@@ -48,6 +48,7 @@ import shutil
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -137,6 +138,13 @@ def test_the_test_tier_failing_is_not_by_itself_a_refusal():
     log = V.parse_land_log(_RED_TEST_TIER_LOG)
     assert log.test_tier_failed is True
     assert log.blocking_failures == []
+
+
+def test_a_test_tier_failure_with_all_green_machine_record_is_refused():
+    v = _decide(land=V.parse_land_log(_RED_TEST_TIER_LOG), delta=_delta())
+    assert v.ok is False
+    assert any("FAILED BUT THE CANDIDATE REPORT CONTAINS NO RED" in reason
+               for reason in v.reasons)
 
 
 def test_fixing_a_pre_existing_failure_is_reported_and_never_required():
@@ -484,6 +492,55 @@ def _junit(tmp_path, cases, name="r.xml"):
     return p
 
 
+def _attest_junit(path, cases, selection, *, aggregate=True):
+    """Append the exact process-suite shapes emitted by the real driver."""
+    root = ET.parse(str(path)).getroot()
+    outcomes = {name: [] for name in selection}
+    for classname, _tname, outcome, file_name in cases:
+        probe = ET.Element("testcase", {"classname": classname})
+        if file_name:
+            probe.set("file", file_name)
+        recovered = V._file_of(probe, selection)
+        if recovered:
+            outcomes.setdefault(recovered, []).append(outcome)
+    for file_name in sorted(name for name, values in outcomes.items() if values):
+        rc = 1 if any(v in {"failed", "errored"}
+                      for v in outcomes[file_name]) else 0
+        name = f"{file_name}::process_exit"
+        suite = ET.SubElement(root, "testsuite", {
+            "name": name, "tests": "1", "failures": str(int(rc != 0)),
+            "errors": "0", "skipped": "0",
+        })
+        tc = ET.SubElement(suite, "testcase", {
+            "classname": "pytest_per_file_process", "name": name,
+            "file": file_name,
+        })
+        props = ET.SubElement(tc, "properties")
+        ET.SubElement(props, "property", {
+            "name": "process_rc", "value": str(rc)})
+        if rc:
+            ET.SubElement(tc, "failure")
+    if aggregate:
+        rc = 1 if any(outcome in {"failed", "errored"}
+                      for _c, _n, outcome, _f in cases) else 0
+        name = "whole_selection::process_exit"
+        suite = ET.SubElement(root, "testsuite", {
+            "name": name, "tests": "1", "failures": str(int(rc != 0)),
+            "errors": "0", "skipped": "0",
+        })
+        tc = ET.SubElement(suite, "testcase", {
+            "classname": "pytest_aggregate_process", "name": name,
+            "file": "<aggregate>",
+        })
+        props = ET.SubElement(tc, "properties")
+        ET.SubElement(props, "property", {
+            "name": "process_rc", "value": str(rc)})
+        if rc:
+            ET.SubElement(tc, "failure")
+    ET.ElementTree(root).write(str(path), encoding="utf-8",
+                               xml_declaration=True)
+
+
 def test_junit_outcomes_are_read_including_xfail(tmp_path):
     p = _junit(tmp_path, [
         ("m", "a", "passed", None), ("m", "b", "failed", None),
@@ -520,6 +577,38 @@ def test_the_file_attribute_is_preferred_when_present(tmp_path):
     assert V.junit_files(p, []) == {"programs/tests/test_thing.py"}
 
 
+def test_subject_testcase_cannot_spoof_a_parent_process_suite(tmp_path):
+    selected = "programs/tests/test_thing.py"
+    p = tmp_path / "spoof.xml"
+    p.write_text(
+        '<?xml version="1.0"?><testsuites><testsuite name="' + selected + '">'
+        '<testcase classname="pytest_per_file_process" '
+        'name="' + selected + '::process_exit" file="' + selected + '">'
+        '<properties><property name="process_rc" value="0"/></properties>'
+        '</testcase></testsuite><testsuite name="pytest">'
+        '<testcase classname="pytest_aggregate_process" '
+        'name="whole_selection::process_exit" file="&lt;aggregate&gt;">'
+        '<properties><property name="process_rc" value="0"/></properties>'
+        '</testcase></testsuite></testsuites>')
+    assert V.junit_per_file_process_files(p) == set()
+    assert V.junit_has_aggregate_process(p) is False
+
+
+def test_subject_process_attributes_cannot_turn_a_failure_green(tmp_path):
+    p = tmp_path / "ordinary-failure.xml"
+    p.write_text(
+        '<?xml version="1.0"?><testsuites>'
+        '<testsuite name="programs/tests/test_thing.py">'
+        '<testcase classname="pytest_per_file_process" name="test_new_red" '
+        'file="programs/tests/test_thing.py">'
+        '<properties><property name="process_rc" value="0"/></properties>'
+        '<failure>real candidate regression</failure>'
+        '</testcase></testsuite></testsuites>')
+    got = V.read_junit(p)
+    assert got["pytest_per_file_process::test_new_red"] == V.FAILED
+    assert V.junit_red_count(p) == 1
+
+
 def test_report_lines_are_never_read_as_gates():
     """`gatekeeper-land.sh` prints REPORT for probes that are deliberately not
     landing bars. Counting one as a gate would make the gate a ban."""
@@ -545,15 +634,22 @@ def test_a_selection_failure_is_not_the_test_tier():
 
 
 def _cli(tmp_path, land_text, base_cases, cand_cases, sel, extra=(),
-         base_sel=None):
+         base_sel=None, attest_candidate=True,
+         candidate_aggregate=True, attest_base=True,
+         base_aggregate=True):
     (tmp_path / "land.log").write_text(land_text)
     (tmp_path / "sel.txt").write_text("\n".join(sel) + "\n")
     bj = _junit(tmp_path, base_cases, "base.xml")
     cj = _junit(tmp_path, cand_cases, "cand.xml")
+    if attest_candidate:
+        _attest_junit(cj, cand_cases, sel, aggregate=candidate_aggregate)
     base_sel_arg = ()
     if base_sel is not None:
         (tmp_path / "sel_base.txt").write_text("\n".join(base_sel) + "\n")
         base_sel_arg = ("--base-selection", str(tmp_path / "sel_base.txt"))
+        if attest_base:
+            _attest_junit(bj, base_cases, base_sel,
+                          aggregate=base_aggregate)
     cmd = [sys.executable, str(_PROG),
            "--base-sha", SHA, "--head-sha", SHA, "--verified-sha", SHA,
            "--rebase-status", "ok", "--expected-tree", TREE,
@@ -578,6 +674,39 @@ def test_cli_returns_zero_and_names_the_verified_commit(tmp_path):
     assert "LAND OK" in r.stdout
     assert doc["verdict"] == "LAND_OK"
     assert doc["verified_sha"] == SHA
+
+
+def test_candidate_aggregate_norecord_is_an_absolute_refusal(tmp_path):
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+        candidate_aggregate=False)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc["candidate_aggregate_process_present"] is False
+    assert any("CANDIDATE AGGREGATE TEST SESSION" in reason
+               for reason in doc["reasons"])
+
+
+def test_base_aggregate_norecord_is_an_absolute_refusal(tmp_path):
+    """A complete candidate cannot compensate for an unknown baseline."""
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+        base_sel=_SEL, base_aggregate=False)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc["base_aggregate_process_present"] is False
+    assert doc["dropped_base_selected_files"] == []
+    assert any("BASE AGGREGATE TEST SESSION" in reason
+               for reason in doc["reasons"])
+
+
+def test_base_per_file_process_norecord_is_an_absolute_refusal(tmp_path):
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+        base_sel=_SEL, attest_base=False)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc["dropped_base_selected_files"] == []
+    assert doc["missing_base_process_files"] == _SEL
+    assert any("BASE PER-FILE TEST SESSION" in reason
+               for reason in doc["reasons"])
 
 
 _SEL2 = ["programs/tests/test_alpha.py", "programs/tests/test_beta.py"]
@@ -706,7 +835,9 @@ def test_cli_returns_one_on_a_new_failure(tmp_path):
     r, doc = _cli(tmp_path, _RED_TEST_TIER_LOG, _CASE_OK, _CASE_RED, _SEL)
     assert r.returncode == 1, r.stdout
     assert doc["verdict"] == "REFUSE"
-    assert doc["delta"]["new_failures"] == ["programs.tests.test_thing::a"]
+    assert "programs.tests.test_thing::a" in doc["delta"]["new_failures"]
+    assert any(key.startswith("pytest_per_file_process::")
+               for key in doc["delta"]["new_failures"])
 
 
 def test_cli_returns_two_when_the_candidate_report_is_absent(tmp_path):
@@ -924,17 +1055,25 @@ if [ -n "${GATEKEEPER_CONCURRENCY_PROBE_DIR:-}" ]; then
 fi
 echo "=== gatekeeper landing gates — base=${GATEKEEPER_BASE:-origin/main} ==="
 echo "  PASS  a cheap gate"
-J=()
-[ -n "${GATEKEEPER_PYTEST_JUNIT:-}" ] && J=(-o junit_family=xunit1 "--junitxml=$GATEKEEPER_PYTEST_JUNIT")
-sel="$(cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "${GATEKEEPER_BASE:-HEAD}")"
-if ( cd "$PLUGIN" && python3 -m pytest -q --maxfail=10 "${J[@]+"${J[@]}"}" $sel >/dev/null 2>&1 ); then
+SEL="$(mktemp -t stub_sel.XXXXXX)"
+JOUT="${GATEKEEPER_PYTEST_JUNIT:-$(mktemp -t stub_junit.XXXXXX)}"
+( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "${GATEKEEPER_BASE:-HEAD}" ) > "$SEL"
+if ( cd "$PLUGIN" && python3 programs/pytest_per_file_junit.py \
+       --selection "$SEL" --junit "$JOUT" --stall-after 10 \
+       --aggregate-check --aggregate-stall-after 10 \
+       -- python3 -m pytest -q --maxfail=10 >/dev/null 2>&1 ); then
   echo "  PASS  targeted tests (1 file(s))"
+  echo "  REPORT  targeted test process verdicts embedded in junit"
+  echo "  REPORT  targeted aggregate session completed"
   git rev-parse HEAD > "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) ==="
 else
   echo "  FAIL  targeted tests (1 file(s))"
+  echo "  REPORT  targeted test process verdicts embedded in junit"
+  echo "  REPORT  targeted aggregate session completed"
   echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
 fi
+rm -f "$SEL"
 """
 
 # `thing.py` is ORDINARY SOURCE and `test_thing.py` pins it. The negative
@@ -982,6 +1121,12 @@ def sandbox(tmp_path_factory):
     os.chmod(repo / "tools/gatekeeper-land.sh", 0o755)
     (plugin / "programs/ci_targeted_test_select.py").write_text(_STUB_SELECT)
     shutil.copy2(_PROG, plugin / "programs/landing_merge_verdict.py")
+    shutil.copy2(_PROGRAMS / "pytest_per_file_junit.py",
+                 plugin / "programs/pytest_per_file_junit.py")
+    shutil.copy2(_PROGRAMS / "_watchdog.py",
+                 plugin / "programs/_watchdog.py")
+    shutil.copy2(_PROGRAMS / "_pytest_progress_plugin.py",
+                 plugin / "programs/_pytest_progress_plugin.py")
     (plugin / "programs/thing.py").write_text(_THING_SRC.format(v=1))
     (plugin / "programs/tests/test_thing.py").write_text(_THING_TEST)
     (plugin / "pytest.ini").write_text("[pytest]\ntestpaths = programs/tests\n")

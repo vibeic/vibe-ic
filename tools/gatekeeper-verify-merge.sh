@@ -566,7 +566,8 @@ done < <("${G[@]}" diff --name-only "$BASE_SHA" "$REBASED_SHA" -- \
             tools/gatekeeper-land.sh tools/gatekeeper-verify-merge.sh \
             tools/ci/repo_hygiene_gates.sh tools/git-hooks/pre-push \
             "$PLUGIN_REL/programs/landing_merge_verdict.py" \
-            "$PLUGIN_REL/programs/ci_targeted_test_select.py" 2>/dev/null)
+            "$PLUGIN_REL/programs/ci_targeted_test_select.py" \
+            "$PLUGIN_REL/programs/pytest_per_file_junit.py" 2>/dev/null)
 
 if [ "$SHORT_CIRCUIT" = "0" ]; then
   # ------------------------------------------------ 5a. the selection, ONCE
@@ -619,15 +620,23 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     # in `gatekeeper-land.sh`), so both settings of the ambient switch could
     # take this arm down while arm B ran. Declared here instead of inherited.
     # A1, A2 and B are the critical path, so start A1 now and join it only after
-    # B finishes.  `setsid` gives cleanup a process group it can stop as a unit;
-    # the pytest child must not survive an interrupted verifier.
+    # B finishes. Both test arms use the candidate's exact per-file + aggregate
+    # instrument; source-text guessing cannot select a mismatched runner.
+    A1_DRIVER="$CAND_PLUGIN/programs/pytest_per_file_junit.py"
     setsid bash -c '
       cd "$1" || exit 2
+      if [ ! -f "$4" ]; then
+        printf "%s\n" "NORECORD  <all selected files>  candidate carries no pytest_per_file_junit.py instrument (vibe-ic#1654)"
+        exit 2
+      fi
       exec env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 GATEKEEPER_VERIFY_ARM=A1 \
-        xargs -a "$2" python3 -m pytest -q -p pytest_timeout \
-        --timeout=180 --timeout-method=thread -p no:cacheprovider \
-        -o junit_family=xunit1 "--junitxml=$3"
+        python3 "$4" --selection "$2" --junit "$3" \
+        --stall-after "$5" --aggregate-check --aggregate-stall-after "$6" \
+        -- python3 -m pytest -q -p pytest_timeout \
+        --timeout=180 --timeout-method=thread -p no:cacheprovider
     ' gkverify-a1 "$BASE_TEST_PLUGIN" "$RUN/selection_base.txt" "$BASE_JUNIT" \
+      "$A1_DRIVER" "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
+      "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
       > "$RUN/base_tests.log" 2>&1 &
     A1_PID=$!
   fi
@@ -723,13 +732,25 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     # Strict, so never a false landing; but it refuses a conformant PR for a
     # failure it does not own, and #1417's whole finding is that merge capacity
     # — not authoring — is this repo's bottleneck. An unmeasured arm is NAMED.
-    if [ -s "$BASE_JUNIT" ]; then
-      echo "--- arm A1 (base ${BASE_SHA:0:12}): $(tail -1 "$RUN/base_tests.log")"
+    A1_NORECORD="$(grep -ac '^NORECORD\|^NOTRUN' "$RUN/base_tests.log" 2>/dev/null || true)"
+    A1_NORECORD="${A1_NORECORD:-0}"
+    A1_AGG_NORECORD="$(grep -ac '^AGGREGATE_NORECORD' "$RUN/base_tests.log" 2>/dev/null || true)"
+    A1_AGG_NORECORD="${A1_AGG_NORECORD:-0}"
+    A1_RECORDED="$(sed -n 's/^  recorded *//p' "$RUN/base_tests.log" | tail -1)"
+    if [ -n "$A1_RECORDED" ]; then
+      A1_SUMMARY="$A1_RECORDED of $(sed -n 's/^  asked *//p' "$RUN/base_tests.log" | tail -1) file(s) recorded, $(sed -n 's/^  red cases *//p' "$RUN/base_tests.log" | tail -1) red case(s)"
     else
-      echo "--- arm A1 UNMEASURED (base ${BASE_SHA:0:12}): pytest rc=$A1_RC and no" \
-           "junit report; the base failed set is UNKNOWN, not empty. The" \
-           "differential below degrades to 'demand green' and will blame this" \
-           "branch for reds it did not introduce. Last lines:"
+      A1_SUMMARY="$(tail -1 "$RUN/base_tests.log")"
+    fi
+    if [ -s "$BASE_JUNIT" ] && [ "$A1_NORECORD" = "0" ] \
+       && [ "$A1_AGG_NORECORD" = "0" ]; then
+      echo "--- arm A1 (base ${BASE_SHA:0:12}): rc=$A1_RC, $A1_SUMMARY"
+    else
+      echo "--- arm A1 INCOMPLETE (base ${BASE_SHA:0:12}): pytest rc=$A1_RC;" \
+           "$A1_NORECORD selected file(s) and $A1_AGG_NORECORD aggregate" \
+           "session(s) produced NO complete record. The verdict refuses an" \
+           "unknown baseline rather than subtracting it. Last lines:"
+      grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD' "$RUN/base_tests.log" | sed 's/^/      /'
       tail -5 "$RUN/base_tests.log" | sed 's/^/      /'
     fi
   else

@@ -190,6 +190,7 @@ XFAILED = "xfailed"
 ABSENT = "absent"
 RED = frozenset({FAILED, ERRORED})
 SILENT = frozenset({SKIPPED, XFAILED, ABSENT})
+PROCESS_RC_PREFIX = "process_rc:"
 
 # `run()` in gatekeeper-land.sh prints exactly two leading spaces, the word, two
 # more spaces, then the label. `report()` prints REPORT and is NOT a gate.
@@ -199,6 +200,11 @@ _LAND_SENTINEL = "=== gatekeeper landing gates"
 # this program overrides with the differential. NOT `targeted test selection
 # produced no files`, which is a selection failure and stays a hard refusal.
 _TEST_TIER = re.compile(r"^targeted tests(?:\s|\(|$)")
+_PROCESS_VERDICT_MARKER = "targeted test process verdicts embedded in junit"
+_AGGREGATE_COMPLETE_MARKER = "targeted aggregate session completed"
+_AGGREGATE_INCOMPLETE_PREFIX = "targeted aggregate session produced no "
+_PER_FILE_INCOMPLETE_PREFIX = "targeted per-file session produced no "
+_PER_FILE_NOTRUN = "targeted per-file session was not run"
 _STAMPED = re.compile(r"===\s*ALL GATES PASS\s*[—-]\s*stamped\s+(\S+)")
 
 # A GATE'S LABEL IS ITS IDENTITY; A COUNT INSIDE IT IS A MEASUREMENT OF A TREE.
@@ -298,6 +304,25 @@ class LandLog:
     def test_tier_failed(self) -> bool:
         return any(_TEST_TIER.match(l) for l in self.failed)
 
+    @property
+    def process_verdicts_embedded(self) -> bool:
+        return _PROCESS_VERDICT_MARKER in self.reported
+
+    @property
+    def aggregate_complete(self) -> bool:
+        return _AGGREGATE_COMPLETE_MARKER in self.reported
+
+    @property
+    def aggregate_incomplete(self) -> bool:
+        return any(label.startswith(_AGGREGATE_INCOMPLETE_PREFIX)
+                   for label in self.failed)
+
+    @property
+    def per_file_incomplete(self) -> bool:
+        return (any(label.startswith(_PER_FILE_INCOMPLETE_PREFIX)
+                    for label in self.failed)
+                or _PER_FILE_NOTRUN in self.failed)
+
     def as_dict(self) -> dict:
         return {
             "pass": self.passed,
@@ -307,6 +332,10 @@ class LandLog:
             "stamped_sha": self.stamped_sha,
             "blocking_failures": self.blocking_failures,
             "test_tier_failed": self.test_tier_failed,
+            "process_verdicts_embedded": self.process_verdicts_embedded,
+            "aggregate_complete": self.aggregate_complete,
+            "aggregate_incomplete": self.aggregate_incomplete,
+            "per_file_incomplete": self.per_file_incomplete,
         }
 
 
@@ -335,7 +364,16 @@ MERGE_TREE_MIN_VERSION = "2.38"
 # ---------------------------------------------------------------- junit reading
 
 
-def _testcase_outcome(tc: ET.Element) -> str:
+def _testcase_outcome(tc: ET.Element, *, process_attested: bool = False) -> str:
+    # A subject testcase can set its own junit classname and properties through
+    # pytest's public record_xml_attribute/record_property fixtures. Therefore
+    # those attributes authorize a process outcome ONLY when the parent suite
+    # has independently passed the exact driver-attestation shape check.
+    if process_attested and (tc.get("classname") or "") in {
+            "pytest_per_file_process", "pytest_aggregate_process"}:
+        for prop in tc.iter("property"):
+            if prop.get("name") == "process_rc":
+                return PROCESS_RC_PREFIX + str(prop.get("value"))
     for child in tc:
         tag = child.tag.rsplit("}", 1)[-1]
         if tag == "failure":
@@ -347,6 +385,24 @@ def _testcase_outcome(tc: ET.Element) -> str:
                 return XFAILED
             return SKIPPED
     return PASSED
+
+
+def _is_red(outcome: str) -> bool:
+    if outcome.startswith(PROCESS_RC_PREFIX):
+        return outcome != PROCESS_RC_PREFIX + "0"
+    return outcome in RED
+
+
+def _is_passed(outcome: str) -> bool:
+    return outcome == PASSED or outcome == PROCESS_RC_PREFIX + "0"
+
+
+def _same_red(base: str, candidate: str) -> bool:
+    """Ordinary pytest reds are equivalent; process rc values are exact."""
+    if (base.startswith(PROCESS_RC_PREFIX)
+            or candidate.startswith(PROCESS_RC_PREFIX)):
+        return base == candidate and _is_red(base)
+    return base in RED and candidate in RED
 
 
 def _key(tc: ET.Element) -> str:
@@ -379,13 +435,14 @@ def _file_of(tc: ET.Element, selection: Sequence[str]) -> Optional[str]:
 def read_junit(path: Path, selection: Sequence[str] = ()) -> Dict[str, str]:
     """key -> outcome. A missing file raises; an unparseable one raises."""
     root = ET.parse(str(path)).getroot()
+    process_cases = _trusted_process_case_ids(root)
     out: Dict[str, str] = {}
     for tc in root.iter("testcase"):
         k = _key(tc)
-        o = _testcase_outcome(tc)
+        o = _testcase_outcome(tc, process_attested=id(tc) in process_cases)
         # A rerun/duplicate id keeps the WORST outcome. Two entries for one id
         # otherwise let an ordering accident decide whether a failure is seen.
-        if k in out and out[k] in RED:
+        if k in out and _is_red(out[k]):
             continue
         out[k] = o
     return out
@@ -401,11 +458,99 @@ def junit_files(path: Path, selection: Sequence[str]) -> set:
     return seen
 
 
+def _valid_process_case(suite: ET.Element, *, classname: str,
+                        name: str, file_name: str) -> bool:
+    """Whether *suite* is one process attestation written by the driver.
+
+    Subject pytest stdout shares a channel with the driver's human log and can
+    therefore print any REPORT-looking text it wants.  The landing decision
+    never trusts that channel.  It trusts only this exact, parent-appended XML
+    shape.  In particular, the suite name matters: ordinary per-file suites
+    are renamed to the selected ``*.py`` path, while process suites are named
+    ``<path>::process_exit``.  A testcase changing its own junit classname
+    cannot manufacture that parent suite.
+    """
+    cases = list(suite.iter("testcase"))
+    if len(cases) != 1:
+        return False
+    tc = cases[0]
+    if (suite.get("name") != name
+            or tc.get("classname") != classname
+            or tc.get("name") != name
+            or tc.get("file") != file_name):
+        return False
+    values = [prop.get("value") for prop in tc.iter("property")
+              if prop.get("name") == "process_rc"]
+    # A complete pytest session has one of the two normal pytest outcomes.
+    # Kills, signals and setup failures outside that contract are NORECORD and
+    # the driver deliberately emits no process case for them.
+    return len(values) == 1 and values[0] in {"0", "1"}
+
+
+def _trusted_process_case_ids(root: ET.Element) -> set:
+    """Object ids of cases whose parent suite authenticates their role."""
+    trusted = set()
+    for suite in root.iter("testsuite"):
+        cases = list(suite.iter("testcase"))
+        if len(cases) != 1:
+            continue
+        tc = cases[0]
+        classname = tc.get("classname") or ""
+        if classname == "pytest_per_file_process":
+            file_name = tc.get("file") or ""
+            name = f"{file_name}::process_exit"
+        elif classname == "pytest_aggregate_process":
+            file_name = "<aggregate>"
+            name = "whole_selection::process_exit"
+        else:
+            continue
+        if _valid_process_case(suite, classname=classname, name=name,
+                               file_name=file_name):
+            trusted.add(id(tc))
+    return trusted
+
+
+def junit_per_file_process_files(path: Path) -> set:
+    """Selected file paths with exactly one valid per-file attestation."""
+    root = ET.parse(str(path)).getroot()
+    counts: Dict[str, int] = {}
+    for suite in root.iter("testsuite"):
+        cases = list(suite.iter("testcase"))
+        if len(cases) != 1:
+            continue
+        tc = cases[0]
+        if tc.get("classname") != "pytest_per_file_process":
+            continue
+        file_name = tc.get("file") or ""
+        name = f"{file_name}::process_exit"
+        if _valid_process_case(
+                suite, classname="pytest_per_file_process", name=name,
+                file_name=file_name):
+            counts[file_name] = counts.get(file_name, 0) + 1
+    # Duplicated attestations are malformed, not stronger evidence.
+    return {file_name for file_name, count in counts.items() if count == 1}
+
+
+def junit_has_aggregate_process(path: Path) -> bool:
+    """Whether the report has exactly one valid aggregate attestation."""
+    root = ET.parse(str(path)).getroot()
+    valid = 0
+    for suite in root.iter("testsuite"):
+        if _valid_process_case(
+                suite, classname="pytest_aggregate_process",
+                name="whole_selection::process_exit",
+                file_name="<aggregate>"):
+            valid += 1
+    return valid == 1
+
+
 def junit_red_count(path: Path) -> int:
     root = ET.parse(str(path)).getroot()
+    process_cases = _trusted_process_case_ids(root)
     n = 0
     for tc in root.iter("testcase"):
-        if _testcase_outcome(tc) in RED:
+        if _is_red(_testcase_outcome(
+                tc, process_attested=id(tc) in process_cases)):
             n += 1
     return n
 
@@ -419,8 +564,8 @@ def failed_set_delta(base: Dict[str, str], cand: Dict[str, str]) -> Delta:
     for k in sorted(set(base) | set(cand)):
         b = base.get(k, ABSENT)
         c = cand.get(k, ABSENT)
-        if c in RED:
-            if b in RED:
+        if _is_red(c):
+            if _same_red(b, c):
                 d.preexisting.append(k)
             else:
                 d.new_failures.append(k)
@@ -437,14 +582,14 @@ def failed_set_delta(base: Dict[str, str], cand: Dict[str, str]) -> Delta:
                 # stays silent there rather than adding a second wrong sentence.
                 if base and k not in base:
                     d.new_absent_on_base.append(k)
-        elif b in RED:
+        elif _is_red(b):
             if c in SILENT:
                 # FAILED -> SKIPPED / ABSENT. Never an improvement: the failure
                 # did not go away, the question did.
                 d.silenced.append(k)
             else:
                 d.fixed.append(k)
-        elif b == PASSED and c in SILENT:
+        elif _is_passed(b) and c in SILENT:
             d.weakened.append(k)
     return d
 
@@ -480,7 +625,11 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
            base_selection_supplied: bool = True,
            base_land: Optional[LandLog] = None,
            verification_tier: str = TIER_MERGE_TREE,
-           git_version: str = "", tier_reason: str = "") -> Verdict:
+           git_version: str = "", tier_reason: str = "",
+           missing_process_files: Sequence[str] = (),
+           aggregate_process_present: bool = True,
+           base_missing_process_files: Sequence[str] = (),
+           base_aggregate_process_present: bool = True) -> Verdict:
     reasons: List[str] = []
     notes: List[str] = []
     disclosures: List[str] = []
@@ -576,6 +725,47 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
         return _stop(
             "THE LANDING GATES DID NOT RUN — gatekeeper-land.sh produced no "
             "gate lines, so its silence is not a pass.")
+
+    # Runtime attestations, read from the report itself — never source text and
+    # never the combined driver/subject stdout. Per-file process records
+    # preserve session-finish guard verdicts; the aggregate record proves the
+    # original cross-file/order question completed. Any missing attestation is
+    # UNKNOWN and an absolute refusal, not a base-differential gate label.
+    if missing_process_files:
+        reasons.append(
+            "AT LEAST ONE CANDIDATE PER-FILE TEST SESSION PRODUCED NO COMPLETE "
+            "RECORD OR WAS NOT RUN — aggregate testcase entries cannot fill in "
+            "a missing independent record. This is an absolute refusal. "
+            f"Missing: {', '.join(missing_process_files[:5])}"
+            + ("…" if len(missing_process_files) > 5 else ""))
+    if not aggregate_process_present:
+        reasons.append(
+            "THE CANDIDATE AGGREGATE TEST SESSION PRODUCED NO COMPLETE RECORD "
+            "— cross-file/order semantics are UNKNOWN, not clean. This is an "
+            "absolute refusal and cannot be waived by the base gate log.")
+    if (land.test_tier_failed and not delta.new_failures
+            and not delta.preexisting):
+        reasons.append(
+            "THE TARGETED TEST TIER FAILED BUT THE CANDIDATE REPORT CONTAINS "
+            "NO RED TESTCASE OR PROCESS VERDICT — the failure is unexplained "
+            "by the machine record and cannot be treated as green.")
+    # The base is the permissive arm of a differential: anything it failed to
+    # measure can disappear from the candidate without becoming `silenced`.
+    # Therefore the same runtime attestation is mandatory on the base whenever
+    # that arm had at least one selected file. A complete candidate cannot
+    # compensate for an unknown baseline.
+    if base_selection_supplied and base_missing_process_files:
+        reasons.append(
+            "AT LEAST ONE BASE PER-FILE TEST SESSION PRODUCED NO COMPLETE "
+            "RECORD OR WAS NOT RUN — the baseline failed set is incomplete, "
+            "so the differential cannot safely subtract it. Missing: "
+            f"{', '.join(base_missing_process_files[:5])}"
+            + ("…" if len(base_missing_process_files) > 5 else ""))
+    if base_selection_supplied and not base_aggregate_process_present:
+        reasons.append(
+            "THE BASE AGGREGATE TEST SESSION PRODUCED NO COMPLETE RECORD — "
+            "cross-file/order failures on the baseline are UNKNOWN. This is "
+            "an absolute refusal, not a pre-existing failure to subtract.")
 
     # ---- the GATE differential, on exactly the rule the test tier uses ----
     # Not a nicety: measured 2026-08-12 at `e4880703b`, TWO of the repo-hygiene
@@ -886,11 +1076,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     delta = failed_set_delta(base, cand or {})
     dropped: List[str] = []
     truncated = False
+    missing_process_files = sorted(selection)
+    aggregate_process_present = False
     if cand is not None:
-        ran_files = junit_files(Path(a.candidate_junit), selection)
+        candidate_path = Path(a.candidate_junit)
+        ran_files = junit_files(candidate_path, selection)
         dropped = sorted(set(selection) - ran_files)
-        truncated = (bool(dropped)
-                     and junit_red_count(Path(a.candidate_junit)) >= a.maxfail)
+        truncated = (bool(dropped) and
+                     junit_red_count(candidate_path) >= a.maxfail)
+        process_files = junit_per_file_process_files(candidate_path)
+        missing_process_files = sorted(set(selection) - process_files)
+        aggregate_process_present = junit_has_aggregate_process(candidate_path)
     # THE SAME QUESTION OF ARM A (vibe-ic#1443). The list is the base's OWN
     # selection, never `--selection`: a file the PR ADDS is legitimately absent
     # from the base report, and asking about it here would refuse every PR that
@@ -899,13 +1095,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # `base_raw is None` arm names all of them rather than falling through to
     # the all-or-nothing note.
     base_dropped: List[str] = []
+    base_missing_process_files: List[str] = []
+    base_aggregate_process_present = True
     if base_selection:
         if base_raw is None:
             base_dropped = sorted(base_selection)
+            base_missing_process_files = sorted(base_selection)
+            base_aggregate_process_present = False
         else:
+            base_path = Path(a.base_junit)
             base_dropped = sorted(
                 set(base_selection)
-                - junit_files(Path(a.base_junit), base_selection))
+                - junit_files(base_path, base_selection))
+            base_process_files = junit_per_file_process_files(base_path)
+            base_missing_process_files = sorted(
+                set(base_selection) - base_process_files)
+            base_aggregate_process_present = junit_has_aggregate_process(
+                base_path)
 
     v = decide(rebase_status=a.rebase_status, expected_tree=a.expected_tree,
                verified_tree=a.verified_tree,
@@ -916,7 +1122,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                base_selection_supplied=bool(base_selection),
                replayed_tree=a.replayed_tree, base_land=base_land,
                verification_tier=a.verification_tier,
-               git_version=a.git_version, tier_reason=a.tier_reason)
+               git_version=a.git_version, tier_reason=a.tier_reason,
+               missing_process_files=missing_process_files,
+               aggregate_process_present=aggregate_process_present,
+               base_missing_process_files=base_missing_process_files,
+               base_aggregate_process_present=(
+                   base_aggregate_process_present))
 
     if a.gate_edited:
         v.notes.append("this branch edits the gate that judges it: "
@@ -969,6 +1180,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # nothing", which is why the size travels with the list.
             "base_selection_size": len(base_selection),
             "dropped_base_selected_files": base_dropped,
+            "missing_candidate_process_files": missing_process_files,
+            "candidate_aggregate_process_present": aggregate_process_present,
+            "missing_base_process_files": base_missing_process_files,
+            "base_aggregate_process_present": (
+                base_aggregate_process_present),
             "gate_edited": a.gate_edited,
             # ---- WHAT THIS VERDICT DID NOT CHECK, MACHINE-READABLY ----
             # A disclosed weaker check beats a universal refusal ONLY if the
