@@ -43,9 +43,11 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -916,6 +918,10 @@ _STUB_LAND = r"""#!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 PLUGIN="$ROOT/vibe-ic-marketplace/plugins/vibe-ic"
+if [ -n "${GATEKEEPER_CONCURRENCY_PROBE_DIR:-}" ]; then
+  mkdir -p "$GATEKEEPER_CONCURRENCY_PROBE_DIR"
+  : > "$GATEKEEPER_CONCURRENCY_PROBE_DIR/${GATEKEEPER_VERIFY_ARM:-unknown}.started"
+fi
 echo "=== gatekeeper landing gates — base=${GATEKEEPER_BASE:-origin/main} ==="
 echo "  PASS  a cheap gate"
 J=()
@@ -935,10 +941,24 @@ fi
 # control's diff therefore touches no test file at all — which is the whole
 # point: what got through five times looked like a normal source change.
 _THING_SRC = "VALUE = {v}\n"
-_THING_TEST = """import pathlib
+_THING_TEST = """import os
+import pathlib
+import time
+
+
+def _require_parallel_gate_arms():
+    probe = os.environ.get("GATEKEEPER_CONCURRENCY_PROBE_DIR")
+    if not probe or os.environ.get("GATEKEEPER_VERIFY_ARM") != "A1":
+        return
+    needed = [pathlib.Path(probe) / "A2.started", pathlib.Path(probe) / "B.started"]
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline and not all(path.is_file() for path in needed):
+        time.sleep(0.02)
+    assert all(path.is_file() for path in needed), "A1 completed before A2 and B started"
 
 
 def test_value_is_one():
+    _require_parallel_gate_arms()
     src = (pathlib.Path(__file__).resolve().parents[1] / "thing.py").read_text()
     assert "VALUE = 1" in src
 """
@@ -1038,6 +1058,28 @@ def test_end_to_end_a_known_good_branch_is_allowed(sandbox, tmp_path):
     assert doc["base_land"] is not None, "arm A2 never ran, so the gate tier was asserted"
 
 
+def test_end_to_end_a1_a2_and_b_start_in_parallel_isolated_worktrees(
+        sandbox, tmp_path):
+    """The three expensive merge-verification arms are one critical path.
+
+    A1's real test waits until the A2 and B landing wrappers have both started.
+    The old serial implementation times out in A1 before either marker can
+    exist; the concurrent implementation completes normally.  The ordinary
+    end-to-end assertions also prove that concurrency did not change the
+    verdict or lose either arm's evidence.
+    """
+    probe = tmp_path / "parallel-arms"
+    r, doc = _verify(
+        sandbox, "innocuous_green", tmp_path,
+        env_extra={"GATEKEEPER_CONCURRENCY_PROBE_DIR": str(probe)},
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert doc["verdict"] == "LAND_OK"
+    assert {p.name for p in probe.iterdir()} >= {"A2.started", "B.started"}
+    assert doc["base_land"] is not None
+    assert doc["delta"]["new_failures"] == []
+
+
 def test_end_to_end_what_is_gated_is_the_squash_and_not_the_branch(
         sandbox, tmp_path):
     """`gh pr merge --squash` creates ONE commit: parent = base tip, tree = the
@@ -1085,6 +1127,70 @@ def test_end_to_end_the_caller_checkout_is_never_touched(sandbox, tmp_path):
     assert _git(sandbox, "rev-parse", "HEAD").stdout.strip() == before
     assert _git(sandbox, "status", "--porcelain").stdout == status
     assert _git(sandbox, "worktree", "list").stdout.count("\n") == 1
+
+
+def test_interruption_kills_a_term_ignoring_parallel_arm_and_removes_worktrees(
+        sandbox, tmp_path):
+    """Parallel speed must not trade an interrupt for leaked gate processes.
+
+    A private clone's A2 arm deliberately ignores TERM forever.  SIGINT to the
+    verifier must run the bounded cleanup, escalate that dedicated group to
+    KILL, reap it, and remove all three temporary worktrees.
+    """
+    repo = tmp_path / "interrupt-repo"
+    cloned = subprocess.run(
+        ["git", "clone", "-q", str(sandbox), str(repo)],
+        capture_output=True, text=True, timeout=_T,
+    )
+    assert cloned.returncode == 0, cloned.stderr
+    _git(repo, "config", "user.email", "t@localhost")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "checkout", "-q", "main")
+
+    land = repo / "tools/gatekeeper-land.sh"
+    text = land.read_text()
+    needle = 'echo "=== gatekeeper landing gates — base=${GATEKEEPER_BASE:-origin/main} ==="\n'
+    hang = r'''if [ -n "${GATEKEEPER_CONCURRENCY_PROBE_DIR:-}" ] \
+   && [ "${GATEKEEPER_VERIFY_ARM:-}" = "A2" ]; then
+  echo "$$" > "$GATEKEEPER_CONCURRENCY_PROBE_DIR/A2.pid"
+  trap '' TERM
+  while :; do sleep 30; done
+fi
+'''
+    assert needle in text
+    land.write_text(text.replace(needle, hang + needle))
+    _git(repo, "add", "tools/gatekeeper-land.sh")
+    assert _git(repo, "commit", "-qm", "make interrupt control").returncode == 0
+    _git(repo, "checkout", "-q", "-b", "probe")
+    (repo / "probe.txt").write_text("candidate\n")
+    _git(repo, "add", "probe.txt")
+    assert _git(repo, "commit", "-qm", "candidate").returncode == 0
+
+    probe = tmp_path / "interrupt-probe"
+    out = tmp_path / "interrupt.json"
+    proc = subprocess.Popen(
+        ["bash", str(_VERIFY), "--ref", "probe", "--base", "main",
+         "--repo", str(repo), "--no-fetch", "--json", str(out)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        start_new_session=True,
+        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
+             "GATEKEEPER_CONCURRENCY_PROBE_DIR": str(probe)},
+    )
+    pid_file = probe / "A2.pid"
+    deadline = time.monotonic() + 12
+    while time.monotonic() < deadline and not pid_file.is_file():
+        if proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    assert pid_file.is_file(), proc.communicate(timeout=2)
+    arm_pid = int(pid_file.read_text().strip())
+
+    os.killpg(proc.pid, signal.SIGINT)
+    stdout, stderr = proc.communicate(timeout=8)
+    assert proc.returncode != 0, stdout + stderr
+    assert _git(repo, "worktree", "list").stdout.count("\n") == 1
+    with pytest.raises(ProcessLookupError):
+        os.kill(arm_pid, 0)
 
 
 def _reassert(sandbox, path):

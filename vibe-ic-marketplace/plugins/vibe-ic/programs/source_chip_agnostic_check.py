@@ -355,7 +355,13 @@ def _scan_nda(plugin_root: Path) -> List[TokenFinding]:
         if not f.is_file() or f.suffix.lower() not in _NDA_SCAN_EXTS:
             continue
         parts = f.parts
-        if "__pycache__" in parts or ".git" in parts:
+        # Runtime caches are not source and are deliberately absent from a
+        # fresh worktree at the same commit.  Counting their README/metadata
+        # files makes this gate's denominator depend on whether pytest happened
+        # to run in the checkout first (measured: 4343 vs 4342 files solely
+        # because ``.pytest_cache/README.md`` existed on one arm).
+        if ("__pycache__" in parts or ".pytest_cache" in parts
+                or ".git" in parts):
             continue
         rel_str = str(f.relative_to(plugin_root))
         if rel_str.replace("\\", "/") == _NDA_ENCODED_HOME:

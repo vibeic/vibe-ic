@@ -138,12 +138,16 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+import _watchdog as _wd
 
 
 _PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -982,18 +986,21 @@ def run_deliverable_gate(repo: Path, files: List[str]) -> GateResult:
 # convention applied one level up.
 # --------------------------------------------------------------------------
 _HYGIENE_SCRIPT_REL = "tools/ci/repo_hygiene_gates.sh"
+_HYGIENE_PARALLEL_REL = (
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/repo_hygiene_parallel.py")
 
-#: Generous ceiling, not a target. Measured on this repo the full set is
-#: minutes, dominated by one gate that runs every other gate twice. A run that
-#: exceeds this is reported as ERROR — never as a pass — because a hygiene set
-#: that did not finish has told us nothing.
-_HYGIENE_TIMEOUT_S = 3600
+#: No runtime estimate.  This is the maximum interval with neither captured
+#: output nor a completed gate record before the shared progress watchdog calls
+#: the coordinator stalled.  Any forward progress resets it, however long the
+#: complete hygiene run legitimately needs.
+_HYGIENE_STALL_GRACE_S = 1800
 
 
 def repo_hygiene_gate(repo: Path,
                       script: Optional[Path] = None,
-                      timeout: int = _HYGIENE_TIMEOUT_S,
-                      summary_out: Optional[Path] = None) -> GateResult:
+                      stall_grace: int = _HYGIENE_STALL_GRACE_S,
+                      summary_out: Optional[Path] = None,
+                      progress_out: Optional[Path] = None) -> GateResult:
     """Run `tools/ci/repo_hygiene_gates.sh` and report its own coverage record.
 
     `script` is a test seam in the same spirit as `override_files` — it lets a
@@ -1003,7 +1010,14 @@ def repo_hygiene_gate(repo: Path,
     that it cannot be forgotten.
     """
     name = "repo_hygiene_gates"
-    path = Path(script) if script is not None else (repo / _HYGIENE_SCRIPT_REL)
+    if script is not None:
+        path = Path(script)
+        command = ["bash", str(path)]
+    else:
+        parallel = repo / _HYGIENE_PARALLEL_REL
+        path = parallel if parallel.is_file() else (repo / _HYGIENE_SCRIPT_REL)
+        command = ([sys.executable, str(path)] if path == parallel
+                   else ["bash", str(path)])
     if not path.is_file():
         # An honest SKIP that states its denominator: this tree wires no
         # hygiene set, so 0 gates were consulted. Never dressed up as a pass
@@ -1014,33 +1028,63 @@ def repo_hygiene_gate(repo: Path,
 
     with tempfile.TemporaryDirectory(prefix="hygiene_summary_") as td:
         summary_path = Path(td) / "summary.json"
+        progress = None
         try:
-            # watchdog-exempt: bounded shell-runner — the call carries an
-            # explicit wall-clock timeout and the TimeoutExpired path below
-            # reports ERROR, never a pass, so work that escapes into the
-            # script cannot outlive this budget nor be mistaken for a clean
-            # result. That bound holds whatever the script launches, which is
-            # what class (c) is protecting against; the set happens to be all
-            # `python3` gates today, but the exemption does not rest on it.
-            proc = subprocess.run(
-                ["bash", str(path), "--summary-json", str(summary_path)],
-                cwd=str(repo), capture_output=True, text=True, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return GateResult(name, 2,
-                              f"ERROR — the hygiene set did not finish within "
-                              f"{timeout}s; nothing was concluded")
+            env = None
+            if progress_out is not None:
+                progress = Path(progress_out).resolve()
+                progress.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    progress.unlink()
+                except FileNotFoundError:
+                    pass
+                env = os.environ.copy()
+                env["GATE_DISPATCH_ATTESTATION_FILE"] = str(progress)
+            def _popen(argv, **kwargs):
+                return subprocess.Popen(
+                    argv, cwd=str(repo), start_new_session=True, **kwargs)
+
+            def _kill_group(proc, _reason):
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    return
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+                # The coordinator may exit on TERM while one of its workers
+                # ignores it.  Kill the remaining process group either way.
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+            supervised = _wd.run_supervised(
+                [*command, "--summary-json", str(summary_path)],
+                env=env, log_path=progress,
+                stall_grace_s=stall_grace, poll_s=5,
+                hard_ceiling_s=float("inf"), popen_factory=_popen,
+                kill=_kill_group)
         except OSError as exc:
             return GateResult(name, 2, f"ERROR — could not run {path}: {exc}")
+
+        if supervised.outcome != "natural":
+            return GateResult(
+                name, 2,
+                "ERROR — hygiene progress watchdog reported "
+                f"{supervised.outcome} after no output or completed-gate "
+                f"record advanced for {stall_grace}s; nothing was concluded")
 
         if not summary_path.is_file():
             # The script ran but produced no record, so we cannot say what it
             # covered. "I do not know what ran" is its own state and must not
             # reach a reader as a pass.
-            tail = ((proc.stderr or proc.stdout or "").strip().splitlines()
+            tail = ((supervised.err or supervised.out or "").strip().splitlines()
                     or ["(no output)"])[-1][:180]
             return GateResult(name, 2,
                               f"ERROR — {_HYGIENE_SCRIPT_REL} exited "
-                              f"{proc.returncode} without writing its coverage "
+                              f"{supervised.rc} without writing its coverage "
                               f"record; coverage unknown. Last line: {tail}")
         try:
             doc = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -1066,7 +1110,7 @@ def repo_hygiene_gate(repo: Path,
                                   f"ERROR — could not hand on the coverage "
                                   f"record: {exc}")
 
-    return _hygiene_verdict(doc, proc.returncode)
+    return _hygiene_verdict(doc, supervised.rc)
 
 
 def gate_red_since_gate(repo: Path, record: Path) -> GateResult:
@@ -1338,7 +1382,9 @@ def review(base: str, head: str, *,
            override_cur: Optional[str] = None,
            override_prev: Optional[str] = None,
            batch: bool = False,
-           hygiene_script: Optional[Path] = None) -> Verdict:
+           hygiene_script: Optional[Path] = None,
+           hygiene_report: Optional[Path] = None,
+           hygiene_progress: Optional[Path] = None) -> Verdict:
     """Run the deterministic gatekeeper and return a Verdict.
 
     `version_by_gatekeeper=True` is the AUTHORING-side review of a version-less
@@ -1425,9 +1471,12 @@ def review(base: str, head: str, *,
     # the deadline its acknowledgement set? The record is handed over rather
     # than the set re-run.
     with tempfile.TemporaryDirectory(prefix="gate_red_since_") as _td:
-        _record = Path(_td) / "hygiene.json"
+        _record = (Path(hygiene_report).resolve() if hygiene_report is not None
+                   else Path(_td) / "hygiene.json")
+        _record.parent.mkdir(parents=True, exist_ok=True)
         gates.append(repo_hygiene_gate(repo, script=hygiene_script,
-                                       summary_out=_record))
+                                       summary_out=_record,
+                                       progress_out=hygiene_progress))
         gates.append(gate_red_since_gate(repo, _record))
 
     # 5. verdict.
@@ -1516,6 +1565,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "gatekeeper_assign_version.py and re-runs this review "
                          "WITHOUT the flag on the bumped tree)")
     ap.add_argument("--json", default=None, help="write the verdict JSON here")
+    ap.add_argument(
+        "--gate-record", dest="hygiene_report", default=None,
+        help=("persist the complete repo-hygiene summary/attestation JSON at "
+              "this path instead of keeping it only for the in-process "
+              "gate-red-since adjudication"))
+    ap.add_argument(
+        "--gate-progress", dest="hygiene_progress", default=None,
+        help=("append one owner-only JSONL process attestation after each "
+              "completed hygiene gate; intended for sparse monitoring of a "
+              "long run without polling its full stdout"))
     args = ap.parse_args(argv)
 
     repo = Path(args.repo).resolve() if args.repo else _find_repo_root()
@@ -1549,7 +1608,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                    control_text=args.control_text,
                    version_by_gatekeeper=args.version_by_gatekeeper,
                    override_files=override_files,
-                   batch=args.batch)
+                   batch=args.batch,
+                   hygiene_report=(Path(args.hygiene_report)
+                                   if args.hygiene_report else None),
+                   hygiene_progress=(Path(args.hygiene_progress)
+                                     if args.hygiene_progress else None))
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

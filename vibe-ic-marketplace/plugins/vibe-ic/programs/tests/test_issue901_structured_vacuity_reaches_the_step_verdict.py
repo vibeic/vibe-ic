@@ -170,7 +170,7 @@ def test_the_gate_ledger_row_repeats_what_the_gate_said_about_itself(tmp_path):
     flow = _flow(tmp_path, '        - program_exit_zero: "vacuous_testbench_check'
                            ' . --json reports/gates/vacuous_testbench.json"\n')
     _rc, out, _doc = _audit(project, flow)
-    row = re.search(r"GATE_RAN\s+vacuous_testbench_check\s+rc=0\s+(\S+)", out)
+    row = re.search(r"GATE_RAN\s+vacuous_testbench_check\s+rc=2\s+(\S+)", out)
     assert row, out
     assert row.group(1) == "VACUOUS_PASS", (
         f"the ledger row reads {row.group(1)} for a gate whose own report "

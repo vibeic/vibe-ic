@@ -471,14 +471,15 @@ def main(argv=None) -> int:
         # and the step still records PASS — carrying a `PARTIALLY-VACUOUS`
         # reason, which names the hole rather than closing it.
         #
-        # rc STAYS 0, deliberately. Flipping it would fail every legitimately
-        # sim-free run, and a permanently red gate is one people route around.
-        # What changes is that the flow stops recording "checked, fine" for a
-        # thing nobody checked: the sentinel below is the channel
-        # `check_step` promotes on, so the step becomes VACUOUS_PASS.
+        # rc 2 is the flow's disclosed-skip convention. `program_exit_zero`
+        # consumes it as VACUOUS_PASS rather than FAIL, so a legitimately
+        # sim-free run stays non-red while the repo-level zero-denominator
+        # guard can distinguish "nothing was checked" from a real rc-0 PASS.
+        # Keep the stdout sentinel as an independent channel: report, token,
+        # and rc must agree instead of asking a reader to infer one from another.
         print(f"VACUOUS_PASS: vacuous_testbench examined 0 testbench(es) — "
               f"{res.get('reason', 'the producing step left nothing to check')}")
-        return 0
+        return 2
     if verdict == "PASS":
         return 0
     if verdict == "IO_ERROR":

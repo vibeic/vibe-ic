@@ -89,6 +89,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import port_parser  # noqa: E402  bullet form OR Verilog module header (v2/human twins)
+import _watchdog  # noqa: E402  plugin-wide progress-stall process supervision
 
 
 # ===========================================================================
@@ -714,17 +715,16 @@ def host_verify(prompt_text: str, ref_sv: str, test_sv: str, top: str = "TopModu
         dut = Path(td) / "dut.sv"
         dut.write_text(rtl)
         binp = Path(td) / "a.vvp"
-        # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
-        try:
-            cp = subprocess.run(["iverilog", "-g2012", "-o", str(binp), str(dut),
-                                 ref_sv, test_sv], capture_output=True, text=True)
-        except FileNotFoundError as e:
-            # #1437 — an ABSENT iverilog raises before returning, so the
-            # TOOL_ERR this function's own contract declares was unreachable and
-            # the caller got a traceback instead of one of the four verdicts.
-            return ("TOOL_ERR", f"COMMAND_NOT_FOUND: {e}")
-        if cp.returncode != 0:
-            return ("TOOL_ERR", cp.stderr[-600:])
+        # BLOCKING PROCESS POLICY: iverilog is a potentially long EDA compile,
+        # so it must use the plugin-wide progress watchdog. The primitive also
+        # preserves #1437's declared absent-tool outcome as launch_error/rc127.
+        cp = _watchdog.run_supervised(
+            ["iverilog", "-g2012", "-o", str(binp), str(dut),
+             ref_sv, test_sv])
+        if cp.outcome != "natural":
+            return ("TOOL_ERR", cp.err[-600:])
+        if cp.rc != 0:
+            return ("TOOL_ERR", cp.err[-600:])
         try:
             cp = subprocess.run(["vvp", str(binp)], capture_output=True, text=True)
         except FileNotFoundError as e:

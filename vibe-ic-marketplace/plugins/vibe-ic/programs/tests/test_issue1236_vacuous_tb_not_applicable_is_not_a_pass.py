@@ -15,8 +15,8 @@ On a project with no sim tree it writes
     {"gate": "vacuous_testbench", "verdict": "NOT_APPLICABLE",
      "reason": "no sim tree (step did not run)"}
 
-to stdout and to its `--json` report, and exits 0. `_check_program_exit_zero`
-reads the EXIT CODE and, on the passing path, exactly one stdout channel:
+to stdout and to its `--json` report, and exits 2. `_check_program_exit_zero`
+reads that as the disclosed-skip tier and also reads the stdout channel:
 `_stdout_signals_vacuous`, which matches `VACUOUS_PASS` at LINE START. A JSON
 blob carrying the word inside a quoted field does not match it. MEASURED against
 the consumer itself, on the pre-fix program:
@@ -38,9 +38,9 @@ where a sibling substantively examines something the count is not unanimous and
 the step still records PASS — carrying a `PARTIALLY-VACUOUS` reason, which names
 the hole rather than closing it.
 
-rc STAYS 0. Flipping it would fail every legitimately sim-free run, and a
-permanently red gate is one people route around. What changes is that the flow
-stops recording "checked, fine" for a thing nobody checked.
+rc 2 is the disclosed-skip convention. The flow maps it to VACUOUS_PASS, so a
+legitimately sim-free run remains non-red while a repo-level consumer can no
+longer mistake zero examined testbenches for an ordinary PASS.
 """
 from __future__ import annotations
 
@@ -117,11 +117,11 @@ def _seed(tmp_path: Path, tb: str | None) -> Path:
 # --------------------------------------------------------------------------
 def test_not_applicable_reaches_the_channel_that_tiers_the_step(tmp_path):
     rc, out = _run(_seed(tmp_path, None))
-    assert rc == 0, out
+    assert rc == 2, out
     assert '"verdict": "NOT_APPLICABLE"' in out, out
     assert _stdout_signals_vacuous(out), (
         "the producing step left no sim tree, the gate said so in its own JSON "
-        "and exited 0 with nothing on the one stdout channel `check_step` "
+        "and did not reach the one stdout channel `check_step` "
         f"promotes on — so the flow records a plain PASS:\n{out}")
 
 
@@ -147,7 +147,7 @@ def test_the_json_channel_alone_does_not_tier_this_step(tmp_path):
     """
     p = _seed(tmp_path, None)
     rc, _out = _run(p)
-    assert rc == 0
+    assert rc == 2
     assert _json_report_signals_vacuous(p, _CLAUSE), (
         "the JSON channel stopped reading this gate's report; if that is "
         "intended, the stdout sentinel is now the ONLY disclosure and this "
@@ -235,6 +235,6 @@ def test_an_empty_sim_tree_is_also_not_applicable(tmp_path):
     p = _seed(tmp_path, None)
     (p / "phase2" / "stage1" / "sim").mkdir(parents=True, exist_ok=True)
     rc, out = _run(p)
-    assert rc == 0, out
+    assert rc == 2, out
     assert "NOT_APPLICABLE" in out, out
     assert _stdout_signals_vacuous(out), out

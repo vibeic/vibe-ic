@@ -2050,10 +2050,10 @@ def test_the_mapping_spelling_is_swept_as_well_as_the_string(tmp_path):
 def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
     pop = lc.population_report(lc.FLOW_YAML)
     assert pop["unswept"] == [], pop["unswept"]
-    # 167 -> 168 as the flow gained a clause. The PIN is `swept == declared`;
+    # 168 -> 169 as the flow gained a clause. The PIN is `swept == declared`;
     # the literal is only there so a flow that silently SHRINKS is caught too,
     # and it is meant to move whenever the flow does.
-    assert pop["swept"] == pop["declared"] == 168, pop
+    assert pop["swept"] == pop["declared"] == 169, pop
     assert pop["unrecognised"] == {}, pop["unrecognised"]
 
 

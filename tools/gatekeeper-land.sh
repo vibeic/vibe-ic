@@ -654,7 +654,11 @@ run "unselectable-test census is not stale" \
 GK_HYG=()
 [ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ] \
   && GK_HYG=(--summary-json "$GATEKEEPER_HYGIENE_REPORT")
-run "repo hygiene gates"      bash "$ROOT/tools/ci/repo_hygiene_gates.sh" \
+GK_HYG_ENV=()
+[ -n "${GATEKEEPER_HYGIENE_PROGRESS:-}" ] \
+  && GK_HYG_ENV=(env "GATE_DISPATCH_ATTESTATION_FILE=$GATEKEEPER_HYGIENE_PROGRESS")
+run "repo hygiene gates"      "${GK_HYG_ENV[@]}" \
+    bash "$ROOT/tools/ci/repo_hygiene_gates.sh" \
     "${GK_HYG[@]+"${GK_HYG[@]}"}"
 run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
 

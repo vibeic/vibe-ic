@@ -336,6 +336,12 @@ _UNDRIVEABLE: Dict[str, Dict[str, str]] = {}
 # instead of asserting they are equal.
 _RUN_HEAD_RE = re.compile(r'^(\s*)run(?:_\w+)?\s+(.*)$')
 
+# Shared with ``gate_host_independence_check``.  The declaration belongs to
+# the run line, so every meta-runner must preserve it; otherwise an excluded
+# remote gate simply comes back through a nested sweep.
+HOST_INDEPENDENCE_EXCLUDE_RE = re.compile(
+    r'^\s*#\s*host-independence:\s*EXCLUDE\b[\s—:-]*(.*?)\s*$')
+
 #: Shell parameters this repo's readers can resolve to a real path. Anything
 #: else in a declaration — a loop variable, a command substitution — is
 #: RUNTIME-EXPANDED: only bash, at the moment it iterates, knows what it is.
@@ -359,6 +365,7 @@ class GateDecl(NamedTuple):
     cmd: str
     lineno: int
     runtime_expansion: Optional[str]
+    host_independence_exclusion: Optional[str] = None
 
 
 def _logical_lines(text: str) -> List[Tuple[int, str]]:
@@ -432,6 +439,7 @@ def parse_declarations(script: Path) -> List[GateDecl]:
         text = script.read_text(errors="replace")
     except OSError:
         return []
+    physical = text.splitlines()
     out: List[GateDecl] = []
     for lineno, line in _logical_lines(text):
         m = _RUN_HEAD_RE.match(line)
@@ -455,8 +463,14 @@ def parse_declarations(script: Path) -> List[GateDecl]:
         cmd = rest.strip()
         if not cmd:
             continue
+        above = physical[lineno - 2] if lineno >= 2 else ""
+        excluded = HOST_INDEPENDENCE_EXCLUDE_RE.match(above)
+        reason = None
+        if excluded:
+            reason = (excluded.group(1).strip()
+                      or "declared at the gate, no reason given")
         out.append(GateDecl(label, cwd_token, cmd, lineno,
-                            _runtime_expansion(label, cmd)))
+                            _runtime_expansion(label, cmd), reason))
     return out
 
 
@@ -545,7 +559,8 @@ def _driveable(argv: List[str]) -> Optional[str]:
 
 
 def audit_ci(repo_root: Path, timeout: int = 120,
-             budget: Optional[float] = None) -> CiAudit:
+             budget: Optional[float] = None,
+             skip_host_excluded: bool = False) -> CiAudit:
     """Drive every declared CI gate over an empty scratch tree.
 
     `timeout` bounds ONE gate. `budget` bounds the WHOLE loop, and vibe-ic#1181
@@ -602,6 +617,10 @@ def audit_ci(repo_root: Path, timeout: int = 120,
     def _probe(decl):
         """Drive one gate in its own empty repo. Returns (kind, label, payload)."""
         label, cmd = decl.label, decl.cmd
+        if skip_host_excluded and decl.host_independence_exclusion is not None:
+            return ("not_driven", label,
+                    "EXCLUDED from host-independence by its adjacent "
+                    f"declaration: {decl.host_independence_exclusion}")
         if deadline is not None and time.monotonic() >= deadline:
             return ("budget", label,
                     f"aggregate budget of {budget:g}s exhausted before this "
@@ -1173,13 +1192,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "vibe-ic#1181 measured at 192.9s on an idle host. "
                          "On exhaustion the sweep stops and reports "
                          "NOT_CHECKED, never PASS.")
+    ap.add_argument(
+        "--skip-host-excluded", action="store_true",
+        help=("when this meta-gate is itself driven by host-independence, do "
+              "not indirectly launch declarations carrying an adjacent "
+              "host-independence EXCLUDE; every skip remains named"))
     a = ap.parse_args(argv)
 
     if a.population == "project":
         return _main_project_population(a)
 
     root = Path(a.repo_root).resolve() if a.repo_root else _PLUGIN.parents[2]
-    res = audit_ci(root, timeout=a.timeout, budget=a.budget)
+    res = audit_ci(root, timeout=a.timeout, budget=a.budget,
+                   skip_host_excluded=a.skip_host_excluded)
     verdict, findings = res.verdict, res.findings
 
     if a.json_out:
