@@ -654,11 +654,11 @@ NA_STEPS_AS_MEASURED: Tuple[str, ...] = ("FS1", "P0")
 PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 
 #: Steps declaring FEWER THAN TWO ``required_outputs`` entries, RE-MEASURED
-#: 2026-08-14 (27 of 63). They cannot express "one artefact present, the rest
+#: 2026-08-16 (26 of 63). They cannot express "one artefact present, the rest
 #: absent", so the pooled-evidence check has no shape to build; the population
 #: is pinned so a step that gains a second entry cannot slip past it silently.
 #:
-#: TWO CHANGES vs the 2026-07-27 measurement, and they are independent:
+#: THREE CHANGES vs the 2026-07-27 measurement, and they are independent:
 #:
 #:   + "1"   this change moves `reports/phase1/extraction_coverage_report.{md,json}`
 #:           off step 1, taking it from THREE entries to ONE. It therefore joins
@@ -677,9 +677,14 @@ PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 #:           "1". The membership assertion is one-directional — it fires only
 #:           when a single-entry step is ABSENT from this tuple — which is why a
 #:           stale member sat here without reddening anything.
+#:
+#:   - "27"  step 27 now declares both its noise/glitch report and the MCF
+#:           crosstalk-delay verdict. It therefore has two ALL-of entries and
+#:           leaves this fewer-than-two population; retaining it would silently
+#:           disable the partial-evidence shape this pin exists to measure.
 SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
     "1", "8", "FS1", "DT1", "DT2", "DT3", "12", "A1", "A2", "A3", "A4", "A5",
-    "A7", "A9", "14", "16", "17", "20", "22", "27", "35", "36", "37", "M4",
+    "A7", "A9", "14", "16", "17", "20", "22", "35", "36", "37", "M4",
     "42", "44", "P0",
 )
 

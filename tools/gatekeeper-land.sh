@@ -339,7 +339,8 @@ run "write-guard baseline" \
 # unmeasurable. A landing gate that cannot answer for a wide PR is a landing gate
 # nobody uses.
 run_pytest() {
-  local sel out
+  local sel out rc
+  TARGETED_NORECORD=0
   # PREFLIGHT (vibe-ic#1446): the scratch root this pytest will use is part of
   # its verdict. A root inside a git work tree makes 46 tests report failures
   # that are the ROOT, not the tree — and each names its own subject rather
@@ -359,9 +360,18 @@ run_pytest() {
   sel="$(mktemp -t gk_sel.XXXXXX)"
   local maxfail=(--maxfail="${GATEKEEPER_PYTEST_MAXFAIL:-10}")
   [ "${GATEKEEPER_PYTEST_MAXFAIL:-10}" = "0" ] && maxfail=()
-  local junit=()
+  # THE MERGED REPORT IS ALWAYS PRODUCED, even when nobody asked for it
+  # (vibe-ic#1654). The per-file driver below needs somewhere to merge to, and
+  # the run that does NOT export a junit is the same run in every other
+  # respect — measuring it differently is the asymmetry #1417 spent a version
+  # removing. A temporary target costs nothing and keeps ONE instrument.
+  local merged="${GATEKEEPER_PYTEST_JUNIT:-}"
+  local merged_tmp=""
+  if [ -z "$merged" ]; then
+    merged_tmp="$(mktemp -t gk_junit.XXXXXX)"
+    merged="$merged_tmp"
+  fi
   if [ -n "${GATEKEEPER_PYTEST_JUNIT:-}" ]; then
-    junit=(-o junit_family=xunit1 "--junitxml=$GATEKEEPER_PYTEST_JUNIT")
     # REMOVE THE TARGET FIRST, so a leftover can never be read as THIS run's record.
     #
     # A pytest that TIMES OUT writes no junit at all. Meanwhile
@@ -410,7 +420,48 @@ run_pytest() {
   # not disarm the write guard. That is the check that would have made this fix a
   # false green, so it is asserted rather than assumed — the guard's PASS/FAIL line
   # must still appear in `out`.
-  if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 xargs -a "$sel" python3 -m pytest -q -p pytest_timeout "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread "${junit[@]+"${junit[@]}"}" 2>&1 )"; then
+  #
+  # ── ONE WHOLE-SELECTION SESSION ON THE LANDING CRITICAL PATH (#1654) ──
+  #
+  # `--timeout-method=thread` cannot interrupt a blocking `waiter.acquire()`. It
+  # dumps every thread's stack and takes the PROCESS down, and a process that
+  # dies never writes its `--junitxml`. So ONE hanging file used to cost the
+  # WHOLE run's machine-readable record — measured at the #1650 tree with a
+  # 91-file selection, where the hang was 1 file and the blast radius was the
+  # other 90, on BOTH arms:
+  #
+  #     ARM_cand_RC=123   ls: cannot access '/tmp/junit_full_cand.xml'
+  #     ARM_base_RC=143   ls: cannot access '/tmp/junit_full_base.xml'
+  #
+  # Reproduced on this tree at 1adbf3444 with three files, one of them hanging
+  # in the exact `Future.result -> Condition.wait -> waiter.acquire` shape: the
+  # green file that had ALREADY PASSED lost its record too.
+  #
+  # The first #1654 repair ran N isolated sessions and then repeated the whole
+  # selection as an aggregate semantics canary.  That preserved neighbouring
+  # records after a hang, but made every successful landing pay for BOTH
+  # questions and erased cross-file/order semantics from the first copy.
+  #
+  # Landing now asks the authoritative question exactly once: the original
+  # whole-selection session, supervised by validated pytest lifecycle progress.
+  # A complete aggregate JUnit plus its exact OS process verdict is sufficient
+  # evidence.  AGGREGATE_NORECORD is an absolute refusal; per-file recovery is
+  # useful diagnostics after that refusal, but cannot make UNKNOWN land and is
+  # deliberately outside this critical path.
+  #
+  # THE PYTEST COMMAND IS PASSED IN VERBATIM, not built inside the driver, so
+  # `--timeout=180` stays declared HERE — `ci_harness_timeout_ceiling_check`
+  # resolves the binding harness bound from this file (EXTRA_HARNESS_RELS) and a
+  # bound moved into Python would vanish from its view.
+  if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
+        --selection "$sel" --junit "$merged" \
+        --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
+        --aggregate-check --aggregate-only \
+        --aggregate-stall-after "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
+        --stop-after-failures "${GATEKEEPER_PYTEST_MAXFAIL:-10}" \
+        -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
+        "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"; then
+    rc=0
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
     # PAIRED GUARD for the autoload pin above. A green bought by quietly removing
     # the write guard from the session would be a false green, and it would look
@@ -422,13 +473,62 @@ run_pytest() {
       FAILED=1
     fi
   else
+    rc=$?
     printf '  FAIL  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
+    # THE FILES WITH NO RECORD, ALWAYS AND FIRST. They are the one thing a
+    # reader cannot reconstruct from the tail of a 91-file run, and `tail -6`
+    # would show whichever file happened to be last instead of the one that
+    # cost the record.
+    printf '%s\n' "$out" | grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD' | sed 's/^/          /'
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
+    FAILED=1
+    [ "$rc" -eq 2 ] && TARGETED_NORECORD=1
+  fi
+  # Human-facing diagnostics only. The merge verdict does NOT trust this mixed
+  # driver/subject stdout channel: pytest can print marker-looking text. It
+  # derives completeness from exact process suites in the merged JUnit.
+  if printf '%s\n' "$out" | grep -qa '^=== pytest junit summary'; then
+    printf '  REPORT  targeted test process verdicts embedded in junit\n'
+  else
+    printf '  FAIL  targeted test instrument produced no junit summary\n'
+    FAILED=1
+  fi
+  if printf '%s\n' "$out" | grep -qa '^NORECORD'; then
+    printf '  FAIL  targeted per-file session produced no complete record\n'
+    FAILED=1
+  fi
+  if printf '%s\n' "$out" | grep -qa '^NOTRUN'; then
+    printf '  FAIL  targeted per-file session was not run\n'
+    FAILED=1
+  fi
+  if printf '%s\n' "$out" | grep -qa '^AGGREGATE_NORECORD'; then
+    printf '  FAIL  targeted aggregate session produced no complete record\n'
+    FAILED=1
+  elif printf '%s\n' "$out" | grep -qa '^AGGREGATE_COMPLETE'; then
+    printf '  REPORT  targeted aggregate session completed\n'
+  else
+    printf '  FAIL  targeted aggregate session produced no status\n'
     FAILED=1
   fi
   rm -f "$sel"
+  if [ -n "$merged_tmp" ]; then rm -f "$merged_tmp"; fi
 }
-run_pytest
+if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then
+  echo "  SKIP  targeted tests — measured by the independent aggregate test arm"
+else
+  run_pytest
+fi
+
+# Merge verification already has enough evidence to refuse once the aggregate
+# session produced NO complete record.  Continuing through every remaining gate
+# cannot turn UNKNOWN into PASS; it only burns the critical path.  Ordinary red
+# tests do NOT take this branch because the differential still has to decide
+# whether they were pre-existing.
+if [ "${GATEKEEPER_FAIL_FAST_NORECORD:-0}" = "1" ] \
+   && [ "${TARGETED_NORECORD:-0}" = "1" ]; then
+  echo "=== FAILURES ABOVE — aggregate NORECORD is an absolute refusal; remaining gates were not run"
+  exit 2
+fi
 
 # ── REPO-LEVEL tests (tools/) ──────────────────────────────────────────────
 # `run_pytest` above cannot reach them, and not by accident: the targeted
@@ -678,7 +778,14 @@ run "worktree unchanged since the gates started" \
     python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT" \
         --expect-fingerprint "$FP"
 
-if [ "$FAILED" -eq 0 ]; then
+if [ "$FAILED" -eq 0 ] && [ "${GATEKEEPER_NO_STAMP:-0}" = "1" ]; then
+  # Merge verification runs the authoritative aggregate test session in its
+  # own parallel arm.  This lane therefore proves ONLY the non-target gates and
+  # must never mint a standalone push stamp before that evidence is joined.
+  rm -f "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
+  echo "  REPORT  merge verifier owns the independent targeted-test evidence"
+  echo "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ==="
+elif [ "$FAILED" -eq 0 ]; then
   # Stamp the exact commit these suites were verified against. The hook compares
   # this to what is being pushed, so a later commit invalidates it automatically.
   #

@@ -283,10 +283,10 @@ def test_the_comparison_runs_after_the_last_suite_and_before_the_stamp(land_sh):
 
 def test_the_stamp_records_the_commit_and_is_dropped_when_a_gate_failed(land_sh):
     """A stamp that survives a failure is a permanent authorisation to push."""
-    assert _stamp_write(land_sh)
-    m = _STAMP_REMOVE_RE.search(land_sh)
-    assert m, "a failing run leaves the previous stamp in place"
-    assert m.start() > _stamp_write(land_sh).start(), (
+    stamp = _stamp_write(land_sh)
+    removals = list(_STAMP_REMOVE_RE.finditer(land_sh))
+    assert removals, "a failing run leaves the previous stamp in place"
+    assert any(m.start() > stamp.start() for m in removals), (
         "the removal is written before the success branch — read the order")
 
 

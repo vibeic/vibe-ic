@@ -1082,9 +1082,18 @@ def _build_probes(ids: Tuple[Any, ...]) -> None:
     todo = [s for s in ids if F.normalize_id(s) not in _PROBE_CACHE]
     if not todo:
         return
+    # This one pytest item deliberately batches many independent, real flow
+    # probes.  Expose FINITE completed-work checkpoints to the landing
+    # supervisor; do not emit time/output/CPU heartbeats.  When the private
+    # plugin is not loaded (ordinary direct pytest), this remains a no-op.
+    progress_plugin = sys.modules.get("_pytest_progress_plugin")
+    progress = getattr(progress_plugin, "domain_progress", None)
+    scope = f"matrix-d6-probes:{len(_PROBE_CACHE)}:{len(todo)}"
     with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
-        for probe in pool.map(_probe_step, todo):
+        for completed, probe in enumerate(pool.map(_probe_step, todo), start=1):
             _PROBE_CACHE.setdefault(F.normalize_id(probe.step_id), probe)
+            if progress is not None:
+                progress(scope, completed, len(todo))
 
 
 def _budget_from(items) -> Optional[Tuple[str, ...]]:
@@ -1567,6 +1576,7 @@ def _params():
     return out
 
 
+@pytest.mark.timeout(0)
 @pytest.mark.parametrize("cell", _params(), ids=lambda c: f"step{c.step_id}")
 def test_d6_skip_discipline(cell):
     """Every skip / vacuous-pass surface of this step is conditioned on a
