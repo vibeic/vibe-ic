@@ -48,6 +48,7 @@ import shutil
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -139,6 +140,13 @@ def test_the_test_tier_failing_is_not_by_itself_a_refusal():
     assert log.blocking_failures == []
 
 
+def test_a_test_tier_failure_with_all_green_machine_record_is_refused():
+    v = _decide(land=V.parse_land_log(_RED_TEST_TIER_LOG), delta=_delta())
+    assert v.ok is False
+    assert any("FAILED BUT THE CANDIDATE REPORT CONTAINS NO RED" in reason
+               for reason in v.reasons)
+
+
 def test_fixing_a_pre_existing_failure_is_reported_and_never_required():
     v = _decide(delta=_delta(fixed=["m::t_was_red"]))
     assert v.ok is True
@@ -161,6 +169,19 @@ def test_a_silenced_failure_is_refused_and_is_never_an_improvement():
     v = _decide(delta=_delta(silenced=["m::t_skipped_now"]))
     assert v.ok is False
     assert any("SILENCED" in r for r in v.reasons)
+
+
+def test_a_passing_test_weakened_to_skip_is_refused():
+    """Green base evidence must not become a stale permission to stop asking.
+
+    A cached PASS followed by a candidate SKIP is unsafe even when the live
+    base would still pass; if runtime drift made the live base red, allowing
+    PASS -> SKIP would hide the exact silenced failure the differential exists
+    to catch.
+    """
+    v = _decide(delta=_delta(weakened=["m::t_skipped_now"]))
+    assert v.ok is False
+    assert any("WEAKENED" in r for r in v.reasons)
 
 
 def test_a_rebase_conflict_is_refused():
@@ -332,6 +353,52 @@ def test_land_gates_that_did_not_report_are_not_a_pass():
     assert any("DID NOT RUN" in r for r in v.reasons)
 
 
+def test_a_partial_non_target_gate_log_is_not_a_composite_pass():
+    partial = V.parse_land_log(
+        "=== gatekeeper landing gates — base=origin/main ===\n"
+        "  PASS  one cheap gate\n")
+    v = _decide(land=partial, candidate_gate_rc=0,
+                require_composite_gate_record=True)
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("NO COMPLETE TERMINAL RECORD" in r for r in v.reasons)
+
+
+def test_a_non_target_gate_abnormal_exit_refuses_even_with_a_fake_terminal():
+    fake = V.parse_land_log(
+        "=== gatekeeper landing gates — base=origin/main ===\n"
+        "  PASS  one cheap gate\n"
+        "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ===\n")
+    v = _decide(land=fake, candidate_gate_rc=2,
+                require_composite_gate_record=True)
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("DID NOT EXIT NORMALLY" in r for r in v.reasons)
+
+
+def test_a_complete_non_target_gate_record_can_join_the_composite():
+    complete = V.parse_land_log(
+        "=== gatekeeper landing gates — base=origin/main ===\n"
+        "  PASS  one cheap gate\n"
+        "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ===\n")
+    v = _decide(land=complete, candidate_gate_rc=0,
+                require_composite_gate_record=True)
+    assert v.ok is True, v.reasons
+
+
+def test_a_candidate_test_arm_that_wrote_the_tree_is_refused():
+    v = _decide(candidate_test_worktree_status="dirty")
+    assert v.ok is False
+    assert any("TEST ARM WROTE" in r for r in v.reasons)
+
+
+def test_an_uninspectable_candidate_test_worktree_is_unmeasurable():
+    v = _decide(candidate_test_worktree_status="unknown")
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("COULD NOT BE INSPECTED" in r for r in v.reasons)
+
+
 def test_a_candidate_that_ran_no_tests_is_not_a_pass():
     v = _decide(delta=_delta(candidate_total=0, base_total=0, overlap=0))
     assert v.ok is False
@@ -484,6 +551,70 @@ def _junit(tmp_path, cases, name="r.xml"):
     return p
 
 
+def _attest_junit(path, cases, selection, *, aggregate=True, per_file=True):
+    """Append the exact process-suite shapes emitted by the real driver."""
+    root = ET.parse(str(path)).getroot()
+    outcomes = {name: [] for name in selection}
+    for classname, _tname, outcome, file_name in cases:
+        probe = ET.Element("testcase", {"classname": classname})
+        if file_name:
+            probe.set("file", file_name)
+        recovered = V._file_of(probe, selection)
+        if recovered:
+            outcomes.setdefault(recovered, []).append(outcome)
+    if per_file:
+        for file_name in sorted(
+                name for name, values in outcomes.items() if values):
+            rc = 1 if any(v in {"failed", "errored"}
+                          for v in outcomes[file_name]) else 0
+            name = f"{file_name}::process_exit"
+            suite = ET.SubElement(root, "testsuite", {
+                "name": name, "tests": "1", "failures": str(int(rc != 0)),
+                "errors": "0", "skipped": "0",
+            })
+            tc = ET.SubElement(suite, "testcase", {
+                "classname": "pytest_per_file_process", "name": name,
+                "file": file_name,
+            })
+            props = ET.SubElement(tc, "properties")
+            ET.SubElement(props, "property", {
+                "name": "process_rc", "value": str(rc)})
+            if rc:
+                ET.SubElement(tc, "failure")
+    if aggregate:
+        ordinary = next(root.iter("testsuite"))
+        aggregate_suite = ET.SubElement(root, "testsuite", {
+            "name": "aggregate::pytest",
+        })
+        for original in list(ordinary.iter("testcase")):
+            copied = ET.fromstring(ET.tostring(original, encoding="unicode"))
+            recovered = V._file_of(original, selection)
+            if recovered:
+                copied.set("file", recovered)
+            copied.set(
+                "classname",
+                "pytest_aggregate." + (copied.get("classname") or ""))
+            aggregate_suite.append(copied)
+        rc = 1 if any(outcome in {"failed", "errored"}
+                      for _c, _n, outcome, _f in cases) else 0
+        name = "whole_selection::process_exit"
+        suite = ET.SubElement(root, "testsuite", {
+            "name": name, "tests": "1", "failures": str(int(rc != 0)),
+            "errors": "0", "skipped": "0",
+        })
+        tc = ET.SubElement(suite, "testcase", {
+            "classname": "pytest_aggregate_process", "name": name,
+            "file": "<aggregate>",
+        })
+        props = ET.SubElement(tc, "properties")
+        ET.SubElement(props, "property", {
+            "name": "process_rc", "value": str(rc)})
+        if rc:
+            ET.SubElement(tc, "failure")
+    ET.ElementTree(root).write(str(path), encoding="utf-8",
+                               xml_declaration=True)
+
+
 def test_junit_outcomes_are_read_including_xfail(tmp_path):
     p = _junit(tmp_path, [
         ("m", "a", "passed", None), ("m", "b", "failed", None),
@@ -520,6 +651,64 @@ def test_the_file_attribute_is_preferred_when_present(tmp_path):
     assert V.junit_files(p, []) == {"programs/tests/test_thing.py"}
 
 
+def test_subject_testcase_cannot_spoof_a_parent_process_suite(tmp_path):
+    selected = "programs/tests/test_thing.py"
+    p = tmp_path / "spoof.xml"
+    p.write_text(
+        '<?xml version="1.0"?><testsuites><testsuite name="' + selected + '">'
+        '<testcase classname="pytest_per_file_process" '
+        'name="' + selected + '::process_exit" file="' + selected + '">'
+        '<properties><property name="process_rc" value="0"/></properties>'
+        '</testcase></testsuite><testsuite name="pytest">'
+        '<testcase classname="pytest_aggregate_process" '
+        'name="whole_selection::process_exit" file="&lt;aggregate&gt;">'
+        '<properties><property name="process_rc" value="0"/></properties>'
+        '</testcase></testsuite></testsuites>')
+    assert V.junit_per_file_process_files(p) == set()
+    assert V.junit_has_aggregate_process(p) is False
+
+
+def test_subject_process_attributes_cannot_turn_a_failure_green(tmp_path):
+    p = tmp_path / "ordinary-failure.xml"
+    p.write_text(
+        '<?xml version="1.0"?><testsuites>'
+        '<testsuite name="programs/tests/test_thing.py">'
+        '<testcase classname="pytest_per_file_process" name="test_new_red" '
+        'file="programs/tests/test_thing.py">'
+        '<properties><property name="process_rc" value="0"/></properties>'
+        '<failure>real candidate regression</failure>'
+        '</testcase></testsuite></testsuites>')
+    got = V.read_junit(p)
+    assert got["pytest_per_file_process::test_new_red"] == V.FAILED
+    assert V.junit_red_count(p) == 1
+
+
+def test_per_file_diagnostics_cannot_fill_an_incomplete_aggregate(tmp_path):
+    """The fallback channel cannot complete the authoritative question."""
+    selected = ["programs/tests/test_alpha.py",
+                "programs/tests/test_beta.py"]
+    p = tmp_path / "mixed.xml"
+    p.write_text(
+        '<?xml version="1.0"?><testsuites>'
+        '<testsuite name="aggregate::pytest">'
+        '<testcase classname="pytest_aggregate.programs.tests.test_alpha" '
+        'name="a" file="programs/tests/test_alpha.py"/>'
+        '</testsuite>'
+        '<testsuite name="programs/tests/test_beta.py">'
+        '<testcase classname="programs.tests.test_beta" name="b" '
+        'file="programs/tests/test_beta.py"/>'
+        '</testsuite>'
+        '<testsuite name="whole_selection::process_exit" tests="1" '
+        'failures="0" errors="0" skipped="0">'
+        '<testcase classname="pytest_aggregate_process" '
+        'name="whole_selection::process_exit" file="&lt;aggregate&gt;">'
+        '<properties><property name="process_rc" value="0"/></properties>'
+        '</testcase></testsuite></testsuites>')
+
+    assert set(selected).issubset(V.junit_files(p, selected))
+    assert V.junit_aggregate_files(p, selected) == {selected[0]}
+
+
 def test_report_lines_are_never_read_as_gates():
     """`gatekeeper-land.sh` prints REPORT for probes that are deliberately not
     landing bars. Counting one as a gate would make the gate a ban."""
@@ -545,15 +734,29 @@ def test_a_selection_failure_is_not_the_test_tier():
 
 
 def _cli(tmp_path, land_text, base_cases, cand_cases, sel, extra=(),
-         base_sel=None):
+         base_sel=None, attest_candidate=True,
+         candidate_aggregate=True, candidate_per_file=True,
+         attest_base=True, base_aggregate=True, base_per_file=True,
+         base_mutator=None, candidate_mutator=None):
     (tmp_path / "land.log").write_text(land_text)
     (tmp_path / "sel.txt").write_text("\n".join(sel) + "\n")
     bj = _junit(tmp_path, base_cases, "base.xml")
     cj = _junit(tmp_path, cand_cases, "cand.xml")
+    if attest_candidate:
+        _attest_junit(cj, cand_cases, sel, aggregate=candidate_aggregate,
+                      per_file=candidate_per_file)
     base_sel_arg = ()
     if base_sel is not None:
         (tmp_path / "sel_base.txt").write_text("\n".join(base_sel) + "\n")
         base_sel_arg = ("--base-selection", str(tmp_path / "sel_base.txt"))
+        if attest_base:
+            _attest_junit(bj, base_cases, base_sel,
+                          aggregate=base_aggregate,
+                          per_file=base_per_file)
+    if base_mutator:
+        base_mutator(bj)
+    if candidate_mutator:
+        candidate_mutator(cj)
     cmd = [sys.executable, str(_PROG),
            "--base-sha", SHA, "--head-sha", SHA, "--verified-sha", SHA,
            "--rebase-status", "ok", "--expected-tree", TREE,
@@ -578,6 +781,40 @@ def test_cli_returns_zero_and_names_the_verified_commit(tmp_path):
     assert "LAND OK" in r.stdout
     assert doc["verdict"] == "LAND_OK"
     assert doc["verified_sha"] == SHA
+
+
+def test_candidate_aggregate_norecord_is_an_absolute_refusal(tmp_path):
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+        candidate_aggregate=False)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc["candidate_aggregate_process_present"] is False
+    assert any("CANDIDATE AGGREGATE TEST SESSION" in reason
+               for reason in doc["reasons"])
+
+
+def test_base_aggregate_norecord_is_an_absolute_refusal(tmp_path):
+    """A complete candidate cannot compensate for an unknown baseline."""
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+        base_sel=_SEL, base_aggregate=False)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc["base_aggregate_process_present"] is False
+    assert doc["dropped_base_selected_files"] == _SEL
+    assert any("BASE AGGREGATE TEST SESSION" in reason
+               for reason in doc["reasons"])
+
+
+def test_aggregate_only_attestations_are_sufficient_on_both_arms(tmp_path):
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+        base_sel=_SEL, candidate_per_file=False, base_per_file=False)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert doc["verdict"] == "LAND_OK"
+    assert doc["test_evidence_mode"] == "aggregate"
+    assert doc["missing_candidate_process_files"] == []
+    assert doc["dropped_base_selected_files"] == []
+    assert doc["missing_base_process_files"] == []
 
 
 _SEL2 = ["programs/tests/test_alpha.py", "programs/tests/test_beta.py"]
@@ -615,7 +852,8 @@ def test_a_partial_base_arm_cannot_clear_a_silenced_failure(tmp_path):
     r_whole, doc_whole = _cli(whole_dir, _RED_TEST_TIER_LOG, _CASE_BASE_WHOLE,
                               _CASE_SILENCED_CAND, _SEL2, base_sel=_SEL2)
     assert r_whole.returncode == 1, r_whole.stdout + r_whole.stderr
-    assert doc_whole["delta"]["silenced"] == ["programs.tests.test_alpha::t_red"]
+    assert doc_whole["delta"]["silenced"] == [
+        "pytest_aggregate.programs.tests.test_alpha::t_red"]
     assert doc_whole["dropped_base_selected_files"] == []
 
     part_dir = tmp_path / "partial"
@@ -632,6 +870,28 @@ def test_a_partial_base_arm_cannot_clear_a_silenced_failure(tmp_path):
     # The silencing itself is INVISIBLE to the partial arm — which is the whole
     # point. The refusal is the only thing standing between it and a landing.
     assert doc_part["delta"]["silenced"] == []
+
+
+def test_per_file_base_diagnostics_cannot_fill_aggregate_coverage(tmp_path):
+    """A fallback record for beta cannot make a partial base aggregate whole."""
+    def drop_beta_from_aggregate(path):
+        root = ET.parse(str(path)).getroot()
+        for suite in root.iter("testsuite"):
+            if not (suite.get("name") or "").startswith("aggregate::"):
+                continue
+            for tc in list(suite):
+                if tc.get("file") == _SEL2[1]:
+                    suite.remove(tc)
+        ET.ElementTree(root).write(str(path), encoding="utf-8",
+                                   xml_declaration=True)
+
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_BASE_WHOLE, _CASE_SILENCED_CAND,
+        _SEL2, base_sel=_SEL2, base_mutator=drop_beta_from_aggregate)
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc["dropped_base_selected_files"] == [_SEL2[1]]
+    assert any("ON THE BASE" in reason for reason in doc["reasons"])
 
 
 def test_a_base_arm_asked_for_files_that_produced_no_report_is_refused(tmp_path):
@@ -706,7 +966,10 @@ def test_cli_returns_one_on_a_new_failure(tmp_path):
     r, doc = _cli(tmp_path, _RED_TEST_TIER_LOG, _CASE_OK, _CASE_RED, _SEL)
     assert r.returncode == 1, r.stdout
     assert doc["verdict"] == "REFUSE"
-    assert doc["delta"]["new_failures"] == ["programs.tests.test_thing::a"]
+    assert "pytest_aggregate.programs.tests.test_thing::a" in \
+        doc["delta"]["new_failures"]
+    assert any(key.startswith("pytest_aggregate_process::")
+               for key in doc["delta"]["new_failures"])
 
 
 def test_cli_returns_two_when_the_candidate_report_is_absent(tmp_path):
@@ -816,11 +1079,27 @@ def test_the_base_gate_cache_is_keyed_by_the_base_commit():
     an earlier tree's gates, and it would answer it permissively."""
     src = _VERIFY.read_text(encoding="utf-8")
     body = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
-    assert '"$BASE_GATE_CACHE/$BASE_SHA.land.log"' in body, \
-        "the cache is not keyed by the base commit"
-    # An empty or sentinel-less log must never be cached: it would read as
-    # "the base fails nothing", which is the permissive direction.
+    assert '"base=$BASE_SHA"' in body, "the cache omits the base commit"
+    assert 'gatekeeper-base-cache-schema=3-green-only' in body
+    assert 'host=$THIS_HOST' in body
+    assert 'CACHE_FINGERPRINT' in body
+    assert 'CACHED_MANIFEST' in body
+    # An empty, unterminated, or half-published log must never be cached: it
+    # would read as "the base fails nothing", which is the permissive direction.
     assert "grep -q '^=== gatekeeper landing gates'" in body
+    assert "grep -q '^=== ALL GATES PASS'" in body
+    assert '! grep -q \'^  FAIL  \' "$CACHED"' in body
+    assert 'flock -n "$A2_CACHE_LOCK_FD"' in body
+    assert 'mv "$CACHE_TMP.manifest" "$CACHED_MANIFEST"' in body
+
+
+def test_the_critical_path_does_not_run_targeted_tests_inside_a2_again():
+    src = _VERIFY.read_text(encoding="utf-8")
+    body = "\n".join(line for line in src.splitlines()
+                     if not line.lstrip().startswith("#"))
+    assert body.count("GATEKEEPER_SKIP_TARGETED_TESTS=1") >= 2
+    assert "GATEKEEPER_NO_STAMP=1" in body
+    assert "gkverify-b1" in body and "gkverify-b2" in body
 
 
 def test_the_gate_tier_is_compared_against_the_base_not_asserted():
@@ -868,8 +1147,8 @@ def test_the_candidate_arm_runs_without_a_maxfail_bound():
     verify = _VERIFY.read_text(encoding="utf-8")
     vbody = "\n".join(l for l in verify.splitlines()
                       if not l.lstrip().startswith("#"))
-    assert "GATEKEEPER_PYTEST_MAXFAIL=0" in vbody, \
-        "the candidate arm still truncates, so the differential cannot be computed"
+    assert "--stop-after-failures 0" in vbody, \
+        "the candidate aggregate arm still truncates, so the differential cannot be computed"
     # ...and a truncated run must remain a refusal, not a pass, for the cases the
     # bound cannot be lifted (a foreign land.sh that predates the hook).
     assert _decide(truncated=True, dropped_files=["programs/tests/test_x.py"]).ok \
@@ -924,17 +1203,33 @@ if [ -n "${GATEKEEPER_CONCURRENCY_PROBE_DIR:-}" ]; then
 fi
 echo "=== gatekeeper landing gates — base=${GATEKEEPER_BASE:-origin/main} ==="
 echo "  PASS  a cheap gate"
-J=()
-[ -n "${GATEKEEPER_PYTEST_JUNIT:-}" ] && J=(-o junit_family=xunit1 "--junitxml=$GATEKEEPER_PYTEST_JUNIT")
-sel="$(cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "${GATEKEEPER_BASE:-HEAD}")"
-if ( cd "$PLUGIN" && python3 -m pytest -q --maxfail=10 "${J[@]+"${J[@]}"}" $sel >/dev/null 2>&1 ); then
+SEL="$(mktemp -t stub_sel.XXXXXX)"
+JOUT="${GATEKEEPER_PYTEST_JUNIT:-$(mktemp -t stub_junit.XXXXXX)}"
+( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "${GATEKEEPER_BASE:-HEAD}" ) > "$SEL"
+if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then
+  echo "  SKIP  targeted tests — measured by the independent aggregate test arm"
+  if [ "${GATEKEEPER_NO_STAMP:-0}" = "1" ]; then
+    echo "  REPORT  merge verifier owns the independent targeted-test evidence"
+    echo "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ==="
+  else
+    echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) ==="
+  fi
+elif ( cd "$PLUGIN" && python3 programs/pytest_per_file_junit.py \
+       --selection "$SEL" --junit "$JOUT" --stall-after 10 \
+       --aggregate-check --aggregate-only --aggregate-stall-after 10 \
+       -- python3 -m pytest -q --maxfail=10 >/dev/null 2>&1 ); then
   echo "  PASS  targeted tests (1 file(s))"
+  echo "  REPORT  targeted test process verdicts embedded in junit"
+  echo "  REPORT  targeted aggregate session completed"
   git rev-parse HEAD > "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) ==="
 else
   echo "  FAIL  targeted tests (1 file(s))"
+  echo "  REPORT  targeted test process verdicts embedded in junit"
+  echo "  REPORT  targeted aggregate session completed"
   echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
 fi
+rm -f "$SEL"
 """
 
 # `thing.py` is ORDINARY SOURCE and `test_thing.py` pins it. The negative
@@ -950,11 +1245,13 @@ def _require_parallel_gate_arms():
     probe = os.environ.get("GATEKEEPER_CONCURRENCY_PROBE_DIR")
     if not probe or os.environ.get("GATEKEEPER_VERIFY_ARM") != "A1":
         return
-    needed = [pathlib.Path(probe) / "A2.started", pathlib.Path(probe) / "B.started"]
+    needed = [pathlib.Path(probe) / f"{arm}.started"
+              for arm in ("A2", "B1", "B2")]
     deadline = time.monotonic() + 8
     while time.monotonic() < deadline and not all(path.is_file() for path in needed):
         time.sleep(0.02)
-    assert all(path.is_file() for path in needed), "A1 completed before A2 and B started"
+    assert all(path.is_file() for path in needed), \
+        "A1 completed before A2, B1 and B2 started"
 
 
 def test_value_is_one():
@@ -982,6 +1279,12 @@ def sandbox(tmp_path_factory):
     os.chmod(repo / "tools/gatekeeper-land.sh", 0o755)
     (plugin / "programs/ci_targeted_test_select.py").write_text(_STUB_SELECT)
     shutil.copy2(_PROG, plugin / "programs/landing_merge_verdict.py")
+    shutil.copy2(_PROGRAMS / "pytest_per_file_junit.py",
+                 plugin / "programs/pytest_per_file_junit.py")
+    shutil.copy2(_PROGRAMS / "_watchdog.py",
+                 plugin / "programs/_watchdog.py")
+    shutil.copy2(_PROGRAMS / "_pytest_progress_plugin.py",
+                 plugin / "programs/_pytest_progress_plugin.py")
     (plugin / "programs/thing.py").write_text(_THING_SRC.format(v=1))
     (plugin / "programs/tests/test_thing.py").write_text(_THING_TEST)
     (plugin / "pytest.ini").write_text("[pytest]\ntestpaths = programs/tests\n")
@@ -1054,13 +1357,78 @@ def test_end_to_end_a_known_good_branch_is_allowed(sandbox, tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     assert doc["verdict"] == "LAND_OK"
     assert doc["delta"]["new_failures"] == []
-    assert doc["land"]["stamped_sha"], "the landing gates never stamped"
+    assert doc["land"]["stamped_sha"] is None, (
+        "the non-target B2 lane minted a standalone stamp before B1 joined")
+    assert any("merge verifier owns" in label
+               for label in doc["land"]["report"])
     assert doc["base_land"] is not None, "arm A2 never ran, so the gate tier was asserted"
+    assert any("targeted tests" in label
+               for label in doc["base_land"]["skip"]), (
+        "A2 duplicated the targeted suite already measured by A1")
 
 
-def test_end_to_end_a1_a2_and_b_start_in_parallel_isolated_worktrees(
+def test_end_to_end_base_gate_cache_hits_exactly_and_misses_after_base_moves(
         sandbox, tmp_path):
-    """The three expensive merge-verification arms are one critical path.
+    """A reusable baseline must prove both HIT and stale-key MISS."""
+    repo = tmp_path / "cache-repo"
+    cloned = subprocess.run(
+        ["git", "clone", "-q", str(sandbox), str(repo)],
+        capture_output=True, text=True, timeout=_T)
+    assert cloned.returncode == 0, cloned.stderr
+    _git(repo, "config", "user.email", "t@localhost")
+    _git(repo, "config", "user.name", "t")
+    assert _git(repo, "branch", "innocuous_green",
+                "origin/innocuous_green").returncode == 0
+    cache = tmp_path / "base-cache"
+
+    first_dir = tmp_path / "cache-first"
+    first_dir.mkdir()
+    first, first_doc = _verify(
+        repo, "innocuous_green", first_dir,
+        "--base-gate-cache", str(cache))
+    assert first.returncode == 0, first.stdout + first.stderr
+    old_base = first_doc["base_sha"]
+    old_manifests = {
+        p for p in cache.glob(f"{old_base}.*.manifest")
+        if not p.name.endswith(".base-tests.manifest")}
+    assert len(old_manifests) == 1
+
+    hit_dir = tmp_path / "cache-hit"
+    hit_dir.mkdir()
+    hit, hit_doc = _verify(
+        repo, "innocuous_green", hit_dir,
+        "--base-gate-cache", str(cache))
+    assert hit.returncode == 0, hit.stdout + hit.stderr
+    assert hit_doc["base_sha"] == old_base
+    assert "arm A2: reused the gate log" in hit.stdout
+    assert "arm A1: reused aggregate test evidence" in hit.stdout
+
+    _git(repo, "checkout", "-q", "main")
+    (repo / "base_moved.txt").write_text("new base\n")
+    _git(repo, "add", "base_moved.txt")
+    assert _git(repo, "commit", "-qm", "move base").returncode == 0
+    _git(repo, "checkout", "-q", "-b", "green_after_move")
+    (repo / "green_after_move.txt").write_text("candidate\n")
+    _git(repo, "add", "green_after_move.txt")
+    assert _git(repo, "commit", "-qm", "green after move").returncode == 0
+
+    miss_dir = tmp_path / "cache-miss"
+    miss_dir.mkdir()
+    probe = tmp_path / "cache-miss-probe"
+    miss, miss_doc = _verify(
+        repo, "green_after_move", miss_dir,
+        "--base-gate-cache", str(cache),
+        env_extra={"GATEKEEPER_CONCURRENCY_PROBE_DIR": str(probe)})
+    assert miss.returncode == 0, miss.stdout + miss.stderr
+    assert miss_doc["base_sha"] != old_base
+    assert f"base {old_base[:12]}" not in miss.stdout
+    assert (probe / "A2.started").is_file(), "moved base reused stale A2"
+    assert list(cache.glob(f"{miss_doc['base_sha']}.*.manifest"))
+
+
+def test_end_to_end_a1_a2_b1_and_b2_start_in_parallel_isolated_worktrees(
+        sandbox, tmp_path):
+    """All four expensive merge-verification arms share one critical path.
 
     A1's real test waits until the A2 and B landing wrappers have both started.
     The old serial implementation times out in A1 before either marker can
@@ -1075,7 +1443,8 @@ def test_end_to_end_a1_a2_and_b_start_in_parallel_isolated_worktrees(
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert doc["verdict"] == "LAND_OK"
-    assert {p.name for p in probe.iterdir()} >= {"A2.started", "B.started"}
+    assert {p.name for p in probe.iterdir()} >= {
+        "A2.started", "B1.started", "B2.started"}
     assert doc["base_land"] is not None
     assert doc["delta"]["new_failures"] == []
 
@@ -1129,13 +1498,18 @@ def test_end_to_end_the_caller_checkout_is_never_touched(sandbox, tmp_path):
     assert _git(sandbox, "worktree", "list").stdout.count("\n") == 1
 
 
+@pytest.mark.parametrize(
+    ("hung_arm", "pid_only_term"),
+    [("A2", False), ("B2", True)],
+)
 def test_interruption_kills_a_term_ignoring_parallel_arm_and_removes_worktrees(
-        sandbox, tmp_path):
+        sandbox, tmp_path, hung_arm, pid_only_term):
     """Parallel speed must not trade an interrupt for leaked gate processes.
 
-    A private clone's A2 arm deliberately ignores TERM forever.  SIGINT to the
-    verifier must run the bounded cleanup, escalate that dedicated group to
-    KILL, reap it, and remove all three temporary worktrees.
+    A private clone's selected arm deliberately ignores TERM forever.  Both a
+    process-group SIGINT and the common PID-only SIGTERM service-stop path must
+    run bounded cleanup, escalate every dedicated group to KILL, reap it, and
+    remove all four temporary worktrees.
     """
     repo = tmp_path / "interrupt-repo"
     cloned = subprocess.run(
@@ -1151,12 +1525,12 @@ def test_interruption_kills_a_term_ignoring_parallel_arm_and_removes_worktrees(
     text = land.read_text()
     needle = 'echo "=== gatekeeper landing gates — base=${GATEKEEPER_BASE:-origin/main} ==="\n'
     hang = r'''if [ -n "${GATEKEEPER_CONCURRENCY_PROBE_DIR:-}" ] \
-   && [ "${GATEKEEPER_VERIFY_ARM:-}" = "A2" ]; then
-  echo "$$" > "$GATEKEEPER_CONCURRENCY_PROBE_DIR/A2.pid"
+   && [ "${GATEKEEPER_VERIFY_ARM:-}" = "__HUNG_ARM__" ]; then
+  echo "$$" > "$GATEKEEPER_CONCURRENCY_PROBE_DIR/__HUNG_ARM__.pid"
   trap '' TERM
   while :; do sleep 30; done
 fi
-'''
+'''.replace("__HUNG_ARM__", hung_arm)
     assert needle in text
     land.write_text(text.replace(needle, hang + needle))
     _git(repo, "add", "tools/gatekeeper-land.sh")
@@ -1176,7 +1550,7 @@ fi
         env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
              "GATEKEEPER_CONCURRENCY_PROBE_DIR": str(probe)},
     )
-    pid_file = probe / "A2.pid"
+    pid_file = probe / f"{hung_arm}.pid"
     deadline = time.monotonic() + 12
     while time.monotonic() < deadline and not pid_file.is_file():
         if proc.poll() is not None:
@@ -1185,9 +1559,12 @@ fi
     assert pid_file.is_file(), proc.communicate(timeout=2)
     arm_pid = int(pid_file.read_text().strip())
 
-    os.killpg(proc.pid, signal.SIGINT)
+    if pid_only_term:
+        os.kill(proc.pid, signal.SIGTERM)
+    else:
+        os.killpg(proc.pid, signal.SIGINT)
     # Wait on the cleanup protocol, not on a wall-clock estimate of how fast a
-    # loaded host can remove three worktrees.  `_T` is only the suite's final
+    # loaded host can remove four worktrees.  `_T` is only the suite's final
     # dead-process safety ceiling; the success path is the atomic `done` event.
     cleanup_started = probe / "cleanup.started"
     cleanup_reaped = probe / "cleanup.reaped"
@@ -1475,7 +1852,10 @@ def test_end_to_end_the_fallback_allows_a_known_good_branch(sandbox, tmp_path):
     assert doc["verification_tier"] == V.TIER_REBASE_REPLAY
     assert doc["tier_degraded"] is True
     assert doc["delta"]["new_failures"] == []
-    assert doc["land"]["stamped_sha"], "the landing gates never stamped"
+    assert doc["land"]["stamped_sha"] is None, (
+        "the non-target B2 lane minted a standalone stamp before B1 joined")
+    assert any("merge verifier owns" in label
+               for label in doc["land"]["report"])
     assert doc["base_land"] is not None, "arm A2 never ran under the fallback"
     # The tree under test IS the replay — that identity is the disclosed loss.
     assert doc["expected_tree"] == doc["replayed_tree"] == doc["verified_tree"]

@@ -534,13 +534,44 @@ def test_the_json_record_carries_what_the_text_says(tmp_path):
 #: remedy is the checker's SECOND one — move the two replay-driven tests out of
 #: the 180 s lane — which needs a lane that does not exist in this tree yet.
 #: When it does, delete this entry and the set is empty again.
+#: ── AND THE ENTRY HAD TO CARRY WHAT THE EXPIRY COSTS (vibe-ic#1654) ─────────
+#: The recording below was honest and its measurement is sound, and it was still
+#: only half the fact. It reasons about the call's DURATION — how long the bound
+#: permits — and a reader of it learns "this test is slow". What it did not say
+#: is what happens to the EVIDENCE when the bound is reached, and those are
+#: different properties.
+#:
+#: MEASURED at 1adbf3444 with three files, one of them hanging in this entry's
+#: exact shape (`Future.result` -> `Condition.wait` -> `waiter.acquire`):
+#: `--timeout-method=thread` cannot interrupt a blocking `waiter.acquire()`, so
+#: pytest-timeout dumps the stacks and takes the PROCESS down, and a process
+#: that dies never writes its `--junitxml`. The green file that had already
+#: PASSED lost its record with it, and `ls` on the junit target reported
+#: `No such file or directory`. In the 91-file selection that opened #1654 the
+#: blast radius was the other 90 files, on BOTH arms — which is the permissive
+#: direction, because the merge gate's failed-set differential reads both arms
+#: from junit and an absent record must never be read as a clean one.
+#:
+#: So the consequence is recorded HERE, beside the duration, and the fix is not
+#: a re-bound: `programs/pytest_per_file_junit.py` gives each selected file its
+#: own session and its own report, so this entry's expiry now costs THIS file's
+#: record and names it (`NORECORD`) instead of the run's. The relocation the
+#: entry asks for is still the right remedy for the DURATION half and is still
+#: owed.
 _REVIEWED_ADVISORY_RESIDUAL = {
     ("programs/tests/test_matrix_mutation_ledger.py", "L.replay_many"): (
         "REPLAY_TIMEOUT=900 bounds one `_run_cell` pytest-cell subprocess. "
         "MEASURED 24-pair witness plan, 32 cores, instrumented at `_run_cell`: "
         "32 invocations, worst single call 42.61 s at jobs=8 / 26.8 s "
         "uncontended (dimension-7 cell). 60 s is 1.41x that and would fire on "
-        "passing work. Needs relocation out of the 180 s lane, not a re-bound."
+        "passing work. Needs relocation out of the 180 s lane, not a re-bound. "
+        "RECORD-LOSS CONSEQUENCE (vibe-ic#1654): when this bound is reached the "
+        "180 s harness has already killed the SESSION, and a killed session "
+        "writes no junit — so the expiry used to cost the whole run's "
+        "machine-readable record, not just this file's result (measured: 1 "
+        "hanging file of 91 selected, both arms, neither junit written). "
+        "`programs/pytest_per_file_junit.py` now confines that loss to this "
+        "file and NAMES it; the relocation is still owed for the duration."
     ),
 }
 
