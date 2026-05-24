@@ -1,6 +1,6 @@
 {
   "name": "mcp-eda-server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server bridging Claude / AI agents to open-source EDA tools (Yosys, OpenROAD, KLayout, SymbiYosys, Magic, ngspice, ...) and lab hardware (FPGA programmer, oscilloscope, USB tester) over the Model Context Protocol.",
   "type": "module",
   "bin": {

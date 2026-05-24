@@ -92,7 +92,7 @@ For answers to common questions about this code of conduct, see the FAQ at [http
 
 ## Enforcement contact (VibeIC.AI)
 
-Reports go to: **conduct@vibeic.ai** (private). If you prefer not to use
+Reports go to: **reyer.chu@vibeic.ai** (private). If you prefer not to use
 email, open a confidential issue tagged `code-of-conduct`.
 
 Maintainers will acknowledge within 7 days and decide on any action

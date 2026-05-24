@@ -5,6 +5,18 @@ All notable changes to the `vibe-ic` plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — Cleanup
+
+### Changed
+
+- Maintainer contact emails (`CODE_OF_CONDUCT.md`, `SECURITY.md`) now
+  point to `reyer.chu@vibeic.ai`.
+
+### Removed
+
+- Internal development notes that slipped into v0.1.0:
+  `MIGRATION_LOG.md`, `SKILL_VS_RUNNER_DECISION.md`.
+
 ## [0.1.0] — Initial public release
 
 First public release. Claude Code plugin driving an AI-native IC design

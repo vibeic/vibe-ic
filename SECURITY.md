@@ -15,7 +15,7 @@ backported to the current minor only.
 
 **Please do not open a public GitHub issue for security vulnerabilities.**
 
-Instead, email **security@vibeic.ai** with:
+Instead, email **reyer.chu@vibeic.ai** with:
 
 - A description of the issue
 - Steps to reproduce (a minimal test case is ideal)
