@@ -1,0 +1,23 @@
+name: Stale
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"     # Mondays 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          days-before-stale: 60
+          days-before-close: 14
+          stale-issue-message: "This issue has been inactive for 60 days. It will close in 14 days unless updated. Add the `keep-open` label to suspend this bot."
+          stale-pr-message: "This PR has been inactive for 60 days. It will close in 14 days unless updated."
+          exempt-issue-labels: "keep-open,security,roadmap"
+          exempt-pr-labels: "keep-open,security"

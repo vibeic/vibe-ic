@@ -1,0 +1,316 @@
+#!/usr/bin/env python3
+"""cdc_async_input_check.py — deterministic compliance check derived from <chip-class> v040 debug.
+
+Verifies that asynchronous inputs (external pads, GPIO inputs, or signals named
+*_pad / *_async / *_raw) pass through at least a 2-stage synchronizer flop
+chain before being consumed by synchronous logic.
+
+Heuristic (no full CDC analysis):
+  - Find top-level module input/inout ports.
+  - Also flag any signal named *_pad / *_async / *_raw.
+  - For each such signal, look for direct usage inside always @(posedge ...)
+    blocks.
+  - If the signal is not staged through at least 2 sequential `<=` assignments
+    (a typical `_sync1 <= raw; _sync2 <= _sync1;` pattern), flag it.
+
+Exit: 0 = PASS (no unsynchronized async inputs), 1 = FAIL.
+"""
+from __future__ import annotations
+import argparse
+import json
+import re
+import sys
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+from typing import List, Set, Tuple
+
+
+@dataclass
+class Finding:
+    rule: str
+    severity: str
+    message: str
+    file: str = ""
+    line: int = 0
+
+
+@dataclass
+class AuditResult:
+    program: str
+    passed: bool
+    findings: List[Finding] = field(default_factory=list)
+    summary: dict = field(default_factory=dict)
+
+
+def strip_comments(src: str) -> str:
+    """Remove // and /* */ comments, preserving newlines."""
+    out = []
+    i = 0
+    while i < len(src):
+        if src[i:i+2] == '/*':
+            end = src.find('*/', i+2)
+            if end == -1:
+                break
+            out.append(''.join('\n' if c == '\n' else ' ' for c in src[i:end+2]))
+            i = end + 2
+        elif src[i:i+2] == '//':
+            end = src.find('\n', i)
+            if end == -1:
+                break
+            out.append(' ' * (end - i))
+            i = end
+        else:
+            out.append(src[i])
+            i += 1
+    return ''.join(out)
+
+
+def find_rtl_files(project_dir: Path) -> List[Path]:
+    """Find authoritative RTL. Excludes derived copies commonly placed under
+    formal/, sim/, synth/, build/, dft/, db/, .git/, etc."""
+    excluded_dir_parts = {
+        'formal', 'sim', 'synth', 'build', 'db', 'output_files',
+        'incremental_db', 'dft', 'pnr', 'gds', 'reports',
+        '.git', '__pycache__', 'node_modules',
+    }
+    files = []
+    for ext in ('*.v', '*.sv'):
+        files.extend(project_dir.rglob(ext))
+    result = []
+    for f in files:
+        if not f.is_file():
+            continue
+        # Skip if any path part matches an excluded directory
+        parts = set(f.relative_to(project_dir).parts[:-1])
+        if parts & excluded_dir_parts:
+            continue
+        result.append(f)
+    return result
+
+
+def find_input_ports(src: str) -> List[Tuple[str, int]]:
+    """Return list of (signal_name, lineno) for input/inout ports."""
+    ports = []
+    for m in re.finditer(
+        r'\b(input|inout)\s+(?:wire\s+|reg\s+|logic\s+)?'
+        r'(?:signed\s+|unsigned\s+)?(?:\[[^\]]+\]\s*)?(\w+)',
+        src
+    ):
+        name = m.group(2)
+        lineno = src[:m.start()].count('\n') + 1
+        ports.append((name, lineno))
+    return ports
+
+
+def find_suspicious_named_signals(src: str) -> List[Tuple[str, int]]:
+    """Find signals named *_pad, *_async, *_raw."""
+    sigs = []
+    seen = set()
+    for m in re.finditer(
+        r'\b(?:input|inout|wire|reg|logic)\s+(?:\[[^\]]+\]\s*)?'
+        r'(\w+_(?:pad|async|raw))\b',
+        src
+    ):
+        name = m.group(1)
+        if name in seen:
+            continue
+        seen.add(name)
+        lineno = src[:m.start()].count('\n') + 1
+        sigs.append((name, lineno))
+    return sigs
+
+
+def is_synchronized(src: str, signal: str) -> bool:
+    """
+    Check if signal has at least a 2-stage synchronizer.
+    Recognises:
+      (a) direct 2-flop chain: `sync1 <= signal;` then `sync2 <= sync1;`
+      (b) concatenation-based shift chain: `sync_q <= {sync_q[0], signal};`
+          (common compact 2FF synchroniser).
+      (c) signal used ONLY as async reset/clock in sensitivity lists
+          (`always @(posedge clk or negedge signal)` — signal IS the reset
+          and doesn't need further synchronising).
+    Updated 2026-04-22 per LL feedback_plugin_usage_discipline.md to handle
+    patterns (b) and (c) which were producing false positives.
+    """
+    # (c) used as async reset or clock in a sensitivity list
+    sens_pat = re.compile(
+        r'always\s*@\s*\([^)]*(?:posedge|negedge)\s+' + re.escape(signal) + r'\b'
+    )
+    if sens_pat.search(src):
+        # It IS the clock/reset; no further sync required
+        return True
+
+    # (a) direct chain
+    stage1_pat = re.compile(
+        r'\b(\w+)\s*<=\s*' + re.escape(signal) + r'\s*;'
+    )
+    stage1_targets = set(m.group(1) for m in stage1_pat.finditer(src))
+
+    # (b) concat shift: sync_q <= {sync_q[0], signal}; (or similar)
+    concat_pat = re.compile(
+        r'(\w+)\s*<=\s*\{[^}]*\b' + re.escape(signal) + r'\b[^}]*\}\s*;'
+    )
+    stage1_targets.update(m.group(1) for m in concat_pat.finditer(src))
+
+    if not stage1_targets:
+        return False
+
+    # stage 2: something_else <= stage1_target (direct or via indexed bit)
+    for t1 in stage1_targets:
+        stage2_pat = re.compile(
+            r'\b\w+\s*<=\s*(?:' + re.escape(t1) + r'|\{[^}]*\b' + re.escape(t1) + r'\b[^}]*\})'
+        )
+        if stage2_pat.search(src):
+            return True
+        # A shift-register `sync_q <= {sync_q[0], signal}` has sync_q[1] =
+        # second stage by construction (width ≥ 2). Accept it as 2-stage.
+        width_decl_pat = re.compile(
+            r'\b(?:reg|logic|wire)\s*\[\s*(\d+)\s*:\s*0\s*\]\s*' + re.escape(t1) + r'\b'
+        )
+        m = width_decl_pat.search(src)
+        if m and int(m.group(1)) >= 1:
+            return True
+    return False
+
+
+def is_used_in_always_posedge(src: str, signal: str) -> Tuple[bool, int]:
+    """Check if signal is read inside an always @(posedge ...) block."""
+    # Scan each always @(posedge ...) ... end block
+    # Heuristic: find `always @(posedge` and then capture text until a line
+    # that starts a new always/assign/endmodule.
+    for m in re.finditer(r'always\s*@\s*\(\s*posedge\b', src):
+        start = m.start()
+        # Find the matching end: naive — until next always/endmodule
+        tail = src[start:]
+        # cap scan length to ~4000 chars to avoid swallowing whole file
+        region_end = min(len(tail), 4000)
+        nxt = re.search(r'\n\s*(always\b|endmodule\b|assign\b)', tail[10:region_end])
+        region = tail[:10 + nxt.start()] if nxt else tail[:region_end]
+        # Skip if signal appears only on LHS of <=
+        pat = re.compile(r'\b' + re.escape(signal) + r'\b')
+        for mm in pat.finditer(region):
+            pos = mm.start()
+            rest = region[pos:pos + 120]
+            if re.match(r'^\w+\s*<=(?!=)', rest):
+                continue  # LHS
+            # Found a read
+            lineno = src[:start + pos].count('\n') + 1
+            return True, lineno
+    return False, 0
+
+
+def audit_file(path: Path, project_root: Path) -> List[Finding]:
+    findings: List[Finding] = []
+    try:
+        raw = path.read_text(errors='replace')
+    except Exception:
+        return findings
+    src = strip_comments(raw)
+
+    # Collect inputs + suspicious names (dedup)
+    candidates: List[Tuple[str, int]] = []
+    seen: Set[str] = set()
+    for name, lineno in find_input_ports(src) + find_suspicious_named_signals(src):
+        if name in seen:
+            continue
+        seen.add(name)
+        # Skip reset/clock pins (typical synchronizer exception)
+        if re.match(r'^(clk|clock|rst|rstn|reset|resetn)(_.*)?$', name, re.I):
+            continue
+        # Skip OpenTitan-style internal hierarchy ports: `<name>_i` is a
+        # convention for same-clock inputs (the parent drives from the same
+        # clock). Only flag names that match KNOWN async patterns: physical
+        # pad / GPIO / external pin / explicit async suffix. This removes the
+        # false-positive flood on same-clock module hierarchies.
+        # Updated 2026-04-22 per LL feedback_plugin_usage_discipline.md —
+        # prior version flagged ALL inputs, producing 20+ bogus findings per
+        # OpenTitan-style design.
+        # Skip common OpenTitan software-driven signal prefixes — these are
+        # APB/TL-UL register-file outputs, NOT async inputs. Lowercase `sw_*`
+        # in OpenTitan means "software-controlled", not "switch".
+        if re.match(r'^(sw_|hw_|reg_|wdog_|wkup_|intr_)', name):
+            continue
+
+        is_probable_async = (
+            # Explicit async markers in the name (lowercase suffix)
+            re.search(r'_(pad|async|raw|ext)$', name) is not None
+            # Physical FPGA pin names — require uppercase start to avoid
+            # matching lowercase `sw_*` software signals
+            or re.match(r'^(KEY|BUTTON|SW|GPIO|MISO|MOSI|SDA|SCL|SCK|CS_N|BUS_RX|UART_RX)(_.*)?$',
+                        name) is not None
+        )
+        if not is_probable_async:
+            continue
+        candidates.append((name, lineno))
+
+    rel = str(path.relative_to(project_root)) if path.is_relative_to(project_root) else str(path)
+
+    for name, decl_line in candidates:
+        used, use_line = is_used_in_always_posedge(src, name)
+        if not used:
+            continue
+        if is_synchronized(src, name):
+            continue
+        findings.append(Finding(
+            rule='ASYNC_INPUT_NO_SYNC',
+            severity='ERROR',
+            message=(f"async input '{name}' used in always @(posedge) without "
+                     "a 2-stage synchronizer chain"),
+            file=rel,
+            line=use_line or decl_line,
+        ))
+    return findings
+
+
+def audit(project_dir: str) -> AuditResult:
+    root = Path(project_dir).resolve()
+    result = AuditResult(program='cdc_async_input_check', passed=True)
+    if not root.exists():
+        result.findings.append(Finding(
+            rule='PROJECT_DIR_MISSING', severity='ERROR',
+            message=f"project_dir not found: {project_dir}"))
+        result.passed = False
+        result.summary = {'files_scanned': 0, 'violations': 1}
+        return result
+
+    files = find_rtl_files(root)
+    for f in files:
+        result.findings.extend(audit_file(f, root))
+
+    result.passed = len(result.findings) == 0
+    result.summary = {
+        'files_scanned': len(files),
+        'violations': len(result.findings),
+    }
+    return result
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("project_dir", nargs="?", default=".")
+    # Accept both `--json` (bool, print to stdout) and `--json PATH` (write to file).
+    # Unified 2026-04-22 with other report_check programs per LL
+    # feedback_plugin_usage_discipline.md (14 gate-signature bugs).
+    p.add_argument("--json", nargs="?", const="-", default=None,
+                   help="Emit JSON. With no value → stdout. With a path → write file.")
+    args = p.parse_args()
+    result = audit(args.project_dir)
+    if args.json is not None:
+        payload = json.dumps(asdict(result), indent=2)
+        if args.json == "-":
+            print(payload)
+        else:
+            from pathlib import Path as _P
+            _P(args.json).parent.mkdir(parents=True, exist_ok=True)
+            _P(args.json).write_text(payload)
+    else:
+        for f in result.findings:
+            loc = f"{f.file}:{f.line}" if f.line else f.file
+            print(f"[{f.severity}] {f.rule} ({loc}): {f.message}")
+        print(f"\n{'PASS' if result.passed else 'FAIL'} — {result.summary}")
+    sys.exit(0 if result.passed else 1)
+
+
+if __name__ == "__main__":
+    main()

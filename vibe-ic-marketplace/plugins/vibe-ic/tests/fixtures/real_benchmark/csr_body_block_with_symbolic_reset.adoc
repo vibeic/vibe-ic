@@ -1,0 +1,24 @@
+// Real-world AsciiDoc CSR body block whose `Reset value` cell
+// carries a SYMBOLIC token (`DEFINED, ...`) rather than a numeric
+// literal. Synthetic minimal `0x00000000` fixture does NOT exercise
+// this — that gap caused #399 R1 (v1.6.589 walker correctly
+// classified kind but merge layer cherry-picked specific keys and
+// dropped reset_value_kind).
+//
+// Use in test:
+//   src = load_real_fixture("csr_body_block_with_symbolic_reset.adoc")
+//   out = _v1_6_491_extract_csr_definitions(src, "f.adoc")
+//   assert out[0]["reset_value"] == "DEFINED"
+//   assert out[0]["reset_value_kind"] == "symbolic"
+
+===== **`ext_isa_select`**
+
+[cols="<1,<8"]
+|=======================
+| Name        | ISA and extensions
+| Address     | `0x301`
+| Reset value | `DEFINED`, according to enabled ISA extensions
+| ISA         | <<_zicsr_isa_extension,`Zicsr`>>
+| Description | Reports which ISA extensions are implemented at this
+                hart. Bits are read-only and pre-set at synthesis.
+|=======================

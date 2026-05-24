@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  plugin-tests:
+    name: Plugin tests + chip-AGNOSTIC guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install pytest
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pyyaml
+
+      - name: chip-AGNOSTIC source guard
+        run: |
+          python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py \
+            --root vibe-ic-marketplace/plugins/vibe-ic
+
+      - name: pytest (plugin)
+        run: |
+          cd vibe-ic-marketplace/plugins/vibe-ic
+          pytest -q --maxfail=10
+
+  server-tests:
+    name: mcp-eda-server tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: mcp-eda-server/package.json
+
+      - name: Install
+        run: |
+          cd mcp-eda-server
+          npm install
+
+      - name: Smoke test
+        run: |
+          cd mcp-eda-server
+          node -e "import('./src/index.js').then(() => console.log('import OK')).catch(e => { console.error(e); process.exit(1); })"
+
+  lint:
+    name: Lint (markdown + json + yaml)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate JSON
+        run: |
+          find . -name "*.json" -not -path "*/node_modules/*" -not -path "*/.git/*" \
+            -exec python3 -c "import json, sys; json.load(open(sys.argv[1]))" {} \;
+
+      - name: Validate YAML
+        run: |
+          python3 -m pip install pyyaml
+          find . \( -name "*.yml" -o -name "*.yaml" \) -not -path "*/node_modules/*" -not -path "*/.git/*" \
+            -exec python3 -c "import yaml, sys; yaml.safe_load(open(sys.argv[1]))" {} \;

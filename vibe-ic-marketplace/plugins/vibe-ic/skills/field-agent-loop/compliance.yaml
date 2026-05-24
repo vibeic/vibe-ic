@@ -1,0 +1,39 @@
+skill: field-agent-loop
+
+# Compliance requirements for field-agent-loop verify comments.
+#
+# The skill produces two kinds of output:
+#   A. Backlog YAMLs   (delegated → community-backlog-submit compliance)
+#   B. Verify comments (this file)
+#
+# Below applies to verify comments posted on GitHub issues by
+# Step 4 of the loop. Verify comments must be unambiguous so the
+# core-agent can act on them deterministically.
+#
+# Schema matches skill_compliance_check.py (uses `skill:` +
+# `requirements:` list). Save the candidate comment body to a
+# file and run:
+#     python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+#         --requirements compliance.yaml <file>
+
+requirements:
+  - id: R1_verdict_line
+    description: >-
+      Verify comment must open with "**VERIFIED at v<version>**" OR
+      "**NOT VERIFIED at v<version>**" — no equivocation.
+    pattern: '\*\*(VERIFIED|NOT VERIFIED) at v\d+\.\d+\.\d+\*\*'
+
+  - id: R2_evidence_table_or_block
+    description: >-
+      Verify comment must contain at least one table row or code
+      block citing concrete fields/values from generated_docs.
+    pattern: '(\|.*\|)|```'
+
+  - id: R3_label_management
+    description: >-
+      Either VERIFIED → `gh issue close` + remove label, OR
+      NOT VERIFIED → remove `wait-for-verification` label. The
+      verify comment body MUST end with one of:
+        - "Closing."
+        - "Removing `wait-for-verification`."
+    pattern: '(Closing\.|Removing `wait-for-verification`\.)'

@@ -1,0 +1,24 @@
+{
+  "name": "vibe-ic",
+  "version": "0.1.0",
+  "description": "AI-native IC design plugin for Claude Code. Drives a deterministic flow from natural-language intent through L1-L13 design documents, RTL, FPGA verification, and tape-out sign-off. Strict canonical-flow compliance gates + chip-AGNOSTIC source guard.",
+  "author": {
+    "name": "VibeIC.AI Contributors"
+  },
+  "keywords": [
+    "ic-design",
+    "asic",
+    "verilog",
+    "systemverilog",
+    "eda",
+    "gf180",
+    "sky130",
+    "vibe-coding",
+    "agent",
+    "phase-1-dialogue",
+    "canonical-flow",
+    "hardware-proven"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/vibeic/vibe-ic"
+}

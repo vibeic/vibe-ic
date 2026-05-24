@@ -1,0 +1,22 @@
+class: any-ic
+layer: L7
+qbank:
+  test_modes:
+    expert:       ["Test / debug modes (≥1) — name, entry condition, observable output?"]
+    intermediate: ["What test modes does the chip have? How is each entered and what does it expose?"]
+    beginner:     ["How do we tell if the chip is working or broken on the bench?"]
+    follow_ups:
+      - if_user_says: ["basic", "minimal"]
+        respond_with_default: "Single scan-out observe mode; ATE 1149.1 if pin budget allows"
+      - if_user_says: ["bist"]
+        respond_with_default: "Self-test on reset: walk-1 register check + CRC scratch"
+
+  debug_hooks:
+    expert:       ["Debug probes / mux-out signals?"]
+    intermediate: ["Any debug signals muxed out to a pin — internal states, counters, FSM visibility?"]
+    beginner:     []
+
+  document_id:
+    expert:       []
+    intermediate: []
+    beginner:     []

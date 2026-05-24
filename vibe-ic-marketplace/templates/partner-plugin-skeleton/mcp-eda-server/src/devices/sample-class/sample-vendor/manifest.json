@@ -1,0 +1,18 @@
+{
+  "vendor": "sample-vendor",
+  "device_class": "sample-class",
+  "supported_models": ["Sample-1234"],
+  "permissions": ["require_group:plugdev"],
+  "tools": [
+    {
+      "name": "device_sample_query",
+      "description": "Replace with what your tool does.",
+      "driver": "driver.py",
+      "tool_mode": "query",
+      "schema": {
+        "vid": {"type": "integer", "optional": true},
+        "pid": {"type": "integer", "optional": true}
+      }
+    }
+  ]
+}

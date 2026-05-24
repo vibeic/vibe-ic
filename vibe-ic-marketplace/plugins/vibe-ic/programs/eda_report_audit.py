@@ -1,0 +1,595 @@
+#!/usr/bin/env python3
+"""
+eda_report_audit.py -- Multi-mode EDA report checker for backend skills.
+
+Deterministic compliance program that verifies EDA sign-off reports contain
+the expected analysis categories and quantitative data.
+
+Modes:
+  drc      -- DRC report: violation categories + counts
+  lvs      -- LVS report: mismatch categories
+  power    -- Power report: leakage AND dynamic values
+  em       -- EM report: current density values
+  ir_drop  -- IR-drop report: voltage drop values
+  sta      -- STA report: WNS/TNS + setup/hold
+
+Usage:
+    python3 eda_report_audit.py <project_dir> --mode drc
+    python3 eda_report_audit.py <project_dir> --mode sta --json out.json
+
+Exit codes:
+    0 = PASS (report exists with expected content)
+    1 = FAIL (missing report or missing categories)
+
+No external tool dependencies -- pure Python.
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import re
+import sys
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+from typing import List
+
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
+@dataclass
+class Finding:
+    rule: str
+    severity: str
+    message: str
+    file: str = ""
+
+
+@dataclass
+class AuditResult:
+    program: str
+    passed: bool
+    findings: List[Finding] = field(default_factory=list)
+    summary: dict = field(default_factory=dict)
+
+
+# v0.119.21: tool-unavailable-for-PDK waiver. Custom open-source PDKs
+# (<foundry> m18e80pm180su etc.) lack characterization data the IR / EM
+# / SI / power / SPEF tools need. Blocking the gate forever penalises
+# honest projects; instead require a documented waiver with reason ≥20
+# chars (matches the waivers schema's anti-rubber-stamp policy).
+_UNAVAILABLE_KEYS = {
+    "power":   "power_report_unavailable_reason",
+    "ir_drop": "ir_drop_report_unavailable_reason",
+    "em":      "em_report_unavailable_reason",
+    "si":      "si_report_unavailable_reason",
+}
+
+
+def _waived_for_pdk(project_dir, mode: str) -> str:
+    import json as _json
+    waivers = project_dir / "waivers.json"
+    if not waivers.is_file():
+        return ""
+    try:
+        data = _json.loads(waivers.read_text())
+    except Exception:
+        return ""
+    key = _UNAVAILABLE_KEYS.get(mode)
+    if not key:
+        return ""
+    val = data.get(key, "")
+    if isinstance(val, str):
+        return val.strip()
+    if isinstance(val, list):
+        return "\n".join(str(x).strip() for x in val if str(x).strip())
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# File discovery helpers
+# ---------------------------------------------------------------------------
+def _discover(project_dir: Path, patterns: List[str]) -> List[Path]:
+    """Glob for files matching any of the given patterns recursively."""
+    found: List[Path] = []
+    for pat in patterns:
+        found.extend(project_dir.rglob(pat))
+    # Deduplicate, preserve order
+    seen = set()
+    unique = []
+    for p in found:
+        if p not in seen:
+            seen.add(p)
+            unique.append(p)
+    return unique
+
+
+# Tool signatures — a real EDA-tool report will contain AT LEAST one of these
+# distinctive strings. Hand-authored stubs rarely reproduce them. Added
+# 2026-04-22 after the <benchmark> v0.47 pilot where <1.5 KB hand-typed stubs
+# passed every *_report_check via category-keyword matching alone.
+TOOL_SIGNATURES = {
+    "drc": [
+        "klayout",             # KLayout DRC runset output
+        "openroad",            # OpenROAD detailed-route DRC
+        "detailed_route",
+        "magic",               # Magic DRC
+        "calibre",             # Calibre DRC
+        "drt-",                # OpenROAD drt messages
+        "lvs mismatch",        # DRC reports sometimes chain with LVS context
+        "DRC clean",
+        "violation report",
+    ],
+    "lvs": [
+        "netgen",              # Netgen LVS
+        "NET count",           # Netgen summary
+        "Equivalence test",
+        "Circuits match",
+        "Circuits don't match",
+        "Number of topologically valid",
+        "calibre", "lvs_check",
+    ],
+    "power": [
+        "openroad",
+        "Power Report",        # OpenROAD report_power
+        "Total Power",
+        "Switching Power",
+        "Leakage Power",
+        "Internal Power",
+        "Group: sequential",   # OpenROAD breakdown
+        "Group: combinational",
+        "mW\n", " uW\n", "  nW\n",
+    ],
+    "em": [
+        "openroad",
+        "Electromigration",
+        "EM lifetime",
+        "current density",
+        "RMS current",
+        "Peak current",
+        "redhawk", "voltus",
+    ],
+    "ir_drop": [
+        "openroad",
+        "IR drop",
+        "PSM",                 # Power Supply Metal (OpenROAD analyzer)
+        "static IR",
+        "dynamic IR",
+        "worst voltage",
+        "power grid",
+        "voltage drop",
+    ],
+    "sta": [
+        "OpenSTA",
+        "Report",
+        "Startpoint",
+        "Endpoint",
+        "data arrival time",
+        "slack",
+        "primetime",
+    ],
+}
+
+# Minimum reasonable file size (bytes) for a real report on a non-trivial
+# design. A stub that only sums "violations: 0" across ~6 categories fits in
+# well under 500 B, so the threshold filters obvious hand-typed cases while
+# still allowing small open-flow outputs. Tuned from observed runs:
+#   aon_timer OpenSTA pre-PnR:      5.2 KB
+#   aon_timer Fault ATPG coverage:  225 KB
+#   <benchmark>   Yosys synth stats:      3.1 KB
+#   Agent's 2026-04-22 DRC stub:    0.62 KB  ← should be rejected
+MIN_REPORT_BYTES = {
+    "drc":     2048,
+    "lvs":     1536,
+    "power":   2048,
+    "em":      1024,
+    "ir_drop": 1024,
+    "sta":     1024,
+}
+
+
+def _has_tool_signature(text: str, mode: str) -> tuple[bool, str]:
+    """Return (found, matched_pattern) — case-insensitive."""
+    sigs = TOOL_SIGNATURES.get(mode, [])
+    lower = text.lower()
+    for sig in sigs:
+        if sig.lower() in lower:
+            return True, sig
+    return False, ""
+
+
+def _check_tool_authenticity(files: List[Path], mode: str,
+                              result: AuditResult) -> bool:
+    """Append findings for missing tool signature + undersized reports.
+    Returns True only if at least one candidate passed both checks."""
+    any_authentic = False
+    for fp in files:
+        try:
+            size = fp.stat().st_size
+            text = fp.read_text(errors="replace")
+        except OSError:
+            continue
+        ok_size = size >= MIN_REPORT_BYTES.get(mode, 1024)
+        ok_sig, matched = _has_tool_signature(text, mode)
+        if ok_size and ok_sig:
+            any_authentic = True
+            continue
+        rel = str(fp)
+        if not ok_size:
+            result.findings.append(Finding(
+                rule=f"{mode.upper()}_REPORT_TOO_SMALL", severity="ERROR",
+                message=(f"report {size} B is below minimum "
+                         f"{MIN_REPORT_BYTES.get(mode,1024)} B — "
+                         f"suggests a hand-typed stub, not a real "
+                         f"{mode} tool output"),
+                file=rel,
+            ))
+        if not ok_sig:
+            result.findings.append(Finding(
+                rule=f"{mode.upper()}_NO_TOOL_SIGNATURE", severity="ERROR",
+                message=(f"report lacks any known {mode} tool signature "
+                         f"(one of: {TOOL_SIGNATURES[mode][:4]}... ). "
+                         f"Hand-typed reports rejected."),
+                file=rel,
+            ))
+    return any_authentic
+
+
+# ---------------------------------------------------------------------------
+# Mode checkers
+# ---------------------------------------------------------------------------
+def _check_drc(project_dir: Path) -> AuditResult:
+    result = AuditResult(program="eda_report_audit:drc", passed=False)
+    files = _discover(project_dir, ["*drc*.rpt", "*drc*.log", "*drc*.txt",
+                                     "*DRC*.rpt", "*DRC*.log", "*DRC*.txt"])
+    if not files:
+        result.findings.append(Finding(
+            rule="DRC_REPORT_EXISTS", severity="ERROR",
+            message="No DRC report found (searched *drc*.rpt/log/txt)"))
+        result.summary = {"files_found": 0, "categories_found": []}
+        return result
+
+    categories_re = {
+        "spacing": re.compile(r"spac", re.I),
+        "width": re.compile(r"width|min\s*width", re.I),
+        "density": re.compile(r"density", re.I),
+        "antenna": re.compile(r"antenna", re.I),
+        "via": re.compile(r"\bvia\b", re.I),
+        "enclosure": re.compile(r"enclos", re.I),
+    }
+    count_re = re.compile(r"\b(\d+)\s*(violation|error|issue|total)", re.I)
+    cats_found: List[str] = []
+    has_count = False
+    best_file = ""
+
+    for fp in files:
+        try:
+            text = fp.read_text(errors="replace")
+        except OSError:
+            continue
+        for cat, regex in categories_re.items():
+            if regex.search(text) and cat not in cats_found:
+                cats_found.append(cat)
+        if count_re.search(text):
+            has_count = True
+        if not best_file:
+            best_file = str(fp)
+
+    for cat, regex in categories_re.items():
+        if cat not in cats_found:
+            result.findings.append(Finding(
+                rule="DRC_CATEGORY_PRESENT", severity="WARNING",
+                message=f"DRC category '{cat}' not found in reports",
+                file=best_file))
+
+    if not cats_found:
+        result.findings.append(Finding(
+            rule="DRC_CATEGORIES_EXIST", severity="ERROR",
+            message="No DRC violation categories found in report",
+            file=best_file))
+    if not has_count:
+        result.findings.append(Finding(
+            rule="DRC_VIOLATION_COUNT", severity="WARNING",
+            message="No violation count pattern found in DRC report",
+            file=best_file))
+
+    # Tool-authenticity check — rejects hand-typed stubs (added 2026-04-22)
+    authentic = _check_tool_authenticity(files, "drc", result)
+
+    result.passed = len(cats_found) > 0 and authentic
+    result.summary = {"files_found": len(files), "categories_found": cats_found,
+                      "has_count": has_count, "tool_authentic": authentic}
+    return result
+
+
+def _check_lvs(project_dir: Path) -> AuditResult:
+    result = AuditResult(program="eda_report_audit:lvs", passed=False)
+    files = _discover(project_dir, ["*lvs*.rpt", "*lvs*.log", "*LVS*.rpt",
+                                     "*LVS*.log", "*comp*.out"])
+    if not files:
+        result.findings.append(Finding(
+            rule="LVS_REPORT_EXISTS", severity="ERROR",
+            message="No LVS report found (searched *lvs*.rpt/log, *comp*.out)"))
+        result.summary = {"files_found": 0, "categories_found": []}
+        return result
+
+    categories_re = {
+        "instance": re.compile(r"instance", re.I),
+        "net": re.compile(r"\bnet\b", re.I),
+        "device": re.compile(r"device", re.I),
+        "parameter": re.compile(r"parameter", re.I),
+    }
+    cats_found: List[str] = []
+    best_file = ""
+
+    for fp in files:
+        try:
+            text = fp.read_text(errors="replace")
+        except OSError:
+            continue
+        for cat, regex in categories_re.items():
+            if regex.search(text) and cat not in cats_found:
+                cats_found.append(cat)
+        if not best_file:
+            best_file = str(fp)
+
+    if not cats_found:
+        result.findings.append(Finding(
+            rule="LVS_CATEGORIES_EXIST", severity="ERROR",
+            message="No LVS mismatch categories found in report",
+            file=best_file))
+
+    authentic = _check_tool_authenticity(files, "lvs", result)
+    result.passed = len(cats_found) > 0 and authentic
+    result.summary = {"files_found": len(files), "categories_found": cats_found,
+                      "tool_authentic": authentic}
+    return result
+
+
+def _check_power(project_dir: Path) -> AuditResult:
+    result = AuditResult(program="eda_report_audit:power", passed=False)
+    reason = _waived_for_pdk(project_dir, "power")
+    if reason and len(reason) >= 20:
+        result.findings.append(Finding(
+            rule="WAIVED_TOOL_UNAVAILABLE", severity="INFO",
+            message=f"power report waived for this PDK: {reason[:80]}"))
+        result.passed = True
+        result.summary = {"waived": True, "reason": reason}
+        return result
+    files = _discover(project_dir, ["*power*.rpt", "*power*.log",
+                                     "*Power*.rpt", "*Power*.log"])
+    if not files:
+        result.findings.append(Finding(
+            rule="POWER_REPORT_EXISTS", severity="ERROR",
+            message="No power report found (searched *power*.rpt/log)"))
+        result.summary = {"files_found": 0, "has_leakage": False, "has_dynamic": False}
+        return result
+
+    leak_re = re.compile(r"leakage|static\s*power", re.I)
+    dyn_re = re.compile(r"dynamic|switching|internal\s*power", re.I)
+    has_leak = False
+    has_dyn = False
+    best_file = ""
+
+    for fp in files:
+        try:
+            text = fp.read_text(errors="replace")
+        except OSError:
+            continue
+        if leak_re.search(text):
+            has_leak = True
+        if dyn_re.search(text):
+            has_dyn = True
+        if not best_file:
+            best_file = str(fp)
+
+    if not has_leak:
+        result.findings.append(Finding(
+            rule="POWER_LEAKAGE_REPORTED", severity="ERROR",
+            message="No leakage/static power value found in report",
+            file=best_file))
+    if not has_dyn:
+        result.findings.append(Finding(
+            rule="POWER_DYNAMIC_REPORTED", severity="ERROR",
+            message="No dynamic/switching power value found in report",
+            file=best_file))
+
+    authentic = _check_tool_authenticity(files, "power", result)
+    result.passed = has_leak and has_dyn and authentic
+    result.summary = {"files_found": len(files), "has_leakage": has_leak,
+                      "has_dynamic": has_dyn, "tool_authentic": authentic}
+    return result
+
+
+def _check_em(project_dir: Path) -> AuditResult:
+    result = AuditResult(program="eda_report_audit:em", passed=False)
+    reason = _waived_for_pdk(project_dir, "em")
+    if reason and len(reason) >= 20:
+        result.findings.append(Finding(
+            rule="WAIVED_TOOL_UNAVAILABLE", severity="INFO",
+            message=f"EM report waived for this PDK: {reason[:80]}"))
+        result.passed = True
+        result.summary = {"waived": True, "reason": reason}
+        return result
+    files = _discover(project_dir, ["*em*.rpt", "*electromigration*",
+                                     "*EM*.rpt", "*ir*.rpt"])
+    if not files:
+        result.findings.append(Finding(
+            rule="EM_REPORT_EXISTS", severity="ERROR",
+            message="No EM report found (searched *em*.rpt, *electromigration*, *ir*.rpt)"))
+        result.summary = {"files_found": 0, "has_density": False}
+        return result
+
+    density_re = re.compile(r"Javg|Jpeak|mA|A/cm|current\s*density", re.I)
+    has_density = False
+    best_file = ""
+
+    for fp in files:
+        try:
+            text = fp.read_text(errors="replace")
+        except OSError:
+            continue
+        if density_re.search(text):
+            has_density = True
+        if not best_file:
+            best_file = str(fp)
+
+    if not has_density:
+        result.findings.append(Finding(
+            rule="EM_DENSITY_VALUES", severity="ERROR",
+            message="No current density values (Javg/Jpeak/mA/A/cm) found",
+            file=best_file))
+
+    authentic = _check_tool_authenticity(files, "em", result)
+    result.passed = has_density and authentic
+    result.summary = {"files_found": len(files), "has_density": has_density,
+                      "tool_authentic": authentic}
+    return result
+
+
+def _check_ir_drop(project_dir: Path) -> AuditResult:
+    result = AuditResult(program="eda_report_audit:ir_drop", passed=False)
+    reason = _waived_for_pdk(project_dir, "ir_drop")
+    if reason and len(reason) >= 20:
+        result.findings.append(Finding(
+            rule="WAIVED_TOOL_UNAVAILABLE", severity="INFO",
+            message=f"IR-drop report waived for this PDK: {reason[:80]}"))
+        result.passed = True
+        result.summary = {"waived": True, "reason": reason}
+        return result
+    files = _discover(project_dir, ["*ir*.rpt", "*power_grid*", "*IR*.rpt",
+                                     "*ir_drop*", "*voltage_drop*"])
+    if not files:
+        result.findings.append(Finding(
+            rule="IR_REPORT_EXISTS", severity="ERROR",
+            message="No IR-drop report found (searched *ir*.rpt, *power_grid*)"))
+        result.summary = {"files_found": 0, "has_drop_value": False}
+        return result
+
+    drop_re = re.compile(r"mV|%\s*Vdd|voltage\s*drop|IR\s*drop", re.I)
+    has_drop = False
+    best_file = ""
+
+    for fp in files:
+        try:
+            text = fp.read_text(errors="replace")
+        except OSError:
+            continue
+        if drop_re.search(text):
+            has_drop = True
+        if not best_file:
+            best_file = str(fp)
+
+    if not has_drop:
+        result.findings.append(Finding(
+            rule="IR_DROP_VALUES", severity="ERROR",
+            message="No voltage drop values (mV / %Vdd) found in report",
+            file=best_file))
+
+    authentic = _check_tool_authenticity(files, "ir_drop", result)
+    result.passed = has_drop and authentic
+    result.summary = {"files_found": len(files), "has_drop_value": has_drop,
+                      "tool_authentic": authentic}
+    return result
+
+
+def _check_sta(project_dir: Path) -> AuditResult:
+    result = AuditResult(program="eda_report_audit:sta", passed=False)
+    files = _discover(project_dir, ["*sta*.rpt", "*timing*.rpt",
+                                     "*STA*.rpt", "*timing*.log"])
+    if not files:
+        result.findings.append(Finding(
+            rule="STA_REPORT_EXISTS", severity="ERROR",
+            message="No STA report found (searched *sta*.rpt, *timing*.rpt)"))
+        result.summary = {"files_found": 0, "has_wns_tns": False,
+                          "has_setup_hold": False}
+        return result
+
+    wns_tns_re = re.compile(r"WNS|TNS|worst\s*negative\s*slack|total\s*negative\s*slack",
+                            re.I)
+    setup_hold_re = re.compile(r"setup|hold", re.I)
+    has_wns_tns = False
+    has_setup_hold = False
+    best_file = ""
+
+    for fp in files:
+        try:
+            text = fp.read_text(errors="replace")
+        except OSError:
+            continue
+        if wns_tns_re.search(text):
+            has_wns_tns = True
+        if setup_hold_re.search(text):
+            has_setup_hold = True
+        if not best_file:
+            best_file = str(fp)
+
+    if not has_wns_tns:
+        result.findings.append(Finding(
+            rule="STA_WNS_TNS", severity="ERROR",
+            message="No WNS/TNS slack values found in STA report",
+            file=best_file))
+    if not has_setup_hold:
+        result.findings.append(Finding(
+            rule="STA_SETUP_HOLD", severity="ERROR",
+            message="No setup/hold analysis found in STA report",
+            file=best_file))
+
+    authentic = _check_tool_authenticity(files, "sta", result)
+    result.passed = has_wns_tns and has_setup_hold and authentic
+    result.summary = {"files_found": len(files), "has_wns_tns": has_wns_tns,
+                      "has_setup_hold": has_setup_hold,
+                      "tool_authentic": authentic}
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Mode dispatch
+# ---------------------------------------------------------------------------
+MODE_MAP = {
+    "drc": _check_drc,
+    "lvs": _check_lvs,
+    "power": _check_power,
+    "em": _check_em,
+    "ir_drop": _check_ir_drop,
+    "sta": _check_sta,
+}
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+def main(argv: list = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Multi-mode EDA report compliance checker")
+    parser.add_argument("project_dir", help="Project directory to scan")
+    parser.add_argument("--mode", required=True, choices=list(MODE_MAP.keys()),
+                        help="Report type to check")
+    parser.add_argument("--json", default=None, help="Output JSON report path")
+    args = parser.parse_args(argv)
+
+    project_dir = Path(args.project_dir)
+    if not project_dir.is_dir():
+        result = AuditResult(program=f"eda_report_audit:{args.mode}", passed=False)
+        result.findings.append(Finding(
+            rule="PROJECT_DIR_EXISTS", severity="ERROR",
+            message=f"Project directory does not exist: {project_dir}"))
+        result.summary = {"files_found": 0}
+    else:
+        checker = MODE_MAP[args.mode]
+        result = checker(project_dir)
+
+    report = asdict(result)
+    report_json = json.dumps(report, indent=2, ensure_ascii=False)
+
+    if args.json:
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json).write_text(report_json)
+
+    print(report_json)
+    return 0 if result.passed else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""reset_dependency_check.py — deterministic compliance check derived from <chip-class> v040 debug.
+
+Detects circular reset dependencies: module A's reset depends on a signal
+produced by module B, but that signal is produced by a register that itself
+is reset by A's reset (or something derived from it). The whole chain never
+releases reset, or releases it non-deterministically.
+
+Heuristic (two passes):
+  1. Parse module instances at the top level and record their
+     .rstn(...) / .rst(...) / .reset(...) connections.
+  2. Find `assign <reset_sig> = ... & <something>_done;` style reset
+     combining expressions. If `<something>_done` is produced by a module
+     that is itself reset by `<reset_sig>`, flag a circular dependency.
+
+A graph of (instance → reset_source_signal) is also built, and any direct
+cycle in that graph is reported.
+
+Exit: 0 = PASS (no circular deps), 1 = FAIL.
+"""
+from __future__ import annotations
+import argparse
+import json
+import re
+import sys
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+from typing import Dict, List, Set, Tuple
+
+
+@dataclass
+class Finding:
+    rule: str
+    severity: str
+    message: str
+    file: str = ""
+    line: int = 0
+
+
+@dataclass
+class AuditResult:
+    program: str
+    passed: bool
+    findings: List[Finding] = field(default_factory=list)
+    summary: dict = field(default_factory=dict)
+
+
+def strip_comments(src: str) -> str:
+    out = []
+    i = 0
+    while i < len(src):
+        if src[i:i+2] == '/*':
+            end = src.find('*/', i+2)
+            if end == -1:
+                break
+            out.append(''.join('\n' if c == '\n' else ' ' for c in src[i:end+2]))
+            i = end + 2
+        elif src[i:i+2] == '//':
+            end = src.find('\n', i)
+            if end == -1:
+                break
+            out.append(' ' * (end - i))
+            i = end
+        else:
+            out.append(src[i])
+            i += 1
+    return ''.join(out)
+
+
+def find_rtl_files(project_dir: Path) -> List[Path]:
+    files = []
+    for ext in ('*.v', '*.sv'):
+        files.extend(project_dir.rglob(ext))
+    return [f for f in files if f.is_file()]
+
+
+# Module instance: <TypeName> <inst_name> ( .port(sig), ... );
+INSTANCE_RE = re.compile(
+    r'\b([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*\(\s*((?:\.\w+\s*\([^)]*\)\s*,?\s*)+)\)\s*;',
+    re.MULTILINE,
+)
+# Reset port names of interest
+RESET_PORT_RE = re.compile(r'\.(rstn|rst_n|rst|reset|resetn|rst_sync|rstn_sync)\s*\(\s*([^)]+)\s*\)')
+# Reset-combining assign: `assign foo_rstn = a & b;`
+RESET_ASSIGN_RE = re.compile(
+    r'\bassign\s+(\w*(?:rst|reset)\w*)\s*=\s*([^;]+);'
+)
+# Done-style producer signal extraction (tokens in RHS)
+TOKEN_RE = re.compile(r'\b([a-zA-Z_]\w*)\b')
+
+
+def collect_instances(src: str) -> List[Tuple[str, str, Dict[str, str], int]]:
+    """Return [(module_type, inst_name, port_map, lineno)]."""
+    out = []
+    for m in INSTANCE_RE.finditer(src):
+        mtype, iname, ports = m.group(1), m.group(2), m.group(3)
+        if mtype in ('module', 'endmodule', 'assign', 'wire', 'reg', 'logic',
+                     'input', 'output', 'inout', 'parameter', 'localparam',
+                     'always', 'always_ff', 'always_comb', 'begin', 'end',
+                     'if', 'else', 'for', 'case', 'endcase', 'generate',
+                     'endgenerate', 'function', 'endfunction', 'task', 'endtask',
+                     'initial', 'return'):
+            continue
+        port_map: Dict[str, str] = {}
+        for pm in re.finditer(r'\.(\w+)\s*\(\s*([^)]*)\s*\)', ports):
+            port_map[pm.group(1)] = pm.group(2).strip()
+        lineno = src[:m.start()].count('\n') + 1
+        out.append((mtype, iname, port_map, lineno))
+    return out
+
+
+def reset_connection(port_map: Dict[str, str]) -> str:
+    for pname in ('rstn', 'rst_n', 'rst', 'reset', 'resetn', 'rst_sync', 'rstn_sync'):
+        if pname in port_map:
+            # Take the first identifier in the expression
+            expr = port_map[pname]
+            tok = TOKEN_RE.search(expr)
+            if tok:
+                return tok.group(1)
+    return ''
+
+
+def output_signals(port_map: Dict[str, str]) -> Set[str]:
+    """
+    Without knowing port directions, treat every non-reset / non-clk port's
+    connected signal as a potential output. Works as a conservative set.
+    """
+    skip = {'rstn', 'rst_n', 'rst', 'reset', 'resetn', 'rst_sync', 'rstn_sync',
+            'clk', 'clock', 'clk_in', 'clk_sys'}
+    out: Set[str] = set()
+    for p, expr in port_map.items():
+        if p in skip:
+            continue
+        tok = TOKEN_RE.search(expr)
+        if tok:
+            out.add(tok.group(1))
+    return out
+
+
+def find_done_producers_per_instance(
+    instances: List[Tuple[str, str, Dict[str, str], int]]
+) -> Dict[str, str]:
+    """Return map done_signal -> inst_name (instance that produces it)."""
+    mapping: Dict[str, str] = {}
+    for mtype, iname, pmap, _ in instances:
+        for sig in output_signals(pmap):
+            # "done-ish" output names
+            if re.search(r'(done|ready|valid|ok|ack|ready_out)$', sig):
+                mapping[sig] = iname
+    return mapping
+
+
+def audit_file(path: Path, project_root: Path) -> List[Finding]:
+    findings: List[Finding] = []
+    try:
+        raw = path.read_text(errors='replace')
+    except Exception:
+        return findings
+    src = strip_comments(raw)
+
+    rel = str(path.relative_to(project_root)) if path.is_relative_to(project_root) else str(path)
+
+    instances = collect_instances(src)
+    if not instances:
+        return findings
+
+    inst_reset: Dict[str, str] = {iname: reset_connection(pmap)
+                                  for _, iname, pmap, _ in instances}
+    inst_line: Dict[str, int] = {iname: ln for _, iname, _, ln in instances}
+    done_producer = find_done_producers_per_instance(instances)
+
+    # Pattern A: reset-combining assign brings a done-signal into a reset,
+    # and that done-signal's producer is reset by the same combined reset.
+    for m in RESET_ASSIGN_RE.finditer(src):
+        rst_sig = m.group(1)
+        rhs = m.group(2)
+        rhs_tokens = set(TOKEN_RE.findall(rhs))
+        lineno = src[:m.start()].count('\n') + 1
+        for tok in rhs_tokens:
+            if tok not in done_producer:
+                continue
+            producer_inst = done_producer[tok]
+            producer_rstn = inst_reset.get(producer_inst, '')
+            if producer_rstn == rst_sig:
+                findings.append(Finding(
+                    rule='CIRCULAR_RESET_DEPENDENCY',
+                    severity='ERROR',
+                    message=(f"reset '{rst_sig}' combines '{tok}', which is "
+                             f"produced by instance '{producer_inst}' whose "
+                             f"own reset is '{producer_rstn}' — circular: "
+                             f"{rst_sig} <- {tok} <- {producer_inst} <- {rst_sig}"),
+                    file=rel,
+                    line=lineno,
+                ))
+
+    # Pattern B: direct 2-node cycle via instance reset graph.
+    # A.rstn = sig_from_B; B.rstn = sig_from_A.
+    # Approximate: if inst_reset[A] is produced by B and inst_reset[B] is produced by A.
+    for _, ia, pa, _ in instances:
+        for outa in output_signals(pa):
+            if outa not in inst_reset.values():
+                continue
+            # Find B whose reset == outa
+            for _, ib, pb, _ in instances:
+                if ib == ia:
+                    continue
+                if inst_reset.get(ib) != outa:
+                    continue
+                for outb in output_signals(pb):
+                    if inst_reset.get(ia) == outb:
+                        findings.append(Finding(
+                            rule='CIRCULAR_RESET_DEPENDENCY',
+                            severity='ERROR',
+                            message=(f"2-node reset cycle: '{ia}' reset '{inst_reset[ia]}' "
+                                     f"sourced from '{ib}', which is reset by "
+                                     f"'{inst_reset[ib]}' sourced from '{ia}'."),
+                            file=rel,
+                            line=inst_line.get(ia, 0),
+                        ))
+    return findings
+
+
+def audit(project_dir: str) -> AuditResult:
+    root = Path(project_dir).resolve()
+    result = AuditResult(program='reset_dependency_check', passed=True)
+    if not root.exists():
+        result.findings.append(Finding(
+            rule='PROJECT_DIR_MISSING', severity='ERROR',
+            message=f"project_dir not found: {project_dir}"))
+        result.passed = False
+        result.summary = {'files_scanned': 0, 'violations': 1}
+        return result
+
+    files = find_rtl_files(root)
+    # de-duplicate findings by (rule, file, line, message)
+    seen: Set[Tuple[str, str, int, str]] = set()
+    for f in files:
+        for fd in audit_file(f, root):
+            key = (fd.rule, fd.file, fd.line, fd.message)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.findings.append(fd)
+
+    result.passed = len(result.findings) == 0
+    result.summary = {
+        'files_scanned': len(files),
+        'violations': len(result.findings),
+    }
+    return result
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("project_dir", nargs="?", default=".")
+    p.add_argument("--json", nargs="?", const="-", default=None,
+                   help="Emit JSON. With no value → stdout. With a path → write file.")
+    args = p.parse_args()
+    result = audit(args.project_dir)
+    if args.json is not None:
+        payload = json.dumps(asdict(result), indent=2)
+        if args.json == "-":
+            print(payload)
+        else:
+            from pathlib import Path as _P
+            _P(args.json).parent.mkdir(parents=True, exist_ok=True)
+            _P(args.json).write_text(payload)
+    else:
+        for f in result.findings:
+            loc = f"{f.file}:{f.line}" if f.line else f.file
+            print(f"[{f.severity}] {f.rule} ({loc}): {f.message}")
+        print(f"\n{'PASS' if result.passed else 'FAIL'} — {result.summary}")
+    sys.exit(0 if result.passed else 1)
+
+
+if __name__ == "__main__":
+    main()

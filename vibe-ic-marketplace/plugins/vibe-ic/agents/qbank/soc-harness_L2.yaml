@@ -1,0 +1,26 @@
+class: soc-harness
+layer: L2
+qbank:
+  pad_count:
+    expert:       ["Pad counts — {mprj_io, mprj_pwr, flash, other}?"]
+    intermediate: ["How many pads of each type — user-project IO, user-project power, flash, housekeeping?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["caravel", "standard"]
+        respond_with_default: "{mprj_io: 38, mprj_pwr: 4, flash: 4, other: 12}"
+
+  user_project_area_wires:
+    expert:       ["User-project area wires — {la_data, la_oenb, la_iena, user_irq, wbs_present}?"]
+    intermediate: ["Wiring exposed to the user project area — logic analyser bits, IRQ count, wishbone slave?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["caravel"]
+        respond_with_default: "{la_data: 128, la_oenb: 128, la_iena: 128, user_irq: 3, wbs_present: true}"
+
+  power_rails:
+    expert:       ["Power rails — list every rail?"]
+    intermediate: ["List all the distinct power rails — vddio, vdda1, vccd1, vssa1, vssd, etc."]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["caravel"]
+        respond_with_default: "['vddio', 'vssio', 'vdda', 'vssa', 'vccd', 'vssd', 'vdda1', 'vssa1', 'vccd1', 'vssd1']"

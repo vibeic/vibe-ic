@@ -1,0 +1,63 @@
+ip_name: wb_intercon
+ip_version: "1.4.0"
+ip_class: wishbone_b3_b4_interconnect
+license: ISC
+canonical_url: https://github.com/olofk/wb_intercon
+canonical_commit: "master"
+authors:
+  - "Olof Kindgren <olof.kindgren@gmail.com>"
+description: >
+  Parameterizable Wishbone B3/B4 interconnect family. Includes single-master
+  multi-slave mux, multi-master arbiter, clock-domain crossing FIFO, data-width
+  resize adapter, and bus upsizer. Used in OpenMPW SoCs (subservient, others).
+
+implements:
+  bus_protocol: wishbone_b3_b4
+  components:
+    - wb_mux: single_master_to_n_slaves
+    - wb_arbiter: n_masters_to_1_slave
+    - wb_cdc: clock_domain_crossing_with_async_fifo
+    - wb_data_resize: data_width_adapter
+    - wb_upsizer: bus_width_upgrade
+
+matches_when:
+  - "L2 mentions 'Wishbone' AND L8 mentions 'interconnect' or 'crossbar' or 'multi-master'"
+  - "L8 contains 'wb_mux' OR L8 contains 'wb_arbiter'"
+  - "L2.bus_protocol == 'wishbone'"
+
+interface:
+  ports:
+    - {name: wb_clk_i, dir: in, width: 1, description: "(all components share this)"}
+    - {name: wb_rst_i, dir: in, width: 1}
+    - {name: wbm_*_i,  dir: in, width: "master-side bus inputs"}
+    - {name: wbm_*_o,  dir: out, width: "master-side bus outputs"}
+    - {name: wbs_*_i,  dir: in, width: "slave-side bus inputs"}
+    - {name: wbs_*_o,  dir: out, width: "slave-side bus outputs"}
+  parameters:
+    - {name: aw, default: 32, description: "address width"}
+    - {name: dw, default: 32, description: "data width"}
+    - {name: num_slaves, default: 2}
+    - {name: num_masters, default: 1}
+    - {name: MATCH_ADDR, description: "address-mask vector for slave decode"}
+    - {name: MATCH_MASK, description: "address-mask vector for slave decode"}
+
+rtl_files:
+  - rtl/verilog/wb_mux.v
+  - rtl/verilog/wb_arbiter.v
+  - rtl/verilog/wb_cdc.v
+  - rtl/verilog/wb_data_resize.v
+  - rtl/verilog/wb_upsizer.v
+
+synth:
+  pdk_compatible: [sky130A, gf180mcuD, fpga]
+  tested_clock_period_ns: 5
+  area_ge: 1500
+  openlane_tapeout_track_record: "OpenMPW subservient / SERV-based SoCs use wb_intercon variants"
+
+integration_notes: >
+  Each component is a standalone module. For a typical CPU SoC, use
+  wb_mux to fan one master to multiple slaves (memory + peripherals).
+  MATCH_ADDR + MATCH_MASK parameters define slave address ranges —
+  Plugin should derive these from L5 memory map.
+
+depends_on: []

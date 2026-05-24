@@ -1,0 +1,88 @@
+---
+name: ppa-predict
+description: Predict power, performance, and area of an RTL module before running synthesis. Use when the user says "estimate PPA", "how big will this be", "what's the area of this module", "will this meet timing", or wants an early PPA sanity check before committing to a long synthesis run.
+---
+
+# PPA Predict
+
+Provide fast, pre-synthesis estimates of Power, Performance (Fmax / critical-path delay), and Area for an RTL module. Acts as a Circuit Foundation Model surrogate for the synthesis tool — seconds instead of hours.
+
+## When to use
+
+Trigger when the user:
+- Wants an area/timing ballpark before running DC/Genus/Yosys
+- Is comparing two RTL variants and needs a quick "which is better"
+- Asks "will this fit in X gates" or "can I close timing at Y MHz"
+- Needs PPA feedback inside a generate-evaluate loop
+
+## Inputs to gather
+
+1. Target technology node (e.g., TSMC 28nm, 16nm, 7nm; or generic `NangateOpenCell`)
+2. Target clock frequency (MHz)
+3. Target cell library (if known) or standard-cell assumption
+4. Optimization goal: area, speed, power, or balanced
+
+## Prediction workflow
+
+1. **Structural analysis** — count flops, adders, multipliers, memory bits, mux layers
+2. **Critical-path estimate** — identify the deepest combinational chain and estimate logic-level delay
+3. **Gate-count estimate** — map each construct to approximate NAND2 equivalents
+4. **Power estimate** — dynamic (activity × capacitance × V² × f) + leakage (gate count × node leakage)
+5. **Confidence band** — report each number as a range, not a point estimate
+
+## Output format
+
+```
+# PPA Prediction — <module>
+
+Technology: <node>
+Target frequency: <MHz>
+
+| Metric | Estimate | Range | Confidence |
+|--------|----------|-------|------------|
+| Area (µm²) | ... | ... – ... | High/Med/Low |
+| Gate count (NAND2 eq) | ... | ... – ... | ... |
+| Fmax (MHz) | ... | ... – ... | ... |
+| Dynamic power (mW @ target f) | ... | ... – ... | ... |
+| Leakage (µW) | ... | ... – ... | ... |
+
+## Critical path (estimated)
+<signal A> → <logic> → <signal B>  (~<n> logic levels)
+
+## Bottleneck
+<what is limiting Fmax or dominating area>
+
+## Optimization suggestions
+- <suggestion 1, e.g., pipeline the multiplier>
+- <suggestion 2, e.g., share the adder>
+```
+
+## Technical basis
+
+Grounded in Circuit Foundation Models for pre-synthesis prediction — encoder-based CFMs like MasterRTL, CircuitEncoder, and graph-neural-network surrogates trained on synthesized netlists. Typical prediction error: 10–15% vs real synthesis for area, 15–20% for timing.
+
+## Do not
+
+- Do not claim single-number precision — always give a range
+- Do not replace real synthesis for sign-off; this is a pre-check only
+- Do not extrapolate far outside the training distribution (e.g., very exotic architectures)
+
+## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+
+If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
+after producing your output, save it to a file and run:
+
+```bash
+python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic-d/skills/ppa-predict/compliance.yaml \
+    <your_output_file>
+```
+
+Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
+`compliance.yaml` in the corresponding vibe-ic-d skill directory enumerates
+every required element of your output: section headers, metadata fields,
+handoff lines, tool invocations.
+
+**Your task is not complete until the audit returns PASS.** Missing
+elements are the single largest source of skill-execution non-determinism
+across different agents.

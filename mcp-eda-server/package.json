@@ -1,0 +1,26 @@
+{
+  "name": "mcp-eda-server",
+  "version": "0.1.0",
+  "description": "MCP server bridging Claude / AI agents to open-source EDA tools (Yosys, OpenROAD, KLayout, SymbiYosys, Magic, ngspice, ...) and lab hardware (FPGA programmer, oscilloscope, USB tester) over the Model Context Protocol.",
+  "type": "module",
+  "bin": {
+    "mcp-eda-server": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "latest"
+  },
+  "license": "Apache-2.0",
+  "author": "VibeIC.AI Contributors",
+  "homepage": "https://github.com/vibeic/vibe-ic",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vibeic/vibe-ic.git",
+    "directory": "mcp-eda-server"
+  },
+  "bugs": {
+    "url": "https://github.com/vibeic/vibe-ic/issues"
+  }
+}

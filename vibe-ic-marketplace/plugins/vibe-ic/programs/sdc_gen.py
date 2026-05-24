@@ -1,0 +1,427 @@
+#!/usr/bin/env python3
+"""sdc_gen.py — auto-generate Synopsys Design Constraints (SDC).
+
+Wave 72 deliverable. Wave 73 (v0.128) renamed from aid_class_sdc_gen.py
+to reflect that the generator is class-AGNOSTIC. A backwards-compat
+shim at the old path forwards calls until v0.130.
+
+Pairs with qsf_gen.py to close the last manual-prep gap. Chip-AGNOSTIC:
+clock period comes from L8.clock_mhz, port roles come from
+L9.top_module_pins. No chip-specific constants.
+
+Inputs (read from <project_dir>):
+    generated_docs/L8_RTL_CONSTANTS.json
+        - clock_mhz                 → period_ns = 1000 / clock_mhz (default 50)
+        - clock_domains[*]          → optional richer clock spec
+    generated_docs/L9_INTEGRATION_SPEC.json
+        - top_module                → guides ports default
+        - top_module_pins[]         → infer clock / reset / async / IO ports
+
+Optional rtl wrapper (board namespace) — detected by scanning rtl/ for a
+module with CLOCK_50/KEY/GPIO_0 ports. If present, we emit constraints
+against board signal names (CLOCK_50/KEY[*]/GPIO_0[*]) so the SDC matches
+what Quartus sees post-elaboration. Otherwise we emit against IC-namespace
+ports (clk/reset_n/id_bus).
+
+Output:
+    <project_dir>/fpga/<top>.sdc
+
+CLI:
+    python3 sdc_gen.py <project_dir> [--board de10lite]
+                                      [--top-name chip_top]
+                                      [--force]
+
+Exit codes:
+    0  PASS
+    1  FAIL (missing L8 / L9)
+    2  IO / arg error
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+import _path_layout as _pl
+
+
+def _load_json(p: Path) -> Optional[dict]:
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+# v1.6.94 (issue #25 Bug 5) — EXAMPLE_PROTOCOL-class half-duplex single-wire protocols
+# don't need 50 MHz at the bit level (already tens of cycles per byte). On
+# de10lite_top the 50 MHz default produced negative slack on the byte-
+# assembler / main_fsm decode arm. 25 MHz (40 ns) is the field-agent's
+# recommended fix path (b) — trivially closes timing without an RTL
+# pipeline insertion. Non-EXAMPLE_PROTOCOL classes (SPI / parallel-bus / etc.) keep
+# the 50 MHz default.
+_AID_CLASS_DEFAULT_MHZ_DE10LITE: float = 25.0
+_DEFAULT_MHZ: float = 50.0
+
+_AID_CLASS_TOKENS: tuple[str, ...] = (
+    "example_protocol",
+    "apple id bus",
+    "apple_id_bus",
+    "single_wire_half_duplex",
+    "single-wire half-duplex",
+    "half_duplex_single_wire",
+    "half-duplex single-wire",
+    "id_bus",
+    "open_drain_single_wire",
+    "cable-side-id",
+    "cable_side_id",
+)
+
+
+def _is_aid_class(project: Path, l9: dict,
+                  ic_class_arg: Optional[str] = None) -> bool:
+    """Return True iff the project's L9 (or sibling L1 / L2) class field
+    indicates an EXAMPLE_PROTOCOL-class half-duplex single-wire protocol.
+
+    Chip-AGNOSTIC: matches on the L9 ``class_path`` / ``class`` /
+    ``interface`` / ``protocol_type`` field tokens. No specific chip /
+    pin / opcode hard-coded.
+
+    v1.6.96 (issue #28 Bug 1) — also consult the ``--ic-class`` CLI arg
+    first. The arg is the verdict from
+    ``phase2_one_shot_runner.detect_ic_class`` (e.g.
+    ``aid_class_half_duplex``); when present it short-circuits the
+    L-doc scan, which was DEAD CODE on benchmark projects whose
+    phase1 never propagated the verdict into any L doc.
+    """
+    if isinstance(ic_class_arg, str) and ic_class_arg:
+        low = ic_class_arg.lower()
+        if any(tok in low for tok in _AID_CLASS_TOKENS):
+            return True
+    blob_parts: list[str] = []
+    for k in ("class_path", "class", "interface", "protocol_type",
+              "protocol", "interface_type"):
+        v = l9.get(k)
+        if isinstance(v, str):
+            blob_parts.append(v.lower())
+    # Also check L1 + L2 if present — some flows put class on L1, protocol
+    # on L2.
+    gd = _pl.generated_docs_dir(project)
+    for pat in ("L1*.json", "L2*.json"):
+        for cand in sorted(gd.glob(pat)) if gd.is_dir() else []:
+            try:
+                j = json.loads(cand.read_text(encoding="utf-8",
+                                              errors="ignore"))
+            except Exception:
+                continue
+            for k in ("class_path", "class", "interface", "protocol_type",
+                      "protocol", "interface_type"):
+                v = j.get(k)
+                if isinstance(v, str):
+                    blob_parts.append(v.lower())
+            # Nested: physical_layer.interface, frs_doc.protocol_type
+            for outer in ("physical_layer", "frs_doc"):
+                inner = j.get(outer)
+                if isinstance(inner, dict):
+                    for k in ("interface", "protocol_type"):
+                        v = inner.get(k)
+                        if isinstance(v, str):
+                            blob_parts.append(v.lower())
+    blob = " ".join(blob_parts)
+    return any(tok in blob for tok in _AID_CLASS_TOKENS)
+
+
+def _list_rtl(project: Path) -> List[Path]:
+    r = _pl.rtl_dir(project)
+    if not r.is_dir():
+        return []
+    return (sorted(r.glob("*.sv")) + sorted(r.glob("*.v")))
+
+
+def _detect_board_wrapper(rtl_files: List[Path], board: str
+                          ) -> Optional[Tuple[str, str]]:
+    """Returns (module_name, port_signature_blob) if a board wrapper exists."""
+    for f in rtl_files:
+        if board.replace("-", "").lower() not in f.name.lower():
+            continue
+        try:
+            txt = f.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if "CLOCK_50" in txt or "GPIO_0" in txt:
+            for line in txt.splitlines():
+                line = line.strip()
+                if line.startswith("module "):
+                    name = line.split()[1].split("(")[0].strip()
+                    return (name, txt)
+    return None
+
+
+def _parse_module_ports(txt: str) -> List[Tuple[str, str, int]]:
+    """Returns list of (name, dir, width) from a module's port list."""
+    if "module " not in txt:
+        return []
+    after = txt.split("module ", 1)[1]
+    if "(" not in after:
+        return []
+    body_after_paren = after.split("(", 1)[1]
+    depth = 1
+    chars: List[str] = []
+    for c in body_after_paren:
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        chars.append(c)
+    body = "".join(chars)
+    out: List[Tuple[str, str, int]] = []
+    for raw in body.split(","):
+        line = raw.strip().split("//")[0].strip()
+        if not line:
+            continue
+        toks = line.replace(",", " ").split()
+        direction = "input"
+        for t in toks:
+            if t in ("input", "output", "inout"):
+                direction = t
+                break
+        width = 1
+        for t in toks:
+            if t.startswith("[") and ":" in t and "]" in t:
+                inner = t.strip("[]")
+                try:
+                    hi, lo = inner.split(":")
+                    width = abs(int(hi) - int(lo)) + 1
+                except Exception:
+                    pass
+                break
+        ident = None
+        for t in toks:
+            if t.isidentifier() and t not in (
+                "input", "output", "inout", "wire", "reg", "logic"
+            ):
+                ident = t  # last identifier
+        if ident:
+            out.append((ident, direction, width))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Port classification
+# ---------------------------------------------------------------------------
+def _is_clock(name: str) -> bool:
+    n = name.lower()
+    return ("clk" in n) or ("clock" in n)
+
+
+def _is_reset(name: str) -> bool:
+    n = name.lower()
+    return ("reset" in n) or ("rst" in n)
+
+
+def _is_async_io(name: str) -> bool:
+    n = name.lower()
+    # KEY / SW / GPIO / id_bus / generic data
+    return any(tok in n for tok in
+               ("key", "sw", "switch", "gpio", "id_bus", "data", "io"))
+
+
+def _is_output(name: str, direction: str) -> bool:
+    if direction == "output":
+        return True
+    n = name.lower()
+    return any(tok in n for tok in ("led", "hex", "out"))
+
+
+# ---------------------------------------------------------------------------
+# SDC rendering
+# ---------------------------------------------------------------------------
+def _render_sdc(top: str, clock_port: str, period_ns: float,
+                inputs: List[str], outputs: List[str],
+                async_ports: List[str]) -> str:
+    period_str = f"{period_ns:.3f}".rstrip("0").rstrip(".") or "20"
+    lines: List[str] = []
+    lines.append("# =========================================================================")
+    lines.append("# Auto-generated by sdc_gen.py (Wave 72/73)")
+    lines.append(f"# Top entity: {top}")
+    lines.append(f"# Clock: {clock_port} period={period_str} ns")
+    lines.append("# DO NOT hand-edit; regenerate via sdc_gen.py.")
+    lines.append("# =========================================================================")
+    lines.append("")
+    # Pick a short user-friendly clock name
+    clock_label = "clk_main"
+    if "50" in clock_port:
+        clock_label = "clk_50"
+    elif "100" in clock_port:
+        clock_label = "clk_100"
+    lines.append(f"create_clock -name {clock_label} -period {period_str} "
+                 f"[get_ports {{{clock_port}}}]")
+    lines.append("derive_pll_clocks")
+    lines.append("derive_clock_uncertainty")
+    lines.append("")
+    if inputs:
+        lines.append("# Synchronous data inputs (moderate setup/hold)")
+        for sig in inputs:
+            lines.append(f"set_input_delay  -clock {clock_label} -max 4.0 "
+                         f"[get_ports {{{sig}}}]")
+            lines.append(f"set_input_delay  -clock {clock_label} -min 0.0 "
+                         f"[get_ports {{{sig}}}]")
+        lines.append("")
+    if outputs:
+        lines.append("# Outputs")
+        for sig in outputs:
+            lines.append(f"set_output_delay -clock {clock_label} -max 4.0 "
+                         f"[get_ports {{{sig}}}]")
+            lines.append(f"set_output_delay -clock {clock_label} -min 0.0 "
+                         f"[get_ports {{{sig}}}]")
+        lines.append("")
+    if async_ports:
+        lines.append("# Async inputs / open-drain shared bus → false_path")
+        # collapse to wildcard groups when names share a base
+        base_groups: Dict[str, bool] = {}
+        for s in async_ports:
+            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\[", s)
+            base = m.group(1) + "[*]" if m else s
+            base_groups[base] = True
+        for s in base_groups:
+            lines.append(f"set_false_path -from [get_ports {{{s}}}] "
+                         f"-to [all_clocks]")
+            lines.append(f"set_false_path -from [all_clocks] "
+                         f"-to [get_ports {{{s}}}]")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Driver
+# ---------------------------------------------------------------------------
+def main() -> int:
+    p = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("project", type=Path)
+    p.add_argument("--board", default="de10lite", choices=["de10lite"])
+    p.add_argument("--top-name", default=None)
+    p.add_argument("--force", action="store_true")
+    # v1.6.96 (issue #28 Bug 1) — explicit IC class hint from the
+    # phase2 runner's detect_ic_class step. Short-circuits the L-doc
+    # scan so the EXAMPLE_PROTOCOL-class default fires even on projects whose
+    # phase1 never propagated the verdict into L9.interface_type /
+    # L1.class_path.
+    p.add_argument("--ic-class", default=None,
+                   help="IC class verdict from detect_ic_class "
+                        "(e.g. aid_class_half_duplex)")
+    args = p.parse_args()
+
+    project = args.project.resolve()
+    if not project.is_dir():
+        print(f"ERROR: not a directory: {project}", file=sys.stderr)
+        return 2
+
+    l8 = _load_json(_pl.generated_docs_dir(project) / "L8_RTL_CONSTANTS.json")
+    l9 = _load_json(_pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json")
+    if l8 is None or l9 is None:
+        print("FAIL: missing L8 or L9", file=sys.stderr)
+        return 1
+
+    # v1.6.94 (issue #25 Bug 5) — EXAMPLE_PROTOCOL-class half-duplex single-wire on
+    # de10lite_top relaxes to 25 MHz (40 ns); other classes / boards keep
+    # the L8.clock_mhz value (default 50 MHz). Only relax when L8 hasn't
+    # been pinned to an explicit non-default — explicit `clock_mhz` always
+    # wins over the per-class default.
+    explicit_clock = l8.get("clock_mhz")
+    if explicit_clock is not None:
+        try:
+            clock_mhz = float(explicit_clock)
+        except Exception:
+            clock_mhz = _DEFAULT_MHZ
+    else:
+        clock_mhz = _DEFAULT_MHZ
+        if args.board == "de10lite" and _is_aid_class(
+                project, l9, getattr(args, "ic_class", None)):
+            clock_mhz = _AID_CLASS_DEFAULT_MHZ_DE10LITE
+    period_ns = 1000.0 / clock_mhz
+
+    rtl_files = _list_rtl(project)
+    wrapper = _detect_board_wrapper(rtl_files, args.board)
+
+    # Decide top
+    if args.top_name:
+        top = args.top_name
+    elif wrapper:
+        top = wrapper[0]
+    else:
+        top = l9.get("top_module") or "chip_top"
+
+    # Decide port set: prefer wrapper ports (board namespace) when wrapper
+    # is the top entity, else fall back to L9.top_module_pins.
+    inputs: List[str] = []
+    outputs: List[str] = []
+    async_ports: List[str] = []
+    clock_port: Optional[str] = None
+
+    if wrapper and top == wrapper[0]:
+        ports = _parse_module_ports(wrapper[1])
+        for name, direction, width in ports:
+            sigs = ([name] if width == 1
+                    else [f"{name}[{i}]" for i in range(width)])
+            if _is_clock(name):
+                clock_port = name if width == 1 else f"{name}[0]"
+                continue
+            if _is_reset(name) or _is_async_io(name):
+                async_ports.extend(sigs)
+                continue
+            if _is_output(name, direction):
+                outputs.extend(sigs)
+            else:
+                inputs.extend(sigs)
+    else:
+        # L9 namespace
+        for port in l9.get("top_module_pins", []):
+            if not isinstance(port, dict):
+                continue
+            name = port.get("name", "")
+            mode = (port.get("mode") or "").lower()
+            if _is_clock(name):
+                clock_port = name
+                continue
+            if _is_reset(name) or "inout" in mode or _is_async_io(name):
+                async_ports.append(name)
+                continue
+            if mode == "output":
+                outputs.append(name)
+            else:
+                inputs.append(name)
+
+    if not clock_port:
+        # Fallback: take first 'clk*' from L9, else 'clk'
+        clock_port = "clk"
+        for port in l9.get("top_module_pins", []):
+            if isinstance(port, dict) and _is_clock(port.get("name", "")):
+                clock_port = port["name"]
+                break
+
+    fpga_dir = _pl.fpga_early_dir(project)
+    fpga_dir.mkdir(parents=True, exist_ok=True)
+    out = fpga_dir / f"{top}.sdc"
+    if out.exists() and not args.force:
+        print(f"SKIP: {out} exists (use --force to overwrite)")
+        return 0
+
+    text = _render_sdc(top, clock_port, period_ns, inputs, outputs,
+                       async_ports)
+    out.write_text(text, encoding="utf-8")
+    print(f"PASS sdc_gen: {out} "
+          f"(clock={clock_port}@{clock_mhz}MHz period={period_ns:.2f}ns; "
+          f"{len(inputs)} in / {len(outputs)} out / "
+          f"{len(async_ports)} false_path)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

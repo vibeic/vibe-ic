@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "eda-tools": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/home/<your-user>/AI_IC_design/mcp-eda-server/src/index.js"
+      ],
+      "env": {
+        "EDA_CONTAINER": "iic-eda"
+      }
+    }
+  }
+}

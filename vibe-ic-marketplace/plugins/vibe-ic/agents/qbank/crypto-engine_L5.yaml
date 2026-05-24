@@ -1,0 +1,23 @@
+class: crypto-engine
+layer: L5
+# v0.74 E+F-implement: crypto engine datapath / interface
+qbank:
+  datapath_style:
+    expert:       ["Datapath style — round-unrolled / pipelined / iterative / bit-serial?"]
+    intermediate: ["Is the datapath pipelined (high throughput) or iterative (small area)?"]
+    beginner:     []
+
+  interface_type:
+    expert:       ["Data interface — bus-RW / streaming FIFO / DMA-attach?"]
+    intermediate: ["How does data flow in and out — bus writes, FIFO, DMA?"]
+    beginner:     []
+
+  parallelism_factor:
+    expert:       ["Parallelism — bits per cycle processed?"]
+    intermediate: ["How many bits does the core process per cycle?"]
+    beginner:     []
+
+  throughput_cycles_per_block:
+    expert:       ["Cycles per block (AES block = 128b; SHA block = 512b, etc.)?"]
+    intermediate: ["How many cycles does one block take?"]
+    beginner:     ["Roughly how fast is it per message?"]

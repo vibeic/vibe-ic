@@ -1,0 +1,81 @@
+{
+  "_comment": "IC class registry — runners (phase2/aid_class_rtl_gen/etc.) consult this to dispatch deterministic generators per detected IC class. Third-party plugins can append entries to extend coverage.",
+  "schema_version": 1,
+  "classes": [
+    {
+      "name": "aid_class_half_duplex_single_wire",
+      "description": "Apple-Lightning-style half-duplex single-wire ID / authentication IC. Host emits BR + opcode (1-byte LSB-first) + optional payload; chip replies with response opcode + payload + CRC8 (poly 0x31 reflected, init 0xFF, residue 0).",
+      "synonyms": [
+        "aid_class",
+        "aid_class_half_duplex",
+        "aid_class_single_wire",
+        "apple_id_class"
+      ],
+      "rtl_gen": "aid_class_rtl_gen.py",
+      "rtl_gen_args": ["--spec-compliance"],
+      "reference_tb": "tools/protocol_tb/aid_class_reference_tb.v",
+      "detect_markers": {
+        "L2": ["half_duplex", "half-duplex", "single-wire", "single_wire"],
+        "L3": ["BR", "break", "opcode", "CRC", "crc8"],
+        "L8": ["br_min", "br_max", "rx_classifier", "ibt"]
+      },
+      "min_marker_score": 2,
+      "default_top": "chip_top",
+      "fallback_skill": "spec-to-rtl",
+      "owner_plugin": "vibe-ic"
+    },
+    {
+      "name": "digital_cmd_driven",
+      "description": "Generic command-driven digital IC (UART / SPI / I2C / parallel cmd). RTL gen not yet covered by deterministic generator — defer to spec-to-rtl skill.",
+      "synonyms": ["digital_cmd", "uart_cmd", "spi_cmd", "i2c_cmd"],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "owner_plugin": "vibe-ic"
+    },
+    {
+      "name": "mixed_signal_otp",
+      "description": "Mixed-signal IC with OTP-driven configuration. Digital control logic + OTP read sequence — partial overlap with aid_class. v1.6.142 (#52) routes through MAIN_FSM_SPEC_COMPLIANT so the dispatcher consumes L3.opcodes (per-opcode case-arms + L3-enumerated silent-reject arms); BASELINE spam-responder produces silent DUT for chips with opcodes outside the EXAMPLE_PROTOCOL-convention default reply path.",
+      "synonyms": ["mixed_otp", "otp_chip"],
+      "rtl_gen": "aid_class_rtl_gen.py",
+      "rtl_gen_args": ["--spec-compliance"],
+      "fallback_skill": "spec-to-rtl",
+      "owner_plugin": "vibe-ic"
+    },
+    {
+      "name": "pure_analog",
+      "description": "Pure analog IC — no digital RTL. Phase 2 SKIPs RTL gen; analog flow (A1..A8) handles via /vibe-ic-analog.",
+      "synonyms": ["analog_only"],
+      "rtl_gen": null,
+      "fallback_skill": null,
+      "owner_plugin": "vibe-ic"
+    },
+    {
+      "name": "bare_fpga",
+      "description": "FPGA-only design with no silicon target. Phase 2 runs FPGA-side (RTL → SOF), Phase 3 SKIPs.",
+      "synonyms": ["fpga_only"],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "owner_plugin": "vibe-ic"
+    },
+    {
+      "name": "digital_arithmetic_primitive",
+      "description": "v1.6.522 — for #358 P2. Pure digital data-transform IP (multiplier, adder, filter, hash core, encoder/decoder, arithmetic sub-block). No SW-visible protocol / register map / calibration. Single top module with clock + reset + data ports. L4/L5/L6 legitimately N/A — L2 describes a deterministic combinational/sequential data transform. Phase 2 runner dispatches via fallback_skill=spec-to-rtl since there is no deterministic RTL generator for this open family.",
+      "synonyms": [
+        "digital_datapath",
+        "arithmetic_primitive",
+        "pure_datapath"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "owner_plugin": "vibe-ic"
+    },
+    {
+      "name": "unknown_protocol_class",
+      "description": "Detection failed or class not yet registered. Runner fall-throughs to fallback_skill — AI takes over via /spec-to-rtl skill.",
+      "synonyms": [],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "owner_plugin": "vibe-ic"
+    }
+  ]
+}

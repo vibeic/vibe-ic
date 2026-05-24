@@ -1,0 +1,31 @@
+# Chip / project / vendor names that must NEVER appear in this repo's
+# source code, skills, agents, or docs.
+#
+# This file exists because the project was originally developed against
+# private benchmark ICs whose names must not leak. Any name in this list,
+# when found in a tracked source file, is a chip-AGNOSTIC violation.
+#
+# The check runs in CI via tests/test_chip_agnostic_guard.py.
+#
+# Format: one lowercase token per line, # comments allowed.
+# Matching is case-insensitive, word-bounded (\b).
+#
+# DO NOT add common English words (aid, bin, ace, etc.) — too many
+# false positives. Only add tokens that are uniquely private codenames.
+# DO NOT add example placeholders (MyChip, ExampleSoC, SomeProject) —
+# those are legitimate tutorial/comment idioms.
+
+# Private IC codenames
+as3616
+sn2025
+
+# Private vendor / brand
+noirs
+
+# Private device / tester
+md905
+md-905
+
+# Private benchmark sources
+u_hawaii
+uhee628

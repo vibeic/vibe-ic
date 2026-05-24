@@ -1,0 +1,20 @@
+class: bus-controller
+layer: L1
+qbank:
+  protocol_family:
+    expert:       ["Bus protocol family — AXI4 / AXI4-Lite / AXI-Stream / Wishbone / APB / AHB / OBI / mixed?"]
+    intermediate: ["Which bus protocol is this controller for? AXI4, Wishbone, APB, AHB, or something else?"]
+    beginner:     ["What kind of on-chip bus does the chip use to move data?"]
+    follow_ups:
+      - if_user_says: ["xilinx", "arm"]
+        respond_with_default: "AXI4"
+
+  topology:
+    expert:       ["Topology — crossbar / interconnect / bridge / adapter / cdc / width-adapter?"]
+    intermediate: ["Is it a crossbar (many masters × many slaves), a bridge (one-to-one), or an adapter?"]
+    beginner:     ["Is it routing one signal or connecting many sources to many destinations?"]
+    follow_ups:
+      - if_user_says: ["many-to-many"]
+        respond_with_default: "crossbar"
+      - if_user_says: ["one-to-one", "bridge"]
+        respond_with_default: "bridge"

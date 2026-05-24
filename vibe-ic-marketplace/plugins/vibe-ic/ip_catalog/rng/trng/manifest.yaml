@@ -1,0 +1,58 @@
+ip_name: trng
+ip_version: "0.51"
+ip_class: hardware_true_random_number_generator
+license: BSD-2-Clause
+canonical_url: https://github.com/secworks/trng
+canonical_commit: "master"
+authors:
+  - "Joachim Strömbergson <joachim@secworks.se>"
+description: >
+  True Random Number Generator with NIST SP 800-90A compatible CSPRNG output
+  stage. Uses ring oscillators (digital, no analog macro required) +
+  ChaCha20 CSPRNG for entropy whitening. Memory-mapped interface.
+
+implements:
+  entropy_source: ring_oscillator_digital
+  csprng_stage: chacha20
+  standards_alignment: [nist_sp_800_90a, nist_sp_800_90b]
+  output_bits_per_cycle: 32
+  fifo_depth: 32
+
+matches_when:
+  - "L2.function == 'trng' OR L2.function == 'rng'"
+  - "L2.function == 'random number generator'"
+  - "L2.crypto_family == 'rng' OR L2.crypto_family == 'entropy'"
+  - "L4 contains 'NIST SP 800-90'"
+
+interface:
+  ports:
+    - {name: clk,        dir: in,  width: 1}
+    - {name: reset_n,    dir: in,  width: 1}
+    - {name: cs,         dir: in,  width: 1}
+    - {name: we,         dir: in,  width: 1}
+    - {name: address,    dir: in,  width: 8}
+    - {name: write_data, dir: in,  width: 32}
+    - {name: read_data,  dir: out, width: 32}
+    - {name: error,      dir: out, width: 1}
+    - {name: security_error, dir: out, width: 1}
+  parameters: []
+
+rtl_files:
+  - src/rtl/trng.v
+  - src/rtl/trng_mixer.v
+  - src/rtl/trng_csprng.v
+  - src/rtl/trng_csprng_fifo.v
+  - src/rtl/trng_debug_ctrl.v
+
+synth:
+  pdk_compatible: [sky130A]
+  tested_clock_period_ns: 10
+  area_ge: 15000
+  openlane_tapeout_track_record: "secworks/trng + neoTRNG family are commonly integrated into open-source RV SoCs"
+
+integration_notes: >
+  Ring oscillator entropy source requires careful constraints in
+  floorplan to avoid placement that defeats randomness. Reference
+  recommends spreading ROs across different placement regions.
+
+depends_on: []

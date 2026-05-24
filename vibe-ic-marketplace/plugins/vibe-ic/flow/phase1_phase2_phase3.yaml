@@ -1,0 +1,1279 @@
+# Vibe-IC Phase 1+2+3 Canonical Flow Definition
+# =============================================
+# Machine-readable enumeration of the canonical Phase 1+2+3 steps;
+# see the active CANONICAL_FLOW doc under docs/architecture/.
+#
+# v2 phase redesign (merged 2026-05-23): the legacy Phase 2a doc-
+# extraction track is absorbed into Phase 1 (single D-class step that
+# wraps all 17 doc-gen skills + A1 analog spec extract). Phase 2 (was
+# 2b) covers Steps 1-13 + A2-A4 analog frontend. Phase 3 covers
+# Steps 14-40 + A5-A9 analog backend + M1-M4 mixed-signal.
+#
+# Wave 91 / v1.6.15 — Option D restructure:
+# the legacy `Step -1` (structural-RTL umbrella) is renamed `P0` to align
+# with A*/M* stage-class markers, and the synthetic `Step 0` (pre-PnR
+# Yosys gate) is promoted into the canonical integer track as Step 14
+# (sits between stage2 Equivalence Check and stage3 Floorplan). Stage 3,
+# 4 and 5 cascade +1 — main flow integer track is now 1..40 (Foundry
+# Handoff is 35, FPGA final sign-off is 36, manufacturing 37-40).
+# Analog A1..A9 and mixed-signal M1..M4 are unchanged.
+#
+# This file is the single source of truth. Any agent given a phase 2+3
+# task MUST follow this order and pass every gate. The programs/
+# flow_compliance_check.py script parses this file and produces a
+# PASS/FAIL matrix. Declaring "PASS" without compliance_check exit 0
+# is a process violation — see flow-orchestrate/SKILL.md.
+#
+# Skipping a step requires a machine-readable waiver in
+# <project>/waivers.json with a documented justification; waivers still
+# appear in the compliance report as SKIPPED and must be reviewed by a
+# human before tape-out.
+
+version: 2
+flow_name: phase1_phase2_phase3
+total_steps: 40
+analog_steps: 9
+
+# When a step maps to a plugin skill, use the `skill:` field with the
+# SKILL.md directory name (relative to vibe-ic-core/skills/).
+# When a step maps to a deterministic program, use `program:` with the
+# .py filename (relative to vibe-ic-d/programs/).
+# Multiple entries imply sequence; all must succeed.
+#
+# gate_predicate options:
+#   files_exist: <list of glob patterns, all must match at least one file>
+#   program_exit_zero: <program name + args; must exit 0>
+#   json_field_true: {file: <path>, field: <dotted.key>, expect: true}
+
+stages:
+  # v2 — Phase 1 doc-extraction stage. Unified entry that wraps the
+  # 17 doc-gen skills (Path A: input_doc/) + 1 dialogue skill
+  # (Path B: input_prompt/). Output is L1-L13 JSON in
+  # phase1/generated_docs/ — the universal handoff to Phase 2.
+  # SKIP allowed when phase1/generated_docs/ already populated by an
+  # external authoring path (e.g. the runner's dialogue mode).
+  - id: stage_phase1
+    name: "Phase 1 - Spec Extraction (input → L1-L13 structured JSON)"
+    steps: [D1]
+    gate_at_end: phase1_compliance
+
+  - id: stage1
+    name: "RTL Generation + Verification"
+    steps: [1, 2, 3, 4, 5, 6]
+    gate_at_end: stage1_compliance
+
+  - id: stage2
+    name: "Synthesis + DFT"
+    steps: [7, 8, 9, 10, 11, 12, 13]
+    gate_at_end: stage2_compliance
+
+  - id: stage_analog
+    name: "Analog Design Pipeline (parallel with digital stages 1-2)"
+    # Wave 90 / v1.6.14 — analog track integerised to A1..A9. A6 is
+    # per-block Physical Verification; A7/A8/A9 are Resim / Hardmacro
+    # / Cosim respectively.
+    steps: [A1, A2, A3, A4, A5, A6, A7, A8, A9]
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    gate_at_end: analog_compliance
+
+  - id: stage3
+    name: "Physical Design + Sign-off"
+    # Wave 91 / v1.6.15 — Step 14 is the pre-PnR Yosys gate (promoted
+    # from synthetic Step 0); steps 15..30 are the +1 cascade of the
+    # legacy 14..29 PnR/sign-off track.
+    steps: [14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+    gate_at_end: stage3_compliance
+
+  # v1.6.13 Wave 88 — Mixed-Signal Integration (M1-M4) inserted
+  # between digital stage3 and stage4. Required when analog blocks
+  # are present (A7 hardmacros must be merged, power domains
+  # crossed, level shifters / isolation cells inserted, top-level
+  # PV repeated on the merged GDS, A+D interface signals validated).
+  # SKIP if no analog_block_list.json (pure digital).
+  - id: stage_mixed_signal
+    name: "Mixed-Signal Integration (A+D top-level merge + sign-off)"
+    steps: [M1, M2, M3, M4]
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    gate_at_end: mixed_signal_compliance
+
+  - id: stage4
+    name: "Output + Validation"
+    # Wave 91 / v1.6.15 — stage 3 cascade pushed steps +1; Foundry Handoff
+    # is now step 35 and FPGA final sign-off is step 36.
+    steps: [31, 32, 33, 34, 35, 36]
+    gate_at_end: stage4_compliance
+
+  # v1.6.13 Wave 88 — Manufacturing & Test (post-fab silicon stage).
+  # Optional: only fires when project sets manufacturing.enabled = true
+  # OR a fabricated-silicon report exists. Most benchmark projects
+  # SKIP this stage entirely.
+  - id: stage5_manufacturing
+    name: "Manufacturing & Test (fab → wafer-sort → packaging → ATE final)"
+    # Wave 91 / v1.6.15 — manufacturing shifted 36-39 → 37-40.
+    steps: [37, 38, 39, 40]
+    condition:
+      files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
+    gate_at_end: manufacturing_compliance
+
+steps:
+  # v2 — Phase 1 doc-extraction single-gate step. Wraps the 17
+  # doc-gen skills + dialogue entry. Gate passes when all 13 L docs
+  # (L1..L13) exist as JSON under phase1/generated_docs/.
+  - id: D1
+    name: "Phase 1 Doc Extraction (17 skills + dialogue entry → L1-L13)"
+    stage: stage_phase1
+    skills:
+      - datasheet-gen
+      - frs-gen
+      - cmd-protocol-gen
+      - regmap-gen
+      - adi-spec-gen
+      - control-logic-gen
+      - test-debug-gen
+      - timing-waveform-gen
+      - rtl-constants-gen
+      - integration-spec-gen
+      - test-cases-gen
+      - calibration-gen
+      - behavioral-sequences-gen
+      - lab-calibration-gen
+      - otp-content-gen
+      - doc-consistency-check
+      - schematic-gen
+      - phase1
+    required_outputs:
+      - "phase1/generated_docs/L1_DATASHEET.json"
+      - "phase1/generated_docs/L2_FRS.json"
+      - "phase1/generated_docs/L3_CMD_PROTOCOL.json"
+      - "phase1/generated_docs/L4_REGMAP.json"
+      - "phase1/generated_docs/L5_ADI_SPEC.json"
+      - "phase1/generated_docs/L6_CONTROL_LOGIC.json"
+      - "phase1/generated_docs/L7_TEST_DEBUG.json"
+      - "phase1/generated_docs/L8_TIMING_WAVEFORM.json"
+      - "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+      - "phase1/generated_docs/L10_TEST_CASES.json"
+      - "phase1/generated_docs/L11_CALIBRATION.json"
+      - "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json"
+      - "phase1/generated_docs/L13_OTP.json"
+    gate:
+      program_exit_zero: "phase1_all_l_docs_present_check ."
+    blocks_on: []
+
+  - id: 1
+    name: "Spec-to-RTL"
+    stage: stage1
+    skills: [spec-to-rtl]
+    required_outputs:
+      - "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
+      # BACKLOG-v13 Wave 4: Phase 2a extraction-coverage REPORT
+      # (companion to LL-38 gate). Mandatory deliverable; per-doc
+      # diagnostic of which verbatim literals from
+      # extraction_patterns.json reached generated_docs/L*.json.
+      - "reports/phase1/extraction_coverage_report.md"
+      - "reports/phase1/extraction_coverage_report.json"
+    gate:
+      files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
+      any_of: true
+    blocks_on: []
+
+  - id: 2
+    name: "🔁 Lint (RTL + Quartus-unsafe patterns + RTL-bug claim schema)"
+    stage: stage1
+    closed_loop:
+      fallback_to: 1
+      trigger: "Lint error/warning above threshold"
+    skills: [rtl-review]
+    programs:
+      - rtl_hygiene_lint
+      - rom_init_lint
+      - rtl_bug_report_schema_check   # v0.54: every reports/phase2/rtl_bugs.json
+                                       # entry must carry spec_evidence
+                                       # (doc + locator + verbatim quote).
+                                       # Skipped if reports/phase2/rtl_bugs.json
+                                       # absent (nothing to validate).
+      # v0.74 Phase-2a gates — generic any-IC lints from BENCHMARK_A bisect:
+      - internal_vs_external_timing_check   # L8 must split host-side
+                                            # (RX thresholds) and DUT-side
+                                            # (TX cycles) timing groups.
+      - threshold_range_contiguity_check    # H1_MAX/H0_MIN must be
+                                            # contiguous (no reject gap).
+      - rsp_example_otp_consistency_check   # L3 rsp_example OTP-sourced
+                                            # bytes must match L11_OTP
+                                            # + CRC self-consistent.
+      - spec_response_delay_check           # If spec declares tSRS /
+                                            # tIRT / turnaround, RTL
+                                            # needs a S_WAIT/S_DELAY
+                                            # state before TX launch.
+      - nba_addr_read_race_check            # RTL FSM that writes
+                                            # <X>_addr_o and reads
+                                            # <X>_data_i in the same
+                                            # always block must pre-
+                                            # advance the addr (or
+                                            # explicitly silence).
+      - periodic_timer_vs_rx_activity_check # Periodic counters that
+                                            # trigger TX (wake/keepalive)
+                                            # must reset on RX activity.
+      - memory_read_pipeline_check          # Memory modules must
+                                            # document 1-cycle read
+                                            # latency or expose _valid.
+    required_outputs:
+      - "reports/phase2/lint/rtl_hygiene.json"
+      - "reports/phase2/lint/rom_init_lint.json"
+    gate:
+      all_of:
+        - program_exit_zero: "rtl_hygiene_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v --json reports/phase2/lint/rtl_hygiene.json"
+        - program_exit_zero: "rom_init_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v --json reports/phase2/lint/rom_init_lint.json"
+        # rtl_bug_report_schema_check: only fires when reports/phase2/rtl_bugs.json
+        # exists; otherwise the program reports rc=2 (input missing) which
+        # we treat as "not applicable" via the optional_program_exit_zero
+        # predicate (file-exist gate).
+        - optional_program_exit_zero:
+            command: "rtl_bug_report_schema_check . --json reports/phase2/gates/rtl_bug_schema.json"
+            condition_files_exist: ["reports/phase2/rtl_bugs.json"]
+        # v0.74 Phase-2a gates — generic (any-IC) lints surfaced by the
+        # BENCHMARK_A/EXAMPLE_CHIP fresh-agent bisect. Each fires only when its
+        # input document is present; silent no-op otherwise.
+        - optional_program_exit_zero:
+            command: "internal_vs_external_timing_check phase1/generated_docs/L8_TIMING_WAVEFORM.json --layer phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/int_vs_ext_timing.json"
+            condition_files_exist: ["phase1/generated_docs/L8_TIMING_WAVEFORM.json"]
+        - optional_program_exit_zero:
+            command: "threshold_range_contiguity_check phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/threshold_contiguity.json"
+            condition_files_exist: ["phase1/generated_docs/L8_RTL_CONSTANTS.json"]
+        - optional_program_exit_zero:
+            command: "rsp_example_otp_consistency_check phase1/generated_docs/L3_CMD_PROTOCOL.json --otp phase1/generated_docs/L11_OTP_CONTENT.json --json reports/phase2/gates/rsp_otp_consistency.json"
+            condition_files_exist: ["phase1/generated_docs/L3_CMD_PROTOCOL.json", "phase1/generated_docs/L11_OTP_CONTENT.json"]
+        - optional_program_exit_zero:
+            command: "spec_response_delay_check phase2/stage1/rtl --spec phase1/generated_docs/L8_TIMING_WAVEFORM.json --spec phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/spec_response_delay.json"
+            condition_files_exist: ["phase1/generated_docs/L8_TIMING_WAVEFORM.json"]
+        - optional_program_exit_zero:
+            command: "nba_addr_read_race_check phase2/stage1/rtl --json reports/phase2/gates/nba_addr_race.json"
+            condition_files_exist: ["phase2/stage1/rtl"]
+        - optional_program_exit_zero:
+            command: "periodic_timer_vs_rx_activity_check phase2/stage1/rtl --json reports/phase2/gates/periodic_timer.json"
+            condition_files_exist: ["phase2/stage1/rtl"]
+        - optional_program_exit_zero:
+            command: "memory_read_pipeline_check phase2/stage1/rtl --json reports/phase2/gates/memory_read_pipeline.json"
+            condition_files_exist: ["phase2/stage1/rtl"]
+        # v0.76 FPGA wrapper input-polluter check — generic across protocols.
+        # Catches the sim-PASS hardware-FAIL trap where a wrapper ANDs/ORs
+        # multiple inout pins to "hedge" against bench-cable uncertainty;
+        # the floating ghost pins poison the input via weak-pullup noise.
+        - optional_program_exit_zero:
+            command: "fpga_wrapper_input_polluter_check --rtl phase2/stage1/rtl --json reports/phase2/gates/fpga_input_polluter.json"
+            condition_files_exist: ["phase2/stage1/rtl"]
+    blocks_on: [1]
+
+  - id: 3
+    name: "🔁 CDC / RDC check"
+    stage: stage1
+    closed_loop:
+      fallback_to: 1
+      trigger: "CDC/RDC violation requires RTL change"
+    skills: [cdc-check, rdc-check]
+    programs:
+      - cdc_crossing_check
+      - cdc_async_input_check
+      - reset_dependency_check
+    required_outputs:
+      - "reports/phase2/cdc/crossing.json"
+      - "reports/phase2/cdc/async_input.json"
+      - "reports/phase2/cdc/reset_dep.json"
+    gate:
+      all_of:
+        # v1.6.36 — gate-output JSON paths moved under reports/phase2/gates/
+        # to avoid clobbering the runner-emitted canonical JSONs at
+        # reports/phase2/cdc/{crossing,async_input,reset_dep}.json.
+        # The substance check (cdc_crossing_check) reads the runner's
+        # canonical JSON and confirms verdict=PASS + populated
+        # crossings/async/reset fields.
+        - program_exit_zero: "cdc_crossing_check . --json reports/phase2/gates/cdc_crossing.json"
+        - program_exit_zero: "cdc_async_input_check . --json reports/phase2/gates/cdc_async_input.json"
+        - program_exit_zero: "reset_dependency_check . --json reports/phase2/gates/cdc_reset_dep.json"
+    blocks_on: [1]
+
+  - id: 4
+    name: "🔁 Simulation (testbench-based + L10/L12 coverage + Verilator coverage)"
+    stage: stage1
+    closed_loop:
+      fallback_to: 1
+      trigger: "Test fail traceable to RTL"
+    skills: [testbench-gen]
+    mcp_tools: [eda_simulate]
+    programs:
+      # Wave 82 — testbench scaffolder + coverage-closure analyser.
+      # `testbench_gen` emits the unit/integration tb skeleton from
+      # L10 test_cases (run BEFORE the agent fills in stimulus);
+      # `coverage_closure` consumes the post-sim coverage report and
+      # identifies remaining gaps. Both invoked via the agent before
+      # the verilator measurement gate.
+      - testbench_gen                # scaffolds phase2/stage1/sim/tb/*.v from L10
+      - coverage_closure              # gap analysis from coverage_actual.json
+      # v0.53/v0.54 byte-level coverage gates (replace agent self-reports
+      # of "≥ 95 % covered" with machine-measured numbers).
+      - l10_tb_conformance_check     # every L10 test case must be
+                                      # exercised by a tb (not just sim-driven)
+      - l12_tb_coverage_check         # every L12 behavioural sequence must
+                                      # have a matching sim/tb/tb_*.v
+      - verilator_coverage_measure    # real verilator --coverage replaces
+                                      # agent-estimated %. The `check`
+                                      # subcommand is invoked here; the
+                                      # `measure` subcommand is run by the
+                                      # agent before this gate.
+    required_outputs:
+      - "phase2/stage1/sim/*.log"
+      - "phase2/stage1/sim/results.xml OR phase2/stage1/sim/pass.flag"
+      - "reports/phase2/coverage/coverage_actual.json"   # produced by verilator_coverage_measure
+    gate:
+      all_of:
+        - files_exist: ["phase2/stage1/sim/results.xml", "phase2/stage1/sim/pass.flag"]
+          any_of: true
+        # L10 tb-conformance: run only when L10_TEST_CASES.json exists.
+        - optional_program_exit_zero:
+            command: "l10_tb_conformance_check --l10 phase1/generated_docs/L10_TEST_CASES.json --tb-dir phase2/stage1/sim/tb --out reports/phase2/gates/l10_tb_conformance.json"
+            condition_files_exist: ["phase1/generated_docs/L10_TEST_CASES.json"]
+        # L12 tb-coverage: run only when L12_BEHAVIORAL_SEQUENCES.json exists.
+        # Agents pointing at a class template gain better candidate matching
+        # via the optional --ic-class arg.
+        - optional_program_exit_zero:
+            command: "l12_tb_coverage_check . --json reports/phase2/gates/l12_tb_coverage.json"
+            condition_files_exist: ["phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json"]
+        # Verilator coverage: gate only fires when the project has run
+        # `verilator_coverage_measure measure …` and produced coverage_actual.json.
+        - optional_program_exit_zero:
+            command: "verilator_coverage_measure check --coverage-json reports/phase2/coverage/coverage_actual.json"
+            condition_files_exist: ["reports/phase2/coverage/coverage_actual.json"]
+    blocks_on: [2]
+
+  - id: 5
+    name: "🔁 Formal verification (assertions proved + bit-level full-stack phase2/stage1/tb)"
+    stage: stage1
+    closed_loop:
+      fallback_to: 1
+      trigger: "SVA assertion fail"
+    skills: [assertion-gen, formal-verify]
+    mcp_tools: [eda_formal]
+    programs:
+      - assertion_property_check
+      # v0.52 Rule D: a synth-able full-stack tb must drive the chip top
+      # bit-by-bit through the single-wire pad before FPGA compile, so
+      # bit-level integration bugs surface in sim (~30 s) instead of in
+      # the 15-min Quartus + JTAG cycle.
+      - bit_level_full_stack_tb_check
+    required_outputs:
+      - "phase2/stage1/formal/*.sby"
+      - "phase2/stage1/formal/results.json"
+      - "phase2/stage1/sim_full_stack/results.json"   # produced by Rule-D phase2/stage1/tb
+    gate:
+      all_of:
+        - files_exist: ["phase2/stage1/formal/results.json"]
+        - json_field_true: {file: "phase2/stage1/formal/results.json", field: "all_proved", expect: true}
+        # Bit-level full-stack tb is mandatory before FPGA compile.
+        # The check resolves the top module from L9 if present; the
+        # tb file pattern is sim_full_stack/tb_<top>_full.v.
+        - program_exit_zero: "bit_level_full_stack_tb_check . --json reports/phase2/gates/bit_level_full_stack.json"
+    blocks_on: [2]
+
+  - id: 6
+    name: "FPGA early prototype + verification report audit"
+    stage: stage1
+    skills: [fpga-test-harness]
+    mcp_tools: [eda_synth]
+    programs:
+      # Wave 82 — emit the FPGA test-harness wrapper before Quartus
+      # picks it up. `fpga_test_harness_gen` reads chip_top + L9 ports
+      # and writes fpga/*.sv (top wrapper + pin map glue).
+      - fpga_test_harness_gen
+      # Wave 82 — `debug_first_pass` runs the deterministic first-pass
+      # debug dispatcher when sim/HW disagree (called interactively by
+      # the agent in step 6 fallback path; kept registered here for
+      # discoverability + reachability).
+      - debug_first_pass
+      - quartus_map_audit
+      # v0.53 audit: every pass-count + coverage-% claim in the
+      # human-written FPGA verification report must be traceable to
+      # a tool-generated artefact (sim summary + coverage_actual.json).
+      - fpga_verification_audit
+    required_outputs:
+      - "phase2/stage1/fpga/output_files/*.sof"
+      - "phase2/stage1/fpga/output_files/*.map.rpt"
+      - "reports/phase2/fpga/quartus_map_audit.json"
+    gate:
+      all_of:
+        - files_exist: ["phase2/stage1/fpga/output_files/*.sof"]
+        # quartus_map_audit takes report-path positional; glob expands in compliance gate (cwd=project).
+        # Audit produces findings; non-zero exit allowed when JSON report is present and reviewed
+        # under the waiver mechanism. Here we require only the JSON exists + .sof exists.
+        - files_exist: ["reports/phase2/fpga/quartus_map_audit.json"]
+        # fpga_verification_audit only fires when the human report exists;
+        # not all projects ship one (FPGA-skip projects, sub-agent runs
+        # without a board). Skips harmlessly via condition_files_exist.
+        - optional_program_exit_zero:
+            command: "fpga_verification_audit --report reports/fpga_verification_report.md --summary phase2/stage1/sim/work/summary.txt --coverage reports/phase2/coverage/coverage_actual.json --out reports/phase2/gates/fpga_verification_audit.json"
+            condition_files_exist: ["reports/fpga_verification_report.md"]
+    blocks_on: [2, 4, 5]
+
+  - id: 7
+    name: "Constraint setup (SDC + PVT matrix)"
+    stage: stage2
+    skills: [constraint-gen]
+    required_outputs:
+      - "phase2/stage2/constraints/*.sdc"
+      - "phase2/stage2/constraints/pvt_matrix.json"
+    gate:
+      files_exist: ["phase2/stage2/constraints/*.sdc", "phase2/stage2/constraints/pvt_matrix.json"]
+      all_of: true
+    blocks_on: [1]
+
+  - id: 8
+    name: "🔁 SDC validation"
+    stage: stage2
+    closed_loop:
+      fallback_to: 7
+      trigger: "SDC syntax/semantic error"
+    skills: [sdc-validator]
+    programs:
+      - sdc_syntax_check
+      # Wave 82 — `sdc_validator_check` cross-checks the SDC against
+      # L8_TIMING_WAVEFORM constraints; complements sdc_syntax_check
+      # which only validates SDC syntax.
+      - sdc_validator_check
+    required_outputs:
+      - "reports/phase2/sdc_check.json"
+    gate:
+      all_of:
+        - program_exit_zero: "sdc_syntax_check . --json reports/phase2/sdc_check.json"
+        # sdc_validator_check fires only when L8 timing exists.
+        - optional_program_exit_zero:
+            command: "sdc_validator_check phase2/stage2/constraints --l8 phase1/generated_docs/L8_TIMING_WAVEFORM.json --json reports/sdc_validator.json"
+            condition_files_exist: ["phase1/generated_docs/L8_TIMING_WAVEFORM.json"]
+    blocks_on: [7]
+
+  - id: 9
+    name: "Synthesis (Yosys → mapped netlist)"
+    stage: stage2
+    skills: [synth-doctor]
+    mcp_tools: [eda_synth]
+    programs:
+      # Wave 82 — `synth_wrapper_gen` auto-generates the synthesis
+      # wrapper for inout-port designs (the wrapper splits inout into
+      # in/out/oen so Yosys can map cleanly). Run before Yosys.
+      - synth_wrapper_gen
+    required_outputs:
+      - "phase2/stage2/synth/netlist.v"
+      - "phase2/stage2/synth/area.rpt OR phase2/stage2/synth/stats.json"
+    # Provenance required (2026-04-22): the netlist MUST appear as a
+    # logged `yosys` output in provenance.jsonl with matching hash.
+    # To satisfy, wrap Yosys like:
+    #   provenance_logger.py --project . --tool yosys \
+    #     --version-cmd "yosys -V" --output synth/netlist.v \
+    #     -- yosys -s synth.ys
+    gate:
+      all_of:
+        - files_exist: ["phase2/stage2/synth/netlist.v"]
+        - program_exit_zero: "synth_netlist_check --netlist phase2/stage2/synth/netlist.v --json reports/phase2/synth_netlist.json"
+        - program_exit_zero: "provenance_check . --output phase2/stage2/synth/netlist.v --tool yosys,yosys-abc"
+    blocks_on: [2, 3, 8]
+
+  - id: 10
+    name: "🔁 Pre-layout STA (multi-corner)"
+    stage: stage2
+    closed_loop:
+      fallback_to: 7
+      trigger: "Setup violation; constraint or phase2/stage2/synth opt re-do"
+    skills: [sta-review]
+    mcp_tools: [eda_sta]
+    required_outputs:
+      - "phase3/stage3/sta/pre_pnr_timing.rpt"
+      - "reports/phase3/sta/pre_pnr_summary.json"
+    gate:
+      all_of:
+        - files_exist: ["phase3/stage3/sta/pre_pnr_timing.rpt"]
+        - program_exit_zero: "sta_report_check . --mode phase3/stage3/sta --json reports/phase3/sta/pre_pnr_summary.json"
+    blocks_on: [9]
+
+  - id: 11
+    name: "DFT insertion (scan chain + ATPG)"
+    stage: stage2
+    skills: [dft-insert, atpg]
+    mcp_tools: [eda_dft]
+    programs:
+      # Fault (cloudv-io/fault) for open-source stuck-at ATPG.
+      # Integrated 2026-04-22 to eliminate the "no commercial ATPG" waiver
+      # per LL feedback_plugin_usage_discipline.md.
+      - fault_atpg_run
+    required_outputs:
+      - "phase2/stage2/dft/scan_netlist.v"
+      - "phase2/stage2/dft/atpg_coverage.rpt"
+      - "reports/phase2/dft/coverage.json"
+    # NOTE on invocation: flow-orchestrate/SKILL.md directs the agent to
+    # invoke `fault_atpg_run` with the design's clock name and the
+    # already-synthesised netlist. Target varies by design (open-flow
+    # stuck-at typically 55-75% without real scan chain insertion).
+    gate:
+      all_of:
+        - files_exist: ["phase2/stage2/dft/scan_netlist.v", "phase2/stage2/dft/atpg_coverage.rpt"]
+        - json_field_true: {file: "reports/phase2/dft/coverage.json", field: "stuck_at_ge_target", expect: true}
+    blocks_on: [10]
+
+  - id: 12
+    name: "Post-DFT optimization (resynth / buffering)"
+    stage: stage2
+    skills: [synth-doctor]
+    required_outputs:
+      - "phase2/stage2/synth/post_dft_netlist.v"
+    gate:
+      files_exist: ["phase2/stage2/synth/post_dft_netlist.v"]
+    blocks_on: [11]
+
+  - id: 13
+    name: "🔁 Equivalence check (RTL ≡ post-DFT netlist)"
+    stage: stage2
+    closed_loop:
+      fallback_to: 9
+      trigger: "Non-equivalence: phase2/stage2/synth or DFT changed netlist semantics"
+    skills: [equivalence-check]
+    required_outputs:
+      - "reports/lec.rpt"
+      - "reports/lec.json"
+    gate:
+      json_field_true: {file: "reports/lec.json", field: "equivalent", expect: true}
+    blocks_on: [12]
+
+  # ── Analog Design Pipeline (A1-A8) ─────────────────────────────
+  # Runs in parallel with digital stages 1-2. All steps are conditional
+  # on analog/analog_block_list.json existing (pure-digital ICs skip).
+  # A7 (hardmacro) must complete before Step 14 (floorplan) so that
+  # LEF abstracts are available for mixed-signal floorplanning.
+
+  - id: A1
+    name: "Analog Spec Extraction"
+    stage: stage_analog
+    skills: [analog-spec-extract]
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    required_outputs:
+      - "phase1/analog/*/spec.json"
+    gate:
+      files_exist: ["phase1/analog/*/spec.json"]
+    blocks_on: []
+
+  - id: A2
+    name: "Analog Topology Selection"
+    stage: stage_analog
+    skills: [analog-topology-select]
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    required_outputs:
+      - "phase2/analog/*/topology.md"
+    gate:
+      files_exist: ["phase2/analog/*/topology.md"]
+    blocks_on: [A1]
+
+  - id: A3
+    name: "Analog Netlist Generation"
+    stage: stage_analog
+    skills: [analog-netlist-gen]
+    mcp_tools: [eda_xschem_netlist]
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    required_outputs:
+      - "phase2/analog/*/*.sp"
+    gate:
+      all_of:
+        - files_exist: ["phase2/analog/*/*.sp"]
+        - program_exit_zero: "analog_netlist_pdk_check . --json reports/phase2/gates/analog_netlist_pdk.json"
+    blocks_on: [A2]
+
+  - id: A4
+    name: "Analog Corner Sweep (PVT)"
+    stage: stage_analog
+    skills: [analog-sizing-loop]
+    mcp_tools: [eda_spice_corner]
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    required_outputs:
+      - "phase2/analog/*/corner_results.json"
+    gate:
+      all_of:
+        - files_exist: ["phase2/analog/*/corner_results.json"]
+        - program_exit_zero: "analog_corner_sweep_check . --json reports/phase2/gates/analog_corner_sweep.json"
+    blocks_on: [A3]
+
+  - id: A5
+    name: "Analog Layout"
+    stage: stage_analog
+    skills: [analog-layout]
+    mcp_tools: [eda_analog_layout]
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    required_outputs:
+      - "phase3/analog/*/layout.mag OR phase3/analog/*/*.gds"
+    gate:
+      files_exist: ["phase3/analog/*/layout.mag", "phase3/analog/*/*.gds"]
+      any_of: true
+    blocks_on: [A4]
+
+  - id: A7
+    name: "🔁 Post-Layout Resimulation"
+    stage: stage_analog
+    closed_loop:
+      fallback_to: A3
+      trigger: "Performance degradation > 10% post-extraction"
+    skills: [analog-extraction-resim]
+    mcp_tools: [eda_spice_corner]
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    required_outputs:
+      - "phase3/analog/*/pre_vs_post.json"
+    gate:
+      all_of:
+        - files_exist: ["phase3/analog/*/pre_vs_post.json"]
+        - program_exit_zero: "analog_pre_vs_post_layout_check . --json reports/phase2/gates/pre_vs_post.json"
+    blocks_on: [A6]
+
+  - id: A8
+    name: "Hardmacro Generation (LEF + Liberty + GDS + Verilog)"
+    stage: stage_analog
+    skills: [analog-hardmacro-gen]
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    required_outputs:
+      - "phase3/analog/hardmacro/*/*.lef"
+      - "phase3/analog/hardmacro/*/*.lib"
+      - "phase3/analog/hardmacro/*/*.gds"
+      - "phase3/analog/hardmacro/*/*.v"
+    gate:
+      program_exit_zero: "analog_hardmacro_check . --json reports/phase2/gates/hardmacro.json"
+    blocks_on: [A7]
+
+  - id: A9
+    name: "🔁 Co-Simulation / HW Verification"
+    stage: stage_analog
+    closed_loop:
+      fallback_to: A3
+      trigger: "HW mismatch; netlist or analog/hardmacro fix"
+    skills: [mixed-signal-cosim, analog-hw-tuning-loop]
+    mcp_tools: [eda_spice, eda_simulate]
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    required_outputs:
+      - "phase3/mixed_signal/cosim/*_cosim_results.json OR analog/*/hw_measurements.json"
+    gate:
+      all_of:
+        - program_exit_zero: "mixed_signal_cosim_check . --json reports/phase2/gates/cosim.json"
+        - optional_program_exit_zero:
+            command: "analog_hw_spice_correlation_check . --json reports/phase2/gates/hw_spice_corr.json"
+            condition_files_exist: ["phase3/analog/*/hw_measurements.json"]
+    blocks_on: [A8]
+
+  # ── Step 14 (Wave 91 / v1.6.15): pre-PnR Yosys gate ──────────────
+  # Promoted from synthetic Step 0 (legacy v0.70 in-process gate). Sits
+  # between stage2 Equivalence Check (Step 13) and stage3 PnR proper
+  # (Floorplan, Step 15). Verifies the Yosys synth script template
+  # contains the required tokens (-sv, -flatten, hilomap) and that the
+  # synth output has no zero_ ghost-net residue — failures here indicate
+  # the Yosys flow needs to be re-run with proper flags before PnR
+  # consumes the netlist. Implementation: aggregated by
+  # `flow_compliance_check.py:_run_yosys_gates` (combines
+  # yosys_hilomap_required_check + yosys_script_template_check).
+  - id: 14
+    name: "🔁 pre-PnR Yosys gate (phase2/stage2/synth script template + hilomap-ordering audit)"
+    stage: stage3
+    closed_loop:
+      fallback_to: 9
+      trigger: "Yosys phase2/stage2/synth script missing -sv/-flatten/hilomap or unresolved zero_ nets"
+    programs:
+      - yosys_hilomap_required_check
+      - yosys_script_template_check
+    required_outputs:
+      - "phase2/stage2/synth/netlist.v"
+    gate:
+      all_of:
+        - optional_program_exit_zero:
+            command: "yosys_hilomap_required_check . --json reports/phase2/gates/yosys_hilomap.json"
+            condition_files_exist: ["phase2/stage2/synth"]
+        - optional_program_exit_zero:
+            command: "yosys_script_template_check . --json reports/phase2/gates/yosys_script_template.json"
+            condition_files_exist: ["phase2/stage2/synth"]
+    blocks_on: [9, 13]
+
+  - id: 15
+    name: "Floorplan + PDN"
+    stage: stage3
+    mcp_tools: [eda_pnr]
+    programs:
+      # Wave 82 — `phase3_backend_step` is the per-step dispatcher
+      # that wraps each backend invocation (synth → PnR → STA → DRC)
+      # with a single deterministic entry point. Registered at the
+      # entry to stage3 so the agent can call it for every backend
+      # step. The dispatcher itself is an internal coordinator;
+      # individual gate logic stays in the dedicated checks below.
+      - phase3_backend_step
+    required_outputs:
+      - "phase3/stage3/pnr/floorplan.def"
+      - "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done"
+    gate:
+      files_exist: ["phase3/stage3/pnr/floorplan.def"]
+    blocks_on: [13, 14, A8]
+
+  - id: 16
+    name: "Clock planning"
+    stage: stage3
+    skills: [cts-plan]
+    required_outputs:
+      - "phase3/stage3/cts/clock_plan.json"
+    gate:
+      files_exist: ["phase3/stage3/cts/clock_plan.json"]
+    blocks_on: [15]
+
+  - id: 17
+    name: "Placement (global + detailed)"
+    stage: stage3
+    skills: [placement-optimize]
+    mcp_tools: [eda_pnr]
+    required_outputs:
+      - "phase3/stage3/pnr/placed.def"
+    gate:
+      files_exist: ["phase3/stage3/pnr/placed.def"]
+    blocks_on: [16]
+
+  - id: 18
+    name: "CTS (Clock Tree Synthesis)"
+    stage: stage3
+    mcp_tools: [eda_pnr]
+    required_outputs:
+      - "phase3/stage3/pnr/post_cts.def"
+      - "phase3/stage3/cts/clock_tree.rpt"
+    gate:
+      files_exist: ["phase3/stage3/pnr/post_cts.def", "phase3/stage3/cts/clock_tree.rpt"]
+    blocks_on: [17]
+
+  - id: 19
+    name: "🔁 Post-CTS hold fixing"
+    stage: stage3
+    closed_loop:
+      fallback_to: 18
+      trigger: "Hold violation; insert delay cell or re-CTS"
+    skills: [hold-fix]
+    required_outputs:
+      - "phase3/stage3/pnr/post_hold.def"
+    gate:
+      files_exist: ["phase3/stage3/pnr/post_hold.def"]
+    blocks_on: [18]
+
+  - id: 20
+    name: "Routing (global + detailed)"
+    stage: stage3
+    mcp_tools: [eda_pnr]
+    required_outputs:
+      - "phase3/stage3/pnr/routed.def"
+      - "phase3/stage3/pnr/drc.rpt"
+    gate:
+      all_of:
+        - files_exist: ["phase3/stage3/pnr/routed.def"]
+        - program_exit_zero: "drc_report_check . --mode drc --json reports/phase3/drc_router.json"
+        # Anti-fabrication: all 5 stage DEFs must be byte-distinct,
+        # size-monotone, instance-count growing, and routed.def must
+        # contain `+ ROUTED` geometry. Added 2026-04-22 after benchmark_a
+        # pilot copied a3616_top.def to all 5 stage names.
+        - program_exit_zero: "def_stage_progression_check . --json reports/phase3/pnr/def_progression.json"
+        # Provenance required: routed.def must appear as a logged
+        # openroad output (wrap OpenROAD invocation with provenance_logger).
+        - program_exit_zero: "provenance_check . --output phase3/stage3/pnr/routed.def --tool openroad"
+    blocks_on: [19]
+
+  # ── NEW Step 20: Parasitic Extraction ──────────────────────────
+  # Industry standard ⑪: RC extraction produces SPEF for accurate
+  # post-layout STA, power, and SI analysis. Without SPEF, post-route
+  # STA uses wire-load estimates — not real parasitics.
+  - id: 21
+    name: "Parasitic Extraction (RC → SPEF)"
+    stage: stage3
+    mcp_tools: [eda_extraction]
+    programs:
+      - spef_extraction_check
+    required_outputs:
+      - "phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef"
+    gate:
+      all_of:
+        - files_exist: ["phase3/stage3/extracted/*.spef"]
+          any_of: true
+        - program_exit_zero: "spef_extraction_check . --json reports/phase2/gates/spef_extraction.json"
+        - program_exit_zero: "provenance_check . --output phase3/stage3/extracted/*.spef --tool magic,openroad"
+    blocks_on: [20]
+
+  - id: 22
+    name: "🔁 Post-route STA (multi-corner multi-mode sign-off)"
+    stage: stage3
+    closed_loop:
+      fallback_to: 30
+      trigger: "Setup/Hold violation; ECO loop required"
+    skills: [sta-review]
+    mcp_tools: [eda_sta]
+    required_outputs:
+      - "phase3/stage3/sta/post_route_timing.rpt"
+      - "reports/phase3/sta/post_route_summary.json"
+    gate:
+      all_of:
+        - files_exist: ["phase3/stage3/sta/post_route_timing.rpt"]
+        - program_exit_zero: "sta_report_check . --mode phase3/stage3/sta --json reports/phase3/sta/post_route_summary.json"
+    blocks_on: [21]
+
+  - id: 23
+    name: "🔁 IR Drop (static + dynamic)"
+    stage: stage3
+    closed_loop:
+      fallback_to: 15
+      trigger: "IR drop > 5%; PDN strengthen"
+    skills: [ir-drop-triage]
+    required_outputs:
+      - "reports/phase3/ir_drop.rpt"
+      - "reports/phase3/ir_drop.json"
+    gate:
+      program_exit_zero: "ir_drop_report_check . --mode ir_drop --json reports/phase3/ir_drop.json"
+    blocks_on: [21]
+
+  - id: 24
+    name: "🔁 EM check (electromigration lifetime)"
+    stage: stage3
+    closed_loop:
+      fallback_to: 20
+      trigger: "EM violation; widen wire or re-route"
+    skills: [em-check]
+    required_outputs:
+      - "reports/phase3/em.rpt"
+    gate:
+      program_exit_zero: "em_report_check . --mode em --json reports/phase3/em.json"
+    blocks_on: [21]
+
+  - id: 25
+    name: "🔁 Antenna check (gate-oxide protection)"
+    stage: stage3
+    closed_loop:
+      fallback_to: 20
+      trigger: "Antenna violation; insert diode or re-route"
+    required_outputs:
+      - "reports/phase3/antenna.rpt"
+    gate:
+      files_exist: ["reports/phase3/antenna.rpt"]
+    blocks_on: [20]
+
+  # ── NEW Step 25: Signal Integrity ────────────────────────────
+  # Industry standard ⑭/⑮: Crosstalk, noise, and glitch analysis
+  # on extracted parasitics. Critical for high-speed designs where
+  # coupling capacitance between adjacent nets causes functional
+  # failures or timing degradation.
+  - id: 26
+    name: "🔁 Signal Integrity (Crosstalk / Noise / Glitch)"
+    stage: stage3
+    closed_loop:
+      fallback_to: 20
+      trigger: "Crosstalk/noise above limit; shielding/spacing"
+    required_outputs:
+      - "reports/phase3/si_crosstalk.rpt OR reports/phase3/si_crosstalk.json"
+    gate:
+      all_of:
+        - files_exist: ["reports/phase3/si_crosstalk.rpt", "reports/phase3/si_crosstalk.json"]
+          any_of: true
+        - optional_program_exit_zero:
+            command: "si_crosstalk_check . --json reports/phase2/gates/si_crosstalk.json"
+            condition_files_exist: ["reports/phase3/si_crosstalk.rpt"]
+    blocks_on: [21]
+
+  # ── NEW Step 26: Post-Layout Gate-Level Simulation ───────────
+  # Industry standard ⑮: Gate-level netlist + SDF back-annotation
+  # simulation. Verifies that the physical implementation preserves
+  # RTL functional correctness after synthesis, DFT, CTS, and
+  # routing transformations. This is *not* the same as pre-layout
+  # RTL sim (Step 4) — it catches timing-induced functional failures
+  # that only manifest with real parasitic delays.
+  - id: 27
+    name: "Post-Layout Gate-Level Simulation (Post-Sim + SDF)"
+    stage: stage3
+    mcp_tools: [eda_simulate]
+    programs:
+      - post_layout_sim_check
+    required_outputs:
+      - "phase3/stage3/sim_postlayout/results.log OR phase3/stage3/sim_postlayout/pass.flag"
+    gate:
+      all_of:
+        - files_exist: ["phase3/stage3/sim_postlayout/results.log", "phase3/stage3/sim_postlayout/pass.flag"]
+          any_of: true
+        - program_exit_zero: "post_layout_sim_check . --json reports/phase2/gates/post_layout_sim.json"
+    blocks_on: [21]
+
+  # ── Step 27: Post-Layout SPICE Verification ──────────────────
+  # Industry standard: transistor-level SPICE simulation is the only
+  # way to verify that liberty timing models accurately represent
+  # post-layout behavior. STA and gate-level SDF sim both rely on
+  # the same liberty abstractions — if the model is wrong, both are
+  # wrong together. SPICE catches model inaccuracies, analog block
+  # failures, and timing correlation issues that no other step can.
+  - id: 28
+    name: "Post-Layout SPICE Verification (critical-path correlation + analog)"
+    stage: stage3
+    skills: [ams-sim]
+    mcp_tools: [eda_spice]
+    programs:
+      - spice_correlation_check
+    required_outputs:
+      - "phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR sim_spice/*.sp"
+      - "phase3/stage3/spice/correlation.json OR reports/phase3/spice_correlation.json"
+    gate:
+      all_of:
+        - files_exist: ["phase3/stage3/spice/*.sp", "phase3/stage3/spice/*.spice", "sim_spice/*.sp"]
+          any_of: true
+        - program_exit_zero: "spice_correlation_check . --json reports/phase2/gates/spice_correlation.json"
+    blocks_on: [21, 22]
+
+  - id: 29
+    name: "🔁 Physical Verification (DRC + LVS + ERC + Density)"
+    stage: stage3
+    closed_loop:
+      fallback_to: 30
+      trigger: "DRC/LVS/ERC fail; ECO"
+    skills: [drc-fix, lvs-triage, perc-check]
+    mcp_tools: [eda_drc_klayout, eda_lvs]
+    programs:
+      - density_check
+    required_outputs:
+      - "reports/phase3/drc_signoff.rpt"
+      - "reports/phase3/lvs.rpt"
+      - "reports/phase3/erc.rpt"
+    gate:
+      all_of:
+        - program_exit_zero: "drc_report_check . --mode drc --json reports/phase3/drc_signoff.json"
+        - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
+        # Provenance required: sign-off DRC / LVS reports must come
+        # from real tool runs (klayout / magic for DRC; netgen for LVS).
+        - program_exit_zero: "provenance_check . --output reports/phase3/drc_signoff.rpt --tool klayout,magic,openroad"
+        - program_exit_zero: "provenance_check . --output reports/phase3/lvs.rpt --tool netgen,magic"
+        # Density check: metal density must be within foundry limits
+        # (typically 20-80% per layer). Fires only when density report exists.
+        - optional_program_exit_zero:
+            command: "density_check . --json reports/phase2/gates/density.json"
+            condition_files_exist: ["reports/density.rpt"]
+    blocks_on: [22, 23, 24, 25, 26, 27, 28]
+
+  # ── Step 29: ECO ─────────────────────────────────────────────
+  # Industry standard: Engineering Change Order repair loop.
+  # If any sign-off step (STA, PV, IR Drop, EM, SI, Post-Sim, SPICE)
+  # fails, ECO applies targeted netlist patches and re-runs the
+  # failing checks. If all sign-off steps passed on first attempt,
+  # the ECO step records "no_eco_needed" and passes through.
+  - id: 30
+    name: "🔁 ECO (Engineering Change Order — repair loop)"
+    stage: stage3
+    closed_loop:
+      fallback_to: 30
+      trigger: "Aggregator: re-run #21-#28 after ECO"
+    skills: [eco-plan]
+    required_outputs:
+      - "phase3/stage3/eco/eco_log.json OR phase3/stage3/eco/no_eco_needed.flag"
+    gate:
+      all_of:
+        - files_exist: ["phase3/stage3/eco/eco_log.json", "phase3/stage3/eco/no_eco_needed.flag"]
+          any_of: true
+        - optional_program_exit_zero:
+            command: "eco_loop_audit . --json reports/phase2/gates/eco_audit.json"
+            condition_files_exist: ["phase3/stage3/eco/eco_log.json"]
+    blocks_on: [22, 23, 24, 25, 26, 27, 28, 29]
+
+  - id: 31
+    name: "Power analysis (pre/post-layout)"
+    stage: stage4
+    skills: [power-analysis]
+    required_outputs:
+      - "reports/phase3/power.rpt"
+      - "reports/phase3/power.json"
+    gate:
+      program_exit_zero: "power_report_check . --mode power --json reports/phase3/power.json"
+    blocks_on: [22]
+
+  # ── Step 31: Metal Fill ──────────────────────────────────────
+  # Industry standard (pre-GDS): Insert dummy metal fill to meet
+  # foundry density requirements. Without metal fill, CMP
+  # (Chemical-Mechanical Polishing) causes uneven planarization and
+  # the foundry rejects the tapeout.
+  - id: 32
+    name: "Metal Fill (density fill insertion)"
+    stage: stage4
+    mcp_tools: [eda_pnr]
+    programs:
+      - metal_fill_density_check
+    required_outputs:
+      - "phase3/stage3/pnr/filled.def OR phase3/stage3/pnr/metal_fill.done"
+    gate:
+      all_of:
+        - files_exist: ["phase3/stage3/pnr/filled.def", "phase3/stage3/pnr/metal_fill.done"]
+          any_of: true
+        - program_exit_zero: "metal_fill_density_check . --json reports/phase2/gates/metal_fill_density.json"
+    blocks_on: [30]
+
+  - id: 33
+    name: "Tapeout checklist (final sign-off confirmation)"
+    stage: stage4
+    skills: [tapeout-checklist]
+    programs:
+      - tapeout_signoff_check
+    required_outputs:
+      - "reports/audit/tapeout_checklist.json"
+    gate:
+      program_exit_zero: "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
+    blocks_on: [29, 30, 31, 32]
+
+  - id: 34
+    name: "GDSII output (only if Step 28 PV fully clean)"
+    stage: stage4
+    mcp_tools: [eda_gds]
+    required_outputs:
+      - "phase3/stage4/gds/*.gds"
+    gate:
+      all_of:
+        - files_exist: ["phase3/stage4/gds/*.gds"]
+        - program_exit_zero: "gds_size_check --gds-file phase3/stage4/gds/*.gds --json reports/phase3/gds_size.json"
+        # Provenance required: GDS must be produced by a real streamer
+        # (KLayout def2gds, Magic gds write, etc.). This closes the
+        # "rename old .def to .gds" loophole.
+        - program_exit_zero: "provenance_check . --require-entries 1"
+    blocks_on: [32, 33]
+
+  - id: 36
+    name: "FPGA final sign-off (recompile + on-board test)"
+    stage: stage4
+    skills: [fpga-test-harness]
+    programs:
+      # Wave 82 — `bringup_plan_gen` emits the bring-up plan from
+      # L13_LAB_CALIBRATION before the on-board attestation runs;
+      # gives the lab tech a deterministic checklist for the
+      # board-up sequence (probe order / supply ramp / safe-states).
+      - bringup_plan_gen
+      - fpga_on_board_attestation_check
+    required_outputs:
+      - "phase2/stage1/fpga/final/*.sof"
+      - "reports/phase2/fpga/on_board_pass.json"
+    # Hardened 2026-04-22: single-JSON self-attestation ("echo
+    # all_scenarios_passed: true > on_board_pass.json") is rejected.
+    # Requires: pass.json with hashed bitstream + scenarios list;
+    # quartus_pgm.log with tool-marker; and at least one non-JSON
+    # hardware evidence artefact (webcam / UART / scope).
+    gate:
+      all_of:
+        - json_field_true: {file: "reports/phase2/fpga/on_board_pass.json", field: "all_scenarios_passed", expect: true}
+        - program_exit_zero: "fpga_on_board_attestation_check . --json reports/phase2/fpga/on_board_attestation.json --min-scenarios 1"
+    blocks_on: [13]
+
+# ─────────────────────────────────────────────────────────────────
+# Wave 88 closed 4 assessment-report gaps (Mixed-Signal Integration
+# M1-M4, Analog PV [now A6], Foundry Handoff [now 34], Manufacturing
+# [now 36-39]). Wave 90 / v1.6.14 integerised the decimal ids.
+# All chip-AGNOSTIC.
+# ─────────────────────────────────────────────────────────────────
+
+  - id: A6
+    name: "Analog Physical Verification (per-block DRC + LVS before merge)"
+    stage: stage_analog
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    skills: [drc-fix, lvs-triage]
+    programs:
+      - analog_block_pv_check
+    required_outputs:
+      - "phase3/analog/*/drc_clean.flag"
+      - "phase3/analog/*/lvs_match.flag"
+    gate:
+      program_exit_zero: "analog_block_pv_check . --json reports/phase2/gates/analog_block_pv.json"
+    blocks_on: [A5]
+    notes: |
+      Each analog block must have DRC-clean + LVS-match BEFORE A7
+      post-layout resim runs. Catches per-block layout errors that
+      top-level PV (Step 28) would otherwise mask via merge.
+
+  - id: M1
+    name: "Mixed-Signal Top-Level Integration (A+D GDS merge + macro placement)"
+    stage: stage_mixed_signal
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    skills: [analog-flow-orchestrate, flow-orchestrate]
+    programs:
+      - mixed_signal_merge_check
+    required_outputs:
+      - "phase3/mixed_signal/top_merged.gds"
+      - "reports/analog/mixed_signal/merge.json"
+    gate:
+      program_exit_zero: "mixed_signal_merge_check . --json reports/analog/mixed_signal/merge.json"
+    blocks_on: [A8, 15]
+    notes: |
+      Merge each analog analog/hardmacro GDS into the digital top GDS at
+      its assigned floorplan position. Verify no overlap, all macro
+      pins land on routable tracks, and macro-halo / blockage rules
+      from PDK are honoured.
+
+  - id: M2
+    name: "Mixed-Signal Power Domain + Level Shifter / Isolation Verification"
+    stage: stage_mixed_signal
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    skills: [ir-drop-triage]
+    programs:
+      - power_domain_crossing_check
+      - level_shifter_required_check
+      - isolation_cell_required_check
+    required_outputs:
+      - "reports/analog/mixed_signal/power_domain.json"
+      - "reports/analog/mixed_signal/level_shifter.json"
+      - "reports/analog/mixed_signal/isolation.json"
+    gate:
+      all_of:
+        - json_field_true: {file: "reports/analog/mixed_signal/power_domain.json", field: "all_crossings_protected", expect: true}
+        - json_field_true: {file: "reports/analog/mixed_signal/level_shifter.json", field: "all_required_inserted", expect: true}
+        - json_field_true: {file: "reports/analog/mixed_signal/isolation.json", field: "all_required_inserted", expect: true}
+    blocks_on: [M1]
+    notes: |
+      For each net crossing analog/digital power domain boundary:
+      level shifter required when source/sink Vdd differ; isolation
+      cell required when one domain can be powered down. Audit
+      against `analog/<block>/spec.json#power_domain` declarations.
+
+  - id: M3
+    name: "Mixed-Signal Verification (AMS co-sim + RNM + interface signal integrity)"
+    stage: stage_mixed_signal
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    skills: [mixed-signal-cosim, ams-sim]
+    programs:
+      - mixed_signal_cosim_check
+      - mixed_signal_interface_si_check
+    required_outputs:
+      - "phase3/mixed_signal/cosim/mixed_signal_results.json"
+      - "reports/analog/mixed_signal/interface_si.json"
+    gate:
+      all_of:
+        - json_field_true: {file: "phase3/mixed_signal/cosim/mixed_signal_results.json", field: "all_scenarios_passed", expect: true}
+        - json_field_true: {file: "reports/analog/mixed_signal/interface_si.json", field: "all_interfaces_clean", expect: true}
+    blocks_on: [M2]
+
+  - id: M4
+    name: "Mixed-Signal Sign-Off (top-level PV + final verdict)"
+    stage: stage_mixed_signal
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    skills: [tapeout-checklist]
+    programs:
+      - mixed_signal_signoff_check
+    required_outputs:
+      - "reports/analog/mixed_signal/signoff.json"
+    gate:
+      json_field_true: {file: "reports/analog/mixed_signal/signoff.json", field: "ready_for_tapeout", expect: true}
+    blocks_on: [M3]
+
+  - id: 35
+    name: "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)"
+    stage: stage4
+    skills: [tapeout-checklist]
+    programs:
+      - foundry_handoff_package_check
+    required_outputs:
+      - "phase3/stage4/foundry_handoff/mask_spec.json"
+      - "phase3/stage4/foundry_handoff/wat_plan.json"
+      - "phase3/stage4/foundry_handoff/scribe_line_layout.gds"
+      - "phase3/stage4/foundry_handoff/corner_test_vectors.json"
+      - "reports/phase3/foundry_handoff_audit.json"
+    gate:
+      program_exit_zero: "foundry_handoff_package_check . --json reports/phase3/foundry_handoff_audit.json"
+    blocks_on: [34]
+    notes: |
+      Final foundry-deliverable kit: mask reticle spec, WAT
+      (Wafer Acceptance Test) probe plan, scribe-line PCM
+      structures, corner-test ATE vector kit. Without this kit
+      the foundry cannot accept the GDS for fab. Distinct from
+      Step 32 tapeout_checklist which is internal sign-off.
+
+  - id: 37
+    name: "Fabrication (foundry mask-set + wafer fab — external)"
+    stage: stage5_manufacturing
+    condition:
+      files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
+    programs:
+      - manufacturing_fab_intake_check
+    required_outputs:
+      - "phase3/stage5_manufacturing/mask_set_received.json"
+      - "phase3/stage5_manufacturing/wafer_lot_received.json"
+    gate:
+      program_exit_zero: "manufacturing_fab_intake_check . --json reports/manufacturing/fab_intake.json"
+    blocks_on: [35]
+    notes: |
+      External step. Plugin records lot id, mask set version, and
+      foundry status; verifies wafer-lot file lands when foundry
+      ships. Not waivable for production tape-out.
+
+  - id: 38
+    name: "Wafer Sort / Probe Test (ATE + probe card)"
+    stage: stage5_manufacturing
+    condition:
+      files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
+    programs:
+      - wafer_sort_yield_check
+    required_outputs:
+      - "phase3/stage5_manufacturing/wafer_sort_yield.json"
+      - "phase3/stage5_manufacturing/wafer_map.csv"
+    gate:
+      json_field_true: {file: "phase3/stage5_manufacturing/wafer_sort_yield.json", field: "yield_meets_target", expect: true}
+    blocks_on: [37]
+
+  - id: 39
+    name: "Packaging (assembly: wirebond / FC-CSP / WLCSP)"
+    stage: stage5_manufacturing
+    condition:
+      files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
+    programs:
+      - packaging_intake_check
+    required_outputs:
+      - "phase3/stage5_manufacturing/packaging_log.json"
+    gate:
+      program_exit_zero: "packaging_intake_check . --json reports/manufacturing/packaging.json"
+    blocks_on: [38]
+
+  - id: 40
+    name: "Final Test (ATE: functional + parametric + burn-in)"
+    stage: stage5_manufacturing
+    condition:
+      files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
+    programs:
+      - final_test_attestation_check
+    required_outputs:
+      - "phase3/stage5_manufacturing/final_test_yield.json"
+      - "phase3/stage5_manufacturing/burn_in_results.json"
+    gate:
+      json_field_true: {file: "phase3/stage5_manufacturing/final_test_yield.json", field: "shippable", expect: true}
+    blocks_on: [39]
+    notes: |
+      Final-test sign-off before product ship. Functional test
+      across PVT corners, parametric trim, optional burn-in for
+      automotive / medical grades.
+
+  # ── P0 (Wave 91 / v1.6.15): structural-RTL umbrella ─────────────
+  # Renamed from synthetic Step -1. Aggregates all _STRUCTURAL_RTL_GATES
+  # registered in `flow_compliance_check.py` (77 gates as of v1.6.15)
+  # and emits a single PASS/FAIL umbrella verdict that flow-orchestrate
+  # consumes before stage1 begins. Stage-class marker (P*-prefix), like
+  # A*/M*. Skipped automatically when --stage 3/4 is requested or when
+  # no RTL is present in the project.
+  - id: P0
+    name: "Structural-RTL pre-flight (77 chip-AGNOSTIC structural gates)"
+    stage: stage1
+    notes: |
+      Synthetic preflight stage; the verdict is emitted directly by
+      flow_compliance_check.py's `_run_structural_rtl_gates(...)` and
+      surfaces in reports/audit/phase23_completion_audit.json under the
+      `gates:` array. Individual gate names (e.g. `cdc_async_input_check`,
+      `bram_pdob_combinational_check`) appear there with PASS/FAIL.
+
+# Final gate — runs after all 40 main-track integer steps + A1-A9
+# + M1-M4 (53 entities total) + P0 structural-RTL umbrella.
+final_gate:
+  program: flow_compliance_check
+  args: ". --flow phase1_phase2_phase3 --strict"
+  exit_zero_required: true

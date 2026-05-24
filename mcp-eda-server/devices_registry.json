@@ -1,0 +1,56 @@
+{
+  "_comment": "Device registry — auto-aggregated from src/devices/<class>/<vendor>/manifest.json files. Third-party plugins drop their device manifests under the same tree and they auto-register on plugin/MCP-server reload. This file is a snapshot for documentation; the live registry is rebuilt at MCP server start by src/devices/_registry.js.",
+  "schema_version": 1,
+  "scan_path": "src/devices/<class>/<vendor>/manifest.json",
+  "auto_aggregator": "src/devices/_registry.js",
+  "devices": [
+    {
+      "class": "tester",
+      "vendor": "example_vendor",
+      "model": "EXAMPLE_TESTER",
+      "manifest_path": "src/devices/tester/example_vendor-example_tester/manifest.json",
+      "tools_exposed": [
+        "device_tester_example_tester_connect_test",
+        "device_tester_example_tester_send_raw",
+        "device_id_bus_send_opcode",
+        "device_id_bus_force_low_pulse",
+        "device_tester_example_tester_read_state"
+      ],
+      "owner_plugin": "vibe-ic"
+    },
+    {
+      "class": "fpga",
+      "vendor": "terasic",
+      "model": "DE10-Lite",
+      "manifest_path": "src/devices/fpga/terasic-de10lite/manifest.json",
+      "tools_exposed": [
+        "device_fpga_de10lite_program",
+        "device_fpga_de10lite_detect",
+        "device_fpga_de10lite_adc_read"
+      ],
+      "owner_plugin": "vibe-ic"
+    },
+    {
+      "class": "scope",
+      "vendor": "keysight",
+      "model": "DSO-X 30xx series",
+      "manifest_path": "src/devices/scope/keysight/manifest.json",
+      "tools_exposed": [
+        "device_scope_capture",
+        "device_scope_periodic_pulse_check"
+      ],
+      "owner_plugin": "vibe-ic"
+    },
+    {
+      "class": "camera",
+      "vendor": "v4l2",
+      "model": "USB / built-in webcam",
+      "manifest_path": "src/devices/camera/v4l2/manifest.json",
+      "tools_exposed": [
+        "device_camera_capture",
+        "device_camera_led_diff"
+      ],
+      "owner_plugin": "vibe-ic"
+    }
+  ]
+}

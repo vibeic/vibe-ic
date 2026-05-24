@@ -1,0 +1,34 @@
+# Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
+testability: full_markdown
+
+# Compliance spec for skill 'atpg-name-harmonize' (vibe-ic-d v0.63)
+# Packages the v052 fix_fault_cut_names.py + yosys_flatten_scan.ys
+# recipe as a skill for Yosys -> Fault ATPG flows.
+skill: atpg-name-harmonize
+
+requirements:
+  - id: R_inputs
+    description: "Documents --scan-cut input"
+    pattern: '(--scan-cut|SCAN_NETLIST|scan[- ]?cut)'
+    skill_section: 'Inputs'
+  - id: R_outputs
+    description: "Documents harmonized netlist / name-map outputs"
+    pattern: '(--out\b|name[- ]?map|flat\.v|FLAT_OUT)'
+    skill_section: 'Outputs'
+  - id: R_invocation
+    description: "Shows CLI invocation example"
+    pattern: '(python3\s+.*fix_fault_cut_names\.py|yosys\s+-c|CLI invocation)'
+    skill_section: 'CLI'
+  - id: R_limitations
+    description: "States tool-specific / coverage limitations"
+    pattern: '(Fault.specific|Limitations|rename|escape|not.*formal)'
+    skill_section: 'Limitations'
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line"
+    pattern: 'Next:\s*(?:run\s+)?/\w'
+    skill_section: 'Output/Handoff'
+
+cross_checks:
+  - id: X_zero_backslashes
+    description: "Target: 0 remaining backslash identifiers after rewrite"
+    rule: postcheck_pass_only

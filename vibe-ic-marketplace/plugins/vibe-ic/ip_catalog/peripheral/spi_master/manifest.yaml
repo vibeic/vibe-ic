@@ -1,0 +1,65 @@
+ip_name: spi_master
+ip_version: "1.0.0"
+ip_class: spi_master_standalone
+license: MIT
+canonical_url: https://github.com/nandland/spi-master
+canonical_commit: "master"
+authors:
+  - "Russell Merrick (russell-merrick / nandland)"
+description: >
+  Standalone parameterizable SPI master. Supports all 4 SPI modes
+  (CPOL/CPHA combinations). Plain non-Wishbone interface (data byte
+  in, data byte out, ready/done strobes). Single-chip-select and
+  multi-CS variants included.
+
+implements:
+  protocol: spi
+  modes_supported: [0, 1, 2, 3]
+  bus_interface: standalone_byte_stream
+  data_width_bits: 8
+  half_duplex_capable: true
+  full_duplex_capable: true
+
+matches_when:
+  # v1.6.574 — tightened from prior 'L4 contains mode' which was too broad
+  # (matched SHA's MODE bit, etc.). All patterns now require explicit
+  # SPI-protocol signal.
+  - "L2 mentions 'SPI master' OR L2.peripheral_class == 'spi_master'"
+  - "L2.protocol == 'spi' AND L8 contains 'master'"
+  - "L4 contains 'SPI mode' OR L4 contains 'CPOL'"
+  - "L8 contains 'SPI_Master' OR L8 contains 'spi-master'"
+
+interface:
+  ports:
+    - {name: i_Rst_L,        dir: in,  width: 1, description: "active-LOW reset"}
+    - {name: i_Clk,          dir: in,  width: 1}
+    - {name: i_TX_Byte,      dir: in,  width: 8}
+    - {name: i_TX_DV,        dir: in,  width: 1, description: "data valid pulse"}
+    - {name: o_TX_Ready,     dir: out, width: 1}
+    - {name: o_RX_DV,        dir: out, width: 1}
+    - {name: o_RX_Byte,      dir: out, width: 8}
+    - {name: o_SPI_Clk,      dir: out, width: 1}
+    - {name: i_SPI_MISO,     dir: in,  width: 1}
+    - {name: o_SPI_MOSI,     dir: out, width: 1}
+  parameters:
+    - {name: SPI_MODE,          default: 0, description: "0/1/2/3 SPI mode"}
+    - {name: CLKS_PER_HALF_BIT, default: 2, description: "SPI clock period (in i_Clk cycles, half-period)"}
+
+rtl_files:
+  - Verilog/source/SPI_Master.v
+  - Verilog/source/SPI_Master_With_Single_CS.v
+
+synth:
+  pdk_compatible: [sky130A, gf180mcuD, fpga]
+  tested_clock_period_ns: 10
+  area_ge: 500
+  openlane_tapeout_track_record: "Educational reference; multiple FPGA designs"
+
+integration_notes: >
+  Plain non-Wishbone interface — Plugin must author a Wishbone or
+  AXI4-Lite adapter if SoC uses bus-mapped peripherals. The standalone
+  byte-stream interface is also useful for direct CPU port-mapped use.
+  For multi-slave SPI bus, use SPI_Master_With_Single_CS.v plus
+  add'l CS decode logic (Plugin authored).
+
+depends_on: []
