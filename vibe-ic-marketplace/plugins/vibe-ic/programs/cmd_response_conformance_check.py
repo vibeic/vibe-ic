@@ -88,9 +88,17 @@ def match_bytes(expected: list[int], actual: list[int]) -> tuple[bool, str]:
 
 
 def run_hook(hook: str, vectors_path: Path, cwd: Path) -> list[str]:
-    """Execute sim hook — must return JSON list of rsp strings on stdout."""
+    """Execute sim hook — must return JSON list of rsp strings on stdout.
+
+    SECURITY: ``hook`` is run through a shell (``shell=True``) by design — it is
+    a sim-runner command line (e.g. ``python3 sim.py {VECTORS}``) supplied by
+    the project's own test configuration, NOT by end-user / untrusted input.
+    Treat it as TRUSTED INPUT ONLY. Never pass a ``hook`` string derived from an
+    untrusted spec / fetched repo without sanitising it first — it executes
+    arbitrary shell with this process's privileges.
+    """
     cmd = hook.replace("{VECTORS}", str(vectors_path))
-    r = subprocess.run(cmd, shell=True, cwd=str(cwd),
+    r = subprocess.run(cmd, shell=True, cwd=str(cwd),  # nosec B602 — trusted config hook
                        capture_output=True, text=True, timeout=600)
     if r.returncode != 0:
         raise RuntimeError(f"hook exit {r.returncode}: {r.stderr[:500]}")

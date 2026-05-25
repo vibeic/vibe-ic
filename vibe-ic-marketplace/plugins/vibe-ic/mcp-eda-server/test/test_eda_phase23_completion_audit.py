@@ -47,13 +47,16 @@ def test_project_dir_is_required():
 
 
 def test_dispatches_to_canonical_gate_script():
-    """Positive: must execSync the canonical
-    phase23_completion_self_audit_check.py — NOT a re-implementation."""
+    """Positive: must run the canonical phase23_completion_self_audit_check.py
+    via a subprocess — NOT a re-implementation. The hardening switched the runner
+    from execSync(string) to _spawnSync(argv) so project_dir is never
+    shell-parsed; either subprocess primitive satisfies the delegation
+    contract."""
     w = _slice()
     assert "phase23_completion_self_audit_check.py" in w, (
         "tool must delegate to the canonical gate, not re-implement"
     )
-    assert "execSync" in w
+    assert "_spawnSync" in w or "execSync" in w
 
 
 def test_uses_json_output_mode():

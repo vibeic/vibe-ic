@@ -95,11 +95,19 @@ def _utcnow_iso() -> str:
 
 
 def _capture_version(version_cmd: str) -> str:
+    """Run a tool-version probe (e.g. ``yosys --version``) and return its first
+    line.
+
+    SECURITY: ``version_cmd`` is run through a shell (``shell=True``) by design
+    so callers can pass a pipeline (``tool --version | head -1``). It is a
+    tool-version command supplied by the caller's own configuration, NOT by
+    untrusted input. Treat it as TRUSTED INPUT ONLY.
+    """
     if not version_cmd:
         return ""
     try:
         r = subprocess.run(
-            version_cmd, shell=True, capture_output=True, text=True, timeout=30,
+            version_cmd, shell=True, capture_output=True, text=True, timeout=30,  # nosec B602 — trusted version probe
         )
         first_line = (r.stdout or r.stderr or "").strip().splitlines()
         return (first_line[0] if first_line else "")[:200]

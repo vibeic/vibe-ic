@@ -336,13 +336,16 @@ def run_phase2(ic_dir: str, ic_name: str, log_path: str,
         # Build a simple yosys script
         top_module = ic_name.lower()
         sv_files = " ".join(rtl_files)
-        yosys_cmd = (
-            f"yosys -p '"
+        # security hardening: run yosys via argv (shell=False) with the log
+        # redirected through a file handle instead of a shell `>`. The former
+        # shell=True form interpolated top_module / RTL file paths straight into
+        # a shell command — a command-injection vector if either contained
+        # shell metacharacters.
+        yosys_script = (
             f"read_verilog -sv {sv_files}; "
             f"synth -top {top_module}; "
             f"stat; "
             f"write_verilog {synth_dir}/synth_{top_module}.v"
-            f"' > {synth_log} 2>&1"
         )
 
         # Check if yosys is available
@@ -351,8 +354,11 @@ def run_phase2(ic_dir: str, ic_name: str, log_path: str,
         ).returncode == 0
 
         if yosys_avail:
-            result = subprocess.run(yosys_cmd, shell=True, timeout=300,
-                                    capture_output=True, text=True)
+            with open(synth_log, "w") as _logf:
+                result = subprocess.run(
+                    ["yosys", "-p", yosys_script],
+                    stdout=_logf, stderr=subprocess.STDOUT, timeout=300, text=True,
+                )
         else:
             _print_step(2, "Yosys available", "SKIP",
                         "yosys not installed, checking existing logs only")

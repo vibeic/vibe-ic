@@ -38,6 +38,14 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { execSync } from "child_process";
 import { registerDevices } from "./devices/_registry.js";
+// Shell-safety validators (command-injection hardening). The argv-based
+// _spawnSync used by dockerExec + host handlers is the existing legacy
+// import declared further down (`spawnSync as _spawnSyncEarly`).
+import {
+  shq, assertSafeIdent, assertSafeToken, assertNoShellMeta,
+  assertSafePath, assertSafePaths,
+  optPath, optIdent, optToken, optNoShellMeta, guardError,
+} from "./lib/shell_safety.mjs";
 
 function _shellSingleQuotedHeredoc(content, sentinel) {
   // Run `<content>` through a `cat << 'SENTINEL' > target` block. The
@@ -90,6 +98,26 @@ import { fileURLToPath } from "url";
 // it was loaded as `_spawnSync` for that scope.
 import { spawnSync as _spawnSyncEarly } from "child_process";
 const _spawnSync = _spawnSyncEarly;
+
+// execSync-compatible runner using an argv array (no shell). Returns stdout
+// as a string; throws an Error carrying .stdout/.stderr/.status on non-zero
+// exit or spawn failure — matches the throw-on-error contract the legacy
+// execSync(string) call sites were written against. Use this to replace any
+// execSync(string) whose command is a single program + fixed args.
+function _run(file, args, opts = {}) {
+  const r = _spawnSync(file, args, { encoding: "utf-8", ...opts });
+  if (r.error) {
+    const e = r.error;
+    e.stderr = r.stderr || ""; e.stdout = r.stdout || ""; e.status = r.status;
+    throw e;
+  }
+  if (r.status !== 0) {
+    const e = new Error(`${file} exited with status ${r.status}${r.signal ? ` (${r.signal})` : ""}`);
+    e.stderr = r.stderr || ""; e.stdout = r.stdout || ""; e.status = r.status;
+    throw e;
+  }
+  return r.stdout || "";
+}
 
 // v2.5.2: derive plugin programs dir from this file's location instead of
 // hardcoding /home/user/. Order: $VIBE_IC_PROGRAMS_DIR -> sibling
@@ -236,20 +264,20 @@ function _probeDocker(force = false) {
   try {
     // v2.5.3: also confirm the target container exists. `docker ps --filter`
     // exits 0 even when nothing matches, so check stdout is non-empty.
-    const out = execSync(
-      `docker ps --filter name=${CONTAINER} --format '{{.Names}}'`,
-      { timeout: 5000, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+    const out = _run(
+      "docker", ["ps", "--filter", `name=${CONTAINER}`, "--format", "{{.Names}}"],
+      { timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
     );
     if (!out.trim()) {
       // Auto-start: try `docker start` if the container exists but is stopped
       try {
-        const stopped = execSync(
-          `docker ps -a --filter name=${CONTAINER} --format '{{.Names}}'`,
-          { timeout: 5000, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+        const stopped = _run(
+          "docker", ["ps", "-a", "--filter", `name=${CONTAINER}`, "--format", "{{.Names}}"],
+          { timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
         );
         if (stopped.trim()) {
-          execSync(`docker start ${CONTAINER}`, {
-            timeout: 30000, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"],
+          _run("docker", ["start", CONTAINER], {
+            timeout: 30000, stdio: ["ignore", "pipe", "pipe"],
           });
           _dockerReachable = { ok: true };
         } else {
@@ -288,34 +316,38 @@ function dockerExec(cmd, timeoutMs = 300000) {
     // on docker failure.
     return { success: false, output: diag, error: diag, exitCode: 127 };
   }
-  const fullCmd = `docker exec ${CONTAINER} bash -c "${cmd.replace(/"/g, '\\"')}"`;
-  try {
-    const output = execSync(fullCmd, {
-      timeout: timeoutMs,
-      maxBuffer: 10 * 1024 * 1024,
-      encoding: "utf-8",
-    });
-    return { success: true, output };
-  } catch (err) {
-    // v2.4.1: combine stdout + stderr in `output` so downstream tools see the
-    // failure reason. Previously `output` got only stdout (often empty) and
-    // `error` was discarded when tools returned `{output: result.output...}`.
-    const stdout = err.stdout || "";
-    const stderr = err.stderr || err.message || "";
-    const combined = stdout + (stderr && stdout ? "\n" : "") + stderr;
-    // v2.5.3: if the failure smells like docker became unreachable mid-run
-    // (daemon died, container stopped), invalidate the probe cache so the
-    // very next call re-probes and surfaces the actionable hint.
-    if (_UNREACHABLE_HINTS.some(h => stderr.includes(h))) {
-      _invalidateDockerProbe();
-    }
-    return {
-      success: false,
-      output: combined,
-      error: stderr,
-      exitCode: err.status,
-    };
+  // security hardening: pass `cmd` verbatim as the single `bash -c` argument
+  // via an argv array. The previous form ran `docker exec C bash -c "..."`
+  // through /bin/sh first (and only escaped `"`), so shell metacharacters in
+  // tool arguments could break out of the command context.
+  const r = _spawnSync("docker", ["exec", CONTAINER, "bash", "-c", cmd], {
+    timeout: timeoutMs,
+    maxBuffer: 10 * 1024 * 1024,
+    encoding: "utf-8",
+  });
+  const stdout = r.stdout || "";
+  const stderr = (r.stderr || "") || (r.error ? (r.error.message || String(r.error)) : "");
+  if (r.error || r.status === null) {
+    const timedOut = (r.error && r.error.code === "ETIMEDOUT") || !!r.signal;
+    const msg = timedOut
+      ? `command timed out after ${timeoutMs}ms${r.signal ? ` (killed by ${r.signal})` : ""}`
+      : stderr || "spawn failed";
+    const combined = stdout + (stdout && msg ? "\n" : "") + msg;
+    if (_UNREACHABLE_HINTS.some(h => msg.includes(h))) _invalidateDockerProbe();
+    return { success: false, output: combined, error: msg, exitCode: r.status ?? 1 };
   }
+  if (r.status === 0) {
+    return { success: true, output: stdout };
+  }
+  // Non-zero exit: preserves the earlier v2.4.1 behaviour (combine stdout +
+  // stderr in `output` so downstream tools see the failure reason).
+  const combined = stdout + (stderr && stdout ? "\n" : "") + stderr;
+  // since v2.5.3: if the failure smells like docker became unreachable mid-run,
+  // invalidate the probe cache so the next call re-probes.
+  if (_UNREACHABLE_HINTS.some(h => stderr.includes(h))) {
+    _invalidateDockerProbe();
+  }
+  return { success: false, output: combined, error: stderr, exitCode: r.status };
 }
 
 // PDK config lookup
@@ -535,6 +567,15 @@ server.tool(
     custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for KeyFoundry MET1-6). Default 'met'."),
   },
   async ({ verilog_files, top_module, output_netlist, pdk, sv_mode, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
+    try {
+      assertSafePaths(verilog_files, "verilog_files");
+      assertSafePath(output_netlist, "output_netlist");
+      assertSafeIdent(top_module, "top_module");
+      optPath(custom_lib, "custom_lib"); optPath(custom_techlef, "custom_techlef");
+      optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
+      optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
+      optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
+    } catch (e) { return guardError(e); }
     const cfg = pdkConfig(pdk, { custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix });
     const lib = libPath(cfg);
     const readFlag = sv_mode ? "-sv" : "";
@@ -654,6 +695,10 @@ server.tool(
     strictness: z.enum(["error_only", "warnings_as_errors"]).default("error_only").describe("'error_only' (default) demotes WIDTHTRUNC / UNUSEDPARAM / UNUSEDSIGNAL / PINMISSING / DECLFILENAME / STMTDLY / SYNCASYNCNET to non-fatal — matches Quartus / Icarus tolerance. 'warnings_as_errors' uses verilator -Wall and fails on any warning."),
   },
   async ({ verilog_files, top_module, strictness }) => {
+    try {
+      assertSafePaths(verilog_files, "verilog_files");
+      assertSafeIdent(top_module, "top_module");
+    } catch (e) { return guardError(e); }
     const files = verilog_files.join(" ");
     const wnoFlags = strictness === "error_only"
       ? _LINT_DEMOTED_WARNINGS.map(w => `-Wno-${w}`).join(" ")
@@ -730,6 +775,11 @@ server.tool(
     work_dir: z.string().optional().describe("Working directory for the simulation. Both iverilog (compile) and vvp (run) are invoked from this directory so $readmemh(\"file.hex\") and similar relative paths resolve correctly. Defaults to the directory of the first verilog_files entry."),
   },
   async ({ verilog_files, output_vvp, work_dir }) => {
+    try {
+      assertSafePaths(verilog_files, "verilog_files");
+      assertSafePath(output_vvp, "output_vvp");
+      optPath(work_dir, "work_dir");
+    } catch (e) { return guardError(e); }
     const files = verilog_files.join(" ");
     // v0.99.3: pin the working directory so relative paths in the
     // testbench (e.g. $readmemh("apple.hex", mem)) resolve. Earlier
@@ -788,6 +838,12 @@ server.tool(
     depth: z.number().default(20).describe("Proof depth"),
   },
   async ({ design_files, assertion_file, top_module, work_dir, depth }) => {
+    try {
+      assertSafePaths(design_files, "design_files");
+      assertSafePath(assertion_file, "assertion_file");
+      assertSafeIdent(top_module, "top_module");
+      optPath(work_dir, "work_dir");
+    } catch (e) { return guardError(e); }
     const reads = design_files.map((f) => `read -formal ${f}`).join("\\n");
     const sbyContent = `[tasks]\\nprove\\n[options]\\nprove: mode prove\\nprove: depth ${depth}\\n[engines]\\nsmtbmc yices\\n[script]\\n${reads}\\nread -sv ${assertion_file}\\nhierarchy -top ${top_module}\\nprep -top ${top_module}\\n[files]\\n${[...design_files, assertion_file].join("\\n")}`;
 
@@ -857,6 +913,18 @@ server.tool(
     custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for KeyFoundry MET1-6). Default 'met'."),
   },
   async ({ netlist, top_module, output_def, pdk, clock_port, clock_period_ns, utilization, density, enable_cts, enable_detailed_route, cts_buf_list, cts_root_buf, min_routing_layer, max_routing_layer, sdc_file, output_routed_v, pdn_stripe_layer, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
+    try {
+      assertSafePath(netlist, "netlist"); assertSafePath(output_def, "output_def");
+      assertSafeIdent(top_module, "top_module"); optIdent(clock_port, "clock_port");
+      optPath(sdc_file, "sdc_file"); optPath(output_routed_v, "output_routed_v");
+      optToken(cts_root_buf, "cts_root_buf"); optNoShellMeta(cts_buf_list, "cts_buf_list");
+      optToken(min_routing_layer, "min_routing_layer"); optToken(max_routing_layer, "max_routing_layer");
+      optToken(pdn_stripe_layer, "pdn_stripe_layer");
+      optPath(custom_lib, "custom_lib"); optPath(custom_techlef, "custom_techlef");
+      optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
+      optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
+      optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
+    } catch (e) { return guardError(e); }
     const cfg = pdkConfig(pdk, { custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix });
     const mp = cfg.metal_prefix;
 
@@ -1026,6 +1094,14 @@ server.tool(
     custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for KeyFoundry MET1-6). Default 'met'."),
   },
   async ({ def_file, output_gds, pdk, cell_gds_override, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
+    try {
+      assertSafePath(def_file, "def_file"); assertSafePath(output_gds, "output_gds");
+      optPath(cell_gds_override, "cell_gds_override");
+      optPath(custom_lib, "custom_lib"); optPath(custom_techlef, "custom_techlef");
+      optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
+      optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
+      optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
+    } catch (e) { return guardError(e); }
     const cfg = pdkConfig(pdk, { custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix });
     const resolvedCellGds = cell_gds_override || cellgdsPath(cfg);
     const pyScript = `
@@ -1138,6 +1214,14 @@ server.tool(
     custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for KeyFoundry MET1-6). Default 'met'."),
   },
   async ({ netlist, top_module, pdk, clock_port, clock_period_ns, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
+    try {
+      assertSafePath(netlist, "netlist"); assertSafeIdent(top_module, "top_module");
+      optIdent(clock_port, "clock_port");
+      optPath(custom_lib, "custom_lib"); optPath(custom_techlef, "custom_techlef");
+      optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
+      optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
+      optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
+    } catch (e) { return guardError(e); }
     const cfg = pdkConfig(pdk, { custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix });
 
     // v0.100 H1: auto-flatten Yosys $paramod references that OpenSTA cannot resolve
@@ -1228,6 +1312,12 @@ server.tool(
     custom_lib: z.string().optional().describe("Liberty .lib path for cell semantics (yosys_equiv mode)"),
   },
   async ({ mode, layout_netlist, schematic_netlist, top_module, pdk, custom_lib }) => {
+    try {
+      assertSafePath(layout_netlist, "layout_netlist");
+      assertSafePath(schematic_netlist, "schematic_netlist");
+      assertSafeIdent(top_module, "top_module");
+      optPath(custom_lib, "custom_lib");
+    } catch (e) { return guardError(e); }
     if (mode === "yosys_equiv") {
       const t0 = Date.now();
       const libPathLocal = custom_lib || (pdk === "gf180"
@@ -1542,6 +1632,11 @@ server.tool(
     output_rdb: z.string().optional().describe("Output KLayout RDB report path. Default: <gds_file>.lyrdb"),
   },
   async ({ gds_file, top_cell, pdk, custom_techlef, custom_drc_script, custom_layermap, output_rdb }) => {
+    try {
+      assertSafePath(gds_file, "gds_file"); assertSafeIdent(top_cell, "top_cell");
+      optPath(custom_techlef, "custom_techlef"); optPath(custom_drc_script, "custom_drc_script");
+      optPath(custom_layermap, "custom_layermap"); optPath(output_rdb, "output_rdb");
+    } catch (e) { return guardError(e); }
     const rdbPath = output_rdb || `${gds_file}.lyrdb`;
 
     // v0.76: custom PDK path
@@ -1780,6 +1875,13 @@ server.tool(
     via_resistance_ohm: z.number().default(5.5).describe("Fallback per-via resistance when tech LEF lacks RESISTANCE PER CUT (e.g. KeyFoundry 180nm)"),
   },
   async ({ def_file, pdk, voltage, custom_lib, custom_techlef, custom_celllef, custom_site, custom_vdd, custom_vss, custom_metal_prefix, via_resistance_ohm }) => {
+    try {
+      assertSafePath(def_file, "def_file");
+      optPath(custom_lib, "custom_lib"); optPath(custom_techlef, "custom_techlef");
+      optPath(custom_celllef, "custom_celllef");
+      optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
+      optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
+    } catch (e) { return guardError(e); }
     const cfg = pdkConfig(pdk, { custom_lib, custom_techlef, custom_celllef, custom_site, custom_vdd, custom_vss, custom_metal_prefix });
     const mp = cfg.metal_prefix;
     const vddNet = cfg.vdd_pin || "VDD";
@@ -1864,6 +1966,11 @@ server.tool(
     top_module: z.string().describe("Top module name"),
   },
   async ({ gold_files, gate_file, top_module }) => {
+    try {
+      assertSafePaths(gold_files, "gold_files");
+      assertSafePath(gate_file, "gate_file");
+      assertSafeIdent(top_module, "top_module");
+    } catch (e) { return guardError(e); }
     // v0.99.1 fix: `read_verilog -gold` and `equiv_make -gold -gate <top>`
     // are not valid yosys CLI flags — Yosys rejects with "Bad option".
     // The canonical flow uses design-stash to keep the two RTL trees
@@ -1926,6 +2033,10 @@ server.tool(
     output_file: z.string().default("./sim_spice/spice_out.txt").describe("Output results file. v0.123: default changed from /tmp/spice_out.txt to ./sim_spice/spice_out.txt so artifacts land in the project tree (volatile /tmp lost Wave 53 Phase 3 outputs)."),
   },
   async ({ spice_file, output_file }) => {
+    try {
+      assertSafePath(spice_file, "spice_file");
+      assertSafePath(output_file, "output_file");
+    } catch (e) { return guardError(e); }
     const result = dockerExec(
       `export PATH=${TOOLS}/ngspice/bin:${TOOLS}/bin:$PATH && ngspice -b ${spice_file} -o ${output_file} 2>&1 && echo 'SPICE_COMPLETE' && tail -20 ${output_file} 2>/dev/null`,
       300000
@@ -1986,6 +2097,11 @@ server.tool(
     custom_xschemrc: z.string().optional().describe("Path to custom xschemrc file (custom PDK only)"),
   },
   async ({ schematic, output_dir, pdk, custom_xschemrc }) => {
+    try {
+      assertSafePath(schematic, "schematic");
+      assertSafePath(output_dir, "output_dir");
+      optPath(custom_xschemrc, "custom_xschemrc");
+    } catch (e) { return guardError(e); }
     let xschemrc;
     if (pdk === "custom" && custom_xschemrc) {
       xschemrc = custom_xschemrc;
@@ -2057,6 +2173,15 @@ server.tool(
     custom_nominal_supply: z.number().optional().describe("v0.121: for pdk=custom, nominal supply voltage when `supplies` is not supplied. Defaults to 1.8 V if omitted."),
   },
   async ({ spice_file, pdk, corners, temperatures, supplies, monte_carlo_n, output_dir, specs, custom_corner_lib, custom_design_include, custom_nominal_supply }) => {
+    try {
+      assertSafePath(spice_file, "spice_file");
+      assertSafePath(output_dir, "output_dir");
+      optPath(custom_corner_lib, "custom_corner_lib");
+      optPath(custom_design_include, "custom_design_include");
+      optNoShellMeta(custom_nominal_supply, "custom_nominal_supply");
+      (corners || []).forEach((c) => optNoShellMeta(c, "corners"));
+      (supplies || []).forEach((s) => optNoShellMeta(String(s), "supplies"));
+    } catch (e) { return guardError(e); }
     let designInclude, modelLib;
     if (pdk === "gf180") {
       designInclude = "/foss/pdks/gf180mcuD/libs.tech/ngspice/design.ngspice";
@@ -2234,6 +2359,14 @@ server.tool(
     custom_primitives_verilog: z.string().optional().describe("Path to primitives .v file (custom PDK)"),
   },
   async ({ netlist, clock, reset, reset_active_low, pdk, tv_count, add_jtag, output_dir, custom_lib, custom_dff_names, custom_cell_verilog, custom_primitives_verilog }) => {
+    try {
+      assertSafePath(netlist, "netlist");
+      assertSafeIdent(clock, "clock"); assertSafeIdent(reset, "reset");
+      optPath(output_dir, "output_dir"); optPath(custom_lib, "custom_lib");
+      optNoShellMeta(custom_dff_names, "custom_dff_names");
+      optPath(custom_cell_verilog, "custom_cell_verilog");
+      optPath(custom_primitives_verilog, "custom_primitives_verilog");
+    } catch (e) { return guardError(e); }
     const cfg = pdkConfig(pdk, { custom_lib });
     const lib = pdk === "custom" ? (custom_lib || "") : libPath(cfg);
     if (pdk === "custom" && (!lib || !custom_dff_names)) {
@@ -2416,11 +2549,15 @@ print(json.dumps({"count": len(results), "results": results}, default=str))
 conn.close()
 `;
 
-    const result = execSync(`python3 -c '${pyScript.replace(/'/g, "'\\''")}'`, {
+    // security hardening: run via argv (no shell). The SQL is static + fully
+    // parameterized (psycopg2 cur.execute(sql, params)); removing the shell
+    // wrapper drops the last shell-escaping concern.
+    const _r = _spawnSync("python3", ["-c", pyScript], {
       timeout: 10000,
       maxBuffer: 5 * 1024 * 1024,
       encoding: "utf-8",
     });
+    const result = (_r.stdout || "") || (_r.stderr || "");
 
     let parsed;
     try {
@@ -2459,6 +2596,10 @@ server.tool(
     top_module: z.string().describe("Top module name"),
   },
   async ({ netlist, lib_wci, lib_typ, lib_bci, sdc_file, top_module }) => {
+    try {
+      assertSafePaths([netlist, lib_wci, lib_typ, lib_bci, sdc_file], "path");
+      assertSafeIdent(top_module, "top_module");
+    } catch (e) { return guardError(e); }
     // v0.100 H1: auto-flatten Yosys $paramod references that OpenSTA cannot resolve
     let effectiveNetlist = netlist;
     const paramodCheck = dockerExec(`grep -c '\\$paramod' ${netlist} 2>/dev/null || true`, 10000);
@@ -2556,20 +2697,29 @@ server.tool(
     programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing audit program scripts. v2.5.2: auto-detected from this file's location (sibling vibe-ic-marketplace/plugins/vibe-ic-d/programs/) — overridable via $VIBE_IC_PROGRAMS_DIR. v2.4.1 hardcoded /home/user/ was wrong on most installs."),
   },
   async ({ rtl_dir, programs, programs_dir }) => {
+    try {
+      assertSafePath(rtl_dir, "rtl_dir");
+      optPath(programs_dir, "programs_dir");
+      (programs || []).forEach((p) => assertSafeToken(p, "programs"));
+    } catch (e) { return guardError(e); }
     const results = {};
     let all_pass = true;
 
     for (const prog of programs) {
       const scriptPath = `${programs_dir}${prog}.py`;
       try {
-        const output = execSync(
-          `python3 "${scriptPath}" "${rtl_dir}" 2>&1`,
-          {
-            timeout: 60000,
-            maxBuffer: 5 * 1024 * 1024,
-            encoding: "utf-8",
-          }
-        );
+        // security hardening: run via argv (no shell) so neither the program
+        // name nor rtl_dir is ever shell-parsed. stderr merged into stdout to
+        // preserve the prior `2>&1` behaviour the PASS/FAIL match relies on.
+        const _r = _spawnSync("python3", [scriptPath, rtl_dir], {
+          timeout: 60000, maxBuffer: 5 * 1024 * 1024, encoding: "utf-8",
+        });
+        if (_r.error) throw _r.error;
+        if (_r.status !== 0) {
+          const e = new Error(`exit ${_r.status}`);
+          e.stdout = (_r.stdout || "") + (_r.stderr || ""); throw e;
+        }
+        const output = (_r.stdout || "") + (_r.stderr || "");
 
         const passMatch = output.match(/PASS/i);
         const failMatch = output.match(/FAIL/i);
@@ -2626,6 +2776,12 @@ server.tool(
     work_dir: z.string().default("./sim/cocotb_work").describe("Working directory for build artifacts. v0.123: default changed from /tmp/cocotb_work so artifacts land in the project tree."),
   },
   async ({ verilog_files, top_module, testbench_py, simulator, work_dir }) => {
+    try {
+      assertSafePaths(verilog_files, "verilog_files");
+      assertSafePath(testbench_py, "testbench_py");
+      assertSafeIdent(top_module, "top_module");
+      optPath(work_dir, "work_dir");
+    } catch (e) { return guardError(e); }
     const simMap = { verilator: "verilator", icarus: "icarus" };
     const sim = simMap[simulator];
     const verilogSources = verilog_files.join(" ");
@@ -2700,7 +2856,17 @@ server.tool(
     part: z.string().optional().describe("FPGA part number (for vivado flow)"),
   },
   async ({ project_dir, tool, qsf_file, xdc_file, top_module, part }) => {
-    let cmd;
+    try {
+      assertSafePath(project_dir, "project_dir");
+      optPath(qsf_file, "qsf_file"); optPath(xdc_file, "xdc_file");
+      optIdent(top_module, "top_module"); optToken(part, "part");
+    } catch (e) { return guardError(e); }
+    // security hardening: this tool runs on the HOST (not Docker). Inputs are
+    // already validated at handler entry; here we execute via argv arrays so
+    // no value is ever shell-parsed (the former `cd "${project_dir}" &&
+    // quartus_sh ...` and `echo '...' > "${tclPath}"` were host
+    // command-injection vectors).
+    let bin, args, cwd;
     let timeoutMs = 600000; // 10 minutes
 
     if (tool === "quartus") {
@@ -2710,7 +2876,7 @@ server.tool(
       // Extract project name from QSF file
       const qsfBase = qsf_file.replace(/\.qsf$/, "");
       const projName = qsfBase.substring(qsfBase.lastIndexOf("/") + 1);
-      cmd = `cd "${project_dir}" && quartus_sh --flow compile "${projName}" 2>&1`;
+      bin = "quartus_sh"; args = ["--flow", "compile", projName]; cwd = project_dir;
     } else {
       // Vivado
       if (!xdc_file || !top_module || !part) {
@@ -2730,25 +2896,27 @@ exit
 `;
       const tclPath = `${project_dir}/run_vivado.tcl`;
       try {
-        execSync(`echo '${tclScript.replace(/'/g, "'\\''")}' > "${tclPath}"`, { encoding: "utf-8" });
+        require_fs_writeFileSync(tclPath, tclScript, "utf-8");
       } catch (e) { /* ignore */ }
-      cmd = `vivado -mode batch -source "${tclPath}" 2>&1`;
+      bin = "vivado"; args = ["-mode", "batch", "-source", tclPath];
     }
 
     let result;
-    try {
-      const output = execSync(cmd, {
+    {
+      const r = _spawnSync(bin, args, {
+        cwd,
         timeout: timeoutMs,
         maxBuffer: 10 * 1024 * 1024,
         encoding: "utf-8",
       });
-      result = { success: true, output };
-    } catch (err) {
-      result = {
-        success: false,
-        output: err.stdout || "",
-        error: err.stderr || err.message,
-      };
+      const merged = (r.stdout || "") + (r.stderr || "");
+      if (r.error) {
+        result = { success: false, output: merged, error: r.error.message || String(r.error) };
+      } else if (r.status === 0) {
+        result = { success: true, output: merged };
+      } else {
+        result = { success: false, output: merged, error: r.stderr || `exited with status ${r.status}` };
+      }
     }
 
     // Parse resource usage
@@ -2893,6 +3061,10 @@ server.tool(
     ),
   },
   async ({ tool, sof_file, bit_file, cable_index, verify_burn, expected_device, rtl_dir }) => {
+    try {
+      optPath(sof_file, "sof_file"); optPath(bit_file, "bit_file");
+      optPath(rtl_dir, "rtl_dir"); optToken(expected_device, "expected_device");
+    } catch (e) { return guardError(e); }
     if (tool === "quartus") {
       if (!sof_file) {
         return {
@@ -3106,21 +3278,25 @@ puts "=== PROGRAM_COMPLETE ==="
 close_hw_manager
 exit
 `;
-    const cmd = `vivado -mode batch -source <(echo '${tclScript.replace(/'/g, "'\\''")}') 2>&1`;
+    // security hardening: write the TCL to a temp file and run vivado via
+    // argv (no shell) — replaces `vivado ... -source <(echo '...')`, which
+    // relied on bash process-substitution under execSync's /bin/sh and put
+    // bit_file through a shell.
+    const _tclPath = join(process.env.TMPDIR || "/tmp", `vivado_program_${randomUUID()}.tcl`);
     let result;
     try {
-      const output = execSync(cmd, {
+      require_fs_writeFileSync(_tclPath, tclScript, "utf-8");
+      const r = _spawnSync("vivado", ["-mode", "batch", "-source", _tclPath], {
         timeout: 120000,
         maxBuffer: 10 * 1024 * 1024,
         encoding: "utf-8",
       });
-      result = { success: true, output };
+      const merged = (r.stdout || "") + (r.stderr || "");
+      if (r.error) result = { success: false, output: merged, error: r.error.message || String(r.error) };
+      else if (r.status === 0) result = { success: true, output: merged };
+      else result = { success: false, output: merged, error: r.stderr || `exited with status ${r.status}` };
     } catch (err) {
-      result = {
-        success: false,
-        output: err.stdout || "",
-        error: err.stderr || err.message,
-      };
+      result = { success: false, output: err.stdout || "", error: err.stderr || err.message };
     }
     const deviceMatch = result.output.match(/Device\s*(?:\d+)?:\s*(\S+)/i) ||
                         result.output.match(/Info.*?:\s*(EP\S+|xc\S+)/i);
@@ -3181,6 +3357,14 @@ server.tool(
     custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for KeyFoundry MET1-6). Default 'met'."),
   },
   async ({ def_file, gds_file, top_cell, pdk, output_format, output_dir, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
+    try {
+      optPath(def_file, "def_file"); optPath(gds_file, "gds_file");
+      assertSafeIdent(top_cell, "top_cell"); optPath(output_dir, "output_dir");
+      optPath(custom_lib, "custom_lib"); optPath(custom_techlef, "custom_techlef");
+      optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
+      optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
+      optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
+    } catch (e) { return guardError(e); }
     if (!def_file && !gds_file) {
       return { content: [{ type: "text", text: JSON.stringify({ success: false, error: "Either def_file or gds_file is required" }) }] };
     }
@@ -3318,23 +3502,30 @@ server.tool(
     recurse: z.boolean().default(true).describe("Recurse into subdirectories of in_dir"),
   },
   async ({ in_dir, in_file, out_dir, recurse }) => {
+    try {
+      optPath(in_dir, "in_dir"); optPath(in_file, "in_file");
+      assertSafePath(out_dir, "out_dir");
+    } catch (e) { return guardError(e); }
     const t0 = Date.now();
     if (!in_dir && !in_file) {
       return wrapResult({ success: false, t0, error: "either in_dir or in_file required", output: "" });
     }
-    const inflag = in_file ? `--in-file ${in_file}` : `--in-dir ${in_dir}`;
     const recflag = recurse ? "--recurse" : "--no-recurse";
     const programPath = `${VIBE_IC_PROGRAMS_DIR}/doc_extract.py`;
-    // v2.6.3: drop `2>&1` shell redirect, capture stderr via stdio config —
-    // mirrors the eda_doctor doc-probe pattern. On crash we still merge
-    // stdout+stderr in the catch handler so partial PASS lines survive.
-    const cmd = `python3 ${programPath} ${inflag} --out-dir ${out_dir} ${recflag}`;
+    // security hardening: run on HOST via argv (no shell) so in_file/in_dir/
+    // out_dir are never shell-parsed. stderr captured separately and merged
+    // so partial "N PASS / M FAIL" lines survive a mid-run crash (prior to
+    // this change, behaviour added in v2.6.3).
+    const args = [programPath,
+      ...(in_file ? ["--in-file", in_file] : ["--in-dir", in_dir]),
+      "--out-dir", out_dir, recflag];
     let r;
-    try {
-      const out = execSync(cmd, { timeout: 600000, maxBuffer: 10 * 1024 * 1024, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-      r = { success: true, output: out };
-    } catch (err) {
-      r = { success: false, output: (err.stdout || "") + (err.stderr || ""), error: err.message };
+    {
+      const out = _spawnSync("python3", args, { timeout: 600000, maxBuffer: 10 * 1024 * 1024, encoding: "utf-8" });
+      const merged = (out.stdout || "") + (out.stderr || "");
+      if (out.error) r = { success: false, output: merged, error: out.error.message || String(out.error) };
+      else if (out.status === 0) r = { success: true, output: merged };
+      else r = { success: false, output: merged, error: out.stderr || `exited with status ${out.status}` };
     }
     const passMatch = (r.output || "").match(/(\d+) PASS \/ (\d+) FAIL \/ (\d+) SKIP/);
     const passN = passMatch ? parseInt(passMatch[1]) : 0;
@@ -3370,6 +3561,9 @@ server.tool(
     skip_versions: z.boolean().default(false).describe("Skip per-tool version probes (faster)"),
   },
   async ({ custom_pdk, skip_versions }) => {
+    try {
+      for (const p of Object.values(custom_pdk || {})) optPath(p, "custom_pdk");
+    } catch (e) { return guardError(e); }
     const t0 = Date.now();
     const checks = [];
     let allOk = true;
@@ -3480,6 +3674,12 @@ server.tool(
     timeout_sec: z.number().default(900).describe("Timeout in seconds (default 15 min)"),
   },
   async ({ engine, script, script_file, extra_args, timeout_sec }) => {
+    try {
+      // script_file is interpolated into the engine command unquoted;
+      // guard it. (Inline `script` is base64-transported and extra_args
+      // are POSIX single-quote-escaped, both already shell-safe.)
+      try { optPath(script_file, "script_file"); } catch (e) { return guardError(e); }
+    } catch (e) { return guardError(e); }
     const t0 = Date.now();
     let scriptArg, runCmd;
     const PATH_PREFIX = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/yosys/bin:${TOOLS}/iverilog/bin:${TOOLS}/bin:$PATH && export QT_QPA_PLATFORM=offscreen`;
@@ -3557,6 +3757,11 @@ server.tool(
     cts_buf_list: z.array(z.string()).optional().describe("List of CTS buffer cell names to verify (e.g. ['CLKBUFD8'])"),
   },
   async ({ lib, techlef, celllef, cellgds, cts_buf_list }) => {
+    try {
+      assertSafePath(lib, "lib");
+      optPath(techlef, "techlef"); optPath(celllef, "celllef"); optPath(cellgds, "cellgds");
+      optNoShellMeta(cts_buf_list, "cts_buf_list");
+    } catch (e) { return guardError(e); }
     const t0 = Date.now();
     const findings = [];
     let allOk = true;
@@ -3682,6 +3887,17 @@ server.tool(
     template_args: z.any().optional().describe("Template parameters (object). For 'phase-2c-bringup': qpf_path, sof_path, expected_device, opcodes (array of int), camera_device, baseline_jpg, post_jpg, led_y_pixel, led_count."),
   },
   async ({ project_dir, steps, dry_run, template, template_args }) => {
+    try {
+      assertSafePath(project_dir, "project_dir");
+      optToken(template, "template");
+      const _chkArgs = (o) => {
+        for (const v of Object.values(o || {})) {
+          if (typeof v === "string") assertNoShellMeta(v, "template_args");
+          else if (v && typeof v === "object") _chkArgs(v);
+        }
+      };
+      _chkArgs(template_args);
+    } catch (e) { return guardError(e); }
     const t0 = Date.now();
     const timeline = [];
     let allOk = true;
@@ -3847,33 +4063,36 @@ server.tool(
   },
   async ({ device, output, width, height, led_mode, timeout_sec }) => {
     try {
+      assertSafePath(device, "device");
+      assertSafePath(output, "output");
+    } catch (e) { return guardError(e); }
+    try {
       const fs = await import("fs");
       const pathlib = await import("path");
       fs.mkdirSync(pathlib.dirname(output), { recursive: true });
     } catch (_) { /* ok */ }
 
     // ffmpeg invocation tuned for LEDs: short exposure (-vf for HSV/saturation
-    // boost), single frame.
-    const ledFilter = led_mode
-      ? '-vf "eq=brightness=-0.1:saturation=1.5,format=yuv420p"'
-      : "";
-    const cmd = `ffmpeg -hide_banner -loglevel error -y -f v4l2 `
-              + `-video_size ${width}x${height} -i "${device}" `
-              + `-frames:v 1 ${ledFilter} "${output}" 2>&1`;
+    // boost), single frame. security hardening: run via argv (no shell) so
+    // device / output paths are never shell-parsed.
+    const ffArgs = [
+      "-hide_banner", "-loglevel", "error", "-y", "-f", "v4l2",
+      "-video_size", `${width}x${height}`, "-i", String(device),
+      "-frames:v", "1",
+    ];
+    if (led_mode) ffArgs.push("-vf", "eq=brightness=-0.1:saturation=1.5,format=yuv420p");
+    ffArgs.push(String(output));
     let result;
-    try {
-      const out = execSync(cmd, {
+    {
+      const r = _spawnSync("ffmpeg", ffArgs, {
         timeout: timeout_sec * 1000,
         maxBuffer: 4 * 1024 * 1024,
         encoding: "utf-8",
       });
-      result = { success: true, output: out };
-    } catch (err) {
-      result = {
-        success: false,
-        output: err.stdout || "",
-        error: err.stderr || err.message,
-      };
+      const merged = (r.stdout || "") + (r.stderr || "");
+      if (r.error) result = { success: false, output: merged, error: r.error.message || String(r.error) };
+      else if (r.status === 0) result = { success: true, output: merged };
+      else result = { success: false, output: merged, error: r.stderr || `exited with status ${r.status}` };
     }
 
     let imageHash = null;
@@ -3923,6 +4142,15 @@ server.tool(
     threshold: z.number().default(80).describe("Brightness threshold (0-255)"),
   },
   async ({ before, after, led_count, led_y_pixel, led_y_height, threshold }) => {
+    try {
+      assertSafePath(before, "before");
+      assertSafePath(after, "after");
+    } catch (e) { return guardError(e); }
+    // security hardening: values are read from argv (sys.argv) rather than
+    // interpolated into the Python source, and the script runs via spawnSync
+    // argv (no shell). The former `python3 -c "...${before}..."` ran on the
+    // HOST through a double-quoted shell arg, so a path containing $(...) or
+    // backticks was a host command-injection vector.
     const py = `
 import sys, json
 try:
@@ -3930,6 +4158,13 @@ try:
 except Exception as e:
     print(json.dumps({"success": False, "error": "PIL unavailable: " + str(e)}))
     sys.exit(0)
+
+before = sys.argv[1]
+after = sys.argv[2]
+led_y_pixel = int(sys.argv[3])
+led_y_height = int(sys.argv[4])
+led_count = int(sys.argv[5])
+threshold = int(sys.argv[6])
 
 def row_avg(path, y, h):
     im = Image.open(path).convert("L")
@@ -3944,8 +4179,8 @@ def row_avg(path, y, h):
         cols.append(s // max(1, y1 - y0))
     return cols, w
 
-cols_b, w = row_avg("${before}", ${led_y_pixel}, ${led_y_height})
-cols_a, _ = row_avg("${after}",  ${led_y_pixel}, ${led_y_height})
+cols_b, w = row_avg(before, led_y_pixel, led_y_height)
+cols_a, _ = row_avg(after,  led_y_pixel, led_y_height)
 
 # Bin each row into led_count equal-width bins; max-pixel per bin = LED brightness
 def bin_max(cols, n):
@@ -3956,10 +4191,10 @@ def bin_max(cols, n):
         out.append(max(seg) if seg else 0)
     return out
 
-a = bin_max(cols_b, ${led_count})
-b = bin_max(cols_a, ${led_count})
-state_b = [int(v >= ${threshold}) for v in a]
-state_a = [int(v >= ${threshold}) for v in b]
+a = bin_max(cols_b, led_count)
+b = bin_max(cols_a, led_count)
+state_b = [int(v >= threshold) for v in a]
+state_a = [int(v >= threshold) for v in b]
 diff = []
 for i, (sb, sa) in enumerate(zip(state_b, state_a)):
     if sb != sa:
@@ -3967,7 +4202,7 @@ for i, (sb, sa) in enumerate(zip(state_b, state_a)):
 
 print(json.dumps({
     "success": True,
-    "led_count": ${led_count},
+    "led_count": led_count,
     "before_state": state_b,
     "after_state":  state_a,
     "changed": diff,
@@ -3975,12 +4210,12 @@ print(json.dumps({
 `;
     let result;
     try {
-      const out = execSync(`python3 -c "${py.replace(/"/g, '\\"')}"`, {
-        timeout: 15000,
-        maxBuffer: 4 * 1024 * 1024,
-        encoding: "utf-8",
-      });
-      result = JSON.parse(out.trim());
+      const _r = _spawnSync("python3",
+        ["-c", py, String(before), String(after), String(led_y_pixel),
+         String(led_y_height), String(led_count), String(threshold)],
+        { timeout: 15000, maxBuffer: 4 * 1024 * 1024, encoding: "utf-8" });
+      if (_r.error) throw _r.error;
+      result = JSON.parse((_r.stdout || "").trim());
     } catch (err) {
       result = { success: false, error: (err.stderr || err.message || "") };
     }
@@ -4232,6 +4467,12 @@ server.tool(
     extra_signals: z.array(z.string()).default([]).describe("Additional signal names to capture"),
   },
   async ({ rtl_dir, top_module, target, clock_signal, depth, output_dir, extra_signals }) => {
+    try {
+      assertSafePath(rtl_dir, "rtl_dir"); optPath(output_dir, "output_dir");
+      assertSafeIdent(top_module, "top_module"); optIdent(clock_signal, "clock_signal");
+      optToken(target, "target");
+      (extra_signals || []).forEach((s) => optNoShellMeta(String(s), "extra_signals"));
+    } catch (e) { return guardError(e); }
     const fs = await import("fs");
     const path = await import("path");
 
@@ -4356,6 +4597,13 @@ server.tool(
     custom_pdk_path: z.string().optional().describe("PDK path for custom PDK (magicrc location)"),
   },
   async ({ spice_netlist, block_name, pdk, output_dir, matching_pairs, guard_rings, drc_check, lvs_check, custom_pdk_path }) => {
+    try {
+      assertSafePath(spice_netlist, "spice_netlist");
+      assertSafeIdent(block_name, "block_name");
+      assertSafePath(output_dir, "output_dir");
+      optPath(custom_pdk_path, "custom_pdk_path");
+      (matching_pairs || []).forEach((pair) => (pair || []).forEach((n) => assertSafeIdent(n, "matching_pairs")));
+    } catch (e) { return guardError(e); }
     const fs = await import("fs");
     const path = await import("path");
 
@@ -4409,19 +4657,13 @@ puts "DONE: analog layout complete for ${block_name}"
     const tclPath = path.join(output_dir, `${block_name}_layout.tcl`);
     fs.writeFileSync(tclPath, tclScript);
 
-    // Run Magic inside Docker
+    // Run Magic inside Docker via dockerExec, which now uses an argv-based
+    // spawnSync — no host-shell layer, inputs already validated at entry.
     const magicCmd = `magic -dnull -noconsole -T ${pdkInfo.magicrc} < ${tclPath}`;
-    const cmd = `docker exec ${CONTAINER} bash -c "${magicCmd.replace(/"/g, '\\"')}"`;
-
-    let stdout, stderr, exitCode = 0;
-    try {
-      stdout = execSync(cmd, { encoding: "utf-8", timeout: 300000, maxBuffer: 10 * 1024 * 1024 });
-      stderr = "";
-    } catch (e) {
-      stdout = (e.stdout || "").toString();
-      stderr = (e.stderr || "").toString();
-      exitCode = e.status || 1;
-    }
+    const mres = dockerExec(magicCmd, 300000);
+    let stdout = mres.output || "";
+    let stderr = mres.success ? "" : (mres.error || "");
+    let exitCode = mres.success ? 0 : (mres.exitCode || 1);
 
     const result = {
       block_name,
@@ -4440,24 +4682,26 @@ puts "DONE: analog layout complete for ${block_name}"
     };
 
     if (drc_check && exitCode === 0) {
-      const drcCmd = `docker exec ${CONTAINER} bash -c "cd ${output_dir} && magic -dnull -noconsole -T ${pdkInfo.magicrc} -c 'load ${block_name}; drc check; drc count; quit'"`;
-      try {
-        const drcOut = execSync(drcCmd, { encoding: "utf-8", timeout: 120000 });
+      const drcCmd = `cd ${output_dir} && magic -dnull -noconsole -T ${pdkInfo.magicrc} -c 'load ${block_name}; drc check; drc count; quit'`;
+      const drcRes = dockerExec(drcCmd, 120000);
+      if (drcRes.success) {
+        const drcOut = drcRes.output || "";
         const countMatch = drcOut.match(/(\d+)\s+error/i);
         result.drc = { ran: true, errors: countMatch ? parseInt(countMatch[1]) : 0, output_tail: drcOut.slice(-500) };
-      } catch (e) {
-        result.drc = { ran: true, errors: -1, error: (e.stderr || "").toString().slice(-500) };
+      } else {
+        result.drc = { ran: true, errors: -1, error: (drcRes.error || "").toString().slice(-500) };
       }
     }
 
     if (lvs_check && exitCode === 0) {
-      const lvsCmd = `docker exec ${CONTAINER} bash -c "cd ${output_dir} && netgen -batch lvs '${block_name}_extracted.sp ${block_name}' '${spice_netlist} ${block_name}' ${pdkInfo.tech}_setup.tcl ${block_name}_lvs.log"`;
-      try {
-        const lvsOut = execSync(lvsCmd, { encoding: "utf-8", timeout: 120000 });
+      const lvsCmd = `cd ${output_dir} && netgen -batch lvs '${block_name}_extracted.sp ${block_name}' '${spice_netlist} ${block_name}' ${pdkInfo.tech}_setup.tcl ${block_name}_lvs.log`;
+      const lvsRes = dockerExec(lvsCmd, 120000);
+      if (lvsRes.success) {
+        const lvsOut = lvsRes.output || "";
         const match = lvsOut.match(/Circuits match uniquely|Final result.*Correct/i);
         result.lvs = { ran: true, match: !!match, output_tail: lvsOut.slice(-500) };
-      } catch (e) {
-        result.lvs = { ran: true, match: false, error: (e.stderr || "").toString().slice(-500) };
+      } else {
+        result.lvs = { ran: true, match: false, error: (lvsRes.error || "").toString().slice(-500) };
       }
     }
 
@@ -4485,6 +4729,10 @@ server.tool(
     quartus_path: z.string().default("/opt/intelFPGA_lite/23.1std/quartus").describe("Quartus install path"),
   },
   async ({ channel, samples, cable, reference_voltage, quartus_path }) => {
+    try {
+      assertSafePath(quartus_path, "quartus_path");
+      optToken(cable, "cable");
+    } catch (e) { return guardError(e); }
     const fs = await import("fs");
     const path = await import("path");
     const { execSync } = await import("child_process");
@@ -4524,15 +4772,15 @@ close_service master $adc_path
     fs.writeFileSync(tclPath, tclScript);
 
     const sysCon = path.join(quartus_path, "sopc_builder/bin/system-console");
-    const cmd = `${sysCon} --script=${tclPath} --cable="${cable}"`;
-
+    // security hardening: run on HOST via argv (no shell) so quartus_path /
+    // cable are never shell-parsed.
     let stdout = "", stderr = "", exitCode = 0;
-    try {
-      stdout = execSync(cmd, { encoding: "utf-8", timeout: 30000, maxBuffer: 1024 * 1024 });
-    } catch (e) {
-      stdout = (e.stdout || "").toString();
-      stderr = (e.stderr || "").toString();
-      exitCode = e.status || 1;
+    {
+      const r = _spawnSync(sysCon, [`--script=${tclPath}`, `--cable=${cable}`],
+        { encoding: "utf-8", timeout: 30000, maxBuffer: 1024 * 1024 });
+      stdout = (r.stdout || "").toString();
+      if (r.error) { stderr = r.error.message || String(r.error); exitCode = r.status || 1; }
+      else if (r.status !== 0) { stderr = (r.stderr || "").toString(); exitCode = r.status || 1; }
     }
 
     const result = { channel, samples, reference_voltage, exit_code: exitCode };
@@ -4640,30 +4888,44 @@ server.tool(
       "Path for output L10-style oracle JSON (default: <project>/generated_docs/L10_oracle.json)"),
   },
   async (args) => {
+    try {
+      assertSafePath(args.oracle_sof_path, "oracle_sof_path");
+      assertSafePath(args.project_dir, "project_dir");
+      assertSafePath(args.l2_timing_json, "l2_timing_json");
+      optPath(args.output_oracle_json, "output_oracle_json");
+    } catch (e) { return guardError(e); }
     const fs = await import("fs");
     const path = await import("path");
     const { execSync } = await import("child_process");
 
-    // Step 1 — burn oracle SOF (delegate to existing device tool)
+    // Step 1 — burn oracle SOF (delegate to existing device tool).
+    // security hardening: run on HOST via argv (no shell) — the quartus_pgm
+    // -o operand `p;<path>@1` is passed as a single argument, so
+    // oracle_sof_path is never shell-parsed (the former
+    // `quartus_pgm ... p\;${path}@1` was a host command-injection vector).
     let burnOk = false;
-    try {
-      const r = execSync(
-        `quartus_pgm -m JTAG -c USB-Blaster -o p\\;${args.oracle_sof_path}@1`,
+    {
+      const r = _spawnSync(
+        "quartus_pgm",
+        ["-m", "JTAG", "-c", "USB-Blaster", "-o", `p;${args.oracle_sof_path}@1`],
         { encoding: "utf-8", timeout: 120_000, maxBuffer: 16 * 1024 * 1024 }
       );
-      burnOk = r.includes("Configuration succeeded") || r.includes("Successfully performed");
-    } catch (e) {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            success: false,
-            stage: "burn_sof",
-            error: "oracle SOF burn failed — verify quartus_pgm + USB-Blaster",
-            detail: (e.stderr || e.stdout || "").toString().slice(-1500),
-          }, null, 2),
-        }],
-      };
+      if (r.error || r.status !== 0) {
+        const e = r.error || new Error((r.stderr || "").toString() || `exit ${r.status}`);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              stage: "burn_sof",
+              error: "oracle SOF burn failed — verify quartus_pgm + USB-Blaster",
+              detail: (e.stderr || e.stdout || "").toString().slice(-1500),
+            }, null, 2),
+          }],
+        };
+      }
+      const out = (r.stdout || "").toString();
+      burnOk = out.includes("Configuration succeeded") || out.includes("Successfully performed");
     }
 
     // Step 2 — reset host tester (memory rule: 0xFF before fresh test)
@@ -4785,21 +5047,23 @@ server.tool(
     project_dir: z.string().describe("Absolute path to the project directory (containing rtl/, fpga/, gds/, etc.)"),
   },
   async ({ project_dir }) => {
+    try {
+      assertSafePath(project_dir, "project_dir");
+    } catch (e) { return guardError(e); }
     const path = await import("path");
-    const { execSync } = await import("child_process");
     const here = path.dirname(new URL(import.meta.url).pathname);
     const gate = path.resolve(here, "..", "..", "vibe-ic-marketplace", "plugins", "vibe-ic-d", "programs", "phase23_completion_self_audit_check.py");
     let output, exitCode;
-    try {
-      output = execSync(`python3 "${gate}" "${project_dir}" --json -`, {
+    {
+      // security hardening: run via argv (no shell) so project_dir is never
+      // shell-parsed.
+      const r = _spawnSync("python3", [gate, project_dir, "--json", "-"], {
         encoding: "utf-8",
         timeout: 300_000,
         maxBuffer: 32 * 1024 * 1024,
       });
-      exitCode = 0;
-    } catch (e) {
-      output = (e.stdout || "") + (e.stderr || "");
-      exitCode = e.status ?? 1;
+      output = (r.stdout || "") + (r.stderr || "");
+      exitCode = r.error ? 1 : (r.status ?? 1);
     }
     let parsed;
     try {
