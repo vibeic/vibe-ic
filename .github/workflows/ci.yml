@@ -27,7 +27,7 @@ jobs:
       - name: chip-AGNOSTIC source guard
         run: |
           python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py \
-            --root vibe-ic-marketplace/plugins/vibe-ic
+            vibe-ic-marketplace/plugins/vibe-ic
 
       - name: pytest (plugin)
         run: |

@@ -19,7 +19,7 @@
     pytest -q vibe-ic-marketplace/plugins/vibe-ic/tests
     pytest -q mcp-eda-server/test
     python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py \
-            --root vibe-ic-marketplace/plugins/vibe-ic
+            vibe-ic-marketplace/plugins/vibe-ic
 -->
 
 ## Checklist

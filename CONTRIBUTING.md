@@ -84,7 +84,7 @@ The two hard gates that **must** pass before any PR is mergeable:
 ```bash
 # (a) chip-AGNOSTIC source guard — no private IC / vendor / protocol names
 python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py \
-        --root vibe-ic-marketplace/plugins/vibe-ic
+        vibe-ic-marketplace/plugins/vibe-ic
 
 # (b) Full test suite
 pytest -q vibe-ic-marketplace/plugins/vibe-ic/tests
