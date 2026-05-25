@@ -1,0 +1,27 @@
+{
+  "name": "vibe-ic-marketplace",
+  "description": "AI-native IC design plugins for Claude Code. Vibe Coding for ASIC: natural-language design intent → verified silicon.",
+  "owner": {
+    "name": "VibeIC.AI"
+  },
+  "plugins": [
+    {
+      "name": "vibe-ic",
+      "source": "./vibe-ic-marketplace/plugins/vibe-ic",
+      "description": "AI-native IC design plugin for Claude Code. NL prompt or design docs → L1-L13 design JSON → RTL → FPGA SOF → ASIC GDS. Strict canonical-flow compliance gates + chip-AGNOSTIC source guard.",
+      "version": "0.1.1",
+      "homepage": "https://github.com/vibeic/vibe-ic",
+      "license": "Apache-2.0",
+      "category": "ic-design",
+      "keywords": [
+        "ic-design",
+        "asic",
+        "fpga",
+        "rtl",
+        "synthesis",
+        "vibe-coding"
+      ],
+      "strict": true
+    }
+  ]
+}

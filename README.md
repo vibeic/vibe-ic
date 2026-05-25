@@ -59,13 +59,16 @@ claude mcp add eda-tools node "$PWD/src/index.js"
 
 ### 3. Claude Code plugin
 
-Add this repo's `vibe-ic-marketplace` to your Claude Code plugin sources,
-then install the `vibe-ic` plugin:
+Add this repo as a marketplace and install the `vibe-ic` plugin:
 
 ```bash
-claude plugin marketplace add <path-or-url-to-this-repo>/vibe-ic-marketplace
+claude plugin marketplace add vibeic/vibe-ic
 claude plugin install vibe-ic
 ```
+
+> Inside an interactive Claude Code session the same two commands are
+> `/plugin marketplace add vibeic/vibe-ic` and
+> `/plugin install vibe-ic@vibe-ic-marketplace`.
 
 ### 4. Design something
 
