@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 398
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 398)
+- **Total programs (excluding helpers / shims):** 404
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 404)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 389 |
+| `any` | 395 |
 
 ## Alphabetical listing
 
@@ -50,6 +50,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_hw_spice_correlation_check` | any | — | deterministic gate for HW-vs-SPICE correlation |
 | `analog_netlist_pdk_check` | any | — | deterministic gate for SPICE netlist PDK compliance |
 | `analog_one_shot_runner` | any | — | A1..A8 analog flow (parallel to Phase 2 digital). |
+| `analog_oracle_compare` | any | — | deterministic analog-benchmark comparator. |
 | `analog_per_block_pv_completeness_check` | any | Wave 93 | strict per-block deliverable |
 | `analog_pre_vs_post_layout_check` | any | — | deterministic gate for pre/post-layout comparison |
 | `analog_real_corner_sweep` | any | — | v1.6.207 (ORGANIC-20260512). |
@@ -177,6 +178,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gap_reset_granularity_check` | any | — | deterministic compliance check derived from |
 | `gate_evidence_completeness_check` | any | v0.100 | v0.100 L1 |
 | `gate_utils` | any | v0.117 | Shared helpers for v0.117+ structural-RTL gates. |
+| `gds_ip_attribution` | any | — | Embed IP attribution metadata into the foundry |
 | `gds_size_check` | any | — | Deterministic GDS file existence and size checker. |
 | `half_duplex_frame_end_idle_reset_check` | any | — | structural-RTL gate for |
 | `half_duplex_response_window_check` | any | — | LL-4. |
@@ -192,6 +194,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `integration_spec_audit` | any | — | Deterministic compliance check for integration-spec-gen. |
 | `interface_encoding_audit` | any | — | Detect gray-code vs binary encoding mismatches |
 | `internal_vs_external_timing_check` | any | — | L8 must separate host-side from DUT-side timing. |
+| `ip_catalog_pull` | any | — | Pull catalog IP RTL files into project's canonical |
+| `ip_catalog_query` | any | — | IP catalog query + match + pull engine. |
+| `ip_catalog_reproduce_pull` | any | — | Reproducibility check. |
+| `ip_catalog_upstream_audit` | any | — | Verify catalog manifests against canonical |
+| `ip_catalog_validate` | any | — | Validate catalog manifests against schema + |
 | `ir_drop_report_check` | any | — | wrapper for eda_report_audit --mode ir_drop. |
 | `isolation_cell_required_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
 | `json_schema_check` | any | — | Deterministic JSON schema key checker. |
@@ -230,11 +237,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `marketplace_version_sync_check` | any | — | marketplace_version_sync_check.py |
 | `mask_application_check` | any | — | Verify any AND-mask rule the spec declares |
 | `mcp_execution_verify` | any | — | Deterministic MCP tool execution verifier. |
-| `md905_bfm_gen` | any | v0.119.5 | LL-13 generator. |
 | `memory_read_pipeline_check` | any | — | Registered-read memory modules must |
 | `metadata_content_substance_check` | any | — | guard against empty / near-empty |
 | `metal_fill_density_check` | any | — | Verify metal fill was inserted and density is within bounds. |
 | `migrate_to_canonical_taxonomy` | any | — | one-shot migration tool that moves |
+| `migrate_to_layout_p` | any | — | pre-v2 → Layout P project migration. |
 | `mixed_signal_cosim_check` | any | — | deterministic gate for mixed-signal co-simulation |
 | `mixed_signal_interface_si_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
 | `mixed_signal_merge_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
@@ -268,25 +275,24 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `per_opcode_response_latency_table_check` | any | v0.119.30 | gate (LL-33) catching |
 | `periodic_signal_required_check` | any | — | Verify that for every protocol-mandated |
 | `periodic_timer_vs_rx_activity_check` | any | — | Periodic TX-triggering timer |
-| `phase1_consistency_check` | any | — | Cross-layer consistency gate (K4). |
-| `phase1_doc_presence_check` | any | Wave 8 | Fail if fewer than 10 Phase-1 layer docs exist. |
-| `phase1_input_vs_generated_completeness_check` | any | v0.60 | Phase 1 coverage gate |
-| `phase1_k5_quality_check` | any | — | catch the 6 K5 issues found by real Phase-2 synth. |
-| `phase1_one_shot_runner` | any | — | Phase 1 (Path A: prompt → L1-L13 JSON + human MD). |
-| `phase1_provenance_presence_check` | any | — | Phase 1 D6-traceability gate. |
-| `phase1_quality_parity_check` | any | v0.50 | v0.50 gate |
-| `phase23_completion_self_audit_check` | any | v0.109 | v0.109 mandatory self-audit gate. |
-| `phase23_one_shot_runner` | any | — | Phase 2 + Phase 3 chain. |
-| `phase2_one_shot_runner` | any | — | thin chain of Phase 1 (doc-extraction) + Phase 2. |
 | `phase1_all_l_docs_present_check` | any | Wave 23 | gate (Wave 23, v0.119.55). |
+| `phase1_consistency_check` | any | — | Cross-layer consistency gate (K4). |
 | `phase1_coverage_report_gen` | any | Wave 4 | Phase 1 (doc-extraction) extraction-coverage REPORT. |
 | `phase1_coverage_report_present_check` | any | Wave 5 | gate (BACKLOG-v13 Wave 5). |
 | `phase1_doc_content_implementation_completeness_check` | any | Wave 47 | Wave 47 |
-| `phase1_gate_contract_check` | any | v0.74 | Meta-checker for Phase-2a deterministic gates. |
 | `phase1_doc_input_completeness_check` | any | — | strong gate |
+| `phase1_doc_one_shot_runner` | any | Wave 49 | chip-AGNOSTIC Phase 1 (doc-extraction) orchestrator. |
+| `phase1_doc_presence_check` | any | Wave 8 | Fail if fewer than 10 Phase-1 layer docs exist. |
+| `phase1_gate_contract_check` | any | v0.74 | Meta-checker for Phase-2a deterministic gates. |
+| `phase1_input_vs_generated_completeness_check` | any | v0.60 | Phase 1 coverage gate |
+| `phase1_k5_quality_check` | any | — | catch the 6 K5 issues found by real Phase-2 synth. |
 | `phase1_no_waivers_used_check` | any | Wave 23 | gate (Wave 23, v0.119.55). |
-| `phase1_one_shot_runner` | any | Wave 49 | chip-AGNOSTIC Phase 1 (doc-extraction) orchestrator. |
+| `phase1_one_shot_runner` | any | — | Phase 1 unified dispatcher. |
+| `phase1_provenance_presence_check` | any | — | Phase 1 D6-traceability gate. |
+| `phase1_quality_parity_check` | any | v0.50 | v0.50 gate |
 | `phase1_structured_field_substance_check` | any | — | Tier-2 sibling of the |
+| `phase23_completion_self_audit_check` | any | v0.109 | v0.109 mandatory self-audit gate. |
+| `phase23_one_shot_runner` | any | — | Phase 2 + Phase 3 chain. |
 | `phase2_one_shot_runner` | any | Wave 45 | Phase 2 main impl (L1-L13 → RTL → SOF → <half-duplex-tester>). |
 | `phase3_backend_step` | any | — | single dispatcher for Phase 3 backend per-step entries. |
 | `phase3_one_shot_runner` | any | — | single-call orchestrator for Phase 3 (synth → GDS). |
@@ -314,7 +320,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `qsf_gen` | any | Wave 72 | auto-generate Quartus QSF (FPGA pin assignments). |
 | `qsf_open_drain_assignment_check` | any | v0.119.29 | DEPRECATED in v0.119.29. |
 | `quartus_map_audit` | any | — | Scan Quartus .map.rpt for silent-failure indicators. |
-| `readme_class_detector` | any | — | README-token IC class detector (v1.6.111). |
+| `readme_class_detector` | any | — | README-token IC class detector (v1.6.522). |
 | `readme_deep_parser` | any | — | Capability 1 of GitHub issue #27. |
 | `readme_ppa_extractor` | any | — | for #36 Bug 10: PPA implementation-results table picker. |
 | `readme_submodule_extractor` | any | — | for #36 Bug 5: README markdown file-list submodule extractor. |
@@ -470,7 +476,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (389 programs)
+### `any` (395 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -496,6 +502,7 @@ _(no programs in this group)_
 - `analog_hw_spice_correlation_check` — deterministic gate for HW-vs-SPICE correlation
 - `analog_netlist_pdk_check` — deterministic gate for SPICE netlist PDK compliance
 - `analog_one_shot_runner` — A1..A8 analog flow (parallel to Phase 2 digital).
+- `analog_oracle_compare` — deterministic analog-benchmark comparator.
 - `analog_per_block_pv_completeness_check` — strict per-block deliverable  _[Wave 93]_
 - `analog_pre_vs_post_layout_check` — deterministic gate for pre/post-layout comparison
 - `analog_real_corner_sweep` — v1.6.207 (ORGANIC-20260512).
@@ -619,6 +626,7 @@ _(no programs in this group)_
 - `gap_reset_granularity_check` — deterministic compliance check derived from
 - `gate_evidence_completeness_check` — v0.100 L1  _[v0.100]_
 - `gate_utils` — Shared helpers for v0.117+ structural-RTL gates.  _[v0.117]_
+- `gds_ip_attribution` — Embed IP attribution metadata into the foundry
 - `gds_size_check` — Deterministic GDS file existence and size checker.
 - `half_duplex_frame_end_idle_reset_check` — structural-RTL gate for
 - `half_duplex_response_window_check` — LL-4.
@@ -634,6 +642,11 @@ _(no programs in this group)_
 - `integration_spec_audit` — Deterministic compliance check for integration-spec-gen.
 - `interface_encoding_audit` — Detect gray-code vs binary encoding mismatches
 - `internal_vs_external_timing_check` — L8 must separate host-side from DUT-side timing.
+- `ip_catalog_pull` — Pull catalog IP RTL files into project's canonical
+- `ip_catalog_query` — IP catalog query + match + pull engine.
+- `ip_catalog_reproduce_pull` — Reproducibility check.
+- `ip_catalog_upstream_audit` — Verify catalog manifests against canonical
+- `ip_catalog_validate` — Validate catalog manifests against schema +
 - `ir_drop_report_check` — wrapper for eda_report_audit --mode ir_drop.
 - `isolation_cell_required_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
 - `json_schema_check` — Deterministic JSON schema key checker.
@@ -671,11 +684,11 @@ _(no programs in this group)_
 - `marketplace_version_sync_check` — marketplace_version_sync_check.py
 - `mask_application_check` — Verify any AND-mask rule the spec declares
 - `mcp_execution_verify` — Deterministic MCP tool execution verifier.
-- `md905_bfm_gen` — LL-13 generator.  _[v0.119.5]_
 - `memory_read_pipeline_check` — Registered-read memory modules must
 - `metadata_content_substance_check` — guard against empty / near-empty
 - `metal_fill_density_check` — Verify metal fill was inserted and density is within bounds.
 - `migrate_to_canonical_taxonomy` — one-shot migration tool that moves
+- `migrate_to_layout_p` — pre-v2 → Layout P project migration.
 - `mixed_signal_cosim_check` — deterministic gate for mixed-signal co-simulation
 - `mixed_signal_interface_si_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
 - `mixed_signal_merge_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
@@ -709,25 +722,24 @@ _(no programs in this group)_
 - `per_opcode_response_latency_table_check` — gate (LL-33) catching  _[v0.119.30]_
 - `periodic_signal_required_check` — Verify that for every protocol-mandated
 - `periodic_timer_vs_rx_activity_check` — Periodic TX-triggering timer
-- `phase1_consistency_check` — Cross-layer consistency gate (K4).
-- `phase1_doc_presence_check` — Fail if fewer than 10 Phase-1 layer docs exist.  _[Wave 8]_
-- `phase1_input_vs_generated_completeness_check` — Phase 1 coverage gate  _[v0.60]_
-- `phase1_k5_quality_check` — catch the 6 K5 issues found by real Phase-2 synth.
-- `phase1_one_shot_runner` — Phase 1 (Path A: prompt → L1-L13 JSON + human MD).
-- `phase1_provenance_presence_check` — Phase 1 D6-traceability gate.
-- `phase1_quality_parity_check` — v0.50 gate  _[v0.50]_
-- `phase23_completion_self_audit_check` — v0.109 mandatory self-audit gate.  _[v0.109]_
-- `phase23_one_shot_runner` — Phase 2 + Phase 3 chain.
-- `phase2_one_shot_runner` — thin chain of Phase 1 (doc-extraction) + Phase 2.
 - `phase1_all_l_docs_present_check` — gate (Wave 23, v0.119.55).  _[Wave 23]_
+- `phase1_consistency_check` — Cross-layer consistency gate (K4).
 - `phase1_coverage_report_gen` — Phase 1 (doc-extraction) extraction-coverage REPORT.  _[Wave 4]_
 - `phase1_coverage_report_present_check` — gate (BACKLOG-v13 Wave 5).  _[Wave 5]_
 - `phase1_doc_content_implementation_completeness_check` — Wave 47  _[Wave 47]_
-- `phase1_gate_contract_check` — Meta-checker for Phase-2a deterministic gates.  _[v0.74]_
 - `phase1_doc_input_completeness_check` — strong gate
+- `phase1_doc_one_shot_runner` — chip-AGNOSTIC Phase 1 (doc-extraction) orchestrator.  _[Wave 49]_
+- `phase1_doc_presence_check` — Fail if fewer than 10 Phase-1 layer docs exist.  _[Wave 8]_
+- `phase1_gate_contract_check` — Meta-checker for Phase-2a deterministic gates.  _[v0.74]_
+- `phase1_input_vs_generated_completeness_check` — Phase 1 coverage gate  _[v0.60]_
+- `phase1_k5_quality_check` — catch the 6 K5 issues found by real Phase-2 synth.
 - `phase1_no_waivers_used_check` — gate (Wave 23, v0.119.55).  _[Wave 23]_
-- `phase1_one_shot_runner` — chip-AGNOSTIC Phase 1 (doc-extraction) orchestrator.  _[Wave 49]_
+- `phase1_one_shot_runner` — Phase 1 unified dispatcher.
+- `phase1_provenance_presence_check` — Phase 1 D6-traceability gate.
+- `phase1_quality_parity_check` — v0.50 gate  _[v0.50]_
 - `phase1_structured_field_substance_check` — Tier-2 sibling of the
+- `phase23_completion_self_audit_check` — v0.109 mandatory self-audit gate.  _[v0.109]_
+- `phase23_one_shot_runner` — Phase 2 + Phase 3 chain.
 - `phase2_one_shot_runner` — Phase 2 main impl (L1-L13 → RTL → SOF → <half-duplex-tester>).  _[Wave 45]_
 - `phase3_backend_step` — single dispatcher for Phase 3 backend per-step entries.
 - `phase3_one_shot_runner` — single-call orchestrator for Phase 3 (synth → GDS).
@@ -755,7 +767,7 @@ _(no programs in this group)_
 - `qsf_gen` — auto-generate Quartus QSF (FPGA pin assignments).  _[Wave 72]_
 - `qsf_open_drain_assignment_check` — DEPRECATED in v0.119.29.  _[v0.119.29]_
 - `quartus_map_audit` — Scan Quartus .map.rpt for silent-failure indicators.
-- `readme_class_detector` — README-token IC class detector (v1.6.111).
+- `readme_class_detector` — README-token IC class detector (v1.6.522).
 - `readme_deep_parser` — Capability 1 of GitHub issue #27.
 - `readme_ppa_extractor` — for #36 Bug 10: PPA implementation-results table picker.
 - `readme_submodule_extractor` — for #36 Bug 5: README markdown file-list submodule extractor.
