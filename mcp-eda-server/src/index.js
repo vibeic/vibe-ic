@@ -88,7 +88,7 @@ function writeManifest(workDir, entry) {
 
 // Helper: SHA-256 of a host-side file (used for provenance hashing)
 import { createHash } from "crypto";
-import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync as require_fs_writeFileSync } from "fs";
+import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync as require_fs_writeFileSync, unlinkSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 // Wave 33 (mcp-eda v0.99.9): top-level spawnSync import so the
@@ -3281,7 +3281,10 @@ exit
     // security hardening: write the TCL to a temp file and run vivado via
     // argv (no shell) — replaces `vivado ... -source <(echo '...')`, which
     // relied on bash process-substitution under execSync's /bin/sh and put
-    // bit_file through a shell.
+    // bit_file through a shell. The temp file is unlinked in `finally` so a
+    // long-running mcp server doesn't accumulate one `vivado_program_*.tcl`
+    // per Vivado-tool call (the legacy `<(echo ...)` form left nothing on
+    // disk; this preserves that property).
     const _tclPath = join(process.env.TMPDIR || "/tmp", `vivado_program_${randomUUID()}.tcl`);
     let result;
     try {
@@ -3297,6 +3300,10 @@ exit
       else result = { success: false, output: merged, error: r.stderr || `exited with status ${r.status}` };
     } catch (err) {
       result = { success: false, output: err.stdout || "", error: err.stderr || err.message };
+    } finally {
+      // Best-effort cleanup; tolerate the file having never been written
+      // (e.g. require_fs_writeFileSync threw on a read-only TMPDIR).
+      try { unlinkSync(_tclPath); } catch (_) { /* not present — fine */ }
     }
     const deviceMatch = result.output.match(/Device\s*(?:\d+)?:\s*(\S+)/i) ||
                         result.output.match(/Info.*?:\s*(EP\S+|xc\S+)/i);
