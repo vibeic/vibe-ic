@@ -6,16 +6,14 @@ description: Closed-loop core-agent that fixes plugin issues filed by the field-
 
 <!-- WAVE_76_CHIP_AGNOSTIC_BANNER -->
 
-> **Case-study notation.** This skill cites the EXAMPLE_CHIP / EXAMPLE_TESTER /
-> MDV-A1101 BENCHMARK_A reference project as concrete evidence for the
-> rules below. The rules themselves are chip-AGNOSTIC and apply to
-> any IC of the matching `ic_class` (see
+> **Case-study notation.** This skill uses `IC-A / USB-HID tester /
+> BENCH-A` as the canonical example chip — substitute your own IC
+> name and host-tester name. The rules themselves are chip-AGNOSTIC
+> and apply to any IC of the matching `ic_class` (see
 > `vibe-ic-marketplace/plugins/vibe-ic-d/programs/ic_class_profile.py`).
-> When you adopt this skill on a different IC, swap `EXAMPLE_CHIP` →
-> `<your IC name>` and `EXAMPLE_TESTER` → `<your host-tester name>`; the
-> structural gates and rule bodies do not depend on those SKUs.
-> See `docs/design/CASE_STUDIES/EXAMPLE_CHIP_*.md` for the full BENCHMARK_A
-> regression history.
+> When you adopt this skill on a different IC, swap `IC-A` →
+> `<your IC name>` and `USB-HID tester` → `<your host-tester name>`;
+> the structural gates and rule bodies do not depend on those SKUs.
 
 # Core-Agent Loop — Closed-Loop Plugin Issue Fixing
 
@@ -31,8 +29,8 @@ label, and waits for the field-agent to verify on real hardware.
 
 The loop is **chip-AGNOSTIC**: fixes describe general plugin
 behaviour (regex broadens, schema accepts more synonyms, gate
-recognises canonical pattern); no fix references `EXAMPLE_CHIP`,
-`BENCHMARK_A`, `example_vendor`, `example_tester`, `aid`, or any vendor IC name as
+recognises canonical pattern); no fix references `IC-A`,
+`BENCH-A`, `Vendor`, `usb_hid_tester`, `aid`, or any vendor IC name as
 detection logic.
 
 ## The four-step loop
@@ -71,7 +69,7 @@ For each actionable issue:
 3. Write a chip-AGNOSTIC fix:
    - **NO chip-specific path literals** as detection logic.
      Forbidden tokens in any new code hunk:
-     `EXAMPLE_CHIP`, `BENCHMARK_A`, `example_vendor`, `example_tester`, `aid` (word-bounded).
+     `IC-A`, `BENCH-A`, `Vendor`, `usb_hid_tester`, `aid` (word-bounded).
    - Heuristics need **deny-list / length-floor / structural
      check**, not chip-class string literals.
    - Fix must work across **every benchmark chip**, not just the

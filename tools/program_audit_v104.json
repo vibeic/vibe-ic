@@ -1,0 +1,1541 @@
+[
+  {
+    "program": "_phase1_sentinel.py",
+    "phase": "phase1",
+    "trigger": "after phase1 / phase1 doc-gen",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "acceptance_gate_cli.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "acceptance_gate_full.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "acceptance_gate_registry.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "assertion_property_check.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "backlog_sanitize_check.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "behavioral_evidence_per_spec_item_check.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "billing_log.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "bist_window_calculator.py",
+    "phase": "phase2-sim",
+    "trigger": "after simulation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "bit_count_modulo_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "bit_level_full_stack_tb_check.py",
+    "phase": "phase2-sim",
+    "trigger": "after simulation",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "bitwidth_consistency_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "bus_turnaround_consumes_spec_constant_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "cdc_async_input_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before synthesis",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "cdc_crossing_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before synthesis",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "class_convergence_eval.py",
+    "phase": "meta",
+    "trigger": "on-demand (training/analysis)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "clock_scale_consistency_check.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "cmd_arg_range_validation_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "cmd_protocol_crc_verify.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "cmd_response_conformance_check.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "constants_validation.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "corner_coverage_audit.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "coverage_metric_check.py",
+    "phase": "phase2-sim",
+    "trigger": "after simulation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "crc_bitorder_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "crc_completeness_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "crc_engine_isolation_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "crc_residual_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "crc_seed_consistency_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "crc_vector_gen.py",
+    "phase": "phase2-sim",
+    "trigger": "after simulation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "cross_constant_invariant_check.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "dead_timing_constant_warn.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "decision_log_append.py",
+    "phase": "meta",
+    "trigger": "on-demand (training/analysis)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "decision_log_extract.py",
+    "phase": "meta",
+    "trigger": "on-demand (training/analysis)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "def_stage_progression_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "derived_clock_sdc_required_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "device_response_no_br_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "dispatch_register_default_reset_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "doc_extract.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "drc_rdb_summarize.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "drc_report_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "eda_log_check.py",
+    "phase": "infra",
+    "trigger": "at flow checkpoints",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "flow-gate"
+  },
+  {
+    "program": "eda_report_audit.py",
+    "phase": "infra",
+    "trigger": "at flow checkpoints",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "flow-gate"
+  },
+  {
+    "program": "em_report_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "experience_unit_t5_capture.py",
+    "phase": "meta",
+    "trigger": "on-demand (training/analysis)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "experience_unit_t6_capture.py",
+    "phase": "meta",
+    "trigger": "on-demand (training/analysis)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "fault_atpg_run.py",
+    "phase": "phase3",
+    "trigger": "after DFT insertion",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "flow_compliance_check.py",
+    "phase": "infra",
+    "trigger": "at flow checkpoints",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "flow-gate"
+  },
+  {
+    "program": "flow_stage_check.py",
+    "phase": "infra",
+    "trigger": "at flow checkpoints",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "flow-gate"
+  },
+  {
+    "program": "fpga_async_input_synchronizer_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "fpga_on_board_attestation_check.py",
+    "phase": "phase2-fpga",
+    "trigger": "after FPGA compile/program",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "fpga_program_chain_attest_check.py",
+    "phase": "phase2-fpga",
+    "trigger": "after FPGA compile/program",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "fpga_pullup_lint.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "fpga_qsf_lint.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "fpga_verification_audit.py",
+    "phase": "phase2-fpga",
+    "trigger": "after FPGA compile/program",
+    "mandatory_today": false,
+    "optional_in_flow": true,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "fpga_wrapper_input_polluter_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": true,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "fresh_agent_provenance_check.py",
+    "phase": "phase2-fpga",
+    "trigger": "after FPGA compile/program",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "fsm_error_invariant.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "functional_state_transition_coverage_check.py",
+    "phase": "phase2-sim",
+    "trigger": "after simulation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "gap_reset_granularity_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "gate_evidence_completeness_check.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "gds_size_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "handshake_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "hardware_pass_attestation_check.py",
+    "phase": "phase2-fpga",
+    "trigger": "after FPGA compile/program",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "hw_vs_rtl_verdict_check.py",
+    "phase": "phase2-fpga",
+    "trigger": "after FPGA compile/program",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "input_docs_coverage_check.py",
+    "phase": "phase1",
+    "trigger": "after phase1 / phase1 doc-gen",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "integration_spec_audit.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "interface_encoding_audit.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "internal_vs_external_timing_check.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": true,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "ir_drop_report_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "json_schema_check.py",
+    "phase": "phase1",
+    "trigger": "after phase1 / phase1 doc-gen",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "k3_class_miner.py",
+    "phase": "meta",
+    "trigger": "on-demand (training/analysis)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "k3_patch_proposer.py",
+    "phase": "meta",
+    "trigger": "on-demand (training/analysis)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "k3_view_resolve.py",
+    "phase": "meta",
+    "trigger": "on-demand (training/analysis)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "l10_tb_conformance_check.py",
+    "phase": "phase2-sim",
+    "trigger": "after simulation",
+    "mandatory_today": false,
+    "optional_in_flow": true,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "l12_sequence_implementation_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": true,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "l12_tb_coverage_check.py",
+    "phase": "phase2-sim",
+    "trigger": "after simulation",
+    "mandatory_today": false,
+    "optional_in_flow": true,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "l9_completeness_check.py",
+    "phase": "phase1",
+    "trigger": "after phase1 / phase1 doc-gen",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "l9_response_delay_schema_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "layer_extension_presence_check.py",
+    "phase": "phase1",
+    "trigger": "after phase1 / phase1 doc-gen",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "lvs_report_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "manifest_leak_check.py",
+    "phase": "phase1",
+    "trigger": "after phase1 / phase1 doc-gen",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "mask_application_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "mcp_execution_verify.py",
+    "phase": "infra",
+    "trigger": "at flow checkpoints",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "flow-gate"
+  },
+  {
+    "program": "mcp_tool_registry.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "memory_gc.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "memory_read_pipeline_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": true,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "module_port_audit.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "nba_addr_read_race_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": true,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "no_protocol_consistency_check.py",
+    "phase": "phase1",
+    "trigger": "after phase1 / phase1 doc-gen",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "oe_pattern_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "openroad_drc_report_normalize.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "openroad_tcl_deprecation_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "otp_image_check.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "otp_write_lock_gate_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": true,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "output_artifact_check.py",
+    "phase": "infra",
+    "trigger": "at flow checkpoints",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "flow-gate"
+  },
+  {
+    "program": "packet_length_check_present.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": true,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "pattern_effectiveness_eval.py",
+    "phase": "meta",
+    "trigger": "on-demand (training/analysis)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "payload_bit_position_check.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "pdk_consistency_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "periodic_signal_required_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "periodic_timer_vs_rx_activity_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": true,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "phase1_consistency_check.py",
+    "phase": "phase1",
+    "trigger": "after phase1 / phase1 doc-gen",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "phase1_doc_presence_check.py",
+    "phase": "phase1",
+    "trigger": "after phase1 / phase1 doc-gen",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "phase1_k5_quality_check.py",
+    "phase": "phase1",
+    "trigger": "after phase1 / phase1 doc-gen",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "phase1_quality_parity_check.py",
+    "phase": "phase1",
+    "trigger": "after phase1 / phase1 doc-gen",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "phase1_gate_contract_check.py",
+    "phase": "phase1",
+    "trigger": "after phase1 / phase1 doc-gen",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "phy_counter_audit.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "plugin_crypto.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "plugin_manifest.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "plugin_registry_client.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "plugin_self_leak_check.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "plugin_sign.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "power_report_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "practical_notes_proposer.py",
+    "phase": "meta",
+    "trigger": "on-demand (training/analysis)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "practical_notes_specificity_check.py",
+    "phase": "meta",
+    "trigger": "on-demand (training/analysis)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "pre_awake_silence_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "protocol_delimiter_consistency_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "protocol_gap_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "provenance_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "provenance_logger.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "pulse_decoder_edge_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": true,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "quartus_map_audit.py",
+    "phase": "phase2-fpga",
+    "trigger": "after FPGA compile/program",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "reference_parity_eval.py",
+    "phase": "meta",
+    "trigger": "on-demand (training/analysis)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "release_audit.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "reset_dependency_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before synthesis",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "response_payload_template_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "rig_topology_disclosure_check.py",
+    "phase": "phase2-fpga",
+    "trigger": "before FPGA compile",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "rom_init_lint.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "rsp_example_otp_consistency_check.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": true,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "rtl_bug_report_schema_check.py",
+    "phase": "phase2-fpga",
+    "trigger": "after FPGA compile/program",
+    "mandatory_today": false,
+    "optional_in_flow": true,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "rtl_hygiene_lint.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "rtl_precheck_gate.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "rtl_unit_test_coverage_check.py",
+    "phase": "phase2-sim",
+    "trigger": "after simulation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "rx_tolerance_sweep.py",
+    "phase": "phase2-sim",
+    "trigger": "after simulation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "scope_periodic_pulse_check.py",
+    "phase": "phase2-fpga",
+    "trigger": "after FPGA compile/program",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "scoreboard_to_csv.py",
+    "phase": "meta",
+    "trigger": "on-demand (training/analysis)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "sdc_syntax_check.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "self_rx_mask_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "signoff_audit.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "skill_compliance_triangle_check.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "spec_response_delay_check.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": true,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "sta_report_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "stage1_compliance.py",
+    "phase": "infra",
+    "trigger": "at flow checkpoints",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "flow-gate"
+  },
+  {
+    "program": "stage2_compliance.py",
+    "phase": "infra",
+    "trigger": "at flow checkpoints",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "flow-gate"
+  },
+  {
+    "program": "stage3_compliance.py",
+    "phase": "infra",
+    "trigger": "at flow checkpoints",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "flow-gate"
+  },
+  {
+    "program": "stage4_compliance.py",
+    "phase": "infra",
+    "trigger": "at flow checkpoints",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "flow-gate"
+  },
+  {
+    "program": "sustained_vs_edge_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "sv_compat_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "synth_netlist_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "synth_wrapper_check.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "tapeout_signoff_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "testbench_exists_check.py",
+    "phase": "phase2-sim",
+    "trigger": "after simulation",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "tester_oracle_health_check.py",
+    "phase": "phase2-fpga",
+    "trigger": "after FPGA compile/program",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "tester_verdict_frame_decode.py",
+    "phase": "phase2-fpga",
+    "trigger": "after FPGA compile/program",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "threshold_range_contiguity_check.py",
+    "phase": "phase1",
+    "trigger": "after L1-L13 generation",
+    "mandatory_today": false,
+    "optional_in_flow": true,
+    "in_rtl_precheck_gate": false,
+    "category": "phase1-gate"
+  },
+  {
+    "program": "timer_freeze_after_state_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": true,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "trailing_delimiter_completeness_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "transient_signal_latch_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "tristate_bus_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "tristate_self_rx_mask_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": true,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "trust_tier_recompute.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "upf_syntax_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "verilator_coverage_measure.py",
+    "phase": "phase2-sim",
+    "trigger": "after simulation",
+    "mandatory_today": false,
+    "optional_in_flow": true,
+    "in_rtl_precheck_gate": false,
+    "category": "sim-coverage"
+  },
+  {
+    "program": "vibe_ic_plugin.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "vibeic_mcp_adapter.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "vibeic_registry_server.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "waivers_schema_check.py",
+    "phase": "infra",
+    "trigger": "at flow checkpoints",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "flow-gate"
+  },
+  {
+    "program": "warn_acceptance_policy_check.py",
+    "phase": "phase2-structural-rtl",
+    "trigger": "after spec-to-rtl, before eda_lint",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "structural-rtl"
+  },
+  {
+    "program": "xlsx_extract.py",
+    "phase": "infra",
+    "trigger": "on-demand (CI/release/marketplace)",
+    "mandatory_today": false,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "infra"
+  },
+  {
+    "program": "yosys_hilomap_required_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  },
+  {
+    "program": "yosys_script_template_check.py",
+    "phase": "phase3",
+    "trigger": "after respective backend step",
+    "mandatory_today": true,
+    "optional_in_flow": false,
+    "in_rtl_precheck_gate": false,
+    "category": "backend-signoff"
+  }
+]

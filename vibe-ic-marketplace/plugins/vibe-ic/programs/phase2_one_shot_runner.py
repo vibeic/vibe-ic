@@ -2,7 +2,7 @@
 """phase2_one_shot_runner.py — Phase 2 main impl (L1-L13 → RTL → SOF → <half-duplex-tester>).
 
 Phase 2 consumes Phase 1 (doc-extraction)'s `generated_docs/L*.json` and produces:
-  - rtl/*.sv|.v               (deterministic EXAMPLE_PROTOCOL-class RTL via aid_class_rtl_gen)
+  - rtl/*.sv|.v               (deterministic AID-class RTL via aid_class_rtl_gen)
   - sim/reference_tb/*.log    (iverilog protocol TB; ECO loop)
   - sim_full_stack/*.json     (oracle for protocol_ip_simulation_required_check)
   - synth/netlist_yosys.v
@@ -20,7 +20,7 @@ historical context-budget bottleneck.
 Pipeline (chip-AGNOSTIC, but skip-on-mismatch when class detection fails):
 
     1. detect IC class from generated_docs/L*.json
-    2. EXAMPLE_PROTOCOL-class branch: call aid_class_rtl_gen.py --spec-compliance
+    2. AID-class branch: call aid_class_rtl_gen.py --spec-compliance
        (Wave 45/46 hardware-verified baseline)
        Other branches: SKIP step 2 with explicit verdict
     3. iverilog reference TB (vibe-ic-d/tools/protocol_tb/aid_class_reference_tb.v)
@@ -32,7 +32,7 @@ Pipeline (chip-AGNOSTIC, but skip-on-mismatch when class detection fails):
     5. quartus FPGA compile via Docker (when iic-eda container is up)
        outputs <project>/fpga/output_files/<top>.sof
     6. device burn via terasic-de10lite driver (if SOF + USB-Blaster present)
-    7. <half-duplex-tester> connect_test via example_vendor-<half-duplex-tester> driver (if HID present)
+    7. <half-duplex-tester> connect_test via vendor-<half-duplex-tester> driver (if HID present)
        repeat N runs; PASS = same verdict-byte across all runs matching
        the value declared in L9 (chip-agnostic — does NOT hardcode the
        expected verdict; reads `expected_verdict_byte_hex` from L9
@@ -61,13 +61,13 @@ Exit codes:
     2  IO / arg / IC-class mismatch error
 
 Limitations (intentional, will be relaxed in future waves):
-    - EXAMPLE_PROTOCOL-class branch only; non-EXAMPLE_PROTOCOL classes SKIP RTL gen step
+    - AID-class branch only; non-AID classes SKIP RTL gen step
     - mcp-eda Docker tools wrap shell commands — Quartus / KLayout / Magic /
       Netgen must be in the iic-eda container. (They are, in
       hpretl/iic-osic-tools:latest.)
     - Hardware steps require:
         - DE10-Lite plugged in (USB-Blaster detected by quartus_pgm)
-        - <half-duplex-tester> example_vendor-<half-duplex-tester> USB HID at /dev/hidraw*
+        - <half-duplex-tester> vendor-<half-duplex-tester> USB HID at /dev/hidraw*
       If absent, those steps SKIP with explicit verdict.
 """
 from __future__ import annotations
@@ -388,7 +388,7 @@ def _detect_registered_testers() -> List[str]:
     Used by step_rig_topology_skeleton to auto-pick tester.name when
     exactly one tester is registered with the MCP-EDA-server, so a
     fresh project run doesn't leave tester.name as `__TODO__` (which
-    example_tester_verify treats as PENDING-rather-than-SKIP and flags as a
+    usb_hid_tester_verify treats as PENDING-rather-than-SKIP and flags as a
     blocker). chip-AGNOSTIC — discovery is by filesystem shape, not
     by chip class.
     """
@@ -427,7 +427,7 @@ def step_rig_topology_skeleton(project: Path) -> StepResult:
     For a fresh general-user project that doesn't declare a rig, we emit
     a skeleton with the required fields filled with chip-AGNOSTIC
     defaults (DE10-Lite + USB-Blaster) and the verdict-byte semantics
-    flagged as __TODO__ so example_tester_verify cleanly SKIPs until the user
+    flagged as __TODO__ so usb_hid_tester_verify cleanly SKIPs until the user
     fills them in. Existing rig_topology.json files are left alone.
     """
     t0 = time.time()
@@ -481,7 +481,7 @@ def step_rig_topology_skeleton(project: Path) -> StepResult:
                 "<dir-name under mcp-eda-server/src/devices/tester/> | "
                 "'n/a' | 'none' | 'no_hardware' | 'digital_only' "
                 "(any of the latter four marks the project as having no "
-                "tester rig and example_tester_verify will SKIP permanently)"),
+                "tester rig and usb_hid_tester_verify will SKIP permanently)"),
             "_auto_detected_note": tester_note,
             "name": tester_name,
             "vendor": "__TODO__" if tester_name in ("__TODO__", "none") else "auto-picked",
@@ -575,7 +575,7 @@ def detect_ic_class(project: Path) -> Tuple[str, str]:
     ``"protocol_overview": {"half_duplex": false, ...}`` even for a
     non-half-duplex IC). The substring scanner could not distinguish
     KEY-presence from VALUE-truth, so every IC with conformant Phase-2a
-    output scored ≥2 and was mis-routed into the EXAMPLE_PROTOCOL-class generator.
+    output scored ≥2 and was mis-routed into the AID-class generator.
     Empirical scope: 10/10 fresh-agent benchmarks across crypto cores /
     storage / networking / debug IPs all FAILed identically before any
     backend tool ran.
@@ -583,7 +583,7 @@ def detect_ic_class(project: Path) -> Tuple[str, str]:
     The canonical classifier in ``ic_class_profile`` is schema-aware
     (reads ``protocol_overview.half_duplex`` as a boolean, walks
     ``L3.opcodes`` for actual entries, distinguishes pure-analog /
-    bare-FPGA / digital-cmd-driven / mixed-signal-OTP / EXAMPLE_PROTOCOL-class).
+    bare-FPGA / digital-cmd-driven / mixed-signal-OTP / AID-class).
     Adapter shape: keep the Tuple[str, str] contract used by the
     registry lookup and step_rtl_gen so no other call sites change.
     """
@@ -1061,7 +1061,7 @@ def step_reference_tb(project: Path, top_name: str = "chip_top") -> StepResult:
     # OTP image hex — `$readmemh` runs at sim time relative to the cwd
     # when vvp is invoked. We look for any *.hex emitted by Phase 1 (doc-extraction)
     # OTP-content gen and stage it in sim_dir under both its real name
-    # AND the canonical name the EXAMPLE_PROTOCOL-class generator emits ("apple.hex").
+    # AND the canonical name the AID-class generator emits ("apple.hex").
     # If no OTP image exists, the reference TB will read X-state and
     # ID bytes will not match — we surface this as a SKIP with the
     # actionable remediation instead of a confusing FAIL.
@@ -1560,7 +1560,7 @@ def step_sdc_gen(project: Path, top_name: str = "chip_top",
                  ic_class: Optional[str] = None) -> StepResult:
     # v1.6.97 (issue #29 Bug 3, P0) — always force-regenerate the SDC.
     # Pre-v1.6.97 the runner short-circuited when any *.sdc existed
-    # under fpga_early_dir, which masked the EXAMPLE_PROTOCOL-class 25 MHz default
+    # under fpga_early_dir, which masked the AID-class 25 MHz default
     # on re-runs of projects whose iter-A had been built with an older
     # plugin (stale 50 MHz / 20 ns SDC lingered). SDC generation is fast
     # (≪1 s); idempotency through caching is not worth the failure mode
@@ -1837,7 +1837,7 @@ def step_fpga_burn(project: Path, top_name: str) -> StepResult:
                       f"rc={rc} stderr={err[-800:]} stdout={out[-800:]}")
 
 
-def step_example_tester_verify(project: Path, runs: int = 5,
+def step_usb_hid_tester_verify(project: Path, runs: int = 5,
                       verdict_byte_offset: int = 6,
                       prior_fpga_burn_status: Optional[str] = None
                       ) -> StepResult:
@@ -1869,7 +1869,7 @@ def step_example_tester_verify(project: Path, runs: int = 5,
     # rather than silently passing on a stale board.
     if prior_fpga_burn_status is not None and prior_fpga_burn_status != "PASS":
         return StepResult(
-            "example_tester_verify", "STALE_BOARD_DETECTED",
+            "usb_hid_tester_verify", "STALE_BOARD_DETECTED",
             time.time() - t0,
             (f"fpga_burn step in this run = {prior_fpga_burn_status!r}; "
              "host-tester would observe a stale board bitstream burned "
@@ -1907,7 +1907,7 @@ def step_example_tester_verify(project: Path, runs: int = 5,
     _N_A_SENTINEL_VALUES = ("n/a",)
     norm_tester = (tester_name or "").strip().lower()
     if not tester_name or tester_name == "__TODO__":
-        return StepResult("example_tester_verify", "SKIP",
+        return StepResult("usb_hid_tester_verify", "SKIP",
                           time.time() - t0,
                           "rig_topology.json tester.name is missing or "
                           "__TODO__ — fill it with the lab tester directory "
@@ -1915,12 +1915,12 @@ def step_example_tester_verify(project: Path, runs: int = 5,
                           "before <half-duplex-tester> hardware verify can run; "
                           "set to 'n/a' (or 'none' / 'no_hardware' / "
                           "'digital_only') to mark the project as having no "
-                          "tester rig — example_tester_verify will SKIP cleanly with a "
+                          "tester rig — usb_hid_tester_verify will SKIP cleanly with a "
                           "permanent message instead of an outstanding TODO")
     if norm_tester in _N_A_SENTINEL_VALUES:
         # Issue #29 Bug 4 — explicit "n/a" sentinel → WAIVED.
         return StepResult(
-            "example_tester_verify", "WAIVED",
+            "usb_hid_tester_verify", "WAIVED",
             time.time() - t0,
             f"rig_topology.json tester.name = {tester_name!r} "
             f"declares no rig available for this project; "
@@ -1944,7 +1944,7 @@ def step_example_tester_verify(project: Path, runs: int = 5,
                 },
             })
     if norm_tester in _NO_HARDWARE_VALUES:
-        return StepResult("example_tester_verify", "SKIP",
+        return StepResult("usb_hid_tester_verify", "SKIP",
                           time.time() - t0,
                           f"rig_topology.json tester.name = {tester_name!r} "
                           f"declares no hardware tester for this project; "
@@ -1952,7 +1952,7 @@ def step_example_tester_verify(project: Path, runs: int = 5,
                           f"inapplicable here (this is NOT a TODO)")
     drv = DEVICES_ROOT / "tester" / tester_name / "driver.py"
     if not drv.is_file():
-        return StepResult("example_tester_verify", "FAIL",
+        return StepResult("usb_hid_tester_verify", "FAIL",
                           time.time() - t0,
                           f"driver missing: {drv}")
 
@@ -1963,7 +1963,7 @@ def step_example_tester_verify(project: Path, runs: int = 5,
             d = json.loads(f.read_text())
         except Exception:
             continue
-        v = d.get("expected_verdict_byte_hex") or d.get("example_tester_verdict_byte_hex")
+        v = d.get("expected_verdict_byte_hex") or d.get("usb_hid_tester_verdict_byte_hex")
         if isinstance(v, str):
             cand = v.lower().lstrip("0x").strip()
             # Treat unfilled placeholders / non-hex as ABSENT, not as a real
@@ -2025,7 +2025,7 @@ def step_example_tester_verify(project: Path, runs: int = 5,
     retries_used = 0
     fails = 0
     for i in range(runs):
-        # disconnect-then-connect — see memory reference_example_tester_reset_between_sof.md
+        # disconnect-then-connect — see memory reference_usb_hid_tester_reset_between_sof.md
         # Driver expects `cmd_byte` (single hex byte) for the disconnect; the
         # 0xFF DISCONNECT keep-alive resets <half-duplex-tester>'s internal frame state so
         # the next connect_test sees fresh chip output (vs stale verdict).
@@ -2086,7 +2086,7 @@ def step_example_tester_verify(project: Path, runs: int = 5,
             fails += 1
     if expected_hex is None:
         if bad_placeholder is not None:
-            return StepResult("example_tester_verify", "SKIP",
+            return StepResult("usb_hid_tester_verify", "SKIP",
                               time.time() - t0,
                               f"L9.expected_verdict_byte_hex is a placeholder "
                               f"({bad_placeholder!r}) — Phase 1 (doc-extraction) must fill it "
@@ -2098,21 +2098,21 @@ def step_example_tester_verify(project: Path, runs: int = 5,
                               extras={"observed": observed,
                                       "expected": None,
                                       "placeholder": bad_placeholder})
-        return StepResult("example_tester_verify", "SKIP",
+        return StepResult("usb_hid_tester_verify", "SKIP",
                           time.time() - t0,
                           f"no L9.expected_verdict_byte_hex; "
                           f"observed={observed}",
                           extras={"observed": observed,
                                   "expected": None})
     if fails == 0:
-        return StepResult("example_tester_verify", "PASS",
+        return StepResult("usb_hid_tester_verify", "PASS",
                           time.time() - t0,
                           f"{runs}/{runs} runs verdict=0x{expected_hex}"
                           + (f" (retries={retries_used})" if retries_used else ""),
                           extras={"observed": observed,
                                   "expected": expected_hex,
                                   "retries_used": retries_used})
-    return StepResult("example_tester_verify", "FAIL",
+    return StepResult("usb_hid_tester_verify", "FAIL",
                       time.time() - t0,
                       f"{fails}/{runs} runs missed expected 0x{expected_hex}; "
                       f"observed={observed}",
@@ -2375,7 +2375,7 @@ def step_emit_phase2_manifests(project: Path,
         "evidence": (fpga_compile_step.detail if fpga_compile_step
                      else "fpga_compile not run"),
     })
-    example_tester_step = by_name.get("example_tester_verify")
+    usb_hid_tester_step = by_name.get("usb_hid_tester_verify")
     fpga_burn_step = by_name.get("fpga_burn")
 
     # v1.6.207 (#89 P0) — pull bitstream provenance from fpga_burn extras
@@ -2385,8 +2385,8 @@ def step_emit_phase2_manifests(project: Path,
     # plus the existing all_scenarios_passed.  Each piece is sourced from
     # a real step output (anti-fabrication: no synthesised constants —
     # if fpga_burn didn't run we leave fields blank and the gate fails
-    # correctly).  chip-AGNOSTIC: every EXAMPLE_PROTOCOL-class project that runs the
-    # canonical (fpga_burn → example_tester_verify) chain gets the same schema.
+    # correctly).  chip-AGNOSTIC: every AID-class project that runs the
+    # canonical (fpga_burn → usb_hid_tester_verify) chain gets the same schema.
     def _burn_provenance() -> dict:
         e = (fpga_burn_step.extras if fpga_burn_step else None) or {}
         prov = e.get("burn_provenance") or {}
@@ -2433,21 +2433,21 @@ def step_emit_phase2_manifests(project: Path,
                 pass
         return f"{part} (cable={cable}{idx_part})"
 
-    def _scenarios_from_example_tester() -> list:
-        if example_tester_step is None:
+    def _scenarios_from_usb_hid_tester() -> list:
+        if usb_hid_tester_step is None:
             return []
-        extras = example_tester_step.extras or {}
+        extras = usb_hid_tester_step.extras or {}
         observed = extras.get("observed") or []
         expected = extras.get("expected")
         runs = len(observed)
-        if example_tester_step.status == "PASS":
+        if usb_hid_tester_step.status == "PASS":
             result = "PASS"
-        elif example_tester_step.status == "WAIVED":
+        elif usb_hid_tester_step.status == "WAIVED":
             result = "WAIVED"
         else:
-            result = example_tester_step.status or "?"
+            result = usb_hid_tester_step.status or "?"
         sc: dict = {
-            "name": "example_tester_verify",
+            "name": "usb_hid_tester_verify",
             "result": result,
             "runs": runs,
         }
@@ -2458,7 +2458,7 @@ def step_emit_phase2_manifests(project: Path,
         return [sc]
 
     # v1.6.98 (issue #30 Bug 1) — propagate WAIVED tier from
-    # example_tester_verify into on_board_pass.json. v1.6.97 added the WAIVED
+    # usb_hid_tester_verify into on_board_pass.json. v1.6.97 added the WAIVED
     # status at the step level but the manifest writer only honored
     # PASS, so Step 36 (FPGA final sign-off) kept FAILing on
     # PASS_WITH_WAIVERS-class projects (e.g. tester.name="n/a"). Triple
@@ -2471,14 +2471,14 @@ def step_emit_phase2_manifests(project: Path,
     bs_sha = prov.get("sof_sha256")
     board = _board_string(prov)
     burn_at = prov.get("burn_at")
-    scenarios = _scenarios_from_example_tester()
+    scenarios = _scenarios_from_usb_hid_tester()
 
-    if example_tester_step is None:
+    if usb_hid_tester_step is None:
         on_board_manifest = {
             "verdict": "SKIP",
-            "evidence": "example_tester_verify not run",
+            "evidence": "usb_hid_tester_verify not run",
         }
-    elif example_tester_step.status == "PASS":
+    elif usb_hid_tester_step.status == "PASS":
         on_board_manifest = {
             "verdict": "PASS",
             "all_scenarios_passed": True,
@@ -2487,15 +2487,15 @@ def step_emit_phase2_manifests(project: Path,
             "board": board,
             "programmed_at": burn_at,
             "scenarios": scenarios,
-            "evidence": example_tester_step.detail,
+            "evidence": usb_hid_tester_step.detail,
         }
-    elif example_tester_step.status == "WAIVED":
-        # example_tester_verify stashes waiver metadata in extras["waiver"]
+    elif usb_hid_tester_step.status == "WAIVED":
+        # usb_hid_tester_verify stashes waiver metadata in extras["waiver"]
         # (ticket, evidence, reason, review_required) plus
         # extras["all_scenarios_passed"]=True. Pull from there with
         # safe fallbacks so a partially-populated extras dict doesn't
         # crash the manifest writer.
-        waiver = (example_tester_step.extras or {}).get("waiver", {}) or {}
+        waiver = (usb_hid_tester_step.extras or {}).get("waiver", {}) or {}
         on_board_manifest = {
             "verdict": "WAIVED",
             "all_scenarios_passed": True,
@@ -2506,7 +2506,7 @@ def step_emit_phase2_manifests(project: Path,
             "scenarios": scenarios,
             "review_required": bool(waiver.get("review_required", True)),
             "waiver_ticket": waiver.get("ticket", "no-tester-rig-v1.6.97"),
-            "evidence": waiver.get("evidence") or example_tester_step.detail,
+            "evidence": waiver.get("evidence") or usb_hid_tester_step.detail,
         }
     else:
         # FAIL / SKIP / ECO_LOOP / unknown — do NOT promote
@@ -2520,7 +2520,7 @@ def step_emit_phase2_manifests(project: Path,
         if (fpga_burn_step is not None
                 and fpga_burn_step.status == "PASS"):
             on_board_manifest = {
-                "verdict": ("FAIL" if example_tester_step.status == "FAIL"
+                "verdict": ("FAIL" if usb_hid_tester_step.status == "FAIL"
                             else "SKIP"),
                 "all_scenarios_passed": False,
                 "bitstream_path": bs_rel,
@@ -2528,13 +2528,13 @@ def step_emit_phase2_manifests(project: Path,
                 "board": board,
                 "programmed_at": burn_at,
                 "scenarios": scenarios,
-                "evidence": example_tester_step.detail or
-                            f"example_tester_verify status={example_tester_step.status}",
+                "evidence": usb_hid_tester_step.detail or
+                            f"usb_hid_tester_verify status={usb_hid_tester_step.status}",
             }
         else:
             on_board_manifest = {
                 "verdict": "SKIP",
-                "evidence": example_tester_step.detail or f"example_tester_verify status={example_tester_step.status}",
+                "evidence": usb_hid_tester_step.detail or f"usb_hid_tester_verify status={usb_hid_tester_step.status}",
             }
     w("reports/phase2/fpga/on_board_pass.json", on_board_manifest)
 
@@ -2572,19 +2572,19 @@ def step_emit_phase2_manifests(project: Path,
     # required `reports/fpga/on_board_evidence/*.{log,bin,csv,...}` file.
     # The gate refuses JSON-only evidence (anti-fabrication: byte captures
     # must be in a human-readable / raw form, not paraphrased into a
-    # structured manifest). The .log content mirrors example_tester_step.extras
+    # structured manifest). The .log content mirrors usb_hid_tester_step.extras
     # (observed bytes per run + expected hex + timestamp). chip-AGNOSTIC —
-    # any EXAMPLE_PROTOCOL-class project whose example_tester_verify runs and reaches PASS /
+    # any AID-class project whose usb_hid_tester_verify runs and reaches PASS /
     # WAIVED tiers gets the same evidence emission.
-    if example_tester_step is not None and example_tester_step.status in ("PASS", "WAIVED"):
-        extras = example_tester_step.extras or {}
+    if usb_hid_tester_step is not None and usb_hid_tester_step.status in ("PASS", "WAIVED"):
+        extras = usb_hid_tester_step.extras or {}
         observed = extras.get("observed") or []
         expected = extras.get("expected") or "?"
         lines = [
-            "# example_tester_byte_capture.log",
+            "# usb_hid_tester_byte_capture.log",
             f"# emitted_at: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}",
-            f"# step: example_tester_verify",
-            f"# status: {example_tester_step.status}",
+            f"# step: usb_hid_tester_verify",
+            f"# status: {usb_hid_tester_step.status}",
             f"# expected_verdict_byte_hex: 0x{expected}",
             f"# runs: {len(observed)}",
             "# run_idx,observed_verdict_byte_hex,match",
@@ -2594,9 +2594,9 @@ def step_emit_phase2_manifests(project: Path,
             lines.append(f"{i},0x{b},{match}")
         evidence_path = project / "reports/phase2/fpga/on_board_evidence"
         evidence_path.mkdir(parents=True, exist_ok=True)
-        evidence_log = evidence_path / "example_tester_byte_capture.log"
+        evidence_log = evidence_path / "usb_hid_tester_byte_capture.log"
         evidence_log.write_text("\n".join(lines) + "\n")
-        written.append("reports/phase2/fpga/on_board_evidence/example_tester_byte_capture.log")
+        written.append("reports/phase2/fpga/on_board_evidence/usb_hid_tester_byte_capture.log")
 
     return StepResult("phase2_manifests", "PASS",
                       time.time() - t0,
@@ -2970,11 +2970,11 @@ def main() -> int:
             plan.append(step_fpga_burn(project, args.top_name))
 
         eco = 0
-        # v1.6.127 (#49 Fix 1) — also guard the example_tester_verify ECO
+        # v1.6.127 (#49 Fix 1) — also guard the usb_hid_tester_verify ECO
         # loop against byte-identical retries.
         last_rtl_hash = _rtl_dir_sha256(project)
         # v1.6.181 (#72 P1-4) — hint-driven remediation flag for the
-        # example_tester_verify loop (one attempt per session).
+        # usb_hid_tester_verify loop (one attempt per session).
         eco_remediation_attempted_md = eco_remediation_attempted
         # v1.6.153 (#60 P0-4) — refresh the most recent fpga_burn
         # status on each iteration (ECO re-burns), so the STALE-board
@@ -2985,7 +2985,7 @@ def main() -> int:
                     return _sr.status
             return None
         while True:
-            sr = step_example_tester_verify(project,
+            sr = step_usb_hid_tester_verify(project,
                                    prior_fpga_burn_status=_latest_burn_status())
             plan.append(sr)
             # v1.6.100: WAIVED is a canonical good state (no rig available, ticket emitted). Skip ECO iteration.

@@ -88,7 +88,7 @@ def cite_in_coverage_md(coverage_text: str, doc_name: str) -> bool:
 # ---------------------------------------------------------------------------
 # v0.50.1 strict contribution check (learned from <benchmark> measured_timing.pptx miss)
 # ---------------------------------------------------------------------------
-# A fresh-agent cited `EXAMPLE_CHIP_measured_timing.pptx` in its coverage manifest with the
+# A fresh-agent cited `AS3616_measured_timing.pptx` in its coverage manifest with the
 # single line:
 #     "Reviewed for context; did not contribute RTL constants."
 # It turned out slide 2 of that pptx contained exactly the lab-measured

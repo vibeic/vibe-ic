@@ -4,7 +4,7 @@ framing when L3 CMD_PROTOCOL specifies break-delimited frames.
 
 THE PROBLEM
 -----------
-Half-duplex single-wire protocols (EXAMPLE_PROTOCOL-bus, etc.) delimit frames with break
+Half-duplex single-wire protocols (AID-bus, etc.) delimit frames with break
 pulses. A correct RX command parser collects all bytes between two breaks,
 validates CRC at the frame boundary, then dispatches. An INCORRECT parser
 pre-computes ``expected_len`` per opcode and dispatches when byte count

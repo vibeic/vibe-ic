@@ -7,13 +7,13 @@ chip's target frequency.
 
 Why this gate exists
 ====================
-v0.119.30 <benchmark> noris benchmark. Vendor reference uses direct 50 MHz
+v0.119.30 <benchmark> vendor benchmark. Vendor reference uses direct 50 MHz
 clock (master is 50 MHz, chip target is 50 MHz). Fresh agent emitted:
 
     always_ff @(posedge clk_50m)
         clk_2p5m <= ~clk_2p5m;          // unnecessary divider
     ...
-    example_chip_top u_chip ( .clk(clk_2p5m), ... );
+    as3616_top u_chip ( .clk(clk_2p5m), ... );
 
 The 16× coarser tick granularity (50→2.5 MHz) plus uncontrolled
 clock-tree route on the toggle-register output produced sub-microsecond

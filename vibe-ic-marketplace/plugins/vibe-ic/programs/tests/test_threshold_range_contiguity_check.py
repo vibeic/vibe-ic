@@ -1,6 +1,6 @@
 """Tests for threshold_range_contiguity_check.py.
 
-Generic gate — catches the v068 BENCHMARK_A fresh-agent's range-gap bug
+Generic gate — catches the v068 BENCH-A fresh-agent's range-gap bug
 (H1_MAX 192 → H0_MIN 196, 3-tick gap) but applies to ANY IC with
 discrete threshold classification (pulse widths, voltage bins, ADC
 codes, etc.).
@@ -111,7 +111,7 @@ def test_user_can_include_ibt_in_chain(tmp_path):
 
 
 def test_voltage_bins_use_case(tmp_path):
-    # Generic non-BENCHMARK_A use: ADC voltage bins must be contiguous.
+    # Generic non-BENCH-A use: ADC voltage bins must be contiguous.
     doc = {
         "bins": [
             {"name": "LOW_MIN",  "value_dec": 0},

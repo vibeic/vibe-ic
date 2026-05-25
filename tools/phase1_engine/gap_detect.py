@@ -165,10 +165,62 @@ def _generic_auto_default(layer: str, path: str, ic_name: str) -> Optional[Any]:
     return None
 
 
+# v1.6.273 — for #131 ORGANIC-phase1 typed NOT_SPECIFIED sentinel.
+#
+# Pre-v1.6.273, required-int gaps with no K3 / class-reference / industry-std
+# default coerced to the literal `0`. That silently destroyed the distinction
+# between (a) "the chip has zero of X" (rarely meaningful) and (b) "the input
+# never stated X" (the honest answer for soft-IP / configurable-generic
+# designs where the value is fixed at the integrating SoC, not by this IP).
+# Downstream gates read the `0` as authoritative, no provenance, no warn.
+#
+# v1.6.273 fix: return a typed sentinel object instead of `0`. The renderer
+# detects the sentinel and emits `<field>_status: NOT_SPECIFIED` + the
+# associated reason metadata, OMITTING the numeric key entirely. The
+# `phase1_input_vs_generated_completeness` gate is sentinel-aware: sentinel-
+# only fields are NOT scored against the prompt (they are by definition not
+# present in input).
+#
+# Chip-AGNOSTIC: the sentinel applies to EVERY required-int field across
+# EVERY class template, not a chip-specific opt-out.
+NOT_SPECIFIED_SENTINEL_KEY = "__phase1_not_specified__"
+
+
+def _make_not_specified_sentinel(
+    reason: str = "no input or class-default for required field"
+) -> Dict[str, Any]:
+    """Build the typed NOT_SPECIFIED marker carried as a fact value when a
+    required-int (or other required leaf) has no honest answer. Render-time
+    detection via `_is_not_specified_sentinel`.
+    """
+    return {
+        NOT_SPECIFIED_SENTINEL_KEY: True,
+        "_status": "NOT_SPECIFIED",
+        "_reason": reason,
+    }
+
+
+def _is_not_specified_sentinel(v: Any) -> bool:
+    """True iff `v` is the typed NOT_SPECIFIED marker produced by
+    `_make_not_specified_sentinel`. Used by the renderer to suppress the
+    integer key and emit `<field>_status` / `<field>_reason` siblings.
+    """
+    return (
+        isinstance(v, dict)
+        and v.get(NOT_SPECIFIED_SENTINEL_KEY) is True
+        and v.get("_status") == "NOT_SPECIFIED"
+    )
+
+
 def _empty_stub_for_type(type_name: Optional[str]) -> Optional[Any]:
     """Last-resort stub when no default is known. Lets the layer render
     with a placeholder rather than silently missing. Class-template `type`
     values come from the K1 schema (e.g. `list_of_dicts`, `dict`, `string`).
+
+    v1.6.273 — for #131. Required-numeric leaves now return the typed
+    NOT_SPECIFIED sentinel rather than the literal `0`. Pre-v1.6.273 the
+    `0` was indistinguishable from a genuinely-zero value and downstream
+    gates treated it as authoritative.
     """
     if not type_name:
         return None
@@ -180,7 +232,10 @@ def _empty_stub_for_type(type_name: Optional[str]) -> Optional[Any]:
     if t in ("string", "str", "text"):
         return ""
     if t in ("integer", "int", "number", "float"):
-        return 0
+        return _make_not_specified_sentinel(
+            reason="required-numeric field has no honest answer from input "
+                   "or class-default; soft-IP / configurable-generic pattern"
+        )
     if t in ("bool", "boolean"):
         return False
     return None
@@ -472,6 +527,17 @@ def auto_fill(
     # declared as "required" in the K1 template but are checked downstream.
     scaffolds_applied = _apply_typical_scaffolds(graph, chain)
 
+    # (0c) supported_interfaces floor — IC-agnostic L1 bullet-list of buses,
+    # derived deterministically from pinout signatures. Closes D3 rubric gap.
+    # Implementation lives in tools/phase1_engine/interfaces_floor.py so it
+    # survives plugin auto-updates (the plugin's class_kb templates are
+    # rewritten on every install).
+    try:
+        from .interfaces_floor import apply_to_graph as _apply_ifaces
+        interfaces_added = _apply_ifaces(graph)
+    except Exception:
+        interfaces_added = 0
+
     gaps = detect_gaps(graph, class_kb_root=class_kb_root)
     filled = 0
     no_default = 0
@@ -515,6 +581,7 @@ def auto_fill(
         "total_gaps": len(gaps),
         "sentinels_added": sentinels_added,
         "scaffolds_applied": scaffolds_applied,
+        "interfaces_added": interfaces_added,
     }
 
 

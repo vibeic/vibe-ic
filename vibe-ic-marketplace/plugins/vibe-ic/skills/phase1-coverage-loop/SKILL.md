@@ -221,7 +221,7 @@ Set `state.step = "STOPPED"` and exit.
   `SKIP_REFERENCE` (DE10-Lite / vendor PDK manual), the IC is
   recorded as SKIP for the rotation; do not file an issue.
 - **Honour low-tokens skip**: if a README has <10 design tokens
-  (e.g. the `EXAMPLE_UNIVERSITY_EE628_DeltaSigma_ADC/README.md` is 7 lines),
+  (e.g. the `U_Hawaii_EE628_DeltaSigma_ADC/README.md` is 7 lines),
   treat as SKIP; do not file an issue blaming the ingester for
   insufficient input.
 

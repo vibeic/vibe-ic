@@ -66,15 +66,15 @@ requirements:
   - id: R7_chip_agnostic_language
     description: >-
       Comment text MUST NOT carry chip-specific class literals as
-      detection logic. Naming a benchmark folder (e.g. "benchmark_a"
-      / "noris") is allowed when it appears in an "evidence on"
+      detection logic. Naming a benchmark folder (e.g. "bench-a"
+      / "vendor") is allowed when it appears in an "evidence on"
       / "on the … benchmark" context, but the same chip-class
       string must not appear in a code-block declaring a regex /
       deny-list / detection condition. Conservative pattern:
-      bare EXAMPLE_CHIP / aid / example_tester / example_vendor OUTSIDE backticks → fail.
+      bare IC-A / aid / usb_hid_tester / Vendor OUTSIDE backticks → fail.
       (chip-AGNOSTIC at the publish layer is a second line of
       defence; the patch hunk is the primary one.)
-    pattern: '^(?!.*(?<![`a-zA-Z])(EXAMPLE_CHIP|example_tester)(?![`a-zA-Z])).*$'
+    pattern: '^(?!.*(?<![`a-zA-Z])(IC-A|usb_hid_tester)(?![`a-zA-Z])).*$'
     required: false   # advisory; spot-checks rather than blocking
 
   - id: R8_field_agent_not_debug_agent

@@ -6,7 +6,7 @@ FSM in rtl/ has either:
   (a) an explicit `<HEX>:` case arm in the dispatch state, OR
   (b) the opcode is documented as silent-reject via a waiver.
 
-The previous (v0.121-noris) RTL had only 0x70 / 0x72 / 0x74 case arms
+The previous (v0.121-vendor) RTL had only 0x70 / 0x72 / 0x74 case arms
 and a `default:` branch that fell back to a GET_ID-equivalent reply
 for ANY validated opcode — which mass-passed 0xE0 / 0xE2 / 0x76 / 0x78
 frames as 0x75+OTP responses (Wave 56 column-D Issue 4 + 0xE0/0xE2
@@ -46,7 +46,7 @@ from typing import List, Tuple, Set
 import _path_layout as _pl
 
 # Wave 78 — explicit class applicability. Dispatch / opcode-table
-# completeness applies to any command-driven IC (EXAMPLE_PROTOCOL half-duplex,
+# completeness applies to any command-driven IC (AID half-duplex,
 # UART/SPI/I2C cmd, mixed-signal-OTP). Pure-analog / bare-FPGA have
 # no L3.opcodes[] and the gate already SKIPs there.
 sys.path.insert(0, str(Path(__file__).resolve().parent))

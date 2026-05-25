@@ -125,7 +125,7 @@ def test_token_inside_comment_is_ignored(tmp_path):
 
 # ---- regression guard: v068 synth.ys passes with --allow-no-sv ------------
 _V068_YS = Path(
-    "/path/to/project/scripts/synth.ys"
+    "~/AI_IC_design/1st_benchmark_sn2025/phase2+3_v068/scripts/synth.ys"
 )
 
 

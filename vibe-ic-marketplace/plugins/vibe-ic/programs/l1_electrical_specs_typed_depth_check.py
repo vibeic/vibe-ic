@@ -49,7 +49,7 @@ from ic_class_profile import detect_ic_class  # noqa: E402
 
 # Wave 43 (v0.119.75) — explicit ic_class_profile guard.
 # L1 electrical_specs are MANDATORY for digital / mixed-signal /
-# EXAMPLE_PROTOCOL-class digital ICs. Pure-analog blocks have their own A1-A8
+# AID-class digital ICs. Pure-analog blocks have their own A1-A8
 # analog-spec deck (different shape, different units), so this gate
 # becomes noise on a pure-analog project.
 _SKIP_CLASSES = ("pure_analog",)

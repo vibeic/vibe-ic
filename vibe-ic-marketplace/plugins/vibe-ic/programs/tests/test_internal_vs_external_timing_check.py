@@ -1,6 +1,6 @@
 """Tests for internal_vs_external_timing_check.py.
 
-The gate was written from the v068 EXAMPLE_TESTER FAIL forensics — v068 agent
+The gate was written from the v068 USB-HID tester FAIL forensics — v068 agent
 produced an L8_TIMING_WAVEFORM with only host-side values, Phase 2
 then copied those into DUT-side TX code, resulting in a 22μs IBT that
 exceeded the far-side 12.7μs BR threshold. This test battery replays

@@ -163,9 +163,9 @@ def from_existing_docs(
 def from_structured_yaml(yaml_path: Path) -> FactGraph:
     """Parse a YAML like:
 
-        ic_name: EXAMPLE_IC
+        ic_name: BENCH-A
         class_path: cable-side-id-ic
-        L1: { ic_name: EXAMPLE_IC, pinout: {...}, ... }
+        L1: { ic_name: BENCH-A, pinout: {...}, ... }
         L3: { protocol_name: ..., commands: [...] }
         ...
 

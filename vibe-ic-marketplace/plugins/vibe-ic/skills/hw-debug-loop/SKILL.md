@@ -14,7 +14,7 @@ description: Closed-loop hardware debug methodology for half-duplex protocol ICs
 > When you adopt this skill on a different IC, swap `<chip-class>` →
 > `<your IC name>` and `<half-duplex-tester>` → `<your host-tester name>`; the
 > structural gates and rule bodies do not depend on those SKUs.
-> See `docs/design/CASE_STUDIES/EXAMPLE_CHIP_*.md` for the full <benchmark>
+> See `docs/design/CASE_STUDIES/AS3616_*.md` for the full <benchmark>
 > regression history.
 
 # Closed Hardware Debug Loop
@@ -53,7 +53,7 @@ Trigger when ALL of:
   - `flow_compliance_check.py` reports `Overall: PASS`.
   - BFM `eda_simulate` shows `verdict: PASS opcodes=N fails=0`.
   - SOF burned successfully, FPGA JTAG verifies the device.
-  - Host acceptance test (e.g. `device_tester_example_tester_connect_test`)
+  - Host acceptance test (e.g. `device_tester_md905_connect_test`)
     returns `verdict: FAIL` with a non-canonical byte[6].
 
 Do NOT trigger if:
@@ -85,7 +85,7 @@ Do NOT trigger if:
 Run the host acceptance test, capture the verdict + frame bytes:
 
 ```bash
-mcp__eda-tools__device_tester_example_tester_connect_test collect_seconds=8
+mcp__eda-tools__device_tester_md905_connect_test collect_seconds=8
 ```
 
 Save the response under `evidence/baseline_fail.json`. Record:
@@ -105,7 +105,7 @@ distinguish "test broken" from "RTL broken".
 
 ```bash
 mcp__eda-tools__eda_fpga_program tool=quartus sof_file=<oracle.sof>
-mcp__eda-tools__device_tester_example_tester_connect_test
+mcp__eda-tools__device_tester_md905_connect_test
 ```
 
 Save under `evidence/oracle_pass.json`. If the oracle does NOT PASS
@@ -184,8 +184,8 @@ declaring the fix complete. The gate is the regression guard.
 ```bash
 mcp__eda-tools__eda_fpga_compile ...
 mcp__eda-tools__eda_fpga_program ...
-mcp__eda-tools__device_tester_example_tester_send_raw cmd_byte=255   # disconnect
-mcp__eda-tools__device_tester_example_tester_connect_test
+mcp__eda-tools__device_tester_md905_send_raw cmd_byte=255   # disconnect
+mcp__eda-tools__device_tester_md905_connect_test
 ```
 
 Save `evidence/iter_<N>_pass.json` if `verdict: PASS`. Record the

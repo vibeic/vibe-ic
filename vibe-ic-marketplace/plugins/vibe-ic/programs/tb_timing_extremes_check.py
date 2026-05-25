@@ -8,7 +8,7 @@ sim PASSes but real HW (which may operate at any point in the range)
 exposes timing-window bugs that sim missed.
 
 Concrete failure mode this would have caught:
-  - v0118-noris <benchmark>: TB drove `host_idle(22600)` (= L2.ibt_us[1]
+  - v0118-vendor <benchmark>: TB drove `host_idle(22600)` (= L2.ibt_us[1]
     only). Bugs that only manifest at L2.ibt_us[0] (lower end) were
     invisible.
 
@@ -214,7 +214,7 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
                 "Testbench does not drive both extremes of L2 timing "
                 f"range(s): {'; '.join(uncovered)}. Real HW may operate "
                 "at any point in the spec range; bugs at the unexercised "
-                "extreme will pass sim and fail HW (e.g. v0118-noris "
+                "extreme will pass sim and fail HW (e.g. v0118-vendor "
                 "<benchmark>: TB drove only ibt=22us, sim PASS, HW FAIL "
                 "because chip latency budget was tight at min-IBT). "
                 "Add test cases at each spec extreme."

@@ -5,7 +5,7 @@ Covers four applicability paths:
   1. POSITIVE_PASS — wake_gen module with counter that free-runs across
                      frame_active (no else-branch reset of period cnt).
   2. POSITIVE_FAIL — wake_gen module with `if (frame_active) cnt++; else
-                     cnt <= 0;` — v0.121-noris pathology.
+                     cnt <= 0;` — v0.121-vendor pathology.
   3. SKIP_NON_APPLICABLE — RTL has wake_gen but it does NOT increment a
                      period-class counter (no pulse_gen pathology).
   4. SKIP_NO_CONSTRUCT — RTL has no wake_gen / wake_pulse / pulse_gen

@@ -28,7 +28,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `agent_report_presence_check` | any | — | verify the project ships a structured |
 | `agent_report_sha256_attestation_check` | any | — | verify the project's |
 | `aid_class_qsf_gen` | any | Wave 73 | to be removed in v0.130. |
-| `aid_class_rtl_gen` | aid_class_half_duplex, aid_class_half_duplex_single_wire, mixed_signal_otp, digital_cmd_driven | Wave 56 | Vibe-IC plugin Phase 2 RTL generator for EXAMPLE_PROTOCOL-class half-duplex protocol. |
+| `aid_class_rtl_gen` | aid_class_half_duplex, aid_class_half_duplex_single_wire, mixed_signal_otp, digital_cmd_driven | Wave 56 | Vibe-IC plugin Phase 2 RTL generator for AID-class half-duplex protocol. |
 | `aid_class_sdc_gen` | any | Wave 73 | to be removed in v0.130. |
 | `analog_a1_spec_extract_check` | any | — | A1 deterministic gate (v1.6.35). |
 | `analog_a2_topology_select_check` | any | — | A2 deterministic gate (v1.6.35). |
@@ -230,7 +230,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `marketplace_version_sync_check` | any | — | marketplace_version_sync_check.py |
 | `mask_application_check` | any | — | Verify any AND-mask rule the spec declares |
 | `mcp_execution_verify` | any | — | Deterministic MCP tool execution verifier. |
-| `example_tester_bfm_gen` | any | v0.119.5 | LL-13 generator. |
+| `md905_bfm_gen` | any | v0.119.5 | LL-13 generator. |
 | `memory_read_pipeline_check` | any | — | Registered-read memory modules must |
 | `metadata_content_substance_check` | any | — | guard against empty / near-empty |
 | `metal_fill_density_check` | any | — | Verify metal fill was inserted and density is within bounds. |
@@ -428,7 +428,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ### `aid_class_half_duplex` (9 programs)
 
-- `aid_class_rtl_gen` — Vibe-IC plugin Phase 2 RTL generator for EXAMPLE_PROTOCOL-class half-duplex protocol.  _[Wave 56]_
+- `aid_class_rtl_gen` — Vibe-IC plugin Phase 2 RTL generator for AID-class half-duplex protocol.  _[Wave 56]_
 - `byte_assembler_explicit_9bit_reject_check` — Wave 37 (v0.119.69).  _[Wave 37]_
 - `cmd_buf_index_semantic_consistency_check` — Wave 37 (v0.119.69).  _[Wave 37]_
 - `crc_validation_present` — Wave 58 / BACKLOG-v12 P0.3 plugin gate.  _[Wave 58]_
@@ -440,7 +440,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ### `digital_cmd_driven` (7 programs)
 
-- `aid_class_rtl_gen` — Vibe-IC plugin Phase 2 RTL generator for EXAMPLE_PROTOCOL-class half-duplex protocol.  _[Wave 56]_
+- `aid_class_rtl_gen` — Vibe-IC plugin Phase 2 RTL generator for AID-class half-duplex protocol.  _[Wave 56]_
 - `cmd_buf_index_semantic_consistency_check` — Wave 37 (v0.119.69).  _[Wave 37]_
 - `crc_validation_present` — Wave 58 / BACKLOG-v12 P0.3 plugin gate.  _[Wave 58]_
 - `dispatch_handler_completeness` — Wave 58 / BACKLOG-v12 P0.2 plugin gate.  _[Wave 58]_
@@ -450,7 +450,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ### `mixed_signal_otp` (7 programs)
 
-- `aid_class_rtl_gen` — Vibe-IC plugin Phase 2 RTL generator for EXAMPLE_PROTOCOL-class half-duplex protocol.  _[Wave 56]_
+- `aid_class_rtl_gen` — Vibe-IC plugin Phase 2 RTL generator for AID-class half-duplex protocol.  _[Wave 56]_
 - `cmd_buf_index_semantic_consistency_check` — Wave 37 (v0.119.69).  _[Wave 37]_
 - `crc_validation_present` — Wave 58 / BACKLOG-v12 P0.3 plugin gate.  _[Wave 58]_
 - `dispatch_handler_completeness` — Wave 58 / BACKLOG-v12 P0.2 plugin gate.  _[Wave 58]_
@@ -671,7 +671,7 @@ _(no programs in this group)_
 - `marketplace_version_sync_check` — marketplace_version_sync_check.py
 - `mask_application_check` — Verify any AND-mask rule the spec declares
 - `mcp_execution_verify` — Deterministic MCP tool execution verifier.
-- `example_tester_bfm_gen` — LL-13 generator.  _[v0.119.5]_
+- `md905_bfm_gen` — LL-13 generator.  _[v0.119.5]_
 - `memory_read_pipeline_check` — Registered-read memory modules must
 - `metadata_content_substance_check` — guard against empty / near-empty
 - `metal_fill_density_check` — Verify metal fill was inserted and density is within bounds.

@@ -4,7 +4,7 @@ analog_hil_convergence_log_check.py — verify that at least one analog
 block ships a hardware-in-the-loop tuning-loop log demonstrating real
 SPICE→hardware→corner→post-layout convergence.
 
-Real-world inspiration: phase2+3_v10619-noris/analog/A8_hardmacro/
+Real-world inspiration: phase2+3_v10619-vendor/analog/A8_hardmacro/
 ldo_default/hil_log/convergence_log.json carried 7 iterations spanning
 stages SPICE_TT → SPICE_TT_after_resize → HW_TT_27C →
 HW_TT_27C_after_trim → HW_SS_-40C → HW_FF_125C → post_layout_resim_TT,
@@ -85,7 +85,7 @@ class BlockResult:
 
 def _load_log(path: Path) -> Optional[dict]:
     """Tolerant JSON loader: accepts JSON with leading `+` on numbers
-    (which strict JSON disallows but appeared in the v10619-noris log).
+    (which strict JSON disallows but appeared in the v10619-vendor log).
     Returns None on irrecoverable parse errors."""
     try:
         return json.loads(path.read_text(encoding="utf-8"))

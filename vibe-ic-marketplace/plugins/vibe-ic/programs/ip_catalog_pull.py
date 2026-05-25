@@ -39,12 +39,9 @@ from ip_catalog_query import (  # noqa: E402
 # (NOT through reverse-engineering — these are legitimate open-source repos
 # the user already mirrored for offline use).
 # ---------------------------------------------------------------------------
-# Local mirror roots for pre-cloned open-source IPs. Set via env var:
-#   VIBEIC_LOCAL_MIRROR_ROOTS=/path/one:/path/two
-# Empty by default — falls back to upstream `git clone`.
-import os as _os
 LOCAL_MIRROR_ROOTS = [
-    Path(_p) for _p in _os.environ.get("VIBEIC_LOCAL_MIRROR_ROOTS", "").split(":") if _p
+    Path("~/ic_documents/open_ic"),
+    Path("~/ic_documents/open_ip"),
 ]
 
 

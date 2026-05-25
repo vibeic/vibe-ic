@@ -6,7 +6,7 @@ When `<project>/generated_docs/L3_*.json` declares CRC parameters
 consume the CRC engine's output (`crc_q == 8'h00` or equivalent
 residue check) somewhere on the validate / dispatch decision path.
 
-The previous (v0.121-noris) RTL instantiated `crc8` in chip_top.sv,
+The previous (v0.121-vendor) RTL instantiated `crc8` in chip_top.sv,
 fed it across every RX bit, but the main_fsm `frame_ok` signal did
 NOT include `crc_q` — wrong-CRC frames were dropped only as a side-
 effect of length / 9-bit gates, and many invalid frames PASSed

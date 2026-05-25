@@ -5,7 +5,7 @@ CRC constants between RTL Verilog source and L8_RTL_CONSTANTS.json.
 
 Why this gate exists
 ====================
-BACKLOG-v13 Wave 2, audit item #4. v0.119.32 noris run shipped:
+BACKLOG-v13 Wave 2, audit item #4. v0.119.32 vendor run shipped:
   - rtl/crc8.v line 51:  `crc_out <= 8'hFF;`            (init = 0xFF)
   - L8.crc8_constants:   `{"name": "CRC_SEED", "value": 0}`  (says 0x00)
 

@@ -3,7 +3,7 @@
 
 The gate's v0.119.27 prescription (`set_instance_assignment -name
 OPEN_DRAIN ON -to <pad>`) caused Quartus error 125048 in the v0.119.27
-noris run — the assignment name doesn't exist on MAX10 / Cyclone.
+vendor run — the assignment name doesn't exist on MAX10 / Cyclone.
 v0.119.29 deprecates the gate to a silent-PASS stub so any
 flow_compliance call importing it doesn't break, but the gate is no
 longer registered in the structural-RTL gate set.

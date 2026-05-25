@@ -289,7 +289,7 @@ def test_autodiscover_no_sources(tmp_path):
 
 # ====================================================================
 # BACKLOG-v13 Wave 8 (v0.119.40) — numeric_unit cross-line literal fix.
-# Motivated by 1st_benchmark_benchmark_a/phase1_v0119.39-noris/RESULT.md:
+# Motivated by 1st_benchmark_benchmark_a/phase1_v0119.39-vendor/RESULT.md:
 # the auto-discovery `numeric_unit` regex used `\s+` between number and
 # unit, capturing cell-broken PDF rows like `'3.5\nV'`. These literals
 # carry a real LF byte; json.dumps escapes LF to `\\n` so they can
@@ -380,7 +380,7 @@ def test_numeric_unit_tab_separated_filtered(tmp_path):
 
 # ====================================================================
 # Wave 9 (v0.119.41) — dump-field defence.
-# Motivated by 1st_benchmark_benchmark_a/phase2_v0119.40-noris/RESULT.md:
+# Motivated by 1st_benchmark_benchmark_a/phase2_v0119.40-vendor/RESULT.md:
 # the agent created an `LX_DUMP` catch-all field containing verbatim
 # input doc text to lift coverage to 100% trivially. Wave 9 adds a
 # size + LCS ratio detector that excludes such fields from the

@@ -4,13 +4,13 @@
 Sole rule: UNREPRODUCIBLE_BENCHMARK_PATH.
 
 When a fenced code block in CHANGELOG.md / README.md / docs/**/*.md
-quotes a benchmark path of the form `1st_benchmark_benchmark_a/<dir>/`,
+quotes a benchmark path of the form `1st_benchmark_sn2025/<dir>/`,
 that directory must exist on disk relative to the repo root. Catches
 the v1.6.45 escape where CHANGELOG was rewritten to claim
 `phase2+3_v10634/` was the real benchmark when only
-`phase2+3_v10634-noris/` existed.
+`phase2+3_v10634-vendor/` existed.
 
-VACUOUS-PASSes when the benchmark tree (`1st_benchmark_benchmark_a/`) is
+VACUOUS-PASSes when the benchmark tree (`1st_benchmark_sn2025/`) is
 absent — fresh checkouts and CI hosts without private benchmarks see
 the gate as inapplicable.
 
@@ -40,12 +40,12 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 
-# Benchmark path tokens like `1st_benchmark_benchmark_a/phase2+3_v10634-noris`
-# or `1st_benchmark_benchmark_a/phase2+3_v10634-noris/`. The leading
-# `1st_benchmark_benchmark_a/` is the only known root, so we anchor on it.
+# Benchmark path tokens like `1st_benchmark_sn2025/phase2+3_v10634-vendor`
+# or `1st_benchmark_sn2025/phase2+3_v10634-vendor/`. The leading
+# `1st_benchmark_sn2025/` is the only known root, so we anchor on it.
 # Tokens containing wildcards / asterisks / `<...>` placeholders are
 # excluded (they're not literal paths).
-_BENCH_ROOT = "1st_benchmark_benchmark_a"
+_BENCH_ROOT = "1st_benchmark_sn2025"
 _BENCH_PATH_RE = re.compile(
     r"\b" + re.escape(_BENCH_ROOT)
     + r"/(?P<sub>[A-Za-z0-9_.+\-*?<>]+)/?"
@@ -161,7 +161,7 @@ def audit(plugin_root: Path) -> Tuple[str, List[Finding]]:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Anti-fabrication: enforce that any "
-                    "`1st_benchmark_benchmark_a/<dir>/` path quoted in a "
+                    "`1st_benchmark_sn2025/<dir>/` path quoted in a "
                     "fenced markdown code block actually exists on "
                     "disk relative to the repo root.")
     ap.add_argument("plugin_root")
@@ -187,7 +187,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         out.write_text(json.dumps(report, indent=2) + "\n")
 
     if verdict == "VACUOUS_PASS":
-        print("VACUOUS_PASS: 1st_benchmark_benchmark_a/ tree absent on this "
+        print("VACUOUS_PASS: 1st_benchmark_sn2025/ tree absent on this "
               "host (gate is dev-host-only)")
         return 0
     if verdict == "PASS":

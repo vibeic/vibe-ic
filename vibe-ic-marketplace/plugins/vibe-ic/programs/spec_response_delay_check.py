@@ -4,7 +4,7 @@ spec_response_delay_check.py — Response path must honour spec-declared
 minimum response delay (tSRS / tIRT / t_turnaround / similar).
 
 Generic pattern (applies to any request/response protocol):
-  Host-initiated protocols (UART-slave, I2C-slave, SPI-slave, EXAMPLE_PROTOCOL,
+  Host-initiated protocols (UART-slave, I2C-slave, SPI-slave, AID,
   1-Wire, HID report responses) almost always specify a MIN delay
   between end-of-request and first-bit-of-response. The host uses
   that gap to turn around its bus driver (enable RX, release ACK

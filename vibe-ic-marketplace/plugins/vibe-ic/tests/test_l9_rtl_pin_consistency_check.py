@@ -80,7 +80,7 @@ def test_pass_when_l9_and_rtl_agree(tmp_path):
 
 # ─── v1.6.19 regression — schema-v2 top_module field is honoured ──
 def test_v1_6_19_schema_v2_top_module_field_honoured(tmp_path):
-    """Real v1069-noris L9 v2 carries `top_module="chip_top"` (no
+    """Real v1069-vendor L9 v2 carries `top_module="chip_top"` (no
     legacy `dtop_module_name` / `dtop_top_level.module_name`). Pre-v1.6.19
     `find_rtl_top` ignored that field and the gate SKIPped silently with
     'no RTL top file'. After the fix the gate must locate rtl/chip_top.sv

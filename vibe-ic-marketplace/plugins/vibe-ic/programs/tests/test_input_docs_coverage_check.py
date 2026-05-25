@@ -105,7 +105,7 @@ def test_detailed_contribution_passes(tmp_path):
            layers={},
            manifest_text=(
                "| timing.pptx | Slide 2 table: IBT=22.7us, RSP_Time=22.7us, "
-               "BR range 9.4-18.4us. | rtl/example_chip_params.vh CYC_IBT=91 |"
+               "BR range 9.4-18.4us. | rtl/as3616_params.vh CYC_IBT=91 |"
            ))
     code, out = _run(tmp_path)
     rules = [f["rule"] for f in out.get("findings", [])]

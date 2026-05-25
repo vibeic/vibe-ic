@@ -176,9 +176,10 @@ label means a core-agent slice is stalled waiting for your gate.
   RTL when assessing input-doc-only extractors. The plugin must
   derive structure from input docs.
 - **Chip-AGNOSTIC backlog**: every YAML must pass
-  `backlog_sanitize_check`. No `example_chip`, `benchmark_a`, `example_vendor`,
-  `example_tester`, `aid`, vendor IC names, or project paths in the
-  title/pattern/suggested_fix.
+  `backlog_sanitize_check`. No `ic-a`, `bench-a`, `vendor`,
+  `usb_hid_tester`, `aid`, vendor IC names, or project paths in the
+  title/pattern/suggested_fix. The authoritative deny-list lives
+  in `tests/chip_deny_list.txt`.
 - **Field-agent files GENERAL plugin gaps**, never chip-specific
   bugs. The user owns chip-specific fixes; the field-agent owns
   plugin generality.

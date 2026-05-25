@@ -8,7 +8,7 @@ pump, OTA / op-amp, OTP trim register, ...).
 
 Closes the v0.120 fresh-agent failure mode where the agent wrote
 ``analog_blocks: []`` and ``A0_skip_decision.json: SKIPPED-CONDITION``
-even though ``EXAMPLE_CHIP_Short_Datasheet_0v06.txt`` documented:
+even though ``AS3616_Short_Datasheet_0v06.txt`` documented:
   - 4 MHz oscillator with FREQ_TRIM ±6%
   - RPD_WAKE 80-120 kΩ pull-down
   - RMPD_0/1/OFF analog pull-down switch network

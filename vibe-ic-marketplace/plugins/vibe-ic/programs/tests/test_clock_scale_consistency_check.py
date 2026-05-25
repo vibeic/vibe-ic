@@ -77,7 +77,7 @@ def test_correct_scale_passes(tmp_path):
 
 
 def test_physical_value_mismatch_detected(tmp_path):
-    """Classic EXAMPLE_CHIP bug: value=192 ticks at 2.5MHz = 76.8us but claim 1.6us."""
+    """Classic IC-A bug: value=192 ticks at 2.5MHz = 76.8us but claim 1.6us."""
     f = _write(tmp_path, {
         "t": [{"name": "H1_MAX", "value": 192, "unit": "ticks",
                "domain_clock": "clk_25", "source_clock": "clk_25",

@@ -24,7 +24,7 @@ qbank:
     intermediate: ["The internal RC oscillator — what frequency and trim percentage?"]
     beginner:     []
     follow_ups:
-      - if_user_says: ["standard cable-id", "EXAMPLE_CHIP"]
+      - if_user_says: ["standard cable-id", "IC-A"]
         respond_with_default: "{nominal: 5, unit: MHz, trim_range_percent: 10}"
 
   electrical_characteristics.id_bus_vil:

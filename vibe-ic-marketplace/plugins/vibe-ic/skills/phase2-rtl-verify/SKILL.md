@@ -22,7 +22,7 @@ paired_program: phase2_one_shot_runner.py
 
 > **Case study reference.** Concrete `<host_tester>` examples (e.g.
 > <chip-class> → <half-duplex-tester> byte[6]=0xF2 verdict) are documented in
-> `docs/design/CASE_STUDIES/EXAMPLE_CHIP_EXAMPLE_TESTER_byte6_verdict.md`.
+> `docs/design/CASE_STUDIES/AS3616_MD905_byte6_verdict.md`.
 
 But the RTL itself may still:
 - have unused signals / unused states / dangling registers

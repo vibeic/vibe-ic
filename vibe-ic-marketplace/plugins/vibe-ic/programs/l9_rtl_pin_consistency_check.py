@@ -202,7 +202,7 @@ def find_rtl_top(project: Path, l9: dict) -> Optional[Path]:
             [f"{ic_l}_dtop.sv", f"{ic_l}_dtop.v",
              f"{ic_l}.sv", f"{ic_l}.v"]
         )
-    # v1.6.84 (#16 Bug B): fallback to EXAMPLE_PROTOCOL-class canonical 'chip_top'
+    # v1.6.84 (#16 Bug B): fallback to AID-class canonical 'chip_top'
     # when L9.top_module is null/empty. Without this, a project with a
     # null L9.top_module silently SKIPs even though the deterministic
     # generator emitted rtl/chip_top.sv — a silent quality loss.

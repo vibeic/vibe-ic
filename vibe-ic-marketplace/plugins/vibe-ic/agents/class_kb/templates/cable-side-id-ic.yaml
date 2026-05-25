@@ -33,7 +33,7 @@ facts:
     - {path: submodule_control_logic.cc_ctrl,           type: dict, required: true}
 
   L7:
-    # Generic test-sequence list. The specific tester (EXAMPLE_TESTER, vendor jig,
+    # Generic test-sequence list. The specific tester (USB-HID tester, vendor jig,
     # or ATE program) is captured in L13_LAB_CALIBRATION when known.
     - {path: production_test_sequence,                  type: list_of_strings, required: false, comment: "Optional list of host-side commands the production tester sends to a known-good DUT"}
 
@@ -87,7 +87,7 @@ spec_floor:
   # when L3 actually declares a crc poly. Cable-plug ID protocols vary;
   # pick from any standard CRC-8 polynomial list. v0.56: removed
   # vendor-specific comments from individual entries (the prior list
-  # tagged 0x31 as "EXAMPLE_CHIP style", which was a vendor leak).
+  # tagged 0x31 as "IC-A style", which was a vendor leak).
   L3_crc_poly_allowed:                # industry-standard CRC-8 polynomials
     - "0x07"      # ATM HEC / SMBus PEC
     - "0x31"      # MAXIM / Dallas / 1-Wire
@@ -97,7 +97,7 @@ spec_floor:
   L4_otp_bytes_min: 64                # byte-addressable OTP
   L4_regmap_reg_count_min: 4          # minimum runtime registers
   # v0.56: L6_required_submodules removed from this generic parent
-  # class (the previous list was EXAMPLE_CHIP-Maxim-style verbatim and broke
+  # class (the previous list was IC-A-Maxim-style verbatim and broke
   # any cable-plug ID controller that used a different decomposition).
   # Specific architectures should declare their required submodules in
   # a sub-class — see cable-side-id-ic-maxim-style.yaml.
@@ -106,7 +106,7 @@ spec_floor:
                                        # cmd dispatch + memory/NV
   L9_internal_wire_count_min: 24
   L9_top_level_port_count_min: 14     # was 18 — generic-class floor;
-                                       # EXAMPLE_CHIP-style designs typically
+                                       # IC-A-style designs typically
                                        # exceed this comfortably
 
 # -----------------------------------------------------------------------------
@@ -117,7 +117,7 @@ spec_floor:
 # `tb_testmode.v`. Without this list, only literal-snake_case and flat
 # variants are tried.
 #
-# Added v0.54 (2026-04-24) to remove the EXAMPLE_CHIP-specific suffix list that
+# Added v0.54 (2026-04-24) to remove the IC-A-specific suffix list that
 # was hard-coded in l12_tb_coverage_check.py prior to v0.53. Each IC class
 # template now declares its own naming conventions.
 # -----------------------------------------------------------------------------

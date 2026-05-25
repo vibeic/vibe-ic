@@ -56,18 +56,18 @@ def _load_json(p: Path) -> Optional[dict]:
         return None
 
 
-# v1.6.94 (issue #25 Bug 5) — EXAMPLE_PROTOCOL-class half-duplex single-wire protocols
+# v1.6.94 (issue #25 Bug 5) — AID-class half-duplex single-wire protocols
 # don't need 50 MHz at the bit level (already tens of cycles per byte). On
 # de10lite_top the 50 MHz default produced negative slack on the byte-
 # assembler / main_fsm decode arm. 25 MHz (40 ns) is the field-agent's
 # recommended fix path (b) — trivially closes timing without an RTL
-# pipeline insertion. Non-EXAMPLE_PROTOCOL classes (SPI / parallel-bus / etc.) keep
+# pipeline insertion. Non-AID classes (SPI / parallel-bus / etc.) keep
 # the 50 MHz default.
 _AID_CLASS_DEFAULT_MHZ_DE10LITE: float = 25.0
 _DEFAULT_MHZ: float = 50.0
 
 _AID_CLASS_TOKENS: tuple[str, ...] = (
-    "example_protocol",
+    "aid",
     "apple id bus",
     "apple_id_bus",
     "single_wire_half_duplex",
@@ -84,7 +84,7 @@ _AID_CLASS_TOKENS: tuple[str, ...] = (
 def _is_aid_class(project: Path, l9: dict,
                   ic_class_arg: Optional[str] = None) -> bool:
     """Return True iff the project's L9 (or sibling L1 / L2) class field
-    indicates an EXAMPLE_PROTOCOL-class half-duplex single-wire protocol.
+    indicates an AID-class half-duplex single-wire protocol.
 
     Chip-AGNOSTIC: matches on the L9 ``class_path`` / ``class`` /
     ``interface`` / ``protocol_type`` field tokens. No specific chip /
@@ -310,7 +310,7 @@ def main() -> int:
     p.add_argument("--force", action="store_true")
     # v1.6.96 (issue #28 Bug 1) — explicit IC class hint from the
     # phase2 runner's detect_ic_class step. Short-circuits the L-doc
-    # scan so the EXAMPLE_PROTOCOL-class default fires even on projects whose
+    # scan so the AID-class default fires even on projects whose
     # phase1 never propagated the verdict into L9.interface_type /
     # L1.class_path.
     p.add_argument("--ic-class", default=None,
@@ -329,7 +329,7 @@ def main() -> int:
         print("FAIL: missing L8 or L9", file=sys.stderr)
         return 1
 
-    # v1.6.94 (issue #25 Bug 5) — EXAMPLE_PROTOCOL-class half-duplex single-wire on
+    # v1.6.94 (issue #25 Bug 5) — AID-class half-duplex single-wire on
     # de10lite_top relaxes to 25 MHz (40 ns); other classes / boards keep
     # the L8.clock_mhz value (default 50 MHz). Only relax when L8 hasn't
     # been pinned to an explicit non-default — explicit `clock_mhz` always

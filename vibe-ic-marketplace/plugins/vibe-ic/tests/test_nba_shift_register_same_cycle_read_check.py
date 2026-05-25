@@ -167,7 +167,7 @@ def test_help_works():
 def test_v0119_43_real_rtl_caught():
     """Demo: real v0.119.43 id_bus_phy.v has the bug."""
     proj = (Path(__file__).resolve().parent.parent.parent.parent.parent
-            / "1st_benchmark_benchmark_a" / "phase2_v0119.43-noris")
+            / "1st_benchmark_benchmark_a" / "phase2_v0119.43-vendor")
     if not proj.exists():
         import pytest
         pytest.skip(f"benchmark dir {proj} not present in this checkout")

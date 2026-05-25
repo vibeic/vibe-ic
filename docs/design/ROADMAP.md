@@ -55,7 +55,7 @@ real scarcity hierarchy:
 | T2 | LLM Phase-1 from persona prompt → JSON | minutes | $0 (Max) |
 | T3 | T2 + spec-to-rtl + Yosys synth | 10-30 min | $0 (Max) |
 | T4 | T3 + Quartus + OpenROAD GDS | 2-3 hr | $0 (Max) |
-| **T5** | **Hardware bench verdict (DE10-Lite + EXAMPLE_TESTER + scope)** | **manual, batch weekly** | **human bench time** |
+| **T5** | **Hardware bench verdict (DE10-Lite + USB-HID tester + scope)** | **manual, batch weekly** | **human bench time** |
 | **T6** | **Silicon tapeout (Efabless chipIgnite / Tiny Tapeout)** | **8-10 weeks** | **MPW slot, fab time** |
 
 The decisive constraint shifts from *"can we afford to run T4?"* (no — we
@@ -182,7 +182,7 @@ single proposer.
 - The benchmark IC's L1-L13 JSON
 - The matching class entry from `class_reference.yaml`
 - (optional) Phase-2b synth stats (cell count, latch warnings, port count)
-- (optional) hardware verdict (T5 bench: EXAMPLE_TESTER / FPGA BIST PASS/FAIL)
+- (optional) hardware verdict (T5 bench: USB-HID tester / FPGA BIST PASS/FAIL)
 - The 15-IC scoreboard score for this run
 
 **Output** (markdown PR comment + YAML patch suggestion), **two flavours**:
@@ -270,7 +270,7 @@ bench availability*, not dollars. See § 0 calibration for context.
 | T2 | LLM Phase-1 from persona prompt → JSON | minutes | none | nightly | informational |
 | T3 | T2 + spec-to-rtl + Yosys synth + Verilator coverage | 10-30 min | none | nightly | informational |
 | T4 | T3 + Quartus FPGA `.sof` + OpenROAD GDS | 2-3 hr | wall-clock only (4-8 ICs/night per machine) | nightly (rotating subset) | release-gate blocking |
-| **T5** | **Hardware bench verdict** (DE10-Lite + EXAMPLE_TESTER + scope) | **manual** | **human bench time, ~1 IC per session** | **weekly batch** | release-gate blocking |
+| **T5** | **Hardware bench verdict** (DE10-Lite + USB-HID tester + scope) | **manual** | **human bench time, ~1 IC per session** | **weekly batch** | release-gate blocking |
 | **T6** | **Silicon tapeout** (Efabless chipIgnite / Tiny Tapeout) | **8-10 weeks** | **MPW slot + fab time** | **per-release** | tagged-release-only |
 
 **What this changes vs. the original draft**:
@@ -289,9 +289,9 @@ bench availability*, not dollars. See § 0 calibration for context.
 
 ```yaml
 # experience_unit.t5.yaml — written by hardware-bench operator after each session
-ic_id: "EXAMPLE_CHIP"
+ic_id: "IC-A"
 commit: "b66585d1"
-bench_setup: "DE10-Lite + EXAMPLE_TESTER (tester), USB-Blaster"
+bench_setup: "DE10-Lite + USB-HID tester, USB-Blaster"
 fpga_program_pass: true
 test_session:
   total_iterations: 5
@@ -624,7 +624,7 @@ experience_unit:
     promote_to: ["k3.spi-peripheral.proven_default"]
   provenance:
     source: t5_bench              # or auto_decided / k4_mine / pr_review
-    evidence: "experience_unit.t5.EXAMPLE_CHIP.2026-04-26.yaml"
+    evidence: "experience_unit.t5.IC-A.2026-04-26.yaml"
 ```
 
 ### 5.3 Adapters (one per store)

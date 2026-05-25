@@ -219,7 +219,7 @@ def test_jsonl_parse_error_fails(tmp_path: Path) -> None:
 
 def test_round_minute_no_subsec_pattern_warns(tmp_path: Path) -> None:
     """Pattern B: all entries on round-minute boundaries with zero
-    sub-second precision. Catches v10627-noris-style fabrication."""
+    sub-second precision. Catches v10627-vendor-style fabrication."""
     p = tmp_path / "proj"
     body = b"// real\n" + b"Q" * 200
     sha = _write_real_output(p, "phase2/stage2/synth/netlist.v", body)

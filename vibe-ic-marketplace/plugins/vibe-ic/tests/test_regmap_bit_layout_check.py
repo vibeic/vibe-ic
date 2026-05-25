@@ -113,7 +113,7 @@ def _write_l4_dict(tmp_path: Path, registers: dict):
 def test_dict_schema_explicit_bits_passes(tmp_path):
     """Regression for v0.119.19: registers may be a dict-of-dicts with
     inner `bits` dict (the schema regmap-gen actually emitted in the
-    v0.119.18 noris benchmark). Earlier code crashed with AttributeError
+    v0.119.18 vendor benchmark). Earlier code crashed with AttributeError
     `'str' object has no attribute 'get'` on this schema."""
     _write_l4_dict(tmp_path, {
         "REG0": {

@@ -17,7 +17,7 @@ cable-side-id-ic:
   typical_package: "WLCSP or equivalent"
   typical_process: "180 nm"
 
-  # v0.74 post-EXAMPLE_CHIP auto-run-loop feedback: generalised class structure
+  # v0.74 post-IC-A auto-run-loop feedback: generalised class structure
   # the loop surfaced. Values here are CLASS-TYPICAL CONCEPT NAMES, not
   # specific vendor numbers. IC Expert uses this block to default the
   # shape of a cable-side-id-ic design when the user / persona leaves
@@ -46,7 +46,7 @@ cable-side-id-ic:
     L3_cmd_protocol:
       typical_phy:
         encoding: "single-wire pulse-width modulated (bit0/bit1 differ in low-time duration)"
-        byte_order: "LSB_first (1-Wire family) or MSB_first (EXAMPLE_PROTOCOL family)"
+        byte_order: "LSB_first (1-Wire family) or MSB_first (AID family)"
         wake_prefix_required: true
         break_prefix_required: true
       typical_crc: "CRC-8, polynomial from L3_crc_poly_allowed whitelist (0x31 MAXIM, 0x07 CCITT, 0x1D SAE-J1850)"
@@ -74,7 +74,7 @@ cable-side-id-ic:
         - trim_codes
         - lock_bits
         - otp_crc
-      # v0.79 BENCHMARK_A enhance-loop: canonical otp_regions[] + runtime_regs[]
+      # v0.79 BENCH-A enhance-loop: canonical otp_regions[] + runtime_regs[]
       # ordering (typical 11-entry OTP map + 12-entry runtime reg file).
       typical_otp_regions_canonical_order:
         - {region: ID,        typical_addr_bytes: "[0x00..0x05]"}
@@ -116,7 +116,7 @@ cable-side-id-ic:
         - {name: otp_ctrl, purpose: "OTP autoload + protection"}
         - {name: gen_wake, purpose: "wake-pulse detector / timer"}
         - {name: cc_ctrl,  purpose: "CC passthrough gate (USB-C variant)"}
-      # v0.79 BENCHMARK_A enhance-loop: canonical fsms[].name ordering for L6.
+      # v0.79 BENCH-A enhance-loop: canonical fsms[].name ordering for L6.
       typical_fsms_canonical_order:
         - {name: rx_phy_fsm,        states: [IDLE, LOW, CLASSIFY, BIT_DONE], desc: "Watch id_bus_rx; LOW pulse duration counted in rx_clk; classify into H1/H0/BR by window thresholds"}
         - {name: rx_cmd_fsm,        states: [IDLE, LEN, OPCODE, PAYLOAD, CRC_RX, DONE, ERR], desc: "Frame-level command parser: assemble OPCODE + PAYLOAD + CRC bytes from rx_phy bit stream; gate on CRC verify"}
@@ -138,7 +138,7 @@ cable-side-id-ic:
 
     L8R_rtl_constants:
       typical_constant_count: "30-50"
-      # v0.79 BENCHMARK_A enhance-loop: canonical L8R `constants` list ordering
+      # v0.79 BENCH-A enhance-loop: canonical L8R `constants` list ordering
       # for cable-side-id-ic. The agent's per-layer fill emits constants[]
       # in exactly this order. Names are universal (CRC-8/MAXIM idiom +
       # standard PWM bit-encoding nomenclature); specific cycle values
@@ -224,7 +224,7 @@ cable-side-id-ic:
       typical_top_level_port_count: "≥ 16 (pad-level + test + scan)"
       typical_submodule_instance_count: "≥ 20 (matches L6 decomposition)"
       typical_internal_wire_count: "≥ 24 producer→consumer wires"
-      # v0.79 BENCHMARK_A enhance-loop: canonical top-level port ordering.
+      # v0.79 BENCH-A enhance-loop: canonical top-level port ordering.
       # Names are universal cable-side-id snake_case nomenclature.
       typical_top_level_ports_canonical_order:
         - {name: clk_ext_50m,    direction: input,   width: 1,  desc: "External 50 MHz clock"}
@@ -243,7 +243,7 @@ cable-side-id-ic:
         - {name: awake_dbg,      direction: output,  width: 1,  desc: "Awake state debug observability"}
         - {name: eng_mode_dbg,   direction: output,  width: 1,  desc: "Engineer-mode debug observability"}
         - {name: test_mode_dbg,  direction: output,  width: 1,  desc: "Test-mode debug observability"}
-      # v0.79 BENCHMARK_A enhance-loop: canonical submodule instance ordering
+      # v0.79 BENCH-A enhance-loop: canonical submodule instance ordering
       # for L9.submodules[].name. Drives Yosys-friendly DTOP synthesis order.
       typical_submodules_canonical_order:
         - u_dclk          # digital clock gen
@@ -266,10 +266,10 @@ cable-side-id-ic:
         - u_dis_cnt_ito   # ITO timer counter
         - u_dis_cnt_hd    # tHD timer counter
         - u_spare         # spare bay for late-stage additions
-      # v0.79 BENCHMARK_A enhance-loop: canonical L9.modules[] ordering
+      # v0.79 BENCH-A enhance-loop: canonical L9.modules[] ordering
       # (declared module list, distinct from instance list).
       typical_modules_canonical_order:
-        - benchmark_a_top
+        - bench_a_top
         - a3616_top
         - dclk
         - drst
@@ -290,7 +290,7 @@ cable-side-id-ic:
         - ram128x8
         - dis_cnt
         - spare
-      # v0.79 BENCHMARK_A enhance-loop: canonical L9.internal_wires[] ordering.
+      # v0.79 BENCH-A enhance-loop: canonical L9.internal_wires[] ordering.
       typical_internal_wires_canonical_order:
         - {name: rx_clk,         width: 1,  desc: "2.5 MHz RX clock from dclk"}
         - {name: core_clk,       width: 1,  desc: "5 MHz core clock from dclk"}
@@ -316,7 +316,7 @@ cable-side-id-ic:
         - {name: otp_wdata,      width: 8,  desc: "OTP write data byte"}
         - {name: otp_we,         width: 1,  desc: "OTP write enable"}
 
-    # v0.79 BENCHMARK_A enhance-loop: canonical L5 analog_digital_interfaces[]
+    # v0.79 BENCH-A enhance-loop: canonical L5 analog_digital_interfaces[]
     # ordering. ID_BUS family first, then sense pads, then trim/test pads.
     L5_adi_spec:
       typical_analog_digital_interfaces_canonical_order:
@@ -342,7 +342,7 @@ cable-side-id-ic:
         - {signal: OVP,              direction: "A->D"}
         - {signal: OCP,              direction: "A->D"}
 
-    # v0.79 BENCHMARK_A enhance-loop: canonical L7 test_categories[] ordering.
+    # v0.79 BENCH-A enhance-loop: canonical L7 test_categories[] ordering.
     L7_test_debug:
       typical_test_categories_canonical_order:
         - {cat: per_command_happy_path,       desc: "Send each opcode with valid CRC + valid length; expect spec response"}
@@ -365,7 +365,7 @@ cable-side-id-ic:
       L11_calibration: "pulse_decoder_windows + response_byte1_sampling tables, keyed by clock domain"
       L12_sequences: "≥ 2 multi-step chains (engineer-mode unlock, cc-reset probe, etc.)"
       L13_lab_calibration: "criterion + tester spec; Phase-2b fills evidence"
-      # v0.79 BENCHMARK_A enhance-loop: canonical L10 test_cases[].name ordering.
+      # v0.79 BENCH-A enhance-loop: canonical L10 test_cases[].name ordering.
       typical_l10_test_cases_canonical_order:
         # Per-opcode happy-path tests (page 7)
         - CMD_70_set_state
@@ -413,7 +413,7 @@ cable-side-id-ic:
 
 
 cable-side-id-ic-apple-lightning:
-  # Apple Lightning cable plug-side authenticator. BENCHMARK_A / EXAMPLE_CHIP / "Noris"
+  # Apple Lightning cable plug-side authenticator. BENCH-A / IC-A / "Vendor"
   # family of chips clone this protocol. Public details below come from
   # community reverse-engineering (e.g. nyansat/lightning, libimobiledevice).
   inherits_from: cable-side-id-ic

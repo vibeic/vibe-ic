@@ -14,7 +14,7 @@ description: "Verify that all required artifacts exist and pass quality checks b
 > When you adopt this skill on a different IC, swap `<chip-class>` →
 > `<your IC name>` and `<half-duplex-tester>` → `<your host-tester name>`; the
 > structural gates and rule bodies do not depend on those SKUs.
-> See `docs/design/CASE_STUDIES/EXAMPLE_CHIP_*.md` for the full <benchmark>
+> See `docs/design/CASE_STUDIES/AS3616_*.md` for the full <benchmark>
 > regression history.
 
 # Checkpoint Gate — Phase Transition Verification
@@ -39,7 +39,7 @@ and the project's `<host_tester>` then FAILs at integration.
 > **Case study reference.** Concrete example documenting this
 > regression class (<chip-class> v041-v043 → <half-duplex-tester> FAIL on
 > dclk/drst/pad_ctrl/rx_chk/rx_cmd/dis_cnt/spare/otp_ctrl/gen_wake):
-> see `docs/design/CASE_STUDIES/EXAMPLE_CHIP_v041_L_layer_skip_regression.md`.
+> see `docs/design/CASE_STUDIES/AS3616_v041_L_layer_skip_regression.md`.
 
 ### Required Files
 - [ ] `phase1_spec/01_prompt.md` — original user input
@@ -159,7 +159,7 @@ Write `phase2_design/checkpoint2_signoff.md`
 
 ## Checkpoint 3: Phase 3 → Production
 
-### Required Files (Quartus FPGA Flow on 8HD-d)
+### Required Files (Quartus FPGA Flow on <host>)
 - [ ] `phase3_verify/fpga/<module>_fpga.qpf` — Quartus project file
 - [ ] `phase3_verify/fpga/<module>_fpga.qsf` — Quartus settings (device=5CSEBA6U23I7, pin assignments)
 - [ ] `phase3_verify/fpga/<module>_fpga.sdc` — SDC timing constraints
@@ -175,9 +175,9 @@ Write `phase2_design/checkpoint2_signoff.md`
 - [ ] SOF file generated (non-zero size)
 - [ ] STA: no setup/hold violations (or documented waivers)
 
-### FPGA Flow Commands (on 8HD-d, Quartus 23.1 Lite)
+### FPGA Flow Commands (on <host>, Quartus 23.1 Lite)
 ```bash
-export PATH="$HOME/eda/quartus/quartus/bin:$PATH"
+export PATH="~/eda/quartus/quartus/bin:$PATH"
 cd phase3_verify/fpga/
 quartus_map <module>_fpga    # Analysis & Synthesis
 quartus_fit <module>_fpga    # Fitter (Place & Route)

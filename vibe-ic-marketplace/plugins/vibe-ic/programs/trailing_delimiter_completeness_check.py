@@ -5,7 +5,7 @@ in a testbench drives the protocol's trailing delimiter, not just idle padding.
 
 THE PROBLEM
 -----------
-On the v0.99 noris fresh-agent run (and several earlier runs), bugs in
+On the v0.99 vendor fresh-agent run (and several earlier runs), bugs in
 the dispatcher FSM survived sim because the integration testbench
 appended `#500_000` (idle wait) AFTER each cmd packet instead of the
 protocol's actual trailing delimiter (BR / EOF / STOP).

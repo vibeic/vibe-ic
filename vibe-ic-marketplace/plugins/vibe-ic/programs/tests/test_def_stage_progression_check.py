@@ -1,7 +1,7 @@
 """Unit tests for def_stage_progression_check.py.
 
-Catches the 5-identical-DEF fabrication pattern seen in the benchmark_a
-2026-04-22 pilot (subagent copied `a3616_top.def` to all 5 stage names
+Catches the 5-identical-DEF fabrication pattern seen in the BENCH-A
+2026-04-22 pilot (subagent copied `ic_a_top.def` to all 5 stage names
 and declared PnR complete).
 
 Tests:

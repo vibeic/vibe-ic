@@ -22,7 +22,7 @@ Skills that look "redundant" relative to a runner are still essential for Path A
 |---|---|---|---|
 | `NL_REQUIRED` (no deterministic equivalent) | 39 | `essential` (25) + `analog_essential` (14) | KEEP — invoke directly |
 | `REDUNDANT_PATH_B` (covered by `phase2a_one_shot_runner.py` for Path B; needed for Path A NL dialogue) | 19 | `fallback_when_runner_waives` | KEEP for Path A; do NOT auto-invoke when Path B runner is running |
-| `PARTIAL_OVERLAP` — RTL track (covered by `phase2b_one_shot_runner.py` + `aid_class_rtl_gen.py` only for EXAMPLE_PROTOCOL-class) | 17 | `rtl_track` | KEEP — covers non-EXAMPLE_PROTOCOL classes / specialised flows |
+| `PARTIAL_OVERLAP` — RTL track (covered by `phase2b_one_shot_runner.py` + `aid_class_rtl_gen.py` only for AID-class) | 17 | `rtl_track` | KEEP — covers non-AID classes / specialised flows |
 | `PARTIAL_OVERLAP` — backend track (covered by `phase3_one_shot_runner.py` only for standard open-source PDK) | 15 | `backend_track` | KEEP — covers vendor PDK / commercial signoff flows |
 | `REDUNDANT_FULL` (no NL judgement, fully replicated by a runner) | **0** | — | — |
 | `DEAD` (no consumer at all) | **0** | — | — |
@@ -71,17 +71,17 @@ Skills that look "redundant" relative to a runner are still essential for Path A
 | analog-spec-extract | analog_essential | NL_REQUIRED | — | yes | KEEP |
 | analog-topology-select | analog_essential | NL_REQUIRED | — | yes | KEEP |
 | architecture-explore | essential | NL_REQUIRED | — | yes | KEEP |
-| assertion-gen | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
+| assertion-gen | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
 | atpg | backend_track | PARTIAL_OVERLAP | phase3_one_shot_runner.py (standard PDK only) | partial | KEEP |
 | atpg-name-harmonize | essential | NL_REQUIRED | — | yes | KEEP |
 | behavioral-sequences-gen | fallback_when_runner_waives | REDUNDANT_PATH_B | phase2a_one_shot_runner.py (gen_l1..l13 + emit_coverage_report) | no | KEEP_PATH_A_ONLY |
-| bringup-plan | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
+| bringup-plan | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
 | calibration-gen | fallback_when_runner_waives | REDUNDANT_PATH_B | phase2a_one_shot_runner.py (gen_l1..l13 + emit_coverage_report) | no | KEEP_PATH_A_ONLY |
-| cdc-check | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
+| cdc-check | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
 | checkpoint-gate | essential | NL_REQUIRED | — | yes | KEEP |
 | cmd-protocol-gen | fallback_when_runner_waives | REDUNDANT_PATH_B | phase2a_one_shot_runner.py (gen_l1..l13 + emit_coverage_report) | no | KEEP_PATH_A_ONLY |
 | community-backlog-submit | essential | NL_REQUIRED | — | yes | KEEP |
-| constraint-gen | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
+| constraint-gen | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
 | control-logic-gen | fallback_when_runner_waives | REDUNDANT_PATH_B | phase2a_one_shot_runner.py (gen_l1..l13 + emit_coverage_report) | no | KEEP_PATH_A_ONLY |
 | coverage-closure | essential | NL_REQUIRED | — | yes | KEEP |
 | cts-plan | backend_track | PARTIAL_OVERLAP | phase3_one_shot_runner.py (standard PDK only) | partial | KEEP |
@@ -93,15 +93,15 @@ Skills that look "redundant" relative to a runner are still essential for Path A
 | drc-from-lef | backend_track | PARTIAL_OVERLAP | phase3_one_shot_runner.py (standard PDK only) | partial | KEEP |
 | eco-plan | essential | NL_REQUIRED | — | yes | KEEP |
 | em-check | backend_track | PARTIAL_OVERLAP | phase3_one_shot_runner.py (standard PDK only) | partial | KEEP |
-| equivalence-check | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
+| equivalence-check | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
 | flow-orchestrate | backend_track | PARTIAL_OVERLAP | phase3_one_shot_runner.py (standard PDK only) | partial | KEEP |
-| formal-verify | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
-| fpga-hps-bridge | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
-| fpga-led-probe-allocation | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
-| fpga-signaltap | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
-| fpga-test-harness | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
+| formal-verify | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
+| fpga-hps-bridge | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
+| fpga-led-probe-allocation | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
+| fpga-signaltap | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
+| fpga-test-harness | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
 | frs-gen | fallback_when_runner_waives | REDUNDANT_PATH_B | phase2a_one_shot_runner.py (gen_l1..l13 + emit_coverage_report) | no | KEEP_PATH_A_ONLY |
-| hls-c2rtl | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
+| hls-c2rtl | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
 | hold-fix | essential | NL_REQUIRED | — | yes | KEEP |
 | hw-debug-loop | essential | NL_REQUIRED | — | yes | KEEP |
 | integration-spec-gen | fallback_when_runner_waives | REDUNDANT_PATH_B | phase2a_one_shot_runner.py (gen_l1..l13 + emit_coverage_report) | no | KEEP_PATH_A_ONLY |
@@ -123,26 +123,26 @@ Skills that look "redundant" relative to a runner are still essential for Path A
 | ppa-predict | essential | NL_REQUIRED | — | yes | KEEP |
 | protocol-timeline-assert | essential | NL_REQUIRED | — | yes | KEEP |
 | protocol-turnaround-audit | essential | NL_REQUIRED | — | yes | KEEP |
-| rdc-check | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
+| rdc-check | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
 | regmap-gen | fallback_when_runner_waives | REDUNDANT_PATH_B | phase2a_one_shot_runner.py (gen_l1..l13 + emit_coverage_report) | no | KEEP_PATH_A_ONLY |
 | regression-manage | essential | NL_REQUIRED | — | yes | KEEP |
 | rtl-constants-gen | fallback_when_runner_waives | REDUNDANT_PATH_B | phase2a_one_shot_runner.py (gen_l1..l13 + emit_coverage_report) | no | KEEP_PATH_A_ONLY |
 | rtl-repair | essential | NL_REQUIRED | — | yes | KEEP |
 | rtl-review | essential | NL_REQUIRED | — | yes | KEEP |
-| rtl-unit-testbench-gen | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
+| rtl-unit-testbench-gen | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
 | schematic-gen | fallback_when_runner_waives | REDUNDANT_PATH_B | phase2a_one_shot_runner.py (gen_l1..l13 + emit_coverage_report) | no | KEEP_PATH_A_ONLY |
 | scope-pattern-attestation | essential | NL_REQUIRED | — | yes | KEEP |
-| sdc-validator | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
+| sdc-validator | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
 | spec-review | essential | NL_REQUIRED | — | yes | KEEP |
-| spec-to-rtl | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
+| spec-to-rtl | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
 | spec-validator | essential | NL_REQUIRED | — | yes | KEEP |
 | sta-review | essential | NL_REQUIRED | — | yes | KEEP |
 | synth-doctor | essential | NL_REQUIRED | — | yes | KEEP |
-| synth-wrapper-gen | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
+| synth-wrapper-gen | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
 | tapeout-checklist | essential | NL_REQUIRED | — | yes | KEEP |
 | test-cases-gen | fallback_when_runner_waives | REDUNDANT_PATH_B | phase2a_one_shot_runner.py (gen_l1..l13 + emit_coverage_report) | no | KEEP_PATH_A_ONLY |
 | test-debug-gen | fallback_when_runner_waives | REDUNDANT_PATH_B | phase2a_one_shot_runner.py (gen_l1..l13 + emit_coverage_report) | no | KEEP_PATH_A_ONLY |
-| testbench-gen | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (EXAMPLE_PROTOCOL-class only) | partial | KEEP |
+| testbench-gen | rtl_track | PARTIAL_OVERLAP | phase2b_one_shot_runner.py + aid_class_rtl_gen.py (AID-class only) | partial | KEEP |
 | timing-waveform-gen | fallback_when_runner_waives | REDUNDANT_PATH_B | phase2a_one_shot_runner.py (gen_l1..l13 + emit_coverage_report) | no | KEEP_PATH_A_ONLY |
 | upf-author | backend_track | PARTIAL_OVERLAP | phase3_one_shot_runner.py (standard PDK only) | partial | KEEP |
 | yield-diagnostic | essential | NL_REQUIRED | — | yes | KEEP |
@@ -414,7 +414,7 @@ Total `*_check.py` files: 253. Status counts: {'WIRED': 204, 'WIRED_VIA_NONRUNNE
 
 ### Skills to delete: **NONE**
 
-Justification: every skill is either NL-required (essential / analog_essential tiers, 39 skills), tier-classified as a Path-A fallback (19 skills), or a track-specific specialisation that runners only partially cover (17 RTL + 15 backend). Deleting any of them would break either the NL Path A entry point or the non-EXAMPLE_PROTOCOL / vendor-PDK extension paths.
+Justification: every skill is either NL-required (essential / analog_essential tiers, 39 skills), tier-classified as a Path-A fallback (19 skills), or a track-specific specialisation that runners only partially cover (17 RTL + 15 backend). Deleting any of them would break either the NL Path A entry point or the non-AID / vendor-PDK extension paths.
 
 ### Programs to delete (or wire): 1 hard candidate + 22 review candidates
 

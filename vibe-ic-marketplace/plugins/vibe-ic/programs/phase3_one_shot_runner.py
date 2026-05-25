@@ -1909,7 +1909,7 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     rpt.parent.mkdir(parents=True, exist_ok=True)
     # v1.6.550 — for #DRC-PATH P2. Translate host paths to container
     # paths before invoking klayout via docker exec. Without translation
-    # klayout receives e.g. <project_root>/.../sha256.gds
+    # klayout receives e.g. ~/AI_IC_design/.../sha256.gds
     # which doesn't exist inside the iic-osic-tools container (mount
     # point is /foss/designs/). Fixes sha256 / spm / subservient pilot
     # DRC step FAIL with "Unable to open file: /home//... (errno=2)".

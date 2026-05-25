@@ -3,7 +3,7 @@
 
 Wave 73 (v0.128) S3 renamed aid_class_sdc_gen.py to sdc_gen.py because
 the generator is class-AGNOSTIC (it works for any chip whose L8/L9
-declares clock + top-module pins, not just EXAMPLE_PROTOCOL-class).
+declares clock + top-module pins, not just AID-class).
 
 Existing in-tree callers were migrated to the new name. This shim
 forwards both library imports (`from aid_class_sdc_gen import ...`)

@@ -31,7 +31,7 @@ def test_empty_rtl(tmp_path):
 def test_v029_primary_if_state_freeze_accepted(tmp_path):
     """v0.119.29: primary `if (state) cnt <= 0;` is logically equivalent
     to `else if (state) cnt <= 0;` and must also count as a valid freeze.
-    The agent on v0.119.27 noris was false-flagged for this form."""
+    The agent on v0.119.27 vendor was false-flagged for this form."""
     (tmp_path / "wake_ctrl.sv").write_text("""\
 module wake_ctrl(input clk, input awake);
   reg [9:0] tito_cnt;

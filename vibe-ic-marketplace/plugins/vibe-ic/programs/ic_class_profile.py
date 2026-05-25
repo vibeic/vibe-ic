@@ -5,7 +5,7 @@ ic_class_profile.py — IC class detection helper (Wave 36, v0.119.68).
 Wave 36 introduces an IC class profile so other gates can decide
 "is this gate applicable to this IC" before running their existing
 FAIL logic.  The motivation: every Phase 1 (doc-extraction) / Phase 2 gate so far
-hard-coded the assumption that the IC is an EXAMPLE_PROTOCOL-class half-duplex
+hard-coded the assumption that the IC is an AID-class half-duplex
 single-wire device with OTP / calibration / 13 L docs.  Running
 those gates against e.g. a pure-analog PMIC, a SPI EEPROM, or a
 bare FPGA project produced false-positive FAILs that cost the
@@ -63,7 +63,7 @@ import _path_layout as _pl
 
 # Generic single-wire half-duplex protocol nomenclature. Chip-AGNOSTIC.
 _AID_CLASS_PROTOCOL_TOKENS: tuple[str, ...] = (
-    "example_protocol",
+    "aid",
     "apple id bus",
     "id_bus",
     "single_wire_half_duplex",

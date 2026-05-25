@@ -3,7 +3,7 @@
 fpga_pullup_lint.py — Flag tristate inout ports without weak pull-up assignment.
 
 Common bug class: an RTL tristate `inout` port wired to a single-wire bus
-(I2C, ID-bus, Apple EXAMPLE_PROTOCOL, OneWire, ...) requires a weak pull-up on the FPGA
+(I2C, ID-bus, Apple AID, OneWire, ...) requires a weak pull-up on the FPGA
 pin to define the bus state when no driver is active. Without the pull-up,
 the first power-up emits garbage until something pulls the bus, and the
 host tester sees nothing or sees random framing → first-burn FAIL with no

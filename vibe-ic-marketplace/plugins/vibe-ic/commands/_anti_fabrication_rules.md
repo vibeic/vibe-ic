@@ -1,6 +1,6 @@
 # v1.6.30 Anti-fabrication Rules — shared appendix
 
-Codified after the v10627 / v10627-noris false-PASS comparison. Inlined
+Codified after the v10627 / v10627-vendor false-PASS comparison. Inlined
 into every phase2 / phase2 / phase3 / phase23 / vibe-ic-all command so
 that any fresh agent invoking those commands sees the same hard rules.
 

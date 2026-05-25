@@ -2,7 +2,7 @@
 """Tests for fpga_clock_divider_antipattern_check.py (LL-27).
 
 The gate catches the FPGA toggle-divider antipattern surfaced by the
-v0.119.22 noris benchmark: a register output used as a clock without
+v0.119.22 vendor benchmark: a register output used as a clock without
 a corresponding create_generated_clock SDC entry. General — works on
 any FPGA project (Quartus / Vivado / Lattice).
 """
@@ -58,7 +58,7 @@ def test_silent_skip_no_rtl(tmp_path):
 
 
 def test_fail_toggle_divider_no_sdc(tmp_path):
-    """The actual noris failure mode: clk_5m toggle-divider used as
+    """The actual vendor failure mode: clk_5m toggle-divider used as
     posedge clock with no SDC entry → FAIL."""
     _make_fpga_project(tmp_path)
     _write_rtl(tmp_path, """\

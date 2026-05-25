@@ -9,8 +9,8 @@
 # Usage:
 #   plugin_clean_slate_test.sh \
 #       --project-dir /path/to/phase2+3_v0XX_clean \
-#       --baseline-gds /path/to/contaminated/gds/example_chip.gds \
-#       --device-tool device_tester_example_tester_connect_test \
+#       --baseline-gds /path/to/contaminated/gds/ic-a.gds \
+#       --device-tool device_tester_usb_hid_tester_connect_test \
 #       --verdict-key verdict
 #
 # The script does NOT itself spawn the fresh agent — that's a thicker

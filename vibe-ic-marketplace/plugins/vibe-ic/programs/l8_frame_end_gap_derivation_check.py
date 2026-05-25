@@ -10,7 +10,7 @@ A value below the lower bound risks classifying a real IBT as
 end-of-frame (chip dispatches mid-frame).
 
 A value above the upper bound risks chip response missing the master's
-receive window (the v0118-noris bug: 80us > 2*22us = 44us → FAIL).
+receive window (the v0118-vendor bug: 80us > 2*22us = 44us → FAIL).
 
 False-alert escape hatches
 ==========================
@@ -219,7 +219,7 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
                 f"L8.{fe_key}={fe_us}us exceeds {factor}*ibt_us[1] "
                 f"({upper}us). Wide gap delays chip response past the "
                 f"half-duplex master's receive window — exact failure "
-                f"mode of v0118-noris <benchmark> (set 80us, master expected "
+                f"mode of v0118-vendor <benchmark> (set 80us, master expected "
                 f"~30us). Recommended: ibt_us[1] + {margin}us = "
                 f"{ibt_max + margin}us. Override via L2."
                 f"frame_end_gap_max_factor if master genuinely tolerates."

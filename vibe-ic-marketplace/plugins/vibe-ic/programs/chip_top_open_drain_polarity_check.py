@@ -4,7 +4,7 @@
 When a chip_top exposes split open-drain pad signals (`<bus>_oe_low` +
 `<bus>_drive_data`) to a Verilog wrapper that reconstructs the tristate
 pad, the wrapper's polarity MUST match the chip's semantic — NOT the
-signal name. This gate detects the BENCHMARK_A-class bug where Yosys's
+signal name. This gate detects the BENCH-A-class bug where Yosys's
 output naming was `id_bus_oe_low` but the actual semantic was
 `id_bus_drive_low` (=1 means drive low, opposite of "active low OE").
 

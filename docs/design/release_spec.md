@@ -108,7 +108,7 @@ This is an mcp-eda-server work item; this repo only ships the catalogue.
   "plugin_id": "dc-shell-2025.06",
   "version": "1.0.0",
   "mcp_tool_name": "eda_synth_dc",
-  "ic_id": "example_chip",
+  "ic_id": "ic-a",
   "step": 8,
   "duration_ms": 34521,
   "cost_cents": 1500,
@@ -128,7 +128,7 @@ fields required.
 from billing_log import record_call
 record_call(namespace="synopsys", plugin_id="dc-shell-2025.06",
             version="1.0.0", mcp_tool_name="eda_synth_dc",
-            cost_cents=1500, ic_id="example_chip", step=8,
+            cost_cents=1500, ic_id="ic-a", step=8,
             duration_ms=34521)
 ```
 

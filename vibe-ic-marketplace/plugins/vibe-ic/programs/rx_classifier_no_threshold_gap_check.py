@@ -27,7 +27,7 @@ Scope
 -----
 Chip-AGNOSTIC.  Synonym sets cover the canonical
 `rx_classifier_ticks` shape used across half-duplex single-wire
-protocols (EXAMPLE_PROTOCOL class, LIN-ish, K-line-ish).  No vendor / chip /
+protocols (AID class, LIN-ish, K-line-ish).  No vendor / chip /
 PDK / tester-specific identifier is hard-coded.
 
 Verdicts

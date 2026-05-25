@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """slave_tx_no_device_break_check.py — Wave 25/34 silent-bug gate.
 
-In a half-duplex single-wire request-response protocol (EXAMPLE_PROTOCOL class —
+In a half-duplex single-wire request-response protocol (AID class —
 <half-duplex-tester> / <chip-class> / similar), the device/slave's response path MUST
 NOT prepend its own BR (Break) pulse before transmitting response
 bits. The host master already sent a BR at the beginning of the
@@ -608,7 +608,7 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
         return failures, warnings, summary
 
     # Wave 36 (v0.119.68) — protocol-class guard.  This gate is
-    # specific to EXAMPLE_PROTOCOL-class half-duplex single-wire request-response
+    # specific to AID-class half-duplex single-wire request-response
     # framing.  LIN / KWP2000 / fast_init / K-line / ISO14230 use
     # different break semantics (master-side break is the framing
     # marker, not the slave-reply break).  Skip when L2 says one of
@@ -619,8 +619,8 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
     for tok in _NON_AID_PROTOCOL_TOKENS:
         if tok in proto_blob:
             # Wave 42 (v0.119.70) / SF4 — fault-injection hardening.
-            # If L2.protocol_type names a non-EXAMPLE_PROTOCOL half-duplex protocol
-            # but the RTL still exposes an `inout id_bus` (i.e. EXAMPLE_PROTOCOL-
+            # If L2.protocol_type names a non-AID half-duplex protocol
+            # but the RTL still exposes an `inout id_bus` (i.e. AID-
             # class single-wire bidirectional pin), the project has a
             # protocol-type / RTL inconsistency.  FAIL instead of
             # silently SKIPping.
@@ -635,8 +635,8 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
                     continue
             if has_inout_id_bus:
                 failures.append(
-                    f"FAIL — L2.protocol_type='{tok}' (non-EXAMPLE_PROTOCOL), but "
-                    f"RTL exposes inout id_bus (EXAMPLE_PROTOCOL-class hardware). "
+                    f"FAIL — L2.protocol_type='{tok}' (non-AID), but "
+                    f"RTL exposes inout id_bus (AID-class hardware). "
                     f"protocol-type / RTL inconsistency: either L2 is "
                     f"wrong or the RTL pin is wrong. Wave 42 / SF4 "
                     f"fault-injection hardening — fail-closed instead "
@@ -647,7 +647,7 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
                 return failures, warnings, summary
             summary["skip_reason"] = (
                 f"L2.protocol_type indicates '{tok}' which is NOT an "
-                f"EXAMPLE_PROTOCOL-class half-duplex protocol; gate not applicable"
+                f"AID-class half-duplex protocol; gate not applicable"
             )
             return failures, warnings, summary
 
@@ -670,7 +670,7 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
             summary["skip_reason"] = (
                 f"L2 protocol type matches non-half-duplex synonym "
                 f"in `{proto_blob[:60]}...` and no inout id_bus / "
-                f"L8.br_min anchor — EXAMPLE_PROTOCOL-class gate not applicable"
+                f"L8.br_min anchor — AID-class gate not applicable"
             )
             return failures, warnings, summary
 
@@ -753,7 +753,7 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
                     f"FSM state `{state_name}` drives the bus LOW "
                     f"and waits for `{br_const}` ticks before bit "
                     f"transmission{tail}. In half-duplex single-wire "
-                    f"request-response protocols (EXAMPLE_PROTOCOL class), the "
+                    f"request-response protocols (AID class), the "
                     f"device/slave reply must NOT prepend its own BR "
                     f"— host already sent BR at frame start; a second "
                     f"LOW pulse ≥ BR_MIN is read by host as a frame "
@@ -879,7 +879,7 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
                     f"FSM state `{state_name}` drives the bus LOW for "
                     f"{duration} ticks, which is ≥ project BR_MIN "
                     f"threshold {br_min_ticks} ticks. In half-duplex "
-                    f"single-wire request-response protocols (EXAMPLE_PROTOCOL "
+                    f"single-wire request-response protocols (AID "
                     f"class), the device/slave reply MUST NOT drive "
                     f"the bus LOW for ≥ BR_MIN at any point — host "
                     f"firmware classifies that LOW pulse as a BR / "
@@ -956,7 +956,7 @@ def main(argv: List[str]) -> int:
     print("Why this matters:")
     print(
         "  In half-duplex single-wire request-response protocols "
-        "(EXAMPLE_PROTOCOL\n  class — <half-duplex-tester> / <chip-class> / similar), the host master "
+        "(AID\n  class — <half-duplex-tester> / <chip-class> / similar), the host master "
         "sent a BR\n  at the beginning of the frame. The device "
         "ANSWER is NOT\n  preceded by its own BR — host firmware "
         "reads any LOW pulse\n  ≥ BR_MIN after the request as a "

@@ -20,7 +20,7 @@ def _write(tmp: Path, vectors):
 
 
 def test_derives_aid_crc_from_known_vectors(tmp_path):
-    """EXAMPLE_CHIP EXAMPLE_PROTOCOL uses poly=0x31, init=0xFF, refin/refout=True.
+    """IC-A AID uses poly=0x31, init=0xFF, refin/refout=True.
     Given 4 known (data, crc) pairs, the program must derive these."""
     f = _write(tmp_path, [
         {"data_hex": "72", "crc_hex": "71"},

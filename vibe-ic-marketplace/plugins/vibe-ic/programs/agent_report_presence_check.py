@@ -3,7 +3,7 @@
 agent_report_presence_check.py — verify the project ships a structured
 top-level AGENT_REPORT.md summarising what the run delivered.
 
-Real-world inspiration: phase2+3_v10619-noris/AGENT_REPORT.md carried a
+Real-world inspiration: phase2+3_v10619-vendor/AGENT_REPORT.md carried a
 clear five-section breakdown (Verdict, Acceptance evidence, Waivers
 list, Discoveries, Iteration log) that made the run independently
 reviewable. phase2+3_v10619 (other agent) shipped no such file, so
@@ -36,7 +36,7 @@ Exit codes:
     1  AGENT_REPORT.md missing OR sections missing
     2  argument or I/O error
 
-chip-AGNOSTIC. Section synonyms come from the v10619-noris template
+chip-AGNOSTIC. Section synonyms come from the v10619-vendor template
 plus common alternates; no chip / project-name hardcoded.
 """
 from __future__ import annotations

@@ -29,3 +29,7 @@ md-905
 # Private benchmark sources
 u_hawaii
 uhee628
+
+# Typo variants (caught during v0.1.2 sanitize)
+a3616
+noris

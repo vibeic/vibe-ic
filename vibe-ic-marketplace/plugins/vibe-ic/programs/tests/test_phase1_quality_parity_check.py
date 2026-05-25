@@ -315,7 +315,7 @@ def test_count_l9_ports_returns_zero_when_no_ports():
 
 def test_generic_cable_side_class_does_not_require_named_submodules(tmp_path):
     """B3 regression test: the generic `cable-side-id-ic` parent class
-    no longer demands EXAMPLE_CHIP-specific submodule names. A design with
+    no longer demands IC-A-specific submodule names. A design with
     arbitrary submodule names that meets the structural minimum
     (>= 6 submodules) passes the parent class floor — only the
     Maxim-style sub-class enforces specific names."""

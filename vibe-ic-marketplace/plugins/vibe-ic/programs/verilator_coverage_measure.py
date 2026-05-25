@@ -19,7 +19,7 @@ Usage:
     # sim/cov_build/main.cpp — see your project's conventions)
     python3 verilator_coverage_measure.py measure \\
         --rtl-dir rtl \\
-        --top benchmark_a_top \\
+        --top sn2025_top \\
         --main sim/cov_build/main.cpp \\
         --out reports/coverage/coverage_actual.json
 

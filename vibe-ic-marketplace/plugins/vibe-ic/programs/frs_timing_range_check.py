@@ -52,7 +52,7 @@ import _path_layout as _pl
 
 # GENERAL: any L2 key ending in a time-unit suffix is a timing parameter
 # that downstream gates may need to read structurally. This pattern is
-# chip-agnostic — LIN, K-line, 1-Wire, EXAMPLE_PROTOCOL-bus, custom serial all use
+# chip-agnostic — LIN, K-line, 1-Wire, AID-bus, custom serial all use
 # `_us` / `_ms` / `_ns` / `_ps` / `_cyc` / `_ticks` suffixes.
 TIMING_KEYS_NEED_STRUCTURE = re.compile(
     r"_(us|ms|ns|ps|cyc|ticks)$",
@@ -102,7 +102,7 @@ def _looks_like_timing_leaf(v) -> bool:
     correctly flagged by is_well_formed). DICTS are leaves only if they
     have the canonical {min,max} or {value,...} shape; an opaque wrapper
     dict like `response_timing_us = {"setup": ..., "hold": ...}` recurses.
-    v0.119.23 fix to the false-alert noted by the v0.119.22 noris run."""
+    v0.119.23 fix to the false-alert noted by the v0.119.22 vendor run."""
     if isinstance(v, (int, float, list, str)) or v is None:
         return True
     if isinstance(v, dict):

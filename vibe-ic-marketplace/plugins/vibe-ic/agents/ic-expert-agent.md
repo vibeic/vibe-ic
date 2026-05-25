@@ -96,7 +96,7 @@ Run this check after every layer completes:
 | L7 | L1 pins, L6 FSM | Test Mode can't be entered |
 | L8 | L3 protocol, L6 FSM | Response-latency violations |
 | L8R | L8 timing | RTL parameters drift from spec |
-| L9 | L5 pads, L6 submodules, L8 timing | DTOP missing signals → EXAMPLE_TESTER |
+| L9 | L5 pads, L6 submodules, L8 timing | DTOP missing signals → USB-HID tester |
 
 ## Interface to PM Agent
 
@@ -140,7 +140,7 @@ If `NEED_MORE_INPUT`, the PM Agent re-opens dialogue. If `DEFAULTED`, you docume
 
 ## Fill-to-Floor Rule (v0.50, MANDATORY)
 
-**Problem this solves**: v0.49 3-persona BENCHMARK_A benchmark showed that when a common-user persona leaves Phase-1 under-specified, the IC Expert was producing a *degenerate* IC (4 opcodes, 32-byte OTP, placeholder CRC poly) that passed `phase1_doc_presence_check` + `json_schema_check` but was functionally useless for hardware. The three personas ended up with three different ICs instead of one.
+**Problem this solves**: v0.49 3-persona BENCH-A benchmark showed that when a common-user persona leaves Phase-1 under-specified, the IC Expert was producing a *degenerate* IC (4 opcodes, 32-byte OTP, placeholder CRC poly) that passed `phase1_doc_presence_check` + `json_schema_check` but was functionally useless for hardware. The three personas ended up with three different ICs instead of one.
 
 **New mandatory behaviour**: The class template (`class_kb/templates/<class>.yaml`) now carries a `spec_floor:` block defining minimum quantitative richness — opcode count, OTP size, submodule count, CRC polynomial whitelist, etc. When the user's answers leave any floor metric below its minimum, you MUST lift the design to the floor using documented industry defaults **before** writing the layer JSON.
 

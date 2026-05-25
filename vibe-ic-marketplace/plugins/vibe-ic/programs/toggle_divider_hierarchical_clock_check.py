@@ -7,7 +7,7 @@ boundaries.
 Why this gate exists
 ====================
 LL-27 catches `clk_div <= ~clk_div` followed by `always_ff @(posedge
-clk_div)` when both occur in the same RTL file. v0.119.30 <benchmark> noris
+clk_div)` when both occur in the same RTL file. v0.119.30 <benchmark> vendor
 benchmark caught a hierarchical variant LL-27 misses:
 
     // toplevel.v

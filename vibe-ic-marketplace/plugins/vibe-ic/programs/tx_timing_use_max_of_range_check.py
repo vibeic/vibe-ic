@@ -120,7 +120,7 @@ def _direct_us_key(node: dict, fragment: str):
     """v0.119.27: walk a JSON tree looking for any dict key that ends in
     `_us` AND contains `fragment` (case-insensitive). Returns the
     numeric value (number, [min,max]→min, {min,max}→min). Closes the
-    schema-mismatch noris-benchmark gap where L2 stored
+    schema-mismatch vendor-benchmark gap where L2 stored
     `tIBT_us: 22.7` directly instead of as a `name`/`physical_value_us`
     record.
 
@@ -173,7 +173,7 @@ def find_pkg_const(project_dir: Path, name_fragment: str):
     """
     # v0.119.27: type qualifier is OPTIONAL — `localparam TIBT_TICKS = 1135;`
     # is valid SystemVerilog (defaults to logic [31:0]), and the v0.119.25
-    # noris run wrote constants in that form. Earlier required-type regex
+    # vendor run wrote constants in that form. Earlier required-type regex
     # silently missed them and the gate fell back to L8/L2 → wrong values.
     pat = re.compile(
         r"localparam\s+"

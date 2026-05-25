@@ -89,9 +89,9 @@
 | ------ | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | **L1 — 自我審計** | 跑 `flow_compliance_check.py --strict`，每 step 必須 PASS（不能是 WAIVED）                                        | 752/752 deterministic test，77 structural-RTL gates                                                                              |
 | **L2 — Oracle 字節對比** | 把 known-good `.sof`（前一版） burn 進 FPGA，host-tester 抓所有 byte stream → 與新版逐 byte 比對          | `mcp__eda-tools__eda_oracle_bytewise_dump`                                                                                      |
-| **L3 — Hardware-in-the-loop** | DE10-Lite + EXAMPLE_TESTER host-tester + 示波器 + 相機抓 LED → camera_capture diff 對照 reference        | `device_camera_led_diff`、`device_scope_capture`、`eda_pass_reference_scope_diff`                                               |
-| **L4 — Fresh-agent reproducibility** | 砍掉所有 oracle / memory / 過往 conversation，把同一份 L1-L9 spec 餵給乾淨的 Claude session，產出的 RTL 必須 byte-identical（或 functionally identical） | `tools/benchmark/run_benchmark.sh`，第 1 個 benchmark = benchmark_a |
-| **L5 — False-alert 回歸** | 把 v0.119.1 全部 77 gates 跑過 v099 known-good baseline → **零** finding                                      | `pytest -q` + `flow_compliance_check.py 1st_benchmark_benchmark_a/phase2+3_v099 --strict`                                            |
+| **L3 — Hardware-in-the-loop** | DE10-Lite + USB-HID tester + 示波器 + 相機抓 LED → camera_capture diff 對照 reference        | `device_camera_led_diff`、`device_scope_capture`、`eda_pass_reference_scope_diff`                                               |
+| **L4 — Fresh-agent reproducibility** | 砍掉所有 oracle / memory / 過往 conversation，把同一份 L1-L9 spec 餵給乾淨的 Claude session，產出的 RTL 必須 byte-identical（或 functionally identical） | `tools/benchmark/run_benchmark.sh`，第 1 個 benchmark = bench-a |
+| **L5 — False-alert 回歸** | 把 v0.119.1 全部 77 gates 跑過 v099 known-good baseline → **零** finding                                      | `pytest -q` + `flow_compliance_check.py 1st_benchmark_bench-a/phase2+3_v099 --strict`                                            |
 | **L6 — Foundry sign-off** | DRC/LVS/PERC 在真實 PDK 上 clean、density 達標、antenna OK、tapeout_checklist 4/4                            | `eda_drc_klayout`、`eda_lvs`、Step 28 + Step 32                                                                                |
 
 **重點**：`PASS` 不能取代 silicon。silicon 之前的最高保證是 **L1+L2+L3+L4 同時通過**（這是 vibe-ic 的「engineering tapeout-ready」門檻）。
@@ -121,8 +121,8 @@ project/
 
 ### (2) Bug-class Catalogue（讓專家看「我們攔到什麼」）
 
-- **v0118-noris case study**：`FRAME_END_GAP=4000 ticks` 半雙工 latency window 超標 → LL-4 gate 抓到
-- **v0.116 benchmark_a case study**：fresh-agent oracle 缺失 → spec-to-rtl 多攔 7 條規則
+- **v0118-vendor case study**：`FRAME_END_GAP=4000 ticks` 半雙工 latency window 超標 → LL-4 gate 抓到
+- **v0.116 bench-a case study**：fresh-agent oracle 缺失 → spec-to-rtl 多攔 7 條規則
 - 每條規則都附：bug origin commit + 修補 gate + 對應 test 檔
 
 ### (3) Gate-coverage Matrix
@@ -134,7 +134,7 @@ project/
 **這是殺手級展示**。在專家面前：
 
 1. 砍掉一個 worktree 的 memory
-2. 開新 Claude session 只讀 `1st_benchmark_benchmark_a/phase1_v049_*/human_docs/`
+2. 開新 Claude session 只讀 `1st_benchmark_bench-a/phase1_v049_*/human_docs/`
 3. 跑 `/spec-to-rtl` → `/flow_compliance_check --strict`
 4. 對照 v099 reference SOF → bytewise PASS
 

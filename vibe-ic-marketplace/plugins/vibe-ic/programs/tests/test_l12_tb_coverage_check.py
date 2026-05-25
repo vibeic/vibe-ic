@@ -35,7 +35,7 @@ def _make_project(tmp_path, sequences, tb_files=None):
 # ---------------------------------------------------------------------------
 def test_normalise_candidates_no_suffix_list_only_literal_forms():
     """Without a class-template strip list, only the literal id (snake +
-    flat) is tried — no EXAMPLE_CHIP-specific suffix assumptions."""
+    flat) is tried — no IC-A-specific suffix assumptions."""
     cands = gate.normalise_candidates("TEST_MODE_ENTRY")
     assert cands == ["tb_test_mode_entry.v", "tb_testmodeentry.v"]
 

@@ -3,7 +3,7 @@
 
 Wave 72 deliverable. Wave 73 (v0.128) renamed from aid_class_qsf_gen.py
 to reflect that the generator is class-AGNOSTIC: it works for any chip
-whose L9 declares its top-module pins, not just EXAMPLE_PROTOCOL-class ICs. A
+whose L9 declares its top-module pins, not just AID-class ICs. A
 backwards-compat shim at the old path forwards calls until v0.130.
 
 Closes the last manual-prep gap so a fresh-agent can go from empty

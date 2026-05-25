@@ -152,7 +152,7 @@ def test_waiver_no_longer_suppresses_below_threshold(tmp_path):
     (tmp_path / "waivers.json").write_text(json.dumps({
         "extraction_coverage_acceptable_below_95":
             "First-pass benchmark shows 10% coverage; deferring full "
-            "extraction to next iteration; tracked in ticket NORIS-42.",
+            "extraction to next iteration; tracked in ticket VENDOR-42.",
     }))
     r = _run(tmp_path)
     # Wave 23 — the waiver no longer pulls the gate to PASS; FAIL.
@@ -347,7 +347,7 @@ def test_autodiscovery_per_regex_cap_high_enough(tmp_path):
 
 # ─────────────────────────────────────────────────────────────────────
 # BACKLOG-v13 Wave 8 (v0.119.40) — numeric_unit must not span newlines.
-# Motivation: 1st_benchmark_benchmark_a/phase1_v0119.39-noris/RESULT.md
+# Motivation: 1st_benchmark_benchmark_a/phase1_v0119.39-vendor/RESULT.md
 # documented 26/988 = 2.6% unmatchable patterns because the regex used
 # `\s+` between number and unit, capturing cell-broken PDF rows like
 # `'3.5\nV'`. Fix: same-line `[ \t\r]*` gap + post-filter drops \n/\r/\t.

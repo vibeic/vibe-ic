@@ -137,7 +137,7 @@ def _detect_synthetic_timing(entries: List[dict]) -> Optional[str]:
       B. Every entry has 0 sub-second precision (no .frac portion or
          all zero) AND clusters on round-minute boundaries
          (i.e. seconds-of-day mod 60 == 0). Catches entries timestamped
-         10:01:00 / 10:05:00 / 10:11:00 etc. — the v10627-noris case.
+         10:01:00 / 10:05:00 / 10:11:00 etc. — the v10627-vendor case.
       C. ≥3 consecutive monotonic gaps that are EXACT multiples of
          60 / 300 / 600 seconds (regular cadence, fabricated).
 
@@ -171,7 +171,7 @@ def _detect_synthetic_timing(entries: List[dict]) -> Optional[str]:
                 f"various seconds)")
 
     # Pattern B — all entries on round-minute boundaries with no
-    # sub-second jitter (catches the v10627-noris case where the
+    # sub-second jitter (catches the v10627-vendor case where the
     # CHANGELOG describes 10:01:00, 10:05:00, 10:11:00, 11:30:00 etc.)
     if fracs_all_zero and all(int(v) % 60 == 0 for v in soda):
         return (f"all {len(soda)} entries on round-minute boundaries "

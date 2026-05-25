@@ -5,7 +5,7 @@ statements with RTL bit-indexing to catch payload-bit misreads.
 
 THE PROBLEM
 -----------
-On the noris run, the spec said "byte1 bit3 = RD5K, bit7 = OUT1" but the
+On the vendor run, the spec said "byte1 bit3 = RD5K, bit7 = OUT1" but the
 agent's RTL stored RD5K at bit 6 and PT at bit 3. Lint, formal, and CRC
 all PASS — the bug is purely positional, the gate has to be told what
 the canonical positions are.

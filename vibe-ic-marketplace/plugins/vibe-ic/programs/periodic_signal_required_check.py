@@ -6,7 +6,7 @@ contains a generator module that actually emits the signal.
 
 THE PROBLEM
 -----------
-The noris run defined `WAKE_ITO_CYCLES` as a constant but no module
+The vendor run defined `WAKE_ITO_CYCLES` as a constant but no module
 instantiated a wake-pulse generator. The RTL parameter existed; nothing
 ever drove a periodic wake pulse to the host. Since a static lint sees
 the constant defined and the lint passes, the bug only manifests on the

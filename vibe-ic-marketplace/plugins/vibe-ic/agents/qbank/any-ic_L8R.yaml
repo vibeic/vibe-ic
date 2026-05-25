@@ -6,7 +6,7 @@ qbank:
     intermediate: ["What's the core clock speed — in MHz or Hz?"]
     beginner:     ["How fast does the chip tick? (give a rough number, or say 'standard')"]
     follow_ups:
-      - if_user_says: ["standard cable-id", "EXAMPLE_CHIP", "like BENCHMARK_A"]
+      - if_user_says: ["standard cable-id", "IC-A", "like BENCH-A"]
         respond_with_default: "5_000_000 (5 MHz RC)"
       - if_user_says: ["slow", "low power"]
         respond_with_default: "1_000_000 (1 MHz)"

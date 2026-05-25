@@ -33,7 +33,7 @@ def run_cli(tmp_path, sv_content, filename='test_tx_phy.v'):
 
 
 # -----------------------------------------------------------------------
-# Test 1: Classic bus-sampling anti-pattern (EXAMPLE_TESTER pattern)
+# Test 1: Classic bus-sampling anti-pattern (USB-HID tester pattern)
 # -----------------------------------------------------------------------
 class TestBusSamplingDetection:
     def test_detects_bus_gated_low_counter(self, tmp_path):

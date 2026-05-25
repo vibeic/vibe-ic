@@ -11,7 +11,7 @@ fan-out (ideally 1). High fan-out adds capacitance to the pad-driving
 LUT, slowing its edges. The host's analog bit-receiver detects the
 difference even when a 100 ns/sample scope cannot.
 
-Empirical evidence (<benchmark> v3 vs v0118-noris oracle):
+Empirical evidence (<benchmark> v3 vs v0118-vendor oracle):
   v0118 (HW PASS): GPIO_id_bus Combinational Fan-Out = 1
                    Output Enable Source = "GPIO_id_bus~2 (inverted)"
                    (Quartus inferred a pin-local optimized LUT)

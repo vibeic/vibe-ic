@@ -43,19 +43,19 @@ If yes → record it.  If no → it's a project-specific issue, not a plugin gap
 
 | Remove | Replace with |
 |--------|-------------|
-| Chip names (EXAMPLE_CHIP, BME280, ...) | "a cable-side ID IC" / "an I2C sensor" / "a UART bridge" |
+| Chip names (IC-A, BME280, ...) | "a cable-side ID IC" / "an I2C sensor" / "a UART bridge" |
 | Vendor names (Apple, Maxim, ...) | "the vendor" / omit entirely |
 | Proprietary register maps | "the IC's register map" |
 | OTP hex dumps | "OTP content" |
 | Vendor PDF filenames | "the vendor datasheet" |
 | Local file paths | omit |
-| Tester SKUs (EXAMPLE_TESTER) | "the protocol tester" / "the hardware tester" |
+| Tester SKUs (USB-HID tester) | "the protocol tester" / "the hardware tester" |
 | Hard-coded command bytes | "the tester's connect command" |
 
 ### Examples
 
 **Bad** (specific):
-> "EXAMPLE_CHIP's wake register only clears on rst_n, missing the 80µs
+> "IC-A's wake register only clears on rst_n, missing the 80µs
 > bus-LOW soft-reset path from Apple Lightning spec page 47."
 
 **Good** (general):

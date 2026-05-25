@@ -116,7 +116,7 @@ write_verilog out.v
 
 
 def test_abc_between_techmap_and_hilomap_fails(tmp_path):
-    """BENCHMARK_A run-4 finding: ABC after the last techmap, before hilomap, is
+    """BENCH-A run-4 finding: ABC after the last techmap, before hilomap, is
     silent at synth time but trips OpenROAD detailed_route DRT-0305."""
     f = tmp_path / "abc_between.ys"
     f.write_text(_ABC_BETWEEN)

@@ -109,7 +109,7 @@ endmodule
 
 
 def test_low_reset_via_registered_bus_passes(tmp_path):
-    """v0.119.19: noris-benchmark RTL used `id_bus_rx_q1 == 1'b0` to test
+    """v0.119.19: vendor-benchmark RTL used `id_bus_rx_q1 == 1'b0` to test
     bus-LOW. The earlier narrow regex (`!id_bus_rx` or `id_bus_rx==1'b0`)
     silently missed it; the loose regex now accepts the registered form.
     Both `id_bus_rx_q1` and the literal `id_bus_rx` should satisfy."""

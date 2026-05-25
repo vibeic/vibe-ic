@@ -52,7 +52,7 @@ from ic_class_profile import detect_ic_class  # noqa: E402
 
 # Wave 43 (v0.119.75) — explicit ic_class_profile guard.
 # L4 regmap with enumerated multi-bit fields is mandatory for digital
-# command-driven ICs (UART / SPI / I2C / EXAMPLE_PROTOCOL-class). Pure-analog
+# command-driven ICs (UART / SPI / I2C / AID-class). Pure-analog
 # parts have no command register file; bare-FPGA scaffolds have no
 # fab-side regmap to characterise.
 _SKIP_CLASSES = ("pure_analog", "bare_fpga")

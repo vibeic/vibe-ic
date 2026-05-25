@@ -13,7 +13,7 @@ MHz) are all specific enough that observing ≥2 of them in the same
 document is high-confidence SATA evidence.
 
 The L8 generator's existing timing-constant extractor only looks at
-files matching `timing|wave|signal|measure` and at EXAMPLE_PROTOCOL-class
+files matching `timing|wave|signal|measure` and at AID-class
 timing names (`T_<NAME>` / `tBR` / `tIBT` / etc.). It misses the
 SATA-spec literal speeds + clocks because they live in the README
 under prose, not in a timing-named file with a T-prefixed name.

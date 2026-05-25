@@ -260,17 +260,17 @@ def run_audit(project: Path) -> AuditResult:
     result = AuditResult()
 
     # Wave 36 (v0.119.68) — protocol_class guard.  This gate is
-    # specific to EXAMPLE_PROTOCOL-class half-duplex byte framing where IBT
+    # specific to AID-class half-duplex byte framing where IBT
     # (inter-byte time) is part of the protocol contract.  SPI /
     # UART / I2C do NOT have an IBT phase.  Skip when L2 declares
     # one of those AND L8 carries no ibt_min/ibt_max anchor.
     #
     # Wave 42 (v0.119.70) / SF4 — fault-injection hardening: before
-    # SKIPping on non-EXAMPLE_PROTOCOL protocol token, cross-check whether RTL
-    # exposes an `inout id_bus` (EXAMPLE_PROTOCOL-class hardware).  If so, FAIL
+    # SKIPping on non-AID protocol token, cross-check whether RTL
+    # exposes an `inout id_bus` (AID-class hardware).  If so, FAIL
     # with a protocol-type / RTL inconsistency message instead of
     # silent SKIP — this catches faked L2.protocol_type='lin'/'kwp2000'
-    # on an EXAMPLE_PROTOCOL-class IC.
+    # on an AID-class IC.
     proto_blob = _l2_protocol_blob(project)
     matched_non_aid = next(
         (tok for tok in _NON_AID_PROTO_TOKENS if tok in proto_blob),
@@ -308,8 +308,8 @@ def run_audit(project: Path) -> AuditResult:
                 rule="PROTOCOL_RTL_INCONSISTENCY",
                 severity="ERROR",
                 message=(
-                    f"L2.protocol_type='{matched_non_aid}' (non-EXAMPLE_PROTOCOL), "
-                    f"but RTL exposes inout id_bus (EXAMPLE_PROTOCOL-class "
+                    f"L2.protocol_type='{matched_non_aid}' (non-AID), "
+                    f"but RTL exposes inout id_bus (AID-class "
                     f"hardware). protocol-type / RTL inconsistency. "
                     f"Wave 42 / SF4 fault-injection hardening — "
                     f"fail-closed instead of silent SKIP."
@@ -327,7 +327,7 @@ def run_audit(project: Path) -> AuditResult:
             result.findings.append(Finding(
                 rule="PROTOCOL_NOT_AID_CLASS",
                 severity="INFO",
-                message=(f"L2 protocol_type matches non-EXAMPLE_PROTOCOL-class "
+                message=(f"L2 protocol_type matches non-AID-class "
                          f"synonym in `{proto_blob[:60]}...` and L8 "
                          f"has no ibt_min / ibt_max — gate not "
                          f"applicable"),

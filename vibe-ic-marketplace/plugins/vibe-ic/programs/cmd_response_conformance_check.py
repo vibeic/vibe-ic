@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """cmd_response_conformance_check.py — v0.50 plugin gate
 
-Close-loop protocol conformance test for command-and-response ICs (EXAMPLE_PROTOCOL,
+Close-loop protocol conformance test for command-and-response ICs (AID,
 <chip-class>, I2C/SPI peripherals, etc.). Given:
   1. Expected CMD→RSP byte-for-byte vectors (from L3_CMD_PROTOCOL.json,
      crc_vectors.json, or a user-supplied JSON);

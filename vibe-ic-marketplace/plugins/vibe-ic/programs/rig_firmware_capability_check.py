@@ -51,7 +51,7 @@ from typing import List, Tuple, Optional
 
 # Wave 78 — explicit class applicability. Rig-firmware capability
 # applies to any IC that needs a host-tester / programmer for HW
-# verification (EXAMPLE_PROTOCOL-class half-duplex, digital cmd-driven, mixed-
+# verification (AID-class half-duplex, digital cmd-driven, mixed-
 # signal OTP). `unknown` is included so a profile that fails to
 # classify still triggers the fail-closed check.
 sys.path.insert(0, str(Path(__file__).resolve().parent))

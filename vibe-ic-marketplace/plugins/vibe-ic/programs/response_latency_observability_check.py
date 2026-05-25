@@ -215,7 +215,7 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
                 f"`dbg_*_latency`, `dbg_*_resp_cyc`, or "
                 f"`dbg_*_turnaround`. Without such an observable, when "
                 f"sim PASSes but HW FAILs (latency-window bugs like "
-                f"v0118-noris <benchmark>), the developer is forced to do "
+                f"v0118-vendor <benchmark>), the developer is forced to do "
                 f"recompile-iterate-burn loops or set up signaltap, "
                 f"both expensive. Recommend: add `output logic [15:0] "
                 f"dbg_response_latency_cycles` measuring cycles from "

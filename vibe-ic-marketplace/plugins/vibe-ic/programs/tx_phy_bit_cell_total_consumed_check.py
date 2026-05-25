@@ -52,7 +52,7 @@ bit-advance must reference it) is preserved. What changed:
 
 This gate is **chip-AGNOSTIC**. It works for any half-duplex single-
 wire bit-bang protocol where `BIT_CY = LOW_TICKS + HIGH_TICKS`. No
-<chip-class> / <benchmark> / <half-duplex-tester> / NORIS / 0xF2 / specific tick value is
+<chip-class> / <benchmark> / <half-duplex-tester> / VENDOR / 0xF2 / specific tick value is
 hard-coded.
 
 Detection algorithm

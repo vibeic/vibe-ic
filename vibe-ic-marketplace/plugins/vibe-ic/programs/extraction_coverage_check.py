@@ -48,7 +48,7 @@ The gate looks for patterns in this order:
 
 If neither extraction_patterns.json nor input_doc/ nor
 input/docs/*.txt exists, the gate silent-skips (no false alert).
-This means the gate is not NORIS/<chip-class>-tuned: any project
+This means the gate is not VENDOR/<chip-class>-tuned: any project
 supplying its own pattern file gets the same verdict.
 
 Wave 23 (v0.119.55): if patterns + L docs ARE present, coverage

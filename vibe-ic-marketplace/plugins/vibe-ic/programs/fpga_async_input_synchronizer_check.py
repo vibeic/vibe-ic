@@ -6,7 +6,7 @@ logic.
 
 THE PROBLEM
 -----------
-On the noris run, the FPGA top received `KEY_n` and `ID_BUS_PIN` directly
+On the vendor run, the FPGA top received `KEY_n` and `ID_BUS_PIN` directly
 into edge-triggered logic without 2-FF synchronisers. Metastability in the
 core FSM produced sporadic glitches that the sim never modelled.
 

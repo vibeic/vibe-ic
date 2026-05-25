@@ -34,7 +34,7 @@
     },
     {
       "name": "mixed_signal_otp",
-      "description": "Mixed-signal IC with OTP-driven configuration. Digital control logic + OTP read sequence — partial overlap with aid_class. v1.6.142 (#52) routes through MAIN_FSM_SPEC_COMPLIANT so the dispatcher consumes L3.opcodes (per-opcode case-arms + L3-enumerated silent-reject arms); BASELINE spam-responder produces silent DUT for chips with opcodes outside the EXAMPLE_PROTOCOL-convention default reply path.",
+      "description": "Mixed-signal IC with OTP-driven configuration. Digital control logic + OTP read sequence — partial overlap with aid_class. v1.6.142 (#52) routes through MAIN_FSM_SPEC_COMPLIANT so the dispatcher consumes L3.opcodes (per-opcode case-arms + L3-enumerated silent-reject arms); BASELINE spam-responder produces silent DUT for chips with opcodes outside the AID-convention default reply path.",
       "synonyms": ["mixed_otp", "otp_chip"],
       "rtl_gen": "aid_class_rtl_gen.py",
       "rtl_gen_args": ["--spec-compliance"],

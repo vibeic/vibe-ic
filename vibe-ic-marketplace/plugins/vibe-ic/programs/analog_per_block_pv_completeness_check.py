@@ -20,7 +20,7 @@ set on disk:
     analog/<block>/pre_vs_post.json    (A7 post-layout resim diff)
 
 Real-world inspiration: phase2+3_v10619 shipped this exact set across
-6 blocks; phase2+3_v10619-noris shipped only an A8 packaging for
+6 blocks; phase2+3_v10619-vendor shipped only an A8 packaging for
 ldo_default and skipped per-block PV. Both projects passed the wider
 flow_compliance audit, but only one had the structural depth this
 gate enforces. v1.6.24 promotes that depth from convention to gate.

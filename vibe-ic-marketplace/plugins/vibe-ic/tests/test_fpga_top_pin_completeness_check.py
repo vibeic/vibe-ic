@@ -102,7 +102,7 @@ def test_fr_tied_pad_with_mandatory_false_is_elevated(tmp_path):
     """v0.119.19 fix: a pad with `requirement_id` is mandatory regardless
     of `mandatory: false`. FR-tied pins are not optional by definition.
 
-    Noris-benchmark failure mode: agent marked 6 of 8 FR-tied pads
+    Vendor-benchmark failure mode: agent marked 6 of 8 FR-tied pads
     `mandatory: false` so the gate "passed" with 2 pins, missing 6
     FR-mandated pins entirely. The fix forces FR-tied pads back into
     the required set."""
@@ -136,7 +136,7 @@ def test_fr_tied_pad_with_mandatory_false_is_elevated(tmp_path):
 def test_fpga_alias_in_pad_definition(tmp_path):
     """v0.119.24: a pad whose canonical name (RSTN) doesn't appear in
     fpga_top is still satisfied when its `fpga_alias` (KEY[0]) does.
-    Closes the noris-benchmark complaint that DE10-Lite FPGA-board
+    Closes the vendor-benchmark complaint that DE10-Lite FPGA-board
     naming wasn't subsumed."""
     _write_l2(tmp_path, {
         "pad_definitions": [

@@ -5,7 +5,7 @@ failures on CRC parameter sections in vendor docs.
 
 Why this gate exists
 ====================
-v0.119.30 <benchmark> noris benchmark — fresh agent guessed CRC init=0x00
+v0.119.30 <benchmark> vendor benchmark — fresh agent guessed CRC init=0x00
 even though the vendor FRS dedicates a whole section to declaring
 the CRC parameters explicitly (polynomial X^8+X^5+X^4+1, reflected
 representation 0x8C, init=0xFF on every break, full reference

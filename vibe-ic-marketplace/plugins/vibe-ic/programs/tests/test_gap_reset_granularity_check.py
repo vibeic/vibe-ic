@@ -1,6 +1,6 @@
 """Unit tests for gap_reset_granularity_check.py.
 
-Tests verify detection of the EXAMPLE_CHIP v041 fresh-agent final-blocker bug:
+Tests verify detection of the IC-A v041 fresh-agent final-blocker bug:
 gap_cnt reset only on byte-level activity (rx_byte_valid) without also
 resetting on bit-level activity (bit_valid).
 """

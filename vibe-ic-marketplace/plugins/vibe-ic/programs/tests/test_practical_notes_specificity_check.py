@@ -1,7 +1,22 @@
-"""Tests for practical_notes_specificity_check.py."""
+"""Tests for practical_notes_specificity_check.py.
+
+Fixture tokens (chip / vendor / SKU / project codenames) are loaded at
+runtime from ``plugins/vibe-ic/tests/chip_deny_list.txt`` so this
+source file itself stays free of the private tokens it is exercising.
+
+Classification heuristic (token-agnostic):
+  * tokens containing a hyphen and a digit run  -> tester-style SKUs
+  * pure ASCII letters + digits, length >= 5    -> chip / project codenames
+
+The production gate `practical_notes_specificity_check.py` uses
+case-INsensitive regexes, so we feed fixtures verbatim (lowercase as
+stored in the deny list) and assert on rule-id prefixes, not exact
+historical rule ids.
+"""
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +24,61 @@ from pathlib import Path
 import pytest
 
 PROGRAM = Path(__file__).parent.parent / "practical_notes_specificity_check.py"
+
+# ---------------------------------------------------------------------------
+# Runtime fixture loader — pulls the deny tokens from the canonical file.
+# ---------------------------------------------------------------------------
+_DENY_PATH = (
+    Path(__file__).resolve().parent.parent.parent
+    / "tests" / "chip_deny_list.txt"
+)
+
+_CODENAME_TOKEN_RE = re.compile(r"^[a-z]{2,5}\d{3,}[a-z]*$")  # e.g. "xx3616"
+
+
+def _classify_tokens() -> dict:
+    """Group deny tokens into rough fixture buckets WITHOUT spelling any
+    private token in this source. Heuristic:
+      * has '-' AND ends in digits        -> hyphenated tester SKU
+      * letters then digits, no hyphen,
+        and same shape as a paired '-DIG' -> plain tester SKU
+      * any other letters+digits token    -> chip / project codename
+    """
+    out: dict[str, list[str]] = {"chip": [], "tester_hyphen": [],
+                                 "tester_plain": [], "project": []}
+    try:
+        raw = _DENY_PATH.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    tokens: list[str] = []
+    for ln in raw:
+        s = ln.strip()
+        if not s or s.startswith("#") or s in tokens:
+            continue
+        tokens.append(s)
+    # Identify hyphenated tester first; remember its digit run so we can
+    # also tag the un-hyphenated twin (e.g. same letters + same digits).
+    twin_keys: set[str] = set()
+    for s in tokens:
+        if "-" in s and any(ch.isdigit() for ch in s):
+            out["tester_hyphen"].append(s.upper())
+            twin_keys.add(s.replace("-", ""))
+    for s in tokens:
+        if "-" in s:
+            continue
+        if s in twin_keys:
+            out["tester_plain"].append(s.upper())
+        elif _CODENAME_TOKEN_RE.match(s):
+            out["chip"].append(s.upper())
+            out["project"].append(s.upper())
+    return out
+
+
+_TOKENS = _classify_tokens()
+# Canonical labels used in test bodies — guard against missing entries.
+CHIP_NAME = _TOKENS["chip"][0] if _TOKENS["chip"] else ""
+PROJECT_CODENAME = _TOKENS["project"][-1] if _TOKENS["project"] else ""
+TESTER_NAME = _TOKENS["tester_hyphen"][0] if _TOKENS["tester_hyphen"] else ""
 
 
 def _run(args: list[str], cwd: Path | None = None) -> tuple[int, dict]:
@@ -47,22 +117,24 @@ def test_clean_file_passes(tmp_path):
     assert out["total_errors"] == 0
 
 
-def test_chip_name_example_chip_flagged(tmp_path):
+@pytest.mark.skipif(not CHIP_NAME, reason="deny list missing chip token")
+def test_chip_name_flagged(tmp_path):
     _write(tmp_path, "PRACTICAL_NOTES.md",
-           "# Notes\nReal bug from EXAMPLE_CHIP debug: foo\n")
+           f"# Notes\nReal bug from {CHIP_NAME} debug: foo\n")
     code, out = _run(["--paths", str(tmp_path)])
     assert code == 1
     rules = [f["rule"] for f in out["findings"]]
-    assert "chip_name_example_chip" in rules
+    assert any(r.startswith("chip_name_") for r in rules), rules
 
 
-def test_example_tester_flagged(tmp_path):
+@pytest.mark.skipif(not TESTER_NAME, reason="deny list missing tester token")
+def test_tester_name_flagged(tmp_path):
     _write(tmp_path, "PRACTICAL_NOTES.md",
-           "# Notes\nThe EXAMPLE_TESTER tester returns byte[6]=0xF2 on PASS.\n")
+           f"# Notes\nThe {TESTER_NAME} tester returns byte[6]=0xF2 on PASS.\n")
     code, out = _run(["--paths", str(tmp_path)])
     assert code == 1
     rules = {f["rule"] for f in out["findings"]}
-    assert "tester_example_tester" in rules
+    assert any(r.startswith("tester_") for r in rules), rules
     assert "specific_pass_marker" in rules
 
 
@@ -75,9 +147,10 @@ def test_hid_cmd_byte_flagged(tmp_path):
     assert "hid_cmd_byte_decl" in rules
 
 
+@pytest.mark.skipif(not CHIP_NAME, reason="deny list missing chip token")
 def test_vendor_pdf_filename_flagged(tmp_path):
     _write(tmp_path, "PRACTICAL_NOTES.md",
-           "# Notes\nSee EXAMPLE_CHIP_TxRx_signal.pdf for waveform.\n")
+           f"# Notes\nSee {CHIP_NAME}_TxRx_signal.pdf for waveform.\n")
     code, out = _run(["--paths", str(tmp_path)])
     assert code == 1
     rules = [f["rule"] for f in out["findings"]]
@@ -93,50 +166,55 @@ def test_lightning_product_name_flagged(tmp_path):
     assert "vendor_product_lightning" in rules
 
 
+@pytest.mark.skipif(not TESTER_NAME, reason="deny list missing tester token")
 def test_dated_validation_flagged(tmp_path):
     _write(tmp_path, "PRACTICAL_NOTES.md",
-           "# Notes\nvalidated_on: EXAMPLE_TESTER + DE10-Lite 2024-03-15\n")
+           f"# Notes\nvalidated_on: {TESTER_NAME} + DE10-Lite 2024-03-15\n")
     code, out = _run(["--paths", str(tmp_path)])
     assert code == 1
     rules = {f["rule"] for f in out["findings"]}
     assert "dated_validation" in rules
 
 
+@pytest.mark.skipif(not CHIP_NAME, reason="deny list missing chip token")
 def test_provenance_is_warn_by_default(tmp_path):
     _write(tmp_path, "PRACTICAL_NOTES.md",
-           "# Notes\nObserved pattern from EXAMPLE_CHIP debug session.\n")
+           f"# Notes\nObserved pattern from {CHIP_NAME} debug session.\n")
     code, out = _run(["--paths", str(tmp_path)])
-    # Provenance triggers SOFT only — but the bare word EXAMPLE_CHIP also fires HARD.
+    # Provenance triggers SOFT only — but the bare word also fires HARD.
     # So strip the chip name to test SOFT in isolation:
     _write(tmp_path, "PRACTICAL_NOTES.md",
            "# Notes\n"
-           "Real bug from EXAMPLE_CHIP debug: <!-- specificity-allow: provenance -->\n"
-           "But this line: from EXAMPLE_CHIP fresh-agent has no allow marker.\n")
+           f"Real bug from {CHIP_NAME} debug: <!-- specificity-allow: provenance -->\n"
+           f"But this line: from {CHIP_NAME} fresh-agent has no allow marker.\n")
     code, out = _run(["--paths", str(tmp_path)])
-    # Should have at least one WARN (soft) on the second line, plus HARD chip_name on it.
+    # Should have at least one WARN (soft) on the second line, plus HARD on it.
     severities = {f["severity"] for f in out["findings"]}
     assert "WARN" in severities or "ERROR" in severities
 
 
+@pytest.mark.skipif(not CHIP_NAME, reason="deny list missing chip token")
 def test_strict_promotes_soft_to_error(tmp_path):
     # Build a file where the only finding is SOFT (mask the HARD chip name on
     # the provenance line by routing through allowlist).
     _write(tmp_path, "PRACTICAL_NOTES.md",
            "# Notes\n"
            "Real bug from MyChip debug: rule applies generally.\n")
-    # MyChip isn't in HARD list but the SOFT regex doesn't match either
-    # (it requires EXAMPLE_CHIP/BENCHMARK_A/v0xx/EXAMPLE_TESTER). So construct one that hits SOFT only.
+    # MyChip isn't in HARD list; the SOFT regex requires the canonical
+    # chip / project / tester / version tokens. Construct one that hits SOFT only.
+    allow_marker = f"<!-- specificity-allow: chip_name_{CHIP_NAME.lower()} -->"
     _write(tmp_path, "PRACTICAL_NOTES.md",
-           "EXAMPLE_CHIP debug observation. <!-- specificity-allow: chip_name_example_chip -->\n")
+           f"{CHIP_NAME} debug observation. {allow_marker}\n")
     # Allow marker exempts the WHOLE line, so neither HARD nor SOFT fires.
     code, out = _run(["--paths", str(tmp_path)])
     assert code == 0
 
 
+@pytest.mark.skipif(not TESTER_NAME, reason="deny list missing tester token")
 def test_allowlist_marker_exempts_line(tmp_path):
     _write(tmp_path, "PRACTICAL_NOTES.md",
            "# Notes\n"
-           "EXAMPLE_TESTER tester baseline. <!-- specificity-allow: documented-exception -->\n")
+           f"{TESTER_NAME} tester baseline. <!-- specificity-allow: documented-exception -->\n")
     code, out = _run(["--paths", str(tmp_path)])
     assert code == 0
     assert out["total_errors"] == 0
@@ -159,16 +237,30 @@ def test_invalid_path_errors():
     assert r.returncode == 2
 
 
-@pytest.mark.parametrize("snippet,expected_rule", [
-    ("Project BENCHMARK_A baseline.",         "project_codename_benchmark_a"),
-    ("PDK m18e80pm180su corner SS.",     "specific_pdk_codename"),
-    ("Carrier ACC_ID idle high.",        "chip_specific_pin"),
-    ("v068 fresh-agent regression.",     "project_version_codename"),
-    ("Validated 2024-03-15 EXAMPLE_TESTER.",     "dated_validation"),
-])
-def test_each_hard_rule_detects(tmp_path, snippet, expected_rule):
+# ---------------------------------------------------------------------------
+# Parametric matrix — tokens substituted at runtime from the deny list.
+# Each entry pairs (rendered fixture snippet, expected rule id prefix).
+# ---------------------------------------------------------------------------
+def _build_hard_rule_matrix() -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    if PROJECT_CODENAME:
+        out.append((f"Project {PROJECT_CODENAME} baseline.", "project_codename_"))
+    out.append(("PDK m18e80pm180su corner SS.", "specific_pdk_codename"))
+    out.append(("Carrier ACC_ID idle high.", "chip_specific_pin"))
+    out.append(("v068 fresh-agent regression.", "project_version_codename"))
+    if TESTER_NAME:
+        out.append((f"Validated 2024-03-15 {TESTER_NAME}.", "dated_validation"))
+    return out
+
+
+_HARD_RULE_MATRIX = _build_hard_rule_matrix()
+
+
+@pytest.mark.parametrize("snippet,expected_rule_prefix", _HARD_RULE_MATRIX)
+def test_each_hard_rule_detects(tmp_path, snippet, expected_rule_prefix):
     _write(tmp_path, "PRACTICAL_NOTES.md", f"# Notes\n{snippet}\n")
     code, out = _run(["--paths", str(tmp_path)])
     assert code == 1
     rules = {f["rule"] for f in out["findings"]}
-    assert expected_rule in rules, (snippet, rules)
+    assert any(r.startswith(expected_rule_prefix) or r == expected_rule_prefix
+               for r in rules), (snippet, rules)

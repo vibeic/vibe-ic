@@ -15,7 +15,7 @@ actually query was at template default (``ic_name=UNKNOWN_IC``,
 ``protocol_overview={"half_duplex":false,"wire_count":2,...}``,
 ``opcodes=[{"hex":"0x00","name":"RESERVED",...}]`` etc.). The
 phase2 classifier then substring-grepped that boilerplate and
-mis-routed every IC into the EXAMPLE_PROTOCOL generator (separate fix in #1/#2).
+mis-routed every IC into the AID generator (separate fix in #1/#2).
 
 Tier-2 audits structured-field SUBSTANCE: for each L doc, check
 whether the fields downstream consumers query carry real

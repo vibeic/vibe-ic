@@ -181,7 +181,7 @@ def test_base_offset_not_mistaken_for_pre_advance(tmp_path):
 
 
 def test_raddr_rdata_pattern_flagged(tmp_path):
-    """v076 BENCHMARK_A fresh-agent: memory-module convention `<X>_raddr`/`<X>_rdata`
+    """v076 BENCH-A fresh-agent: memory-module convention `<X>_raddr`/`<X>_rdata`
     (read addr / read data) was NOT caught by original `_addr` literal regex.
     Patched gate matches `_raddr`/`_rdata` suffix variants."""
     src = """

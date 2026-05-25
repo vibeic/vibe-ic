@@ -1,6 +1,6 @@
 """Unit tests for rom_init_lint.py.
 
-Covers the EXAMPLE_CHIP FPGA BIST silent-failure class: `initial begin for (...)
+Covers the IC-A FPGA BIST silent-failure class: `initial begin for (...)
 mem[i] = ...` patterns that Quartus MAX10 cannot synthesize.
 
 Tests:

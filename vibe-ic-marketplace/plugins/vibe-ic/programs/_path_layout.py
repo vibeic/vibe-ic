@@ -343,7 +343,7 @@ _REPORT_CATEGORY: dict = {
     # Phase 2 (was phase2)
     "synth_netlist.json": "phase2",
     "sdc_check.json": "phase2",
-    "example_tester_test.json": "phase2",
+    "md905_test.json": "phase2",
     "test_cases.json": "phase2",
     "rtl_bugs.json": "phase2",
     "bringup_plan.md": "phase2",

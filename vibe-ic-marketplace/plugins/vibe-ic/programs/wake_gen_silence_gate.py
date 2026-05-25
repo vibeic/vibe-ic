@@ -2,7 +2,7 @@
 """wake_gen_silence_gate.py — Wave 58 / BACKLOG-v12 P0.1 plugin gate.
 
 Detects the canonical "wake-pulse counter starves under continuous host
-polling" RTL bug class.  Surfaced in the v0.121-noris benchmark
+polling" RTL bug class.  Surfaced in the v0.121-vendor benchmark
 (Wave 56 column-D Issue 2 root cause): a periodic-pulse generator
 gates its counter under `if (frame_active) ... else <cnt> <= 0;`,
 where the counter's job is to span ACROSS frames.  With continuous
@@ -28,7 +28,7 @@ Detection (chip-AGNOSTIC)
    SAME counter that increments inside the if-branch AND the gating
    signal is a frame-level / bus-active signal (frame_active /
    bus_active / rx_active / tx_active / busy / in_progress).  This
-   is the v0.121-noris pathology.
+   is the v0.121-vendor pathology.
 5. PASS when the counter free-runs across the gating signal (no
    reset in the else-branch) OR the else-branch only resets pulse-
    level state (pulse_active / pulse_cnt / *_low / *_oe), never
@@ -52,7 +52,7 @@ from typing import List, Tuple
 import _path_layout as _pl
 
 # Wave 78 — explicit class applicability. Wake-gen periodic pulse
-# applies to any IC that has a wake-gating mechanism: EXAMPLE_PROTOCOL-class half-
+# applies to any IC that has a wake-gating mechanism: AID-class half-
 # duplex, digital cmd-driven (UART/SPI awake-latch), mixed-signal-OTP
 # (analog wake from quiescent). The has_wake_gating profile field
 # refines applicability further at runtime.
@@ -81,7 +81,7 @@ _PULSE_OUT_RE = re.compile(
 
 # Frame-level / bus-active gating signals — any of these in the
 # guard expression, combined with an else-branch counter reset,
-# is the v0.121-noris pathology.
+# is the v0.121-vendor pathology.
 _FRAME_GATE_RE = re.compile(
     r"\b(?:frame_active|bus_active|bus_busy|rx_active|tx_active|"
     r"rx_byte_vld|rx_br|host_active|tester_active|"
@@ -287,7 +287,7 @@ def main(argv: List[str]) -> int:
     print("  counter's threshold (e.g. continuous host polling on a")
     print("  half-duplex bus at 5-15 ms cadence vs a 5 ms wake-pulse")
     print("  threshold), the counter never reaches threshold and the")
-    print("  pulse never fires.  This was the v0.121-noris column-D")
+    print("  pulse never fires.  This was the v0.121-vendor column-D")
     print("  Issue 2 root cause.")
     print()
     print("Fix template:")

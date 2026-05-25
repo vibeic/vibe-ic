@@ -6,7 +6,7 @@ Detects RTL that checks `crc_out == 0` (or equivalent) to validate a received
 frame, WITHOUT verifying that the CRC accumulator is initialized to 0x00.
 
 Root cause: "residual = 0 after feeding data || CRC(data)" holds ONLY when the
-CRC register is initialized to 0x00. For CRC-8 init=0xFF (common: Apple EXAMPLE_PROTOCOL,
+CRC register is initialized to 0x00. For CRC-8 init=0xFF (common: Apple AID,
 Maxim 1-Wire), the residual is NON-ZERO and protocol-specific. Hard-coding
 `== 0` silently drops every command.
 

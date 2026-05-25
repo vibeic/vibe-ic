@@ -30,7 +30,7 @@ Usage:
         --rtl-files tx_phy.v mac_controller.sv \\
         --out-dir /tmp/audit
 
-Generality: works for ANY TX PHY design (Lightning/EXAMPLE_PROTOCOL, I2C, SPI, UART, etc.).
+Generality: works for ANY TX PHY design (Lightning/AID, I2C, SPI, UART, etc.).
 The bus-sampling anti-pattern applies wherever a transmitter reads its own bus
 to time its drive — the correct approach is always time-based counting.
 """

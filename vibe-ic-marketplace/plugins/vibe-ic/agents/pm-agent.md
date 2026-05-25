@@ -160,7 +160,7 @@ translation sources in this priority order:
    verbatim for this persona.
 
 2. **K3 `class_reference.yaml` → `typical_structure`** — per-class
-   structure blocks (added v0.74 post-EXAMPLE_CHIP loop) use `hint:` or
+   structure blocks (added v0.74 post-IC-A loop) use `hint:` or
    `purpose:` text that is already persona-friendly. Example:
 
        L2_requirements:
@@ -177,7 +177,7 @@ translation sources in this priority order:
    map to any qbank or typical_structure entry, fall back to class-level
    concept talk (e.g. "what plugs in on each end" for pinout).
 
-### Avoid these anti-patterns (learned from the EXAMPLE_CHIP common-persona run)
+### Avoid these anti-patterns (learned from the IC-A common-persona run)
 
 - **Leaking hex literals to common personas.** Never ask "CRC-8 with
   polynomial 0x31?" — ask "should the chip use a standard error-check

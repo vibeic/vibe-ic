@@ -14,7 +14,7 @@ Generate an FPGA-side `chip_top` wrapper that:
 
 THE BUG THIS PREVENTS
 ---------------------
-benchmark_a v5 wrote a wrapper interpreting `*_oe_low` as active-LOW
+BENCH-A v5 wrote a wrapper interpreting `*_oe_low` as active-LOW
 (drive when oe==0) but the ASIC RTL drove it active-HIGH (drive
 when oe==1, via `assign id_bus_oe_low = id_bus_drive_low`). Scope
 showed the bus 99% LOW at idle. This generator parses the actual

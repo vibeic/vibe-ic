@@ -1,13 +1,17 @@
 #!/bin/bash
-# tools/ci/run_plugin_self_audit.sh — anti-fabrication self-audit (v1.6.38)
+# tools/ci/run_plugin_self_audit.sh — anti-fabrication self-audit
+# (v1.6.45: added the v1.6.43 gates that v1.6.43 itself forgot to wire
+# in, plus a meta-gate that catches the same class of doc-vs-runner
+# drift in CHANGELOG / plugin.json.)
 #
-# Runs the four plugin-source-auditing gates against the vibe-ic plugin
-# tree itself. Intended as a pre-commit / pre-push CI step. Distinct
-# from `flow_compliance_check.py` which audits a chip-design project
-# tree; these gates audit the plugin's own source for the kinds of
+# Runs the plugin-source-auditing gates against the vibe-ic plugin tree
+# itself. Intended as a pre-commit / pre-push CI step. Distinct from
+# `flow_compliance_check.py` which audits a chip-design project tree;
+# these gates audit the plugin's own source for the kinds of
 # fabrication that the v1.6.37 release shipped (silent-PASS on tool
 # failure, hardcoded sign-off numerics, chip-specific tokens, CHANGELOG
-# metrics that don't trace back to source).
+# metrics / quoted commands / pytest counts that don't trace back to
+# source).
 #
 # Exit codes:
 #   0  every gate PASSes
@@ -39,6 +43,8 @@ GATES=(
     "literal_verdict_keyword_check"
     "source_chip_agnostic_check"
     "changelog_metric_reproducibility_check"
+    "changelog_command_reproducibility_check"
+    "self_audit_doc_claim_consistency_check"
 )
 
 fail=0

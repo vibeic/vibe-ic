@@ -57,7 +57,7 @@ endmodule
 
 
 def test_registered_rx_signal_detected(tmp_path):
-    """v0.119.19: noris-benchmark RTL named the registered bus signal
+    """v0.119.19: vendor-benchmark RTL named the registered bus signal
     `id_bus_rx_q1` (registered form, not `_rx` literal). The earlier
     name-guessing list missed it; loosened to accept `_d`/`_q`/`_q<n>`
     suffixes. Without the fix, the gate emitted `rx_signal_not_found`

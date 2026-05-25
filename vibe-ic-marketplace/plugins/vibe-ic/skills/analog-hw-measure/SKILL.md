@@ -17,7 +17,7 @@ Drives the measurement instruments (oscilloscope + FPGA ADC) to capture real ana
 
 1. `analog/<block>/spec.json` — specs with min/max limits
 2. `analog/<block>/hw_test/pin_assignments.qsf` — which scope channel maps to which signal
-3. Scope connection info (default: 8HD-d lab at <scope-ip>)
+3. Scope connection info (default: <host> lab at <lan-ip>)
 4. FPGA ADC channel mapping
 
 ## MCP tools used

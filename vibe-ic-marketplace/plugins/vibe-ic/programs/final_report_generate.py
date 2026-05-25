@@ -16,7 +16,7 @@ Reads:
   - flow_compliance_check.py         (verdict per step, run as subproc)
   - synth/*.v + pnr/*.def            (cell-count breakdown)
   - reports/hw_test.json             (generic hardware-test verdict)
-                                     OR fallback reports/example_tester_test.json
+                                     OR fallback reports/md905_test.json
   - gds/*.gds                        (final GDS metadata)
   - reports/{drc_signoff,lvs,erc}*   (PV verdicts)
   - reports/test_cases.json          (test-vector count, NOT semantics)
@@ -806,7 +806,7 @@ def _render(project: Path, run_audit: bool = True) -> str:
         if hw.get("_source"):
             md.append(f"- _Source_: `{hw['_source']}`")
     else:
-        md.append("_No `reports/hw_test.json` or legacy `reports/example_tester_test.json` found._")
+        md.append("_No `reports/hw_test.json` or legacy `reports/md905_test.json` found._")
     if sof:
         md.append(f"- **Bitstream**: `{sof['path']}` ({sof['size']:,} B)")
         md.append(f"- **Bitstream SHA-256**: `{sof['sha256']}`")

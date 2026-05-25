@@ -36,7 +36,7 @@ False-alert escape hatches
   - waivers.json entry `half_duplex_response_window_override` skips the
     gate when present with non-empty rationale.
 
-This gate would have HARD-FAILED the v0118-noris bug (FRAME_END_GAP=80us
+This gate would have HARD-FAILED the v0118-vendor bug (FRAME_END_GAP=80us
 + dispatch + TSRS_MIN=30us > 22us + 1.5*20us = 52us → FAIL).
 
 The gate is **structural** (parses RTL constants), not behavioral —

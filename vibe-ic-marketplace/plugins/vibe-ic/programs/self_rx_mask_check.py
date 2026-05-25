@@ -11,7 +11,7 @@ the device drives the wire LOW with `pin_oe=1`, the RX path on the same
 device sees its OWN drive — and unless the RX is gated, the FSM treats
 its own LOW as an external start-of-frame, corrupting the next byte.
 
-The noris run shipped a self-RX issue exactly because the agent never
+The vendor run shipped a self-RX issue exactly because the agent never
 masked the RX path during TX-active windows.
 
 Heuristic
@@ -142,7 +142,7 @@ def _likely_rx_signal(oe_name: str, all_idents: Set[str]) -> Optional[str]:
     signal name by stripping the suffix and searching for `<base>_rx*`,
     `<base>_in_sync`, `<base>_pin_sync*`, `<base>_synced`, or a registered
     form `<base>_d`/`<base>_q`/`<base>_q1`/`<base>_<n>`. The registered
-    forms catch the noris-benchmark case where the agent named the
+    forms catch the vendor-benchmark case where the agent named the
     sync'd bus signal `id_bus_rx_q1` — which the literal-suffix list
     silently missed."""
     base = re.sub(r"_(?:oe|drive_low|drive_lo|oen)$", "", oe_name,

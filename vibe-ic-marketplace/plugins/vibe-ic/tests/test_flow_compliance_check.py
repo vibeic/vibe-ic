@@ -96,7 +96,7 @@ def test_v029_phase_invalid_value_rejected():
 # ====================================================================
 # Wave 9 (v0.119.41) — Step -1 aggregator surfaces individual gate
 # names + first-line messages when ≥2 structural gates FAIL.
-# Motivated by 1st_benchmark_benchmark_a/phase2_v0119.40-noris/RESULT.md:
+# Motivated by 1st_benchmark_benchmark_a/phase2_v0119.40-vendor/RESULT.md:
 # 10 distinct structural FAILs collapsed into one composite FAIL line
 # without per-gate detail, making triage hard.
 # ====================================================================

@@ -193,7 +193,7 @@ def extract_top_ports(rtl_path: Path) -> set[str]:
     #         (input wire clk, ...);
     # The earlier regex didn't account for the optional import block and
     # silently extracted ZERO ports — a false PASS that hid real missing
-    # pins (caught by v0.119.24 noris benchmark).
+    # pins (caught by v0.119.24 vendor benchmark).
     m = re.search(
         r"module\s+\w+\s*"
         r"(?:#\s*\([^)]*\)\s*)?"          # optional parameter port list

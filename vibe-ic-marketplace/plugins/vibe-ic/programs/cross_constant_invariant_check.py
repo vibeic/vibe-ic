@@ -5,7 +5,7 @@ in RTL honour the ordering invariants the spec requires.
 
 THE PROBLEM
 -----------
-On the noris run, two constants — IBT_max and FRAME_END_threshold — were
+On the vendor run, two constants — IBT_max and FRAME_END_threshold — were
 both derived numerically from the spec but the agent set IBT_max=22us and
 FRAME_END_threshold=14us. The spec implicitly requires
 ``IBT_max < FRAME_END_threshold`` (otherwise IBT detection kills frames

@@ -202,7 +202,7 @@ def test_parser_handles_parameter_block_and_logic_kw() -> None:
 
 
 def test_parser_handles_sv_import_clause_in_header() -> None:
-    """Real EXAMPLE_CHIP v0117-noris RTL puts `import example_chip_pkg::*;` between the
+    """Real EXAMPLE_CHIP v0117-vendor RTL puts `import example_chip_pkg::*;` between the
     module name and the port-list opening paren. The parser must not get
     confused — original regex skipped these modules silently."""
     src = """

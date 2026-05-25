@@ -1,6 +1,6 @@
 """Unit tests for otp_image_check.py.
 
-Covers: happy-path vs EXAMPLE_CHIP benchmark, address-out-of-range, duplicate
+Covers: happy-path vs IC-A benchmark, address-out-of-range, duplicate
 address, byte-out-of-range, malformed line, required-field coverage gap,
 and benchmark lenient JSON (hex literals).
 """

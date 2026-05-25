@@ -1,6 +1,6 @@
 """Tests for thin wrapper programs that delegate to eda_report_audit / signoff_audit.
 
-Updated 2026-04-22 after benchmark_a v0.47 pilot to reflect tightened anti-fabrication
+Updated 2026-04-22 after BENCH-A v0.47 pilot to reflect tightened anti-fabrication
 gates: report fixtures must now include a tool-signature string AND meet a
 min-size threshold. Hand-typed <500B stubs are rejected.
 """

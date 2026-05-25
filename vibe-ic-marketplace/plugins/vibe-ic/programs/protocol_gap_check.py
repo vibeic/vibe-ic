@@ -7,7 +7,7 @@ atomic transmission units:
   - UART: stop bit
   - I2C: STOP condition
   - SPI: CS deassert
-  - Apple Lightning / EXAMPLE_PROTOCOL: Inter-Byte Time (IBT)
+  - Apple Lightning / AID: Inter-Byte Time (IBT)
   - CAN: intermission field
   - USB: EOP
 

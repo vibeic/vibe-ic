@@ -10,7 +10,7 @@ PASS so we're done", or any equivalent — MUST run this gate FIRST and
 paste its output into FINAL_REPORT.md as evidence.
 
 Why this gate exists:
-- Individual gates (tapeout_signoff_check, example_tester_connect_test,
+- Individual gates (tapeout_signoff_check, md905_connect_test,
   BACKLOG-v6/v7 P0 set, lvs_yosys_equiv) are NECESSARY but INSUFFICIENT.
 - The v0.108 fresh-agent benchmark on <benchmark> demonstrated that an agent
   can pass every individual gate while only completing 2/34 canonical
@@ -132,7 +132,7 @@ def main():
                 f"Overall=FAIL, executed PASS={executed_pass}/{executed_total}."
             ),
             details=(
-                "Individual gates passing (tapeout_signoff_check, example_tester_connect_test, "
+                "Individual gates passing (tapeout_signoff_check, md905_connect_test, "
                 "BACKLOG-v6/v7 P0) is necessary but NOT sufficient to claim Phase 2+3 "
                 "complete. Read CLAUDE.md rule #11 and skills/spec-to-rtl/SKILL.md "
                 "SOLE-ACCEPTANCE-CRITERION section. To proceed: complete the missing "

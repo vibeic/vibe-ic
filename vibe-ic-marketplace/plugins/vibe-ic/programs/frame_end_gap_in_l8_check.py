@@ -4,7 +4,7 @@
 For half-duplex command-response ICs, L8_RTL_CONSTANTS.json MUST contain
 a `frame_end_gap_*` field (or equivalent inter-byte-gap-timeout constant)
 so the spec-to-rtl skill has an authoritative value to emit. Without it,
-the agent has to invent a value freely — exactly how the v0118-noris
+the agent has to invent a value freely — exactly how the v0118-vendor
 <benchmark> bug happened (FRAME_END_GAP=80us instead of ~30us, pushing chip
 response outside <half-duplex-tester>'s receive window).
 
@@ -229,7 +229,7 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
                 "contain a frame_end_gap_* field. Without it, the "
                 "spec-to-rtl skill must invent a frame-end-gap timeout "
                 "value when generating RTL — common cause of "
-                "response-latency-window bugs (e.g. v0118-noris <benchmark>: "
+                "response-latency-window bugs (e.g. v0118-vendor <benchmark>: "
                 "FRAME_END_GAP=80us instead of ~30us, FAIL on <half-duplex-tester>). "
                 "Fix: extend rtl-constants-gen to emit frame_end_gap_us "
                 "= L2.ibt_us[1] + 5us margin."

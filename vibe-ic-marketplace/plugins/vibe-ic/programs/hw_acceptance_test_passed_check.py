@@ -21,7 +21,7 @@ The gate enforces three things:
      verdict). v0.119.15: the gate no longer silently falls back to
      an <half-duplex-tester>-specific fingerprint (byte[6]=0xF2). Projects must
      declare their own signature explicitly OR opt into the named
-     `"example_tester_byte6_F2"` legacy template — see signature schema below.
+     `"md905_byte6_F2"` legacy template — see signature schema below.
 
   3. Every `waivers.json["oracle_referenced_fix"]` entry points to
      an artifact under `input/oracle/` that exists. No silent
@@ -62,11 +62,11 @@ def find_pass_artifact(evidence_dir: Path):
         return path, None
 
 
-def _check_example_tester_byte6_F2_template(data: dict) -> tuple[bool, str]:
-    """Named template `example_tester_byte6_F2` — kept for back-compat with
+def _check_md905_byte6_F2_template(data: dict) -> tuple[bool, str]:
+    """Named template `md905_byte6_F2` — kept for back-compat with
     projects that ship <half-duplex-tester>-class host testers. Projects opt in
     explicitly via acceptance_signature.json: {"template":
-    "example_tester_byte6_F2"}. Not used as a silent default in v0.119.15+.
+    "md905_byte6_F2"}. Not used as a silent default in v0.119.15+.
     """
     if data.get("verdict") != "PASS":
         return False, f"verdict is {data.get('verdict')!r}, not 'PASS'"
@@ -82,7 +82,7 @@ def _check_example_tester_byte6_F2_template(data: dict) -> tuple[bool, str]:
 
 # Registry of named acceptance templates. Add new chip families here.
 _NAMED_TEMPLATES = {
-    "example_tester_byte6_F2": _check_example_tester_byte6_F2_template,
+    "md905_byte6_F2": _check_md905_byte6_F2_template,
 }
 
 
@@ -99,7 +99,7 @@ def check_custom_signature(data: dict, sig: dict) -> tuple[bool, str]:
           template for richer logic.
 
       Named template:
-        {"template": "example_tester_byte6_F2"}
+        {"template": "md905_byte6_F2"}
         — dispatches to _NAMED_TEMPLATES.
 
     Both forms may be combined; template runs first, then equality.
@@ -189,7 +189,7 @@ def main():
                 "evidence/acceptance_signature.json missing — projects "
                 "must declare their own pass-fingerprint (chip-agnostic "
                 "schema). Either ship a signature file with "
-                '`{"template": "example_tester_byte6_F2"}` (legacy <half-duplex-tester> host '
+                '`{"template": "md905_byte6_F2"}` (legacy <half-duplex-tester> host '
                 'tester) or `{"expected": {"verdict": "PASS", ...}}` '
                 "for project-specific equality checks."
             )

@@ -86,7 +86,7 @@ def has_tb(module_name: str, sim_dir: Path) -> Path | None:
        module 'aid_rx_phy' matches tb_aid_rx_phy.v OR tb_rx_phy.v."""
     candidates = {module_name}
     # Also strip leading prefixes
-    for prefix in ("aid_", "example_chip_", "u_", "i_"):
+    for prefix in ("aid_", "as3616_", "u_", "i_"):
         if module_name.startswith(prefix):
             candidates.add(module_name[len(prefix):])
     # Common aliases (cmd_dispatcher → dispatcher)

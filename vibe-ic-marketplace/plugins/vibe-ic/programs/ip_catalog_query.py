@@ -88,6 +88,13 @@ def find_catalog_dir() -> Optional[Path]:
         candidate = ancestor / "ip_catalog"
         if candidate.is_dir() and (candidate / "_schema").is_dir():
             return candidate
+    # Hard fallbacks
+    for fallback in [
+        Path("~/AI_IC_design/opensource_repo/vibe-ic-marketplace/plugins/vibe-ic/ip_catalog"),
+        Path("~/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic/ip_catalog"),
+    ]:
+        if fallback.is_dir():
+            return fallback
     return None
 
 

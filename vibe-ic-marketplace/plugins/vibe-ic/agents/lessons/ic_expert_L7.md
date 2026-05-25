@@ -13,7 +13,7 @@ The output JSON **must** have exactly these top-level keys, in this order:
 | `generated_by` | string |
 | `source_documents` | list of strings (len 3) |
 | `test_modes` | list of dicts (len 3) |
-| `example_tester_test_sequence` | list of strings (len 5) |
+| `md905_test_sequence` | list of strings (len 5) |
 | `debug_hooks` | list of strings (len 1) |
 
 **Forbidden**: do NOT add extra top-level keys (e.g., `compliance`, `references`, `channels`, `power_domains`, `notes`, `top_module`). The extractor expects this exact schema.

@@ -204,7 +204,7 @@ def test_waiver_skips(tmp_path):
 
 # ====================================================================
 # Wave 9 (v0.119.41) — value-based wake-pulse vs BIT0 classifier.
-# Motivated by 1st_benchmark_benchmark_a/phase2_v0119.40-noris/RESULT.md:
+# Motivated by 1st_benchmark_benchmark_a/phase2_v0119.40-vendor/RESULT.md:
 # the project shipped a structurally-correct wake_pulse_gen FSM but
 # TWK_PULSE = 5 clk × 200 ns/clk = 1 µs, far below the host BIT0 LOW
 # minimum of ~3.6 µs. The previous gate skipped with "spec does not
@@ -417,7 +417,7 @@ def test_wave9_value_waiver_too_short_rejected(tmp_path):
 
 # ====================================================================
 # Wave 10 (v0.119.42) — WKP-vs-BIT0 mode detection.
-# Motivated by 1st_benchmark_benchmark_a/phase2_v0119.41-noris/RESULT.md:
+# Motivated by 1st_benchmark_benchmark_a/phase2_v0119.41-vendor/RESULT.md:
 # the v0.119.41 fresh-agent shipped TWK_PULSE=350 clk @ 50 MHz = 7.0 µs
 # which falls inside the BIT0 LOW window [3.92, 12.24] µs and so the
 # Wave-9 value gate said PASS. Silicon FAILed because the host EXAMPLE_TESTER

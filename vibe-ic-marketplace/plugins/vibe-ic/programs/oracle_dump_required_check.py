@@ -6,7 +6,7 @@ Why this gate exists
 ====================
 Some L3 fields_tx items cannot be resolved to byte-exact form from
 L1-L13 alone because the vendor doc disagrees with the actual silicon
-(Category B). v0118-noris STATUS lists 4 such items: 0xE6 length
+(Category B). v0118-vendor STATUS lists 4 such items: 0xE6 length
 22→18, 0xE4 drop trailing 0x20, 0xE2 missing opcode, 0x76 OTP scatter
 non-contiguous addresses. Plugin extractors cannot detect these — the
 spec says one thing, the chip does another.
@@ -101,7 +101,7 @@ def main():
     print('       {"oracle_referenced_fix": [')
     print('         {"opcode": "0xE6", "field": "tx_len",')
     print('          "spec": 22, "silicon": 18,')
-    print('          "evidence": "input/oracle/benchmark_a_bytewise_dump.json"}')
+    print('          "evidence": "input/oracle/sn2025_bytewise_dump.json"}')
     print("       ]}")
     print("  4. Re-run spec-to-rtl. The patched L3 is now byte-exact.")
     print()

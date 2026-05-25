@@ -122,7 +122,7 @@ def test_diverged_final_verdict_fails(tmp_path: Path) -> None:
 
 
 def test_tolerant_json_loader_handles_leading_plus(tmp_path: Path) -> None:
-    """Real v10619-noris log had `"dropout_mV": +11` (JSON forbids
+    """Real v10619-vendor log had `"dropout_mV": +11` (JSON forbids
     leading `+` on numbers). The gate must still parse it."""
     p = tmp_path / "proj"
     _block_list(p, ["ldo_1v8"])

@@ -80,11 +80,11 @@ ALLOW_MARKER = "<!-- specificity-allow"
 # Each rule = (id, severity, regex, description)
 # regex matches a substring on a line; the file/line is reported.
 HARD_RULES: list[tuple[str, str, str]] = [
-    ("chip_name_example_chip", r"\bEXAMPLE_CHIP\b",
+    ("chip_name_as3616", r"\bAS3616\b",
      "Hard-coded benchmark chip name <chip-class>"),
-    ("project_codename_benchmark_a", r"\bBENCHMARK_A\b",
+    ("project_codename_sn2025", r"\bSN2025\b",
      "Project codename <benchmark> leaks into general-purpose docs"),
-    ("tester_example_tester", r"MD[-_ ]?905\b",
+    ("tester_md905", r"MD[-_ ]?905\b",
      "Tester product name <half-duplex-tester> — describe protocol, not a SKU"),
     ("vendor_product_lightning", r"\bLightning\b",
      "Vendor product name 'Lightning' (Apple) — describe the protocol class instead"),

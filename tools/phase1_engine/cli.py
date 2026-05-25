@@ -34,6 +34,10 @@ from .ingest import (
 from .schema import FactGraph, Provenance, Fact
 from .gap_detect import auto_fill, detect_gaps, DEFAULT_CLASS_KB
 from .render import (
+    DEFAULT_HARD_GATE_THRESHOLD,
+    InsufficientRequiredFactsError,
+    append_warn_insufficient_block,
+    enforce_required_facts_threshold,
     render_human_docs,
     render_layers,
     render_provenance_report,
@@ -139,6 +143,43 @@ def _cmd_auto_fill(args: argparse.Namespace) -> int:
 
 def _cmd_render(args: argparse.Namespace) -> int:
     graph = FactGraph.load(Path(args.facts))
+
+    # v1.6.271 — for #130 hard-gate + structured WARN. Hard-gate refuses
+    # to render when <50% of class-required facts are satisfied unless
+    # --allow-underspec is supplied. Either way, a WARN block is appended
+    # to PROVENANCE.md (when --provenance-report is supplied) and a
+    # single stderr summary line is printed.
+    try:
+        coverage = enforce_required_facts_threshold(
+            graph,
+            threshold=args.underspec_threshold,
+            allow_underspec=args.allow_underspec,
+        )
+    except InsufficientRequiredFactsError as e:
+        print(f"[render] ERROR: {e}", file=sys.stderr)
+        # Still write a WARN block to PROVENANCE.md if the caller asked
+        # for one — gives the field-agent a structured artefact even on
+        # hard-gate refusal.
+        if args.provenance_report:
+            # Need a fresh provenance report first so the WARN block has
+            # context; emit a minimal one with just the header.
+            render_provenance_report(graph, Path(args.provenance_report))
+            append_warn_insufficient_block(
+                Path(args.provenance_report),
+                {"pct": e.pct, "total": 0, "satisfied": 0,
+                 "missing_by_layer": e.missing_by_layer},
+            )
+        return 2
+
+    if coverage["pct"] < 1.0:
+        n_missing = sum(len(v) for v in coverage["missing_by_layer"].values())
+        print(
+            f"[render] WARN_INSUFFICIENT_REQUIRED_FIELDS "
+            f"pct={coverage['pct']:.2f} missing={n_missing} layers="
+            f"{sorted(coverage['missing_by_layer'].keys())}",
+            file=sys.stderr,
+        )
+
     written = render_layers(graph, Path(args.out_dir), layers=args.layers)
     for code, p in sorted(written.items()):
         print(f"[render] {code} → {p}")
@@ -149,6 +190,10 @@ def _cmd_render(args: argparse.Namespace) -> int:
             print(f"[render] {code} → {p}")
     if args.provenance_report:
         render_provenance_report(graph, Path(args.provenance_report))
+        if coverage["pct"] < 1.0:
+            append_warn_insufficient_block(
+                Path(args.provenance_report), coverage,
+            )
         print(f"[render] provenance report → {args.provenance_report}")
     if args.fact_index:
         render_fact_index(graph, Path(args.fact_index))
@@ -178,6 +223,34 @@ def _cmd_run_all(args: argparse.Namespace) -> int:
     )
     print(f"[run-all] {len(gaps)} gaps → {out_dir/'gaps.json'}")
 
+    # v1.6.271 — for #130 hard-gate + structured WARN before render so
+    # an under-specified prompt is caught at Phase 1 rather than at
+    # Phase 2b's phase1_doc_presence_check.
+    try:
+        coverage = enforce_required_facts_threshold(
+            graph,
+            threshold=args.underspec_threshold,
+            allow_underspec=args.allow_underspec,
+        )
+    except InsufficientRequiredFactsError as e:
+        print(f"[run-all] ERROR: {e}", file=sys.stderr)
+        render_provenance_report(graph, out_dir / "PROVENANCE.md")
+        append_warn_insufficient_block(
+            out_dir / "PROVENANCE.md",
+            {"pct": e.pct, "total": 0, "satisfied": 0,
+             "missing_by_layer": e.missing_by_layer},
+        )
+        return 2
+
+    if coverage["pct"] < 1.0:
+        n_missing = sum(len(v) for v in coverage["missing_by_layer"].values())
+        print(
+            f"[run-all] WARN_INSUFFICIENT_REQUIRED_FIELDS "
+            f"pct={coverage['pct']:.2f} missing={n_missing} layers="
+            f"{sorted(coverage['missing_by_layer'].keys())}",
+            file=sys.stderr,
+        )
+
     docs_out = out_dir / "generated_docs"
     written = render_layers(graph, docs_out)
     print(f"[run-all] rendered {len(written)} layer JSONs → {docs_out}")
@@ -190,6 +263,8 @@ def _cmd_run_all(args: argparse.Namespace) -> int:
     print(f"[run-all] rendered {len(md_written)} human-readable .md → {human_out}")
 
     render_provenance_report(graph, out_dir / "PROVENANCE.md")
+    if coverage["pct"] < 1.0:
+        append_warn_insufficient_block(out_dir / "PROVENANCE.md", coverage)
     # v0.74 Task-C PoC: emit machine-readable fact-index JSON alongside
     # PROVENANCE.md so Phase 2b consumers have a stable path→uuid map.
     render_fact_index(graph, out_dir / "fact_index.json")
@@ -393,6 +468,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also render human-readable Markdown views of every "
                         "L*.json into this directory (Phase-1 prompt entry "
                         "should always emit these alongside the JSON; v0.60)")
+    # v1.6.271 — for #130 partial-set WARN + hard-gate
+    a.add_argument("--allow-underspec", action="store_true",
+                   help="render even when required_facts_satisfied_pct is "
+                        "below --underspec-threshold; a WARN block is still "
+                        "written to --provenance-report and a stderr summary "
+                        "line is printed (v1.6.271 — for #130)")
+    a.add_argument("--underspec-threshold", type=float,
+                   default=DEFAULT_HARD_GATE_THRESHOLD,
+                   help=f"hard-gate threshold for required-facts coverage "
+                        f"(default {DEFAULT_HARD_GATE_THRESHOLD})")
     a.set_defaults(fn=_cmd_render)
 
     a = sub.add_parser("run-all", help="ingest + gaps + render in one step")
@@ -400,6 +485,14 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("out_dir")
     a.add_argument("--ic-name")
     a.add_argument("--class-path")
+    # v1.6.271 — for #130 partial-set WARN + hard-gate
+    a.add_argument("--allow-underspec", action="store_true",
+                   help="render even when required_facts_satisfied_pct is "
+                        "below --underspec-threshold (v1.6.271 — for #130)")
+    a.add_argument("--underspec-threshold", type=float,
+                   default=DEFAULT_HARD_GATE_THRESHOLD,
+                   help=f"hard-gate threshold for required-facts coverage "
+                        f"(default {DEFAULT_HARD_GATE_THRESHOLD})")
     a.set_defaults(fn=_cmd_run_all)
 
     a = sub.add_parser("retrieve", help="top-K similar trained ICs")

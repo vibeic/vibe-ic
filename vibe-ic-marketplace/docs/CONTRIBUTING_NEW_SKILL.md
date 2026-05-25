@@ -24,7 +24,7 @@ description: One-paragraph description with NL trigger keywords. Claude auto-loa
 
 ## chip-AGNOSTIC + open-platform rule
 
-Skills should NOT hardcode chip / vendor names in mandatory logic. Cite specific projects only as case studies (the reference plugin uses EXAMPLE_CHIP / EXAMPLE_TESTER as case-study notation).
+Skills should NOT hardcode chip / vendor names in mandatory logic. Cite specific projects only as case studies (the reference plugin uses IC-A / USB-HID tester as case-study notation).
 
 ## Skill vs deterministic program — when to ship a skill
 

@@ -1,0 +1,334 @@
+openapi: 3.0.3
+info:
+  title: Vibe-IC Registry API
+  version: '1.0'
+  description: |
+    HTTP protocol for the Vibe-IC plugin marketplace. Reference deployment at
+    https://vibeic.ai/api/v1/. See docs/design/registry_api.md for the
+    canonical spec.
+  contact:
+    name: Vibe-IC project
+    url: https://vibeic.ai
+  license:
+    name: TBD
+
+servers:
+  - url: https://vibeic.ai/api/v1
+    description: Public reference registry
+  - url: http://localhost:8090/api/v1
+    description: Local dev / private mirror
+
+tags:
+  - name: meta
+    description: Service banner + health
+  - name: auth
+    description: Token issuance
+  - name: plugins
+    description: Plugin search / metadata / bundle download
+  - name: publish
+    description: Plugin publish + yank (token required)
+
+paths:
+  /:
+    get:
+      tags: [meta]
+      summary: Service banner
+      responses:
+        '200':
+          description: Banner
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ServiceBanner'}
+
+  /health:
+    get:
+      tags: [meta]
+      summary: Liveness probe
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, example: ok}
+                  time:   {type: string, format: date-time}
+
+  /auth/token:
+    post:
+      tags: [auth]
+      summary: Issue a bearer token for a namespace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AuthRequest'}
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AuthResponse'}
+        '401':
+          description: Bad creds
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+
+  /plugins:
+    get:
+      tags: [plugins]
+      summary: Search plugins
+      parameters:
+        - in: query
+          name: q
+          schema: {type: string}
+        - in: query
+          name: namespace
+          schema: {type: string}
+        - in: query
+          name: layer
+          schema: {type: string, enum: [exp, ip, eda]}
+        - in: query
+          name: min_trust_tier
+          schema: {type: string, enum: [core, vendor-verified, community-trusted, community, experimental]}
+        - in: query
+          name: limit
+          schema: {type: integer, default: 20, minimum: 1, maximum: 100}
+        - in: query
+          name: cursor
+          schema: {type: string}
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SearchResponse'}
+
+  /plugins/{namespace}/{plugin_id}:
+    parameters:
+      - $ref: '#/components/parameters/Namespace'
+      - $ref: '#/components/parameters/PluginId'
+    get:
+      tags: [plugins]
+      summary: Latest version metadata
+      responses:
+        '200':
+          description: Metadata
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/VersionRecord'}
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+    post:
+      tags: [publish]
+      summary: Publish a new version
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                bundle:
+                  type: string
+                  format: binary
+                  description: '.tgz contents'
+                signature:
+                  type: string
+                  description: '.tgz.sig text'
+              required: [bundle, signature]
+      responses:
+        '201':
+          description: Published
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/VersionRecord'}
+        '400':
+          description: bad_manifest | bad_signature | plugin_id_mismatch
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '403':
+          description: Token does not own namespace
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: version_exists
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+
+  /plugins/{namespace}/{plugin_id}/{version}:
+    parameters:
+      - $ref: '#/components/parameters/Namespace'
+      - $ref: '#/components/parameters/PluginId'
+      - $ref: '#/components/parameters/Version'
+    get:
+      tags: [plugins]
+      summary: Version metadata + manifest
+      responses:
+        '200':
+          description: Metadata
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/VersionRecord'}
+    delete:
+      tags: [publish]
+      summary: Yank a version (still downloadable, hidden from search)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: {type: string}
+      responses:
+        '200':
+          description: Yanked
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/VersionRecord'}
+
+  /plugins/{namespace}/{plugin_id}/{version}/bundle:
+    parameters:
+      - $ref: '#/components/parameters/Namespace'
+      - $ref: '#/components/parameters/PluginId'
+      - $ref: '#/components/parameters/Version'
+    get:
+      tags: [plugins]
+      summary: Download the .tgz
+      responses:
+        '200':
+          description: Bundle
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+
+  /plugins/{namespace}/{plugin_id}/{version}/bundle.sig:
+    parameters:
+      - $ref: '#/components/parameters/Namespace'
+      - $ref: '#/components/parameters/PluginId'
+      - $ref: '#/components/parameters/Version'
+    get:
+      tags: [plugins]
+      summary: Download the detached .sig
+      responses:
+        '200':
+          description: Signature
+          content:
+            text/plain:
+              schema: {type: string}
+
+components:
+  parameters:
+    Namespace:
+      name: namespace
+      in: path
+      required: true
+      schema: {type: string, pattern: '^[a-z][a-z0-9-]{1,32}$'}
+    PluginId:
+      name: plugin_id
+      in: path
+      required: true
+      schema: {type: string, pattern: '^[a-z][a-z0-9._-]{1,63}$'}
+    Version:
+      name: version
+      in: path
+      required: true
+      schema: {type: string}
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:   {type: string, example: bad_manifest}
+        message: {type: string}
+
+    ServiceBanner:
+      type: object
+      properties:
+        service:                {type: string, example: vibe-ic-registry}
+        api_version:            {type: string, example: v1}
+        schema_version:         {type: string, example: vibe-ic-plugin/v1}
+        registry_id:            {type: string, example: vibeic.ai}
+        trust_tiers_supported:  {type: array, items: {type: string}}
+        max_bundle_bytes:       {type: integer}
+
+    AuthRequest:
+      type: object
+      required: [namespace, secret]
+      properties:
+        namespace: {type: string}
+        secret:    {type: string}
+
+    AuthResponse:
+      type: object
+      properties:
+        token:   {type: string}
+        expires: {type: string, format: date-time}
+
+    SearchHit:
+      type: object
+      properties:
+        namespace:       {type: string}
+        plugin_id:       {type: string}
+        latest_version:  {type: string}
+        layer:           {type: string, enum: [exp, ip, eda]}
+        trust_tier:      {type: string}
+        description:     {type: string}
+        publisher_org:   {type: string}
+        downloads_30d:   {type: integer}
+
+    SearchResponse:
+      type: object
+      properties:
+        next_cursor: {type: string, nullable: true}
+        results:
+          type: array
+          items: {$ref: '#/components/schemas/SearchHit'}
+
+    VersionRecord:
+      type: object
+      properties:
+        namespace:           {type: string}
+        plugin_id:           {type: string}
+        version:             {type: string}
+        manifest:            {type: object}
+        trust_tier:          {type: string}
+        trust_tier_history:
+          type: array
+          items:
+            type: object
+            properties:
+              tier: {type: string}
+              at:   {type: string, format: date-time}
+        signature:
+          type: object
+          properties:
+            key_id:               {type: string}
+            publisher_pubkey_url: {type: string}
+        bundle:
+          type: object
+          properties:
+            url:        {type: string}
+            size_bytes: {type: integer}
+            sha256:     {type: string}
+        uploaded_at: {type: string, format: date-time}
+        yanked:      {type: boolean}
+        yank_reason: {type: string, nullable: true}

@@ -101,7 +101,7 @@ The compliance report will show waived steps as `SKIPPED-WAIVED`.
 ### Rule 5 — Hardware-attestation chain (mandatory for any HW-based PASS claim)
 
 The most damaging fresh-agent failure mode the platform has seen is the
-**stale-rig PASS**: the agent runs `device_tester_example_tester_connect_test`,
+**stale-rig PASS**: the agent runs `device_tester_md905_connect_test`,
 sees a PASS coming back from a SOF that was burned to the FPGA in a
 **previous session**, and ships the verdict as if its own work passed.
 The plugin contract makes this impossible if you follow this rule:
@@ -157,7 +157,7 @@ declaring Phase-2c (on-board functional) PASS:
 4. The `behavioural-state-coverage` table goes into `RESULTS.md`
    alongside the synthesis metrics.
 
-The noris run shipped a 5-bug release because the on-rig verification
+The vendor run shipped a 5-bug release because the on-rig verification
 checked response bytes but never the side-effect state changes.
 
 ### Rule 5c — FINAL_REPORT.md must cite the artefact's SHA-256

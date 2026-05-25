@@ -86,7 +86,7 @@ crc_catalog:
     polynomial: "0x31"
     init: "0x00"
     reflected: true
-    source: "Maxim/Dallas 1-Wire spec; also EXAMPLE_CHIP cable-side-id default"
+    source: "Maxim/Dallas 1-Wire spec; also IC-A cable-side-id default"
   crc_8_sae_j1850:
     polynomial: "0x1D"
     init: "0xFF"

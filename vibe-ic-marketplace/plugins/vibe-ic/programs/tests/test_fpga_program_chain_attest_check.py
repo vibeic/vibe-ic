@@ -32,7 +32,7 @@ def _good_chain(session="abcd-1234", sha="sha256:" + "f" * 64):
          "compile_artifact_sha256": sha,
          "program_matches_compile": True},
         {"timestamp": "2026-04-27T10:02:00Z",
-         "step": "device_tester_example_tester_connect_test", "status": "PASS",
+         "step": "device_tester_md905_connect_test", "status": "PASS",
          "session_id": session},
     ]
 

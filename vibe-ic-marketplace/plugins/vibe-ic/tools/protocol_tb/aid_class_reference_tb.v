@@ -1,8 +1,8 @@
 `timescale 1ns / 100ps
 
 // ================================================================
-// Plugin-provided reference testbench for EXAMPLE_PROTOCOL-class half-duplex
-// asynchronous identification protocols (e.g. EXAMPLE_TESTER / EXAMPLE_CHIP /
+// Plugin-provided reference testbench for AID-class half-duplex
+// asynchronous identification protocols (e.g. USB-HID tester / IC-A /
 // any 1-wire open-drain query/response IC family).
 //
 // Wave 28 / v0.119.60: this TB is the first runtime functional
@@ -12,7 +12,7 @@
 // id_bus midway through each bit cell, and prints a single PASS /
 // FAIL line that the gate parser greps for.
 //
-// Wave 34 / v0.119.66 — REJECT device-side BR.  Real EXAMPLE_TESTER-class
+// Wave 34 / v0.119.66 — REJECT device-side BR.  Real USB-HID-tester-class
 // host firmware DOES NOT expect the device to emit a BR before its
 // response bits; the host already sent BR as the framing marker
 // and just samples the DUT's bit cells directly within tSRS.  Any
@@ -28,7 +28,7 @@
 // Both Wave 25 rig spec AND Wave 28 TB now agree: NO device BR.
 //
 // CHIP-AGNOSTIC.  All host timing values are parameters with
-// physical-time units (in ns) so they translate across any EXAMPLE_PROTOCOL-class
+// physical-time units (in ns) so they translate across any AID-class
 // chip whose chip-clock frequency is exposed via CLOCK_PERIOD_NS.
 //
 // Expected DUT contract (the `chip_top` / agent-supplied top must
@@ -49,7 +49,7 @@ module aid_class_reference_tb;
   // ----------------------------------------------------------------
   parameter CLOCK_PERIOD_NS      = 20;     // 50 MHz default chip clock
   // Host-driven LOW durations (in ns).  Defaults derived from FRS §5
-  // typical values for EXAMPLE_PROTOCOL-class.
+  // typical values for AID-class.
   parameter T_BR_NS              = 14000;  // host BR LOW pulse (~14 us)
   parameter T_BIT0_LOW_NS        =  7100;  // bit-0 LOW phase (~7.1 us)
   parameter T_BIT1_LOW_NS        =  1800;  // bit-1 LOW phase (~1.8 us)
@@ -129,7 +129,7 @@ module aid_class_reference_tb;
     end
   endtask
 
-  // One byte = 8 bit cells, LSB-first per EXAMPLE_PROTOCOL-class FRS §7.
+  // One byte = 8 bit cells, LSB-first per AID-class FRS §7.
   task host_drive_byte;
     input [7:0] byte_val;
     integer i;
@@ -379,7 +379,7 @@ module aid_class_reference_tb;
       end else if (dut_response_bytes[0] !== 8'h73) begin
         // Convention: response opcode = command opcode + 1.
         // Some chips reply with arbitrary status — only flag silent.
-        $display("WARN_GET_STATE — DUT first byte 0x%02h (expected 0x73 by EXAMPLE_PROTOCOL convention)",
+        $display("WARN_GET_STATE — DUT first byte 0x%02h (expected 0x73 by AID convention)",
                  dut_response_bytes[0]);
       end else begin
         $display("PASS_GET_STATE — DUT responded with 0x73");
@@ -451,7 +451,7 @@ module aid_class_reference_tb;
       end else if (dut_byte_idx < 1) begin
         $display("SKIP_GET_OTP_BYTE — DUT silent (chip may not implement 0xE2)");
       end else if (dut_response_bytes[0] !== 8'hE3) begin
-        $display("WARN_GET_OTP_BYTE — first byte 0x%02h, expected 0xE3 by EXAMPLE_PROTOCOL convention",
+        $display("WARN_GET_OTP_BYTE — first byte 0x%02h, expected 0xE3 by AID convention",
                  dut_response_bytes[0]);
       end else if (dut_byte_idx >= 3) begin
         residue = compute_crc_residue(dut_byte_idx);
@@ -600,7 +600,7 @@ module aid_class_reference_tb;
     begin
       $display("INFO scenario=WAKE_THEN_GET_ID — wake pulse then GET_ID");
       clear_dut_capture;
-      // Drive a wake-style long LOW (host BR works as wake on most EXAMPLE_PROTOCOL chips)
+      // Drive a wake-style long LOW (host BR works as wake on most AID chips)
       host_drive_br;
       #(T_TSRS_MIN_NS * 4);  // longer settle for wake
       // Standard GET_ID

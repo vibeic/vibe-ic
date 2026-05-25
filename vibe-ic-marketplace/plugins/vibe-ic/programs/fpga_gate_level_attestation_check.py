@@ -9,7 +9,7 @@ THE PROBLEM
 When a project's QSF carries BOTH the gate-level netlist
 (`chip_top_asic_pnr.v`) AND the RTL source (`chip_top.sv`), Quartus
 can silently pick the RTL — and the SOF still works but the gate
-netlist NEVER reached the device. v3 (benchmark_a ORGANIC-20260512) hit
+netlist NEVER reached the device. v3 (BENCH-A ORGANIC-20260512) hit
 this: BIST passed on bench, but `*.map.rpt` revealed `main_fsm:u_fsm`
 proving RTL fallback.
 
@@ -52,7 +52,7 @@ from typing import List, Optional
 
 
 # Default RTL submodule names that would prove fallback to source.
-# chip-AGNOSTIC defaults (benchmark_a-class names) — override per project.
+# chip-AGNOSTIC defaults (BENCH-A-class names) — override per project.
 _DEFAULT_RTL_SUBMODULES = (
     "main_fsm", "rx_phy", "tx_phy",
     "regbank", "regfile", "otp_ctrl", "otp_mem",

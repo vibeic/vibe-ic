@@ -71,8 +71,52 @@ echo "  Vibe-IC Pre-Commit Hook Installed"
 echo "============================================"
 echo "  Hook:   $HOOK_FILE"
 echo "  Script: $PRE_COMMIT_SCRIPT"
+
+# ----------------------------------------------------------------------
+# Wave 93 / v1.6.17 — also install commit-msg hook for version-sync.
+# git passes the active commit-message file as $1 to commit-msg hooks,
+# which is the only reliable place to enforce "commit msg vX.Y.Z must
+# match plugin.json + marketplace.json". Pre-commit cannot read the
+# active message reliably (-m bypass + COMMIT_EDITMSG residue).
+# ----------------------------------------------------------------------
+COMMIT_MSG_HOOK="$HOOKS_DIR/commit-msg"
+VERSION_SYNC_SCRIPT="$PROJECT_ROOT/tools/ci/check_version_sync_with_commit.sh"
+
+if [ -f "$VERSION_SYNC_SCRIPT" ]; then
+    # Back up existing commit-msg hook if present
+    if [ -f "$COMMIT_MSG_HOOK" ]; then
+        BACKUP="$COMMIT_MSG_HOOK.backup.$(date +%Y%m%d%H%M%S)"
+        cp "$COMMIT_MSG_HOOK" "$BACKUP"
+        echo "Existing commit-msg hook backed up to: $BACKUP"
+    fi
+
+    cat > "$COMMIT_MSG_HOOK" << 'CMHOOKEOF'
+#!/bin/bash
+# Vibe-IC Commit-Msg Hook (Wave 93 / v1.6.17)
+# Installed by: tools/ci/install_hooks.sh
+# Validates: when commit msg advertises a vX.Y.Z, plugin.json +
+# marketplace.json plugins[0].version must already match.
+# To uninstall: rm .git/hooks/commit-msg
+
+PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+SYNC_SCRIPT="$PROJECT_ROOT/tools/ci/check_version_sync_with_commit.sh"
+
+if [ -x "$SYNC_SCRIPT" ]; then
+    bash "$SYNC_SCRIPT" "$1"
+    exit $?
+else
+    echo "WARNING: version-sync script not found at $SYNC_SCRIPT"
+    echo "Skipping commit-msg version-sync check."
+    exit 0
+fi
+CMHOOKEOF
+    chmod +x "$COMMIT_MSG_HOOK"
+    echo "  Hook:   $COMMIT_MSG_HOOK"
+    echo "  Script: $VERSION_SYNC_SCRIPT"
+fi
+
 echo ""
-echo "  The hook will run automatically before each 'git commit'."
+echo "  The hooks run automatically on each 'git commit'."
 echo "  To skip once: git commit --no-verify"
-echo "  To uninstall: rm $HOOK_FILE"
+echo "  To uninstall: rm $HOOK_FILE $COMMIT_MSG_HOOK"
 echo "============================================"

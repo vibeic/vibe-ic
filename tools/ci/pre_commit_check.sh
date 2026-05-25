@@ -147,7 +147,7 @@ fi
 # 4.5. Picker fixture-thrash guard (issue #5 lesson learned)
 # --------------------------------------------------------------------------
 # Refuses any commit that flips an entry in the
-# `tests/test_phase2a_fixtures_regression.py::_EXPECTED` dict
+# `tests/test_phase1_fixtures_regression.py::_EXPECTED` dict
 # without an explicit `fixture-flip-acknowledged: <project>:<old>
 # -> <new>` line in the commit message. Closes the
 # v1.6.51→v1.6.58→v1.6.60 thrashing class structurally.

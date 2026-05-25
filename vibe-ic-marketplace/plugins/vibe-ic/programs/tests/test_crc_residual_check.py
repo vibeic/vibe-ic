@@ -1,6 +1,6 @@
 """Unit tests for crc_residual_check.py.
 
-Tests verify detection of the EXAMPLE_CHIP v041 fresh-agent CRC bug:
+Tests verify detection of the IC-A v041 fresh-agent CRC bug:
 `crc_out == 0` residual check alongside CRC init=0xFF → silently drops every frame.
 """
 import sys

@@ -32,7 +32,7 @@ Required JSON shape (``sim/sim_full_stack/results.json`` or
         ...
       ],
       "tb_module": "tb_full_stack",
-      "rtl_top": "example_chip_top",
+      "rtl_top": "as3616_top",
       "input_doc_evidence": "input/docs/CMD_table.xlsx#opcodes",
       "sim_log_sha256": "..."
     }

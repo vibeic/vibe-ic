@@ -3,7 +3,7 @@
 # (single-wire pad, CRC-8 MAXIM polynomial, pad/decoder/encoder/checker/
 # command/MAC/OTP/wake-gen structural decomposition).
 #
-# Added v0.56 (2026-04-24) to host the EXAMPLE_CHIP-style submodule names
+# Added v0.56 (2026-04-24) to host the IC-A-style submodule names
 # that previously lived in `cable-side-id-ic.yaml` parent. The parent
 # class now describes only the generic single-wire ID controller
 # structural minimums; pick this sub-class when the design specifically

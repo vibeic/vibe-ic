@@ -290,7 +290,7 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
 
         # Output reversal detection — search both this file and the
         # whole project text for a load of `crc` or `crc_out` /
-        # `crc_q` / `crc_result` / `crc_local` (canonical EXAMPLE_PROTOCOL-class
+        # `crc_q` / `crc_result` / `crc_local` (canonical AID-class
         # LFSR alias added v1.6.187 #72 P0-2 slice 6/8).
         out_rev = "UNKNOWN"
         for sig in ("crc_out", "crc_q", "crc_result", "crc8_result",

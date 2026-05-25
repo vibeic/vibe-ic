@@ -112,7 +112,7 @@ Each entry is a dict carrying:
   "kind": "<bom_component_part_number | indexed_pin_signal | "
           "indexed_register_address | protocol_constant | "
           "test_threshold | electrical_value | etc>",
-  "source": "<source filename, e.g. EXAMPLE_CHIP_Datasheet.pdf>",
+  "source": "<source filename, e.g. AS3616_Datasheet.pdf>",
   "extraction_strategy": "ai_deep_review_patch",
   "rationale": "<one short sentence on why this fact belongs in "
                 "this L layer>"
@@ -189,7 +189,7 @@ Write `<project>/reports/phase1_completeness_deep_review.md` with:
 ## AI patches applied
 | L doc | Fact | Source doc | Strategy |
 | --- | --- | --- | --- |
-| L8_TIMING_WAVEFORM | tA0=3.5us | EXAMPLE_CHIP_TxRx_signal_format.txt | ai_deep_review_patch |
+| L8_TIMING_WAVEFORM | tA0=3.5us | AS3616_TxRx_signal_format.txt | ai_deep_review_patch |
 | ...
 
 ## Backlog submissions

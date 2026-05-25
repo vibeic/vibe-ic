@@ -162,7 +162,7 @@ class TestRxToleranceSweep:
         return res, findings
 
     def test_detects_width8_gap_lightning(self, tmp_path):
-        """This is the exact EXAMPLE_TESTER bug #2: H1=1..7, H0=9..23 leaves gap at 8."""
+        """This is the exact USB-HID tester bug #2: H1=1..7, H0=9..23 leaves gap at 8."""
         table = {
             "max_width": 30,
             "symbols": [

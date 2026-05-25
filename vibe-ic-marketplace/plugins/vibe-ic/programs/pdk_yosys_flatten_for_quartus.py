@@ -64,11 +64,11 @@ def main():
     p.add_argument("--keep-tmp",      action="store_true")
     args = p.parse_args()
 
-    # Map host paths to docker paths (8HD-d convention)
+    # Map host paths to docker paths (<host> convention)
     def _docker_path(host: Path) -> str:
         h = host.resolve()
         if "AI_IC_design" in str(h):
-            return str(h).replace("<project_root>",
+            return str(h).replace("~/AI_IC_design",
                                     "/foss/designs")
         return str(h)
 

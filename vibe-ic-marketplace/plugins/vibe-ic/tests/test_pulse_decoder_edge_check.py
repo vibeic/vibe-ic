@@ -49,7 +49,7 @@ endmodule
 
 
 def test_fuzzy_pair_id_bus_rx_eff_vs_q_passes(tmp_path):
-    """v0.119.25 fuzzy variant: noris case `id_bus_rx_eff && !id_bus_rx_q`
+    """v0.119.25 fuzzy variant: vendor case `id_bus_rx_eff && !id_bus_rx_q`
     where the registered companion's stem (`id_bus_rx`) is a prefix of
     the live signal (`id_bus_rx_eff`). Previously rejected because
     strict regex required an exact `<X> && !<X>_q` pair."""

@@ -89,7 +89,7 @@ mcp-eda-server/src/devices/<class>/<vendor>/
 ```
 
 `manifest.json` schema mirrors the existing
-`mcp-eda-server/src/devices/tester/example_vendor-example_tester/manifest.json` and
+`mcp-eda-server/src/devices/tester/vendor-usb_hid_tester/manifest.json` and
 `mcp-eda-server/src/devices/fpga/terasic-de10lite/manifest.json`.
 Plugin's `.mcp.json` lists the additional MCP servers if you ship more
 than just driver wrappers.

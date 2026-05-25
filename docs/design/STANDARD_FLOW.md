@@ -20,8 +20,8 @@
 
 ```json
 {
-  "design_name": "benchmark_a",
-  "top_module": "benchmark_a_synth_wrapper",
+  "design_name": "bench-a",
+  "top_module": "bench-a_synth_wrapper",
 
   "clock": {
     "name": "clk",

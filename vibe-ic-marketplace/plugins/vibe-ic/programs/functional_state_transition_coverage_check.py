@@ -6,7 +6,7 @@ correctness.
 
 THE PROBLEM
 -----------
-The noris dispatcher TB drove every cmd opcode through and confirmed
+The vendor dispatcher TB drove every cmd opcode through and confirmed
 the response bytes matched. The TB never checked:
   - awake-state register set/cleared after the right opcodes
   - register echo back on read commands

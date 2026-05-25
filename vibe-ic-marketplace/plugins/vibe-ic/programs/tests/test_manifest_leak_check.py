@@ -24,8 +24,8 @@ def test_detects_long_string_leak(tmp_path):
     m = tmp_path / "L1_manifest.json"
     _write(m, [
         {"path": "ic_name",
-         "benchmark_value": "EXAMPLE_CHIP Power Throttling IC with a long name",
-         "ic_expert_default": "EXAMPLE_CHIP Power Throttling IC with a long name"},
+         "benchmark_value": "IC-A Power Throttling IC with a long name",
+         "ic_expert_default": "IC-A Power Throttling IC with a long name"},
     ])
     r = _run(str(m))
     assert r.returncode == 1
@@ -66,7 +66,7 @@ def test_sanitized_default_is_ok(tmp_path):
     m = tmp_path / "L1_manifest.json"
     _write(m, [
         {"path": "ic_name",
-         "benchmark_value": "BENCHMARK_A specific benchmark value",
+         "benchmark_value": "BENCH-A specific benchmark value",
          "ic_expert_default": None,
          "provenance_hint": "user_required"},
     ])

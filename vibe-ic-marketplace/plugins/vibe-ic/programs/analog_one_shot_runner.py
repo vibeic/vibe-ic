@@ -366,7 +366,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
             # `_analog_a_check_common.vacuous_pass`. Without this
             # discrimination, 64 VACUOUS_PASS leaves silently roll up
             # to a top-level PASS (the false-PASS field-agent
-            # observed at v1.6.128 on benchmark_a). Chip-AGNOSTIC: relies
+            # observed at v1.6.128 on BENCH-A). Chip-AGNOSTIC: relies
             # only on the existing literal sentinel, no chip names.
             stdout_tail = cp.stdout.splitlines()[-1] if cp.stdout else "ran"
             if "VACUOUS_PASS" in cp.stdout:

@@ -23,7 +23,7 @@ qbank/
 ├── cable-side-id-ic_L1.yaml     # electrical chars + pinout
 ├── cable-side-id-ic_L4.yaml     # 128x8 OTP map
 ├── cable-side-id-ic_L6.yaml     # MAC/RX/OTP/CC submodule FSMs
-├── cable-side-id-ic_L7.yaml     # EXAMPLE_TESTER test sequence
+├── cable-side-id-ic_L7.yaml     # USB-HID tester test sequence
 ├── cable-side-id-ic_L8.yaml     # break + POR-to-wake-ready timing
 ├── apb-peripheral_L1.yaml       # APB spec/addr/data
 ├── apb-peripheral_L2.yaml       # clock/reset/wait states

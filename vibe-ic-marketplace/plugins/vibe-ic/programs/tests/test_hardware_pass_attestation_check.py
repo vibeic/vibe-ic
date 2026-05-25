@@ -28,7 +28,7 @@ def _run(proj: Path):
 
 def test_known_pass_with_real_bytes_passes(tmp_path):
     _setup(tmp_path, {
-        "tester": "EXAMPLE_TESTER",
+        "tester": "USB-HID tester",
         "known_pass_bitstream": {"sof_path": "v037v2.sof", "sha256": "abc"},
         "known_pass_transcript": {
             "hid_tool_rx_bytes": "F2 02 02 02 02 02 BE AB BA D1 CD D0 D1 D2 AF CD CD D1 B5 AC D2 C1 B8 02 02 FA",
@@ -41,7 +41,7 @@ def test_known_pass_with_real_bytes_passes(tmp_path):
 
 def test_padding_only_fails(tmp_path):
     _setup(tmp_path, {
-        "tester": "EXAMPLE_TESTER",
+        "tester": "USB-HID tester",
         "known_pass_bitstream": {"sof_path": "sim.sof"},
         "known_pass_transcript": {
             "hid_tool_rx_bytes": "00 00 0E 3A 02 02 02 02 02 02 02 02 02 02",
@@ -66,7 +66,7 @@ def test_missing_l13_fails(tmp_path):
 
 def test_missing_bitstream_identity_fails(tmp_path):
     _setup(tmp_path, {
-        "tester": "EXAMPLE_TESTER",
+        "tester": "USB-HID tester",
         "known_pass_bitstream": {"capture_date": "2026-04-24"},   # no sof/sha/gds
         "known_pass_transcript": {
             "hid_tool_rx_bytes": "F2 BE AB BA D1 CD D0 D1 D2 FA",

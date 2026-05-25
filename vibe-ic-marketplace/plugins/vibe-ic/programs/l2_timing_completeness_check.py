@@ -6,7 +6,7 @@ timing keys when the input docs clearly measure timings.
 
 Why this gate exists
 ====================
-v0.119.30 <benchmark> noris benchmark caught the regression:
+v0.119.30 <benchmark> vendor benchmark caught the regression:
   - input/docs/量測時序.pptx (extracted text) lists `tITO`, `tWFT`,
     `H1_MAX`, `BR_MIN` etc. with concrete µs values.
   - input/docs/MDV-A1101-FRS.txt §5.2 documents wake_pulse mechanism.

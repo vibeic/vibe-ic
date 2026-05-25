@@ -8,7 +8,7 @@ violation: the BR delimiter is the host's framing — only the host
 emits BR; the chip emits only BIT0/BIT1/IBT pulses.
 
 Wave 56 column-D Issue 3 hardware-confirmed this bug class on
-v0.121-noris (every chip reply contained a 14.92 µs BR-class LOW
+v0.121-vendor (every chip reply contained a 14.92 µs BR-class LOW
 preamble at t=431.5 µs).  Static RTL inspection couldn't isolate the
 source — only scope evidence catches it.
 
@@ -26,7 +26,7 @@ Detection (chip-AGNOSTIC)
    `BR_MIN`, `H0_MAX` (or `H0MAX`).  Values in 50 MHz ticks.
 4. SKIP gracefully when neither L8 nor any rtl_constants file declares
    BR_MIN.  This makes the gate inert for projects that don't use the
-   EXAMPLE_PROTOCOL-class half-duplex protocol convention.
+   AID-class half-duplex protocol convention.
 5. For each scope CSV that names a "reply" / "tx" / "response" /
    "chip_reply" / "connect_test" segment in its filename, decode the
    LOW pulse widths.  FAIL when any LOW pulse strictly inside the
@@ -52,7 +52,7 @@ from typing import List, Tuple, Optional
 import _path_layout as _pl
 
 # Wave 78 — explicit class applicability. Scope-reply BR preamble is
-# an EXAMPLE_PROTOCOL-class half-duplex bus concept (BR is the host's framing
+# an AID-class half-duplex bus concept (BR is the host's framing
 # delimiter; only the host emits BR). UART/SPI/I2C and pure-analog
 # projects don't share the BR/IBT/H0/H1 pulse-class taxonomy.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -222,7 +222,7 @@ def main(argv: List[str]) -> int:
         print(f"FAIL — project dir not found: {project_dir}")
         return 1
 
-    # Wave 78 — explicit class gate. EXAMPLE_PROTOCOL-class only; `unknown` falls
+    # Wave 78 — explicit class gate. AID-class only; `unknown` falls
     # through to the existing `is_half_duplex_project` heuristic
     # (fail-closed via the next SKIP guard).
     profile = detect_ic_class(project_dir)
@@ -409,7 +409,7 @@ def main(argv: List[str]) -> int:
         print(f"  • {f}")
     print()
     print("Why this matters:")
-    print("  In a half-duplex single-wire EXAMPLE_PROTOCOL-class protocol the host's")
+    print("  In a half-duplex single-wire AID-class protocol the host's")
     print("  BR is the frame delimiter.  A chip-side BR pulse during")
     print("  reply makes the host re-classify as a new frame start,")
     print("  resetting frame state and silently corrupting the reply.")

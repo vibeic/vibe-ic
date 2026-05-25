@@ -15,6 +15,6 @@ The output JSON **must** have exactly these top-level keys, in this order:
 | `protocol_name` | string |
 | `frame_format` | dict (keys: wake, break, start_bit, bit_encoding, byte_order, crc) |
 | `command_set` | list of dicts (len 5) |
-| `example_tester_signature_response` | string |
+| `md905_signature_response` | string |
 
 **Forbidden**: do NOT add extra top-level keys (e.g., `compliance`, `references`, `channels`, `power_domains`, `notes`, `top_module`). The extractor expects this exact schema.

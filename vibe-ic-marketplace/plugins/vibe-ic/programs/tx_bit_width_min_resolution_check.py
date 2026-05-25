@@ -19,9 +19,9 @@ window dT, the chip's TX clock period must be small enough that the
 worst-case edge-snapping error (T_tx_ns / 2) consumes at most a
 configurable fraction of dT (default safety_factor=4 → at most 25%).
 
-Concrete failure mode (caught by v0.119.20 noris benchmark, hypothesis
+Concrete failure mode (caught by v0.119.20 vendor benchmark, hypothesis
 not yet oracle-confirmed): chip clocked at 5 MHz (T_tx_ns=200) drives
-an EXAMPLE_PROTOCOL-bus where the tightest BIT_LOW pulse is ~8 us with a ±0.5 us
+an AID-bus where the tightest BIT_LOW pulse is ~8 us with a ±0.5 us
 host tolerance. Edge-snap error 100 ns = 0.1 us = 20% of the budget,
 borderline but adequate. At 2.5 MHz (T_tx_ns=400) the error becomes
 0.2 us = 40% — the gate would WARN. At 1 MHz (T_tx_ns=1000) it's

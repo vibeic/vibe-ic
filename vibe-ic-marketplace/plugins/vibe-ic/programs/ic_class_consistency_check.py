@@ -10,7 +10,7 @@ The third-round fault-injection audit (agent
 `a38d56dfe53d7bd11`) demonstrated that an attacker could write
 mis-leading scalars into `facts.yaml` (e.g. claim
 `ic_class: pure_analog` on a UART-driven digital chip, or set
-`no_command_protocol: true` on an EXAMPLE_PROTOCOL-class device) and silence
+`no_command_protocol: true` on an AID-class device) and silence
 the matching gates. None of the Wave 36 / Wave 37 gates
 cross-checked the asserted facts.yaml fields against what the L
 docs / RTL actually said.

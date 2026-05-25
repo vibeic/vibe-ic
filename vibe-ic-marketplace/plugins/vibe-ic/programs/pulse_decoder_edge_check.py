@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 pulse_decoder_edge_check.py — Enforce rising-edge-driven classification in
-LOW-pulse decoders (PPM/PWM/EXAMPLE_PROTOCOL/DALI/1-Wire/NEC-IR/UART-break style).
+LOW-pulse decoders (PPM/PWM/AID/DALI/1-Wire/NEC-IR/UART-break style).
 
 Rule (derived from v052 rtl/rx_phy.v:35-50):
 
@@ -82,7 +82,7 @@ _RISING_FROM_QQ_RE = re.compile(
 )
 # v0.119.29: accept BOTH logical (`&&` / `!`) AND bitwise (`&` / `~`)
 # rising-edge forms. They're logically equivalent for 1-bit signals,
-# and both are common in real RTL — the agent on v0.119.27 noris wrote
+# and both are common in real RTL — the agent on v0.119.27 vendor wrote
 # `(sig & ~sig_q)` and was false-flagged. We use \s*&\s*&? in regex to
 # match either single or double `&`; same for `!` vs `~`.
 _RISING_FROM_Q_RE = re.compile(
@@ -94,7 +94,7 @@ _RISING_BANG_QQ_RE = re.compile(
 
 # v0.119.25 fuzzy variant: (X && !Y) where Y ends in a register suffix
 # AND Y's stem and X share enough common prefix. Catches the
-# noris-benchmark case `id_bus_rx_eff && !id_bus_rx_q` where the strict
+# vendor-benchmark case `id_bus_rx_eff && !id_bus_rx_q` where the strict
 # `\1_q` form rejected because the names differ. v0.119.26 tightened the
 # pairing predicate (see `_is_fuzzy_edge_pair`) so adversarial cases
 # like `(food && !foo_q)` and `(data_rx_eff && !data_tx_q)` no longer
@@ -197,7 +197,7 @@ def _has_edge_detector(text: str) -> bool:
         return True
 
     # Pattern 4 (v0.119.25): fuzzy pairing — (X && !Y_<reg>) where X
-    # and Y share a common prefix. Closes the noris-benchmark gap
+    # and Y share a common prefix. Closes the vendor-benchmark gap
     # where `id_bus_rx_eff && !id_bus_rx_q` was rejected by the strict
     # form even though it IS a valid one-stage edge detector.
     for m in _RISING_FUZZY_RE.finditer(text):

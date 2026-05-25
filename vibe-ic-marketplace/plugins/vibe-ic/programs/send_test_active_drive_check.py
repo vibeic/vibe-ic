@@ -10,7 +10,7 @@ minimum response).
 
 Background
 ----------
-The 32nd-attempt fresh-agent benchmark (v0.119.58, <benchmark> noris) was
+The 32nd-attempt fresh-agent benchmark (v0.119.58, <benchmark> vendor) was
 hardware-silent on SEND_TEST async response.  Diagnostic
 `docs/design/SCOPE_DIAG_v068_vs_v0119.58.md` byte-stream comparison:
 vendor PASS DUT actively drives id_bus during the SEND_TEST query

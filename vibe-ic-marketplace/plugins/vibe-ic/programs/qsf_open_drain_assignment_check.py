@@ -4,11 +4,11 @@ qsf_open_drain_assignment_check.py — DEPRECATED in v0.119.29.
 
 Why this gate is now a stub
 ===========================
-v0.119.27 introduced this gate based on the v0.119.25 noris hypothesis
+v0.119.27 introduced this gate based on the v0.119.25 vendor hypothesis
 that a missing `set_instance_assignment -name OPEN_DRAIN ON -to <pad>`
 in the project's QSF was the byte[6]=0x02 <half-duplex-tester> root cause.
 
-The v0.119.27 noris benchmark proved that hypothesis wrong:
+The v0.119.27 vendor benchmark proved that hypothesis wrong:
 
   • `OPEN_DRAIN ON` is NOT a valid Quartus pin-level instance
     assignment on MAX10 / Cyclone — adding it produces Quartus
@@ -20,7 +20,7 @@ The v0.119.27 noris benchmark proved that hypothesis wrong:
     No additional QSF entry is required.
 
 So the gate as designed FAILed correct projects and instructed users
-to add a non-existent QSF assignment. The agent on the v0.119.27 noris
+to add a non-existent QSF assignment. The agent on the v0.119.27 vendor
 run had to waiver the gate to proceed — a sign that the gate itself
 was the false alert, not the project.
 

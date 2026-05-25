@@ -23,7 +23,7 @@ def test_missing_required_args_errors():
 
 
 def test_aid_protocol_calculation():
-    """Typical EXAMPLE_PROTOCOL BIST: 22 bytes max, 10us per bit, 2.5 MHz sample clk."""
+    """Typical AID BIST: 22 bytes max, 10us per bit, 2.5 MHz sample clk."""
     code, out, err = _run([
         "--max-bytes", "22",
         "--bit-period-us", "10",

@@ -7,7 +7,7 @@ register output as a clock for `always_ff @(posedge clk_X)`.
 
 Why this gate exists
 ====================
-Caught against the v0.119.22 noris benchmark. The fresh agent emitted:
+Caught against the v0.119.22 vendor benchmark. The fresh agent emitted:
 
     logic clk_5m;
     always_ff @(posedge MAX10_CLK1_50) begin

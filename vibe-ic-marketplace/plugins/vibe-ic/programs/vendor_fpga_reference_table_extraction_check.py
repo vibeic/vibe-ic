@@ -6,7 +6,7 @@ timing tables.
 
 Why this gate exists
 ====================
-Surfaced by the v0.119.30 <benchmark> noris benchmark (MIN_DIFF_ANALYSIS.md).
+Surfaced by the v0.119.30 <benchmark> vendor benchmark (MIN_DIFF_ANALYSIS.md).
 Vendor doc `input/docs/20230103-3.txt` lines 2-6 give an explicit FPGA
 reference timing table:
 

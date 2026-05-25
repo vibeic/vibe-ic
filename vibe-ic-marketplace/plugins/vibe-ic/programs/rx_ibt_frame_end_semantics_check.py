@@ -47,7 +47,7 @@ Detection
      - frame-end on an IBT_MAX-class threshold.
 5. Honors waiver `rx_ibt_single_threshold_intentional` (≥40 chars).
 
-Chip-AGNOSTIC: no <chip-class> / <benchmark> / <half-duplex-tester> / NORIS / specific tick
+Chip-AGNOSTIC: no <chip-class> / <benchmark> / <half-duplex-tester> / VENDOR / specific tick
 value hard-coded.
 
 Exit codes

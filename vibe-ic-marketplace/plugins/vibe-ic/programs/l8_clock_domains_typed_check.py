@@ -49,7 +49,7 @@ from ic_class_profile import detect_ic_class  # noqa: E402
 
 # Wave 43 (v0.119.75) — explicit ic_class_profile guard.
 # Typed clock-domain map is required when the IC carries multiple
-# fab-side clock domains (digital cmd-driven, EXAMPLE_PROTOCOL-class, mixed
+# fab-side clock domains (digital cmd-driven, AID-class, mixed
 # signal). Bare-FPGA scaffolds usually run on a single eval-board
 # clock and rely on the QSF/SDC, not L8.
 _SKIP_CLASSES = ("bare_fpga",)

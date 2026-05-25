@@ -89,7 +89,7 @@ Constraints honored (HARD):
       pin name hardcoded. All chip-specific values are read from the
       project's own input/docs/ + input/otp/, OR fall back to a
       generic placeholder with a TODO marker.
-    - **Noris baseline** — only reads <project>/input/. Never touches
+    - **Vendor baseline** — only reads <project>/input/. Never touches
       sibling project directories.
     - **No oracle** — captured logic-analyzer CSVs / vendor SOFs /
       reverse-engineered protocol specs are never written into
@@ -5442,7 +5442,7 @@ def _extract_bullet_kv_specs(text: str) -> List[Dict[str, Any]]:
 # field — counted by ``extraction_coverage_check`` and visible to humans.
 #
 # This map is INTENTIONALLY EMPTY-EXTENSIBLE: it does not encode any
-# specific IC's vocabulary. Entries below are common EXAMPLE_PROTOCOL-class /
+# specific IC's vocabulary. Entries below are common AID-class /
 # half-duplex single-wire / OTP-IP synonyms that recur across multiple
 # vendor docs in the open-source IC corpus. Adding a new entry is safe
 # because aliases are only attached when the canonical token is already
@@ -5473,7 +5473,7 @@ def _extract_bullet_kv_specs(text: str) -> List[Dict[str, Any]]:
 #
 # Conservative split rule: every existing `_ALIAS_MAP` entry is moved
 # to the class-gated map. The field-agent's #254 specifically flagged
-# the half-duplex-protocol class entries (EXAMPLE_PROTOCOL-class single-wire OTP
+# the half-duplex-protocol class entries (AID-class single-wire OTP
 # vocabulary), so those entries get a tightened
 # ``half[_-]?duplex[_-]?(protocol|bus|interface)`` regex. Cross-
 # vendor entries (DPLUS / DMINUS — USB; LOCK_BIT — generic NVM) get
@@ -5503,7 +5503,7 @@ _ALIAS_MAP_ARCHITECTURAL_V1_6_359: Dict[str, List[str]] = {
 
 # Half-duplex single-wire protocol predicate. Matches canonical
 # `class_path` strings like:
-#   protocol/half_duplex_bus/example_protocol
+#   protocol/half_duplex_bus/aid
 #   protocol/half-duplex-interface/...
 #   protocol/halfduplex_protocol/...
 # Chip-AGNOSTIC: structural class-vocabulary regex only.
@@ -5546,8 +5546,8 @@ _ALIAS_MAP_CLASS_GATED_V1_6_359: Dict[str,
     "BR_FLAG":       (["BR_Flag"],
                       _V1_6_359_CLASS_PATTERN_HALF_DUPLEX),
     # Datasheet vocabulary (Apple Identification class)
-    "EXAMPLE_PROTOCOL":           (["Apple ID Bus", "Apple Identification",
-                       "EXAMPLE_PROTOCOL-class"],
+    "AID":           (["Apple ID Bus", "Apple Identification",
+                       "AID-class"],
                       _V1_6_359_CLASS_PATTERN_HALF_DUPLEX),
     # OTP / EEPROM lock vocabulary — generic NVM; permissive
     "LOCK_BIT":      (["LockBit", "Lockbit", "lock_bit"],
@@ -6188,7 +6188,7 @@ _TOPIC_FILENAME_PATTERNS = {
     "behavioral_sequences": re.compile(r"(?i)sequence|flow|behavior|scenario|use[\s_-]?case"),
     "lab_calibration":    re.compile(r"(?i)calibration|trim|lab[\s_-]?cal|cal[\s_-]?procedure|adjust"),
     # v1.6.79 — closes issue #12. New topic regexes for the 17 sibling
-    # sub-fields previously emitting hardcoded EXAMPLE_PROTOCOL-class scaffolds.
+    # sub-fields previously emitting hardcoded AID-class scaffolds.
     "verdict_byte":       re.compile(r"(?i)verdict|status[\s_-]?byte"),
     "payload_semantics":  re.compile(r"(?i)payload|response[\s_-]?(?:format|template)"),
     "debug_observability": re.compile(r"(?i)debug[\s_-]?(?:pin|signal|port)|observability"),
@@ -6379,7 +6379,7 @@ def _write_l_doc(project: Path, name: str, content: dict,
 def _try_load_l_doc(project: Path, name: str) -> Optional[dict]:
     """v1.6.58 — load a previously-emitted L doc by name (e.g.
     "L2_FRS"). Used by L6 generator to consult L2.protocol_overview
-    when deciding whether to emit the EXAMPLE_PROTOCOL 5-state FSM scaffold."""
+    when deciding whether to emit the AID 5-state FSM scaffold."""
     try:
         path = _pl.generated_docs_dir(project) / f"{name}.json"
         if path.is_file():
@@ -6446,7 +6446,7 @@ def _is_fpga_board_name(s: str) -> bool:
 
 
 # v1.6.59 — closes GitHub issue #5 follow-up. The v1.6.58 picker still
-# regressed on EXAMPLE_CHIP ("physics-based rules will") because the impl-of
+# regressed on IC-A ("physics-based rules will") because the impl-of
 # regex carried `re.IGNORECASE`, which let the captured group match
 # lowercase English words. Plus six thin-input failures (SHA-1 grabbed
 # whole H1 line, Lite* prefix dropped, etc.) needed a stricter
@@ -6467,7 +6467,7 @@ _IC_NAME_VERB_STOPWORDS = frozenset({
     "get", "gets", "got", "getting",
     "set", "sets", "setting",
     "run", "runs", "ran", "running",
-    "rules", "rule", "ruled",  # EXAMPLE_CHIP regression literal
+    "rules", "rule", "ruled",  # IC-A regression literal
 })
 
 # Hyphenated suffix tokens that mark an adjective / participial phrase.
@@ -6484,7 +6484,7 @@ def _looks_like_ip_token(tok: str) -> bool:
     """Heuristic: does this single token look like part of an IP name?
 
     Real IP-name tokens are one of:
-      * all-caps with optional digits / hyphens (AES, SHA-1, EXAMPLE_CHIP, EXAMPLE_TESTER)
+      * all-caps with optional digits / hyphens (AES, SHA-1, IC-A, USB-HID-TESTER)
       * CamelCase / PascalCase (LiteDRAM, ChaCha20, OpenRISC, FreeRTOS)
       * known IP-family prefix (Lite, Open, Free, Mega, Pico, Nano,
         Tiny, Cor, Fast, Mini) followed by anything
@@ -6521,7 +6521,7 @@ def _is_valid_ic_name_phrase(s: str) -> bool:
     """A multi-token candidate is valid only if every token passes the
     IP-token heuristic OR the token is a known trailing IP-suffix word
     (`core` / `controller` / `engine`). Used at every tier to reject
-    sentence-fragment captures like the v1.6.58 EXAMPLE_CHIP regression
+    sentence-fragment captures like the v1.6.58 IC-A regression
     "physics-based rules will"."""
     if not s:
         return False
@@ -6610,8 +6610,8 @@ def _is_strict_single_token_ic_name(tok: str) -> bool:
     `LiteICLink`) is accepted as a real IP identifier.
 
     Real single-word IP names look like one of:
-      * all-caps acronym, ≥2 chars: AES, JTAG, USB, MD5, SHA, EXAMPLE_PROTOCOL
-      * contains a digit: SHA1, EXAMPLE_CHIP, ChaCha20, BC1234, EXAMPLE_TESTER
+      * all-caps acronym, ≥2 chars: AES, JTAG, USB, MD5, SHA, AID
+      * contains a digit: SHA1, IC-A, ChaCha20, BC1234, USB-HID-TESTER
       * starts with a known IP-family prefix: LiteDRAM, OpenRISC,
         FreeRTOS, MegaTAP
       * has ≥2 uppercase letters anywhere (BiCapital / CamelCase
@@ -6975,7 +6975,7 @@ def _ic_name_from_docs_impl(extracted: Dict[str, str],
       2. FIPS / RFC / IEEE standard reference (FIPS 197 → AES)
       3. Project H1 from README (markdown / reST / asciidoc)
       4. Adjacency: "<X> core / controller / engine / ..."
-      5. Chip-style part number (EXAMPLE_CHIP / EXAMPLE_TESTER / BC1234A)
+      5. Chip-style part number (IC-A / USB-HID-TESTER / BC1234A)
     """
     # ------ Tier 0 (v1.6.244, for #105): folder-name + in-doc
     # corroboration. v1.6.233's "Tier 4.5" demotion made Tier-0
@@ -7050,11 +7050,11 @@ def _ic_name_from_docs_impl(extracted: Dict[str, str],
 
     # ------ Tier 1.5: chip-style part number with HIGH frequency.
     # v1.6.60 — closes issue-#5 v1.6.59 follow-up. Rich-input chip
-    # datasheets (EXAMPLE_CHIP, EXAMPLE_TESTER, BC1234A) reliably mention the chip's
+    # datasheets (IC-A, USB-HID-TESTER, BC1234A) reliably mention the chip's
     # part number many times. A 3+ count signals "this doc is about
     # this part number"; FIPS-180 mentioned once is just a side
     # reference in cryptographic context. Returning chip-style here
-    # blocks the v1.6.59 regression where EXAMPLE_CHIP's docs were
+    # blocks the v1.6.59 regression where IC-A's docs were
     # mis-classified as "SHA-2" because Tier 2 fired on a single
     # FIPS-180 mention.
     chip_re = re.compile(r"\b([A-Z]{2,4}\d{3,5}[A-Z]?)\b")
@@ -7216,7 +7216,7 @@ def _ic_name_from_docs_impl(extracted: Dict[str, str],
     if folder_cand:
         return folder_cand
 
-    # ------ Tier 5: chip-style part number (e.g. EXAMPLE_CHIP).
+    # ------ Tier 5: chip-style part number (e.g. IC-A).
     candidates: Counter = Counter()
     for text in extracted.values():
         for m in re.finditer(r"\b([A-Z]{2,4}\d{4}[A-Z]?)\b", text):
@@ -7860,7 +7860,7 @@ def _infer_opcode_name(opcode_hex: str, doc_text: str,
           ``NN`` form), after stripping deny-list noise (column
           headers, length / address tokens, etc.).
       P4  ``Command\\s+<HEX>\\s+NAME``       — heading form.
-      P5  legacy fallback: small canonical EXAMPLE_PROTOCOL-class lookup table.
+      P5  legacy fallback: small canonical AID-class lookup table.
 
     Both prefixed (``0xA1``) and bare (``A1``) source occurrences
     are recognised — table-extracted columns often store the raw
@@ -8033,7 +8033,7 @@ def _infer_opcode_name(opcode_hex: str, doc_text: str,
                 return m.group(1).upper()
     except Exception:
         pass
-    # P5 — legacy fallback (canonical EXAMPLE_PROTOCOL-class hexes only). Kept
+    # P5 — legacy fallback (canonical AID-class hexes only). Kept
     # for back-compat; new chips should never rely on this branch
     # because it's not chip-AGNOSTIC. The caller's flag-emit
     # (no_opcode_names_in_input) makes the gap visible.
@@ -8223,7 +8223,7 @@ _NON_PORT_NARRATIVE_TOKENS = frozenset({
     "TBD", "NA", "NC",  # placeholder noise
 })
 
-# v1.6.86 (#18 Bug 3) — dev-kit / FPGA-board tokens + EXAMPLE_CHIP-narrative noise.
+# v1.6.86 (#18 Bug 3) — dev-kit / FPGA-board tokens + IC-A-narrative noise.
 # Field-agent traced 32 dev-kit / narrative tokens leaking into L9.ports
 # from datasheet prose ("DE10-Lite eval kit reference: FPGA: MAX10. ADC:
 # 12-bit. SDRAM: 64Mb. ARDUINO header pins: 6 GPIO (RGB indicator)...").
@@ -8235,7 +8235,7 @@ _DEV_KIT_TOKENS = frozenset({
     "FPGA", "ADC", "SDRAM", "VGA", "MAX10_CLK1_50", "ARDUINO",
     "RGB", "SWITCH", "GSENSOR_SDI", "OSC", "SOF", "PWR",
     "BOOT_SEL", "LVTTL", "MAX",
-    # Narrative / spec-prose noise (EXAMPLE_CHIP-class but chip-AGNOSTIC by
+    # Narrative / spec-prose noise (IC-A-class but chip-AGNOSTIC by
     # heuristic — these are common-noun acronyms or hyperlinking tokens
     # in datasheet narrative, not real pin names).
     "COM", "VCOM", "UFP", "LRL", "EN_L", "MPD_CAP", "ID_CAP",
@@ -8252,7 +8252,7 @@ _PIN_NUMBERED_RE = re.compile(r"^PIN_[A-Z]+\d+$", re.IGNORECASE)
 
 # v1.6.87 (#19 Bug 2) — DE10-Lite-class FPGA-board pin patterns. Field-
 # agent surfaced ADC_CLK_10 / MAX10_CLK2_50 / GPIO_24 / GPIO_25 / HEX_*
-# / KEY_* / LEDR_* / SW_* / DRAM_* leaking into L9.ports for EXAMPLE_PROTOCOL-class
+# / KEY_* / LEDR_* / SW_* / DRAM_* leaking into L9.ports for AID-class
 # chips whose datasheet bundles a DE10-Lite reference design. These are
 # FPGA-board hardware-pin names (LEDs, switches, 7-segs, header pins,
 # board oscillators), never the chip's own top-level ports. Chip-
@@ -8627,7 +8627,7 @@ _L6_FSM_SOURCE_DENY = re.compile(
 )
 
 # v1.6.87 (#19 Bug 4) — chip part-number / version-code shape rejector.
-# Field-agent traced EXAMPLE_CHIP / A1101 / EXAMPLE_TESTER leaking into
+# Field-agent traced IC-A / A1101 / USB-HID-TESTER leaking into
 # fsm_state_catalogue: these are chip part numbers (vendor + die ID),
 # never FSM states. Pattern: 2+ uppercase letters followed by 3+
 # digits (catches common vendor schemes: AS####, A####, MD###, AD####
@@ -8659,7 +8659,7 @@ def _is_real_fsm_state(name, evidence_text):
     if up in _FSM_STATE_BLACKLIST_KEYWORDS:
         return False
     # v1.6.87 (#19 Bug 4) — chip-part-number shape rejector.
-    # EXAMPLE_CHIP, A1101, EXAMPLE_TESTER are vendor part numbers, never FSM states.
+    # IC-A, A1101, USB-HID-TESTER are vendor part numbers, never FSM states.
     if _CHIP_PART_NUMBER_RE.match(up):
         return False
     if not isinstance(evidence_text, str) or not evidence_text:
@@ -8784,9 +8784,9 @@ def _is_real_port_token(tok, l1_chip_name=None):
     all-caps tokens proposed as top-level ports.
 
     Rejects: power rails (VDD/VSS/GND/VIN/V_OUT/VCC*), narrative tokens
-    (HOST/ATE/GPIO/POR), the chip's own name (so `EXAMPLE_CHIP` mentioned in
+    (HOST/ATE/GPIO/POR), the chip's own name (so `IC-A` mentioned in
     a pinout caption doesn't promote to a port), version codes (E4 /
-    A1101 / EXAMPLE_CHIP), and tokens shorter than 3 chars (defensive — real
+    A1101 / IC-A), and tokens shorter than 3 chars (defensive — real
     multi-bit pin names are at least 3 chars). Returns True iff the
     token is plausibly a real chip port name.
 
@@ -8813,7 +8813,7 @@ def _is_real_port_token(tok, l1_chip_name=None):
     # stored lowercase; tokens may come in any case.
     if tok.lower() in _VERILOG_RESERVED_KEYWORDS:
         return False
-    # Pure chip-version codes: leading letters + digits only (E4, EXAMPLE_CHIP, A1101).
+    # Pure chip-version codes: leading letters + digits only (E4, IC-A, A1101).
     if _CHIP_VERSION_CODE_RE.match(up):
         return False
     # v1.6.86 (#18 Bug 3) — board-pin labels (PIN_N5 / PIN_N14 / PIN_AB12)
@@ -15730,7 +15730,7 @@ def gen_l1_datasheet(project: Path,
                     # v1.6.85 (#17 Bug A2) — additional reject filters
                     # for power rails, chip name, narrative tokens, and
                     # pure chip-version codes. Field-agent surfaced
-                    # EXAMPLE_CHIP / V_IN / HOST / ATE / GPIO leaking into
+                    # IC-A / V_IN / HOST / ATE / GPIO leaking into
                     # chip_top ports. Chip-AGNOSTIC: rules apply to any
                     # IC class; legitimate pin names like ID_BUS / OVP /
                     # WAKE pass.
@@ -16804,19 +16804,19 @@ def gen_l2_frs(project: Path,
     # co-occur with a protocol-class noun in the SAME SENTENCE
     # (delimited by `.!?`). Anchor nouns are taken from the IC-bus
     # vocabulary (protocol, bus, interface, frame, opcode, command,
-    # EXAMPLE_PROTOCOL, Maxim, Dallas, wake, response, transaction, payload, CRC,
+    # AID, Maxim, Dallas, wake, response, transaction, payload, CRC,
     # parity, signaling).
     _SINGLE_WIRE_PROTOCOL_REQUIRED_RE = re.compile(
         r"\b(?:single[\s\-]wire|1[\s\-]wire|one[\s\-]wire|"
         r"half[\s\-]duplex)\b"
         r"[^.!?]*?"
-        r"\b(?:protocol|bus|interface|frame|opcode|command|example_protocol|maxim|"
+        r"\b(?:protocol|bus|interface|frame|opcode|command|aid|maxim|"
         r"dallas|wake|response|transaction|payload|crc|parity|"
         r"signaling)\b",
         re.IGNORECASE,
     )
     _PROTOCOL_REQUIRED_BEFORE_SINGLE_WIRE_RE = re.compile(
-        r"\b(?:protocol|bus|interface|frame|opcode|command|example_protocol|maxim|"
+        r"\b(?:protocol|bus|interface|frame|opcode|command|aid|maxim|"
         r"dallas|wake|response|transaction|payload|crc|parity|"
         r"signaling)\b"
         r"[^.!?]*?"
@@ -16829,7 +16829,7 @@ def gen_l2_frs(project: Path,
     # the same sentence, that pairing is itself protocol-bus evidence
     # (clock-routing prose doesn't describe distribution as
     # "half-duplex"). Accept without requiring a separate
-    # protocol-class noun. Catches EXAMPLE_CHIP-class
+    # protocol-class noun. Catches IC-A-class
     # `single-wire half-duplex authentication IC` patterns.
     _SINGLE_WIRE_AND_HALF_DUPLEX_RE = re.compile(
         r"\b(?:single[\s\-]?wire|1[\s\-]?wire|one[\s\-]?wire)\b"
@@ -16847,7 +16847,7 @@ def gen_l2_frs(project: Path,
         same sentence. Catches v1.6.72 false positive on PTP
         clock-routing prose `single wire that carries serial data
         for clock distribution` (no protocol-class noun, no
-        co-occurrence) while preserving EXAMPLE_CHIP-class true positives
+        co-occurrence) while preserving IC-A-class true positives
         like `single-wire half-duplex authentication IC`."""
         return bool(_SINGLE_WIRE_PROTOCOL_REQUIRED_RE.search(text)
                     or _PROTOCOL_REQUIRED_BEFORE_SINGLE_WIRE_RE.search(text)
@@ -17412,7 +17412,7 @@ def gen_l2_frs(project: Path,
     # "LSB-first", wake_required_pre_command: true}` block whose own
     # `evidence` string self-declared "scanned for half-duplex /
     # single-wire keywords" — i.e. "I found no evidence". The values
-    # are EXAMPLE_PROTOCOL/single-wire concepts that don't apply to register-mapped
+    # are AID/single-wire concepts that don't apply to register-mapped
     # block ciphers, hash cores, memory controllers, or networking IPs.
     #
     # New behaviour: when no protocol evidence was found, emit
@@ -17429,7 +17429,7 @@ def gen_l2_frs(project: Path,
     # v1.6.70 — closes issue #10 Bug B. v1.6.67 emitted
     # `byte_order: "LSB-first"` and `wake_required_pre_command: true`
     # whenever ANY protocol keyword fired (i2c/spi/uart/axi/...). But
-    # those values are EXAMPLE_PROTOCOL-class single-wire conventions. A project
+    # those values are AID-class single-wire conventions. A project
     # that uses AXI / I2C / SPI doesn't necessarily transmit bytes
     # LSB-first or require a pre-command wake pulse. Per-field
     # populate ONLY when the source has structured evidence for that
@@ -17515,7 +17515,7 @@ def gen_l2_frs(project: Path,
             "half_duplex": half_duplex,
             "wire_count": 1 if one_wire else (4 if "spi" in concat.lower() else 2),
             # v1.6.70 — null when no structured byte-order claim found
-            # in source. EXAMPLE_PROTOCOL-class default no longer leaks across.
+            # in source. AID-class default no longer leaks across.
             # v1.6.71 — broadened to natural-language forms via
             # ACCEPT/REJECT two-stage match (issue #10 residual).
             "byte_order": (
@@ -18745,7 +18745,7 @@ def gen_l3_cmd_protocol(project: Path,
         if crc_init_hex:
             break
 
-    # v1.6.66 — closes issue #7 Bug X. Previous code emitted EXAMPLE_PROTOCOL-class
+    # v1.6.66 — closes issue #7 Bug X. Previous code emitted AID-class
     # CRC-8 defaults (poly=0x31 / init=0xFF / reflected=0x8C) on every
     # project regardless of whether the IC uses CRC at all. Block
     # ciphers don't carry CRC; hash cores ARE the hash; SerDes uses
@@ -18869,7 +18869,7 @@ def gen_l3_cmd_protocol(project: Path,
 
     # Wave 37/A3 + Wave-on-fix: scan extracted text for global ADDR/LEN
     # constraint hints. Generic patterns "address > 0xNN" / "length >= 0xNN"
-    # cover the common EXAMPLE_PROTOCOL-class limit (e.g. addr_max 0x7F).
+    # cover the common AID-class limit (e.g. addr_max 0x7F).
     #
     # v1.6.371 — for #266 P3 ORGANIC. The pre-v1.6.371 regex was greedy
     # (any 0xNN literal within 40 chars of `address` / `addr` / `length`
@@ -18981,7 +18981,7 @@ def gen_l3_cmd_protocol(project: Path,
 
     # v1.6.79 — closes issue #12. Three sibling-field hardcodes in L3:
     #   (1) verdict_byte_hex unconditionally fell back to "0xF2"
-    #       (canonical EXAMPLE_PROTOCOL-class verdict byte). For non-EXAMPLE_PROTOCOL chips
+    #       (canonical AID-class verdict byte). For non-AID chips
     #       (block ciphers / hash cores / SerDes / DRAM controllers)
     #       this is meaningless. Now: emit None + flag when no
     #       verdict-byte evidence found in source.
@@ -19005,7 +19005,7 @@ def gen_l3_cmd_protocol(project: Path,
             break
     # If we have real opcodes with payload templates, the canonical
     # cross-reference is meaningful evidence (not a hardcode); preserve
-    # it for EXAMPLE_PROTOCOL-class projects whose opcodes were extracted.
+    # it for AID-class projects whose opcodes were extracted.
     if payload_semantics_extracted is None and enriched_opcodes:
         payload_semantics_extracted = "see opcodes[].response_payload_template"
     no_payload_semantics_in_input = _flag_no_X_in_input(
@@ -24071,7 +24071,7 @@ def gen_l4_regmap(project: Path,
         r"\s*\|\s*([0-9xXa-fA-F]*)\s*\|\s*(.*?)\s*$",
         re.MULTILINE,
     )
-    # v1.6.65 — third register-row form. EXAMPLE_CHIP-style datasheets
+    # v1.6.65 — third register-row form. IC-A-style datasheets
     # render registers as `<addr>h (footnote) <REG_NAME> <bit-name1>
     # <bit-name2> ...` rather than the canonical `0xNN NAME R/W`.
     # Capture address-as-hex-h, the SCREAMING_SNAKE register name,
@@ -24833,7 +24833,7 @@ def gen_l4_regmap(project: Path,
         if header_match is None:
             # No header → skip _reg_row_re_c entirely. Avoids
             # false-positive matches on command tables (E9h CB1 ...
-            # row in EXAMPLE_CHIP response-payload section).
+            # row in IC-A response-payload section).
             continue
         # Restrict the row-scan to the text AFTER the header. Stop
         # at the first section-end marker so that command tables /
@@ -25378,7 +25378,7 @@ def gen_l4_regmap(project: Path,
     no_registers_in_input = _flag_no_X_in_input(
         registers, evidence, "registers")
     # v1.6.70 — closes issue #10 Bug A. Previous code emitted a fixed
-    # EXAMPLE_PROTOCOL-class OTP geometry (`depth_bytes=128, width_bits=8`) plus
+    # AID-class OTP geometry (`depth_bytes=128, width_bits=8`) plus
     # hardcoded read_map / write_map / lockbits / trim_registers /
     # mask_sources blocks on EVERY project, including the ten
     # thin-input projects that have no OTP at all. fields=[] correctly
@@ -25414,7 +25414,7 @@ def gen_l4_regmap(project: Path,
         # `TRIM_BG`, `OTP_PWE_MASK`, `generic_otp_macro`,
         # `"bandgap calibration"`) on every project where any OTP
         # evidence was found. Those literals are template
-        # fabrications, identical in class to the closed EXAMPLE_PROTOCOL-class
+        # fabrications, identical in class to the closed AID-class
         # L4/L5 defaults and the #102 L5 analog spec leak. Replace
         # with empty arrays / None so the gate-required schema keys
         # remain present without inventing data; real entries are
@@ -26713,7 +26713,7 @@ def gen_l5_adi_spec(project: Path,
     # see the same blocks L5 declared. Without this file the per-step
     # gates emit VACUOUS_PASS for every (block × step) combination,
     # which then aggregates to a top-level PASS — the false-PASS
-    # field-agent observed at v1.6.128 on benchmark_a. Chip-AGNOSTIC: only
+    # field-agent observed at v1.6.128 on BENCH-A. Chip-AGNOSTIC: only
     # emit when the keyword scan actually found blocks (i.e. the
     # downstream gates have something concrete to verify); when
     # blocks is empty we leave the file absent so the runner's
@@ -27362,9 +27362,9 @@ def gen_l6_control_logic(project: Path,
         + r"(FIFO|Buffer|Queue|Counter|Timer|FSM(?:_[A-Z0-9_]+)?)"
         + _ASCII_NB_AFTER)
     # v1.6.60 — closes issue-#5 v1.6.59 follow-up false-negative on
-    # rich-input EXAMPLE_PROTOCOL-class chip. The previous filename filter
+    # rich-input AID-class chip. The previous filename filter
     # ("RX_EVENT|control|logic|fsm|protocol|cmd|state|register|spec")
-    # excluded `EXAMPLE_CHIP_TxRx_signal_format.txt`, so its S_*/STATE_*
+    # excluded `IC-A_TxRx_signal_format.txt`, so its S_*/STATE_*
     # tokens were never harvested and L6.fsm_states fell to Tier C
     # despite the input clearly containing FSM evidence. The
     # S_*/STATE_* / FIFO / Buffer / Queue / Timer regexes are specific
@@ -27388,7 +27388,7 @@ def gen_l6_control_logic(project: Path,
                                "label": f"FSM {kind} token"})
 
     # v1.6.58 — closes GitHub issue #5 BUG 2. Replace the unconditional
-    # 5-state EXAMPLE_PROTOCOL-class scaffold with a real, three-tier extraction:
+    # 5-state AID-class scaffold with a real, three-tier extraction:
     #
     #   Tier A — concrete state-name evidence in input_doc/:
     #     * `S_<NAME>` / `STATE_<NAME>` tokens (already harvested into
@@ -27397,7 +27397,7 @@ def gen_l6_control_logic(project: Path,
     #         `parameter STATE_X = N'bN;`
     #     * Plain-text "state: <NAME>" / "state = <NAME>" rows
     #   Tier B — protocol_overview.half_duplex evidence (from L2):
-    #     a half-duplex single-wire protocol genuinely uses the EXAMPLE_PROTOCOL-
+    #     a half-duplex single-wire protocol genuinely uses the AID-
     #     class state graph. Emit the canonical 5-state list only
     #     when L2 confirms the protocol family.
     #   Tier C — no FSM evidence anywhere:
@@ -27406,7 +27406,7 @@ def gen_l6_control_logic(project: Path,
     # The previous behaviour (always emit the 5-state template) was
     # the 8/10-project mis-classification cited in issue #5: hash
     # cores, block ciphers, memory controllers, and networking IPs
-    # all carried an EXAMPLE_PROTOCOL-class state list they have nothing to do with.
+    # all carried an AID-class state list they have nothing to do with.
     extracted_states: List[Dict[str, Any]] = []
     # State names from fsm_tokens harvest (Tier A.1).
     for tok in fsm_tokens:
@@ -27432,7 +27432,7 @@ def gen_l6_control_logic(project: Path,
         re.IGNORECASE,
     )
     # v1.6.60 — closes issue-#5 v1.6.59 follow-up false-negative on
-    # rich-input EXAMPLE_PROTOCOL-class chip. The chip's docs DO describe an FSM
+    # rich-input AID-class chip. The chip's docs DO describe an FSM
     # in natural language ("when in IDLE state, ...") and via state
     # tables, but neither pattern matched the v1.6.59 Tier-A regexes.
     # Add three more deterministic extractors:
@@ -27990,10 +27990,10 @@ def gen_l6_control_logic(project: Path,
                     "pipeline_stages_inline_bracket_v1_6_462",
             })
 
-    # v1.6.59 — closes issue #5 follow-up. The EXAMPLE_PROTOCOL 5-state template
+    # v1.6.59 — closes issue #5 follow-up. The AID 5-state template
     # (Tier B in v1.6.58) was a per-class boilerplate that never
     # represented the actual chip's FSM. It is removed entirely.
-    # Even EXAMPLE_PROTOCOL-class chips must extract their own real FSM states from
+    # Even AID-class chips must extract their own real FSM states from
     # their own datasheet / FRS via Tier A; if the input lacks state
     # evidence, emit an empty list and flag it (Tier C).
     # v1.6.436 — for #312 P2 ORGANIC. Pipeline-stage / FSM-state split.
@@ -28763,10 +28763,10 @@ def gen_l7_test_debug(project: Path,
         test_modes, evidence, "test_modes")
 
     # v1.6.79 — closes issue #12. Three sibling-field hardcodes in L7:
-    #   (1) debug_observability previously emitted the EXAMPLE_PROTOCOL-class
+    #   (1) debug_observability previously emitted the AID-class
     #       3-signal scaffold (id_bus / rx_byte_valid / tx_active)
     #       on every project regardless of input.
-    #   (2) verification_strategy emitted the EXAMPLE_PROTOCOL-class 3-phase
+    #   (2) verification_strategy emitted the AID-class 3-phase
     #       template referencing <half-duplex-tester> + DE10-Lite
     #       even on chips with no protocol at all.
     #   (3) engineer_mode_unlock_sequence emitted a fixed prose
@@ -29476,7 +29476,7 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     # Try to derive primary frequency from timing_constants (look for
     # CLK_FREQ_HZ / FREQ_MHZ / similar). Fall back to 50 MHz default
     # (the open-source benchmark consensus reference clock for
-    # FPGA-eval-driven EXAMPLE_PROTOCOL-class designs; the gate accepts any freq
+    # FPGA-eval-driven AID-class designs; the gate accepts any freq
     # so long as the entry is typed).
     primary_freq_hz = _derive_primary_clk_freq_hz(timing_constants)
     for pin in clk_pins:
@@ -30838,20 +30838,20 @@ def gen_l8_timing_waveform(project: Path,
                            extracted: Dict[str, str]) -> LDocResult:
     """L8: RX classifier ticks + TX bit cell + frame-end gap.
 
-    Defaults follow EXAMPLE_PROTOCOL-class half-duplex single-wire convention; specific
+    Defaults follow AID-class half-duplex single-wire convention; specific
     values can be overridden via project's own input/extraction_patterns.json.
     """
     ic_name = _ic_name_from_docs(extracted, project)
     evidence: Dict[str, List[Dict[str, str]]] = {}
 
     # v1.6.79 — closes issue #12. Three sibling-field hardcodes in L8:
-    #   (1) rx_classifier_ticks previously emitted the EXAMPLE_PROTOCOL-class
+    #   (1) rx_classifier_ticks previously emitted the AID-class
     #       half-duplex bit-cell scaffold (h1/h0/br/ibt/wkp tick
     #       windows) on every project regardless of input — this
-    #       only makes sense for EXAMPLE_PROTOCOL-class single-wire protocols.
+    #       only makes sense for AID-class single-wire protocols.
     #   (2) clock_mhz unconditionally fell back to 50 (DE10-Lite
     #       reference clock) regardless of input.
-    #   (3) clock_domains emitted the EXAMPLE_PROTOCOL-class single-domain
+    #   (3) clock_domains emitted the AID-class single-domain
     #       scaffold ([{name: clk_main, freq_mhz: 50, ...}]).
     # Replace each with per-source extraction; emit None / [] + flag
     # when no source evidence is found.
@@ -30867,7 +30867,7 @@ def gen_l8_timing_waveform(project: Path,
         "wkp_min": 750,
     }
     # v1.6.64 — closes issue #6 Bug B. The previous code unconditionally
-    # emitted a 10-entry EXAMPLE_PROTOCOL-protocol timing-constant template
+    # emitted a 10-entry AID-protocol timing-constant template
     # (T_BIT0_LOW_TICKS / T_WAKE_PULSE_TICKS / etc.) even for projects
     # that have nothing to do with the half-duplex single-wire bus.
     # Replace with extraction: harvest `T_<NAME> = <int> [unit]` /
@@ -31094,7 +31094,7 @@ def gen_l8_timing_waveform(project: Path,
             unit = (m.group(3) or "ticks").lower()
             if key in _rx_classifier_default:
                 if rx_classifier is None:
-                    # First-match seeding — populate from the EXAMPLE_PROTOCOL
+                    # First-match seeding — populate from the AID
                     # default schema, then overwrite with extracted
                     # value. Guarantees we only emit a real
                     # rx_classifier when at least one tick window
@@ -31119,7 +31119,7 @@ def gen_l8_timing_waveform(project: Path,
     #   (a) clock_mhz unconditionally fell back to 50 (DE10-Lite
     #       reference) — meaningless for chips clocked at any other
     #       frequency.
-    #   (b) clock_domains emitted the EXAMPLE_PROTOCOL-class single-domain
+    #   (b) clock_domains emitted the AID-class single-domain
     #       scaffold even when the project has multiple domains
     #       (or none at all).
     # Replace each with per-source extraction.
@@ -32113,7 +32113,7 @@ def gen_l8_timing_waveform(project: Path,
             "timing_constant_promoted_from_timing_parameter")
     # v1.6.121 (#36 Bug 9 L8 portion) — SATA-spec literal picker.
     # The existing T_<NAME> / tBR / tIBT extractor above only looks
-    # at EXAMPLE_PROTOCOL-class half-duplex timing names. SATA Gen line rates
+    # at AID-class half-duplex timing names. SATA Gen line rates
     # (1.5/3.0/6.0 Gbps) + litex-litesata system clocks (37.5/75/
     # 150 MHz) live in README prose under industry-standard SATA
     # spec wording. Walk every extracted doc; cluster floor (≥2
@@ -32383,7 +32383,7 @@ def gen_l8_timing_waveform(project: Path,
         "doc_class": "rtl_constants",
         "ic_name": ic_name,
         # v1.6.79 — null when no rx_classifier evidence found; only
-        # EXAMPLE_PROTOCOL-class projects with explicit `H[01]_(MIN|MAX) = N` /
+        # AID-class projects with explicit `H[01]_(MIN|MAX) = N` /
         # `BR_MIN`/`IBT_MIN` constants in source land here populated.
         "rx_classifier_ticks": rx_classifier,
         "no_rx_classifier_ticks_in_input": no_rx_classifier_ticks_in_input,
@@ -32524,7 +32524,7 @@ def _v1_6_561_promote_l8_fmax_scalar(l8: Dict[str, Any]) -> None:
 #     OR (b) the file extension is a structured spec format (.pdf /
 #     .pptx / .xlsx / .ppt / .xls). Plain .txt / .md / .docx alone is
 #     NOT enough — meeting notes live there.
-# Behaviour preserved: EXAMPLE_CHIP_TxRx訊號格式.pdf still matches via the weak
+# Behaviour preserved: IC-A_TxRx訊號格式.pdf still matches via the weak
 # keyword `TxRx`/`訊號` AND the .pdf extension.
 _TIMING_FNAME_STRONG_RE = re.compile(
     r"時序|timing|waveform|波形|measure|量測",
@@ -32891,7 +32891,7 @@ def gen_l8_timing_waveform_doc(project: Path,
         "ic_name": "...",
         "timing_windows": [
           {"name": "RSP_Time", "min_us": null, "max_us": 22.7,
-           "source": "EXAMPLE_CHIP_measured_timing.pptx"},
+           "source": "IC-A_measured_timing.pptx"},
           ...
         ],
         "extraction_evidence": {...}
@@ -36604,7 +36604,7 @@ def gen_l9_integration_spec(project: Path,
     # v1.6.150 (#59 v3) — when L3 emitted verdict_byte_offset=null
     # (no offset extracted from source) but L2 indicates a half-duplex
     # / single-wire protocol family, default verdict_offset = 6.
-    # Rationale: in the EXAMPLE_PROTOCOL half-duplex single-wire protocol family
+    # Rationale: in the AID half-duplex single-wire protocol family
     # (Apple-Lightning style, mixed_signal_otp variants), the
     # canonical GET_ID response shape is [opcode_echo, OTP[0..5], CRC]
     # = 8 bytes, so byte_offset 6 is the verdict-byte position. This
@@ -36633,17 +36633,17 @@ def gen_l9_integration_spec(project: Path,
                 "literal": "half_duplex/single_wire/wire_count=1",
                 "label": (
                     "verdict_byte_offset defaulted to 6 "
-                    "(EXAMPLE_PROTOCOL-class half-duplex single-wire convention) "
+                    "(AID-class half-duplex single-wire convention) "
                     "— L3 did not extract an offset"
                 ),
             })
 
     # v1.6.64 — closes issue #6 Bug E. Promote real pins from
     # L1.pin_table when available. The previous code emitted a
-    # fixed EXAMPLE_PROTOCOL-class 3-pin scaffold (clk / reset_n / id_bus) for
+    # fixed AID-class 3-pin scaffold (clk / reset_n / id_bus) for
     # every project regardless of input. Now: if L1 has real
     # extracted pins, those become L9.ports / top_module_pins.
-    # Fallback to the EXAMPLE_PROTOCOL scaffold only when L1 has nothing.
+    # Fallback to the AID scaffold only when L1 has nothing.
     l1_doc = _try_load_l_doc(project, "L1_DATASHEET")
     l1_pins = ((l1_doc or {}).get("pin_table")
                if isinstance(l1_doc, dict) else None) or []
@@ -36709,19 +36709,19 @@ def gen_l9_integration_spec(project: Path,
             top_module_pins.append(entry_l9)
     else:
         # v1.6.65 — closes issue-#6 v1.6.64 follow-up Bug E thin-input
-        # complaint. The previous code emitted a 3-port EXAMPLE_PROTOCOL-class
+        # complaint. The previous code emitted a 3-port AID-class
         # scaffold (`clk`, `reset_n`, `id_bus`) for every project
         # whose L1.pin_table was empty. AES, SHA-1, ChaCha, LiteDRAM,
         # and the other thin-input projects have NO `id_bus` pin and
         # NO open-drain interface. Now: emit `[]` + flag, no
-        # EXAMPLE_PROTOCOL-flavoured boilerplate.
+        # AID-flavoured boilerplate.
         top_module_pins = []
     # v1.6.78 — closes #11 FLAG-EVIDENCE CONSISTENCY for L9.integration.
     no_integration_in_input = _flag_no_X_in_input(
         promoted_from_l1, evidence, "integration")
 
     # v1.6.79 — closes issue #12. The previous code emitted a 7-entry
-    # EXAMPLE_PROTOCOL-class submodule scaffold (rx_phy / byte_assembler / tx_phy /
+    # AID-class submodule scaffold (rx_phy / byte_assembler / tx_phy /
     # wake_gen / main_fsm / otp_mem / crc8) on every project regardless
     # of input. Block ciphers / hash cores / SerDes / DRAM controllers
     # have entirely different submodule hierarchies. Now: extract real
@@ -37158,11 +37158,11 @@ def gen_l9_integration_spec(project: Path,
     # `top_module_pins` which the gate does NOT recognize — emit it
     # under both names so older consumers keep reading and the gate
     # gets its `ports` typed-list.
-    # State names match the canonical EXAMPLE_PROTOCOL-class spec-compliant generator
+    # State names match the canonical AID-class spec-compliant generator
     # (aid_class_rtl_gen MAIN_FSM_SPEC_COMPLIANT enum). Keep aligned so
     # fsm_state_coverage_check passes — every L9 state must appear in RTL.
     # v1.6.64 — promote real fsm_states from L6 when available.
-    # Otherwise emit the EXAMPLE_PROTOCOL-class summary scaffold.
+    # Otherwise emit the AID-class summary scaffold.
     # v1.6.436 — for #312 P2 ORGANIC. Source-of-truth for L9.fsm_states
     # is now L6.fsm_states (post-split, real FSM only). Pipeline stages
     # promote to L9.pipeline_stages[] separately so they never pollute
@@ -37211,7 +37211,7 @@ def gen_l9_integration_spec(project: Path,
         ]
     else:
         # v1.6.79 — closes issue #12 cross-IC fingerprint follow-up.
-        # The previous fallback emitted an 8-state EXAMPLE_PROTOCOL-class FSM
+        # The previous fallback emitted an 8-state AID-class FSM
         # template (S_IDLE / S_RX / S_VALIDATE / S_DISPATCH /
         # S_BUILD_TX / S_TX_BYTE / S_TX_DONE / S_DROP) on every
         # project whose L6 had no extracted FSM. AES, SHA-1, ChaCha,
@@ -37513,7 +37513,7 @@ def gen_l9_integration_spec(project: Path,
         evidence, "top_module")
 
     # v1.6.79 — closes issue #12. expected_verdict_byte_hex previously
-    # mirrored L3.verdict_byte_hex with the EXAMPLE_PROTOCOL-class fallback "0xF2".
+    # mirrored L3.verdict_byte_hex with the AID-class fallback "0xF2".
     # Now that L3.verdict_byte_hex can legitimately be None, mirror
     # the None too rather than coercing to "0xF2".
     expected_verdict_byte_hex = verdict_hex if verdict_hex != "__TODO__" else None
@@ -37527,13 +37527,13 @@ def gen_l9_integration_spec(project: Path,
     # v1.6.151 (#59 v4) — REMOVED the OTP-image fallback added in
     # v1.6.149. Field-agent's verify of v1.6.150 confirmed the OTP-
     # image derivation was based on a wrong assumption: byte[6] in
-    # the EXAMPLE_PROTOCOL GET_ID response is NOT OTP[5] — the EXAMPLE_PROTOCOL-class RTL
+    # the AID GET_ID response is NOT OTP[5] — the AID-class RTL
     # generator hardcodes 0xF2 at byte[6] as a protocol-spec PASS
     # sentinel regardless of OTP content
     # (aid_class_rtl_gen.py:559/562/993/1156 all confirm this). On a
     # benchmark project whose OTP image had byte[5]=0x00 but silicon
     # emitted 0xF2 across 5 reads, the OTP fallback produced a wrong
-    # 0x00 contract that example_tester_verify (correctly) rejected as a
+    # 0x00 contract that usb_hid_tester_verify (correctly) rejected as a
     # placeholder. Replaced with Option 3 below.
     if expected_verdict_byte_hex is None and verdict_offset is not None:
         try:
@@ -37578,14 +37578,14 @@ def gen_l9_integration_spec(project: Path,
                     break
 
     # v1.6.151 (#59 v4) — Option 3 class-default (replacing the wrong
-    # OTP-image fallback from v1.6.149). For the EXAMPLE_PROTOCOL-class
+    # OTP-image fallback from v1.6.149). For the AID-class
     # half-duplex single-wire protocol family, byte[6] of the GET_ID
     # response is the canonical PASS sentinel 0xF2. The RTL generator
     # hardcodes it (see aid_class_rtl_gen.py "byte[6]=0xF2
     # deterministic verified 15/15"). Gate on L2.protocol_overview
     # half-duplex/single-wire signals (same predicate as v1.6.150's
     # offset default) AND verdict_offset == 6 — both must hold so we
-    # don't apply 0xF2 to non-EXAMPLE_PROTOCOL protocols that happen to use a
+    # don't apply 0xF2 to non-AID protocols that happen to use a
     # different verdict byte. Mark `low_confidence: true` because the
     # value came from the protocol-class convention, not the source.
     # chip-AGNOSTIC: gate is structural (L2 protocol signal), not
@@ -37601,7 +37601,7 @@ def gen_l9_integration_spec(project: Path,
             or l2_proto_hex.get("wire_count") == 1
             or l2_proto_hex.get("single_wire") is True
         ):
-            # EXAMPLE_PROTOCOL-class half-duplex single-wire convention.
+            # AID-class half-duplex single-wire convention.
             expected_verdict_byte_hex = "0xF2"
             expected_verdict_byte_extraction_strategy = (
                 "aid_class_default_pass_byte"
@@ -37610,7 +37610,7 @@ def gen_l9_integration_spec(project: Path,
                 "derived_from_L2.protocol_overview", []).append({
                 "literal": "half_duplex/single_wire/wire_count=1",
                 "label": (
-                    "expected_verdict_byte_hex defaulted to EXAMPLE_PROTOCOL-class "
+                    "expected_verdict_byte_hex defaulted to AID-class "
                     "protocol PASS sentinel (canonical 0xF2 at "
                     "byte_offset 6); L3 did not extract a verdict-byte "
                     "literal — low_confidence"
@@ -37645,17 +37645,17 @@ def gen_l9_integration_spec(project: Path,
     # alongside the canonical id_bus. Chip-AGNOSTIC.
     top_module_pins = _coalesce_half_duplex_alias_group(top_module_pins)
 
-    # v1.6.269 (#127) — chip-AGNOSTIC EXAMPLE_PROTOCOL-class canonical-port plumbing.
-    # The EXAMPLE_PROTOCOL-class RTL emitter (aid_class_rtl_gen.py) ALWAYS appends
+    # v1.6.269 (#127) — chip-AGNOSTIC AID-class canonical-port plumbing.
+    # The AID-class RTL emitter (aid_class_rtl_gen.py) ALWAYS appends
     # canonical `clk`, `reset_n`, and `inout id_bus` to chip_top.sv when
     # any of those is missing from L9.top_ports. That created an
-    # inherent L9 ↔ RTL pin-set mismatch on every EXAMPLE_PROTOCOL-class project
+    # inherent L9 ↔ RTL pin-set mismatch on every AID-class project
     # whose L1.pin_table only surfaced a partial pin list (e.g. just
     # `wake`). l9_rtl_pin_consistency_check then FAILed with
     # "RTL top has ports not in L9: ['id_bus', ...]".
     #
     # Fix: when L2 declares half-duplex / single-wire / wire_count=1
-    # (the EXAMPLE_PROTOCOL-class protocol family), augment L9.top_ports with the
+    # (the AID-class protocol family), augment L9.top_ports with the
     # canonical clk/reset_n/id_bus trio so L9 matches the RTL emitter's
     # behaviour. We only add ports NOT already present (Levenshtein-
     # canonicalised) and tag each with extraction_strategy=
@@ -37692,7 +37692,7 @@ def gen_l9_integration_spec(project: Path,
                 "io": io_std,
                 "extraction_strategy": "aid_class_canonical_pin_augment",
                 "evidence": (
-                    "v1.6.269 (#127): EXAMPLE_PROTOCOL-class half-duplex detected via "
+                    "v1.6.269 (#127): AID-class half-duplex detected via "
                     "L2.protocol_overview; aid_class_rtl_gen.py always "
                     "emits clk/reset_n/inout id_bus on chip_top.sv, so "
                     "L9 is augmented to match RTL contract."
@@ -37843,7 +37843,7 @@ def gen_l9_integration_spec(project: Path,
         "expected_verdict_byte_offset_low_confidence":
             verdict_offset_low_confidence,
         # v1.6.151 (#59 v4) — when the hex value itself came from
-        # the EXAMPLE_PROTOCOL-class protocol-spec default (rather than from any
+        # the AID-class protocol-spec default (rather than from any
         # source-extracted evidence), mark low-confidence in parallel
         # to the offset flag. The hardware-verify step's strict audit
         # can require offset.low_confidence==False AND
@@ -38265,7 +38265,7 @@ def gen_l10_test_cases(project: Path,
         cases, evidence, "test_cases")
 
     # v1.6.84 (#15 Bug A) — L10.bring_up_sequence was previously
-    # hardcoded to the EXAMPLE_PROTOCOL-class POR/wake_pulse/GET_ID template across
+    # hardcoded to the AID-class POR/wake_pulse/GET_ID template across
     # every project (cross-IC fingerprint leak — same pattern as the
     # #12-fixed sibling fields). Now: emit the template only when the
     # input docs carry bring-up evidence; otherwise [] + flag.
@@ -38480,7 +38480,7 @@ def gen_l11_otp_content(project: Path,
             })
             existing_neg_conditions.add(rule_cond_str.lower())
 
-    # v1.6.64 — closes issue #6 Bug F. The rich-input EXAMPLE_PROTOCOL-class chip
+    # v1.6.64 — closes issue #6 Bug F. The rich-input AID-class chip
     # had its OTP layout populated under L4.otp_layout but L11 emitted
     # nothing for the same field. The L taxonomy implies L11 owns
     # OTP content; promote / mirror the layout here so L11 carries
@@ -38741,13 +38741,13 @@ def gen_l13_lab_calibration(project: Path,
                                "label": "calibration step"})
 
     # v1.6.79 — closes issue #12. Three sibling-field hardcodes in L13:
-    #   (1) calibration_steps emitted the EXAMPLE_PROTOCOL-class 5-step
+    #   (1) calibration_steps emitted the AID-class 5-step
     #       template (POR / wake_pulse+GET_ID / scope-decode / trim
     #       sweep / burn-in soak) when cal_steps was empty.
-    #   (2) lab_equipment emitted the EXAMPLE_PROTOCOL-class 3-equipment
+    #   (2) lab_equipment emitted the AID-class 3-equipment
     #       template (<half-duplex-tester> / DE10-Lite / DSO-X 3024G)
     #       on every project regardless of input.
-    #   (3) rig_pin_assignments emitted the EXAMPLE_PROTOCOL-class FPGA pin map
+    #   (3) rig_pin_assignments emitted the AID-class FPGA pin map
     #       (id_bus / clk_50mhz / reset_n) on every project.
     # Replace each with per-source extraction; emit empty + flag when
     # no source evidence is found.
@@ -38782,7 +38782,7 @@ def gen_l13_lab_calibration(project: Path,
         lab_equipment, evidence, "lab_equipment")
 
     # rig_pin_assignments: harvest "PIN_<X>" / "<sig> = PIN_<X>"
-    # patterns. EXAMPLE_PROTOCOL-class fallback removed — projects with no rig
+    # patterns. AID-class fallback removed — projects with no rig
     # docs get empty dict + flag.
     rig_pin_assignments: Dict[str, str] = {}
     _pin_re = re.compile(
@@ -38864,7 +38864,7 @@ def gen_l13_lab_calibration(project: Path,
         "no_lab_calibration_in_input": no_lab_calibration_in_input,
         # v1.6.79 — closes issue #12. All four fields are now empty +
         # flag when source has no calibration / lab evidence; previously
-        # populated with EXAMPLE_PROTOCOL-class scaffolds even on totally unrelated
+        # populated with AID-class scaffolds even on totally unrelated
         # IC classes.
         "calibration_steps": canonical_steps,
         "no_calibration_steps_in_input": no_calibration_steps_in_input,
@@ -39295,12 +39295,12 @@ def _harvest_vendor_short_literals(project: Path,
 
 
 # v1.6.81 — closes issue #12 follow-up. Sentinel signatures of the
-# EXAMPLE_PROTOCOL-class scaffolds that v1.6.79 was supposed to remove. These are
+# AID-class scaffolds that v1.6.79 was supposed to remove. These are
 # the literal strings present in the field agent's reported leaks.
 # Any L doc whose typed field contains EXACTLY one of these signatures
 # is by-definition not real per-source extraction (no real source uses
 # the marker phrase ``"wire-level protocol scope probe"`` verbatim;
-# it was the EXAMPLE_PROTOCOL-class scaffold's hardcoded label).
+# it was the AID-class scaffold's hardcoded label).
 #
 # chip-AGNOSTIC: every signature is a marker phrase that ONLY appears
 # in the v1.6.78-and-earlier hardcoded scaffold. Real chip docs never
@@ -39342,14 +39342,14 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
     """v1.6.81 — closes issue #12 follow-up.
 
     Field-agent's verification of v1.6.79 reported 8 sibling fields
-    STILL emit the EXAMPLE_PROTOCOL-class scaffold across all 11 IC fixtures. The
+    STILL emit the AID-class scaffold across all 11 IC fixtures. The
     runner's own ``gen_l*`` functions produce empty + flag on synthetic
     fixtures, so the residue must come from a path the runner doesn't
     fully control (stale L doc preserved across runs, external tool
     rewriting the file post-emission, etc.).
 
     Defensive purge: scan the freshly-emitted L7/L9/L13 docs for the
-    exact EXAMPLE_PROTOCOL-class scaffold marker strings and, when found, replace
+    exact AID-class scaffold marker strings and, when found, replace
     those typed fields with ``[]``/``{}`` + set the
     ``no_<X>_in_input`` flag to True. Marker strings are literal
     sentinels that no real chip doc carries verbatim, so detection
@@ -39360,7 +39360,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
     ``"<half-duplex-tester>"``, ``"DUT-driving-bus indicator"``, etc.).
     Real per-source extraction uses the helper-emitted phrases like
     ``"debug observability pin (extracted from source)"`` — a real
-    chip's docs never carry the EXAMPLE_PROTOCOL-class marker prose.
+    chip's docs never carry the AID-class marker prose.
 
     Why a post-pass instead of fixing the emitter: the v1.6.79 emitter
     code I audited IS clean. But the field agent's evidence shows the
@@ -39459,7 +39459,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                     l8["clock_mhz"] = None
                     l8["no_clock_mhz_in_input"] = True
                     # Also wipe clock_domains if they are the
-                    # single-domain EXAMPLE_PROTOCOL-derivative shape — keyed on
+                    # single-domain AID-derivative shape — keyed on
                     # the same evidence-absence signal, but still
                     # require the {clk_main, ...} canary on freq_mhz
                     # to avoid collateral wipe of legit multi-domain
@@ -39480,7 +39480,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
     # ---- L10 (v1.6.84 #15 Bug A) ----
     # Belt-and-suspenders: even though gen_l10_test_cases() now emits
     # an evidence-conditional bring_up_sequence, a stale L doc from a
-    # pre-v1.6.84 run could still carry the EXAMPLE_PROTOCOL-class POR/wake_pulse
+    # pre-v1.6.84 run could still carry the AID-class POR/wake_pulse
     # template. Detect it (literal action set match) + wipe.
     l10_path = gd / "L10_TEST_CASES.json"
     if l10_path.is_file():
@@ -39497,7 +39497,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                 }
                 aid_template = {"POR", "wake_pulse", "GET_ID"}
                 if actions and actions.issubset(aid_template):
-                    # All three actions are EXAMPLE_PROTOCOL-class template — purge.
+                    # All three actions are AID-class template — purge.
                     l10["bring_up_sequence"] = []
                     l10["no_bring_up_sequence_in_input"] = True
                     _ensure_bool_flags(l10)
@@ -39534,12 +39534,12 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
             mutated = False
             iw = l9.get("internal_wires")
             if isinstance(iw, list) and iw:
-                # Detect the 3-entry EXAMPLE_PROTOCOL scaffold: rx_byte / tx_active
+                # Detect the 3-entry AID scaffold: rx_byte / tx_active
                 # / wake_oe (any subset of these as the ENTIRE list).
                 names = {it.get("name") for it in iw
                           if isinstance(it, dict)}
                 if names and names.issubset(_AID_SCAFFOLD_INTERNAL_WIRE_NAMES):
-                    # All entries are EXAMPLE_PROTOCOL scaffold names → wipe.
+                    # All entries are AID scaffold names → wipe.
                     l9["internal_wires"] = []
                     l9["no_internal_wires_in_input"] = True
                     mutated = True
@@ -39559,7 +39559,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
         if isinstance(l13, dict):
             mutated = False
             # calibration_steps / test_cases — wipe when EVERY action
-            # matches an EXAMPLE_PROTOCOL scaffold action.
+            # matches an AID scaffold action.
             for fld, flag in (
                 ("calibration_steps", "no_calibration_steps_in_input"),
                 ("test_cases", "no_l13_test_cases_in_input"),
@@ -39572,7 +39572,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                         l13[fld] = []
                         l13[flag] = True
                         mutated = True
-            # lab_equipment — wipe when EVERY name matches an EXAMPLE_PROTOCOL
+            # lab_equipment — wipe when EVERY name matches an AID
             # scaffold equipment name.
             le = l13.get("lab_equipment")
             if isinstance(le, list) and le:
@@ -39583,7 +39583,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                     l13["no_lab_equipment_in_input"] = True
                     mutated = True
             # rig_pin_assignments — wipe when EVERY key matches an
-            # EXAMPLE_PROTOCOL scaffold rig pin signal name.
+            # AID scaffold rig pin signal name.
             rp = l13.get("rig_pin_assignments")
             if isinstance(rp, dict) and rp:
                 if set(rp.keys()).issubset(_AID_SCAFFOLD_RIG_PIN_KEYS):
@@ -39602,7 +39602,7 @@ def _post_fix_l8_rtl_consts_flag(project: Path) -> None:
 
     L8_RTL_CONSTANTS.no_timing_constants_in_input was previously left
     True even when the companion L8_TIMING_WAVEFORM doc carried
-    populated `timing_constants[]` (rich-input EXAMPLE_CHIP case: 9 entries
+    populated `timing_constants[]` (rich-input IC-A case: 9 entries
     extracted via the dedicated _TIMING_FNAME_RE adapter that the
     L8_RTL_CONSTANTS pass did NOT see).
 
@@ -39797,7 +39797,7 @@ def _detect_ic_class_for_phase1(project: Path) -> Optional[str]:
 
 def _detect_ic_class_evidence_strength(project: Path) -> Optional[str]:
     """v1.6.102 (issue #34) — return the ic_class verdict ONLY when the
-    canonical detector has positive evidence (not the EXAMPLE_PROTOCOL-class default
+    canonical detector has positive evidence (not the AID-class default
     fall-through).
 
     Specifically: the verdict is treated as confident iff the underlying
@@ -39805,7 +39805,7 @@ def _detect_ic_class_evidence_strength(project: Path) -> Optional[str]:
     OR ``has_analog=True``. When none of those are true, the verdict is
     a low-confidence fall-through (e.g. an empty L1/L2 with no real
     protocol tokens) and the caller should fall back to null+flag
-    instead of stamping the EXAMPLE_PROTOCOL-class label.
+    instead of stamping the AID-class label.
 
     Chip-AGNOSTIC.
     """
@@ -39822,7 +39822,7 @@ def _detect_ic_class_evidence_strength(project: Path) -> Optional[str]:
     if not isinstance(val, str) or not val or val == "unknown":
         return None
     # Confidence predicate: any positive evidence in the underlying
-    # profile booleans. Without one of these the EXAMPLE_PROTOCOL-class verdict is
+    # profile booleans. Without one of these the AID-class verdict is
     # the silent default the issue #34 fix removes.
     confident = bool(
         profile.get("has_inout_id_bus")
@@ -39963,7 +39963,7 @@ def _post_emit_ic_class_into_L9_L1(project: Path,
 
     v1.6.102 (issue #34) — the v1.6.96 fix made phase1 stamp
     ``aid_class_half_duplex`` on every thin-input IC because
-    ``detect_ic_class`` had no null+flag fall-through; the EXAMPLE_PROTOCOL-class
+    ``detect_ic_class`` had no null+flag fall-through; the AID-class
     label was the silent default when detection was ambiguous.
 
     Fix:
@@ -40013,7 +40013,7 @@ def _post_emit_ic_class_into_L9_L1(project: Path,
             ic_class = _detect_ic_class_evidence_strength(project)
         if ic_class:
             detected_class = ic_class
-            # Best-effort default interface for EXAMPLE_PROTOCOL-class — other
+            # Best-effort default interface for AID-class — other
             # classes leave interface null (no high-confidence default
             # without README evidence).
             try:
@@ -46180,12 +46180,12 @@ def _apply_alias_normalization(project: Path,
             _v1_6_359_class_path = None
     # v1.6.68 — closes issue #9. Previous `_alias_present_in_docs` did
     # plain substring match (`alias.lower() in extracted_lower`), which
-    # caused 2-3-character aliases like `D-`, `Dn`, `Dp`, `EXAMPLE_PROTOCOL` to
+    # caused 2-3-character aliases like `D-`, `Dn`, `Dp`, `AID` to
     # match inside common English / RTL words: `D-flip-flop`,
     # `D-cache`, `paid`, `said`, `afraid`, `params`, `streams`. Result:
     # AES / ChaCha / SHA / networking thin-input projects emitted
-    # EXAMPLE_PROTOCOL-class single-wire-protocol vocabulary (`DMINUS`, `DPLUS`,
-    # `EXAMPLE_PROTOCOL`) in their `aliases_index` — false-positive provenance.
+    # AID-class single-wire-protocol vocabulary (`DMINUS`, `DPLUS`,
+    # `AID`) in their `aliases_index` — false-positive provenance.
     #
     # Fix: word-boundary match + minimum-length floor. Aliases shorter
     # than 4 characters require BOTH word-boundary AND a stricter
@@ -46324,7 +46324,7 @@ def _apply_alias_normalization(project: Path,
         # hands-on grep on EITHER spelling lands in a typed field.
         # v1.6.68 — closes issue #9. Replace substring matching with
         # word-boundary matching so 2-3-char aliases (`D-`, `Dn`,
-        # `Dp`, `EXAMPLE_PROTOCOL`) don't false-positive on `D-flip-flop`, `paid`,
+        # `Dp`, `AID`) don't false-positive on `D-flip-flop`, `paid`,
         # `said`, etc. Plus: short aliases (<4 chars) require BOTH
         # canonical-present AND alias-present — they cannot stand
         # alone on a single weak signal. Plus: add `source_doc`
@@ -46355,7 +46355,7 @@ def _apply_alias_normalization(project: Path,
                 _alias_word_boundary_in(data_blob_str, a)
                 for a in aliases)
             # Stricter rule for short aliases: when canonical AND
-            # all aliases are <4 chars (e.g. `EXAMPLE_PROTOCOL` / `Dn` / `D-`),
+            # all aliases are <4 chars (e.g. `AID` / `Dn` / `D-`),
             # require BOTH canonical-present AND alias-present
             # to emit — single-side hits on short tokens are too
             # leaky to trust on their own.
@@ -47088,7 +47088,7 @@ def main() -> int:
     # explicit clock keyword in the path). Result: the back-fill was
     # overwritten back to None on those chips. Option A is the least-
     # invasive fix — keep `_purge_aid_scaffold_residue` unchanged
-    # (it correctly purges genuine EXAMPLE_PROTOCOL-scaffold residue on minimal-
+    # (it correctly purges genuine AID-scaffold residue on minimal-
     # input projects) and re-invoke the back-fill AFTER the purge so
     # the back-fill is the FINAL signal that wins. Chip-AGNOSTIC.
 
@@ -47284,14 +47284,14 @@ def main() -> int:
         sys.exit(2)
 
     # v1.6.81 — closes issue #12 follow-up. Defensive scaffold purge.
-    # Field agent verified v1.6.79/v1.6.80 still emit EXAMPLE_PROTOCOL-class
+    # Field agent verified v1.6.79/v1.6.80 still emit AID-class
     # scaffolds across all 11 IC fixtures for L7.debug_observability,
     # L7.verification_strategy, L8.clock_mhz, L9.internal_wires, and
     # the four L13 sub-fields. The runner's own gen_l*_* code emits
     # empty + flag on synthetic fixtures, so the residue must come
     # from a path the runner doesn't fully control. This belt-and-
     # suspenders pass scans the freshly-emitted L docs for the
-    # EXAMPLE_PROTOCOL-class marker prose ("wire-level protocol scope probe",
+    # AID-class marker prose ("wire-level protocol scope probe",
     # "<half-duplex-tester>", etc.) and replaces those typed fields
     # with []/{} + flag=True. Marker phrases are sentinels that no
     # real chip doc carries, so detection has zero false-positive

@@ -30,11 +30,11 @@ qbank:
         respond_with_default: "distinct_non_padding_bytes"
 
   criterion_params.padding_byte:
-    expert:       ["For distinct_non_padding_bytes only: which byte is treated as 'no real data'? (e.g. 0x02 for EXAMPLE_PROTOCOL-style protocols)"]
+    expert:       ["For distinct_non_padding_bytes only: which byte is treated as 'no real data'? (e.g. 0x02 for AID-style protocols)"]
     intermediate: ["If using the byte-stream criterion: what byte does the bus default to when nothing's being sent?"]
     beginner:     []
     follow_ups:
-      - if_user_says: ["example_protocol", "single-wire id", "cable-id"]
+      - if_user_says: ["aid", "single-wire id", "cable-id"]
         respond_with_default: "0x02"
       - if_user_says: ["i2c"]
         respond_with_default: "0xFF"
@@ -61,7 +61,7 @@ qbank:
     beginner:     []
 
   tester:
-    expert:       ["Lab tester model / name (e.g. 'EXAMPLE_TESTER protocol tester', 'Keysight 3458A', 'home-built loopback rig')?"]
+    expert:       ["Lab tester model / name (e.g. 'USB-HID tester protocol tester', 'Keysight 3458A', 'home-built loopback rig')?"]
     intermediate: ["Which physical test instrument verifies this IC?"]
     beginner:     ["What machine in the lab is used to test the chip?"]
     follow_ups:

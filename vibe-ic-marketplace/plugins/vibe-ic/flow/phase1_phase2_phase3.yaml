@@ -193,7 +193,7 @@ steps:
                                        # (doc + locator + verbatim quote).
                                        # Skipped if reports/phase2/rtl_bugs.json
                                        # absent (nothing to validate).
-      # v0.74 Phase-2a gates — generic any-IC lints from BENCHMARK_A bisect:
+      # v0.74 Phase-2a gates — generic any-IC lints from BENCH-A bisect:
       - internal_vs_external_timing_check   # L8 must split host-side
                                             # (RX thresholds) and DUT-side
                                             # (TX cycles) timing groups.
@@ -233,7 +233,7 @@ steps:
             command: "rtl_bug_report_schema_check . --json reports/phase2/gates/rtl_bug_schema.json"
             condition_files_exist: ["reports/phase2/rtl_bugs.json"]
         # v0.74 Phase-2a gates — generic (any-IC) lints surfaced by the
-        # BENCHMARK_A/EXAMPLE_CHIP fresh-agent bisect. Each fires only when its
+        # BENCH-A/IC-A fresh-agent bisect. Each fires only when its
         # input document is present; silent no-op otherwise.
         - optional_program_exit_zero:
             command: "internal_vs_external_timing_check phase1/generated_docs/L8_TIMING_WAVEFORM.json --layer phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/int_vs_ext_timing.json"
@@ -776,7 +776,7 @@ steps:
         - program_exit_zero: "drc_report_check . --mode drc --json reports/phase3/drc_router.json"
         # Anti-fabrication: all 5 stage DEFs must be byte-distinct,
         # size-monotone, instance-count growing, and routed.def must
-        # contain `+ ROUTED` geometry. Added 2026-04-22 after benchmark_a
+        # contain `+ ROUTED` geometry. Added 2026-04-22 after bench-a
         # pilot copied a3616_top.def to all 5 stage names.
         - program_exit_zero: "def_stage_progression_check . --json reports/phase3/pnr/def_progression.json"
         # Provenance required: routed.def must appear as a logged

@@ -59,7 +59,7 @@ class TestPresetSelfCheck:
 
 
 class TestResidualProperty:
-    """For EXAMPLE_TESTER-style packets: CRC([0x74, 0x74]) = 0x00 so residual of
+    """For USB-HID-tester-style packets: CRC([0x74, 0x74]) = 0x00 so residual of
     [0x74, 0x74, 0x00] should be 0 under the same CRC.
 
     (General residual-on-wire tests are complicated by endianness conventions
@@ -89,7 +89,7 @@ class TestResidualProperty:
 
     # NOTE: The MFi Lightning CRC (refin=True, refout=False, poly=0x07)
     # is a non-standard catalog form. The byte-mode reference below does
-    # NOT match EXAMPLE_TESTER's right-shift wire convention — users must cross-check
+    # NOT match the USB-HID tester's right-shift wire convention — users must cross-check
     # MFi generated code against hardware before integrating. This gap is
     # tracked separately from these unit tests.
 

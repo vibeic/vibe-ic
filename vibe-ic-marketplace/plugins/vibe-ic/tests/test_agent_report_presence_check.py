@@ -21,7 +21,7 @@ def _write_report(project: Path, body: str) -> None:
     (project / "AGENT_REPORT.md").write_text(body, encoding="utf-8")
 
 
-_HAPPY_BODY = """# AGENT_REPORT — benchmark_a v10619-noris
+_HAPPY_BODY = """# AGENT_REPORT — benchmark_a v10619-vendor
 
 ## Verdict
 PASS_WITH_WAIVERS — 21/0/0/28/4/1.

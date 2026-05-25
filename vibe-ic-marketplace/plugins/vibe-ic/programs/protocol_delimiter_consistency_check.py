@@ -6,7 +6,7 @@ proxy signal (idle_long, timeout, etc.).
 
 THE PROBLEM
 -----------
-On the v0.99 noris fresh-agent run, dispatcher.v gated its frame-validation
+On the v0.99 vendor fresh-agent run, dispatcher.v gated its frame-validation
 arm on `idle_long` (no traffic for N cycles) — but the spec's actual
 end-of-frame symbol was a trailing BR pulse. The TB happened to drive
 500_000 idle cycles after each cmd, so `idle_long` fired and the dispatcher

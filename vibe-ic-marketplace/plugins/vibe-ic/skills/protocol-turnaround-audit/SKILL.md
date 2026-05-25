@@ -68,7 +68,7 @@ Report listing each TX-start signal, its RX trigger, path length in cycles, mini
 
 ```
 [protocol-turnaround-audit]
-  example_chip_ctrl.v:142  tx_start ← trailing_br_seen
+  as3616_ctrl.v:142  tx_start ← trailing_br_seen
     Path length: 3 cycles
     Min safe budget: 200 cycles (80us @ 2.5MHz)
     Verdict: ERROR — turnaround 3 cycles < 200 cycles minimum

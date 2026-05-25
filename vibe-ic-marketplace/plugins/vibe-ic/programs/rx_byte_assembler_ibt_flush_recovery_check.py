@@ -64,7 +64,7 @@ _BIT_IDX_RE = re.compile(
 #
 # Wave 35 (v0.119.67) — extended with `rx_br`, `frame_break`,
 # `break_pulse`, `bus_br`, `frame_restart`, `frame_drop`. In
-# half-duplex single-wire EXAMPLE_PROTOCOL-class protocols (id_bus / kline / lin),
+# half-duplex single-wire AID-class protocols (id_bus / kline / lin),
 # the host issues a Break (BR) at every frame start; flushing the
 # bit_assembler on `rx_br` IS the canonical partial-byte recovery
 # mechanism — there is no separate "IBT" signal in many designs

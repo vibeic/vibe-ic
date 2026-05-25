@@ -32,7 +32,7 @@ Real occurrence (v068 <benchmark> fresh-agent):
   collision at generation time.
 
 Applies to:
-  - EXAMPLE_PROTOCOL / MID single-wire ID bus (<chip-class> family)
+  - AID / MID single-wire ID bus (<chip-class> family)
   - I2C slaves with clock-stretching + autonomous STATUS interrupt
   - 1-Wire protocols (Dallas/Maxim) with presence pulses
   - Any peripheral on a shared bus with periodic keepalive

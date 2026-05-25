@@ -21,7 +21,7 @@ Each step writes into `<project>/phase3/stage4/reverify/`.
 USAGE — pre-compile
 -------------------
     python3 pdk_fpga_gds_reverify_runner.py \\
-        --project           ./benchmark_a \\
+        --project           ./bench-a \\
         --pnr-netlist       phase3/chip_top_asic_pnr.v \\
         --pdk-behavioral    pdk/m18e80_neg.v \\
         --otp-hex           input/otp.hex \\
@@ -41,7 +41,7 @@ EXIT CODES
 
 chip-AGNOSTIC. Quartus paths can be passed via --quartus-bin /
 --quartus-pgm; defaults probe iic-osic-tools and a known mounted
-SSD path used by the BENCHMARK_A lab rig.
+SSD path used by the BENCH-A lab rig.
 """
 from __future__ import annotations
 

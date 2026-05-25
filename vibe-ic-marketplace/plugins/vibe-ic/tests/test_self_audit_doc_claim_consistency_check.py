@@ -78,8 +78,8 @@ def test_invalid_path_returns_2(tmp_path):
 def test_benchmark_path_pass_when_dir_exists(tmp_path):
     plugin = _stage_with_benchmark(
         tmp_path,
-        benchmarks_present=["phase2+3_v10634-noris"],
-        fenced_paths=["phase2+3_v10634-noris/"])
+        benchmarks_present=["phase2+3_v10634-vendor"],
+        fenced_paths=["phase2+3_v10634-vendor/"])
     r = _run(plugin)
     assert r.returncode == 0
     assert "PASS" in r.stdout
@@ -87,10 +87,10 @@ def test_benchmark_path_pass_when_dir_exists(tmp_path):
 
 def test_benchmark_path_fail_when_dir_missing(tmp_path):
     """The exact v1.6.45 escape: CHANGELOG references phase2+3_v10634
-    but only phase2+3_v10634-noris exists."""
+    but only phase2+3_v10634-vendor exists."""
     plugin = _stage_with_benchmark(
         tmp_path,
-        benchmarks_present=["phase2+3_v10634-noris"],
+        benchmarks_present=["phase2+3_v10634-vendor"],
         fenced_paths=["phase2+3_v10634/"])
     r = _run(plugin)
     assert r.returncode == 1
@@ -103,7 +103,7 @@ def test_benchmark_path_vacuous_when_tree_absent(tmp_path):
     plugin = _stage_with_benchmark(
         tmp_path,
         benchmarks_present=None,
-        fenced_paths=["phase2+3_v10634-noris/",
+        fenced_paths=["phase2+3_v10634-vendor/",
                       "phase2+3_anything_at_all/"])
     r = _run(plugin)
     assert r.returncode == 0
@@ -118,14 +118,14 @@ def test_benchmark_prose_mention_ignored(tmp_path):
     plugin = repo / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
     (plugin / ".claude-plugin").mkdir(parents=True)
     (repo / "vibe-ic-marketplace" / ".claude-plugin").mkdir(parents=True)
-    (repo / "1st_benchmark_benchmark_a" / "phase2+3_v10634-noris").mkdir(
+    (repo / "1st_benchmark_benchmark_a" / "phase2+3_v10634-vendor").mkdir(
         parents=True)
     (plugin / "CHANGELOG.md").write_text(
         "# Changelog\n\n"
         "v1.6.45 quoted `1st_benchmark_benchmark_a/phase2+3_v10634/` "
-        "claiming the `-noris` variant didn't exist; v1.6.46 "
+        "claiming the `-vendor` variant didn't exist; v1.6.46 "
         "reverted.\n"
-        "\n```\n$ x 1st_benchmark_benchmark_a/phase2+3_v10634-noris/\n```\n")
+        "\n```\n$ x 1st_benchmark_benchmark_a/phase2+3_v10634-vendor/\n```\n")
     (plugin / ".claude-plugin" / "plugin.json").write_text('{}\n')
     (repo / "vibe-ic-marketplace" / ".claude-plugin"
      / "marketplace.json").write_text('{}\n')

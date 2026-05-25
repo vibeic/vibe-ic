@@ -4,7 +4,7 @@ description: Run Phase 2b (L1-L13 → RTL → SOF → <half-duplex-tester> byte[
 argument-hint: <project-dir> [--top-name chip_top] [--skip-hardware] [--max-eco 3]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
-> `/vibe-ic-phase2 <project-dir>` (e.g. `/vibe-ic-phase2 1st_benchmark_benchmark_a/phase2_v0119.48-noris`).
+> `/vibe-ic-phase2 <project-dir>` (e.g. `/vibe-ic-phase2 1st_benchmark_sn2025/phase2_v0119.48-vendor`).
 > The AI must NOT guess the path; a concrete project path is required before continuing.
 
 
@@ -18,7 +18,7 @@ Main execution (**program-driven**):
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/phase2_one_shot_runner.py $ARGUMENTS
 ```
 
-The runner runs: rig_topology skeleton → detect_ic_class → rtl_gen → reference_tb → yosys → qsf/sdc → otp_image_check → fpga_compile → fpga_burn → example_tester_verify → phase2_manifests → final_audit.
+The runner runs: rig_topology skeleton → detect_ic_class → rtl_gen → reference_tb → yosys → qsf/sdc → otp_image_check → fpga_compile → fpga_burn → md905_verify → phase2_manifests → final_audit.
 
 After the run completes, the AI must:
 
@@ -28,7 +28,7 @@ After the run completes, the AI must:
    - **`reference_tb`** FAIL → iverilog parse / sim error; ECO loop (runner auto-retries up to 3 times); if ECO exhausted, modify `aid_class_rtl_gen.py` template
    - **`fpga_compile`** FAIL → check `fpga/compile.log`; common: QSF init_file SEARCH_PATH, SystemVerilog patterns Quartus does not accept → fix RTL template / qsf_gen
    - **`fpga_burn`** FAIL → parse `error_code` and `failed_gates` (pre-burn structural-gate audit); close-loop each gate (call `programs/<gate>.py` to capture detail → patch RTL/L doc → re-run)
-   - **`example_tester_verify`** FAIL → `<unparsed>` = driver did not see frame; first verify the SOF was burned in + <half-duplex-tester> connected to PIN_V10; if `expected ≠ observed` it is a real hardware bug, requires RTL ECO
+   - **`md905_verify`** FAIL → `<unparsed>` = driver did not see frame; first verify the SOF was burned in + <half-duplex-tester> connected to PIN_V10; if `expected ≠ observed` it is a real hardware bug, requires RTL ECO
 3. All PASS → hint: `/phase3`
 
 **Helper skills:** `spec-to-rtl` / `cdc-check` / `rtl-review` / `formal-verify` / `bringup-plan`

@@ -59,7 +59,7 @@ namespace with cross-layer `views` (e.g. one CRC-poly fact with
 
 ## Status
 
-- ✅ Round-trip validated on a reference IC: 10/10 layers byte-identical,
+- ✅ Round-trip validated on BENCH-A HIGH: 10/10 layers byte-identical,
   all 4 existing gates PASS.
 - ✅ Gap detection for required facts, spec_floor minimums, CRC
   whitelist, required submodules.

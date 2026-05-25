@@ -2,7 +2,7 @@
 """rtl_signal_name_semantic_check.py — v1.6.232 (merged v229+v231).
 
 Lint user RTL for "the name says X, the value says NOT X" signal
-naming traps. The canonical example (which bit benchmark_a v5):
+naming traps. The canonical example (which bit BENCH-A v5):
 
     assign id_bus_oe_low = id_bus_drive_low;
 

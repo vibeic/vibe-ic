@@ -106,7 +106,7 @@ def _find_top_module(rtl_dir: Path, l9_path: Path | None,
     v1.6.125 (#47 Fix 1) — extend filename heuristic to cover
     SystemVerilog (.sv / .svh) emitted by phase2's spec-to-RTL
     generator. Also recognise `chip_top` as a canonical name in
-    addition to the legacy EXAMPLE_PROTOCOL-class `*_top` / `*_dtop` shapes.
+    addition to the legacy AID-class `*_top` / `*_dtop` shapes.
     """
     if explicit_top:
         return explicit_top
@@ -122,8 +122,8 @@ def _find_top_module(rtl_dir: Path, l9_path: Path | None,
             pass
     # Heuristic — preference order (chip-AGNOSTIC):
     #   chip_top.{v,sv}  — phase2 spec-to-RTL canonical emit
-    #   *_top.{v,sv}     — EXAMPLE_PROTOCOL-class / general convention
-    #   *_dtop.{v,sv}    — EXAMPLE_PROTOCOL-class digital-top variant
+    #   *_top.{v,sv}     — AID-class / general convention
+    #   *_dtop.{v,sv}    — AID-class digital-top variant
     #   top.{v,sv}       — legacy / sandbox fallback
     #   dtop.{v,sv}      — legacy
     for pat in (

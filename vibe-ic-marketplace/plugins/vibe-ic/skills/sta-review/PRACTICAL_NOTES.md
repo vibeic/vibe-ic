@@ -7,7 +7,7 @@
 At 5 MHz (200ns period) on GF180 180nm:
 - **Typical designs have 30-40× timing margin** — 180nm at 5 MHz is extremely relaxed
 - Critical path delay: 5-20 ns (logic depth 3-7 levels)
-- This means timing closure is NOT the bottleneck for EXAMPLE_PROTOCOL-class protocol controllers
+- This means timing closure is NOT the bottleneck for AID-class protocol controllers
 
 ## Available Corners in IIC-OSIC-TOOLS
 

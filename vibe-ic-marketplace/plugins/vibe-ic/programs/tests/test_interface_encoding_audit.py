@@ -6,7 +6,7 @@ and verifies the encoding classification and mismatch detection.
 Test cases:
   1. Binary-binary MATCH (counter -> decimal comparison)
   2. Gray-gray MATCH (gray case -> gray comparison)
-  3. Binary-gray MISMATCH (counter -> gray comparison) — the EXAMPLE_TESTER bug
+  3. Binary-gray MISMATCH (counter -> gray comparison) — the USB-HID tester bug
   4. Gray-binary MISMATCH (gray case -> decimal comparison)
   5. Binary-to-gray conversion function detected
   6. Unknown encoding (no clear pattern)
@@ -222,12 +222,12 @@ class TestGrayGrayMatch:
 
 
 # ===================================================================
-# Test 3: Binary-Gray MISMATCH — the EXAMPLE_TESTER bug pattern
+# Test 3: Binary-Gray MISMATCH — the USB-HID tester bug pattern
 # ===================================================================
 class TestBinaryGrayMismatch:
     def test_counter_vs_gray_comparison_mismatch(self, tmp_path):
         """A binary counter compared with a gray-code literal → MISMATCH.
-        This is the exact EXAMPLE_TESTER bug: rx_data_length_cnt produced as binary
+        This is the exact USB-HID tester bug: rx_data_length_cnt produced as binary
         counter, but rx_chk compared against 6'b11_0000 (gray-code for 32,
         not binary 32 which is 6'b10_0000)."""
         files = make_two_module_design(
@@ -593,7 +593,7 @@ class TestGrayConversion:
         assert iea.binary_to_gray(2) == 3
         assert iea.binary_to_gray(3) == 2
         assert iea.binary_to_gray(4) == 6
-        assert iea.binary_to_gray(32) == 48  # The EXAMPLE_TESTER bug value
+        assert iea.binary_to_gray(32) == 48  # The USB-HID tester bug value
 
     def test_gray_to_binary_roundtrip(self):
         for n in range(64):

@@ -46,7 +46,7 @@ from ic_class_profile import detect_ic_class  # noqa: E402
 
 # Wave 43 (v0.119.75) — explicit ic_class_profile guard.
 # OTP lock-bit dependency table is required only for IC classes
-# that actually carry an OTP image (EXAMPLE_PROTOCOL-class, mixed_signal_otp,
+# that actually carry an OTP image (AID-class, mixed_signal_otp,
 # or any digital-cmd-driven IC whose profile reports has_otp).
 # Bare-FPGA scaffolds have no OTP at all; pure-analog parts only
 # have OTP when explicitly trimmed (profile.has_otp covers both).

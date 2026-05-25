@@ -5,7 +5,7 @@ projects whose `ic_class` is `mixed_signal_otp` (analog blocks present in
 L5) BUT which also carry EXAMPLE_PROTOCOL-class half-duplex protocol markers in L2/L3
 (half_duplex / single-wire / opcodes / crc_parameters) are accepted.
 
-Diagnostic context (v0121-noris): two classifiers disagree —
+Diagnostic context (v0121-vendor): two classifiers disagree —
   - phase23_one_shot_runner.detect_ic_class (L2/L3 keyword path)
         → "aid_class_half_duplex"
   - ic_class_profile.detect_ic_class (L5.analog_blocks path used by guard)

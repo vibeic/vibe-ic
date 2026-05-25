@@ -10,7 +10,7 @@ Any agent claiming "Phase 2+3 complete", "design flow done", "tape-out
 ready", "ready for fab", or any equivalent — MUST run this with
 `--strict` and produce `Overall: PASS` with every required step PASS
 before the claim is valid. Individual gates passing (tapeout_signoff_check,
-example_tester_connect_test, BACKLOG-v6/v7 P0 set, lvs_yosys_equiv, etc.) are
+usb_hid_tester_connect_test, BACKLOG-v6/v7 P0 set, lvs_yosys_equiv, etc.) are
 NECESSARY BUT NOT SUFFICIENT. v0.108 fresh-agent benchmark proved that
 a project can pass every individual structural gate while only
 completing 2/34 canonical steps because steps 15-33 (PnR canonical
@@ -313,7 +313,7 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     # if no gate_reports/ directory.
     "provenance_hash_audit",
     # v0.119 LL-2/3/4/5/6: half-duplex protocol response-window family.
-    # Closes the v0118-noris <benchmark> FRAME_END_GAP=80us bug class. All
+    # Closes the v0118-vendor <benchmark> FRAME_END_GAP=80us bug class. All
     # five gates derive constraints from the project's own L1-L13 specs
     # (no oracle dependency). Silent for non-half-duplex projects.
     #   LL-2 catches missing frame_end_gap field in L8.
@@ -346,7 +346,7 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     # FRAME_END_GAP (27us) mid-frame, chip declared EOF early, responded
     # while master still TXing. Bus contention + silent functional fail
     # invisible to lint, formal, and 7/7 prior structural gates. Caught only
-    # by example_tester_bfm_gen sim — now hard-gated structurally.
+    # by usb_hid_tester_bfm_gen sim — now hard-gated structurally.
     "half_duplex_frame_end_idle_reset_check",
     # v0.119.6 LL-15: closes the v3 byte[6]=0x02 silent HW failure where
     # BFM-validated chip RTL fails <half-duplex-tester> acceptance because the agent
@@ -418,7 +418,7 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     # binds all 8. No amount of internal-RTL fix recovers a missing pin.
     "fpga_top_pin_completeness_check",
     # v0.119.21 LL-26: advisory gate for sub-microsecond Category-C residual
-    # surfaced by the v0.119.20 noris benchmark. Catches the case where a
+    # surfaced by the v0.119.20 vendor benchmark. Catches the case where a
     # chip's TX bit-clock period is too coarse to place edges within an
     # L2 timing tolerance window — e.g. 5 MHz clock (T_tx_ns=200) snaps
     # edges at 100 ns, eating 20% of a ±0.5us host budget. The gate
@@ -437,7 +437,7 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     # silent-PASS stub for backward-compat with any caller that
     # invokes it directly. NOT registered here.
     # v0.119.23 LL-27: catches the FPGA toggle-divider clock antipattern
-    # surfaced by the v0.119.22 noris benchmark. Fresh agent emitted
+    # surfaced by the v0.119.22 vendor benchmark. Fresh agent emitted
     # `clk_5m <= ~clk_5m` (toggle divider) and used clk_5m as the chip's
     # core clock; Quartus warned but Phase 2 didn't catch. Effective core
     # clock turned out 2.5 MHz instead of 5 MHz → all chip TX bits 2× spec
@@ -448,7 +448,7 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "fpga_clock_divider_antipattern_check",
     # v0.119.29 ROOT_CAUSE_ANALYSIS — 5 gates closing the 7 deltas
     # surfaced by <benchmark> phase2_fresh_v011924_v2 (FAIL byte[6]=0x02)
-    # vs example_chip_fpga_quartus_ok (PASS byte[6]=0xF2). All chip-agnostic.
+    # vs ic-a_fpga_quartus_ok (PASS byte[6]=0xF2). All chip-agnostic.
     #   Area 1: tx bit-cell µs vs declared TX clock — wrong clock domain
     #           for TX_PHY makes per-bit LOW/HIGH ratio off even when the
     #           total bit period happens to match.
@@ -469,7 +469,7 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     #           WEAK_PULL_UP_RESISTOR assignment — internal vs external
     #           pull-up source mismatch distorts edges on real silicon.
     "fpga_pad_pullup_consistency_check",
-    # v0.119.32 LL-29..33 — closes the v0.119.30 <benchmark> noris extractor
+    # v0.119.32 LL-29..33 — closes the v0.119.30 <benchmark> vendor extractor
     # gaps documented in MIN_DIFF_ANALYSIS.md. All 7 deltas are
     # Category-A (input/docs/ already had the data, the extractor
     # missed it). Each gate is chip-agnostic, silent-skips when its
@@ -494,7 +494,7 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     #          response-latency table, L11/L8 must propagate
     #          response_latency_ticks dict (or per-entry equivalent).
     "per_opcode_response_latency_table_check",
-    # v0.119.33 LL-34..36 — closes the v0.119.32 <benchmark> noris last
+    # v0.119.33 LL-34..36 — closes the v0.119.32 <benchmark> vendor last
     # extractor gaps documented in PLUGIN_ENHANCEMENT_BACKLOG_v13.md.
     # All three are Cat A (vendor docs ARE complete; the plugin's
     # eyes were too narrow). Each gate silent-skips when its trigger
@@ -777,7 +777,7 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     # <half-duplex-tester> reads the spurious 24 µs LOW as another BR/IBT
     # abnormality, resets frame state, discards DUT reply →
     # byte[6]=0x02. Chip-AGNOSTIC protocol convention: in
-    # half-duplex single-wire request-response protocols (EXAMPLE_PROTOCOL
+    # half-duplex single-wire request-response protocols (AID
     # class), the device/slave reply does NOT prepend its own BR;
     # the BR was the host's framing at the beginning. Honors waiver
     # `slave_tx_break_intentional` (≥40 chars).
@@ -854,7 +854,7 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     # still produced byte[6]=0x02 deterministic FAIL on real silicon.
     # The plugin now ships
     # `tools/protocol_tb/aid_class_reference_tb.v` — a chip-AGNOSTIC
-    # half-duplex EXAMPLE_PROTOCOL-class reference TB that drives host-side BR +
+    # half-duplex AID-class reference TB that drives host-side BR +
     # cmd-byte + tSRS gap and captures DUT-side bytes.  This gate
     # plugs the agent's RTL into the TB, compiles with iverilog,
     # runs with vvp, and parses stdout for the
@@ -1038,7 +1038,7 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     # Chip-AGNOSTIC.
     "project_outputs_in_tree_check",
     # v0.124 / Wave 58 — closes Wave 56 column-D RTL bug families on
-    # v0.121-noris.  Each gate is chip-AGNOSTIC, silent-skips when its
+    # v0.121-vendor.  Each gate is chip-AGNOSTIC, silent-skips when its
     # trigger condition is absent, and honors a named ≥40-char waiver.
     #   Gate 1: wake-pulse generator else-branch period-counter reset
     #     starves the periodic pulse on continuous host polling
@@ -1089,7 +1089,7 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     #   instantiated by some other module (dead-code detection). When
     #   schema_version=1, also cross-checks per-submodule .ports against
     #   the actual RTL port list. VACUOUS_PASS when L9 is absent or
-    #   carries no submodules. Real-world signal: v0117-noris flags 9
+    #   carries no submodules. Real-world signal: v0117-vendor flags 9
     #   genuine submodule gaps (L9 declares 12 submodules, rtl/ emits 4).
     "l9_submodule_conformance_check",
     # v1.6.29 wire-in — substance / canonical-real-file gates from
@@ -1097,7 +1097,7 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     #   misfire on digital-only projects or pre-GDS-stream-out runs.
     #   - analog_artefact_substance_check (v1.6.28): catches 64-byte
     #     HEADER+ENDLIB GDS stubs and the
-    #     `ai_authored_methodology_stub` self-marker the v10627-noris
+    #     `ai_authored_methodology_stub` self-marker the v10627-vendor
     #     run shipped for all 8 analog blocks (32 substance-less
     #     deliverables that passed presence-only audit).
     #   - chip_gds_canonical_real_file_check (v1.6.29): catches
@@ -1150,8 +1150,8 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     #   SHA256 attestation of every canonical artefact (SOF / GDS /
     #   synth netlist / LEF / Liberty). The presence gate (v1.6.24)
     #   only checks the 5 section names; this gate audits the report
-    #   content. Real-world signal: v10619-noris (0 sha256) and
-    #   v10627-noris (1 sha256, missing GDS attestation) both FAIL.
+    #   content. Real-world signal: v10619-vendor (0 sha256) and
+    #   v10627-vendor (1 sha256, missing GDS attestation) both FAIL.
     "agent_report_sha256_attestation_check",
     # v1.6.38 — `emitter_failure_mode_check` /
     # `literal_verdict_keyword_check` / `source_chip_agnostic_check` /
@@ -1538,13 +1538,13 @@ def _run_yosys_gates(project: Path) -> tuple[bool, List[str]]:
 # v1.6.97 (issue #29 Bugs 1+2) — thin-input waiver scaffold.
 #
 # Some benchmark / customer projects are intentionally thin on input
-# documentation (e.g. EXAMPLE_CHIP with a single short datasheet excerpt and
+# documentation (e.g. IC-A with a single short datasheet excerpt and
 # 2-3 application notes — total <5 input docs). The two extractor-
 # coverage gates (``phase1_doc_input_completeness_check`` and
 # ``l_doc_structured_field_count_check``) cannot pass on such projects
 # because the extractor genuinely has nothing more to harvest. Without
 # a waiver path these projects can never reach PASS_WITH_WAIVERS, which
-# blocks downstream EXAMPLE_TESTER / Phase 3 GDS work.
+# blocks downstream USB-HID tester / Phase 3 GDS work.
 #
 # The ``--allow-thin-input`` flag converts FAILs from EXACTLY these two
 # gates to a WAIVED entry (review_required: true, ticket id) when the
@@ -1559,7 +1559,7 @@ def _run_yosys_gates(project: Path) -> tuple[bool, List[str]]:
 #
 # v1.6.98 (issue #30 Bug 2) — the doc-count predicate is RETIRED in
 # favour of a COVERAGE-shape predicate. Real-world benchmarks (e.g.
-# EXAMPLE_CHIP with 31 input docs) hit the same coverage-gap pattern as a
+# IC-A with 31 input docs) hit the same coverage-gap pattern as a
 # 3-doc project: extractors can't catch every register-table row in
 # every doc-shape, regardless of total doc count. The new predicate
 # fires when ANY input doc is below 100% capture, gated by a
@@ -1838,7 +1838,7 @@ def _is_thin_input_eligible(project: Path) -> bool:
       - total doc count <= MAX_THICK_DOC_THRESHOLD (anti-gaming).
 
     Replaces the earlier ``len(input_docs) <= 5`` doc-count predicate.
-    A 31-doc project with 3 below 100% capture (the EXAMPLE_CHIP benchmark
+    A 31-doc project with 3 below 100% capture (the IC-A benchmark
     pattern) is now eligible; a 1000-doc dump with one stub is NOT.
 
     Falls back to the legacy doc-count predicate (count <
@@ -2478,7 +2478,7 @@ def main(argv: Optional[List[str]] = None) -> int:
               "scopes to steps 1-6 (Phase-2 docs + RTL + sim + FPGA "
               "compile + burn) and treats Phase-3 steps (7-40) as "
               "OUT-OF-SCOPE rather than MISSING — closes the "
-              "noris-benchmark complaint that legitimate Phase-2-only "
+              "vendor-benchmark complaint that legitimate Phase-2-only "
               "runs were forced to FAIL because Phase-3 sign-off steps "
               "were absent. `--phase 3` does the inverse (Phase-2 "
               "OUT-OF-SCOPE). `--phase all` is the default."),
@@ -2562,7 +2562,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=("v0.119.24: print the full _STRUCTURAL_RTL_GATES tuple "
               "(every gate the P0 umbrella runs) to stdout and exit. "
               "Use this to discover which structural gates exist before "
-              "starting Phase 2 — closes the noris-benchmark complaint "
+              "starting Phase 2 — closes the vendor-benchmark complaint "
               "that real-bug-catching gates like fpga_pad_fanout_check "
               "weren't visible in the brief."),
     )
@@ -2616,7 +2616,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # (constraints through tapeout sign-off + manufacturing).
     # String IDs (`stage1`, `stage_analog`, etc.) and analog `A*` /
     # mixed-signal `M*` / preflight `P0` are phase-agnostic and kept.
-    # Closes the v0.119.27 noris complaint that Phase-2-only runs were
+    # Closes the v0.119.27 vendor complaint that Phase-2-only runs were
     # forced to FAIL because Phase-3 sign-off steps showed up as MISSING.
     # v1.6.15 Wave 91: phase-3 cap raised 39 → 40 (pre-PnR Yosys gate
     # promoted to Step 14, stage3-5 cascade +1).

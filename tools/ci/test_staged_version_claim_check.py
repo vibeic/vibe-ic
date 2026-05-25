@@ -203,8 +203,8 @@ def test_two_files_two_violations(tmp_path):
 def test_ipv4_not_parsed_as_version(tmp_path):
     _make_plugin_json(tmp_path, "1.6.18")
     cp = _run(tmp_path, _diff(
-        "src/x.py", "# server at 192.168.1.108"))
-    # 192.168.1.108 has 4 components, regex requires exactly 3 → no match.
+        "src/x.py", "# server at <lan-ip>"))
+    # <lan-ip> has 4 components, regex requires exactly 3 → no match.
     assert cp.returncode == 0, cp.stdout
 
 

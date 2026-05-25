@@ -6,7 +6,7 @@ stored AND echoed back in any response.
 
 THE PROBLEM
 -----------
-The noris-class spec said "payload byte1 must be AND'd with 0xE8 before
+The vendor-class spec said "payload byte1 must be AND'd with 0xE8 before
 storing". The agent's RTL stored the raw byte, ignoring the mask.
 Read-back commands echoed the raw byte. Lint, sim with masked stimuli,
 and CRC all PASSed because the TB happened to feed pre-masked values.

@@ -211,7 +211,7 @@ def _counter_is_gated_by_state(
     designs (those need to add the branch or whitelist with the
     `// timer_freeze_check: ok-unconditional` comment)."""
     # v0.119.29: also accept the freeze branch as a PRIMARY `if (state)`
-    # (not just `else if (state)`). The agent on v0.119.27 noris wrote
+    # (not just `else if (state)`). The agent on v0.119.27 vendor wrote
     # ```
     #   if (state) cnt <= '0;
     #   else cnt <= cnt + 1;

@@ -17,8 +17,8 @@ mcp-eda-server/src/devices/<class>/<vendor>/
 
 ```json
 {
-  "vendor": "example_vendor",
-  "vendor_full_name": "Example Vendor",
+  "vendor": "vendor",
+  "vendor_full_name": "Vendor (example)",
   "device_class": "tester",
   "supported_models": ["Model-1234"],
   "permissions": ["require_group:plugdev"],
@@ -48,4 +48,4 @@ mcp-eda-server/src/devices/<class>/<vendor>/
 - Write a single JSON object to stdout (`{"success": bool, "mode": "...", ...}`)
 - Exit 0 on PASS, 1 on FAIL, 2 on input error
 
-The reference implementation is `mcp-eda-server/src/devices/tester/example_vendor-example_tester/driver.py`.
+The reference implementation is `mcp-eda-server/src/devices/tester/vendor-usb_hid_tester/driver.py`.

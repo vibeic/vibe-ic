@@ -4,7 +4,7 @@
 Reads `<project>/generated_docs/L10_TEST_CASES.json` and emits one .v TB
 per test case under `<project>/sim/tb/`.
 
-For EXAMPLE_PROTOCOL-class chips, the canonical reference TB
+For AID-class chips, the canonical reference TB
 `tools/protocol_tb/aid_class_reference_tb.v` is reused; this generator
 ships per-test-case TB only for unit-level tests (single-module).
 

@@ -5,7 +5,7 @@ extractor failures on per-opcode response latency tables.
 
 Why this gate exists
 ====================
-v0.119.30 <benchmark> noris benchmark (MIN_DIFF_ANALYSIS.md). The vendor
+v0.119.30 <benchmark> vendor benchmark (MIN_DIFF_ANALYSIS.md). The vendor
 doc `input/docs/20230103-3.txt` lines 8-25 give:
 
     RSP_70[91]  RSP_74[91]  RSP_78[91]  RSP_7C[91]

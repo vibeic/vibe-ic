@@ -75,7 +75,7 @@ endmodule
 
 class TestUnreadReg:
     def test_detects_written_never_read_reg(self, tmp_path):
-        """This is the EXAMPLE_TESTER bug #7 pattern: resp_crc declared, written to,
+        """This is the USB-HID tester bug #7 pattern: resp_crc declared, written to,
         but never appears on any RHS."""
         sv = """
 module m(input clk, input rst_n);

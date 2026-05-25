@@ -7,7 +7,7 @@ escape static gates.  Allowing waiver re-opens the escape route.  If
 the TB FAILs, fix the RTL.
 
 Runtime functional verification gate.  Plugs the agent's RTL into the
-plugin-provided EXAMPLE_PROTOCOL-class reference testbench
+plugin-provided AID-class reference testbench
 (``tools/protocol_tb/aid_class_reference_tb.v``), compiles with
 iverilog, runs with vvp, and parses stdout for the ``PROTOCOL_REFERENCE_TB_PASS``
 sentinel.
@@ -291,7 +291,7 @@ def find_clock_period_ns(project: Path, rtl_files: list[Path]) -> int:
 
 
 _AID_PROTOCOL_TYPE_TOKENS: tuple[str, ...] = (
-    "example_protocol",
+    "aid",
     "apple id bus",
     "apple_id_bus",
     "single_wire_half_duplex",
@@ -341,17 +341,17 @@ def _l2_says_aid_class(project: Path) -> bool:
 
 
 def is_protocol_design(project: Path, rtl_files: list[Path]) -> bool:
-    """Wave 36 (v0.119.68) — EXAMPLE_PROTOCOL-class reference TB only applies to
+    """Wave 36 (v0.119.68) — AID-class reference TB only applies to
     half-duplex single-wire designs. Decision rule:
 
       (RTL declares `inout id_bus|id_io|idbus|id_data`)
-      OR (L2.protocol_type matches an EXAMPLE_PROTOCOL-class synonym)
+      OR (L2.protocol_type matches an AID-class synonym)
 
     L3 commands alone do NOT trigger any more — every cmd-driven
-    digital chip has L3 commands, but only EXAMPLE_PROTOCOL-class ones share the
+    digital chip has L3 commands, but only AID-class ones share the
     open-drain BR/IBT framing the reference TB drives.  This change
     eliminates the FP_RISK F3-style contamination where a SPI / UART
-    / I2C chip with L3 commands was forced through an EXAMPLE_PROTOCOL-class TB.
+    / I2C chip with L3 commands was forced through an AID-class TB.
     """
     has_inout_id_bus = False
     for f in rtl_files:
@@ -466,7 +466,7 @@ def check(project: Path, keep_tmp: bool = False) -> dict:
     if not is_protocol_design(project, rtl_files):
         out["skip_reason"] = (
             "non-protocol design (no inout id_bus / no L3 commands) — "
-            "EXAMPLE_PROTOCOL-class TB not applicable"
+            "AID-class TB not applicable"
         )
         return out
 

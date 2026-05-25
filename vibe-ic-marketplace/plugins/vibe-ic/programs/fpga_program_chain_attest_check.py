@@ -4,7 +4,7 @@ fpga_program_chain_attest_check.py — Audit the FPGA compile→program→test c
 
 THE PROBLEM
 -----------
-A fresh agent runs `device_tester_example_tester_connect_test`, sees PASS, and
+A fresh agent runs `device_tester_md905_connect_test`, sees PASS, and
 declares the design works on hardware. But that PASS may be from a
 PREVIOUSLY-burned SOF still on the FPGA from a different session — the
 agent never actually programmed its own bitstream.
@@ -17,7 +17,7 @@ hardware-attestation PASS:
     2. There must be at least one `eda_fpga_program` PASS *with the
        same `session_id`* and a `programmed_artifact_sha256` that
        matches the compile hash.
-    3. Any `device_tester_example_tester_connect_test` PASS that the agent
+    3. Any `device_tester_md905_connect_test` PASS that the agent
        cites as evidence must come *after* the matching program step
        in the manifest, in the same session.
 
@@ -95,7 +95,7 @@ def audit(manifest_entries: List[Dict[str, Any]]) -> List[Finding]:
     programs = [e for e in manifest_entries
                 if e.get("step") == "fpga_program" and e.get("status") == "PASS"]
     connects = [e for e in manifest_entries
-                if e.get("step", "").startswith("device_tester_example_tester_connect_test")
+                if e.get("step", "").startswith("device_tester_md905_connect_test")
                 and e.get("status") == "PASS"]
 
     if not compiles:

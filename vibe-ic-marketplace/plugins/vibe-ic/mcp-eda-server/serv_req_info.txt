@@ -1,0 +1,32 @@
+<internal_error>
+<sub_system>ERR</sub_system>
+<callstack>
+	0x7a72ad6962f6: ccl_err + 0x82f6 (_ZN15ERR_STACKWALKER15get_stack_traceEPPKviiPv + 0x146)
+	0x7a72ad6993c8: ccl_err + 0xb3c8 (_Z14err_terminatorv + 0x5a)
+	0x7a72b50a4b86: jtag_client + 0x38b86 (_ZN10__cxxabiv111__terminateEPFvvE + 0x6)
+	0x7a72b50a4bf1: jtag_client + 0x38bf1
+	0x7a72b50a4d44: jtag_client + 0x38d44
+	0x7a72b5081ba8: jtag_client + 0x15ba8 (_ZSt19__throw_logic_errorPKc + 0x3d)
+	0x7a72b50b50c9: jtag_client + 0x490c9
+	0x7a72b50b5481: jtag_client + 0x49481 (_ZNSsC2EPKcRKSaIcE + 0x31)
+	0x7a72b6fe005f: comp_qexe + 0x1805f (_ZL24qexe_process_long_optionR15QEXE_LOCAL_ARGSRKSsS2_RbRSt4listISsSaISsEE + 0x9ae)
+	0x7a72b6fe495c: comp_qexe + 0x1c95c (_Z22qexe_process_argumentsP14QEXE_FRAMEWORKR15QEXE_LOCAL_ARGSiPPKc + 0x875)
+	0x7a72b6fe5671: comp_qexe + 0x1d671 (_Z18qexe_standard_mainP14QEXE_FRAMEWORKPPK22QEXE_OPTION_DEFINITIONiPPKc + 0x119)
+	0x5aa80cb8d6da: quartus_pgm + 0x246da (_Z9qpgm_mainiPPKc + 0x97)
+	0x7a72ad74c5c0: ccl_msg + 0x3e5c0 (_Z15msg_main_threadPv + 0x10)
+	0x7a72acdd0c9c: ccl_thr + 0x5c9c (thr_final_wrapper + 0xc)
+	0x7a72ad74c68a: ccl_msg + 0x3e68a (_Z18msg_thread_wrapperPFPvS_ES_ + 0x6e)
+	0x7a72ad6c9096: ccl_mem + 0xc096 (_Z18mem_thread_wrapperPFPvS_ES_ + 0x96)
+	0x7a72ad6971a8: ccl_err + 0x91a8 (_Z18err_thread_wrapperPFPvS_ES_ + 0x27)
+	0x7a72acdd0cdf: ccl_thr + 0x5cdf (thr_thread_wrapper + 0x15)
+	0x7a72ad74e58a: ccl_msg + 0x4058a (_Z12msg_exe_mainiPPKcPFiiS1_E + 0xa8)
+	0x5aa80cb8d755: quartus_pgm + 0x24755 (main + 0x26)
+	0x7a72a702a1ca: c.so.6 + 0x2a1ca
+	0x7a72a702a28b: c.so.6 + 0x2a28b (__libc_start_main + 0x8b)
+	0x5aa80cb71309: quartus_pgm + 0x8309 (_start + 0x29)
+</callstack>
+<error>*** Fatal Error: Unhandled Exception</error>
+<date>Wed Apr 29 18:37:36 2026
+</date>
+<version>Version 23.1std.0 Build 991 11/28/2023 SC Lite Edition</version>
+</internal_error>

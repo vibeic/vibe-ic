@@ -50,7 +50,7 @@ class Finding:
 
 HARD_RULES: List[Tuple[str, str, str]] = [
     ("chip_name",
-     r"\bEXAMPLE_CHIP\b|\bBENCHMARK_A\b|\bSC16IS750\b|\bLM75\b|\bDS1307\b"
+     r"\bAS3616\b|\bSN2025\b|\bSC16IS750\b|\bLM75\b|\bDS1307\b"
      r"|\bPCA9685\b|\bTCA9534\b|\bMCP4725\b|\b24LC256\b|\bBME280\b",
      "Chip/IC product name — describe the IC class instead"),
     ("vendor_name",

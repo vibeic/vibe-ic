@@ -3,7 +3,7 @@
 <chip-class> v042 fresh-agent debug.
 
 Flags tx_phy modules that include BR (Break/Reset) states in the response
-transmission path. In protocols where BR is host-only (e.g., Apple EXAMPLE_PROTOCOL, many
+transmission path. In protocols where BR is host-only (e.g., Apple AID, many
 single-wire protocols), the DEVICE tx_phy response MUST NOT emit a leading BR.
 
 Heuristic pattern scanned (Verilog / SystemVerilog):
@@ -99,7 +99,7 @@ def analyze_file(path: Path) -> List[Finding]:
                     f"tx_phy transitions to a ST_BR_* state at line {lineno} without "
                     "a `tx_send_br`/`send_br` guard. Device response MUST NOT emit "
                     "leading BR — BR is host-only per typical single-wire protocols "
-                    "(Apple EXAMPLE_PROTOCOL, etc.). Fresh-agent bug from <chip-class> v042: <half-duplex-tester> "
+                    "(Apple AID, etc.). Fresh-agent bug from <chip-class> v042: <half-duplex-tester> "
                     "rejects responses starting with BR as host traffic. "
                     "Fix: remove ST_BR_* states from response path, or gate them "
                     "behind an external tx_send_br input."

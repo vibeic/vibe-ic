@@ -10,7 +10,7 @@ cross-checked against the planner.
 
 Why this gate exists
 ====================
-v0.119.32 <benchmark> noris benchmark — the only physical evidence of
+v0.119.32 <benchmark> vendor benchmark — the only physical evidence of
 the FPGA pin map (PIN_V10 for ID_BUS, PIN_B8 for RESET_N, etc.) was
 in `A3606_pin_planner.jpg`. The text-only extractor cannot read
 images, so the fresh agent had no source of truth for the pin map
