@@ -93,10 +93,11 @@ def test_description_forbids_skipping():
     )
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_canonical_gate_exists_on_disk():
     """SKIP-equivalent: if the gate script is missing the tool would
-    fail at runtime; surface that at test time."""
+    fail at runtime; surface that at test time. Note: this previously
+    carried a v2-rename xfail marker; the gate now resolves cleanly via
+    the merged path (_MERGED above) so the marker is no longer needed."""
     assert GATE.exists(), (
         f"canonical gate {GATE} missing — phase23 audit tool would "
         f"fail at runtime"
