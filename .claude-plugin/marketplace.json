@@ -7,12 +7,7 @@
   "plugins": [
     {
       "name": "vibe-ic",
-      "source": {
-        "source": "git-subdir",
-        "url": "https://github.com/vibeic/vibe-ic.git",
-        "path": "vibe-ic-marketplace/plugins/vibe-ic",
-        "ref": "main"
-      },
+      "source": "./plugins/vibe-ic",
       "description": "AI-native IC design plugin for Claude Code. NL prompt or design docs → L1-L13 design JSON → RTL → FPGA SOF → ASIC GDS. Strict canonical-flow compliance gates + chip-AGNOSTIC source guard.",
       "version": "0.1.1",
       "homepage": "https://github.com/vibeic/vibe-ic",
