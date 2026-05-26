@@ -1,0 +1,12 @@
+{
+  "schema_version": "1",
+  "doc_class": "timing_waveform",
+  "ic_name": "PicoRV32",
+  "timing_windows": [],
+  "timing_constants": [],
+  "waveforms": [],
+  "extraction_evidence": {
+    "input/docs/README.md": []
+  },
+  "class_path": "processor_cpu"
+}

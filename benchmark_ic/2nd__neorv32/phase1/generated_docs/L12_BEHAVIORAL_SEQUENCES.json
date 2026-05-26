@@ -1,0 +1,134 @@
+{
+  "schema_version": 2,
+  "doc_class": "behavioral_sequences",
+  "ic_name": "SSE",
+  "behavioral_sequences": [
+    {
+      "name": "usage_sequence_1",
+      "trigger": "host_initiates",
+      "steps": [
+        {
+          "step": 1,
+          "action": "Set sbbusy.",
+          "evidence_line": 2462
+        },
+        {
+          "step": 2,
+          "action": "Perform a bus read from the new value of sbaddress.",
+          "evidence_line": 2463
+        },
+        {
+          "step": 3,
+          "action": "If the read succeeded and sbautoincrement is set, increment sbaddress.",
+          "evidence_line": 2464
+        },
+        {
+          "step": 4,
+          "action": "Clear sbbusy.",
+          "evidence_line": 2465
+        }
+      ],
+      "source": "readme_usage_sequence",
+      "evidence": "input/docs/references__riscv-debug-specification.pdf:line 2462"
+    },
+    {
+      "name": "usage_sequence_2",
+      "trigger": "host_initiates",
+      "steps": [
+        {
+          "step": 1,
+          "action": "Set sbbusy.",
+          "evidence_line": 2555
+        },
+        {
+          "step": 2,
+          "action": "Perform a bus write of the new value of sbdata to sbaddress.",
+          "evidence_line": 2556
+        },
+        {
+          "step": 3,
+          "action": "If the write succeeded and sbautoincrement is set, increment sbaddress.",
+          "evidence_line": 2557
+        },
+        {
+          "step": 4,
+          "action": "Clear sbbusy.",
+          "evidence_line": 2558
+        }
+      ],
+      "source": "readme_usage_sequence",
+      "evidence": "input/docs/references__riscv-debug-specification.pdf:line 2555"
+    },
+    {
+      "name": "usage_sequence_3",
+      "trigger": "host_initiates",
+      "steps": [
+        {
+          "step": 1,
+          "action": "Read back tselect and check that it contains the written value. If not, exit the loop.",
+          "evidence_line": 3290
+        },
+        {
+          "step": 2,
+          "action": "Read tinfo.",
+          "evidence_line": 3291
+        },
+        {
+          "step": 3,
+          "action": "If that caused an exception, the debugger must read tdata1 to discover the type. (If type is 0, this",
+          "evidence_line": 3292
+        }
+      ],
+      "source": "readme_usage_sequence",
+      "evidence": "input/docs/references__riscv-debug-specification.pdf:line 3290"
+    },
+    {
+      "name": "usage_sequence_4",
+      "trigger": "host_initiates",
+      "steps": [
+        {
+          "step": 1,
+          "action": "Write tdata1=0, in case the current tdata2 value is not supported with mcontrol6 triggers.",
+          "evidence_line": 4340
+        },
+        {
+          "step": 2,
+          "action": "Write tdata2=0, which is always supported with mcontrol6 triggers.",
+          "evidence_line": 4341
+        },
+        {
+          "step": 3,
+          "action": "Write tdata1 with type=mcontrol6 and match=1.",
+          "evidence_line": 4342
+        },
+        {
+          "step": 4,
+          "action": "Read match. If it is not 1 then NAPOT matching is not supported.",
+          "evidence_line": 4343
+        },
+        {
+          "step": 5,
+          "action": "Write all ones to tdata2.",
+          "evidence_line": 4344
+        },
+        {
+          "step": 6,
+          "action": "Read tdata2. The value of maskmax6 is the index of the most significant 0 bit plus 1.",
+          "evidence_line": 4345
+        }
+      ],
+      "source": "readme_usage_sequence",
+      "evidence": "input/docs/references__riscv-debug-specification.pdf:line 4340"
+    }
+  ],
+  "no_behavioral_sequences_in_input": false,
+  "extraction_evidence": {
+    "input/docs/references__riscv-debug-specification.pdf": [
+      {
+        "literal": "numbered usage sequence",
+        "label": "README usage-sequence (Bug 2 picker)"
+      }
+    ]
+  },
+  "class_path": "processor_cpu"
+}

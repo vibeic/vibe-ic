@@ -1,0 +1,237 @@
+{
+  "schema_version": "1",
+  "doc_class": "timing_waveform",
+  "ic_name": "Phase-1 Fact-Graph Provenance Audit",
+  "timing_windows": [],
+  "timing_constants": [],
+  "waveforms": [
+    {
+      "file_ref": "doc__interface.rst",
+      "raw_payload": "{ signal: [\n  { name: \"clk\"        , wave: \"P...|...|...|...\"},\n  { name: \"init\"       , wave: \"1...|..0|...|...\", node: \".......d..\", data: \"r0\"},\n  { name: \"o_rf_wreq\"  , wave: \"0...|...|10.|...\", node: \".........g\", data: \"r1\"},\n  { name: \"i_rf_ready\" , wave: \"010.|...|10.|...\", node: \".a.......h.\", data: \"r1\"},\n  { name: \"cnt_en\"     , wave: \"0.1.|..0|.1.|..0\", node: \"..b.......i\"},\n  { name: \"cnt_done\"   , wave: \"0...|.10|...|.10\", node: \"......c..\"},\n  { name: \"o_ext_rs1\"  , wave: \".234567x|...|...\", node: \"..\", data: \"d0 d1 ... d30 d31\"},\n  { name: \"o_ext_rs2\"  , wave: \".234567x|...|...\", node: \"..\", data: \"d0 d1 ... d30 d31\"},\n  { name: \"o_mdu_valid\", wave: \"0...|..1|.0.|...\", node: \".......e\", data: \"0 1 ... 30 31\"},\n  { name: \"i_ext_ready\", wave: \"0...|...|10.|...\", node: \".........f\", data: \"0 1 ... 30 31\"},\n  { name: \"i_ext_rd\"   , wave: \"....|...|234567x\", node: \"..\", data: \"d0 d1 ... d30 d31\"},\n  ],\n  edge : [\n  \"a~>b\", \"c~>d\", \"e~>f\", \"f~>g\", \"h~>i\"]\n}",
+      "options": {},
+      "wavejson": "{ signal: [\n  { name: \"clk\"        , wave: \"P...|...|...|...\"},\n  { name: \"init\"       , wave: \"1...|..0|...|...\", node: \".......d..\", data: \"r0\"},\n  { name: \"o_rf_wreq\"  , wave: \"0...|...|10.|...\", node: \".........g\", data: \"r1\"},\n  { name: \"i_rf_ready\" , wave: \"010.|...|10.|...\", node: \".a.......h.\", data: \"r1\"},\n  { name: \"cnt_en\"     , wave: \"0.1.|..0|.1.|..0\", node: \"..b.......i\"},\n  { name: \"cnt_done\"   , wave: \"0...|.10|...|.10\", node: \"......c..\"},\n  { name: \"o_ext_rs1\"  , wave: \".234567x|...|...\", node: \"..\", data: \"d0 d1 ... d30 d31\"},\n  { name: \"o_ext_rs2\"  , wave: \".234567x|...|...\", node: \"..\", data: \"d0 d1 ... d30 d31\"},\n  { name: \"o_mdu_valid\", wave: \"0...|..1|.0.|...\", node: \".......e\", data: \"0 1 ... 30 31\"},\n  { name: \"i_ext_ready\", wave: \"0...|...|10.|...\", node: \".........f\", data: \"0 1 ... 30 31\"},\n  { name: \"i_ext_rd\"   , wave: \"....|...|234567x\", node: \"..\", data: \"d0 d1 ... d30 d31\"},\n  ],\n  edge : [\n  \"a~>b\", \"c~>d\", \"e~>f\", \"f~>g\", \"h~>i\"]\n}",
+      "extraction_strategy": "rst_wavedrom_directive",
+      "name": "wavedrom_1",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "doc__modules.rst",
+      "raw_payload": "{ signal: [\n  { name: \"clk\"       , wave: \"0P|......\"},\n  { name: \"o_ibus_cyc\", wave: \"01|.0.....\", node: \".a...\"},\n  { name: \"i_ibus_ack\", wave: \"0.|10.....\", node: \"...b\", data: \"r0\"},\n  { name: \"rf_rreq\"   , wave: \"0.|10.....\", node: \"...c.\", data: \"r1\"},\n  { name: \"i_ibus_rdt\", wave: \"x.|2x.....\", node: \"...\", data: \"i0\"},\n  { name: \"opcode\"    , wave: \"x.|.2.....\", data: \"i0[6:2]\"},\n  { name: \"funct3\"    , wave: \"x.|.2.....\", data: \"i0[14:12]\"},\n  { name: \"imm30\"     , wave: \"x.|.2.....\", data: \"i0[30]\"},\n  {},\n  { name: \"r*_addr\"   , wave: \"x.|.2.....\", data: \"i0[24:15,11:7]\"},\n  { name: \"imm*\"      , wave: \"x.|.2.....\", data: \"i0[31:7]\"},\n\n  ],\n  edge : [\n  \"a~>b\",\"b~>c\"]\n}",
+      "options": {},
+      "wavejson": "{ signal: [\n  { name: \"clk\"       , wave: \"0P|......\"},\n  { name: \"o_ibus_cyc\", wave: \"01|.0.....\", node: \".a...\"},\n  { name: \"i_ibus_ack\", wave: \"0.|10.....\", node: \"...b\", data: \"r0\"},\n  { name: \"rf_rreq\"   , wave: \"0.|10.....\", node: \"...c.\", data: \"r1\"},\n  { name: \"i_ibus_rdt\", wave: \"x.|2x.....\", node: \"...\", data: \"i0\"},\n  { name: \"opcode\"    , wave: \"x.|.2.....\", data: \"i0[6:2]\"},\n  { name: \"funct3\"    , wave: \"x.|.2.....\", data: \"i0[14:12]\"},\n  { name: \"imm30\"     , wave: \"x.|.2.....\", data: \"i0[30]\"},\n  {},\n  { name: \"r*_addr\"   , wave: \"x.|.2.....\", data: \"i0[24:15,11:7]\"},\n  { name: \"imm*\"      , wave: \"x.|.2.....\", data: \"i0[31:7]\"},\n\n  ],\n  edge : [\n  \"a~>b\",\"b~>c\"]\n}",
+      "extraction_strategy": "rst_wavedrom_directive",
+      "name": "wavedrom_2",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "doc__modules.rst",
+      "raw_payload": "{ signal: [\n  { name: \"clk\"    , wave: \"0P.|.....\"},\n  { name: \"rreq\"   , wave: \"010|.....\", node: \".a...\"},\n  { name: \"rreg0\"  , wave: \"x.2|.....\", node: \"....\", data: \"r0\"},\n  { name: \"rreg1\"  , wave: \"x.2|.....\", node: \"....\", data: \"r1\"},\n  { name: \"ready\"  , wave: \"0..|10...\", node: \"....b.\"},\n  { name: \"rdata0\" , wave: \"-..|12345\", data: \"0 1 2 3 4\"},\n  { name: \"rdata1\" , wave: \"-..|12345\", data: \"0 1 2 3 4\"},\n  ],\n  edge : [\n  \"a~>b\"]\n}",
+      "options": {},
+      "wavejson": "{ signal: [\n  { name: \"clk\"    , wave: \"0P.|.....\"},\n  { name: \"rreq\"   , wave: \"010|.....\", node: \".a...\"},\n  { name: \"rreg0\"  , wave: \"x.2|.....\", node: \"....\", data: \"r0\"},\n  { name: \"rreg1\"  , wave: \"x.2|.....\", node: \"....\", data: \"r1\"},\n  { name: \"ready\"  , wave: \"0..|10...\", node: \"....b.\"},\n  { name: \"rdata0\" , wave: \"-..|12345\", data: \"0 1 2 3 4\"},\n  { name: \"rdata1\" , wave: \"-..|12345\", data: \"0 1 2 3 4\"},\n  ],\n  edge : [\n  \"a~>b\"]\n}",
+      "extraction_strategy": "rst_wavedrom_directive",
+      "name": "wavedrom_3",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "doc__modules.rst",
+      "raw_payload": "{ signal: [\n  { name: \"clk\"    , wave: \"0P.....\"},\n  { name: \"wreq\"   , wave: \"010....\", node: \".a...\"},\n  { name: \"ready\"  , wave: \"010....\", node: \".b.\"},\n  { name: \"wreg0\"  , wave: \"x.2....\", node: \"....\", data: \"r0\"},\n  { name: \"wreg1\"  , wave: \"x.2....\", node: \"....\", data: \"r1\"},\n  { name: \"wen0\"   , wave: \"0.1....\"},\n  { name: \"wen1\"   , wave: \"0......\"},\n  { name: \"wdata0\" , wave: \"-123456\", node: \"..c.\", data: \"0 1 2 3 4\"},\n  { name: \"wdata1\" , wave: \"-123456\", node: \"..d.\", data: \"0 1 2 3 4\"},\n  ],\n  edge : [\n  \"a~>b\", \"b~>c\", \"b~>d\"]\n}",
+      "options": {},
+      "wavejson": "{ signal: [\n  { name: \"clk\"    , wave: \"0P.....\"},\n  { name: \"wreq\"   , wave: \"010....\", node: \".a...\"},\n  { name: \"ready\"  , wave: \"010....\", node: \".b.\"},\n  { name: \"wreg0\"  , wave: \"x.2....\", node: \"....\", data: \"r0\"},\n  { name: \"wreg1\"  , wave: \"x.2....\", node: \"....\", data: \"r1\"},\n  { name: \"wen0\"   , wave: \"0.1....\"},\n  { name: \"wen1\"   , wave: \"0......\"},\n  { name: \"wdata0\" , wave: \"-123456\", node: \"..c.\", data: \"0 1 2 3 4\"},\n  { name: \"wdata1\" , wave: \"-123456\", node: \"..d.\", data: \"0 1 2 3 4\"},\n  ],\n  edge : [\n  \"a~>b\", \"b~>c\", \"b~>d\"]\n}",
+      "extraction_strategy": "rst_wavedrom_directive",
+      "name": "wavedrom_4",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "doc__modules.rst",
+      "raw_payload": "{ signal: [\n  { name: \"clk\"     , wave: \"0P..|...\"},\n  { name: \"cnt_en\"  , wave: \"01..|..0\", node: \"....\"},\n  { name: \"init\"    , wave: \"0...|...\", node: \"....\", data: \"r0\"},\n  { name: \"trap\"    , wave: \"0...|...\", node: \"....\", data: \"r1\"},\n  { name: \"pc_en\"   , wave: \"01..|..0\"},\n  { name: \"rs1\"     , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"rs2\"     , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"imm\"     , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"rd\"      , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  ],\n  edge : [\n  \"a~>b\", \"b~>c\", \"b~>d\"]\n}",
+      "options": {},
+      "wavejson": "{ signal: [\n  { name: \"clk\"     , wave: \"0P..|...\"},\n  { name: \"cnt_en\"  , wave: \"01..|..0\", node: \"....\"},\n  { name: \"init\"    , wave: \"0...|...\", node: \"....\", data: \"r0\"},\n  { name: \"trap\"    , wave: \"0...|...\", node: \"....\", data: \"r1\"},\n  { name: \"pc_en\"   , wave: \"01..|..0\"},\n  { name: \"rs1\"     , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"rs2\"     , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"imm\"     , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"rd\"      , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  ],\n  edge : [\n  \"a~>b\", \"b~>c\", \"b~>d\"]\n}",
+      "extraction_strategy": "rst_wavedrom_directive",
+      "name": "wavedrom_5",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "doc__modules.rst",
+      "raw_payload": "{ signal: [\n  { name: \"clk\"     , wave: \"0P..|...\"},\n  { name: \"cnt_en\"  , wave: \"01..|..0\", node: \"....\"},\n  { name: \"init\"    , wave: \"0...|...\", node: \"....\", data: \"r0\"},\n  { name: \"trap\"    , wave: \"1...|...\", node: \"....\", data: \"r1\"},\n  { name: \"pc_en\"   , wave: \"01..|..0\"},\n  { name: \"rs1\"     , wave: \"x...|...\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"rs2\"     , wave: \"x...|...\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"imm\"     , wave: \"x...|...\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"rd\"      , wave: \"x...|...\", node: \"...\", data: \"0 1 ... 30 31\"},\n  ],\n  edge : [\n  \"a~>b\", \"b~>c\", \"b~>d\"]\n}",
+      "options": {},
+      "wavejson": "{ signal: [\n  { name: \"clk\"     , wave: \"0P..|...\"},\n  { name: \"cnt_en\"  , wave: \"01..|..0\", node: \"....\"},\n  { name: \"init\"    , wave: \"0...|...\", node: \"....\", data: \"r0\"},\n  { name: \"trap\"    , wave: \"1...|...\", node: \"....\", data: \"r1\"},\n  { name: \"pc_en\"   , wave: \"01..|..0\"},\n  { name: \"rs1\"     , wave: \"x...|...\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"rs2\"     , wave: \"x...|...\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"imm\"     , wave: \"x...|...\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"rd\"      , wave: \"x...|...\", node: \"...\", data: \"0 1 ... 30 31\"},\n  ],\n  edge : [\n  \"a~>b\", \"b~>c\", \"b~>d\"]\n}",
+      "extraction_strategy": "rst_wavedrom_directive",
+      "name": "wavedrom_6",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "doc__modules.rst",
+      "raw_payload": "{ signal: [\n  { name: \"clk\"     , wave: \"0P..|...\"},\n  { name: \"cnt_en\"  , wave: \"01..|..0\", node: \"....\"},\n  { name: \"init\"    , wave: \"1...|..0\", node: \"....\", data: \"r0\"},\n  { name: \"trap\"    , wave: \"0...|...\", node: \"....\", data: \"r1\"},\n  { name: \"pc_en\"   , wave: \"0...|...\"},\n  { name: \"rs1\"     , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"rs2\"     , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"imm\"     , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"rd\"      , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  ],\n  edge : [\n  \"a~>b\", \"b~>c\", \"b~>d\"]\n}",
+      "options": {},
+      "wavejson": "{ signal: [\n  { name: \"clk\"     , wave: \"0P..|...\"},\n  { name: \"cnt_en\"  , wave: \"01..|..0\", node: \"....\"},\n  { name: \"init\"    , wave: \"1...|..0\", node: \"....\", data: \"r0\"},\n  { name: \"trap\"    , wave: \"0...|...\", node: \"....\", data: \"r1\"},\n  { name: \"pc_en\"   , wave: \"0...|...\"},\n  { name: \"rs1\"     , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"rs2\"     , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"imm\"     , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  { name: \"rd\"      , wave: \"x234|56x\", node: \"...\", data: \"0 1 ... 30 31\"},\n  ],\n  edge : [\n  \"a~>b\", \"b~>c\", \"b~>d\"]\n}",
+      "extraction_strategy": "rst_wavedrom_directive",
+      "name": "wavedrom_7",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "doc__modules.rst",
+      "raw_payload": "{ signal: [\n  { name: \"clk\"       , wave: \"P..|...\"},\n  { name: \"trap\"      , wave: \"0..|...\", node: \"....\", data: \"r1\"},\n  { name: \"init\"      , wave: \"1.0|...\", node: \"....\", data: \"r0\"},\n  { name: \"cnt_en\"    , wave: \"1.0|.1.\", node: \".....d\"},\n  { name: \"cnt_done\"  , wave: \"010|.1.\", node: \".a....\"},\n  { name: \"o_dbus_cyc\", wave: \"0.1|.0.\", node: \"..b.\", data: \"0 1 ... 30 31\"},\n  { name: \"i_dbus_ack\", wave: \"0..|10.\", node: \"....c\", data: \"0 1 ... 30 31\"},\n  { name: \"o_dbus_adr\", wave: \"x.2|.x.\", node: \"...\", data: \"address\"},\n  { name: \"rs2\"       , wave: \"33x|...\", node: \".e.\", data: \"d30 d31\"},\n  { name: \"o_dbus_dat\", wave: \"x.3|.x.\", node: \"..f\", data: \"data\"},\n  { name: \"o_dbus_sel\", wave: \"x.4|.x.\", node: \"...\", data: [\"write mask\"]},\n  { name: \"o_dbus_we\" , wave: \"1..|...\"},\n  ],\n  edge : [\n  \"a~>b\", \"b~>c\", \"c~>d\", \"e~>f\"]\n}",
+      "options": {},
+      "wavejson": "{ signal: [\n  { name: \"clk\"       , wave: \"P..|...\"},\n  { name: \"trap\"      , wave: \"0..|...\", node: \"....\", data: \"r1\"},\n  { name: \"init\"      , wave: \"1.0|...\", node: \"....\", data: \"r0\"},\n  { name: \"cnt_en\"    , wave: \"1.0|.1.\", node: \".....d\"},\n  { name: \"cnt_done\"  , wave: \"010|.1.\", node: \".a....\"},\n  { name: \"o_dbus_cyc\", wave: \"0.1|.0.\", node: \"..b.\", data: \"0 1 ... 30 31\"},\n  { name: \"i_dbus_ack\", wave: \"0..|10.\", node: \"....c\", data: \"0 1 ... 30 31\"},\n  { name: \"o_dbus_adr\", wave: \"x.2|.x.\", node: \"...\", data: \"address\"},\n  { name: \"rs2\"       , wave: \"33x|...\", node: \".e.\", data: \"d30 d31\"},\n  { name: \"o_dbus_dat\", wave: \"x.3|.x.\", node: \"..f\", data: \"data\"},\n  { name: \"o_dbus_sel\", wave: \"x.4|.x.\", node: \"...\", data: [\"write mask\"]},\n  { name: \"o_dbus_we\" , wave: \"1..|...\"},\n  ],\n  edge : [\n  \"a~>b\", \"b~>c\", \"c~>d\", \"e~>f\"]\n}",
+      "extraction_strategy": "rst_wavedrom_directive",
+      "name": "wavedrom_8",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "doc__modules.rst",
+      "raw_payload": "{ signal: [\n  { name: \"clk\"       , wave: \"P..|...\"},\n  { name: \"trap\"      , wave: \"0..|...\", node: \"....\", data: \"r1\"},\n  { name: \"init\"      , wave: \"1.0|...\", node: \"....\", data: \"r0\"},\n  { name: \"cnt_en\"    , wave: \"1.0|.1.\", node: \".....d\"},\n  { name: \"cnt_done\"  , wave: \"010|.1.\", node: \".a....\"},\n  { name: \"o_dbus_cyc\", wave: \"0.1|.0.\", node: \"..b.\", data: \"0 1 ... 30 31\"},\n  { name: \"i_dbus_ack\", wave: \"0..|10.\", node: \"....c\", data: \"0 1 ... 30 31\"},\n  { name: \"o_dbus_adr\", wave: \"x.2|.x.\", node: \"...\", data: \"address\"},\n  { name: \"o_dbus_we\" , wave: \"0..|...\"},\n  { name: \"i_dbus_rdt\", wave: \"x..|3x.\", node: \"....e\", data: \"data\"},\n  { name: \"rd\"        , wave: \"x..|.33\", node: \".....f\", data: \"d0 d1\"},\n  ],\n  edge : [\n  \"a~>b\", \"b~>c\", \"c~>d\", \"e~>f\"]\n}",
+      "options": {},
+      "wavejson": "{ signal: [\n  { name: \"clk\"       , wave: \"P..|...\"},\n  { name: \"trap\"      , wave: \"0..|...\", node: \"....\", data: \"r1\"},\n  { name: \"init\"      , wave: \"1.0|...\", node: \"....\", data: \"r0\"},\n  { name: \"cnt_en\"    , wave: \"1.0|.1.\", node: \".....d\"},\n  { name: \"cnt_done\"  , wave: \"010|.1.\", node: \".a....\"},\n  { name: \"o_dbus_cyc\", wave: \"0.1|.0.\", node: \"..b.\", data: \"0 1 ... 30 31\"},\n  { name: \"i_dbus_ack\", wave: \"0..|10.\", node: \"....c\", data: \"0 1 ... 30 31\"},\n  { name: \"o_dbus_adr\", wave: \"x.2|.x.\", node: \"...\", data: \"address\"},\n  { name: \"o_dbus_we\" , wave: \"0..|...\"},\n  { name: \"i_dbus_rdt\", wave: \"x..|3x.\", node: \"....e\", data: \"data\"},\n  { name: \"rd\"        , wave: \"x..|.33\", node: \".....f\", data: \"d0 d1\"},\n  ],\n  edge : [\n  \"a~>b\", \"b~>c\", \"c~>d\", \"e~>f\"]\n}",
+      "extraction_strategy": "rst_wavedrom_directive",
+      "name": "wavedrom_9",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "doc__modules.rst",
+      "raw_payload": "{ signal: [\n  { name: \"clk\"       , wave: \"P....\"},\n  { name: \"misalign\"  , wave: \"1....\", node: \"c..\", data: [\"write mask\"]},\n  { name: \"trap\"      , wave: \"0.1..\", node: \"..b.\", data: \"r1\"},\n  { name: \"init\"      , wave: \"1.0..\", node: \"....\", data: \"r0\"},\n  { name: \"cnt_en\"    , wave: \"1.01.\", node: \"...d\"},\n  { name: \"cnt_done\"  , wave: \"010..\", node: \".a....\"},\n  { name: \"o_dbus_cyc\", wave: \"0....\", node: \"....\", data: \"0 1 ... 30 31\"},\n  { name: \"i_dbus_ack\", wave: \"0....\", node: \"....\", data: \"0 1 ... 30 31\"},\n  ],\n  edge : [\n  \"a~>b\", \"c~>b\", \"b~>d\"]\n}",
+      "options": {},
+      "wavejson": "{ signal: [\n  { name: \"clk\"       , wave: \"P....\"},\n  { name: \"misalign\"  , wave: \"1....\", node: \"c..\", data: [\"write mask\"]},\n  { name: \"trap\"      , wave: \"0.1..\", node: \"..b.\", data: \"r1\"},\n  { name: \"init\"      , wave: \"1.0..\", node: \"....\", data: \"r0\"},\n  { name: \"cnt_en\"    , wave: \"1.01.\", node: \"...d\"},\n  { name: \"cnt_done\"  , wave: \"010..\", node: \".a....\"},\n  { name: \"o_dbus_cyc\", wave: \"0....\", node: \"....\", data: \"0 1 ... 30 31\"},\n  { name: \"i_dbus_ack\", wave: \"0....\", node: \"....\", data: \"0 1 ... 30 31\"},\n  ],\n  edge : [\n  \"a~>b\", \"c~>b\", \"b~>d\"]\n}",
+      "extraction_strategy": "rst_wavedrom_directive",
+      "name": "wavedrom_10",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "doc__modules.rst",
+      "raw_payload": "{ signal: [\n  { name: \"clk\"         , wave: \"P...|.......\"},\n  { name: \"two_stage_op\", wave: \"1...|.......\", node: \"....\", data: \"r1\"},\n  { name: \"shift_op\"    , wave: \"1...|.......\", node: \"....\", data: \"r1\"},\n  { name: \"sh_right\"    , wave: \"0...|.......\", node: \"....\", data: \"r1\"},\n  { name: \"trap\"        , wave: \"0...|.......\", node: \"....\", data: \"r1\"},\n  { name: \"init\"        , wave: \"1.0.|.......\", node: \"....\", data: \"r0\"},\n  { name: \"cnt_en\"      , wave: \"1.01|.......\", node: \"...b.\"},\n  { name: \"cnt_done\"    , wave: \"010.|.......\", node: \".a.....\"},\n  { name: \"shamt\"       , wave: \"x333|.333333\", node: \"......c.f\", data: \"N N-1 ... 0 31 30 29 28 27\"},\n  { name: \"sh_done_r\"   , wave: \"0...|...1...\", node: \"........d.\", data: \"0 1 ... 30 31\"},\n  { name: \"bufreg_en\"   , wave: \"1.0.|...1...\", node: \"........e\", data: \"0 1 ... 30 31\"},\n  { name: \"bufreg_q\"    , wave: \"x.3.|....456\", node: \"...\", data: \"d0 d1 d2 d3\"},\n  { name: \"rd\"          , wave: \"x..2|...3456\", node: \".....f\", data: \"0 d0 d1 d2 d3\"},\n  ],\n  edge : [\n  \"a~>b\", \"c~>d\", \"c~>d\", \"d~>e\"]\n}",
+      "options": {},
+      "wavejson": "{ signal: [\n  { name: \"clk\"         , wave: \"P...|.......\"},\n  { name: \"two_stage_op\", wave: \"1...|.......\", node: \"....\", data: \"r1\"},\n  { name: \"shift_op\"    , wave: \"1...|.......\", node: \"....\", data: \"r1\"},\n  { name: \"sh_right\"    , wave: \"0...|.......\", node: \"....\", data: \"r1\"},\n  { name: \"trap\"        , wave: \"0...|.......\", node: \"....\", data: \"r1\"},\n  { name: \"init\"        , wave: \"1.0.|.......\", node: \"....\", data: \"r0\"},\n  { name: \"cnt_en\"      , wave: \"1.01|.......\", node: \"...b.\"},\n  { name: \"cnt_done\"    , wave: \"010.|.......\", node: \".a.....\"},\n  { name: \"shamt\"       , wave: \"x333|.333333\", node: \"......c.f\", data: \"N N-1 ... 0 31 30 29 28 27\"},\n  { name: \"sh_done_r\"   , wave: \"0...|...1...\", node: \"........d.\", data: \"0 1 ... 30 31\"},\n  { name: \"bufreg_en\"   , wave: \"1.0.|...1...\", node: \"........e\", data: \"0 1 ... 30 31\"},\n  { name: \"bufreg_q\"    , wave: \"x.3.|....456\", node: \"...\", data: \"d0 d1 d2 d3\"},\n  { name: \"rd\"          , wave: \"x..2|...3456\", node: \".....f\", data: \"0 d0 d1 d2 d3\"},\n  ],\n  edge : [\n  \"a~>b\", \"c~>d\", \"c~>d\", \"d~>e\"]\n}",
+      "extraction_strategy": "rst_wavedrom_directive",
+      "name": "wavedrom_11",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "doc__modules.rst",
+      "raw_payload": "{ signal: [\n  { name: \"clk\"         , wave: \"P...|......|..|..\"},\n  { name: \"two_stage_op\", wave: \"1...|......|..|..\", node: \"....\", data: \"r1\"},\n  { name: \"shift_op\"    , wave: \"1...|......|..|..\", node: \"....\", data: \"r1\"},\n  { name: \"sh_right\"    , wave: \"1...|......|..|..\", node: \"....\", data: \"r1\"},\n  { name: \"trap\"        , wave: \"0...|......|..|..\", node: \"....\", data: \"r1\"},\n  { name: \"init\"        , wave: \"1.0.|......|..|..\", node: \"....\", data: \"r0\"},\n  { name: \"cnt_en\"      , wave: \"1.0.|...1..|..|.0\", node: \"........e\"},\n  { name: \"cnt_done\"    , wave: \"010.|......|..|10\", node: \".a.......\"},\n  { name: \"shamt\"       , wave: \"x333|.3x...|..|..\", node: \"......c.f\", data: \"N N-1 ... 0 31 30 29 ... 27\"},\n  { name: \"sh_done_r\"   , wave: \"0...|...1..|..|..\", node: \"........d.\", data: \"0 1 ... 30 31\"},\n  { name: \"bufreg_en\"   , wave: \"1.01|......|..|..\", node: \"...b.....\", data: \"0 1 ... 30 31\"},\n  { name: \"bufreg_q\"    , wave: \"x.34|567893|45|..\", node: \"...\", data: \"d0 ... dN-3 dN-2 dN-1 dN dN+1 ... d31 sign\"},\n  { name: \"rd\"          , wave: \"x...|...893|45|.x\", node: \".....f\", data: \"dN dN+1 ... d31 sign\"},\n  ],\n  edge : [\n  \"a~>b\", \"c~>d\", \"c~>d\", \"d~>e\"]\n}",
+      "options": {},
+      "wavejson": "{ signal: [\n  { name: \"clk\"         , wave: \"P...|......|..|..\"},\n  { name: \"two_stage_op\", wave: \"1...|......|..|..\", node: \"....\", data: \"r1\"},\n  { name: \"shift_op\"    , wave: \"1...|......|..|..\", node: \"....\", data: \"r1\"},\n  { name: \"sh_right\"    , wave: \"1...|......|..|..\", node: \"....\", data: \"r1\"},\n  { name: \"trap\"        , wave: \"0...|......|..|..\", node: \"....\", data: \"r1\"},\n  { name: \"init\"        , wave: \"1.0.|......|..|..\", node: \"....\", data: \"r0\"},\n  { name: \"cnt_en\"      , wave: \"1.0.|...1..|..|.0\", node: \"........e\"},\n  { name: \"cnt_done\"    , wave: \"010.|......|..|10\", node: \".a.......\"},\n  { name: \"shamt\"       , wave: \"x333|.3x...|..|..\", node: \"......c.f\", data: \"N N-1 ... 0 31 30 29 ... 27\"},\n  { name: \"sh_done_r\"   , wave: \"0...|...1..|..|..\", node: \"........d.\", data: \"0 1 ... 30 31\"},\n  { name: \"bufreg_en\"   , wave: \"1.01|......|..|..\", node: \"...b.....\", data: \"0 1 ... 30 31\"},\n  { name: \"bufreg_q\"    , wave: \"x.34|567893|45|..\", node: \"...\", data: \"d0 ... dN-3 dN-2 dN-1 dN dN+1 ... d31 sign\"},\n  { name: \"rd\"          , wave: \"x...|...893|45|.x\", node: \".....f\", data: \"dN dN+1 ... d31 sign\"},\n  ],\n  edge : [\n  \"a~>b\", \"c~>d\", \"c~>d\", \"d~>e\"]\n}",
+      "extraction_strategy": "rst_wavedrom_directive",
+      "name": "wavedrom_12",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/doc__interface.rst": [
+      {
+        "literal": "{ signal: [\n  { name: \"clk\"        , wave: \"P...|...|...|...\"},\n  { name: \"init\"       , wave: \"1...|..0|...|...\", node:",
+        "label": "rst .. wavedrom:: directive"
+      }
+    ],
+    "input/docs/doc__modules.rst": [
+      {
+        "literal": "{ signal: [\n  { name: \"clk\"       , wave: \"0P|......\"},\n  { name: \"o_ibus_cyc\", wave: \"01|.0.....\", node: \".a...\"},\n  {",
+        "label": "rst .. wavedrom:: directive"
+      },
+      {
+        "literal": "{ signal: [\n  { name: \"clk\"    , wave: \"0P.|.....\"},\n  { name: \"rreq\"   , wave: \"010|.....\", node: \".a...\"},\n  { name: \"",
+        "label": "rst .. wavedrom:: directive"
+      },
+      {
+        "literal": "{ signal: [\n  { name: \"clk\"    , wave: \"0P.....\"},\n  { name: \"wreq\"   , wave: \"010....\", node: \".a...\"},\n  { name: \"read",
+        "label": "rst .. wavedrom:: directive"
+      },
+      {
+        "literal": "{ signal: [\n  { name: \"clk\"     , wave: \"0P..|...\"},\n  { name: \"cnt_en\"  , wave: \"01..|..0\", node: \"....\"},\n  { name: \"i",
+        "label": "rst .. wavedrom:: directive"
+      },
+      {
+        "literal": "{ signal: [\n  { name: \"clk\"     , wave: \"0P..|...\"},\n  { name: \"cnt_en\"  , wave: \"01..|..0\", node: \"....\"},\n  { name: \"i",
+        "label": "rst .. wavedrom:: directive"
+      },
+      {
+        "literal": "{ signal: [\n  { name: \"clk\"     , wave: \"0P..|...\"},\n  { name: \"cnt_en\"  , wave: \"01..|..0\", node: \"....\"},\n  { name: \"i",
+        "label": "rst .. wavedrom:: directive"
+      },
+      {
+        "literal": "{ signal: [\n  { name: \"clk\"       , wave: \"P..|...\"},\n  { name: \"trap\"      , wave: \"0..|...\", node: \"....\", data: \"r1\"}",
+        "label": "rst .. wavedrom:: directive"
+      },
+      {
+        "literal": "{ signal: [\n  { name: \"clk\"       , wave: \"P..|...\"},\n  { name: \"trap\"      , wave: \"0..|...\", node: \"....\", data: \"r1\"}",
+        "label": "rst .. wavedrom:: directive"
+      },
+      {
+        "literal": "{ signal: [\n  { name: \"clk\"       , wave: \"P....\"},\n  { name: \"misalign\"  , wave: \"1....\", node: \"c..\", data: [\"write ma",
+        "label": "rst .. wavedrom:: directive"
+      },
+      {
+        "literal": "{ signal: [\n  { name: \"clk\"         , wave: \"P...|.......\"},\n  { name: \"two_stage_op\", wave: \"1...|.......\", node: \"....",
+        "label": "rst .. wavedrom:: directive"
+      },
+      {
+        "literal": "{ signal: [\n  { name: \"clk\"         , wave: \"P...|......|..|..\"},\n  { name: \"two_stage_op\", wave: \"1...|......|..|..\", n",
+        "label": "rst .. wavedrom:: directive"
+      }
+    ]
+  },
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 32.0,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 32.0,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 213,
+        "matched_substring": "32 MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 32000000,
+      "period_ns": 31.25,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    },
+    {
+      "name": "clk",
+      "freq_mhz": 24.0,
+      "freq_hz": 24000000,
+      "low_mhz": 12.0,
+      "high_mhz": 24.0,
+      "role": "extracted_from_doc_freq_mention",
+      "source": "input/docs/README.md",
+      "reset_strategy": "unspecified",
+      "extraction_strategy": "doc_freq_mention_keyword_window",
+      "freq_evidence_count_v1_6_368": 2,
+      "best_rank_v1_6_370": 0,
+      "primary_evidence_v1_6_370": "input/docs/README.md",
+      "derived_from": "clk",
+      "period_ns": 41.666667,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    }
+  ],
+  "clocks": [
+    {
+      "name": "clk",
+      "type": "input",
+      "freq_mhz": null,
+      "extraction_strategy": "seeded_from_l1_clock_port_v1_6_571"
+    },
+    {
+      "name": "i_clk",
+      "type": "input",
+      "freq_mhz": null,
+      "extraction_strategy": "seeded_from_l1_clock_port_v1_6_571"
+    }
+  ],
+  "class_path": "processor_cpu",
+  "clock_mhz": 32.0
+}

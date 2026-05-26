@@ -1,0 +1,3045 @@
+{
+  "schema_version": 2,
+  "doc_class": "datasheet",
+  "ic_name": "Phase-1 Fact-Graph Provenance Audit",
+  "no_ic_name_in_input": false,
+  "package_info": null,
+  "no_package_in_input": true,
+  "pin_table": [
+    {
+      "name": "clk",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "clk",
+      "board_name": "clk",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Clock",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Clock"
+    },
+    {
+      "name": "i_rst",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_rst",
+      "board_name": "i_rst",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Synchronous reset",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Synchronous reset"
+    },
+    {
+      "name": "i_timer_irq",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_timer_irq",
+      "board_name": "i_timer_irq",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Timer interrupt",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Timer interrupt"
+    },
+    {
+      "name": "o_ibus_adr",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_ibus_adr",
+      "board_name": "o_ibus_adr",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Instruction bus address",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Instruction bus address"
+    },
+    {
+      "name": "o_ibus_cyc",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_ibus_cyc",
+      "board_name": "o_ibus_cyc",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Instruction bus active cycle",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Instruction bus active cycle"
+    },
+    {
+      "name": "i_ibus_rdt",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_ibus_rdt",
+      "board_name": "i_ibus_rdt",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Instruction bus read data",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Instruction bus read data"
+    },
+    {
+      "name": "i_ibus_ack",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_ibus_ack",
+      "board_name": "i_ibus_ack",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Instruction bus cycle acknowledged",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Instruction bus cycle acknowledged"
+    },
+    {
+      "name": "o_dbus_adr",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_dbus_adr",
+      "board_name": "o_dbus_adr",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data bus address",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data bus address"
+    },
+    {
+      "name": "o_dbus_dat",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_dbus_dat",
+      "board_name": "o_dbus_dat",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data bus write data",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data bus write data"
+    },
+    {
+      "name": "o_dbus_sel",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_dbus_sel",
+      "board_name": "o_dbus_sel",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data bus write data byte select mask",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0,
+      "description": "Data bus write data byte select mask"
+    },
+    {
+      "name": "o_dbus_we",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_dbus_we",
+      "board_name": "o_dbus_we",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data bus write transaction",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Data bus write transaction"
+    },
+    {
+      "name": "o_dbus_cyc",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_dbus_cyc",
+      "board_name": "o_dbus_cyc",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data bus active cycle",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Data bus active cycle"
+    },
+    {
+      "name": "i_dbus_rdt",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_dbus_rdt",
+      "board_name": "i_dbus_rdt",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data bus return data",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data bus return data"
+    },
+    {
+      "name": "i_dbus_ack",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_dbus_ack",
+      "board_name": "i_dbus_ack",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data bus return data valid",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Data bus return data valid"
+    },
+    {
+      "name": "o_ext_rs1",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_ext_rs1",
+      "board_name": "o_ext_rs1",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Extension interface RS1 contents",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Extension interface RS1 contents"
+    },
+    {
+      "name": "o_ext_rs2",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_ext_rs2",
+      "board_name": "o_ext_rs2",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Extension interface RS2 contents",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Extension interface RS2 contents"
+    },
+    {
+      "name": "o_ext_funct3",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_ext_funct3",
+      "board_name": "o_ext_funct3",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Extension interface funct3 contents",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 3,
+      "msb": 2,
+      "lsb": 0,
+      "description": "Extension interface funct3 contents"
+    },
+    {
+      "name": "i_ext_rd",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_ext_rd",
+      "board_name": "i_ext_rd",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Extension interface RD contents",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Extension interface RD contents"
+    },
+    {
+      "name": "i_ext_ready",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_ext_ready",
+      "board_name": "i_ext_ready",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Extension interface RD contents valid",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Extension interface RD contents valid"
+    },
+    {
+      "name": "o_mdu_valid",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_mdu_valid",
+      "board_name": "o_mdu_valid",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "MDU request",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "MDU request"
+    },
+    {
+      "name": "o_rf_rreq",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_rf_rreq",
+      "board_name": "o_rf_rreq",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "RF interface read request",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "RF interface read request"
+    },
+    {
+      "name": "o_rf_wreq",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_rf_wreq",
+      "board_name": "o_rf_wreq",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "RF interface write request",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "RF interface write request"
+    },
+    {
+      "name": "i_rf_ready",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_rf_ready",
+      "board_name": "i_rf_ready",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "RF interface request acknowledged",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "RF interface request acknowledged"
+    },
+    {
+      "name": "o_wreg0",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wreg0",
+      "board_name": "o_wreg0",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "RF interface channel 0 write address",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals+width_parametric_v1_6_420",
+      "description": "RF interface channel 0 write address"
+    },
+    {
+      "name": "o_wreg1",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wreg1",
+      "board_name": "o_wreg1",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "RF interface channel 1 write address",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals+width_parametric_v1_6_420",
+      "description": "RF interface channel 1 write address"
+    },
+    {
+      "name": "o_wen0",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wen0",
+      "board_name": "o_wen0",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "RF interface channel 0 write enable",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "RF interface channel 0 write enable"
+    },
+    {
+      "name": "o_wen1",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wen1",
+      "board_name": "o_wen1",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "RF interface channel 1 write enable",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "RF interface channel 1 write enable"
+    },
+    {
+      "name": "o_wdata0",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wdata0",
+      "board_name": "o_wdata0",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "RF interface channel 0 write data",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "RF interface channel 0 write data"
+    },
+    {
+      "name": "o_wdata1",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wdata1",
+      "board_name": "o_wdata1",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "RF interface channel 1 write data",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "RF interface channel 1 write data"
+    },
+    {
+      "name": "o_rreg0",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_rreg0",
+      "board_name": "o_rreg0",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "RF interface channel 0 read address",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals+width_parametric_v1_6_420",
+      "description": "RF interface channel 0 read address"
+    },
+    {
+      "name": "o_rreg1",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_rreg1",
+      "board_name": "o_rreg1",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "RF interface channel 1 read address",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals+width_parametric_v1_6_420",
+      "description": "RF interface channel 1 read address"
+    },
+    {
+      "name": "i_rdata0",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_rdata0",
+      "board_name": "i_rdata0",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "RF interface channel 0 read data",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "RF interface channel 0 read data"
+    },
+    {
+      "name": "i_rdata1",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_rdata1",
+      "board_name": "i_rdata1",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "RF interface channel 1 read data",
+      "evidence": "input/docs/doc__interface.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "RF interface channel 1 read data"
+    },
+    {
+      "name": "i_clk",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_clk",
+      "board_name": "i_clk",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Clock",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Clock"
+    },
+    {
+      "name": "o_wb_mem_adr",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wb_mem_adr",
+      "board_name": "o_wb_mem_adr",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Memory bus address",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Memory bus address"
+    },
+    {
+      "name": "o_wb_mem_dat",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wb_mem_dat",
+      "board_name": "o_wb_mem_dat",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Memory bus data",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Memory bus data"
+    },
+    {
+      "name": "o_wb_mem_sel",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wb_mem_sel",
+      "board_name": "o_wb_mem_sel",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Memory bus write data byte select mask",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0,
+      "description": "Memory bus write data byte select mask"
+    },
+    {
+      "name": "o_wb_mem_we",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wb_mem_we",
+      "board_name": "o_wb_mem_we",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Memory bus write transaction",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Memory bus write transaction"
+    },
+    {
+      "name": "o_wb_mem_stb",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wb_mem_stb",
+      "board_name": "o_wb_mem_stb",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Memory bus active strobe",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Memory bus active strobe"
+    },
+    {
+      "name": "i_wb_mem_rdt",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_wb_mem_rdt",
+      "board_name": "i_wb_mem_rdt",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Memory bus read data",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Memory bus read data"
+    },
+    {
+      "name": "i_wb_mem_ack",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_wb_mem_ack",
+      "board_name": "i_wb_mem_ack",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Memory bus cycle acknowledged",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Memory bus cycle acknowledged"
+    },
+    {
+      "name": "o_wb_ext_adr",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wb_ext_adr",
+      "board_name": "o_wb_ext_adr",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data bus address",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data bus address"
+    },
+    {
+      "name": "o_wb_ext_dat",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wb_ext_dat",
+      "board_name": "o_wb_ext_dat",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data bus write data",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data bus write data"
+    },
+    {
+      "name": "o_wb_ext_sel",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wb_ext_sel",
+      "board_name": "o_wb_ext_sel",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data bus write data byte select mask",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0,
+      "description": "Data bus write data byte select mask"
+    },
+    {
+      "name": "o_wb_ext_we",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wb_ext_we",
+      "board_name": "o_wb_ext_we",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data bus write transaction",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Data bus write transaction"
+    },
+    {
+      "name": "o_wb_ext_stb",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_wb_ext_stb",
+      "board_name": "o_wb_ext_stb",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data bus active cycle",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Data bus active cycle"
+    },
+    {
+      "name": "i_wb_ext_rdt",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_wb_ext_rdt",
+      "board_name": "i_wb_ext_rdt",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data bus return data",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data bus return data"
+    },
+    {
+      "name": "i_wb_ext_ack",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_wb_ext_ack",
+      "board_name": "i_wb_ext_ack",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data bus return data valid",
+      "evidence": "input/docs/doc__servile.rst",
+      "extraction_strategy": "rst_list_table_signals",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Data bus return data valid"
+    }
+  ],
+  "no_pin_table_in_input": false,
+  "electrical_specs": [],
+  "no_electrical_specs_in_input": true,
+  "ordering_info": {
+    "part_number": "Phase-1 Fact-Graph Provenance Audit",
+    "vendor": "olofk",
+    "vendor_extraction_strategy": "vendor_github_repo_url_v1_6_536",
+    "no_vendor_in_input": false
+  },
+  "tapeout_metadata": null,
+  "no_tapeout_metadata_in_input": true,
+  "description": "The SERV RISC-V CPU is an award-winning and highly compact processor core based on the RISC-V instruction set architecture (ISA). It is designed to be the smallest possible RISC-V compliant CPU and is particularly well-suited for embedded systems and applications where silicon area is critical.",
+  "description_evidence": {
+    "source": "input/docs/doc__overview.rst",
+    "line": 1,
+    "extraction_strategy": "doc_intro_paragraph_rst_two_line",
+    "anchor": "intro_heading_rst_setext",
+    "filename_score": 9,
+    "filename_demoted": false,
+    "attribution_url_rejected": false,
+    "list_introducer_handling": "none"
+  },
+  "features": [
+    "ISA: RISC-V RV32IZifencei",
+    "Optional ISA extensions: C, M, Zicsr",
+    "Optional features: Timer interrupts, Extension interface",
+    "Architecture: Bit-serial (one bit processed per clock cycle)",
+    "License: ISC (available under other commercial licenses upon request)",
+    "OS support: Zephyr 3.7",
+    "SW support: Compatible with standard RISC-V toolchains",
+    "Area: Smallest RISC-V core available"
+  ],
+  "features_evidence": {
+    "source": "input/docs/doc__overview.rst",
+    "line": 6,
+    "extraction_strategy": "doc_features_bullet_list",
+    "anchor": "features_heading_rst_setext",
+    "filename_demoted": false
+  },
+  "isa_base": [
+    "RV32I"
+  ],
+  "isa_base_evidence": [
+    {
+      "file": "input/docs/README.md",
+      "line": 149,
+      "matched_substring": "RV32I"
+    }
+  ],
+  "isa_extensions": [
+    "Zicsr"
+  ],
+  "isa_extensions_evidence": [
+    {
+      "file": "input/docs/README.md",
+      "line": 149,
+      "matched_substring": "Zicsr"
+    }
+  ],
+  "references": [
+    {
+      "name": "introduction to SERV",
+      "url": "https://www.award-winning.me/serv-introduction/",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 22,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "SERV : RISC-V for a fistful of gates",
+      "url": "https://www.award-winning.me/serv-for-a-fistful-of-gates/",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 23,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "SERV: 32-bit is the New 8-bit",
+      "url": "https://www.award-winning.me/serv-32-bit-is-the-new-8-bit/",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 24,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "Bit by bit - How to fit 8 RISC V cores in a $38 FPGA board (presentation from the Zürich 2019 RISC-V workshop)",
+      "url": "https://www.youtube.com/watch?v=xjIxORBRaeQ",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 25,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "SERV user manual",
+      "url": "https://serv.readthedocs.io/en/latest/#",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 29,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "Servant",
+      "url": "https://serv.readthedocs.io/en/latest/servant.html",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 37,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "CoreScore",
+      "url": "https://corescore.store/",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 39,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "Subservient",
+      "url": "https://github.com/olofk/subservient/",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 43,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "Litex",
+      "url": "https://github.com/enjoy-digital/litex",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 45,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "Verilator",
+      "url": "https://www.veripool.org/wiki/verilator",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 79,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "toolchain",
+      "url": "https://github.com/riscv-collab/riscv-gnu-toolchain",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 144,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "Zephyr RTOS",
+      "url": "https://www.zephyrproject.org",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 172,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "Zephyr getting started guide",
+      "url": "https://docs.zephyrproject.org/latest/getting_started/index.html",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 174,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    }
+  ],
+  "implementation_results": [
+    {
+      "platform": "SERV",
+      "metrics": {
+        "luts": 239
+      },
+      "evidence_line": 17,
+      "source_form": "inline_kv"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/PROVENANCE.md": [],
+    "input/docs/README.md": [
+      {
+        "literal": "32 MHz",
+        "label": "frequency"
+      },
+      {
+        "literal": "24MHz",
+        "label": "frequency"
+      }
+    ],
+    "input/docs/doc__datasheet.rst": [],
+    "input/docs/doc__index.rst": [],
+    "input/docs/doc__interface.rst": [
+      {
+        "literal": "clk in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_rst in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_timer_irq in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_ibus_adr out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_ibus_cyc out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_ibus_rdt in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_ibus_ack in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_dbus_adr out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_dbus_dat out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_dbus_sel out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_dbus_we out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_dbus_cyc out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_dbus_rdt in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_dbus_ack in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_ext_rs1 out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_ext_rs2 out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_ext_funct3 out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_ext_rd in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_ext_ready in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_mdu_valid out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_rf_rreq out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_rf_wreq out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_rf_ready in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wreg0 out",
+        "label": "pin (RST list-table Signals)"
+      }
+    ],
+    "input/docs/doc__internals.rst": [],
+    "input/docs/doc__modules.rst": [],
+    "input/docs/doc__overview.rst": [],
+    "input/docs/doc__reservoir.rst": [],
+    "input/docs/doc__servant.rst": [
+      {
+        "literal": "12 MHz",
+        "label": "frequency"
+      },
+      {
+        "literal": "1Hz",
+        "label": "frequency"
+      }
+    ],
+    "input/docs/doc__servile.rst": [
+      {
+        "literal": "i_clk in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_rst in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_timer_irq in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_mem_adr out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_mem_dat out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_mem_sel out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_mem_we out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_mem_stb out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_wb_mem_rdt in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_wb_mem_ack in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_ext_adr out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_ext_dat out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_ext_sel out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_ext_we out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_ext_stb out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_wb_ext_rdt in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_wb_ext_ack in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_rf_waddr out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_rf_wdata out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_rf_wen out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_rf_raddr out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_rf_rdata out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_rf_ren out",
+        "label": "pin (RST list-table Signals)"
+      }
+    ],
+    "input/docs/doc__serving.rst": [
+      {
+        "literal": "i_clk in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_rst in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_timer_irq in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_adr out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_dat out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_sel out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_we out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "o_wb_cyc out",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_wb_rdt in",
+        "label": "pin (RST list-table Signals)"
+      },
+      {
+        "literal": "i_wb_ack in",
+        "label": "pin (RST list-table Signals)"
+      }
+    ],
+    "input/docs/doc__subservient.rst": [],
+    "L1_description.doc_intro": [
+      {
+        "literal": "The SERV RISC-V CPU is an award-winning and highly compact processor core based ",
+        "label": "L1.description (doc intro paragraph)",
+        "source": "input/docs/doc__overview.rst",
+        "line": 1,
+        "extraction_strategy": "doc_intro_paragraph_rst_two_line",
+        "anchor": "intro_heading_rst_setext",
+        "filename_score": 9,
+        "filename_demoted": false,
+        "attribution_url_rejected": false,
+        "list_introducer_handling": "none"
+      }
+    ],
+    "L1_features.doc_bullets": [
+      {
+        "literal": "ISA: RISC-V RV32IZifencei",
+        "label": "L1.features (doc Features bullet list)",
+        "count": 8,
+        "source": "input/docs/doc__overview.rst",
+        "line": 6,
+        "extraction_strategy": "doc_features_bullet_list",
+        "anchor": "features_heading_rst_setext",
+        "filename_demoted": false
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "no_class_path_in_input": false,
+  "class_path_evidence": {
+    "source": "input/docs/README.md",
+    "line": 9,
+    "extraction_strategy": "readme_class_token_match",
+    "matched_token": "RISC-V",
+    "score": 33.0,
+    "all_scores": {
+      "processor_cpu": 33.0
+    }
+  },
+  "comparison_tables": [
+    {
+      "headers": [
+        "uuid",
+        "path",
+        "source",
+        "origin",
+        "auto_decided",
+        "reasoning"
+      ],
+      "rows": [
+        {
+          "uuid": "`f-541f467a`",
+          "path": "`L1.description`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-1f075340`",
+          "path": "`L1.document_id`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-c7a06112`",
+          "path": "`L1.electrical_characteristics.notes`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-89c7ba23`",
+          "path": "`L1.endianness`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-efa25880`",
+          "path": "`L1.isa_base`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-04205b7c`",
+          "path": "`L1.isa_extensions`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-748ca97d`",
+          "path": "`L1.package`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-f9997129`",
+          "path": "`L1.part_number`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-04a1edc3`",
+          "path": "`L1.pin_count`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-bec8edce`",
+          "path": "`L1.pinout.clk`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-341de11e`",
+          "path": "`L1.pinout.i_dbus_ack`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-5ab142b3`",
+          "path": "`L1.pinout.i_dbus_rdt`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-b935e613`",
+          "path": "`L1.pinout.i_ext_rd`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-6f61cceb`",
+          "path": "`L1.pinout.i_ext_ready`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-f2f0d24b`",
+          "path": "`L1.pinout.i_ibus_ack`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-395d7842`",
+          "path": "`L1.pinout.i_ibus_rdt`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-3e1dff51`",
+          "path": "`L1.pinout.i_rst`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-53024e86`",
+          "path": "`L1.pinout.i_timer_irq`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-32f954ff`",
+          "path": "`L1.pinout.o_dbus_adr`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-92e5f58f`",
+          "path": "`L1.pinout.o_dbus_cyc`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-6e4fdb45`",
+          "path": "`L1.pinout.o_dbus_dat`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-ab4e96d9`",
+          "path": "`L1.pinout.o_dbus_sel`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-8b31b882`",
+          "path": "`L1.pinout.o_dbus_we`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-20bce73e`",
+          "path": "`L1.pinout.o_ext_funct3`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-b863fd94`",
+          "path": "`L1.pinout.o_ext_rs1`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-a633ba49`",
+          "path": "`L1.pinout.o_ext_rs2`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-fcdf4ea1`",
+          "path": "`L1.pinout.o_ibus_adr`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-096bff9a`",
+          "path": "`L1.pinout.o_ibus_cyc`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-a120ae48`",
+          "path": "`L1.pinout.o_mdu_valid`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-23fa7b1b`",
+          "path": "`L1.privilege_modes`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-16f53141`",
+          "path": "`L1.product_family.family`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-457636ba`",
+          "path": "`L1.product_family.notes`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-6c3bdead`",
+          "path": "`L1.regfile_size`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-33462bf9`",
+          "path": "`L1.regfile_width_bits`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-84abb46c`",
+          "path": "`L1.source_documents`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-55eb9b81`",
+          "path": "`L1.supported_interfaces`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-c1be0b50`",
+          "path": "`L1.synthesis_results`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-98b4162a`",
+          "path": "`L2.document_id`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-6c56e918`",
+          "path": "`L2.functional_description`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-4c62b8a9`",
+          "path": "`L2.requirements`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-8257321b`",
+          "path": "`L5.branch_predictor`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-db9dcfa0`",
+          "path": "`L5.bus_interface`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-1251a91b`",
+          "path": "`L5.cache_sizes.dcache_bytes`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-410667c2`",
+          "path": "`L5.cache_sizes.icache_bytes`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-0708630a`",
+          "path": "`L5.cache_sizes.notes`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-40060083`",
+          "path": "`L5.document_id`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-e5d7fe58`",
+          "path": "`L5.ibus_separate_from_dbus`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-cf0b4690`",
+          "path": "`L5.pads`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-320f6ab1`",
+          "path": "`L5.physical_regfile_size`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-22c4201a`",
+          "path": "`L5.timing_notes`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-d4a0832c`",
+          "path": "`L6.document_id`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-4b522fbc`",
+          "path": "`L6.submodule_control_logic.serv_alu`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-5f6e18a8`",
+          "path": "`L6.submodule_control_logic.serv_bufreg`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-bd6ba96e`",
+          "path": "`L6.submodule_control_logic.serv_bufreg2`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-a9c4d41a`",
+          "path": "`L6.submodule_control_logic.serv_csr`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-25ef1942`",
+          "path": "`L6.submodule_control_logic.serv_ctrl`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-ca116e74`",
+          "path": "`L6.submodule_control_logic.serv_decode`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-6f17b9a7`",
+          "path": "`L6.submodule_control_logic.serv_immdec`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-2b7b2250`",
+          "path": "`L6.submodule_control_logic.serv_mem_if`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-3f3e3bf9`",
+          "path": "`L6.submodule_control_logic.serv_rf_top`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-864aab27`",
+          "path": "`L6.submodule_control_logic.serv_top`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-17240e4b`",
+          "path": "`L6.top_level_fsm.exec_stage`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-6b2c8d3f`",
+          "path": "`L6.top_level_fsm.init_stage`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-a5b60d77`",
+          "path": "`L7.debug_hooks`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-9c6f6756`",
+          "path": "`L7.document_id`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-18e0e061`",
+          "path": "`L7.test_modes`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-a0efc83f`",
+          "path": "`L8.document_id`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-911ec5ec`",
+          "path": "`L8.reset_timing.por_to_first_wake_ready_us`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-3abb1c30`",
+          "path": "`L8.reset_vector`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-e0689205`",
+          "path": "`L8R.clock_frequency_hz`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-63d6aee8`",
+          "path": "`L8R.debug_spec_version`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-a6eac8e2`",
+          "path": "`L8R.document_id`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-732c68aa`",
+          "path": "`L8R.fast_irq_count`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-820868b3`",
+          "path": "`L8R.interrupt_model`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-3481c0e9`",
+          "path": "`L8R.pmp.notes`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-60e48aee`",
+          "path": "`L8R.pmp.present`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-fcfdfe63`",
+          "path": "`L9.clock_reset.clock`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-ef303d80`",
+          "path": "`L9.clock_reset.reset`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-fcad5732`",
+          "path": "`L9.clock_reset.reset_polarity`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-fe88f3a6`",
+          "path": "`L9.clock_reset.reset_type`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-4d246ba5`",
+          "path": "`L9.commit_width`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-a5f01004`",
+          "path": "`L9.dispatch_order`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-c349dbb5`",
+          "path": "`L9.document_id`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-2ebdfc3e`",
+          "path": "`L9.issue_width`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-3fe50f4e`",
+          "path": "`L9.parameters.MDU`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-9479d30d`",
+          "path": "`L9.parameters.PRE_REGISTER`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-ddc0544f`",
+          "path": "`L9.parameters.RESET_PC`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-c8e9f6f2`",
+          "path": "`L9.parameters.RESET_STRATEGY`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-0b25e845`",
+          "path": "`L9.parameters.RF_WIDTH`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-2f3e8225`",
+          "path": "`L9.parameters.WITH_CSR`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-76b00536`",
+          "path": "`L9.pipeline_depth`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-b6d19a43`",
+          "path": "`L9.pipeline_style`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-a9c22de7`",
+          "path": "`L9.submodules`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-cff19c4b`",
+          "path": "`L9.top_level_ports`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-604ceefe`",
+          "path": "`L9.writeback_order`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        }
+      ],
+      "context_heading": "Phase-1 Fact-Graph Provenance Audit",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/PROVENANCE.md",
+        "header_line": 7,
+        "alignment_line": 8,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Lattice iCE40",
+        "Intel Cyclone 10LP",
+        "AMD Artix-7",
+        "CMOS"
+      ],
+      "rows": [
+        {
+          "Lattice iCE40": "198 LUT",
+          "Intel Cyclone 10LP": "239 LUT",
+          "AMD Artix-7": "125 LUT",
+          "CMOS": "2.1kGE"
+        },
+        {
+          "Lattice iCE40": "164 FF",
+          "Intel Cyclone 10LP": "164 FF",
+          "AMD Artix-7": "164 FF",
+          "CMOS": ""
+        }
+      ],
+      "context_heading": "SERV",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 15,
+        "alignment_line": 16,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    }
+  ],
+  "auto_discovered_identifiers": [
+    {
+      "name": "L8R",
+      "source_doc": "PROVENANCE.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MDU",
+      "source_doc": "PROVENANCE.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PRE_REGISTER",
+      "source_doc": "PROVENANCE.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RESET_PC",
+      "source_doc": "PROVENANCE.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RESET_STRATEGY",
+      "source_doc": "PROVENANCE.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RF_WIDTH",
+      "source_doc": "PROVENANCE.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITH_CSR",
+      "source_doc": "PROVENANCE.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SERV",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPGA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AMD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LUT",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTOS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ASIC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRAM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WORKSPACE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MDU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "INFO",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32I",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISCOF",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BSP",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SDK",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RAM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UART",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SERV",
+      "source_doc": "doc__index.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "doc__index.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU",
+      "source_doc": "doc__index.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SERV",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRAM",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITH_CSR",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISCV_FORMAL",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MDU",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PRE_REGISTER",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RESET_PC",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RESET_STRATEGY",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MINI",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NONE",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "POR",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RF_WIDTH",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IRQ",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RS1",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RS2",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "doc__interface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SERV",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IRQ",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MSB",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALU",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LSB",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LUI",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AUIPC",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITH_CSR",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRAM",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPGA",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MTVEC",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MEPC",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MTVAL",
+      "source_doc": "doc__modules.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SERV",
+      "source_doc": "doc__overview.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "doc__overview.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU",
+      "source_doc": "doc__overview.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "doc__overview.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISC",
+      "source_doc": "doc__overview.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AMD",
+      "source_doc": "doc__overview.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SERV",
+      "source_doc": "doc__reservoir.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU",
+      "source_doc": "doc__reservoir.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPGA",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SERV",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTOS",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPIO",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UART",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PATH",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LED",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AC701",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FT2232H",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LX9",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "D12",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RS232",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LED0",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "D10",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "R12",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "E18",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "W14",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CMOD",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "J18",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CYC1000",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DE0",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "D11",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JP1",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DE10",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "Y15",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JP7",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DE1",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PIN_AC18",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPIO0",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DECA",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "W18",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EBAZ4205",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "B20",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ECP5",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EVN",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BRAM",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "USB",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RAM",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PCF",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ICE",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GMM7550",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CDC",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MAX10",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SW1",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LED1",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JA1",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TTL",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "L15",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "J14",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FTDI",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LED2",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LX45",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A10",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "V16",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "F14",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HSTC",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TE0802",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PMOD",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ULX3S",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FIXME",
+      "source_doc": "doc__servant.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRAM",
+      "source_doc": "doc__servile.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPR",
+      "source_doc": "doc__servile.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "doc__servile.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MDU",
+      "source_doc": "doc__servile.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MINI",
+      "source_doc": "doc__servile.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NONE",
+      "source_doc": "doc__servile.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "POR",
+      "source_doc": "doc__servile.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RESET_PC",
+      "source_doc": "doc__servile.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SERV",
+      "source_doc": "doc__servile.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IRQ",
+      "source_doc": "doc__servile.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPGA",
+      "source_doc": "doc__serving.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RAM",
+      "source_doc": "doc__serving.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "doc__serving.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RESET_STRATEGY",
+      "source_doc": "doc__serving.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MINI",
+      "source_doc": "doc__serving.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NONE",
+      "source_doc": "doc__serving.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "POR",
+      "source_doc": "doc__serving.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RESET_PC",
+      "source_doc": "doc__serving.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITH_CSR",
+      "source_doc": "doc__serving.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IRQ",
+      "source_doc": "doc__serving.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SERV",
+      "source_doc": "doc__serving.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "doc__serving.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SERV",
+      "source_doc": "doc__subservient.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ASIC",
+      "source_doc": "doc__subservient.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRAM",
+      "source_doc": "doc__subservient.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    }
+  ],
+  "vendor_short_literals": [
+    {
+      "literal": "100%",
+      "kind": "percent",
+      "source": "PROVENANCE.md"
+    }
+  ]
+}

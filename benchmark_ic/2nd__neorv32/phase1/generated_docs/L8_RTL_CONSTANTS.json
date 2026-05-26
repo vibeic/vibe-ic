@@ -1,0 +1,3452 @@
+{
+  "schema_version": 2,
+  "doc_class": "rtl_constants",
+  "ic_name": "SSE",
+  "rx_classifier_ticks": null,
+  "no_rx_classifier_ticks_in_input": true,
+  "timing_constants": [],
+  "no_timing_constants_in_input": true,
+  "timing_parameters": [],
+  "clock_mhz": null,
+  "no_clock_mhz_in_input": true,
+  "clock_domains": [
+    {
+      "name": "clk_i",
+      "source_pin": "clk_i",
+      "domain_kind": "primary",
+      "role": "master",
+      "source": "synthesised-from-L9.top_ports",
+      "evidence": "L9.top_ports",
+      "reset_strategy": "unspecified",
+      "freq_hz": null,
+      "freq_mhz": null,
+      "period_ns": null
+    },
+    {
+      "name": "spi_clk_o",
+      "source_pin": "spi_clk_o",
+      "domain_kind": "secondary",
+      "role": "derived",
+      "source": "synthesised-from-L9.top_ports",
+      "evidence": "L9.top_ports",
+      "reset_strategy": "unspecified",
+      "freq_hz": null,
+      "freq_mhz": null,
+      "period_ns": null
+    },
+    {
+      "name": "jtag_tck_i",
+      "domain_kind": "secondary",
+      "derived_from": "clk_i",
+      "extraction_strategy": "peripheral_clock_pin",
+      "evidence": "input/docs/datasheet__on_chip_debugger.txt"
+    }
+  ],
+  "no_clock_domains_in_input": false,
+  "synthesis_targets": [
+    {
+      "name": "fmax_prose_130mhz",
+      "fmax_mhz": 130.0,
+      "target_fpga": null,
+      "role": "chip_internal_proposed",
+      "extraction_strategy": "fmax_prose_v1_6_538",
+      "v1_6_538_extracted": true,
+      "evidence": {
+        "source": "input/docs/datasheet__overview.adoc"
+      }
+    },
+    {
+      "name": "l2_mirror_processor_clock_f_main_100mhz",
+      "fmax_mhz": 100.0,
+      "role": "chip_internal_proposed",
+      "extraction_strategy": "l2_to_l8_fmax_mirror_v1_6_554",
+      "evidence": "input/docs/datasheet__soc_neoled.adoc"
+    },
+    {
+      "name": "l2_mirror_f_main_100mhz",
+      "fmax_mhz": 100.0,
+      "role": "chip_internal_proposed",
+      "extraction_strategy": "l2_to_l8_fmax_mirror_v1_6_554",
+      "evidence": "input/docs/datasheet__soc_onewire.adoc"
+    }
+  ],
+  "no_synthesis_targets_in_input": false,
+  "parameters": [
+    {
+      "name": "HART_ID",
+      "default": null,
+      "type": "natural",
+      "description": "ID of the core (for <<_mhartid>> CSR).",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "VENDOR_ID",
+      "default": null,
+      "type": "suv(31:0)",
+      "description": "Vendor ID (for <<_mvendorid>> CSR).",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "BOOT_ADDR",
+      "default": null,
+      "type": "suv(31:0)",
+      "description": "CPU reset address. See section <<_address_space>>.",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "DEBUG_PARK_ADDR",
+      "default": null,
+      "type": "suv(31:0)",
+      "description": "\"Park loop\" entry address for the <<_on_chip_debugger_ocd>>, has to be 4-byte aligned.",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "DEBUG_EXC_ADDR",
+      "default": null,
+      "type": "suv(31:0)",
+      "description": "\"Exception\" entry address for the <<_on_chip_debugger_ocd>>, has to be 4-byte aligned.",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Sdext",
+      "default": null,
+      "type": "boolean",
+      "description": "Implement RISC-V-compatible \"debug\" CPU operation mode required for the <<_on_chip_debugger_ocd>>.",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Sdtrig",
+      "default": null,
+      "type": "boolean",
+      "description": "Implement RISC-V-compatible <<_trigger_module>>. See section <<_on_chip_debugger_ocd>>.",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Smpmp",
+      "default": null,
+      "type": "boolean",
+      "description": "Implement RISC-V-compatible physical memory protection (PMP). See section <<_smpmp_isa_extension>>.",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "NUM_HW_TRIGGERS",
+      "default": null,
+      "type": "natural",
+      "description": "Number of hardware triggers for the <<_trigger_module>>",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "valid",
+      "default": null,
+      "type": null,
+      "description": "All others signals are valid when set; high for one cycle",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "order",
+      "default": null,
+      "type": null,
+      "description": "Instruction index (linear incrementing counter; resets to zero on overflow)",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "insn",
+      "default": null,
+      "type": null,
+      "description": "Instruction word; compressed instructions are shown in their decompressed 32-bit format (with `compr = 1`)",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "trap",
+      "default": null,
+      "type": null,
+      "description": "Set if the current instruction causes a synchronous exception",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "halt",
+      "default": null,
+      "type": null,
+      "description": "Set if the current instruction is last instruction before halting",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "intr",
+      "default": null,
+      "type": null,
+      "description": "Set if the current instruction is the first instruction of a trap handler",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "mode",
+      "default": null,
+      "type": null,
+      "description": "Current privilege level; `00` = user, `11` = machine",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "ixl",
+      "default": null,
+      "type": null,
+      "description": "Current `XLEN`; hardwired to `01` = 32-bit",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "debug",
+      "default": null,
+      "type": null,
+      "description": "Set if the current instruction is executed in debug-mode",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "compr",
+      "default": null,
+      "type": null,
+      "description": "Set if the current instruction is a decompressed instruction",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "delta",
+      "default": null,
+      "type": null,
+      "description": "Set if the current instruction is the target of a control-flow transfer",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "rs1_addr",
+      "default": null,
+      "type": null,
+      "description": "register `rs1` address",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "rs2_addr",
+      "default": null,
+      "type": null,
+      "description": "register `rs2` address",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "rs1_rdata",
+      "default": null,
+      "type": null,
+      "description": "register `rs1` read data (_before_ instruction execution)",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "rs2_rdata",
+      "default": null,
+      "type": null,
+      "description": "register `rs2` read data (_before_ instruction execution)",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "rd_addr",
+      "default": null,
+      "type": null,
+      "description": "register `rd` address; all-zero if no write",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "rd_rdata",
+      "default": null,
+      "type": null,
+      "description": "register `rd` write data (_after_ instruction execution)",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "pc_rdata",
+      "default": null,
+      "type": null,
+      "description": "address of current instruction",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "pc_wdata",
+      "default": null,
+      "type": null,
+      "description": "address of next address; e.g. branch destination (_after_ instruction execution)",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "csr_addr",
+      "default": null,
+      "type": null,
+      "description": "CSR access address; all-zero if no CSR access",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "csr_rdata",
+      "default": null,
+      "type": null,
+      "description": "CSR read data (valid if `csr_addr != 0`)",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "csr_wdata",
+      "default": null,
+      "type": null,
+      "description": "CSR write data",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "mem_addr",
+      "default": null,
+      "type": null,
+      "description": "memory access address",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "mem_rmask",
+      "default": null,
+      "type": null,
+      "description": "memory read-mask (byte-wise read-enable; all-zero if no memory read)",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "mem_wmask",
+      "default": null,
+      "type": null,
+      "description": "memory write-mask (byte-wise write-enable; all-zero if no memory write)",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "mem_rdata",
+      "default": null,
+      "type": null,
+      "description": "memory read data (valid if `mem_rmask != 0`)",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "mem_wdata",
+      "default": null,
+      "type": null,
+      "description": "memory write data (valid if `mem_wmask != 0`)",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "Description",
+      "default": "When this option is **enabled**, all conditional branch instructions have identical execution times for taken and not",
+      "type": null,
+      "description": "",
+      "source": "datasheet__cpu.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "Address",
+      "default": "`0x3a0` (`pmpcfg0`) `0x3a1` (`pmpcfg1`) `0x3a2` (`pmpcfg2`) `0x3a3` (`pmpcfg3`)",
+      "type": null,
+      "description": "",
+      "source": "datasheet__cpu_csr.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "Reset value",
+      "default": "all `0x00000000`",
+      "type": null,
+      "description": "",
+      "source": "datasheet__cpu_csr.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "ISA",
+      "default": "<<_zicsr_isa_extension,`Zicsr`>> & <<_smpmp_isa_extension,`Smpmp`>>",
+      "type": null,
+      "description": "",
+      "source": "datasheet__cpu_csr.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "Description",
+      "default": "Configuration of physical memory protection regions. Each region provides an individual 8-bit array in these CSRs.",
+      "type": null,
+      "description": "",
+      "source": "datasheet__cpu_csr.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "Address",
+      "default": "`0x233` (`mhpmevent3`) `0x234` (`mhpmevent4`) `0x235` (`mhpmevent5`) `0x236` (`mhpmevent6`) `0x237` (`mhpmevent7`) `0x238` (`mhpmevent8`) `0x239` (`mhpmevent9`) `0x23a` (`mhpmevent10`) `0x23b` (`mhpmevent11`) `0x23c` (`mhpmevent12`) `0x23d` (`mhpmevent13`) `0x23e` (`mhpmevent14`) `0x23f` (`mhpmevent15`)",
+      "type": null,
+      "description": "",
+      "source": "datasheet__cpu_csr.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "ISA",
+      "default": "<<_zicsr_isa_extension,`Zicsr`>> & <<_zihpm_isa_extension,`Zihpm`>>",
+      "type": null,
+      "description": "",
+      "source": "datasheet__cpu_csr.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "Description",
+      "default": "The value in these CSRs define the micro-architectural events that cause an increment of the according `mhpmcounter*[h]` counter(s).",
+      "type": null,
+      "description": "",
+      "source": "datasheet__cpu_csr.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "OCD_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement the on-chip debugger and the CPU debug mode..",
+      "source": "datasheet__on_chip_debugger.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "OCD_NUM_HW_TRIGGERS",
+      "default": "0",
+      "type": "natural",
+      "description": "Number of implemented HW triggers (<<_trigger_module>> / <<_sdtrig_isa_extension>>) for hardware break-/watchpoints (0..16).",
+      "source": "datasheet__on_chip_debugger.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "OCD_AUTHENTICATION",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement optional <<_debug_authentication>> module.",
+      "source": "datasheet__on_chip_debugger.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "OCD_JEDEC_ID",
+      "default": "\"00000000000\"",
+      "type": "suv(10:0)",
+      "description": "JEDEC ID; continuation codes plus vendor ID (passed to the JTAG <<_debug_transport_module_dtm>>).",
+      "source": "datasheet__on_chip_debugger.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "CLOCK_FREQUENCY",
+      "default": "0",
+      "type": "natural",
+      "description": "The clock frequency of the processor's `clk_i` input port in Hertz (Hz). See <<_processor_clocking>>.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "TRACE_PORT_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable external CPU execution <<_execution_trace_port>>.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "DUAL_CORE_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable the SMP <<_dual_core_configuration>>.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "BOOT_MODE_SELECT",
+      "default": "0",
+      "type": "natural",
+      "description": "Boot mode select; see <<_boot_configuration>>.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "BOOT_ADDR_CUSTOM",
+      "default": "x\"00000000\"",
+      "type": "suv(31:0)",
+      "description": "Custom CPU boot address (available if `BOOT_MODE_SELECT` = 1).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_C",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_c_isa_extension>> (compressed instructions).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_E",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_e_isa_extension>> (reduced register file size).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_M",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_m_isa_extension>> (hardware-based integer multiplication and division).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_U",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_u_isa_extension>> (less-privileged user mode).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zaamo",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zaamo_isa_extension>> (atomic read-modify-write operations).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zalrsc",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zalrsc_isa_extension>> (atomic reservation-set operations).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zba",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zba_isa_extension>> (shifted-add bit-manipulation instructions).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zbb",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zbb_isa_extension>> (basic bit-manipulation instructions).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zbkb",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zbkb_isa_extension>> (scalar cryptography bit manipulation instructions).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zbkc",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zbkc_isa_extension>> (scalar cryptography carry-less multiplication instructions).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zbkx",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zbkx_isa_extension>> (scalar cryptography crossbar permutations).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zbs",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zbs_isa_extension>> (single-bit bit-manipulation instructions).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zcb",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zcb_isa_extension>> (additional code size reduction instruction; builds upon `C`).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zfinx",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zfinx_isa_extension>> (single-precision floating-point unit).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zibi",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zibi_isa_extension>> (CPU base counters).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zicntr",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zicntr_isa_extension>> (CPU base counters).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zicond",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zicond_isa_extension>> (integer conditional instructions).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zihpm",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zihpm_isa_extension>> (hardware performance monitors).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zimop",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zimop_isa_extension>> (may-be-operations).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zknd",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zknd_isa_extension>> (scalar cryptography NIST AES decryption instructions).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zkne",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zkne_isa_extension>> (scalar cryptography NIST AES encryption instructions).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zknh",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zknh_isa_extension>> (scalar cryptography NIST hash instructions).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zksed",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zksed_isa_extension>> (scalar cryptography ShangMi block cyphers).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zksh",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zksh_isa_extension>> (scalar cryptography ShangMi hash functions).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Zmmul",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_zmmul_isa_extension>> (hardware-based integer multiplication).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Smcntrpmf",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable <<_smcntrpmf_isa_extension>> (counter privilege-mode filtering).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RISCV_ISA_Xcfu",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable NEORV32-specific <<_xcfu_isa_extension>> (custom RISC-V instructions).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "CPU_CONSTT_BR_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement constant-time branches (same execution times for taken and not-taken branches).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "CPU_FAST_MUL_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement fast but large full-parallel multipliers (trying to infer DSP blocks); see section <<_cpu_arithmetic_logic_unit>>.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "CPU_FAST_SHIFT_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement fast but large full-parallel barrel shifters; see section <<_cpu_arithmetic_logic_unit>>.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "CPU_RF_ARCH_SEL",
+      "default": "0",
+      "type": "natural",
+      "description": "CPU register file implementation style select; see section <<_cpu_register_file>>.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "PMP_NUM_REGIONS",
+      "default": "0",
+      "type": "natural",
+      "description": "Number of implemented PMP regions (0..16).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "PMP_MIN_GRANULARITY",
+      "default": "4",
+      "type": "natural",
+      "description": "Minimal region granularity in bytes. Has to be a power of two, min 4.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "PMP_TOR_MODE_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement support for top-of-region (TOR) mode.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "PMP_NAP_MODE_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement support for naturally-aligned power-of-two (NAPOT & NA4) modes.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "HPM_NUM_CNTS",
+      "default": "0",
+      "type": "natural",
+      "description": "Number of implemented hardware performance monitor counters (0..13).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "HPM_CNT_WIDTH",
+      "default": "40",
+      "type": "natural",
+      "description": "Total LSB-aligned size of each HPM counter. Min 0, max 64.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IMEM_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement instruction memory.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IMEM_BASE",
+      "default": "x\"00000000\"",
+      "type": "suv(31:0)",
+      "description": "Base address of the instruction memory (has to be naturally-aligned to its size). Handle with care.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IMEM_SIZE",
+      "default": "16*1024",
+      "type": "natural",
+      "description": "Size in bytes of the instruction memory (use a power of 2).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IMEM_OUTREG_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Add IMEM output register stage (improves mapping/timing at the expense of latency).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "DMEM_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement data memory.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "DMEM_BASE",
+      "default": "x\"80000000\"",
+      "type": "suv(31:0)",
+      "description": "Base address of the data memory (has to be naturally-aligned to its size). Handle with care.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "DMEM_SIZE",
+      "default": "8*1024",
+      "type": "natural",
+      "description": "Size in bytes of the data memory (use a power of 2).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "DMEM_OUTREG_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Add DMEM output register stage (improves mapping/timing at the expense of latency).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "ICACHE_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement the instruction cache (\"I$\").",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "ICACHE_NUM_BLOCKS",
+      "default": "4",
+      "type": "natural",
+      "description": "Number of blocks (\"lines\"). Has to be a power of two.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "DCACHE_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement the data cache (\"D$\")",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "DCACHE_NUM_BLOCKS",
+      "default": "4",
+      "type": "natural",
+      "description": "Number of blocks (\"lines\"). Has to be a power of two.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "CACHE_BLOCK_SIZE",
+      "default": "64",
+      "type": "natural",
+      "description": "global cache block size (I$ **and** D$) in bytes. Has to be a power of two, min 4.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "CACHE_BURSTS_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "Enable burst transfers for cache updates.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "XBUS_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement the external bus interface.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "XBUS_TIMEOUT",
+      "default": "2048",
+      "type": "natural",
+      "description": "Number of clock cycles after which an unacknowledged external bus access will auto-terminate (0 = disabled).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "XBUS_REGSTAGE_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement XBUS register stages to ease timing closure.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_GPIO_NUM",
+      "default": "0",
+      "type": "natural",
+      "description": "Number of GPIO pairs, max 32.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_GPIO_DIR_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Enable optional GPIO direction control interface (`gpio_dir_o`).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_CLINT_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement CLINT.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_UART0_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement UART0.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_UART0_RX_FIFO",
+      "default": "1",
+      "type": "natural",
+      "description": "UART0 RX FIFO depth, has to be a power of two, minimum value is 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_UART0_TX_FIFO",
+      "default": "1",
+      "type": "natural",
+      "description": "UART0 TX FIFO depth, has to be a power of two, minimum value is 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_UART1_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement UART1.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_UART1_RX_FIFO",
+      "default": "1",
+      "type": "natural",
+      "description": "UART1 RX FIFO depth, has to be a power of two, minimum value is 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_UART1_TX_FIFO",
+      "default": "1",
+      "type": "natural",
+      "description": "UART1 TX FIFO depth, has to be a power of two, minimum value is 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_SPI_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement SPI controller.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_SPI_FIFO",
+      "default": "1",
+      "type": "natural",
+      "description": "Depth of the SPI FIFO. Has to be a power of two, min 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_SDI_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement SDI controller.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_SDI_FIFO",
+      "default": "1",
+      "type": "natural",
+      "description": "Depth of the SDI FIFO. Has to be a power of two, min 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_TWI_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement TWI controller.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_TWI_FIFO",
+      "default": "1",
+      "type": "natural",
+      "description": "Depth of the TWI FIFO. Has to be a power of two, min 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_TWD_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement TWD controller.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_TWD_RX_FIFO",
+      "default": "1",
+      "type": "natural",
+      "description": "Depth of the TWD RX FIFO. Has to be a power of two, min 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_TWD_TX_FIFO",
+      "default": "1",
+      "type": "natural",
+      "description": "Depth of the TWD TX FIFO. Has to be a power of two, min 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_PWM_NUM",
+      "default": "0",
+      "type": "natural",
+      "description": "Number of PWM channels to implement (0..32).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_WDT_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement WDT.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_TRNG_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement TRNG.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_TRNG_FIFO",
+      "default": "1",
+      "type": "natural",
+      "description": "Depth of the TRNG data FIFO. Has to be a power of two, min 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_TRNG_NUM_RO",
+      "default": "3",
+      "type": "natural",
+      "description": "Total number of ring-oscillators.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_TRNG_NUM_INV",
+      "default": "5",
+      "type": "natural",
+      "description": "Number of inverters in first ring-oscillator; has to be odd.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_TRNG_NUM_RBIT",
+      "default": "64",
+      "type": "natural",
+      "description": "Number of raw random bits to process for one output byte; has to be power of 2.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_CFS_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement CFS.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_NEOLED_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement NEOLED controller.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_NEOLED_TX_FIFO",
+      "default": "1",
+      "type": "natural",
+      "description": "TX FIFO depth of the NEOLED controller. Has to be a power of two, min 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_GPTMR_NUM",
+      "default": "0",
+      "type": "natural",
+      "description": "Number of individual GPTMR timer slices (0..16).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_ONEWIRE_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement 1-wire controller.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_ONEWIRE_FIFO",
+      "default": "1",
+      "type": "natural",
+      "description": "Depth of the 1-Wire FIFO. Has to be a power of two, min 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_DMA_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement DMA controller.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_DMA_DSC_FIFO",
+      "default": "4",
+      "type": "natural",
+      "description": "Depth of the DMA transfer descriptor FIFO. Has to be a power of two, min 4, max 512.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_SLINK_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement stream link interface (AXI4-Stream-Compatible).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_SLINK_RX_FIFO",
+      "default": "1",
+      "type": "natural",
+      "description": "SLINK RX FIFO depth, has to be a power of two, minimum value is 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_SLINK_TX_FIFO",
+      "default": "1",
+      "type": "natural",
+      "description": "SLINK TX FIFO depth, has to be a power of two, minimum value is 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_TRACER_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Implement the trace buffer.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_TRACER_BUFFER",
+      "default": "1",
+      "type": "natural",
+      "description": "Depth of the trace buffer. Has to be a power of two, min 1, max 32768.",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "IO_TRACER_SIMLOG_EN",
+      "default": "false",
+      "type": "boolean",
+      "description": "Write full trace log to file (simulation-only).",
+      "source": "datasheet__soc.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "-",
+      "default": "-",
+      "type": null,
+      "description": "Add further `#include` statements right at the beginning of the file.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "UART_EN",
+      "default": "`1`",
+      "type": null,
+      "description": "Set to `1` to enable the serial console.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "UART_BAUD",
+      "default": "`19200`",
+      "type": null,
+      "description": "Baud rate of UART0.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "UART_OVERFLOW",
+      "default": "`0`",
+      "type": null,
+      "description": "Enable RX overflow detection. Recommended for high baud rates / high memory latency.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "UART_HWFC",
+      "default": "`0`",
+      "type": null,
+      "description": "Enable RTS/CTS hardware flow control. Recommended for very high baud rates / high memory latency.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "STATUS_LED_EN",
+      "default": "`1`",
+      "type": null,
+      "description": "Enable bootloader status led (\"heart beat\") at `GPIO` output port pin `STATUS_LED_PIN` when `1`.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "STATUS_LED_PIN",
+      "default": "`0`",
+      "type": null,
+      "description": "`GPIO` output pin used for the high-active status LED. Note that if the GPIO module's direction control feature is enabled only this pin is configured as output.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "AUTO_BOOT_EN",
+      "default": "`1`",
+      "type": null,
+      "description": "Auto-boot enabled when `1`.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "AUTO_BOOT_TIMEOUT",
+      "default": "`8`",
+      "type": null,
+      "description": "Timeout in seconds after which the auto-boot sequence starts (if there is no UART input by the user).",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "TWI_FLASH_EN",
+      "default": "`1`",
+      "type": null,
+      "description": "Set to `1` to enable the SPI flash (boot) options.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "TWI_FLASH_PROG_EN",
+      "default": "`1`",
+      "type": null,
+      "description": "Set to `1` to enable programming the TWI flash from the bootloader menu.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "TWI_FLASH_CLK_PRSC",
+      "default": "`CLK_PRSC_1024`",
+      "type": null,
+      "description": "TWI clock prescaler.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "TWI_FLASH_CLK_DIV",
+      "default": "`0`",
+      "type": null,
+      "description": "TWI clock divider value.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "TWI_FLASH_ID",
+      "default": "`0xA0`",
+      "type": null,
+      "description": "8-bit TWI device address (with R/W bit cleared).",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "TWI_FLASH_BASE_ADDR",
+      "default": "`0x00000000`",
+      "type": null,
+      "description": "Defines the TWI flash base address for the executable.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "TWI_FLASH_ADDR_BYTES",
+      "default": "`2`",
+      "type": null,
+      "description": "Number of TWI flash address bytes.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "SPI_FLASH_EN",
+      "default": "`1`",
+      "type": null,
+      "description": "Set to `1` to enable the TWI flash (boot) options.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "SPI_FLASH_PROG_EN",
+      "default": "`1`",
+      "type": null,
+      "description": "Set to `1` to enable programming the SPI flash from the bootloader menu.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "SPI_FLASH_CS",
+      "default": "`0`",
+      "type": null,
+      "description": "SPI chip select line (port `spi_csn_o`) for selecting the SPI flash.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "SPI_FLASH_CLK_PRSC",
+      "default": "`CLK_PRSC_64`",
+      "type": null,
+      "description": "SPI clock prescaler.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "SPI_FLASH_CLK_DIV",
+      "default": "`0`",
+      "type": null,
+      "description": "SPI clock divider value.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "SPI_FLASH_BASE_ADDR",
+      "default": "`0x00400000`",
+      "type": null,
+      "description": "Defines the SPI flash base address for the executable.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "SPI_FLASH_ADDR_BYTES",
+      "default": "`3`",
+      "type": null,
+      "description": "SPI flash address size in number of bytes.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "SPI_FLASH_SECTOR_SIZE",
+      "default": "`16*1024`",
+      "type": null,
+      "description": "Number of SPI flash address bytes.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "SPI_SDCARD_EN",
+      "default": "`0`",
+      "type": null,
+      "description": "Set to `1` to enable booting from SD card.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "SPI_SDCARD_CS",
+      "default": "`1`",
+      "type": null,
+      "description": "SPI chip select line (port `spi_csn_o`) for selecting the SD card.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "SPI_SDCARD_CLK_PRSC",
+      "default": "`CLK_PRSC_64`",
+      "type": null,
+      "description": "SPI clock prescaler.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "SPI_SDCARD_CLK_DIV",
+      "default": "`0`",
+      "type": null,
+      "description": "SPI clock divider value.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "SPI_SDCARD_FILE",
+      "default": "`\"boot.bin\"`",
+      "type": null,
+      "description": "File name of the boot image. Has to be located in the root directory.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "THEME_INTRO",
+      "default": "`\"NEORV32 Bootloader\"`",
+      "type": null,
+      "description": "Intro text that is shown in the bootloader console.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "THEME_EXE",
+      "default": "`\"neorv32_exe.bin\"`",
+      "type": null,
+      "description": "Name of executable that is shown in the upload menu.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "USER_CODE_INIT",
+      "default": "`(void)0` (_empty statement_)",
+      "type": null,
+      "description": "User-defined initialization code (wrapped in a macro) that is executed right after the bootloader's hardware initialization.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "DEFAULT_EXE_ADDR",
+      "default": "`0x00000000`",
+      "type": null,
+      "description": "Default base address of executable; can be used to directly execute from main memory.",
+      "source": "datasheet__software_bootloader.adoc",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "BOOT_MODE_SELECT",
+      "default": null,
+      "type": null,
+      "description": "implement BOOTROM when `BOOT_MODE_SELECT` = 0; see <<_boot_configuration>>",
+      "source": "datasheet__soc_bootrom.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_CFS_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement CFS when `true",
+      "source": "datasheet__soc_cfs.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_CLINT_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement core local interruptor when `true",
+      "source": "datasheet__soc_clint.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "DCACHE_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement CPU-exclusive data cache (D$) when `true",
+      "source": "datasheet__soc_dcache.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "DCACHE_NUM_BLOCKS",
+      "default": null,
+      "type": "integer",
+      "description": "number of cache blocks (\"cache lines\"); has to be a power of two",
+      "source": "datasheet__soc_dcache.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "CACHE_BLOCK_SIZE",
+      "default": null,
+      "type": "integer",
+      "description": "size of a cache block in bytes (global configuration for I$ and D$); has to be a power of two, min 4",
+      "source": "datasheet__soc_dcache.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "CACHE_BURSTS_EN",
+      "default": null,
+      "type": null,
+      "description": "enable burst transfers for cache update",
+      "source": "datasheet__soc_dcache.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_DMA_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement DMA when `true",
+      "source": "datasheet__soc_dma.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_DMA_DSC_FIFO",
+      "default": null,
+      "type": null,
+      "description": "descriptor FIFO depth, has to be a power of 2, min 4, max 512",
+      "source": "datasheet__soc_dma.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "DMEM_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement DMEM when `true",
+      "source": "datasheet__soc_dmem.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "DMEM_BASE",
+      "default": null,
+      "type": "natural",
+      "description": "32-bit base address (naturally aligned to DMEM size)",
+      "source": "datasheet__soc_dmem.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "DMEM_SIZE",
+      "default": null,
+      "type": null,
+      "description": "DMEM size in bytes (use a power of 2)",
+      "source": "datasheet__soc_dmem.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "DMEM_OUTREG_EN",
+      "default": null,
+      "type": null,
+      "description": "add DMEM output register stage",
+      "source": "datasheet__soc_dmem.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_GPIO_NUM",
+      "default": null,
+      "type": null,
+      "description": "number of input/output pairs to implement (0..32)",
+      "source": "datasheet__soc_gpio.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_GPIO_DIR_EN",
+      "default": null,
+      "type": "boolean",
+      "description": "enable direction control feature when _true_",
+      "source": "datasheet__soc_gpio.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_GPTMR_NUM",
+      "default": null,
+      "type": null,
+      "description": "number of individual GPTMR timer slices (0..16)",
+      "source": "datasheet__soc_gptmr.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "ICACHE_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement CPU-exclusive instruction cache (I$) when `true",
+      "source": "datasheet__soc_icache.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "ICACHE_NUM_BLOCKS",
+      "default": null,
+      "type": "integer",
+      "description": "number of cache blocks (\"cache lines\"); has to be a power of two",
+      "source": "datasheet__soc_icache.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IMEM_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement IMEM when `true",
+      "source": "datasheet__soc_imem.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IMEM_BASE",
+      "default": null,
+      "type": "natural",
+      "description": "32-bit base address (naturally aligned to IMEM size)",
+      "source": "datasheet__soc_imem.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IMEM_SIZE",
+      "default": null,
+      "type": null,
+      "description": "IMEM size in bytes (use a power of 2)",
+      "source": "datasheet__soc_imem.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IMEM_OUTREG_EN",
+      "default": null,
+      "type": null,
+      "description": "add IMEM output register stage",
+      "source": "datasheet__soc_imem.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_NEOLED_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement NEOLED controller when `true",
+      "source": "datasheet__soc_neoled.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_NEOLED_TX_FIFO",
+      "default": null,
+      "type": null,
+      "description": "transmission FIFO depth, has to be a power of 2, min 1",
+      "source": "datasheet__soc_neoled.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_ONEWIRE_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement ONEWIRE interface controller when `true",
+      "source": "datasheet__soc_onewire.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_ONEWIRE_FIFO",
+      "default": null,
+      "type": "integer",
+      "description": "RTX FIFO depth, has to be zero or a power of two, min 1",
+      "source": "datasheet__soc_onewire.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_PWM_NUM",
+      "default": null,
+      "type": null,
+      "description": "number of PWM channels to implement (0..32)",
+      "source": "datasheet__soc_pwm.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_SDI_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement SDI controller when `true",
+      "source": "datasheet__soc_sdi.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_SDI_FIFO",
+      "default": null,
+      "type": "integer",
+      "description": "data FIFO size, has to be a power of two, min 1",
+      "source": "datasheet__soc_sdi.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_SLINK_EN",
+      "default": null,
+      "type": "boolean",
+      "description": "implement SLINK when _true_",
+      "source": "datasheet__soc_slink.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_SLINK_RX_FIFO",
+      "default": null,
+      "type": "integer",
+      "description": "RX FIFO depth, has to be a power of two, min 1",
+      "source": "datasheet__soc_slink.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_SLINK_TX_FIFO",
+      "default": null,
+      "type": "integer",
+      "description": "TX FIFO depth, has to be a power of two, min 1",
+      "source": "datasheet__soc_slink.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_SPI_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement SPI controller when `true",
+      "source": "datasheet__soc_spi.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_SPI_FIFO",
+      "default": null,
+      "type": "integer",
+      "description": "FIFO depth, has to be a power of two, min 1",
+      "source": "datasheet__soc_spi.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "all",
+      "default": null,
+      "type": null,
+      "description": "most of the top's configuration generics",
+      "source": "datasheet__soc_sysinfo.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_TRACER_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement TRACER module when `true",
+      "source": "datasheet__soc_tracer.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_TRACER_BUFFER",
+      "default": null,
+      "type": "integer",
+      "description": "trace buffer depth, has to be zero or a power of two, min 1",
+      "source": "datasheet__soc_tracer.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_TRACER_SIMLOG_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "write full trace log to file when `true` (simulation-only)",
+      "source": "datasheet__soc_tracer.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_TRNG_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement TRNG when `true",
+      "source": "datasheet__soc_trng.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_TRNG_FIFO",
+      "default": null,
+      "type": "integer",
+      "description": "data FIFO depth, min 1, has to be a power of two",
+      "source": "datasheet__soc_trng.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_TRNG_NUM_RO",
+      "default": null,
+      "type": null,
+      "description": "total number of ring-oscillators",
+      "source": "datasheet__soc_trng.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_TRNG_NUM_INV",
+      "default": null,
+      "type": null,
+      "description": "number of inverters in first ring-oscillator, has to be odd",
+      "source": "datasheet__soc_trng.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_TRNG_NUM_RBIT",
+      "default": null,
+      "type": "bit",
+      "description": "number of raw bits to process for one output byte, has to be power of two",
+      "source": "datasheet__soc_trng.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_TWD_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement TWD controller when `true",
+      "source": "datasheet__soc_twd.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_TWD_RX_FIFO",
+      "default": null,
+      "type": "integer",
+      "description": "RX FIFO depth, has to be a power of two, min 1",
+      "source": "datasheet__soc_twd.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_TWD_TX_FIFO",
+      "default": null,
+      "type": "integer",
+      "description": "TX FIFO depth, has to be a power of two, min 1",
+      "source": "datasheet__soc_twd.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_TWI_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement TWI controller when `true",
+      "source": "datasheet__soc_twi.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_TWI_FIFO",
+      "default": null,
+      "type": "integer",
+      "description": "FIFO depth, has to be a power of two, min 1",
+      "source": "datasheet__soc_twi.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_UART0_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement UART0 when `true",
+      "source": "datasheet__soc_uart.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "UART0_RX_FIFO",
+      "default": null,
+      "type": null,
+      "description": "RX FIFO depth (power of 2, min 1)",
+      "source": "datasheet__soc_uart.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "UART0_TX_FIFO",
+      "default": null,
+      "type": null,
+      "description": "TX FIFO depth (power of 2, min 1)",
+      "source": "datasheet__soc_uart.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_UART1_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement UART1 when `true",
+      "source": "datasheet__soc_uart.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "UART1_RX_FIFO",
+      "default": null,
+      "type": null,
+      "description": "RX FIFO depth (power of 2, min 1)",
+      "source": "datasheet__soc_uart.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "UART1_TX_FIFO",
+      "default": null,
+      "type": null,
+      "description": "TX FIFO depth (power of 2, min 1)",
+      "source": "datasheet__soc_uart.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "IO_WDT_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "implement watchdog when `true",
+      "source": "datasheet__soc_wdt.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "XBUS_EN",
+      "default": "true",
+      "type": "boolean",
+      "description": "enable external bus interface when `true",
+      "source": "datasheet__soc_xbus.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "XBUS_TIMEOUT",
+      "default": null,
+      "type": null,
+      "description": "number of clock cycles after which an unacknowledged external bus access will auto-terminate (0 = disabled)",
+      "source": "datasheet__soc_xbus.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "XBUS_REGSTAGE_EN",
+      "default": null,
+      "type": null,
+      "description": "implement XBUS register stages",
+      "source": "datasheet__soc_xbus.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "(`CACHE_BLOCK_SIZE`)",
+      "default": null,
+      "type": null,
+      "description": "burst size (defined by global cache block size)",
+      "source": "datasheet__soc_xbus.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    },
+    {
+      "name": "(`CACHE_BURSTS_EN`)",
+      "default": null,
+      "type": null,
+      "description": "enable burst transfers for cache update",
+      "source": "datasheet__soc_xbus.adoc",
+      "extraction_strategy": "adoc_keyvalue_continuation_table_v1_6_344"
+    }
+  ],
+  "peripheral_only_emit_skipped_v1_6_376": 9,
+  "extraction_strategy": {
+    "l8_evidence_population_v1_6_395": 240
+  },
+  "fmax_mhz": 130.0,
+  "fmax_mhz_extraction_strategy": "max_of_synthesis_targets_v1_6_561",
+  "extraction_evidence": {
+    "input/docs/Doxyfile": [],
+    "input/docs/Makefile": [],
+    "input/docs/README.md": [],
+    "input/docs/attrs.adoc": [],
+    "input/docs/datasheet__content.adoc": [],
+    "input/docs/datasheet__cpu.adoc": [],
+    "input/docs/datasheet__cpu_cfu.adoc": [],
+    "input/docs/datasheet__cpu_csr.adoc": [],
+    "input/docs/datasheet__cpu_dual_core.adoc": [],
+    "input/docs/datasheet__cpu_isa.adoc": [],
+    "input/docs/datasheet__index.adoc": [],
+    "input/docs/datasheet__main.adoc": [],
+    "input/docs/datasheet__on_chip_debugger.adoc": [],
+    "input/docs/datasheet__overview.adoc": [
+      {
+        "literal": "(130.0, None)",
+        "label": "fmax_prose_v1_6_538"
+      }
+    ],
+    "input/docs/datasheet__soc.adoc": [],
+    "input/docs/datasheet__soc_bootrom.adoc": [],
+    "input/docs/datasheet__soc_cfs.adoc": [],
+    "input/docs/datasheet__soc_clint.adoc": [],
+    "input/docs/datasheet__soc_dcache.adoc": [],
+    "input/docs/datasheet__soc_dma.adoc": [],
+    "input/docs/datasheet__soc_dmem.adoc": [],
+    "input/docs/datasheet__soc_gpio.adoc": [],
+    "input/docs/datasheet__soc_gptmr.adoc": [],
+    "input/docs/datasheet__soc_icache.adoc": [],
+    "input/docs/datasheet__soc_imem.adoc": [],
+    "input/docs/datasheet__soc_neoled.adoc": [],
+    "input/docs/datasheet__soc_onewire.adoc": [],
+    "input/docs/datasheet__soc_pwm.adoc": [],
+    "input/docs/datasheet__soc_sdi.adoc": [],
+    "input/docs/datasheet__soc_slink.adoc": [],
+    "input/docs/datasheet__soc_spi.adoc": [],
+    "input/docs/datasheet__soc_sysinfo.adoc": [],
+    "input/docs/datasheet__soc_tracer.adoc": [],
+    "input/docs/datasheet__soc_trng.adoc": [],
+    "input/docs/datasheet__soc_twd.adoc": [],
+    "input/docs/datasheet__soc_twi.adoc": [],
+    "input/docs/datasheet__soc_uart.adoc": [],
+    "input/docs/datasheet__soc_wdt.adoc": [],
+    "input/docs/datasheet__soc_xbus.adoc": [],
+    "input/docs/datasheet__software.adoc": [],
+    "input/docs/datasheet__software_bootloader.adoc": [],
+    "input/docs/datasheet__software_rte.adoc": [],
+    "input/docs/doxygen_main.md": [],
+    "input/docs/figures__.gitignore": [],
+    "input/docs/figures__README.md": [],
+    "input/docs/legal.adoc": [],
+    "input/docs/references__riscv-aclint-1.0-rc4.pdf": [],
+    "input/docs/references__riscv-asm.pdf": [],
+    "input/docs/references__riscv-c-api.pdf": [],
+    "input/docs/references__riscv-calling.pdf": [],
+    "input/docs/references__riscv-debug-specification.pdf": [],
+    "input/docs/references__riscv-privileged.pdf": [],
+    "input/docs/references__riscv-semihosting.pdf": [],
+    "input/docs/references__riscv-unprivileged.pdf": [],
+    "input/docs/references__riscv-zibi.pdf": [],
+    "input/docs/userguide__adding_custom_hw_modules.adoc": [],
+    "input/docs/userguide__application_program_compilation.adoc": [],
+    "input/docs/userguide__building_the_documentation.adoc": [],
+    "input/docs/userguide__content.adoc": [],
+    "input/docs/userguide__eclipse_ide.adoc": [],
+    "input/docs/userguide__free_rtos_support.adoc": [],
+    "input/docs/userguide__general_hw_setup.adoc": [],
+    "input/docs/userguide__index.adoc": [],
+    "input/docs/userguide__installing_an_executable.adoc": [],
+    "input/docs/userguide__litex_support.adoc": [],
+    "input/docs/userguide__main.adoc": [],
+    "input/docs/userguide__micropython_port.adoc": [],
+    "input/docs/userguide__neorv32_in_verilog.adoc": [],
+    "input/docs/userguide__packaging_vivado.adoc": [],
+    "input/docs/userguide__rust_support.adoc": [],
+    "input/docs/userguide__simulating_the_processor.adoc": [],
+    "input/docs/userguide__sw_toolchain_setup.adoc": [],
+    "input/docs/userguide__using_ocd.adoc": [],
+    "input/docs/userguide__zephyr_support.adoc": [],
+    "datasheet__cpu.adoc": [
+      {
+        "literal": "HART_ID",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "VENDOR_ID",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "BOOT_ADDR",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "DEBUG_PARK_ADDR",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "DEBUG_EXC_ADDR",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Sdext",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Sdtrig",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Smpmp",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "NUM_HW_TRIGGERS",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "valid",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "order",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "insn",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "trap",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "halt",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "intr",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "mode",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "ixl",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "debug",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "compr",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "delta",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "rs1_addr",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "rs2_addr",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "rs1_rdata",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "rs2_rdata",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "rd_addr",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "rd_rdata",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "pc_rdata",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "pc_wdata",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "csr_addr",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "csr_rdata",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "csr_wdata",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "mem_addr",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "mem_rmask",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "mem_wmask",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "mem_rdata",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "mem_wdata",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "Description = When this option is **enabled**, all conditional branch instructions have identical execution times for ta",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      }
+    ],
+    "datasheet__cpu_csr.adoc": [
+      {
+        "literal": "Address = `0x3a0` (`pmpcfg0`) `0x3a1` (`pmpcfg1`) `0x3a2` (`pmpcfg2`) `0x3a3` (`pmpcfg3`)",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "Reset value = all `0x00000000`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "ISA = <<_zicsr_isa_extension,`Zicsr`>> & <<_smpmp_isa_extension,`Smpmp`>>",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "Description = Configuration of physical memory protection regions. Each region provides an individual 8-bit array in the",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "Address = `0x233` (`mhpmevent3`) `0x234` (`mhpmevent4`) `0x235` (`mhpmevent5`) `0x236` (`mhpmevent6`) `0x237` (`mhpmeven",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "ISA = <<_zicsr_isa_extension,`Zicsr`>> & <<_zihpm_isa_extension,`Zihpm`>>",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "Description = The value in these CSRs define the micro-architectural events that cause an increment of the according `mh",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      }
+    ],
+    "datasheet__on_chip_debugger.adoc": [
+      {
+        "literal": "OCD_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "OCD_NUM_HW_TRIGGERS = 0",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "OCD_AUTHENTICATION = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "OCD_JEDEC_ID = \"00000000000\"",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      }
+    ],
+    "datasheet__soc.adoc": [
+      {
+        "literal": "CLOCK_FREQUENCY = 0",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "TRACE_PORT_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "DUAL_CORE_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "BOOT_MODE_SELECT = 0",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "BOOT_ADDR_CUSTOM = x\"00000000\"",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_C = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_E = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_M = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_U = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zaamo = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zalrsc = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zba = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zbb = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zbkb = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zbkc = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zbkx = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zbs = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zcb = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zfinx = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zibi = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zicntr = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zicond = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zihpm = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zimop = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zknd = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zkne = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zknh = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zksed = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zksh = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Zmmul = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Smcntrpmf = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "RISCV_ISA_Xcfu = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "CPU_CONSTT_BR_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "CPU_FAST_MUL_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "CPU_FAST_SHIFT_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "CPU_RF_ARCH_SEL = 0",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "PMP_NUM_REGIONS = 0",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "PMP_MIN_GRANULARITY = 4",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "PMP_TOR_MODE_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "PMP_NAP_MODE_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "HPM_NUM_CNTS = 0",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "HPM_CNT_WIDTH = 40",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IMEM_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IMEM_BASE = x\"00000000\"",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IMEM_SIZE = 16*1024",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IMEM_OUTREG_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "DMEM_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "DMEM_BASE = x\"80000000\"",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "DMEM_SIZE = 8*1024",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "DMEM_OUTREG_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "ICACHE_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "ICACHE_NUM_BLOCKS = 4",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "DCACHE_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "DCACHE_NUM_BLOCKS = 4",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "CACHE_BLOCK_SIZE = 64",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "CACHE_BURSTS_EN = true",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "XBUS_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "XBUS_TIMEOUT = 2048",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "XBUS_REGSTAGE_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_GPIO_NUM = 0",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_GPIO_DIR_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_CLINT_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_UART0_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_UART0_RX_FIFO = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_UART0_TX_FIFO = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_UART1_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_UART1_RX_FIFO = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_UART1_TX_FIFO = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_SPI_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_SPI_FIFO = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_SDI_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_SDI_FIFO = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_TWI_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_TWI_FIFO = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_TWD_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_TWD_RX_FIFO = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_TWD_TX_FIFO = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_PWM_NUM = 0",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_WDT_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_TRNG_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_TRNG_FIFO = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_TRNG_NUM_RO = 3",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_TRNG_NUM_INV = 5",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_TRNG_NUM_RBIT = 64",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_CFS_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_NEOLED_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_NEOLED_TX_FIFO = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_GPTMR_NUM = 0",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_ONEWIRE_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_ONEWIRE_FIFO = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_DMA_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_DMA_DSC_FIFO = 4",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_SLINK_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_SLINK_RX_FIFO = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_SLINK_TX_FIFO = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_TRACER_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_TRACER_BUFFER = 1",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "IO_TRACER_SIMLOG_EN = false",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      }
+    ],
+    "datasheet__software_bootloader.adoc": [
+      {
+        "literal": "- = -",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "UART_EN = `1`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "UART_BAUD = `19200`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "UART_OVERFLOW = `0`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "UART_HWFC = `0`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "STATUS_LED_EN = `1`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "STATUS_LED_PIN = `0`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "AUTO_BOOT_EN = `1`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "AUTO_BOOT_TIMEOUT = `8`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "TWI_FLASH_EN = `1`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "TWI_FLASH_PROG_EN = `1`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "TWI_FLASH_CLK_PRSC = `CLK_PRSC_1024`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "TWI_FLASH_CLK_DIV = `0`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "TWI_FLASH_ID = `0xA0`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "TWI_FLASH_BASE_ADDR = `0x00000000`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "TWI_FLASH_ADDR_BYTES = `2`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "SPI_FLASH_EN = `1`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "SPI_FLASH_PROG_EN = `1`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "SPI_FLASH_CS = `0`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "SPI_FLASH_CLK_PRSC = `CLK_PRSC_64`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "SPI_FLASH_CLK_DIV = `0`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "SPI_FLASH_BASE_ADDR = `0x00400000`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "SPI_FLASH_ADDR_BYTES = `3`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "SPI_FLASH_SECTOR_SIZE = `16*1024`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "SPI_SDCARD_EN = `0`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "SPI_SDCARD_CS = `1`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "SPI_SDCARD_CLK_PRSC = `CLK_PRSC_64`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "SPI_SDCARD_CLK_DIV = `0`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "SPI_SDCARD_FILE = `\"boot.bin\"`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "THEME_INTRO = `\"NEORV32 Bootloader\"`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "THEME_EXE = `\"neorv32_exe.bin\"`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "USER_CODE_INIT = `(void)0` (_empty statement_)",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "DEFAULT_EXE_ADDR = `0x00000000`",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      }
+    ],
+    "datasheet__soc_bootrom.adoc": [
+      {
+        "literal": "BOOT_MODE_SELECT",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_cfs.adoc": [
+      {
+        "literal": "IO_CFS_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_clint.adoc": [
+      {
+        "literal": "IO_CLINT_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_dcache.adoc": [
+      {
+        "literal": "DCACHE_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "DCACHE_NUM_BLOCKS",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "CACHE_BLOCK_SIZE",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "CACHE_BURSTS_EN",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_dma.adoc": [
+      {
+        "literal": "IO_DMA_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_DMA_DSC_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_dmem.adoc": [
+      {
+        "literal": "DMEM_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "DMEM_BASE",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "DMEM_SIZE",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "DMEM_OUTREG_EN",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_gpio.adoc": [
+      {
+        "literal": "IO_GPIO_NUM",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_GPIO_DIR_EN",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_gptmr.adoc": [
+      {
+        "literal": "IO_GPTMR_NUM",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_icache.adoc": [
+      {
+        "literal": "ICACHE_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "ICACHE_NUM_BLOCKS",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_imem.adoc": [
+      {
+        "literal": "IMEM_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IMEM_BASE",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IMEM_SIZE",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IMEM_OUTREG_EN",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_neoled.adoc": [
+      {
+        "literal": "IO_NEOLED_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_NEOLED_TX_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_onewire.adoc": [
+      {
+        "literal": "IO_ONEWIRE_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_ONEWIRE_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_pwm.adoc": [
+      {
+        "literal": "IO_PWM_NUM",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_sdi.adoc": [
+      {
+        "literal": "IO_SDI_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_SDI_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_slink.adoc": [
+      {
+        "literal": "IO_SLINK_EN",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_SLINK_RX_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_SLINK_TX_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_spi.adoc": [
+      {
+        "literal": "IO_SPI_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_SPI_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_sysinfo.adoc": [
+      {
+        "literal": "all",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_tracer.adoc": [
+      {
+        "literal": "IO_TRACER_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_TRACER_BUFFER",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_TRACER_SIMLOG_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_trng.adoc": [
+      {
+        "literal": "IO_TRNG_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_TRNG_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_TRNG_NUM_RO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_TRNG_NUM_INV",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_TRNG_NUM_RBIT",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_twd.adoc": [
+      {
+        "literal": "IO_TWD_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_TWD_RX_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_TWD_TX_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_twi.adoc": [
+      {
+        "literal": "IO_TWI_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_TWI_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_uart.adoc": [
+      {
+        "literal": "IO_UART0_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "UART0_RX_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "UART0_TX_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "IO_UART1_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "UART1_RX_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "UART1_TX_FIFO",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_wdt.adoc": [
+      {
+        "literal": "IO_WDT_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ],
+    "datasheet__soc_xbus.adoc": [
+      {
+        "literal": "XBUS_EN = true",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "XBUS_TIMEOUT",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "XBUS_REGSTAGE_EN",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "(`CACHE_BLOCK_SIZE`)",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      },
+      {
+        "literal": "(`CACHE_BURSTS_EN`)",
+        "label": "adoc_keyvalue_continuation_table_v1_6_344"
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "auto_discovered_literals": [
+    {
+      "literal": "2300LUTs",
+      "value": "2300",
+      "unit": "LUTs",
+      "source_doc": "datasheet__overview.adoc",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1000FFs",
+      "value": "1000",
+      "unit": "FFs",
+      "source_doc": "datasheet__overview.adoc",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "130MHz",
+      "value": "130",
+      "unit": "MHz",
+      "source_doc": "datasheet__overview.adoc",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "300ns",
+      "value": "300",
+      "unit": "ns",
+      "source_doc": "datasheet__soc_neoled.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "150ns",
+      "value": "150",
+      "unit": "ns",
+      "source_doc": "datasheet__soc_neoled.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "800kHz",
+      "value": "800",
+      "unit": "kHz",
+      "source_doc": "datasheet__soc_neoled.adoc",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100MHz",
+      "value": "100",
+      "unit": "MHz",
+      "source_doc": "datasheet__soc_neoled.adoc",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "25MHz",
+      "value": "25",
+      "unit": "MHz",
+      "source_doc": "datasheet__soc_neoled.adoc",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "40ns",
+      "value": "40",
+      "unit": "ns",
+      "source_doc": "datasheet__soc_neoled.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1.4µs",
+      "value": "1.4",
+      "unit": "µs",
+      "source_doc": "datasheet__soc_neoled.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "0.4µs",
+      "value": "0.4",
+      "unit": "µs",
+      "source_doc": "datasheet__soc_neoled.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "0.8µs",
+      "value": "0.8",
+      "unit": "µs",
+      "source_doc": "datasheet__soc_neoled.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100MHz",
+      "value": "100",
+      "unit": "MHz",
+      "source_doc": "datasheet__soc_onewire.adoc",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100000000Hz",
+      "value": "100000000",
+      "unit": "Hz",
+      "source_doc": "datasheet__soc_onewire.adoc",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "10000ns",
+      "value": "10000",
+      "unit": "ns",
+      "source_doc": "datasheet__soc_onewire.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "10µs",
+      "value": "10",
+      "unit": "µs",
+      "source_doc": "datasheet__soc_onewire.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "20µs",
+      "value": "20",
+      "unit": "µs",
+      "source_doc": "datasheet__soc_onewire.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "70µs",
+      "value": "70",
+      "unit": "µs",
+      "source_doc": "datasheet__soc_onewire.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "90µs",
+      "value": "90",
+      "unit": "µs",
+      "source_doc": "datasheet__soc_onewire.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "480µs",
+      "value": "480",
+      "unit": "µs",
+      "source_doc": "datasheet__soc_onewire.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "550µs",
+      "value": "550",
+      "unit": "µs",
+      "source_doc": "datasheet__soc_onewire.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "960µs",
+      "value": "960",
+      "unit": "µs",
+      "source_doc": "datasheet__soc_onewire.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2Hz",
+      "value": "2",
+      "unit": "Hz",
+      "source_doc": "datasheet__software_bootloader.adoc",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "10ns",
+      "value": "10",
+      "unit": "ns",
+      "source_doc": "references__riscv-aclint-1.0-rc4.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1GHz",
+      "value": "1",
+      "unit": "GHz",
+      "source_doc": "references__riscv-unprivileged.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100MHz",
+      "value": "100",
+      "unit": "MHz",
+      "source_doc": "references__riscv-unprivileged.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "10ns",
+      "value": "10",
+      "unit": "ns",
+      "source_doc": "references__riscv-unprivileged.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1950s",
+      "value": "1950",
+      "unit": "s",
+      "source_doc": "references__riscv-unprivileged.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "10001V",
+      "value": "10001",
+      "unit": "V",
+      "source_doc": "references__riscv-unprivileged.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100011V",
+      "value": "100011",
+      "unit": "V",
+      "source_doc": "references__riscv-unprivileged.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "101010V",
+      "value": "101010",
+      "unit": "V",
+      "source_doc": "references__riscv-unprivileged.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "101011V",
+      "value": "101011",
+      "unit": "V",
+      "source_doc": "references__riscv-unprivileged.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2010s",
+      "value": "2010",
+      "unit": "s",
+      "source_doc": "references__riscv-unprivileged.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "200MHz",
+      "value": "200",
+      "unit": "MHz",
+      "source_doc": "references__riscv-unprivileged.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100001V",
+      "value": "100001",
+      "unit": "V",
+      "source_doc": "references__riscv-unprivileged.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100010V",
+      "value": "100010",
+      "unit": "V",
+      "source_doc": "references__riscv-unprivileged.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "101001V",
+      "value": "101001",
+      "unit": "V",
+      "source_doc": "references__riscv-unprivileged.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "101100V",
+      "value": "101100",
+      "unit": "V",
+      "source_doc": "references__riscv-unprivileged.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1MHz",
+      "value": "1",
+      "unit": "MHz",
+      "source_doc": "userguide__litex_support.adoc",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "150000000Hz",
+      "value": "150000000",
+      "unit": "Hz",
+      "source_doc": "userguide__micropython_port.adoc",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100ps",
+      "value": "100",
+      "unit": "ps",
+      "source_doc": "userguide__neorv32_in_verilog.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "20ms",
+      "value": "20",
+      "unit": "ms",
+      "source_doc": "userguide__simulating_the_processor.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "10ms",
+      "value": "10",
+      "unit": "ms",
+      "source_doc": "userguide__simulating_the_processor.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "0ms",
+      "value": "0",
+      "unit": "ms",
+      "source_doc": "userguide__simulating_the_processor.adoc",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2000kHz",
+      "value": "2000",
+      "unit": "kHz",
+      "source_doc": "userguide__using_ocd.adoc",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    }
+  ]
+}

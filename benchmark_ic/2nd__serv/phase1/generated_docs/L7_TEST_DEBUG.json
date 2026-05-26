@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_debug",
+  "ic_name": "Phase-1 Fact-Graph Provenance Audit",
+  "test_modes": [],
+  "no_test_modes_in_input": true,
+  "debug_observability": [],
+  "no_debug_observability_in_input": true,
+  "debug_registers": [],
+  "debug_parameters": [],
+  "no_debug_parameters_in_input": true,
+  "formal_interfaces": [],
+  "no_formal_interfaces_in_input": true,
+  "verification_strategy": [
+    {
+      "phase": "verilator",
+      "method": "verilator",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "verilator",
+      "method": "If everything above is done correctly, we can use Verilator as a linter to check the SERV source code.",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "verilator",
+      "method": "Build and run the single threaded zephyr hello world example with verilator (should be stopped with Ctrl-C):",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "test_suite_reference"
+    }
+  ],
+  "no_verification_strategy_in_input": false,
+  "engineer_mode_unlock_sequence": null,
+  "no_engineer_mode_unlock_in_input": true,
+  "vsuite_per_kw_cap_skipped_v1_6_373": 1,
+  "extraction_evidence": {},
+  "class_path": "processor_cpu"
+}

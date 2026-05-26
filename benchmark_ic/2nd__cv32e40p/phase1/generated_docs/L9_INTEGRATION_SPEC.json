@@ -1,0 +1,1621 @@
+{
+  "schema_version": 2,
+  "doc_class": "integration_spec",
+  "ic_name": "Released core",
+  "top_module": "cv32e40p_top",
+  "top_module_extraction_strategy": "rtl_top_prose_v1_6_545",
+  "no_top_module_in_input": false,
+  "ports": [
+    {
+      "name": "debug_req_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Request to enter Debug Mode"
+    },
+    {
+      "name": "debug_havereset_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Debug status: Core has been reset"
+    },
+    {
+      "name": "debug_running_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Debug status: Core is running"
+    },
+    {
+      "name": "debug_halted_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Debug status: Core is halted"
+    },
+    {
+      "name": "dm_halt_addr_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address to jump to when entering Debug Mode, see :ref:`debug-support`. Must be word-aligned. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "dm_exception_addr_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address to jump to when an exception occurs when executing code during Debug Mode, see :ref:`debug-support`. Must be word-aligned. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "irq_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Level sensistive active high interrupt inputs."
+    },
+    {
+      "name": "irq_ack_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Interrupt acknowledge"
+    },
+    {
+      "name": "irq_id_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 5,
+      "msb": 4,
+      "lsb": 0,
+      "description": "Interrupt index for taken interrupt"
+    },
+    {
+      "name": "instr_addr_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address, word aligned"
+    },
+    {
+      "name": "instr_req_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Request valid, will stay high until ``instr_gnt_i`` is high for one cycle"
+    },
+    {
+      "name": "instr_gnt_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "The other side accepted the request. ``instr_addr_o`` may change in the next cycle."
+    },
+    {
+      "name": "instr_rvalid_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "``instr_rdata_i`` holds valid data when ``instr_rvalid_i`` is high. This signal will be high for exactly one cycle per request."
+    },
+    {
+      "name": "instr_rdata_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data read from memory"
+    },
+    {
+      "name": "rst_ni",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Active-low asynchronous reset"
+    },
+    {
+      "name": "clk_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Clock signal"
+    },
+    {
+      "name": "scan_cg_en_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Scan clock gate enable. Design for test (DfT) related signal. Can be used during scan testing operation to force instantiated clock gate(s) to be enabled. This signal should be 0 during normal / functional operation."
+    },
+    {
+      "name": "fetch_enable_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Enable the instruction fetch of CV32E40P. The first instruction fetch after reset de-assertion will not happen as long as this signal is 0. ``fetch_enable_i`` needs to be set to 1 for at least one cycle while not in reset to enable fetching. Once fetching has been enabled the value ``fetch_enable_i`` is ignored."
+    },
+    {
+      "name": "core_sleep_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Core is sleeping, see :ref:`sleep_unit`."
+    },
+    {
+      "name": "pulp_clock_en_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "PULP clock enable (only used when ``COREV_CLUSTER`` = 1, tie to 0 otherwise), see :ref:`sleep_unit`"
+    },
+    {
+      "name": "boot_addr_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Boot address. First program counter after reset = ``boot_addr_i``. Must be half-word aligned. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "mtvec_addr_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "``mtvec`` address. Initial value for the address part of :ref:`csr-mtvec`. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "hart_id_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Hart ID, usually static, can be read from :ref:`csr-mhartid` and :ref:`csr-uhartid` CSRs"
+    },
+    {
+      "name": "data_addr_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address"
+    },
+    {
+      "name": "data_req_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Request valid, will stay high until ``data_gnt_i`` is high for one cycle"
+    },
+    {
+      "name": "data_gnt_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "The other side accepted the request. ``data_addr_o`` may change in the next cycle."
+    },
+    {
+      "name": "data_we_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Write Enable, high for writes, low for reads. Sent together with ``data_req_o``"
+    },
+    {
+      "name": "data_be_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0,
+      "description": "Byte Enable. Is set for the bytes to write/read, sent together with ``data_req_o``"
+    },
+    {
+      "name": "data_wdata_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data to be written to memory, sent together with ``data_req_o``"
+    },
+    {
+      "name": "data_rvalid_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "``data_rvalid_i`` will be high for exactly one cycle to signal the end of the response phase of for both read and write"
+    },
+    {
+      "name": "data_rdata_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data read from memory"
+    }
+  ],
+  "top_ports": [
+    {
+      "name": "debug_req_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Request to enter Debug Mode"
+    },
+    {
+      "name": "debug_havereset_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Debug status: Core has been reset"
+    },
+    {
+      "name": "debug_running_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Debug status: Core is running"
+    },
+    {
+      "name": "debug_halted_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Debug status: Core is halted"
+    },
+    {
+      "name": "dm_halt_addr_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address to jump to when entering Debug Mode, see :ref:`debug-support`. Must be word-aligned. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "dm_exception_addr_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address to jump to when an exception occurs when executing code during Debug Mode, see :ref:`debug-support`. Must be word-aligned. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "irq_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Level sensistive active high interrupt inputs."
+    },
+    {
+      "name": "irq_ack_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Interrupt acknowledge"
+    },
+    {
+      "name": "irq_id_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 5,
+      "msb": 4,
+      "lsb": 0,
+      "description": "Interrupt index for taken interrupt"
+    },
+    {
+      "name": "instr_addr_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address, word aligned"
+    },
+    {
+      "name": "instr_req_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Request valid, will stay high until ``instr_gnt_i`` is high for one cycle"
+    },
+    {
+      "name": "instr_gnt_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "The other side accepted the request. ``instr_addr_o`` may change in the next cycle."
+    },
+    {
+      "name": "instr_rvalid_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "``instr_rdata_i`` holds valid data when ``instr_rvalid_i`` is high. This signal will be high for exactly one cycle per request."
+    },
+    {
+      "name": "instr_rdata_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data read from memory"
+    },
+    {
+      "name": "rst_ni",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Active-low asynchronous reset"
+    },
+    {
+      "name": "clk_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Clock signal"
+    },
+    {
+      "name": "scan_cg_en_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Scan clock gate enable. Design for test (DfT) related signal. Can be used during scan testing operation to force instantiated clock gate(s) to be enabled. This signal should be 0 during normal / functional operation."
+    },
+    {
+      "name": "fetch_enable_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Enable the instruction fetch of CV32E40P. The first instruction fetch after reset de-assertion will not happen as long as this signal is 0. ``fetch_enable_i`` needs to be set to 1 for at least one cycle while not in reset to enable fetching. Once fetching has been enabled the value ``fetch_enable_i`` is ignored."
+    },
+    {
+      "name": "core_sleep_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Core is sleeping, see :ref:`sleep_unit`."
+    },
+    {
+      "name": "pulp_clock_en_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "PULP clock enable (only used when ``COREV_CLUSTER`` = 1, tie to 0 otherwise), see :ref:`sleep_unit`"
+    },
+    {
+      "name": "boot_addr_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Boot address. First program counter after reset = ``boot_addr_i``. Must be half-word aligned. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "mtvec_addr_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "``mtvec`` address. Initial value for the address part of :ref:`csr-mtvec`. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "hart_id_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Hart ID, usually static, can be read from :ref:`csr-mhartid` and :ref:`csr-uhartid` CSRs"
+    },
+    {
+      "name": "data_addr_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address"
+    },
+    {
+      "name": "data_req_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Request valid, will stay high until ``data_gnt_i`` is high for one cycle"
+    },
+    {
+      "name": "data_gnt_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "The other side accepted the request. ``data_addr_o`` may change in the next cycle."
+    },
+    {
+      "name": "data_we_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Write Enable, high for writes, low for reads. Sent together with ``data_req_o``"
+    },
+    {
+      "name": "data_be_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0,
+      "description": "Byte Enable. Is set for the bytes to write/read, sent together with ``data_req_o``"
+    },
+    {
+      "name": "data_wdata_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data to be written to memory, sent together with ``data_req_o``"
+    },
+    {
+      "name": "data_rvalid_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "``data_rvalid_i`` will be high for exactly one cycle to signal the end of the response phase of for both read and write"
+    },
+    {
+      "name": "data_rdata_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data read from memory"
+    }
+  ],
+  "top_module_pins": [
+    {
+      "name": "debug_req_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Request to enter Debug Mode"
+    },
+    {
+      "name": "debug_havereset_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Debug status: Core has been reset"
+    },
+    {
+      "name": "debug_running_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Debug status: Core is running"
+    },
+    {
+      "name": "debug_halted_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Debug status: Core is halted"
+    },
+    {
+      "name": "dm_halt_addr_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address to jump to when entering Debug Mode, see :ref:`debug-support`. Must be word-aligned. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "dm_exception_addr_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address to jump to when an exception occurs when executing code during Debug Mode, see :ref:`debug-support`. Must be word-aligned. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "irq_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Level sensistive active high interrupt inputs."
+    },
+    {
+      "name": "irq_ack_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Interrupt acknowledge"
+    },
+    {
+      "name": "irq_id_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 5,
+      "msb": 4,
+      "lsb": 0,
+      "description": "Interrupt index for taken interrupt"
+    },
+    {
+      "name": "instr_addr_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address, word aligned"
+    },
+    {
+      "name": "instr_req_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Request valid, will stay high until ``instr_gnt_i`` is high for one cycle"
+    },
+    {
+      "name": "instr_gnt_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "The other side accepted the request. ``instr_addr_o`` may change in the next cycle."
+    },
+    {
+      "name": "instr_rvalid_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "``instr_rdata_i`` holds valid data when ``instr_rvalid_i`` is high. This signal will be high for exactly one cycle per request."
+    },
+    {
+      "name": "instr_rdata_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data read from memory"
+    },
+    {
+      "name": "rst_ni",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Active-low asynchronous reset"
+    },
+    {
+      "name": "clk_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Clock signal"
+    },
+    {
+      "name": "scan_cg_en_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Scan clock gate enable. Design for test (DfT) related signal. Can be used during scan testing operation to force instantiated clock gate(s) to be enabled. This signal should be 0 during normal / functional operation."
+    },
+    {
+      "name": "fetch_enable_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Enable the instruction fetch of CV32E40P. The first instruction fetch after reset de-assertion will not happen as long as this signal is 0. ``fetch_enable_i`` needs to be set to 1 for at least one cycle while not in reset to enable fetching. Once fetching has been enabled the value ``fetch_enable_i`` is ignored."
+    },
+    {
+      "name": "core_sleep_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Core is sleeping, see :ref:`sleep_unit`."
+    },
+    {
+      "name": "pulp_clock_en_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "PULP clock enable (only used when ``COREV_CLUSTER`` = 1, tie to 0 otherwise), see :ref:`sleep_unit`"
+    },
+    {
+      "name": "boot_addr_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Boot address. First program counter after reset = ``boot_addr_i``. Must be half-word aligned. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "mtvec_addr_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "``mtvec`` address. Initial value for the address part of :ref:`csr-mtvec`. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "hart_id_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Hart ID, usually static, can be read from :ref:`csr-mhartid` and :ref:`csr-uhartid` CSRs"
+    },
+    {
+      "name": "data_addr_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address"
+    },
+    {
+      "name": "data_req_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Request valid, will stay high until ``data_gnt_i`` is high for one cycle"
+    },
+    {
+      "name": "data_gnt_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "The other side accepted the request. ``data_addr_o`` may change in the next cycle."
+    },
+    {
+      "name": "data_we_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "Write Enable, high for writes, low for reads. Sent together with ``data_req_o``"
+    },
+    {
+      "name": "data_be_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0,
+      "description": "Byte Enable. Is set for the bytes to write/read, sent together with ``data_req_o``"
+    },
+    {
+      "name": "data_wdata_o",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data to be written to memory, sent together with ``data_req_o``"
+    },
+    {
+      "name": "data_rvalid_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "description": "``data_rvalid_i`` will be high for exactly one cycle to signal the end of the response phase of for both read and write"
+    },
+    {
+      "name": "data_rdata_i",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565+desc_cascade_v1_6_463",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data read from memory"
+    }
+  ],
+  "no_integration_in_input": false,
+  "submodules": [
+    {
+      "name": "cv32e40p_prefetch_buffer",
+      "instances": 1,
+      "extraction_strategy": "rst_inline_backtick_sv",
+      "low_confidence": false,
+      "evidence": {
+        "file": "source__instruction_fetch.rst"
+      }
+    },
+    {
+      "name": "cv32e40p_top",
+      "instances": 1,
+      "extraction_strategy": "rst_inline_backtick_sv",
+      "low_confidence": false,
+      "evidence": {
+        "file": "source__integration.rst"
+      }
+    },
+    {
+      "name": "cv32e40p_sim_clock_gate",
+      "instances": 1,
+      "extraction_strategy": "rst_inline_backtick_sv",
+      "low_confidence": false,
+      "evidence": {
+        "file": "source__integration.rst"
+      }
+    },
+    {
+      "name": "cv32e40p_sleep_unit",
+      "instances": 1,
+      "extraction_strategy": "rst_inline_backtick_sv",
+      "low_confidence": false,
+      "evidence": {
+        "file": "source__integration.rst"
+      }
+    },
+    {
+      "name": "cv32e40p_register_file_ff",
+      "instances": 1,
+      "extraction_strategy": "rst_sphinx_file_role",
+      "low_confidence": false,
+      "evidence": {
+        "file": "source__register_file.rst"
+      }
+    }
+  ],
+  "no_submodules_in_input": false,
+  "sim_only_modules": [],
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
+  "pipeline_stages": [
+    {
+      "name": "ID",
+      "evidence": "input/docs/source__instruction_fetch.rst (pipeline stage)"
+    },
+    {
+      "name": "EX",
+      "evidence": "input/docs/source__intro.rst (pipeline stage)"
+    },
+    {
+      "name": "IF",
+      "evidence": "input/docs/source__pipeline.rst (pipeline stage)"
+    },
+    {
+      "name": "WB",
+      "evidence": "input/docs/source__pipeline.rst (pipeline stage)"
+    }
+  ],
+  "no_pipeline_stages_in_input": false,
+  "internal_wires": [
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "rst_ni",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "clk_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "scan_cg_en_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "fetch_enable_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "pulp_clock_en_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "core_sleep_o",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "boot_addr_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "mtvec_addr_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "dm_halt_addr_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "dm_exception_addr_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "hart_id_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "instr_addr_o",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "instr_req_o",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "instr_gnt_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "instr_rvalid_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "instr_rdata_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "data_addr_o",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "data_req_o",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "data_gnt_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "data_we_o",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "data_be_o",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "data_wdata_o",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "data_rvalid_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "data_rdata_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "irq_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "irq_ack_o",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "irq_id_o",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "debug_req_i",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "debug_havereset_o",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "debug_running_o",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    },
+    {
+      "parent": "<TOP>",
+      "child_module": "cv32e40p_top",
+      "child_inst": "core",
+      "child_port": "debug_halted_o",
+      "net": "<OPEN>",
+      "extraction_strategy": "verilog_inst_template_v1_6_529",
+      "evidence_file": "input/docs/source__integration.rst"
+    }
+  ],
+  "no_internal_wires_in_input": false,
+  "expected_verdict_byte_hex": null,
+  "expected_verdict_byte_offset": null,
+  "expected_verdict_byte_extraction_strategy": null,
+  "expected_verdict_byte_offset_low_confidence": false,
+  "expected_verdict_byte_hex_low_confidence": false,
+  "cpu_interrupts": [],
+  "no_cpu_interrupts_in_input": true,
+  "reset_domains": [
+    {
+      "name": "rst_ni",
+      "polarity": "active_low",
+      "sync": "unknown",
+      "scan_prefixed": false,
+      "direction_prefix": null,
+      "extraction_strategy": "l9_port_reset_shape_v1_6_369"
+    }
+  ],
+  "memories": [
+    {
+      "name": "EnableSIMDMask",
+      "kind": "regfile",
+      "type": "Register File",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "source__fpu.rst",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "f31",
+      "kind": "regfile",
+      "type": "register file",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "source__register_file.rst",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    }
+  ],
+  "memory_candidates": [
+    {
+      "name": null,
+      "kind": "regfile",
+      "type": "register\nfile",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "images__CV32E40P_Block_Diagram.svg",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "regfile",
+      "type": "register file",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "source__fpu.rst",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "source__instruction_fetch.rst",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "fifo",
+      "type": "FIFO",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "source__instruction_fetch.rst",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    }
+  ],
+  "no_memory_candidates_in_input": false,
+  "no_memories_in_input": false,
+  "memory_map": [],
+  "no_memory_map_in_input": true,
+  "instantiation_template": "cv32e40p_top #(\n    .FPU                      ( 0 ),\n    .FPU_ADDMUL_LAT           ( 0 ),\n    .FPU_OTHERS_LAT           ( 0 ),\n    .ZFINX                    ( 0 ),\n    .COREV_PULP               ( 0 ),\n    .COREV_CLUSTER            ( 0 ),\n    .NUM_MHPMCOUNTERS         ( 1 )\n) u_core (\n    // Clock and reset\n    .rst_ni                   (),\n    .clk_i                    (),\n    .scan_cg_en_i             (),\n\n    // Special control signals\n    .fetch_enable_i           (),\n    .pulp_clock_en_i          (),\n    .core_sleep_o             (),\n\n    // Configuration\n    .boot_addr_i              (),\n    .mtvec_addr_i             (),\n    .dm_halt_addr_i           (),\n    .dm_exception_addr_i      (),\n    .hart_id_i                (),\n\n    // Instruction memory interface\n    .instr_addr_o             (),\n    .instr_req_o              (),\n    .instr_gnt_i              (),\n    .instr_rvalid_i           (),\n    .instr_rdata_i            (),\n\n    // Data memory interface\n    .data_addr_o              (),\n    .data_req_o               (),\n    .data_gnt_i               (),\n    .data_we_o                (),\n    .data_be_o                (),\n    .data_wdata_o             (),\n    .data_rvalid_i            (),\n    .data_rdata_i             (),\n\n     // Interrupt interface\n    .irq_i                    (),\n    .irq_ack_o                (),\n    .irq_id_o                 (),\n\n    // Debug interface\n    .debug_req_i              (),\n    .debug_havereset_o        (),\n    .debug_running_o          (),\n    .debug_halted_o           ()\n);",
+  "no_instantiation_template_in_input": false,
+  "extraction_evidence": {
+    "derived_from_L3": []
+  },
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 100.0,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 100.0,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/source__integration.rst",
+        "line": 253,
+        "matched_substring": "100 MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 100000000,
+      "period_ns": 10.0,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    }
+  ],
+  "synthesis_targets": [
+    {
+      "name": "fmax_prose_100mhz_on_a_32_kb_memory_connected_on_each_of_its_obi_interface",
+      "fmax_mhz": 100.0,
+      "target_fpga": "a 32 KB memory connected on each of its OBI interface",
+      "role": "synthesis_fmax",
+      "extraction_strategy": "fmax_prose_v1_6_538",
+      "v1_6_538_extracted": true,
+      "evidence": {
+        "source": "input/docs/source__integration.rst"
+      }
+    }
+  ],
+  "resets": [
+    {
+      "name": "rst_ni",
+      "polarity": "active_low",
+      "extraction_strategy": "l9_top_port_reset_derive"
+    }
+  ],
+  "parameters": [
+    {
+      "name": "FPU_ADDMUL_LAT",
+      "default": "0",
+      "type": "int",
+      "description": "Number of pipeline registers for Floating-Point addition and multiplication instructions, see :ref:`fpu`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "FPU_OTHERS_LAT",
+      "default": "0",
+      "type": "int",
+      "description": "Number of pipeline registers for Floating-Point comparison, conversion and classify instructions, see :ref:`fpu`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "ZFINX",
+      "default": "0",
+      "type": "bit",
+      "description": "Enable Floating Point instructions to use the General Purpose register file instead of requiring a dedicated Floating Point register file, see :ref:`fpu`. Only allowed to be set to 1 if ``FPU`` = 1",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "COREV_PULP",
+      "default": "0",
+      "type": "bit",
+      "description": "Enable all of the custom PULP ISA extensions (except **cv.elw**) (see :ref:`custom-isa-extensions`) and all custom CSRs (see :ref:`cs-registers`).",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "NUM_MHPMCOUNTERS",
+      "default": "1",
+      "type": "int (0..29)",
+      "description": "Number of MHPMCOUNTER performance counters, see :ref:`performance-counters`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "FPU",
+      "default": "0",
+      "type": "bit",
+      "description": "Enable Floating Point Unit (FPU) support, see :ref:`fpu`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "COREV_CLUSTER",
+      "default": "0",
+      "type": "bit",
+      "description": "Enable PULP Cluster support (**cv.elw**), see :ref:`pulp_cluster`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    }
+  ],
+  "clocks": [
+    {
+      "name": "clk_i",
+      "edge": "posedge",
+      "extraction_strategy": "l9_top_port_clock_derive"
+    }
+  ],
+  "interface_type": "obi",
+  "no_interface_type_in_input": false,
+  "interface_types": [
+    {
+      "name": "obi",
+      "occurrences": 31,
+      "first_line": 3766,
+      "matched_token": "OBI"
+    }
+  ],
+  "no_interface_types_in_input": false,
+  "chip_top_interfaces": [
+    {
+      "name": "obi",
+      "matched_token": "OBI"
+    },
+    {
+      "name": "all_interfaces",
+      "group": "all",
+      "signals": [
+        "rst_ni",
+        "clk_i",
+        "scan_cg_en_i",
+        "fetch_enable_i",
+        "core_sleep_o",
+        "sleep_unit",
+        "pulp_clock_en_i",
+        "boot_addr_i",
+        "mtvec_addr_i",
+        "dm_halt_addr_i",
+        "dm_exception_addr_i",
+        "hart_id_i",
+        "instr_",
+        "data_",
+        "irq_",
+        "debug_"
+      ],
+      "extraction_strategy": "interfaces_section_implicit_all_v1_6_533",
+      "evidence_file": "source__integration.rst"
+    }
+  ],
+  "class_path": "processor_cpu",
+  "submodules_extraction_strategy": "rst_sphinx_file_role_or_inline_backtick_sv_fallback"
+}

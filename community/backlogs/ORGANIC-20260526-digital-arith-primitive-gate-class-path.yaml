@@ -1,0 +1,127 @@
+type: enhancement
+severity: P1
+component: program:flow_compliance_check
+plugin_version: "0.1.2"
+
+title: >-
+  Phase 2 structural-gate suite has no class-aware path for a pure-digital
+  arithmetic/transform primitive, and forces protocol/analog gates that the
+  class legitimately cannot satisfy
+
+pattern: |
+  When an IC is classified as a pure-digital data-transform primitive
+  (multiplier, adder, filter, hash core, encoder/decoder — a single top
+  module with clock + reset + a memory-mapped data interface, no
+  software-visible command protocol and no analog/mixed-signal content),
+  the Phase 2 strict-structural gate suite still runs protocol-class and
+  analog-class gates that the primitive cannot satisfy without fabricating
+  spec data. RTL that synthesizes cleanly (gate-level netlist produced,
+  FPGA bitstream produced, reference simulation PASS) is still failed at
+  the structural gate, with no honest convergence path. Three distinct
+  failure clusters:
+
+  1. Analog-keyword false-positive deadlock. The analog keyword detector
+     treats NEGATED or explicitly-EXCLUDED keyword mentions in the input
+     documents (e.g. a line that crosses out an analog feature, or a
+     sentence stating the design does NOT need an analog block) as
+     evidence of analog content. The completeness gate then demands the
+     spec layer declare analog blocks; if blocks are declared, the full
+     analog flow (block coverage, hardmacro, mixed-signal co-sim,
+     analog-digital interface) is required; if blocks are absent, a
+     separate gate flags a contradiction ("keyword detected but not
+     mapped"). For a pure-digital primitive whose documents merely
+     mention an analog term in negated form, neither state can pass.
+
+  2. Protocol / typed-depth cluster. Gates require opcode argument
+     constraints (addr_max/len_max), typed electrical-spec arrays, and
+     typed protocol behavioral-step latencies, plus a per-layer typed
+     structured-field quota. A memory-mapped arithmetic primitive has no
+     opcode argument set, no analog electrical limits, and no
+     protocol-style behavioral sequence, so these gates fail on absent
+     data that the class legitimately does not carry.
+
+  3. Reference testbench mismatch. The reference-testbench step selects a
+     protocol/cable-side-ID-class testbench that instantiates a bus port
+     specific to that class. A pure-digital primitive's top module has no
+     such port, so testbench elaboration fails even though the design's
+     own reference simulation passes.
+
+suggested_fix: |
+  Make the Phase 2 structural-gate suite class-aware for the pure-digital
+  data-transform primitive family:
+
+  (a) Add negated-mention / explicitly-excluded-keyword awareness to the
+      analog keyword detector so that a keyword appearing only inside a
+      negation or an explicit exclusion marker does NOT count as analog
+      content and does NOT force the spec layer to declare analog blocks.
+
+  (b) Define a class-aware gate skip-set for the pure-digital primitive
+      family: skip the analog block-coverage / hardmacro / mixed-signal
+      co-sim / analog-digital-interface / analog-content-must-emit gates,
+      and skip the protocol opcode-argument, typed-electrical-spec,
+      protocol-behavioral-step, and protocol-simulation-required gates,
+      when the class config marks command-protocol / register-map /
+      analog as not-applicable.
+
+  (c) Select a non-protocol reference testbench (clock + reset + data
+      bus pass-through) for the pure-digital primitive family instead of
+      the protocol-class reference testbench.
+
+  Separately, two orchestration defects surfaced while reaching this
+  point and were worked around at the project level:
+
+  - The full-flow orchestrator skips Phase 1 entirely when only vendor
+    documents are present (no structured/free-text prompt), leaving zero
+    structured layer documents, which makes the Phase 2 precondition
+    check fail. The orchestrator should auto-run Phase 1 in document mode
+    for the vendor-docs-only entry path.
+
+  - The Phase 1 dispatcher routes a vendor-documents directory containing
+    Markdown to the structured/prompt backend (whose ingester expects
+    structured layer JSON and ingests zero facts, and which also resolves
+    a class knowledge-base file via a relative path that does not exist
+    from the project working directory) instead of the document-extraction
+    track that actually parses Markdown/PDF/text. Markdown vendor docs
+    should route to the document-extraction track.
+
+id: "ORGANIC-20260526-digital-arith-primitive-gate-class-path"
+submitted_at: "2026-05-26T11:00:00+08:00"
+session_context: >-
+  Fresh field-agent full-flow run on a pure-digital hash-accelerator
+  benchmark. Catalog-glue-author pulled a permissively-licensed
+  open-source hash core and authored the integration wrapper; synthesis,
+  FPGA compile, and reference simulation all PASS, but Phase 2 halts at
+  the strict-structural gate on 12 protocol/analog-class gates with no
+  honest convergence path for this IC class.
+
+corroborating_reproductions:
+  - benchmark: "benchmark_ic/4th__spm (serial-parallel multiplier, size=32)"
+    date: "2026-05-26"
+    detail: >-
+      Independent fresh field-agent reproduction on a DIFFERENT IC of the
+      same class (a 32-bit shift-and-add bit-serial multiplier, not the
+      hash core / CPU of the prior sessions). Confirms all three failure
+      clusters are class-systematic, not IP-specific:
+      (1) Orchestrator skipped Phase 1 entirely (vendor-docs-only entry) →
+          phase2 phase1_precheck FAIL 0/13 L docs. Worked around by running
+          phase1_one_shot_runner.py with --mode docs (produced 14 L docs,
+          100% coverage, 0 TODO).
+      (2) L5_ADI_SPEC emitted two low_confidence analog stubs (dac, esd)
+          from NEGATED mentions in input docs ("不需 Plugin 產生 ... analog
+          trim DAC", and an ESD parity stub). This drove final_audit FAIL on
+          a non-existent phase1/analog/analog_block_list.json condition.
+      (3) reference_tb hard-instantiated the AID-class protocol TB
+          (aid_class_reference_tb.v) and FAILED elaboration with:
+            "port `reset_n' is not a port of u_dut"
+            "port `id_bus' is not a port of u_dut"
+          because SPM's ports are clk/rst/x/y/p (no reset_n, no id_bus).
+      Key new evidence strengthening fix (c): the agent authored real,
+      spec-derived SPM RTL (NOT stubbed) and PROVED it correct —
+      SPM_GOLDEN_TB_PASS errors=0 over 5008 vectors (all L7 corners + 5000
+      random) against the software golden model (x*y) mod 2^32, AND yosys
+      synth PASS (0 problems, 304 cells incl. 33 flops, synth_top=spm,
+      netlist_yosys.v emitted). So correct, synthesizable, simulation-proven
+      RTL is STILL reported as phase2 FAIL purely due to the wrong
+      reference-TB template — confirming fix (c) (non-protocol clk/rst/data
+      reference TB for this family) is the load-bearing change. Phase 3 was
+      never reached (orchestrator halts at phase2).

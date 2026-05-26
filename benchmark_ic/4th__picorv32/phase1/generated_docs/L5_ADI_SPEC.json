@@ -1,0 +1,173 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "PicoRV32",
+  "analog_blocks_detected": false,
+  "analog_blocks": [],
+  "no_analog": true,
+  "external_components": [],
+  "electrical_specs": [],
+  "design_parameters": [
+    {
+      "parameter": "ENABLE_COUNTERS",
+      "value": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "ENABLE_COUNTERS64",
+      "value": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "ENABLE_REGS_16_31",
+      "value": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "ENABLE_REGS_DUALPORT",
+      "value": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "LATCHED_MEM_RDATA",
+      "value": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "TWO_STAGE_SHIFT",
+      "value": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "BARREL_SHIFTER",
+      "value": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "TWO_CYCLE_COMPARE",
+      "value": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "TWO_CYCLE_ALU",
+      "value": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "COMPRESSED_ISA",
+      "value": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "CATCH_MISALIGN",
+      "value": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "CATCH_ILLINSN",
+      "value": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "ENABLE_PCPI",
+      "value": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "ENABLE_MUL",
+      "value": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "ENABLE_FAST_MUL",
+      "value": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "ENABLE_DIV",
+      "value": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "ENABLE_IRQ",
+      "value": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "ENABLE_IRQ_QREGS",
+      "value": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "ENABLE_IRQ_TIMER",
+      "value": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "ENABLE_TRACE",
+      "value": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "REGS_INIT_ZERO",
+      "value": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "MASKED_IRQ",
+      "value": "32'h0000_0000",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "LATCHED_IRQ",
+      "value": "32'hffff_ffff",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "PROGADDR_RESET",
+      "value": "32'h0000_0000",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "PROGADDR_IRQ",
+      "value": "32'h0000_0010",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "parameter": "STACKADDR",
+      "value": "32'hffff_ffff",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/README.md": [],
+    "input/docs/picosoc_README.md": []
+  },
+  "class_path": "processor_cpu"
+}

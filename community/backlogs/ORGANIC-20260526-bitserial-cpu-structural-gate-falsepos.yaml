@@ -1,0 +1,69 @@
+type: bug
+severity: P2
+component: program:flow_compliance_check
+plugin_version: "0.1.2"
+
+title: >-
+  Structural-RTL pre-burn gates fire false-positives on a validated,
+  silicon-proven bit-serial RISC-V CPU core: submodule-instantiation regex
+  rejects standard `mod #(.P(P)) inst (...)` form, ip_catalog_pull provenance
+  uses wrong `outputs_sha256` key, and nba_shift_register check flags the
+  core's intentional bit-serial look-ahead shift as a race
+
+pattern: |
+  When catalog-glue-author pulls a bit-serial CPU (cpu/serv@1.4.0, ISC) and
+  authors a pass-through chip_top, three structural gates emit FAIL even
+  though host yosys elaborates the full module hierarchy and Quartus produces
+  a clean SOF with 0 errors and positive setup/hold slack:
+
+  1. l9_submodule_conformance_check — _INSTANTIATION_TEMPLATE regex
+     `(?<!module\s)\b{name}\b\s+\w+\s*(?:#\s*\([^)]*\)\s*)?\(` requires the
+     `#(...)` param-override AFTER the instance name and uses a flat
+     `[^)]*` body that cannot match nested parens like `#(.W (W))`. SERV uses
+     the correct Verilog order `serv_alu #(.W (W)) alu (...)` (and splits the
+     module name onto its own line for some instances), so every submodule is
+     wrongly reported SUBMODULE_NOT_INSTANTIATED "dead code".
+
+  2. provenance_output_hash_completeness_check — ip_catalog_pull.py writes
+     each pull event with key `outputs_sha256` (a list) but the checker
+     requires `outputs` (a dict of project-relative-path → "sha256:<hex>"),
+     so every catalog-pull provenance entry is flagged
+     PROVENANCE_OUTPUTS_MISSING.
+
+  3. nba_shift_register_same_cycle_read_check — flags serv_immdec.v:40
+     (combinational read of a bit being NBA-shifted) as a same-cycle race.
+     For a bit-serial datapath this look-ahead read is the intended,
+     silicon-validated design (SERV has shipped on multiple OpenMPW
+     shuttles). No automatic suppression exists for the bit-serial family.
+
+suggested_fix: |
+  1. l9_submodule_conformance_check: change _INSTANTIATION_TEMPLATE to put the
+     optional `#(...)` BEFORE the instance name and allow one level of nested
+     parens, e.g.
+       r"(?<!module\s)\b{name}\b\s+(?:#\s*\((?:[^()]|\([^()]*\))*\)\s*)?\w+\s*\("
+     (verified: matches serv_alu/serv_decode/serv_top instantiations; still
+     excludes the module-declaration header). FIXED in this session — please
+     verify and keep.
+  2. ip_catalog_pull.py: emit an `outputs` dict
+     {project_rel_path: "sha256:<hex>"} on each provenance.jsonl event
+     (keep `outputs_sha256` as a back-compat alias). FIXED in this session —
+     please verify and keep.
+  3. nba_shift_register_same_cycle_read_check: add a bit-serial-family
+     suppression — when the design is a known bit-serial core (W==1 datapath
+     / catalog ip_class contains "bit_serial"), downgrade the same-cycle
+     look-ahead read to WARN, or honor an evidence-based waiver key analogous
+     to the analog/electrical gates.
+
+id: "ORGANIC-20260526-bitserial-cpu-structural-gate-falsepos"
+submitted_at: "2026-05-26T03:05:00+00:00"
+session_context: >-
+  Fresh field-agent full Vibe-IC run on the SERV bit-serial RISC-V RV32I core
+  (benchmark_ic/2nd__serv). Phase 1 docs-mode produced 14 L docs at 100%
+  coverage; phase2 rtl_gen WAIVED to catalog-glue-author, which pulled
+  cpu/serv@1.4.0 (ISC) and authored a pass-through chip_top wrapper.
+  Host yosys synthesis PASSED (chip_top, 4219/10522 cells) and Quartus Prime
+  full compilation PASSED (chip_top.sof 3.2MB, setup slack +18.085ns, hold
+  +0.263ns). The three structural gates above (plus the already-filed CPU
+  reference-TB mismatch) were the only things blocking the pre-burn audit;
+  fixes 1 and 2 were applied and verified PASS this session, fix 3 is the
+  remaining false-positive on validated bit-serial IP.

@@ -1,0 +1,116 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "Phase-1 Fact-Graph Provenance Audit",
+  "analog_blocks_detected": false,
+  "analog_blocks": [],
+  "no_analog": true,
+  "external_components": [],
+  "electrical_specs": [],
+  "design_parameters": [
+    {
+      "parameter": "MDU",
+      "value": "0",
+      "type": "logic",
+      "description": "Enables the interface for connecting SERV and the Multiplication and Division Unit (MDU). Note that this only enables the interface and the decoder logic. The MDU itself must be connected externally a",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "parameter": "PRE_REGISTER",
+      "value": "0",
+      "type": null,
+      "description": "| Register signals before or after the decoder | 0 : Register after the decoder. Faster but uses more resources | 1 : (default) Register before the decoder. Slower but uses less resources",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "parameter": "RESET_PC",
+      "value": "0x00000000",
+      "type": "address",
+      "description": "Address of first instruction to fetch from memory after reset (Reset vector)",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "parameter": "RESET_STRATEGY",
+      "value": "\"MINI\"",
+      "type": null,
+      "description": "| Amount of reset applied to design | \"NONE\" : No reset at all. Relies on a POR to set correct initialization values and that core isn't reset during runtime | \"MINI\" : Standard setting. Resets the mi",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "parameter": "RF_WIDTH",
+      "value": "2",
+      "type": null,
+      "description": "(serv_rf_top only) Width of the RF memory. Typically smaller values use less resources, but can be implementation-dependant.",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "parameter": "WITH_CSR",
+      "value": "0",
+      "type": null,
+      "description": "Enable Zicsr extension. This also enables timer IRQ and exception handling. Note that SERV only implements a small subset of the CSR registers.",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "parameter": "sim",
+      "value": "0",
+      "type": "address",
+      "description": "| Enable simulation mode. In simulation mode, two memory addresses have special purposes. | 0x80000000: Writes to this address puts the byte in the lowest data byte into a log file decided by the \"sig",
+      "source": "doc__servile.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "parameter": "with_c",
+      "value": "0",
+      "type": null,
+      "description": "Enable the C extension. This also makes SERV support misaligned loads and stores.",
+      "source": "doc__servile.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "parameter": "with_mdu",
+      "value": "0",
+      "type": "logic",
+      "description": "Enables the Multiplication and Division Unit (MDU) to support the M extension. Note that this only enables the interface and the decoder logic. The MDU itself is external from SERV.",
+      "source": "doc__servile.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "parameter": "memfile",
+      "value": "\"\"",
+      "type": null,
+      "description": "Verilog hex file containing a RISC-V application to be preloaded into memory",
+      "source": "doc__serving.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "parameter": "memsize",
+      "value": "1-4294967296",
+      "type": null,
+      "description": "Size of memory (in bytes). Needs to be at least large enough to fit the application supplied by memsize. Note that the RF occupies the highest 128 bytes of memory in the RAM.",
+      "source": "doc__serving.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/PROVENANCE.md": [],
+    "input/docs/README.md": [],
+    "input/docs/doc__datasheet.rst": [],
+    "input/docs/doc__index.rst": [],
+    "input/docs/doc__interface.rst": [],
+    "input/docs/doc__internals.rst": [],
+    "input/docs/doc__modules.rst": [],
+    "input/docs/doc__overview.rst": [],
+    "input/docs/doc__reservoir.rst": [],
+    "input/docs/doc__servant.rst": [],
+    "input/docs/doc__servile.rst": [],
+    "input/docs/doc__serving.rst": [],
+    "input/docs/doc__subservient.rst": []
+  },
+  "class_path": "processor_cpu"
+}

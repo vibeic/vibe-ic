@@ -1,0 +1,92 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_cases",
+  "ic_name": "Bit-Manipulation Extension",
+  "test_cases": [],
+  "no_test_cases_in_input": true,
+  "bring_up_sequence": [
+    {
+      "step": 1,
+      "description": "``pmp_dside_mode_cross`` - Exception from memory access PMP violation.",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst"
+    },
+    {
+      "step": 2,
+      "description": "Unaligned memory access",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst"
+    },
+    {
+      "step": 3,
+      "description": "``misaligned_insn_bus_err_cross``, ``misaligned_data_bus_err_cross`` - Cover all error and no error scenarios for memory fetch error; first access saw error, second",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst"
+    },
+    {
+      "step": 4,
+      "description": "Interrupt raised/taken.",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst"
+    },
+    {
+      "step": 5,
+      "description": "``interrupt_taken_instr_cross`` - Interrupt raised/taken the first cycle an instruction is in ID/EX or some other cycle the instruction is in ID/EX.",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst"
+    },
+    {
+      "step": 6,
+      "description": "``irq_wfi_cross``, ``debug_wfi_cross`` - Debug and Interrupt whilst sleeping with WFI",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst"
+    },
+    {
+      "step": 7,
+      "description": "Cover with global interrupts enabled and disabled",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst"
+    },
+    {
+      "step": 8,
+      "description": "Cover with specific interrupt enabled and disabled (Should exit sleep when",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst"
+    },
+    {
+      "step": 9,
+      "description": "Debug and interrupt occurring whilst entering WFI",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst"
+    },
+    {
+      "step": 10,
+      "description": "Covering period between WFI entering ID/EX stage and going into sleep",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst"
+    }
+  ],
+  "no_bring_up_sequence_in_input": false,
+  "extraction_evidence": {},
+  "class_path": "processor_cpu"
+}

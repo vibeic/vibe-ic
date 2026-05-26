@@ -1,0 +1,34 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_debug",
+  "ic_name": "SHA256",
+  "test_modes": [],
+  "no_test_modes_in_input": true,
+  "debug_observability": [
+    {
+      "signal": "s",
+      "purpose": "debug observability pin (extracted from source)",
+      "evidence": "input/docs/README.md"
+    }
+  ],
+  "no_debug_observability_in_input": false,
+  "debug_registers": [],
+  "debug_parameters": [],
+  "no_debug_parameters_in_input": true,
+  "formal_interfaces": [],
+  "no_formal_interfaces_in_input": true,
+  "verification_strategy": [],
+  "no_verification_strategy_in_input": true,
+  "engineer_mode_unlock_sequence": null,
+  "no_engineer_mode_unlock_in_input": true,
+  "vsuite_per_kw_cap_skipped_v1_6_373": 0,
+  "extraction_evidence": {
+    "input/docs/README.md": [
+      {
+        "literal": "DEBUG signals",
+        "label": "debug observability"
+      }
+    ]
+  },
+  "class_path": "processor_cpu"
+}

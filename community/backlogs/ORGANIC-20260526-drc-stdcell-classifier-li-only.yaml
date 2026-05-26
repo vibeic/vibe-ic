@@ -1,0 +1,79 @@
+type: enhancement
+severity: P1
+component: program:phase3_one_shot_runner
+plugin_version: "0.1.2"
+
+title: >-
+  phase3 DRC stdcell-library waiver classifier only recognizes the li.* rule
+  family, so foundry-cell-internal contact (ct.*/licon) and standard-cell
+  met1-pin (m1.*) KLayout false-positives are mis-bucketed as user-routing
+  violations and force a FAIL even when OpenROAD's own detailed-route DRC is
+  clean and timing is fully closed
+
+pattern: |
+  When phase3 runs the open-source KLayout sign-off deck against a GDS built
+  from a foundry standard-cell library, the deck flags large counts of
+  violations whose geometry lives ENTIRELY inside the hardened standard cells
+  (their internal local-interconnect spacing, local-interconnect-to-met1
+  contacts, and met1 pin shapes at cell-abutment boundaries). These are the
+  well-known open-source-KLayout-deck-vs-foundry-sign-off-tool rule
+  disagreements on cells that are foundry-qualified — production shuttle
+  sign-off waives this whole class via per-cell foundry confidence statements.
+
+  The runner already encodes this doctrine: it splits per-rule violation
+  counts into a user-routing bucket and a stdcell-library bucket, and re-tiers
+  the verdict to WAIVED when 100% of violations land in the stdcell bucket.
+  But the stdcell-layer prefix allowlist contains ONLY the local-interconnect
+  rule prefix. The contact-layer rules (the cell-internal li-to-met1 vias,
+  which the detailed router never even creates) and the met1 pin-spacing rules
+  (which fire at abutted-cell pin boundaries, not on router wires) are left in
+  the user bucket. So a layout where the router used only met2/met3 for signal
+  routing — and whose own detailed-route DRC reports a single cosmetic
+  ground-net warning — is reported as a hard DRC FAIL with thousands of
+  "user" violations that are in fact all cell-internal deck artifacts.
+
+  Generality: any agent taking any digital design through the open-source
+  ASIC backend on a standard-cell PDK hits this. The mis-classification is a
+  function of the PDK deck + cell library, not of the chip — a UART bridge, a
+  crypto core, a CPU, or a DSP block all trip the same contact/met1-pin deck
+  rules on their abutted standard cells.
+
+suggested_fix: |
+  Broaden the stdcell-library-rule classification so it captures the full set
+  of cell-internal layer rules for each PDK, not just the local-interconnect
+  family. Two complementary, evidence-preserving options:
+
+    1. Extend the per-PDK stdcell-rule prefix table to include the
+       contact/licon rule family and the lowest-metal (met1) rule family,
+       since on these PDKs the user routing stack starts above met1 and the
+       contact layer is never emitted by the detailed router. Keep the
+       existing "ANY genuine user-routing-layer violation -> FAIL" guard for
+       met2-and-above rules so real route defects still fail.
+
+    2. Make the classification geometry-aware instead of rule-name-aware:
+       cross-reference each violation's coordinates against the placed
+       standard-cell instance bounding boxes from the DEF. Violations wholly
+       contained in a cell instance are stdcell-internal (waivable);
+       violations on router-owned wire geometry are user-routing (FAIL).
+       This removes the per-PDK prefix-table maintenance burden entirely.
+
+    Additionally, when OpenROAD's own detailed_route DRC count is ~0 but the
+    KLayout deck count is large, surface that discrepancy explicitly in the
+    DRC StepResult detail so the operator can see at a glance that the
+    violations are a deck-vs-router disagreement rather than a routing defect.
+
+id: "ORGANIC-20260526-drc-stdcell-classifier-li-only"
+submitted_at: "2026-05-26T03:30:00+00:00"
+session_context: >-
+  Fresh field-agent full Vibe-IC run on an open-source RV32IMC CPU core
+  benchmark. Phase 3 ASIC backend ran end-to-end inside the open-source EDA
+  container: synthesis to ~8.1k standard cells PASSED, OpenROAD place-and-route
+  PASSED with timing closed (positive worst slack, zero total negative slack,
+  no ECO needed), KLayout GDS streamout PASSED (1.2 MB GDS). OpenROAD's own
+  detailed-route DRC reported a single cosmetic ground-net warning. The KLayout
+  sign-off deck reported tens of thousands of violations, ~95% in the
+  local-interconnect family (already auto-waived) and the remainder in
+  contact and met1-pin rules clustered at standard-cell pin coordinates. Those
+  remainder rules were mis-bucketed as user-routing violations, flipping the
+  DRC step (and the overall phase3 verdict) to FAIL despite a genuinely clean,
+  timing-closed layout.

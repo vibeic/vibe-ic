@@ -1,0 +1,4700 @@
+{
+  "schema_version": 2,
+  "doc_class": "datasheet",
+  "ic_name": "Released core",
+  "no_ic_name_in_input": false,
+  "package_info": null,
+  "no_package_in_input": true,
+  "pin_table": [
+    {
+      "name": "debug_req_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "debug_req_i",
+      "board_name": "debug_req_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Request to enter Debug Mode",
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "description": "Request to enter Debug Mode"
+    },
+    {
+      "name": "debug_havereset_o",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "debug_havereset_o",
+      "board_name": "debug_havereset_o",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Debug status: Core has been reset",
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "description": "Debug status: Core has been reset"
+    },
+    {
+      "name": "debug_running_o",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "debug_running_o",
+      "board_name": "debug_running_o",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Debug status: Core is running",
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "description": "Debug status: Core is running"
+    },
+    {
+      "name": "debug_halted_o",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "debug_halted_o",
+      "board_name": "debug_halted_o",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Debug status: Core is halted",
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "description": "Debug status: Core is halted"
+    },
+    {
+      "name": "dm_halt_addr_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "dm_halt_addr_i",
+      "board_name": "dm_halt_addr_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Address to jump to when entering Debug",
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address to jump to when entering Debug Mode, see :ref:`debug-support`. Must be word-aligned. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "dm_exception_addr_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "dm_exception_addr_i",
+      "board_name": "dm_exception_addr_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Address to jump to when an exception",
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address to jump to when an exception occurs when executing code during Debug Mode, see :ref:`debug-support`. Must be word-aligned. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "irq_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "irq_i",
+      "board_name": "irq_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Level sensistive active high interrupt inputs.",
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Level sensistive active high interrupt inputs."
+    },
+    {
+      "name": "irq_ack_o",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "irq_ack_o",
+      "board_name": "irq_ack_o",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Interrupt acknowledge",
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "description": "Interrupt acknowledge"
+    },
+    {
+      "name": "irq_id_o",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "irq_id_o",
+      "board_name": "irq_id_o",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Interrupt index for taken interrupt",
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "width": 5,
+      "msb": 4,
+      "lsb": 0,
+      "description": "Interrupt index for taken interrupt"
+    },
+    {
+      "name": "instr_addr_o",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "instr_addr_o",
+      "board_name": "instr_addr_o",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Address, word aligned",
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address, word aligned"
+    },
+    {
+      "name": "instr_req_o",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "instr_req_o",
+      "board_name": "instr_req_o",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Request valid, will stay high until ``instr_gnt_i`` is high for one cycle",
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "description": "Request valid, will stay high until ``instr_gnt_i`` is high for one cycle"
+    },
+    {
+      "name": "instr_gnt_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "instr_gnt_i",
+      "board_name": "instr_gnt_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "The other side accepted the request. ``instr_addr_o`` may change in the next cycle.",
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "description": "The other side accepted the request. ``instr_addr_o`` may change in the next cycle."
+    },
+    {
+      "name": "instr_rvalid_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "instr_rvalid_i",
+      "board_name": "instr_rvalid_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "``instr_rdata_i`` holds valid data when ``instr_rvalid_i`` is high. This signal will be high for exactly one cycle per request.",
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "description": "``instr_rdata_i`` holds valid data when ``instr_rvalid_i`` is high. This signal will be high for exactly one cycle per request."
+    },
+    {
+      "name": "instr_rdata_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "instr_rdata_i",
+      "board_name": "instr_rdata_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data read from memory",
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data read from memory"
+    },
+    {
+      "name": "rst_ni",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "rst_ni",
+      "board_name": "rst_ni",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Active-low asynchronous reset",
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Active-low asynchronous reset"
+    },
+    {
+      "name": "clk_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "clk_i",
+      "board_name": "clk_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Clock signal",
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Clock signal"
+    },
+    {
+      "name": "scan_cg_en_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "scan_cg_en_i",
+      "board_name": "scan_cg_en_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Scan clock gate enable. Design for test",
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Scan clock gate enable. Design for test (DfT) related signal. Can be used during scan testing operation to force instantiated clock gate(s) to be enabled. This signal should be 0 during normal / functional operation."
+    },
+    {
+      "name": "fetch_enable_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "fetch_enable_i",
+      "board_name": "fetch_enable_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Enable the instruction fetch of CV32E40P.",
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Enable the instruction fetch of CV32E40P. The first instruction fetch after reset de-assertion will not happen as long as this signal is 0. ``fetch_enable_i`` needs to be set to 1 for at least one cycle while not in reset to enable fetching. Once fetching has been enabled the value ``fetch_enable_i`` is ignored."
+    },
+    {
+      "name": "core_sleep_o",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "core_sleep_o",
+      "board_name": "core_sleep_o",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Core is sleeping, see :ref:`sleep_unit`.",
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Core is sleeping, see :ref:`sleep_unit`."
+    },
+    {
+      "name": "pulp_clock_en_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "pulp_clock_en_i",
+      "board_name": "pulp_clock_en_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "PULP clock enable (only used when",
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "PULP clock enable (only used when ``COREV_CLUSTER`` = 1, tie to 0 otherwise), see :ref:`sleep_unit`"
+    },
+    {
+      "name": "boot_addr_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "boot_addr_i",
+      "board_name": "boot_addr_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Boot address. First program counter after",
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Boot address. First program counter after reset = ``boot_addr_i``. Must be half-word aligned. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "mtvec_addr_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "mtvec_addr_i",
+      "board_name": "mtvec_addr_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "``mtvec`` address. Initial value for the",
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "``mtvec`` address. Initial value for the address part of :ref:`csr-mtvec`. Do not change after enabling core via ``fetch_enable_i``"
+    },
+    {
+      "name": "hart_id_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "hart_id_i",
+      "board_name": "hart_id_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Hart ID, usually static, can be read from",
+      "evidence": "input/docs/source__integration.rst",
+      "extraction_strategy": "rst_grid_interface_table+desc_continuation_v1_6_456",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Hart ID, usually static, can be read from :ref:`csr-mhartid` and :ref:`csr-uhartid` CSRs"
+    },
+    {
+      "name": "data_addr_o",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "data_addr_o",
+      "board_name": "data_addr_o",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Address",
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Address"
+    },
+    {
+      "name": "data_req_o",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "data_req_o",
+      "board_name": "data_req_o",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Request valid, will stay high until ``data_gnt_i`` is high for one cycle",
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "description": "Request valid, will stay high until ``data_gnt_i`` is high for one cycle"
+    },
+    {
+      "name": "data_gnt_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "data_gnt_i",
+      "board_name": "data_gnt_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "The other side accepted the request. ``data_addr_o`` may change in the next cycle.",
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "description": "The other side accepted the request. ``data_addr_o`` may change in the next cycle."
+    },
+    {
+      "name": "data_we_o",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "data_we_o",
+      "board_name": "data_we_o",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Write Enable, high for writes, low for reads. Sent together with ``data_req_o``",
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "description": "Write Enable, high for writes, low for reads. Sent together with ``data_req_o``"
+    },
+    {
+      "name": "data_be_o",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "data_be_o",
+      "board_name": "data_be_o",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Byte Enable. Is set for the bytes to write/read, sent together with ``data_req_o``",
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0,
+      "description": "Byte Enable. Is set for the bytes to write/read, sent together with ``data_req_o``"
+    },
+    {
+      "name": "data_wdata_o",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "data_wdata_o",
+      "board_name": "data_wdata_o",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data to be written to memory, sent together with ``data_req_o``",
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data to be written to memory, sent together with ``data_req_o``"
+    },
+    {
+      "name": "data_rvalid_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "data_rvalid_i",
+      "board_name": "data_rvalid_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "``data_rvalid_i`` will be high for exactly one cycle to signal the end of the response phase of for both read and write",
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "description": "``data_rvalid_i`` will be high for exactly one cycle to signal the end of the response phase of for both read and write"
+    },
+    {
+      "name": "data_rdata_i",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "data_rdata_i",
+      "board_name": "data_rdata_i",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Data read from memory",
+      "evidence": "input/docs/source__load_store_unit.rst",
+      "extraction_strategy": "rst_iface_3col_v1_6_565",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0,
+      "description": "Data read from memory"
+    }
+  ],
+  "no_pin_table_in_input": false,
+  "electrical_specs": [],
+  "no_electrical_specs_in_input": true,
+  "ordering_info": {
+    "part_number": "Released core",
+    "vendor": "openhwgroup",
+    "vendor_extraction_strategy": "vendor_github_repo_url_v1_6_536",
+    "no_vendor_in_input": false
+  },
+  "tapeout_metadata": null,
+  "no_tapeout_metadata_in_input": true,
+  "description": "CV32E40P is a 4-stage in-order 32-bit RISC-V processor core. The ISA of CV32E40P has been extended to support multiple additional instructions including hardware loops, post-increment load and store instructions, additional ALU instructions and SIMD instructions that are not part of the standard RISC-V ISA.",
+  "description_evidence": {
+    "source": "input/docs/source__intro.rst",
+    "line": 18,
+    "extraction_strategy": "doc_intro_paragraph_rst_two_line",
+    "anchor": "intro_heading_rst_setext",
+    "filename_score": 9,
+    "filename_demoted": false,
+    "attribution_url_rejected": false,
+    "list_introducer_handling": "none"
+  },
+  "features": [
+    "The RV32I Base Integer Instruction Set, version 2.1",
+    "Standard Extension",
+    "C: Standard Extension for Compressed Instructions",
+    "M: Standard Extension for Integer Multiplication and Division",
+    "Zicntr: Performance Counters",
+    "Zicsr: Control and Status Register Instructions",
+    "Zifencei: Instruction-Fetch Fence",
+    "F: Single-Precision Floating-Point using F registers",
+    "optionally enabled with the `FPU` parameter",
+    "Zfinx: Single-Precision Floating-Point using X registers",
+    "optionally enabled with the `ZFINX parameter (also requires the FPU` parameter)",
+    "Custom Extension",
+    "Xcv: CORE-V PULP ISA Extensions",
+    "optionally enabled with the `COREV_PULP` parameter",
+    "Xcvelw: CORE-V PULP Cluster ISA Extension",
+    "optionally enabled with the `COREV_CLUSTER` parameter",
+    "All CSRs listed in :ref:cs-registers",
+    "Hardware Performance Counters as described in :ref:performance-counters controlled by the `NUM_MHPMCOUNTERS` parameter",
+    "Trap handling supporting direct mode or vectored mode as described at :ref:exceptions-interrupts"
+  ],
+  "features_evidence": {
+    "source": "input/docs/source__intro.rst",
+    "line": 58,
+    "extraction_strategy": "doc_features_bullet_list",
+    "anchor": "features_heading_rst_setext",
+    "filename_demoted": false
+  },
+  "isa_base": [
+    "RV32IM",
+    "RV32I",
+    "RV32E",
+    "RV32IMCF"
+  ],
+  "isa_base_evidence": [
+    {
+      "file": "input/docs/README.md",
+      "line": 6,
+      "matched_substring": "RV32IM"
+    },
+    {
+      "file": "input/docs/source__control_status_registers.rst",
+      "line": 1438,
+      "matched_substring": "RV32I"
+    },
+    {
+      "file": "input/docs/source__control_status_registers.rst",
+      "line": 1446,
+      "matched_substring": "RV32E"
+    },
+    {
+      "file": "input/docs/source__verification.rst",
+      "line": 151,
+      "matched_substring": "RV32IMCF"
+    }
+  ],
+  "isa_extensions": [
+    "Zfinx",
+    "RV32F",
+    "RV32C",
+    "RV32A",
+    "Zicsr",
+    "Zifencei"
+  ],
+  "isa_extensions_evidence": [
+    {
+      "file": "input/docs/README.md",
+      "line": 6,
+      "matched_substring": "Zfinx"
+    },
+    {
+      "file": "input/docs/source__fpu.rst",
+      "line": 24,
+      "matched_substring": "RV32F",
+      "extraction_strategy": "isa_base_demoted_to_extension_v1_6_432"
+    },
+    {
+      "file": "input/docs/source__glossary.rst",
+      "line": 43,
+      "matched_substring": "RV32C",
+      "extraction_strategy": "isa_base_demoted_to_extension_v1_6_432"
+    },
+    {
+      "file": "input/docs/source__intro.rst",
+      "line": 180,
+      "matched_substring": "RV32A",
+      "extraction_strategy": "isa_base_demoted_to_extension_v1_6_432"
+    },
+    {
+      "file": "input/docs/source__intro.rst",
+      "line": 97,
+      "matched_substring": "Zicsr"
+    },
+    {
+      "file": "input/docs/source__intro.rst",
+      "line": 101,
+      "matched_substring": "Zifencei"
+    }
+  ],
+  "privilege_modes": [
+    "User",
+    "Machine"
+  ],
+  "privilege_modes_evidence": [
+    {
+      "file": "input/docs/source__control_status_registers.rst",
+      "line": 224,
+      "matched_substring": "User mode"
+    },
+    {
+      "file": "input/docs/source__control_status_registers.rst",
+      "line": 1144,
+      "matched_substring": "machine mode"
+    }
+  ],
+  "machine_isa_version": "1.11",
+  "references": [
+    {
+      "name": "PULP platform",
+      "url": "https://www.pulp-platform.org/",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 10,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "OpenHW Group",
+      "url": "https://www.openhwgroup.org/",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 11,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "Sphinx",
+      "url": "https://docs.readthedocs.io/en/stable/intro/getting-started-with-sphinx.html",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 18,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "core-v-verif",
+      "url": "https://github.com/openhwgroup/core-v-verif",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 27,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "Verible",
+      "url": "https://github.com/google/verible",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 69,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/README.md": [],
+    "input/docs/images__CV32E40P_Block_Diagram.svg": [],
+    "input/docs/images__blockdiagram.svg": [],
+    "input/docs/images__debug_halted.svg": [],
+    "input/docs/images__debug_running.svg": [],
+    "input/docs/images__load_event.svg": [],
+    "input/docs/images__obi_data_back_to_back.svg": [],
+    "input/docs/images__obi_data_basic.svg": [],
+    "input/docs/images__obi_data_multiple_outstanding.svg": [],
+    "input/docs/images__obi_data_slow_response.svg": [],
+    "input/docs/images__obi_instruction_basic.svg": [],
+    "input/docs/images__obi_instruction_multiple_outstanding.svg": [],
+    "input/docs/images__wfi.svg": [],
+    "input/docs/source__control_status_registers.rst": [],
+    "input/docs/source__core_versions.rst": [],
+    "input/docs/source__corev_hw_loop.rst": [],
+    "input/docs/source__debug.rst": [
+      {
+        "literal": "| ``debug_req_i``               | input         | Request to enter Debug Mode                |",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``debug_havereset_o``         | output        | Debug status: Core has been reset          |",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``debug_running_o``           | output        | Debug status: Core is running              |",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``debug_halted_o``            | output        | Debug status: Core is halted               |",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``dm_halt_addr_i[31:0]``      | input         | Address for debugger entry                 |",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``dm_exception_addr_i[31:0]`` | input         | Address for debugger exception entry       |",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``debug_req_i``               | input         | Request to enter Debug Mode                |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``debug_havereset_o``         | output        | Debug status: Core has been reset          |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``debug_running_o``           | output        | Debug status: Core is running              |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``debug_halted_o``            | output        | Debug status: Core is halted               |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``dm_halt_addr_i[31:0]``      | input         | Address for debugger entry                 |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``dm_exception_addr_i[31:0]`` | input         | Address for debugger exception entry       |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      }
+    ],
+    "input/docs/source__exceptions_interrupts.rst": [
+      {
+        "literal": "| ``irq_i[31:0]``         | input         | Level sensistive active high interrupt inputs.   |",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``irq_ack_o``           | output        | Interrupt acknowledge                            |",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``irq_id_o[4:0]``       | output        | Interrupt index for taken interrupt              |",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``irq_i[31:0]``         | input         | Level sensistive active high interrupt inputs.   |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``irq_ack_o``           | output        | Interrupt acknowledge                            |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``irq_id_o[4:0]``       | output        | Interrupt index for taken interrupt              |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      }
+    ],
+    "input/docs/source__fpu.rst": [],
+    "input/docs/source__glossary.rst": [],
+    "input/docs/source__index.rst": [],
+    "input/docs/source__instruction_fetch.rst": [
+      {
+        "literal": "| ``instr_addr_o[31:0]``  | output          | Address, word aligned                                                     ",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``instr_req_o``         | output          | Request valid, will stay high until ``instr_gnt_i`` is high for one cycle ",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``instr_gnt_i``         | input           | The other side accepted the request. ``instr_addr_o`` may change in the ne",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``instr_rvalid_i``      | input           | ``instr_rdata_i`` holds valid data when ``instr_rvalid_i`` is high. This s",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``instr_rdata_i[31:0]`` | input           | Data read from memory                                                     ",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``instr_addr_o[31:0]``  | output          | Address, word aligned                                                     ",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``instr_req_o``         | output          | Request valid, will stay high until ``instr_gnt_i`` is high for one cycle ",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``instr_gnt_i``         | input           | The other side accepted the request. ``instr_addr_o`` may change in the ne",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``instr_rvalid_i``      | input           | ``instr_rdata_i`` holds valid data when ``instr_rvalid_i`` is high. This s",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``instr_rdata_i[31:0]`` | input           | Data read from memory                                                     ",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      }
+    ],
+    "input/docs/source__instruction_set_extensions.rst": [],
+    "input/docs/source__integration.rst": [
+      {
+        "literal": "| ``rst_ni``              | 1                       | in      | Active-low asynchronous reset              |",
+        "label": "pin (RST grid Interface table)"
+      },
+      {
+        "literal": "| ``clk_i``               | 1                       | in      | Clock signal                               |",
+        "label": "pin (RST grid Interface table)"
+      },
+      {
+        "literal": "| ``scan_cg_en_i``        | 1                       | in      | Scan clock gate enable. Design for test    |",
+        "label": "pin (RST grid Interface table)"
+      },
+      {
+        "literal": "| ``fetch_enable_i``      | 1                       | in      | Enable the instruction fetch of CV32E40P.  |",
+        "label": "pin (RST grid Interface table)"
+      },
+      {
+        "literal": "| ``core_sleep_o``        | 1                       | out     | Core is sleeping, see :ref:`sleep_unit`.   |",
+        "label": "pin (RST grid Interface table)"
+      },
+      {
+        "literal": "| ``pulp_clock_en_i``     | 1                       | in      | PULP clock enable (only used when          |",
+        "label": "pin (RST grid Interface table)"
+      },
+      {
+        "literal": "| ``boot_addr_i``         | 32                      | in      | Boot address. First program counter after  |",
+        "label": "pin (RST grid Interface table)"
+      },
+      {
+        "literal": "| ``mtvec_addr_i``        | 32                      | in      | ``mtvec`` address. Initial value for the   |",
+        "label": "pin (RST grid Interface table)"
+      },
+      {
+        "literal": "| ``dm_halt_addr_i``      | 32                      | in      | Address to jump to when entering Debug     |",
+        "label": "pin (RST grid Interface table)"
+      },
+      {
+        "literal": "| ``dm_exception_addr_i`` | 32                      | in      | Address to jump to when an exception       |",
+        "label": "pin (RST grid Interface table)"
+      },
+      {
+        "literal": "| ``hart_id_i``           | 32                      | in      | Hart ID, usually static, can be read from  |",
+        "label": "pin (RST grid Interface table)"
+      },
+      {
+        "literal": "| ``rst_ni``              | 1                       | in      | Active-low asynchronous reset              |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``clk_i``               | 1                       | in      | Clock signal                               |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``scan_cg_en_i``        | 1                       | in      | Scan clock gate enable. Design for test    |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``fetch_enable_i``      | 1                       | in      | Enable the instruction fetch of CV32E40P.  |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``core_sleep_o``        | 1                       | out     | Core is sleeping, see :ref:`sleep_unit`.   |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``pulp_clock_en_i``     | 1                       | in      | PULP clock enable (only used when          |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``boot_addr_i``         | 32                      | in      | Boot address. First program counter after  |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``mtvec_addr_i``        | 32                      | in      | ``mtvec`` address. Initial value for the   |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``dm_halt_addr_i``      | 32                      | in      | Address to jump to when entering Debug     |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``dm_exception_addr_i`` | 32                      | in      | Address to jump to when an exception       |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``hart_id_i``           | 32                      | in      | Hart ID, usually static, can be read from  |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": ".rst_ni                   (),",
+        "label": "pin (Verilog port-bind)"
+      },
+      {
+        "literal": ".clk_i                    (),",
+        "label": "pin (Verilog port-bind)"
+      },
+      {
+        "literal": "100 MHz",
+        "label": "frequency"
+      }
+    ],
+    "input/docs/source__intro.rst": [],
+    "input/docs/source__load_store_unit.rst": [
+      {
+        "literal": "| ``data_addr_o[31:0]``  | output          | Address                                                                    ",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``data_req_o``         | output          | Request valid, will stay high until ``data_gnt_i`` is high for one cycle   ",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``data_gnt_i``         | input           | The other side accepted the request. ``data_addr_o`` may change in the next",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``data_we_o``          | output          | Write Enable, high for writes, low for reads. Sent together with ``data_req",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``data_be_o[3:0]``     | output          | Byte Enable. Is set for the bytes to write/read, sent together with ``data_",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``data_wdata_o[31:0]`` | output          | Data to be written to memory, sent together with ``data_req_o``            ",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``data_rvalid_i``      | input           | ``data_rvalid_i`` will be high for exactly one cycle to signal the end of t",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``data_rdata_i[31:0]`` | input           | Data read from memory                                                      ",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``data_addr_o[31:0]``  | output          | Address                                                                    ",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``data_req_o``         | output          | Request valid, will stay high until ``data_gnt_i`` is high for one cycle   ",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``data_gnt_i``         | input           | The other side accepted the request. ``data_addr_o`` may change in the next",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``data_we_o``          | output          | Write Enable, high for writes, low for reads. Sent together with ``data_req",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``data_be_o[3:0]``     | output          | Byte Enable. Is set for the bytes to write/read, sent together with ``data_",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``data_wdata_o[31:0]`` | output          | Data to be written to memory, sent together with ``data_req_o``            ",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``data_rvalid_i``      | input           | ``data_rvalid_i`` will be high for exactly one cycle to signal the end of t",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``data_rdata_i[31:0]`` | input           | Data read from memory                                                      ",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      }
+    ],
+    "input/docs/source__perf_counters.rst": [],
+    "input/docs/source__pipeline.rst": [],
+    "input/docs/source__preface.rst": [],
+    "input/docs/source__register_file.rst": [],
+    "input/docs/source__sleep.rst": [
+      {
+        "literal": "| ``pulp_clock_en_i``                  | input         | ``COREV_CLUSTER`` = 0:                             |",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``core_sleep_o``                     | output        | ``COREV_CLUSTER`` = 0:                             |",
+        "label": "pin (RST grid 3-col Interface)"
+      },
+      {
+        "literal": "| ``pulp_clock_en_i``                  | input         | ``COREV_CLUSTER`` = 0:                             |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      },
+      {
+        "literal": "| ``core_sleep_o``                     | output        | ``COREV_CLUSTER`` = 0:                             |",
+        "label": "pin (RST grid N-col, suffix-inferred dir)"
+      }
+    ],
+    "input/docs/source__verification.rst": [],
+    "input/docs/Makefile": [],
+    "input/docs/requirements.txt": [],
+    "L1_description.doc_intro": [
+      {
+        "literal": "CV32E40P is a 4-stage in-order 32-bit RISC-V processor core. The ISA of CV32E40P",
+        "label": "L1.description (doc intro paragraph)",
+        "source": "input/docs/source__intro.rst",
+        "line": 18,
+        "extraction_strategy": "doc_intro_paragraph_rst_two_line",
+        "anchor": "intro_heading_rst_setext",
+        "filename_score": 9,
+        "filename_demoted": false,
+        "attribution_url_rejected": false,
+        "list_introducer_handling": "none"
+      }
+    ],
+    "L1_features.doc_bullets": [
+      {
+        "literal": "The RV32I Base Integer Instruction Set, version 2.1",
+        "label": "L1.features (doc Features bullet list)",
+        "count": 19,
+        "source": "input/docs/source__intro.rst",
+        "line": 58,
+        "extraction_strategy": "doc_features_bullet_list",
+        "anchor": "features_heading_rst_setext",
+        "filename_demoted": false
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "no_class_path_in_input": false,
+  "class_path_evidence": {
+    "source": "input/docs/README.md",
+    "line": 1,
+    "extraction_strategy": "readme_class_token_match",
+    "matched_token": "riscv",
+    "score": 23.0,
+    "all_scores": {
+      "processor_cpu": 23.0
+    }
+  },
+  "auto_discovered_identifiers": [
+    {
+      "name": "CORE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32IM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PULP",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TVLSI",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PATMOS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OR10N",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RI5CY",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONTRIBUTING",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DSP",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IEEE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VLSI",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IFID",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IDEX",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EXWB",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DIA",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DIB",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALUDIV",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALU",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DIV",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MULTDOTP",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MULT",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DOTP",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LSU",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU",
+      "source_doc": "images__CV32E40P_Block_Diagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IFID",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IDEX",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EXWB",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPR",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DIA",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DIB",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALUDIV",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALU",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DIV",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MULTMAC",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MULT",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MAC",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LSU",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TCDM",
+      "source_doc": "images__blockdiagram.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RESET",
+      "source_doc": "images__debug_halted.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BOOT_SET",
+      "source_doc": "images__debug_halted.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DBG_TAKEN_IF",
+      "source_doc": "images__debug_halted.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UNAVAILABLE",
+      "source_doc": "images__debug_halted.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HALTED",
+      "source_doc": "images__debug_halted.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FSM",
+      "source_doc": "images__debug_halted.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RESET",
+      "source_doc": "images__debug_running.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BOOT_SET",
+      "source_doc": "images__debug_running.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FIRST_FETCH",
+      "source_doc": "images__debug_running.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UNAVAILABLE",
+      "source_doc": "images__debug_running.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RUNNING",
+      "source_doc": "images__debug_running.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FSM",
+      "source_doc": "images__debug_running.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ELW",
+      "source_doc": "images__load_event.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "APU",
+      "source_doc": "images__load_event.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WD0",
+      "source_doc": "images__obi_data_back_to_back.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD1",
+      "source_doc": "images__obi_data_back_to_back.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WE0",
+      "source_doc": "images__obi_data_back_to_back.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BE0",
+      "source_doc": "images__obi_data_back_to_back.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WD1",
+      "source_doc": "images__obi_data_back_to_back.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WE1",
+      "source_doc": "images__obi_data_back_to_back.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BE1",
+      "source_doc": "images__obi_data_back_to_back.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD0",
+      "source_doc": "images__obi_data_back_to_back.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WD0",
+      "source_doc": "images__obi_data_basic.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD0",
+      "source_doc": "images__obi_data_basic.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WE0",
+      "source_doc": "images__obi_data_basic.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BE0",
+      "source_doc": "images__obi_data_basic.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WD0",
+      "source_doc": "images__obi_data_multiple_outstanding.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD0",
+      "source_doc": "images__obi_data_multiple_outstanding.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD1",
+      "source_doc": "images__obi_data_multiple_outstanding.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD2",
+      "source_doc": "images__obi_data_multiple_outstanding.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WD1",
+      "source_doc": "images__obi_data_multiple_outstanding.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WE0",
+      "source_doc": "images__obi_data_multiple_outstanding.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WE1",
+      "source_doc": "images__obi_data_multiple_outstanding.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BE0",
+      "source_doc": "images__obi_data_multiple_outstanding.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BE1",
+      "source_doc": "images__obi_data_multiple_outstanding.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WD2",
+      "source_doc": "images__obi_data_multiple_outstanding.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WE2",
+      "source_doc": "images__obi_data_multiple_outstanding.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BE2",
+      "source_doc": "images__obi_data_multiple_outstanding.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WD0",
+      "source_doc": "images__obi_data_slow_response.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD0",
+      "source_doc": "images__obi_data_slow_response.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WE0",
+      "source_doc": "images__obi_data_slow_response.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BE0",
+      "source_doc": "images__obi_data_slow_response.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD0",
+      "source_doc": "images__obi_instruction_basic.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD1",
+      "source_doc": "images__obi_instruction_basic.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD2",
+      "source_doc": "images__obi_instruction_basic.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD3",
+      "source_doc": "images__obi_instruction_basic.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD4",
+      "source_doc": "images__obi_instruction_basic.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD5",
+      "source_doc": "images__obi_instruction_basic.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD0",
+      "source_doc": "images__obi_instruction_multiple_outstanding.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RD1",
+      "source_doc": "images__obi_instruction_multiple_outstanding.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WFI",
+      "source_doc": "images__wfi.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CTRL",
+      "source_doc": "images__wfi.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LSU",
+      "source_doc": "images__wfi.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "APU",
+      "source_doc": "images__wfi.svg",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PULP",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WLRL",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARL",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "URW",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "URO",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HPM",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_PULP",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ZFINX",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MRW",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MRO",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DRW",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "USER",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RNE",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTZ",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RDN",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RUP",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RMM",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DYN",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MPP",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MPIE",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MIE",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MSTATUS",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FSW",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UPIE",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UIE",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MEIE",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MTIE",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MSIE",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASE",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MTVEC",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MEPC",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UNDEFINED",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MEIP",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MTIP",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MSIP",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SUPERVISOR",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DPC",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DSCRATCH0",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NUM_MHPMCOUNTERS",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MXL",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XLEN",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SIMD",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32I",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32E",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_CLUSTER",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JEDEC",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UTVEC",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UEPC",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PMP",
+      "source_doc": "source__control_status_registers.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTL",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MINOR",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PATCH",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALU",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PULP",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PULP_XPULP",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PPA",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PULP_ZFINX",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ZFINX",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PULP_CLUSTER",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_PULP",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_CLUSTER",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU_ADDMUL_LAT",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU_OTHERS_LAT",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NUM_MHPMCOUNTERS",
+      "source_doc": "source__core_versions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CORE",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_PULP",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RVC",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MEPC",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DPC",
+      "source_doc": "source__corev_hw_loop.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DPC",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DCSR",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EBREAKM",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPR",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GDB",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JTAG",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PULP",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV3240P",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TDATA1",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DMODE",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EBREAK",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IMFDQC",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IMAFDQC",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MTVEC",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MEPC",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MCAUSE",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MTVAL",
+      "source_doc": "source__debug.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MIE",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MPIE",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MRET",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MEI",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MTI",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MSI",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CLINT",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ECALL",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RVF",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PULP",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_PULP",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CORE_CLUSTER",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PMP",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "USER",
+      "source_doc": "source__exceptions_interrupts.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32F",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IEEE",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "README",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CVFPU",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTL",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SIMD",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU_ADDMUL_LAT",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU_OTHERS_LAT",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NON",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MERGED",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PARALLEL",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AFTER",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ZFINX",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "source__fpu.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALU",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ASIC",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPGA",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KGE",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NAND2",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LSU",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OBI",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PULP",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32C",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32F",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SIMD",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARL",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WLRL",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WPRI",
+      "source_doc": "source__glossary.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__index.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__index.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__index.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__index.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__index.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__index.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__index.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__index.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__index.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__instruction_fetch.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__instruction_fetch.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__instruction_fetch.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__instruction_fetch.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__instruction_fetch.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__instruction_fetch.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__instruction_fetch.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__instruction_fetch.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__instruction_fetch.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FIFO",
+      "source_doc": "source__instruction_fetch.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DEPTH",
+      "source_doc": "source__instruction_fetch.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LSU",
+      "source_doc": "source__instruction_fetch.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LSB",
+      "source_doc": "source__instruction_fetch.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OBI",
+      "source_doc": "source__instruction_fetch.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CORE",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_PULP",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALU",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SIMD",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_CLUSTER",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GCC",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LLVM",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FFT",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MSB",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LSB",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MASK",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LSP",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "source__instruction_set_extensions.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU_ADDMUL_LAT",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU_OTHERS_LAT",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ZFINX",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_PULP",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_CLUSTER",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NUM_MHPMCOUNTERS",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PULP",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MHPMCOUNTER",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTL",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ASIC",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPGA",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OBI",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DFT",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NAND",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AMD",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU_",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALU",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FDIV",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FSQRT",
+      "source_doc": "source__integration.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALU",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SIMD",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ETH",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OBI",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IMAFDQC",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IMFDQC",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32I",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ZFINX",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CORE",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PULP",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_PULP",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_CLUSTER",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NUM_MHPMCOUNTERS",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OR10N",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RI5CY",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AMBA",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AXI",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AHB",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32F",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "APU",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32A",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PMP",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTL",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CLINT",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DSP",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IEEE",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VLSI",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PATMOS",
+      "source_doc": "source__intro.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LSU",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FIFO",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OBI",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_PULP",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PMP",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PULP_SECURE",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "USER",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TOR",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NAPOT",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NA4",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MPRV",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MSTATUS",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LOCK",
+      "source_doc": "source__load_store_unit.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSRRW",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSRRS",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NUM_MHPMCOUNTERS",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CYCLES",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "INSTR",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LD_STALL",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JMP_STALL",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IMISS",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JUMP",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BRANCH",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BRANCH_TAKEN",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COMP_INSTR",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PIPE_STALL",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "APU_TYPE",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "APU",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "APU_CONT",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "APU_DEP",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "APU_WB",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "APUB",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NUM_MHPCOUNTERS",
+      "source_doc": "source__perf_counters.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RVC",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32I",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALU",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LSU",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU_",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MULH",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LOAD",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "STORE",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FDIV",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FSQRT",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISCV",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FENCE",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU_ADDMUL_LAT",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU_OTHERS_LAT",
+      "source_doc": "source__pipeline.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__preface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__preface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__preface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__preface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__preface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__preface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__preface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__preface.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__register_file.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__register_file.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__register_file.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__register_file.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__register_file.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__register_file.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__register_file.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__register_file.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__register_file.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU",
+      "source_doc": "source__register_file.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ZFINX",
+      "source_doc": "source__register_file.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__sleep.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__sleep.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__sleep.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__sleep.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__sleep.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__sleep.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__sleep.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__sleep.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__sleep.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_CLUSTER",
+      "source_doc": "source__sleep.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU",
+      "source_doc": "source__sleep.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WFI",
+      "source_doc": "source__sleep.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PULP",
+      "source_doc": "source__sleep.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPDX",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHL",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BASIS",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WITHOUT",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARRANTIES",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CONDITIONS",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ANY",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KIND",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CV32E40P",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CORE",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTL",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "README",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISS",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PULP",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CFG_",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "P_F0",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "P_F1",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "P_F2",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "P_Z0",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "P_Z1",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "P_Z2",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_PULP",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COREV_CLUSTER",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ZFINX",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU_ADDMUL_LAT",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU_OTHERS_LAT",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RVVI",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISCOF",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32IMCF",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XPULP",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IMC",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SDOTUP",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EXTZ",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SAIL",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OBI",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UCDB",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CFG_P",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CFG_P_F0",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FDIV",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FSQRT",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MULH",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JALR",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IEEE",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MIMPID",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALU",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MSTATUS",
+      "source_doc": "source__verification.rst",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    }
+  ],
+  "vendor_short_literals": [
+    {
+      "literal": "0x1",
+      "kind": "short_hex",
+      "source": "source__control_status_registers.rst"
+    },
+    {
+      "literal": "0x2",
+      "kind": "short_hex",
+      "source": "source__control_status_registers.rst"
+    },
+    {
+      "literal": "0x0",
+      "kind": "short_hex",
+      "source": "source__control_status_registers.rst"
+    },
+    {
+      "literal": "0x4",
+      "kind": "short_hex",
+      "source": "source__control_status_registers.rst"
+    },
+    {
+      "literal": "0x3",
+      "kind": "short_hex",
+      "source": "source__control_status_registers.rst"
+    },
+    {
+      "literal": "0xC",
+      "kind": "short_hex",
+      "source": "source__control_status_registers.rst"
+    },
+    {
+      "literal": "0x3A",
+      "kind": "short_hex",
+      "source": "source__control_status_registers.rst"
+    },
+    {
+      "literal": "0x3B",
+      "kind": "short_hex",
+      "source": "source__control_status_registers.rst"
+    },
+    {
+      "literal": "0xF",
+      "kind": "short_hex",
+      "source": "source__control_status_registers.rst"
+    },
+    {
+      "literal": "1in",
+      "kind": "dimension",
+      "source": "source__corev_hw_loop.rst"
+    },
+    {
+      "literal": "0x00",
+      "kind": "short_hex",
+      "source": "source__exceptions_interrupts.rst"
+    },
+    {
+      "literal": "0\n\nIn",
+      "kind": "dimension",
+      "source": "source__instruction_set_extensions.rst"
+    },
+    {
+      "literal": "01\n\nIn",
+      "kind": "dimension",
+      "source": "source__instruction_set_extensions.rst"
+    },
+    {
+      "literal": "011\n\nIn",
+      "kind": "dimension",
+      "source": "source__instruction_set_extensions.rst"
+    },
+    {
+      "literal": "0xFF",
+      "kind": "short_hex",
+      "source": "source__instruction_set_extensions.rst"
+    },
+    {
+      "literal": "2.1\n\nIn",
+      "kind": "dimension",
+      "source": "source__intro.rst"
+    },
+    {
+      "literal": "0x7C",
+      "kind": "short_hex",
+      "source": "source__intro.rst"
+    },
+    {
+      "literal": "nor",
+      "kind": "primitive_cell",
+      "source": "source__intro.rst"
+    },
+    {
+      "literal": "0x8",
+      "kind": "short_hex",
+      "source": "source__verification.rst"
+    }
+  ]
+}

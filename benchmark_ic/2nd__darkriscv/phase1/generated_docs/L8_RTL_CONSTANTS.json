@@ -1,0 +1,355 @@
+{
+  "schema_version": 2,
+  "doc_class": "rtl_constants",
+  "ic_name": "SHA256",
+  "rx_classifier_ticks": null,
+  "no_rx_classifier_ticks_in_input": true,
+  "timing_constants": [],
+  "no_timing_constants_in_input": true,
+  "timing_parameters": [],
+  "clock_mhz": 75.0,
+  "no_clock_mhz_in_input": false,
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 75.0,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 75.0,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 190,
+        "matched_substring": "75MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 75000000,
+      "period_ns": 13.333333,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    },
+    {
+      "name": "clk",
+      "freq_mhz": 1.0,
+      "freq_hz": 1000000,
+      "low_mhz": 1.0,
+      "high_mhz": 367.0,
+      "role": "extracted_from_doc_freq_mention",
+      "source": "input/docs/README.md",
+      "reset_strategy": "unspecified",
+      "extraction_strategy": "doc_freq_mention_keyword_window",
+      "freq_evidence_count_v1_6_368": 3,
+      "best_rank_v1_6_370": 0,
+      "primary_evidence_v1_6_370": "input/docs/README.md",
+      "derived_from": "clk",
+      "period_ns": 1000.0,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    }
+  ],
+  "no_clock_domains_in_input": false,
+  "synthesis_targets": [
+    {
+      "name": "fmax_prose_100mhz",
+      "fmax_mhz": 100.0,
+      "target_fpga": null,
+      "role": "chip_internal_proposed",
+      "extraction_strategy": "fmax_prose_v1_6_538",
+      "v1_6_538_extracted": true,
+      "evidence": {
+        "source": "input/docs/README.md"
+      }
+    }
+  ],
+  "no_synthesis_targets_in_input": false,
+  "parameters": [],
+  "peripheral_only_emit_skipped_v1_6_376": 0,
+  "extraction_strategy": {
+    "l8_evidence_population_v1_6_395": 2
+  },
+  "fmax_mhz": 100.0,
+  "fmax_mhz_extraction_strategy": "max_of_synthesis_targets_v1_6_561",
+  "extraction_evidence": {
+    "input/docs/README.md": [
+      {
+        "literal": "75MHz",
+        "label": "clock_domain_doc_prose_fmax_primary"
+      },
+      {
+        "literal": "(100.0, None)",
+        "label": "fmax_prose_v1_6_538"
+      }
+    ],
+    "input/docs/boards__README.md": [],
+    "input/docs/openroad_README.md": [],
+    "input/docs/rtl_README.md": [],
+    "input/docs/src__README.md": []
+  },
+  "class_path": "processor_cpu",
+  "auto_discovered_literals": [
+    {
+      "literal": "250MHz",
+      "value": "250",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "400MHz",
+      "value": "400",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100MHz",
+      "value": "100",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1500LUTs",
+      "value": "1500",
+      "unit": "LUTs",
+      "source_doc": "README.md",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "50MHz",
+      "value": "50",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1000LUTs",
+      "value": "1000",
+      "unit": "LUTs",
+      "source_doc": "README.md",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2400LUTs",
+      "value": "2400",
+      "unit": "LUTs",
+      "source_doc": "README.md",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "40MHz",
+      "value": "40",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "150MHz",
+      "value": "150",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "75MHz",
+      "value": "75",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100.0MHz",
+      "value": "100.0",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1000000Hz",
+      "value": "1000000",
+      "unit": "Hz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "90MHz",
+      "value": "90",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "178MHz",
+      "value": "178",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "225MHz",
+      "value": "225",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "117MHz",
+      "value": "117",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "202MHz",
+      "value": "202",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "266MHz",
+      "value": "266",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "70MHz",
+      "value": "70",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "56MHz",
+      "value": "56",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "289us",
+      "value": "289",
+      "unit": "us",
+      "source_doc": "README.md",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "291us",
+      "value": "291",
+      "unit": "us",
+      "source_doc": "README.md",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "324us",
+      "value": "324",
+      "unit": "us",
+      "source_doc": "README.md",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "569us",
+      "value": "569",
+      "unit": "us",
+      "source_doc": "README.md",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "398us",
+      "value": "398",
+      "unit": "us",
+      "source_doc": "README.md",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "147MHz",
+      "value": "147",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "146MHz",
+      "value": "146",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "221MHz",
+      "value": "221",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "260600LUTs",
+      "value": "260600",
+      "unit": "LUTs",
+      "source_doc": "README.md",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "240MHz",
+      "value": "240",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "367MHz",
+      "value": "367",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "128MHz",
+      "value": "128",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "66MHz",
+      "value": "66",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    }
+  ]
+}

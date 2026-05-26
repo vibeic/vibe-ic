@@ -1,0 +1,411 @@
+{
+  "schema_version": 2,
+  "doc_class": "integration_spec",
+  "ic_name": "NEORV32 RISC-V Processor",
+  "top_module": "neorv32_cpu",
+  "top_module_extraction_strategy": "rtl_top_prose_v1_6_545",
+  "no_top_module_in_input": false,
+  "ports": [],
+  "top_ports": [],
+  "top_module_pins": [],
+  "no_integration_in_input": true,
+  "submodules": [
+    {
+      "name": "riscv_archid",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 73,
+        "label": "[![RISCV-ARCHID](https://img.shields.io/badge/RISC--V%20Architecture%20ID-19-000000.svg?longCache=true&style=flat-square&logo=riscv&colorA=273274&colorB=fbb517)](https://github.com/riscv/riscv-isa-manual/blob/master/marchid.md)",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "single_core_or_smp_dual_core_configuration",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 75,
+        "label": "Single-core or SMP dual-core configuration",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "configurable_instruction_sets_and_extensions",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 76,
+        "label": "configurable instruction sets and extensions:",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "machine_and_user_privilege_modes",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 119,
+        "label": "`machine` and `user` privilege modes",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "custom_functions_unit_as_custom_xcfu_isa_extension",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 121,
+        "label": "custom functions unit ([CFU](https://stnolting.github.io/neorv32/#_custom_functions_unit_cfu) as custom `Xcfu` ISA extension)",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "tightly_coupled_data_and_instruction_memories",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 126,
+        "label": "tightly-coupled data and instruction memories ([DMEM](https://stnolting.github.io/neorv32/#_data_memory_dmem) &",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "bootldrom",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 130,
+        "label": "pre-installed bootloader ([BOOTLDROM](https://stnolting.github.io/neorv32/#_bootloader_rom_bootrom)) with serial user interface;",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "clint",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 135,
+        "label": "RISC-V-compatible core-local interruptor ([CLINT](https://stnolting.github.io/neorv32/#_core_local_interruptor_clint))",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "gptmr",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 136,
+        "label": "32-bit general purpose timer ([GPTMR](https://stnolting.github.io/neorv32/#_general_purpose_timer_gptmr)) with up to 16 individual timer slices",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "wdt",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 137,
+        "label": "watchdog timer ([WDT](https://stnolting.github.io/neorv32/#_watchdog_timer_wdt))",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "standard_serial_interfaces_2x_uart",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 141,
+        "label": "standard serial interfaces: 2x [UART](https://stnolting.github.io/neorv32/#_primary_universal_asynchronous_receiver_and_transmitter_uart0),",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "up_to_32_general_purpose_ios_interrupt_capable",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 147,
+        "label": "up to 32 general purpose IOs ([GPIO](https://stnolting.github.io/neorv32/#_general_purpose_input_and_output_port_gpio), interrupt-capable)",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "neoled",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 149,
+        "label": "smart LED interface ([NEOLED](https://stnolting.github.io/neorv32/#_smart_led_interface_neoled)) to directly control NeoPixel(TM) LEDs",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "32_bit_external_bus_interface_wishbone_compatible",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 153,
+        "label": "32-bit external bus interface - Wishbone-compatible",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "trng",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 161,
+        "label": "true-random number generator ([TRNG](https://stnolting.github.io/neorv32/#_true_random_number_generator_trng)) based",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "cfs",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 163,
+        "label": "custom functions subsystem ([CFS](https://stnolting.github.io/neorv32/#_custom_functions_subsystem_cfs))",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "dma",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 165,
+        "label": "direct memory access controller ([DMA](https://stnolting.github.io/neorv32/#_direct_memory_access_controller_dma)) for CPU-independent",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "rvfi_compatible_trace_port",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 167,
+        "label": "RVFI-compatible [trace port](https://stnolting.github.io/neorv32/#_execution_trace_port)",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "ocd",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 172,
+        "label": "on-chip debugger ([OCD](https://stnolting.github.io/neorv32/#_on_chip_debugger_ocd)) accessible via standard JTAG interface",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "tracer",
+      "instances": 1,
+      "type": "module catalog bullet (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 177,
+        "label": "execution trace buffer ([TRACER](https://stnolting.github.io/neorv32/#_execution_trace_buffer_tracer))",
+        "extraction_strategy": "module_catalog_bullet"
+      },
+      "low_confidence": true
+    }
+  ],
+  "no_submodules_in_input": false,
+  "sim_only_modules": [],
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "internal_wires": [],
+  "no_internal_wires_in_input": true,
+  "expected_verdict_byte_hex": null,
+  "expected_verdict_byte_offset": null,
+  "expected_verdict_byte_extraction_strategy": null,
+  "expected_verdict_byte_offset_low_confidence": false,
+  "expected_verdict_byte_hex_low_confidence": false,
+  "cpu_interrupts": [],
+  "no_cpu_interrupts_in_input": true,
+  "memories": [
+    {
+      "name": "neorv32_bootrom",
+      "kind": "rom",
+      "type": "ROM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "overview.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": "neorv32_bootrom_image",
+      "kind": "rom",
+      "type": "ROM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "overview.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": "neorv32_cache",
+      "kind": "cache",
+      "type": "Cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "overview.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": "neorv32_cache",
+      "kind": "ram",
+      "type": "RAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "overview.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": "neorv32_dmem",
+      "kind": "ram",
+      "type": "RAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "overview.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": "neorv32_imem_ram",
+      "kind": "ram",
+      "type": "RAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "overview.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": "_imem_ram",
+      "kind": "rom",
+      "type": "ROM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "overview.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    }
+  ],
+  "memory_candidates": [
+    {
+      "name": null,
+      "kind": "ram",
+      "type": "RAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "overview.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "regfile",
+      "type": "register file",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "overview.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "overview.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    }
+  ],
+  "no_memory_candidates_in_input": false,
+  "no_memories_in_input": false,
+  "memory_map": [],
+  "no_memory_map_in_input": true,
+  "no_instantiation_template_in_input": true,
+  "extraction_evidence": {
+    "derived_from_L3": []
+  },
+  "synthesis_targets": [
+    {
+      "name": "fmax_prose_130mhz",
+      "fmax_mhz": 130.0,
+      "target_fpga": null,
+      "role": "chip_internal_proposed",
+      "extraction_strategy": "fmax_prose_v1_6_538",
+      "v1_6_538_extracted": true,
+      "evidence": {
+        "source": "input/docs/overview.md"
+      }
+    }
+  ],
+  "interface_type": null,
+  "no_interface_type_in_input": true,
+  "interface_types": [],
+  "no_interface_types_in_input": true,
+  "chip_top_interfaces": [],
+  "class_path": "processor_cpu",
+  "submodules_extraction_strategy": "module_catalog_bullet"
+}

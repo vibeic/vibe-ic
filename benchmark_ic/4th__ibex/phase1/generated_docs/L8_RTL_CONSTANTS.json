@@ -1,0 +1,384 @@
+{
+  "schema_version": 2,
+  "doc_class": "rtl_constants",
+  "ic_name": "Bit-Manipulation Extension",
+  "rx_classifier_ticks": null,
+  "no_rx_classifier_ticks_in_input": true,
+  "timing_constants": [],
+  "no_timing_constants_in_input": true,
+  "timing_parameters": [],
+  "clock_mhz": null,
+  "no_clock_mhz_in_input": true,
+  "clock_domains": [
+    {
+      "name": "clk_i",
+      "source_pin": "clk_i",
+      "domain_kind": "primary",
+      "role": "master",
+      "source": "synthesised-from-L9.top_ports",
+      "evidence": "L9.top_ports",
+      "reset_strategy": "unspecified",
+      "freq_hz": null,
+      "freq_mhz": null,
+      "period_ns": null
+    }
+  ],
+  "no_clock_domains_in_input": false,
+  "synthesis_targets": [],
+  "no_synthesis_targets_in_input": true,
+  "parameters": [
+    {
+      "name": "PMPEnable",
+      "default": "0",
+      "type": "bit",
+      "description": "Enable PMP support",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "PMPGranularity",
+      "default": "0",
+      "type": "int (0..31)",
+      "description": "Minimum granularity of PMP address matching",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "PMPNumRegions",
+      "default": "4",
+      "type": "int (1..16)",
+      "description": "Number implemented PMP regions (ignored if PMPEnable == 0)",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "MHPMCounterNum",
+      "default": "0",
+      "type": "int (0..10)",
+      "description": "Number of performance monitor event counters",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "MHPMCounterWidth",
+      "default": "40",
+      "type": "int (64..1)",
+      "description": "Bit width of performance monitor event counters",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "RV32E",
+      "default": "0",
+      "type": "bit",
+      "description": "RV32E mode enable (16 integer registers only)",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "RV32M",
+      "default": "RV32MFast",
+      "type": "ibex_pkg::rv32m_e",
+      "description": "M(ultiply) extension select: \"ibex_pkg::RV32MNone\": No M-extension \"ibex_pkg::RV32MSlow\": Slow multi-cycle multiplier, iterative divider \"ibex_pkg::RV32MFast\": 3-4 cycle multiplier, iterative divider \"ibex_pkg::RV32MSingleCycle\": 1-2 cycle multiplier, iterative divider",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "RV32B",
+      "default": "RV32BNone",
+      "type": "ibex_pkg::rv32b_e",
+      "description": "B(itmanipulation) extension select: \"ibex_pkg::RV32BNone\": No B-extension \"ibex_pkg::RV32BBalanced\": Sub-extensions Zba, Zbb, Zbs, Zbf and Zbt \"ibex_pkg::RV32BOTEarlGrey\": All sub-extensions except Zbe \"ibex_pkg::RV32BFull\": All sub-extensions",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "RV32ZC",
+      "default": "RV32ZcaZcbZcmp",
+      "type": "ibex_pkg::rv32zc_e",
+      "description": "Zc code-size saving extension select: \"ibex_pkg::RV32Zca\": The Zca extension \"ibex_pkg::RV32ZcaZcb\": Zca and Zcb extensions \"ibex_pkg::RV32ZcaZcmp\": Zca and Zcmp extensions \"ibex_pkg::RV32ZcaZcbZcmp\": Zca, Zcb, and Zcmp extensions",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "RegFile",
+      "default": "RegFileFF",
+      "type": "ibex_pkg::regfile_e",
+      "description": "Register file implementation select: \"ibex_pkg::RegFileFF\": Generic flip-flop-based register file \"ibex_pkg::RegFileFPGA\": Register file for FPGA targets \"ibex_pkg::RegFileLatch\": Latch-based register file for ASIC targets",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "BranchTargetALU",
+      "default": "0",
+      "type": "bit",
+      "description": "Enables branch target ALU removing a stall cycle from taken branches",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "WritebackStage",
+      "default": "0",
+      "type": "bit",
+      "description": "Enables third pipeline stage (writeback) improving performance of loads and stores",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "ICache",
+      "default": "0",
+      "type": "bit",
+      "description": "Enable instruction cache instead of prefetch buffer",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "ICacheECC",
+      "default": "0",
+      "type": "bit",
+      "description": "Enable SECDED ECC protection in ICache (if  ICache == 1)",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "ICacheScramble",
+      "default": "0",
+      "type": "bit",
+      "description": "Enabling this parameter replaces tag and data RAMs of ICache with scrambling RAM primitives.",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "BranchPrediction",
+      "default": "0",
+      "type": "bit",
+      "description": "*EXPERIMENTAL* Enable Static branch prediction",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "SecureIbex",
+      "default": "0",
+      "type": "bit",
+      "description": "Enable various additional features targeting secure code execution. Note: SecureIbex == 1'b1 and  RV32M == ibex_pkg::RV32MNone is an illegal combination.",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "Features",
+      "default": "RV32EC",
+      "type": "RV32IMC, 3 cycle mult",
+      "description": "RV32IMC, 1 cycle mult, Branch target ALU, Writeback stage",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "Performance (CoreMark/MHz)",
+      "default": "0.904",
+      "type": "2.47",
+      "description": "3.13",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "Area - Yosys (kGE)",
+      "default": "16.85",
+      "type": "26.60",
+      "description": "32.48",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "Area - Commercial (estimated kGE)",
+      "default": "~15",
+      "type": "~24",
+      "description": "~30",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "Verification status",
+      "default": "Red",
+      "type": "Green",
+      "description": "Green",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    }
+  ],
+  "peripheral_only_emit_skipped_v1_6_376": 0,
+  "extraction_strategy": {
+    "l8_evidence_population_v1_6_395": 22
+  },
+  "extraction_evidence": {
+    "input/docs/README.md": [],
+    "input/docs/doc__01_overview__compliance.rst": [],
+    "input/docs/doc__01_overview__index.rst": [],
+    "input/docs/doc__01_overview__licensing.rst": [],
+    "input/docs/doc__01_overview__targets.rst": [],
+    "input/docs/doc__01_overview__verification_overview.rst": [],
+    "input/docs/doc__02_user__configuration.rst": [],
+    "input/docs/doc__02_user__examples.rst": [],
+    "input/docs/doc__02_user__getting_started.rst": [],
+    "input/docs/doc__02_user__index.rst": [],
+    "input/docs/doc__02_user__integration.rst": [],
+    "input/docs/doc__02_user__system_requirements.rst": [],
+    "input/docs/doc__03_reference__cosim.rst": [],
+    "input/docs/doc__03_reference__coverage_plan.rst": [],
+    "input/docs/doc__03_reference__cs_registers.rst": [],
+    "input/docs/doc__03_reference__debug.rst": [],
+    "input/docs/doc__03_reference__exception_interrupts.rst": [],
+    "input/docs/doc__03_reference__history.rst": [],
+    "input/docs/doc__03_reference__icache.rst": [],
+    "input/docs/doc__03_reference__index.rst": [],
+    "input/docs/doc__03_reference__instruction_decode_execute.rst": [],
+    "input/docs/doc__03_reference__instruction_fetch.rst": [],
+    "input/docs/doc__03_reference__load_store_unit.rst": [],
+    "input/docs/doc__03_reference__performance_counters.rst": [],
+    "input/docs/doc__03_reference__pipeline_details.rst": [],
+    "input/docs/doc__03_reference__pmp.rst": [],
+    "input/docs/doc__03_reference__register_file.rst": [],
+    "input/docs/doc__03_reference__rvfi.rst": [],
+    "input/docs/doc__03_reference__security.rst": [],
+    "input/docs/doc__03_reference__testplan.rst": [],
+    "input/docs/doc__03_reference__tracer.rst": [],
+    "input/docs/doc__03_reference__verification.rst": [],
+    "input/docs/doc__03_reference__verification_stages.rst": [],
+    "input/docs/doc__04_developer__concierge.rst": [],
+    "input/docs/doc__04_developer__index.rst": [],
+    "input/docs/doc__index.rst": [],
+    "doc__02_user__integration.rst": [
+      {
+        "literal": "PMPEnable = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "PMPGranularity = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "PMPNumRegions = 4",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "MHPMCounterNum = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "MHPMCounterWidth = 40",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "RV32E = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "RV32M = RV32MFast",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "RV32B = RV32BNone",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "RV32ZC = RV32ZcaZcbZcmp",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "RegFile = RegFileFF",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "BranchTargetALU = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "WritebackStage = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "ICache = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "ICacheECC = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "ICacheScramble = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "BranchPrediction = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "SecureIbex = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      }
+    ],
+    "README.md": [
+      {
+        "literal": "Features = RV32EC",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "Performance (CoreMark/MHz) = 0.904",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "Area - Yosys (kGE) = 16.85",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "Area - Commercial (estimated kGE) = ~15",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      },
+      {
+        "literal": "Verification status = Red",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "auto_discovered_literals": [
+    {
+      "literal": "23.14kGE",
+      "value": "23.14",
+      "unit": "kGE",
+      "source_doc": "README.md",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2.7kGE",
+      "value": "2.7",
+      "unit": "kGE",
+      "source_doc": "doc__03_reference__instruction_decode_execute.rst",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "6.1kGE",
+      "value": "6.1",
+      "unit": "kGE",
+      "source_doc": "doc__03_reference__instruction_decode_execute.rst",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "7.5kGE",
+      "value": "7.5",
+      "unit": "kGE",
+      "source_doc": "doc__03_reference__instruction_decode_execute.rst",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1DSP",
+      "value": "1",
+      "unit": "DSP",
+      "source_doc": "doc__03_reference__performance_counters.rst",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    }
+  ]
+}

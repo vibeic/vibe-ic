@@ -1,0 +1,239 @@
+{
+  "schema_version": 2,
+  "doc_class": "control_logic",
+  "ic_name": "SSE",
+  "reject_rules": [],
+  "fsm_states": [
+    {
+      "name": "SEND",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "SWITCH",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "DEBUG",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "LEVEL",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "ENCODINGS",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/references__riscv-privileged.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "SUBJECT",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/references__riscv-privileged.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "DEFINED",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/references__riscv-privileged.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "CONTROL",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/references__riscv-privileged.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "ZERO",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/references__riscv-privileged.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "INVALID",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/references__riscv-unprivileged.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "SIMPLIFY",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/references__riscv-unprivileged.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "PROCESS",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/references__riscv-unprivileged.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "RAPIDLY",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/references__riscv-unprivileged.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    }
+  ],
+  "pipeline_stages": [
+    {
+      "name": "IF",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/references__riscv-privileged.pdf (pipeline stage list)"
+    }
+  ],
+  "no_pipeline_stages_in_input": false,
+  "no_fsm_states_in_input": false,
+  "no_fsm_in_input": false,
+  "fsm_tokens": [
+    {
+      "name": "FIFO",
+      "type": "structure",
+      "source": "datasheet__cpu.adoc"
+    },
+    {
+      "name": "Counter",
+      "type": "structure",
+      "source": "datasheet__cpu.adoc"
+    },
+    {
+      "name": "Timer",
+      "type": "structure",
+      "source": "datasheet__cpu_csr.adoc"
+    },
+    {
+      "name": "Buffer",
+      "type": "structure",
+      "source": "datasheet__soc_tracer.adoc"
+    },
+    {
+      "name": "Queue",
+      "type": "structure",
+      "source": "references__riscv-unprivileged.pdf"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/Doxyfile": [],
+    "input/docs/Makefile": [],
+    "input/docs/README.md": [],
+    "input/docs/attrs.adoc": [],
+    "input/docs/datasheet__content.adoc": [],
+    "input/docs/datasheet__cpu.adoc": [
+      {
+        "literal": "FIFO",
+        "label": "FSM structure token"
+      },
+      {
+        "literal": "Counter",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/datasheet__cpu_cfu.adoc": [],
+    "input/docs/datasheet__cpu_csr.adoc": [
+      {
+        "literal": "Timer",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/datasheet__cpu_dual_core.adoc": [],
+    "input/docs/datasheet__cpu_isa.adoc": [],
+    "input/docs/datasheet__index.adoc": [],
+    "input/docs/datasheet__main.adoc": [],
+    "input/docs/datasheet__on_chip_debugger.adoc": [],
+    "input/docs/datasheet__overview.adoc": [],
+    "input/docs/datasheet__soc.adoc": [],
+    "input/docs/datasheet__soc_bootrom.adoc": [],
+    "input/docs/datasheet__soc_cfs.adoc": [],
+    "input/docs/datasheet__soc_clint.adoc": [],
+    "input/docs/datasheet__soc_dcache.adoc": [],
+    "input/docs/datasheet__soc_dma.adoc": [],
+    "input/docs/datasheet__soc_dmem.adoc": [],
+    "input/docs/datasheet__soc_gpio.adoc": [],
+    "input/docs/datasheet__soc_gptmr.adoc": [],
+    "input/docs/datasheet__soc_icache.adoc": [],
+    "input/docs/datasheet__soc_imem.adoc": [],
+    "input/docs/datasheet__soc_neoled.adoc": [],
+    "input/docs/datasheet__soc_onewire.adoc": [],
+    "input/docs/datasheet__soc_pwm.adoc": [],
+    "input/docs/datasheet__soc_sdi.adoc": [],
+    "input/docs/datasheet__soc_slink.adoc": [],
+    "input/docs/datasheet__soc_spi.adoc": [],
+    "input/docs/datasheet__soc_sysinfo.adoc": [],
+    "input/docs/datasheet__soc_tracer.adoc": [
+      {
+        "literal": "Buffer",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/datasheet__soc_trng.adoc": [],
+    "input/docs/datasheet__soc_twd.adoc": [],
+    "input/docs/datasheet__soc_twi.adoc": [],
+    "input/docs/datasheet__soc_uart.adoc": [],
+    "input/docs/datasheet__soc_wdt.adoc": [],
+    "input/docs/datasheet__soc_xbus.adoc": [],
+    "input/docs/datasheet__software.adoc": [],
+    "input/docs/datasheet__software_bootloader.adoc": [],
+    "input/docs/datasheet__software_rte.adoc": [],
+    "input/docs/doxygen_main.md": [],
+    "input/docs/figures__.gitignore": [],
+    "input/docs/figures__README.md": [],
+    "input/docs/legal.adoc": [],
+    "input/docs/references__riscv-aclint-1.0-rc4.pdf": [],
+    "input/docs/references__riscv-asm.pdf": [],
+    "input/docs/references__riscv-c-api.pdf": [],
+    "input/docs/references__riscv-calling.pdf": [],
+    "input/docs/references__riscv-debug-specification.pdf": [],
+    "input/docs/references__riscv-privileged.pdf": [],
+    "input/docs/references__riscv-semihosting.pdf": [],
+    "input/docs/references__riscv-unprivileged.pdf": [
+      {
+        "literal": "Queue",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/references__riscv-zibi.pdf": [],
+    "input/docs/userguide__adding_custom_hw_modules.adoc": [],
+    "input/docs/userguide__application_program_compilation.adoc": [],
+    "input/docs/userguide__building_the_documentation.adoc": [],
+    "input/docs/userguide__content.adoc": [],
+    "input/docs/userguide__eclipse_ide.adoc": [],
+    "input/docs/userguide__free_rtos_support.adoc": [],
+    "input/docs/userguide__general_hw_setup.adoc": [],
+    "input/docs/userguide__index.adoc": [],
+    "input/docs/userguide__installing_an_executable.adoc": [],
+    "input/docs/userguide__litex_support.adoc": [],
+    "input/docs/userguide__main.adoc": [],
+    "input/docs/userguide__micropython_port.adoc": [],
+    "input/docs/userguide__neorv32_in_verilog.adoc": [],
+    "input/docs/userguide__packaging_vivado.adoc": [],
+    "input/docs/userguide__rust_support.adoc": [],
+    "input/docs/userguide__simulating_the_processor.adoc": [],
+    "input/docs/userguide__sw_toolchain_setup.adoc": [],
+    "input/docs/userguide__using_ocd.adoc": [],
+    "input/docs/userguide__zephyr_support.adoc": []
+  },
+  "class_path": "processor_cpu"
+}

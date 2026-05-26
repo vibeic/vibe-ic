@@ -1,0 +1,60 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_debug",
+  "ic_name": "UNKNOWN_IC",
+  "test_modes": [],
+  "no_test_modes_in_input": true,
+  "debug_observability": [],
+  "no_debug_observability_in_input": true,
+  "debug_registers": [
+    {
+      "name": "DRC",
+      "value": null,
+      "description": "clean(magic + KLayout)",
+      "evidence": "input/docs/L7_verification_plan.md",
+      "extraction_strategy": "rst_grid_parameters_table_2col"
+    },
+    {
+      "name": "LVS",
+      "value": null,
+      "description": "clean(magic + netgen)",
+      "evidence": "input/docs/L7_verification_plan.md",
+      "extraction_strategy": "rst_grid_parameters_table_2col"
+    }
+  ],
+  "debug_parameters": [],
+  "no_debug_parameters_in_input": true,
+  "formal_interfaces": [],
+  "no_formal_interfaces_in_input": true,
+  "verification_strategy": [
+    {
+      "phase": "cocotb",
+      "method": "❌ 具體 TB framework(cocotb / Verilator / iverilog 任選)",
+      "evidence": "input/docs/L7_verification_plan.md",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "verilator",
+      "method": "❌ 具體 TB framework(cocotb / Verilator / iverilog 任選)",
+      "evidence": "input/docs/L7_verification_plan.md",
+      "extraction_strategy": "test_suite_reference"
+    }
+  ],
+  "no_verification_strategy_in_input": false,
+  "engineer_mode_unlock_sequence": null,
+  "no_engineer_mode_unlock_in_input": true,
+  "vsuite_per_kw_cap_skipped_v1_6_373": 0,
+  "extraction_evidence": {
+    "input/docs/L7_verification_plan.md": [
+      {
+        "literal": "| DRC | clean(magic + KLayout) |",
+        "label": "debug register (2-col Parameters table)"
+      },
+      {
+        "literal": "| LVS | clean(magic + netgen) |",
+        "label": "debug register (2-col Parameters table)"
+      }
+    ]
+  },
+  "class_path": "digital_arithmetic_primitive"
+}

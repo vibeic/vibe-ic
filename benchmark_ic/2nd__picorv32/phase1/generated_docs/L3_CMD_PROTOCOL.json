@@ -1,0 +1,176 @@
+{
+  "schema_version": 2,
+  "doc_class": "cmd_protocol",
+  "ic_name": "PicoRV32",
+  "opcodes": [
+    {
+      "name": "getq",
+      "mnemonic": "getq",
+      "operands": "rd, qs",
+      "encoding_pattern": "0000000 ----- 000XX --- XXXXX 0001011",
+      "legend": "f7      rs2   qs    f3  rd    opcode",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/README.md:line 533 (#### getq)",
+      "extraction_strategy": "md_h4_instruction_block_v1_6_461",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "setq",
+      "mnemonic": "setq",
+      "operands": "qd, rs",
+      "encoding_pattern": "0000001 ----- XXXXX --- 000XX 0001011",
+      "legend": "f7      rs2   rs    f3  rd    opcode",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/README.md:line 545 (#### setq)",
+      "extraction_strategy": "md_h4_instruction_block_v1_6_461",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "retirq",
+      "mnemonic": "retirq",
+      "operands": "",
+      "encoding_pattern": "0000010 ----- 00000 --- 00000 0001011",
+      "legend": "f7      rs2   rs    f3  rd    opcode",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/README.md:line 557 (#### retirq)",
+      "extraction_strategy": "md_h4_instruction_block_v1_6_461",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "maskirq",
+      "mnemonic": "maskirq",
+      "operands": "",
+      "encoding_pattern": "0000011 ----- XXXXX --- XXXXX 0001011",
+      "legend": "f7      rs2   rs    f3  rd    opcode",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/README.md:line 569 (#### maskirq)",
+      "extraction_strategy": "md_h4_instruction_block_v1_6_461",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "waitirq",
+      "mnemonic": "waitirq",
+      "operands": "",
+      "encoding_pattern": "0000100 ----- 00000 --- XXXXX 0001011",
+      "legend": "f7      rs2   rs    f3  rd    opcode",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/README.md:line 587 (#### waitirq)",
+      "extraction_strategy": "md_h4_instruction_block_v1_6_461",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "timer",
+      "mnemonic": "timer",
+      "operands": "",
+      "encoding_pattern": "0000101 ----- XXXXX --- XXXXX 0001011",
+      "legend": "f7      rs2   rs    f3  rd    opcode",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/README.md:line 599 (#### timer)",
+      "extraction_strategy": "md_h4_instruction_block_v1_6_461",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    }
+  ],
+  "no_opcodes_in_input": false,
+  "placeholder_opcode_count": 0,
+  "no_opcode_names_in_input": false,
+  "crc_parameters": null,
+  "no_crc_parameters_in_input": true,
+  "verdict_byte_offset": null,
+  "verdict_byte_hex": null,
+  "no_verdict_byte_in_input": true,
+  "addr_max": null,
+  "len_max": null,
+  "payload_semantics": "see opcodes[].response_payload_template",
+  "no_payload_semantics_in_input": false,
+  "opcode_synthesis_skipped_reason": null,
+  "extraction_evidence": {
+    "input/docs/README.md": [
+      {
+        "literal": "#### getq ...",
+        "label": "instruction (MD H4 + encoding)"
+      },
+      {
+        "literal": "#### setq ...",
+        "label": "instruction (MD H4 + encoding)"
+      },
+      {
+        "literal": "#### retirq ...",
+        "label": "instruction (MD H4 + encoding)"
+      },
+      {
+        "literal": "#### maskirq ...",
+        "label": "instruction (MD H4 + encoding)"
+      },
+      {
+        "literal": "#### waitirq ...",
+        "label": "instruction (MD H4 + encoding)"
+      },
+      {
+        "literal": "#### timer ...",
+        "label": "instruction (MD H4 + encoding)"
+      }
+    ],
+    "input/docs/picosoc_README.md": []
+  },
+  "class_path": "processor_cpu"
+}

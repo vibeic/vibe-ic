@@ -1,0 +1,137 @@
+{
+  "schema_version": 2,
+  "doc_class": "control_logic",
+  "ic_name": "GCD",
+  "reject_rules": [],
+  "fsm_states": [
+    {
+      "name": "SIMILAR",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__gcdPeripheral__README.md (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "PATH",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__gcdPeripheral__README.md (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "CALCULATE",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__gcdPeripheral__README.md (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "READY",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__gcdPeripheral__README.md (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "REFERS",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__gcdPeripheral__README.md (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "POSSIBILITY",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__gcdPeripheral__README.md (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "NEST",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__gcdPeripheral__README.md (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "IDLE",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__gcdPeripheral__README.md (prose init v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    }
+  ],
+  "pipeline_stages": [
+    {
+      "name": "WB",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/README.md (pipeline stage)"
+    },
+    {
+      "name": "Fetch",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/README.md (pipeline stage inline-bracket/numbered prose)",
+      "extraction_strategy": "pipeline_stages_inline_bracket_v1_6_462"
+    },
+    {
+      "name": "Decode",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/README.md (pipeline stage inline-bracket/numbered prose)",
+      "extraction_strategy": "pipeline_stages_inline_bracket_v1_6_462"
+    },
+    {
+      "name": "Execute",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/README.md (pipeline stage inline-bracket/numbered prose)",
+      "extraction_strategy": "pipeline_stages_inline_bracket_v1_6_462"
+    },
+    {
+      "name": "Memory",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/README.md (pipeline stage inline-bracket/numbered prose)",
+      "extraction_strategy": "pipeline_stages_inline_bracket_v1_6_462"
+    },
+    {
+      "name": "WriteBack",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/README.md (pipeline stage inline-bracket/numbered prose)",
+      "extraction_strategy": "pipeline_stages_inline_bracket_v1_6_462"
+    }
+  ],
+  "no_pipeline_stages_in_input": false,
+  "no_fsm_states_in_input": false,
+  "no_fsm_in_input": false,
+  "fsm_tokens": [
+    {
+      "name": "FSM",
+      "type": "structure",
+      "source": "doc__gcdPeripheral__README.md"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/README.md": [],
+    "input/docs/doc__gcdPeripheral__README.md": [
+      {
+        "literal": "FSM",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile": [],
+    "input/docs/doc__nativeJtag__README.md": [],
+    "input/docs/doc__smp__smp.md": [],
+    "input/docs/doc__vjtag__README.md": []
+  },
+  "class_path": "processor_cpu"
+}

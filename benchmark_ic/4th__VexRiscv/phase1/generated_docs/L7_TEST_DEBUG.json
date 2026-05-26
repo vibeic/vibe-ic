@@ -1,0 +1,64 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_debug",
+  "ic_name": "GCD",
+  "test_modes": [],
+  "no_test_modes_in_input": true,
+  "debug_observability": [],
+  "no_debug_observability_in_input": true,
+  "debug_registers": [],
+  "debug_parameters": [],
+  "no_debug_parameters_in_input": true,
+  "formal_interfaces": [],
+  "no_formal_interfaces_in_input": true,
+  "verification_strategy": [
+    {
+      "phase": "riscv-tests",
+      "method": "riscv-tests",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "verilator",
+      "method": "Interactive debug of the simulated CPU via GDB OpenOCD and Verilator",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "verilator",
+      "method": "To run tests (need java, scala, verilator), just do :",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "verilator",
+      "method": "To run the verilator simulation of the Briey SoC, which can then be connected to OpenOCD/GDB, first",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "openocd",
+      "method": "openocd",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "openocd",
+      "method": "Run openocd:",
+      "evidence": "input/docs/doc__nativeJtag__README.md",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "openocd",
+      "method": "If the board uses USB-Blaster2 then run OpenOCD in shell using:",
+      "evidence": "input/docs/doc__vjtag__README.md",
+      "extraction_strategy": "test_suite_reference"
+    }
+  ],
+  "no_verification_strategy_in_input": false,
+  "engineer_mode_unlock_sequence": null,
+  "no_engineer_mode_unlock_in_input": true,
+  "vsuite_per_kw_cap_skipped_v1_6_373": 12,
+  "extraction_evidence": {},
+  "class_path": "processor_cpu"
+}

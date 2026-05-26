@@ -1,0 +1,2810 @@
+{
+  "schema_version": 2,
+  "doc_class": "datasheet",
+  "ic_name": "GCD",
+  "no_ic_name_in_input": false,
+  "package_info": null,
+  "no_package_in_input": true,
+  "pin_table": [],
+  "no_pin_table_in_input": true,
+  "electrical_specs": [],
+  "no_electrical_specs_in_input": true,
+  "ordering_info": {
+    "part_number": "GCD",
+    "vendor": "enjoy-digital",
+    "vendor_extraction_strategy": "vendor_github_repo_url_v1_6_536",
+    "no_vendor_in_input": false
+  },
+  "tapeout_metadata": null,
+  "no_tapeout_metadata_in_input": true,
+  "description": "This repository hosts a RISC-V implementation written in SpinalHDL.",
+  "description_evidence": {
+    "source": "input/docs/README.md",
+    "line": 57,
+    "extraction_strategy": "doc_intro_paragraph",
+    "anchor": "intro_heading",
+    "filename_score": 2,
+    "filename_demoted": false,
+    "attribution_url_rejected": false,
+    "list_introducer_handling": "trimmed"
+  },
+  "features": [
+    "RV32I[M][A][F[D]][C] instruction set",
+    "Pipelined from 2 to 5+ stages ([Fetch*X], Decode, Execute, [Memory], [WriteBack])",
+    "1.44 DMIPS/MHz --no-inline when nearly all features are enabled (1.57 DMIPS/MHz when the divider lookup table is enabled)",
+    "Optimized for FPGA, does not use any vendor specific IP block / primitive",
+    "AXI4, Avalon, wishbone ready",
+    "Optional MUL/DIV extensions",
+    "Optional F32/F64 FPU (require data cache for now)",
+    "Optional instruction and data caches",
+    "Optional hardware refilled MMU",
+    "Optional debug extension allowing Eclipse debugging via a GDB >> openOCD >> JTAG connection",
+    "Optional interrupts and exception handling with Machine, [Supervisor] and [User] modes as defined in the RISC-V Privileged ISA Specification v1.10.",
+    "Two implementations of shift instructions: single cycle (full barrel shifter) and shiftNumber cycles",
+    "Each stage can have optional bypass or interlock hazard logic",
+    "Linux compatible (SoC : https://github.com/enjoy-digital/linux-on-litex-vexriscv)",
+    "Zephyr compatible",
+    "FreeRTOS port",
+    "Support tightly coupled memory on I$ D$ (see GenFullWithTcm / GenFullWithTcmIntegrated)",
+    "There are very few fixed things. Nearly everything is plugin based. The PC manager is a plugin, the register file is a plugin, the hazard controller is a plugin, ...",
+    "There is an automatic a tool which allows plugins to insert data in the pipeline at a given stage, and allows other plugins to read it in another stage through automatic pipelining.",
+    "There is a service system which provides a very dynamic framework. For instance, a plugin could provide an exception service which can then be used by other plugins to emit exceptions from the pipelin"
+  ],
+  "features_evidence": {
+    "source": "input/docs/README.md",
+    "line": 54,
+    "extraction_strategy": "doc_features_bullet_list",
+    "anchor": "overview_heading_atx",
+    "fallback_source": "overview_bullets",
+    "filename_demoted": false
+  },
+  "isa_base": [
+    "RV32I",
+    "RV32IM",
+    "RV32IMA"
+  ],
+  "isa_base_evidence": [
+    {
+      "file": "input/docs/README.md",
+      "line": 61,
+      "matched_substring": "RV32I"
+    },
+    {
+      "file": "input/docs/README.md",
+      "line": 127,
+      "matched_substring": "RV32IM"
+    },
+    {
+      "file": "input/docs/README.md",
+      "line": 147,
+      "matched_substring": "RV32IMA"
+    }
+  ],
+  "privilege_modes": [
+    "Machine",
+    "User"
+  ],
+  "privilege_modes_evidence": [
+    {
+      "file": "input/docs/README.md",
+      "line": 257,
+      "matched_substring": "machine mode"
+    },
+    {
+      "file": "input/docs/README.md",
+      "line": 1264,
+      "matched_substring": "User mode"
+    }
+  ],
+  "endianness": [
+    "little-endian"
+  ],
+  "endianness_evidence": [
+    {
+      "file": "input/docs/README.md",
+      "line": 1299,
+      "matched_substring": "little-endian"
+    }
+  ],
+  "references": [
+    {
+      "name": "RISC-V Privileged ISA Specification v1.10",
+      "url": "https://riscv.org/specifications/privileged-isa/",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 71,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "FreeRTOS port",
+      "url": "https://github.com/Dolu1990/FreeRTOS-RISCV",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 76,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "Pinsec SoC",
+      "url": "https://spinalhdl.github.io/SpinalDoc-RTD/v1.3.1/SpinalHDL/Legacy/pinsec/hardware_toplevel.html",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 330,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    }
+  ],
+  "features_grouped": {
+    "unstructured": [
+      {
+        "value": "Support IEEE 754 float and optionaly double",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 787,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      },
+      {
+        "value": "Implement Subnormal (few cycles lost in case of subnormal load/store)",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 788,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      },
+      {
+        "value": "Implement exceptions flags",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 789,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      },
+      {
+        "value": "The FPU can be shared between multiple CPU",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 790,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      },
+      {
+        "value": "Can be integrated inside or outside the CPU via the FpuPlugin",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 791,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      },
+      {
+        "value": "Fully pipelined, can produce one result per cycle for most operations (add,sub, mul, fma, load, store), as long there is no inter-dependancies",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 792,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      },
+      {
+        "value": "Implement multiplication using multiple sub multiplication operations in parallel (\"FPGA friendly\")",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 793,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      },
+      {
+        "value": "Division done with radix 4 (2 bits per cycle)",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 794,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      },
+      {
+        "value": "Square root done with radix 2 (1 bit per cycle)",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 795,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      },
+      {
+        "value": "Currently only compatible with the DBusCachedPlugin for load and store",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 796,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      },
+      {
+        "value": "64 bits Load and store can be done in one cycle via the DBusCachedPlugin (even if VexRiscv is RV32)",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 797,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      },
+      {
+        "value": "Fully implemented excepted in the cases specified bellow",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 801,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      },
+      {
+        "value": "In FMA, the result of the multiplication is rounded before the addition (keep mantissa width + 2 bits)",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 802,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      },
+      {
+        "value": "A very special corner case of underflow flag do not follow IEEE 754 (rounding from subnormal to normal number)",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 803,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      },
+      {
+        "value": "Very specific, but SGNJ instruction will not mutate the value from/to F32/F64 (no NaN-boxing mutation)",
+        "evidence": {
+          "source": "input/docs/README.md",
+          "line": 804,
+          "label": "feature bullet",
+          "extraction_strategy": "litex_features_section_match"
+        }
+      }
+    ]
+  },
+  "implementation_results": [
+    {
+      "platform": "Area usage and maximal frequency",
+      "metrics": {
+        "cycles": 33
+      },
+      "evidence_line": 159,
+      "source_form": "inline_kv"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/README.md": [
+      {
+        "literal": "243 MHz",
+        "label": "frequency"
+      },
+      {
+        "literal": "174 MHz",
+        "label": "frequency"
+      },
+      {
+        "literal": "179 MHz",
+        "label": "frequency"
+      }
+    ],
+    "input/docs/doc__gcdPeripheral__README.md": [],
+    "input/docs/doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile": [],
+    "input/docs/doc__nativeJtag__README.md": [
+      {
+        "literal": "5000 kHz",
+        "label": "frequency"
+      }
+    ],
+    "input/docs/doc__smp__smp.md": [],
+    "input/docs/doc__vjtag__README.md": [],
+    "L1_description.doc_intro": [
+      {
+        "literal": "This repository hosts a RISC-V implementation written in SpinalHDL.",
+        "label": "L1.description (doc intro paragraph)",
+        "source": "input/docs/README.md",
+        "line": 57,
+        "extraction_strategy": "doc_intro_paragraph",
+        "anchor": "intro_heading",
+        "filename_score": 2,
+        "filename_demoted": false,
+        "attribution_url_rejected": false,
+        "list_introducer_handling": "trimmed"
+      }
+    ],
+    "L1_features.doc_bullets": [
+      {
+        "literal": "RV32I[M][A][F[D]][C] instruction set",
+        "label": "L1.features (doc Features bullet list)",
+        "count": 20,
+        "source": "input/docs/README.md",
+        "line": 54,
+        "extraction_strategy": "doc_features_bullet_list",
+        "anchor": "overview_heading_atx",
+        "fallback_source": "overview_bullets",
+        "filename_demoted": false
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "no_class_path_in_input": false,
+  "class_path_evidence": {
+    "source": "input/docs/README.md",
+    "line": 16,
+    "extraction_strategy": "readme_class_token_match",
+    "matched_token": "RISC-V",
+    "score": 270.0,
+    "all_scores": {
+      "processor_cpu": 270.0,
+      "digital_arithmetic_primitive": 2.0,
+      "crypto_block_cipher": 6.0
+    }
+  },
+  "comparison_tables": [
+    {
+      "headers": [
+        "Parameters",
+        "range",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "VEXRISCV_REGRESSION_SEED",
+          "range": "Int",
+          "description": "Seed used to generate the random configurations"
+        },
+        {
+          "Parameters": "VEXRISCV_REGRESSION_TEST_ID",
+          "range": "\\[Int\\[,\\Int\\]\\*\\]",
+          "description": "Random configuration that should be keeped and tested"
+        },
+        {
+          "Parameters": "VEXRISCV_REGRESSION_CONFIG_COUNT",
+          "range": "Int",
+          "description": "Number of random configurations"
+        },
+        {
+          "Parameters": "VEXRISCV_REGRESSION_CONFIG_RVC_RATE",
+          "range": "0.0-1.0",
+          "description": "Chance to generate a RVC config"
+        },
+        {
+          "Parameters": "VEXRISCV_REGRESSION_CONFIG_LINUX_RATE",
+          "range": "0.0-1.0",
+          "description": "Chance to generate a linux ready config"
+        },
+        {
+          "Parameters": "VEXRISCV_REGRESSION_CONFIG_MACHINE_OS_RATE",
+          "range": "0.0-1.0",
+          "description": "Chance to generate a machine mode OS ready config"
+        },
+        {
+          "Parameters": "VEXRISCV_REGRESSION_LINUX_REGRESSION",
+          "range": "yes/no",
+          "description": "Enable the linux test"
+        },
+        {
+          "Parameters": "VEXRISCV_REGRESSION_COREMARK",
+          "range": "yes/no",
+          "description": "Enable the Coremark test"
+        },
+        {
+          "Parameters": "VEXRISCV_REGRESSION_ZEPHYR_COUNT",
+          "range": "Int",
+          "description": "Number of zephyr tests to run on capable configs"
+        },
+        {
+          "Parameters": "VEXRISCV_REGRESSION_CONFIG_DEMW_RATE",
+          "range": "0.0-1.0",
+          "description": "Chance to generate a config with writeback stage"
+        },
+        {
+          "Parameters": "VEXRISCV_REGRESSION_CONFIG_DEM_RATE",
+          "range": "0.0-1.0",
+          "description": "Chance to generate a config with memory stage"
+        }
+      ],
+      "context_heading": "Regression tests",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 250,
+        "alignment_line": 251,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "catchAccessFault",
+          "type": "Boolean",
+          "description": "When true, an instruction read response with read error asserted results in a CPU exception trap."
+        },
+        {
+          "Parameters": "resetVector",
+          "type": "BigInt",
+          "description": "Address of the program counter after the reset."
+        },
+        {
+          "Parameters": "cmdForkOnSecondStage",
+          "type": "Boolean",
+          "description": "When false, branches immediately update the program counter. This minimizes branch penalties but might reduce FMax because the instruction bus address signal is a combinatorial path. When true, this combinatorial path is removed and the program counter is updated one cycle after a branch is detected. While FMax may improve, an additional branch penalty will be incurred as well."
+        },
+        {
+          "Parameters": "cmdForkPersistence",
+          "type": "Boolean",
+          "description": "When false, requests on the iBus can disappear/change before they are acknowledged. This reduces area but isn't safe/supported by many arbitration/slaves. When true, once initiated, iBus requests will stay until they are acknowledged."
+        },
+        {
+          "Parameters": "compressedGen",
+          "type": "Boolean",
+          "description": "Enable RISC-V compressed instruction (RVC) support."
+        },
+        {
+          "Parameters": "busLatencyMin",
+          "type": "Int",
+          "description": "Specifies the minimal latency between the iBus.cmd and iBus.rsp. A corresponding number of stages are added to the frontend to keep the IPC to 1."
+        },
+        {
+          "Parameters": "injectorStage",
+          "type": "Boolean",
+          "description": "When true, a stage between the frontend and the decode stage of the CPU is added to improve FMax. (busLatencyMin + injectorStage) should be at least two."
+        },
+        {
+          "Parameters": "prediction",
+          "type": "BranchPrediction",
+          "description": "Can be set to NONE/STATIC/DYNAMIC/DYNAMIC_TARGET to specify the branch predictor implementation. See below for more details."
+        },
+        {
+          "Parameters": "historyRamSizeLog2",
+          "type": "Int",
+          "description": "Specify the number of entries in the direct mapped prediction cache of DYNAMIC/DYNAMIC_TARGET implementation. 2 pow historyRamSizeLog2 entries."
+        }
+      ],
+      "context_heading": "IBusSimplePlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 869,
+        "alignment_line": 870,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "resetVector",
+          "type": "BigInt",
+          "description": "Address of the program counter after the reset."
+        },
+        {
+          "Parameters": "relaxedPcCalculation",
+          "type": "Boolean",
+          "description": "When false, branches immediately update the program counter. This minimizes branch penalties but might reduce FMax because the instruction bus address signal is a combinatorial path. When true, this combinatorial path is removed and the program counter is updated one cycle after a branch is detected. While FMax may improve, an additional branch penalty will be incurred as well."
+        },
+        {
+          "Parameters": "prediction",
+          "type": "BranchPrediction",
+          "description": "Can be set to NONE/STATIC/DYNAMIC/DYNAMIC_TARGET to specify the branch predictor implementation. See below for more details."
+        },
+        {
+          "Parameters": "historyRamSizeLog2",
+          "type": "Int",
+          "description": "Specify the number of entries in the direct mapped prediction cache of DYNAMIC/DYNAMIC_TARGET implementation. 2 pow historyRamSizeLog2 entries"
+        },
+        {
+          "Parameters": "compressedGen",
+          "type": "Boolean",
+          "description": "Enable RISC-V compressed instruction (RVC) support."
+        },
+        {
+          "Parameters": "config.cacheSize",
+          "type": "Int",
+          "description": "Total storage capacity of the cache in bytes."
+        },
+        {
+          "Parameters": "config.bytePerLine",
+          "type": "Int",
+          "description": "Number of bytes per cache line"
+        },
+        {
+          "Parameters": "config.wayCount",
+          "type": "Int",
+          "description": "Number of cache ways"
+        },
+        {
+          "Parameters": "config.twoCycleRam",
+          "type": "Boolean",
+          "description": "Check the tags values in the decode stage instead of the fetch stage to relax timings"
+        },
+        {
+          "Parameters": "config.asyncTagMemory",
+          "type": "Boolean",
+          "description": "Read the cache tags in an asynchronous manner instead of syncronous one"
+        },
+        {
+          "Parameters": "config.addressWidth",
+          "type": "Int",
+          "description": "CPU address width. Should be 32"
+        },
+        {
+          "Parameters": "config.cpuDataWidth",
+          "type": "Int",
+          "description": "CPU data width. Should be 32"
+        },
+        {
+          "Parameters": "config.memDataWidth",
+          "type": "Int",
+          "description": "Memory data width. Could potentialy be something else than 32, but only 32 is currently tested"
+        },
+        {
+          "Parameters": "config.catchIllegalAccess",
+          "type": "Boolean",
+          "description": "Catch when a memory access is done on non-valid memory address (MMU)"
+        },
+        {
+          "Parameters": "config.catchAccessFault",
+          "type": "Boolean",
+          "description": "Catch when the memeory bus is responding with an error"
+        },
+        {
+          "Parameters": "config.catchMemoryTranslationMiss",
+          "type": "Boolean",
+          "description": "Catch when the MMU miss a TLB"
+        }
+      ],
+      "context_heading": "IBusCachedPlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 929,
+        "alignment_line": 930,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "catchIllegalInstruction",
+          "type": "Boolean",
+          "description": "When true, instructions that don't match a decoding specification will generate a trap exception"
+        }
+      ],
+      "context_heading": "DecoderSimplePlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 992,
+        "alignment_line": 993,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "regFileReadyKind",
+          "type": "RegFileReadKind",
+          "description": "Can be set to ASYNC or SYNC. Specifies the kind of memory read used to implement the register file. ASYNC means zero cycle latency memory read, while SYNC means one cycle latency memory read which can be mapped into standard FPGA memory blocks"
+        },
+        {
+          "Parameters": "zeroBoot",
+          "type": "Boolean",
+          "description": "Load all registers with zeroes at the beginning of the simulation to keep everything deterministic in logs/traces"
+        }
+      ],
+      "context_heading": "RegFilePlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 1023,
+        "alignment_line": 1024,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "bypassExecute",
+          "type": "Boolean",
+          "description": "Enable the bypassing of instruction results coming from the Execute stage"
+        },
+        {
+          "Parameters": "bypassMemory",
+          "type": "Boolean",
+          "description": "Enable the bypassing of instruction results coming from the Memory stage"
+        },
+        {
+          "Parameters": "bypassWriteBack",
+          "type": "Boolean",
+          "description": "Enable the bypassing of instruction results coming from the WriteBack stage"
+        },
+        {
+          "Parameters": "bypassWriteBackBuffer",
+          "type": "Boolean",
+          "description": "Enable the bypassing of the previous cycle register file written value"
+        }
+      ],
+      "context_heading": "HazardSimplePlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 1043,
+        "alignment_line": 1044,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "separatedAddSub",
+          "type": "RegFileReadKind",
+          "description": "By default SRC_ADD/SRC_SUB are generated from a single controllable adder/substractor, but if this is set to true, it use separate adder/substractors"
+        },
+        {
+          "Parameters": "executeInsertion",
+          "type": "Boolean",
+          "description": "By default SRC1/SRC2 are generated in the Decode stage, but if this parameter is true, it is done in the Execute stage (It will relax the bypassing network)"
+        }
+      ],
+      "context_heading": "SrcPlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 1054,
+        "alignment_line": 1055,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "earlyInjection",
+          "type": "Boolean",
+          "description": "By default the result of the shift is injected into the pipeline in the Memory stage to relax timings, but if this option is true it will be done in the Execute stage"
+        }
+      ],
+      "context_heading": "FullBarrelShifterPlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 1077,
+        "alignment_line": 1078,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "earlyBranch",
+          "type": "Boolean",
+          "description": "By default the branch is done in the Memory stage to relax timings, but if this option is set it's done in the Execute stage"
+        },
+        {
+          "Parameters": "catchAddressMisaligned",
+          "type": "Boolean",
+          "description": "If a jump/branch is done in an unaligned PC address, it will fire an trap exception"
+        }
+      ],
+      "context_heading": "BranchPlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 1085,
+        "alignment_line": 1086,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "catchAddressMisaligned",
+          "type": "Boolean",
+          "description": "If a memory access is done to an unaligned memory address, it will fire a trap exception"
+        },
+        {
+          "Parameters": "catchAccessFault",
+          "type": "Boolean",
+          "description": "If a memory read returns an error, it will fire a trap exception"
+        },
+        {
+          "Parameters": "earlyInjection",
+          "type": "Boolean",
+          "description": "By default, the memory read values are injected into the pipeline in the WriteBack stage to relax the timings. If this parameter is true, it's done in the Memory stage"
+        }
+      ],
+      "context_heading": "DBusSimplePlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 1115,
+        "alignment_line": 1116,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "genMul",
+          "type": "Boolean",
+          "description": "Enables multiplication support. Can be set to false if you want to use the MulPlugin instead"
+        },
+        {
+          "Parameters": "genDiv",
+          "type": "Boolean",
+          "description": "Enables division support"
+        },
+        {
+          "Parameters": "mulUnrollFactor",
+          "type": "Int",
+          "description": "Number of combinatorial stages used to speed up the multiplication, should be > 0"
+        },
+        {
+          "Parameters": "divUnrollFactor",
+          "type": "Int",
+          "description": "Number of combinatorial stages used to speed up the division, should be > 0"
+        }
+      ],
+      "context_heading": "MulDivIterativePlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 1250,
+        "alignment_line": 1251,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "catchIllegalAccess",
+          "type": "Boolean",
+          "description": ""
+        },
+        {
+          "Parameters": "mvendorid",
+          "type": "BigInt",
+          "description": ""
+        },
+        {
+          "Parameters": "marchid",
+          "type": "BigInt",
+          "description": ""
+        },
+        {
+          "Parameters": "mimpid",
+          "type": "BigInt",
+          "description": ""
+        },
+        {
+          "Parameters": "mhartid",
+          "type": "BigInt",
+          "description": ""
+        },
+        {
+          "Parameters": "misaExtensionsInit",
+          "type": "Int",
+          "description": ""
+        },
+        {
+          "Parameters": "misaAccess",
+          "type": "CsrAccess",
+          "description": ""
+        },
+        {
+          "Parameters": "mtvecAccess",
+          "type": "CsrAccess",
+          "description": ""
+        },
+        {
+          "Parameters": "mtvecInit",
+          "type": "BigInt",
+          "description": ""
+        },
+        {
+          "Parameters": "mepcAccess",
+          "type": "CsrAccess",
+          "description": ""
+        },
+        {
+          "Parameters": "mscratchGen",
+          "type": "Boolean",
+          "description": ""
+        },
+        {
+          "Parameters": "mcauseAccess",
+          "type": "CsrAccess",
+          "description": ""
+        },
+        {
+          "Parameters": "mbadaddrAccess",
+          "type": "CsrAccess",
+          "description": ""
+        },
+        {
+          "Parameters": "mcycleAccess",
+          "type": "CsrAccess",
+          "description": ""
+        },
+        {
+          "Parameters": "minstretAccess",
+          "type": "CsrAccess",
+          "description": ""
+        },
+        {
+          "Parameters": "ucycleAccess",
+          "type": "CsrAccess",
+          "description": ""
+        },
+        {
+          "Parameters": "wfiGen",
+          "type": "Boolean",
+          "description": ""
+        },
+        {
+          "Parameters": "ecallGen",
+          "type": "Boolean",
+          "description": ""
+        }
+      ],
+      "context_heading": "CsrPlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 1269,
+        "alignment_line": 1270,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "readOnly",
+          "type": "Boolean",
+          "description": "When true (default), mstatush is read-only. When false, writes are accepted but have no effect."
+        }
+      ],
+      "context_heading": "MstatushPlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 1301,
+        "alignment_line": 1302,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "ioRange",
+          "type": "UInt => Bool",
+          "description": "Function reference which eat an address and return true if the address should be uncached. ex : ioRange= _(31 downto 28) === 0xF => all 0xFXXXXXXX will be uncached"
+        }
+      ],
+      "context_heading": "StaticMemoryTranslatorPlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 1320,
+        "alignment_line": 1321,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "debugClockDomain",
+          "type": "ClockDomain",
+          "description": "As the debug unit is able to reset the CPU itself, it should use another clock domain to avoid killing itself (only the reset wire should differ)"
+        }
+      ],
+      "context_heading": "DebugPlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 1343,
+        "alignment_line": 1344,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Parameters",
+        "type",
+        "description"
+      ],
+      "rows": [
+        {
+          "Parameters": "externalFpu",
+          "type": "Boolean",
+          "description": "When false the FPU is instanciated in Vex, else the plugin has a `port` interface to which you can connect an external FPU"
+        },
+        {
+          "Parameters": "p",
+          "type": "FpuParameter",
+          "description": "Parameter with which the connected FPU will be created"
+        }
+      ],
+      "context_heading": "FpuPlugin",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 1502,
+        "alignment_line": 1503,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Address",
+        "Name",
+        "Description",
+        "Mode"
+      ],
+      "rows": [
+        {
+          "Address": "0",
+          "Name": "a",
+          "Description": "Operand A of the GCD(a,b)",
+          "Mode": "R/W"
+        },
+        {
+          "Address": "4",
+          "Name": "b",
+          "Description": "Operand B of the GCD(a,b)",
+          "Mode": "R/W"
+        },
+        {
+          "Address": "8",
+          "Name": "res",
+          "Description": "Result of GCD(a,b)",
+          "Mode": "RO, clears res and ready on read"
+        },
+        {
+          "Address": "12",
+          "Name": "ready",
+          "Description": "Ready, 1 if result available, 0 otherwise",
+          "Mode": "RO"
+        },
+        {
+          "Address": "16",
+          "Name": "valid",
+          "Description": "Valid, write 1 to start calculating GCD(a,b)",
+          "Mode": "WO, clear after write"
+        }
+      ],
+      "context_heading": "5. GCD Murax Integration",
+      "table_kind": "register",
+      "evidence": {
+        "source": "input/docs/doc/gcdPeripheral/README.md",
+        "header_line": 392,
+        "alignment_line": 393,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Name",
+        "Description"
+      ],
+      "rows": [
+        {
+          "Name": "Valid/Invalid",
+          "Description": "Line loaded or not"
+        },
+        {
+          "Name": "Shared/Unique",
+          "Description": "shared => multiple copy of the cache line in different caches, unique => no other caches has a copy of the line"
+        },
+        {
+          "Name": "Owner/Lodger",
+          "Description": "lodger => copy of the line, but no other responsibility, owner => the given cache is responsible to write back dirty data and answer probes with the data"
+        },
+        {
+          "Name": "Clean/Dirty",
+          "Description": "clean => match main memory, dirty => main memory need updates"
+        }
+      ],
+      "context_heading": "Memory copy status",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/doc/smp/smp.md",
+        "header_line": 37,
+        "alignment_line": 38,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Name",
+        "Direction",
+        "Description"
+      ],
+      "rows": [
+        {
+          "Name": "readCmd",
+          "Direction": "M -> S",
+          "Description": "Emit memory read and cache management commands"
+        },
+        {
+          "Name": "readRsp",
+          "Direction": "M <- S",
+          "Description": "Return some data and/or a status from readCmd"
+        },
+        {
+          "Name": "readAck",
+          "Direction": "M -> S",
+          "Description": "Return ACK from readRsp to synchronize the interconnect status"
+        }
+      ],
+      "context_heading": "Read interface",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/doc/smp/smp.md",
+        "header_line": 71,
+        "alignment_line": 72,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Name",
+        "Direction",
+        "Description"
+      ],
+      "rows": [
+        {
+          "Name": "writeCmd",
+          "Direction": "M -> S",
+          "Description": "Emit memory writes and cache management commands"
+        },
+        {
+          "Name": "writeRsp",
+          "Direction": "M <- S",
+          "Description": "Return a status from writeCmd"
+        }
+      ],
+      "context_heading": "Write interface",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/doc/smp/smp.md",
+        "header_line": 83,
+        "alignment_line": 84,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Name",
+        "Direction",
+        "Description"
+      ],
+      "rows": [
+        {
+          "Name": "probeCmd",
+          "Direction": "M <- S",
+          "Description": "Used for cache management"
+        },
+        {
+          "Name": "probeRsp",
+          "Direction": "M -> S",
+          "Description": "Acknowledgment"
+        }
+      ],
+      "context_heading": "Probe interface",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/doc/smp/smp.md",
+        "header_line": 94,
+        "alignment_line": 95,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Command",
+        "Initial state",
+        "Description",
+        "Usage example"
+      ],
+      "rows": [
+        {
+          "Command": "readShared",
+          "Initial state": "I---",
+          "Description": "Get a memory copy as V---",
+          "Usage example": "Want to read a uncached address"
+        },
+        {
+          "Command": "readUnique",
+          "Initial state": "I---",
+          "Description": "Get a memory copy as VUO-",
+          "Usage example": "Want to write a uncached address"
+        },
+        {
+          "Command": "readOnce",
+          "Initial state": "I---",
+          "Description": "Get a memory copy without coherency tracking",
+          "Usage example": "Instruction cache read"
+        },
+        {
+          "Command": "makeUnique",
+          "Initial state": "VS--",
+          "Description": "Make other memory copy as I--- and make yourself VUO-",
+          "Usage example": "Want to write into a shared line"
+        },
+        {
+          "Command": "readBarrier",
+          "Initial state": "N/A",
+          "Description": "Ensure that the visibility of the memory operations of this channel do not cross the barrier",
+          "Usage example": "ISA fence"
+        }
+      ],
+      "context_heading": "Read commands",
+      "table_kind": "command",
+      "evidence": {
+        "source": "input/docs/doc/smp/smp.md",
+        "header_line": 107,
+        "alignment_line": 108,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Responses",
+        "From command",
+        "Description"
+      ],
+      "rows": [
+        {
+          "Responses": "readSuccess",
+          "From command": "makeUnique, readBarrier",
+          "Description": "-"
+        },
+        {
+          "Responses": "readError",
+          "From command": "readShared, readUnique, readOnce",
+          "Description": "Bad address"
+        },
+        {
+          "Responses": "readData",
+          "From command": "readShared, readUnique, readOnce",
+          "Description": "Data + coherency status (V---)"
+        }
+      ],
+      "context_heading": "Read responses",
+      "table_kind": "command",
+      "evidence": {
+        "source": "input/docs/doc/smp/smp.md",
+        "header_line": 127,
+        "alignment_line": 128,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Name",
+        "From command",
+        "Description"
+      ],
+      "rows": [
+        {
+          "Name": "readSuccess",
+          "From command": "*",
+          "Description": "-"
+        }
+      ],
+      "context_heading": "Read ack",
+      "table_kind": "command",
+      "evidence": {
+        "source": "input/docs/doc/smp/smp.md",
+        "header_line": 137,
+        "alignment_line": 138,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Name",
+        "Initial state",
+        "Description",
+        "Usage example"
+      ],
+      "rows": [
+        {
+          "Name": "writeInvalid",
+          "Initial state": "V-O-",
+          "Description": "Write the memory copy and update it status to I---",
+          "Usage example": "Need to free the dirty cache line"
+        },
+        {
+          "Name": "writeShare",
+          "Initial state": "V-O-",
+          "Description": "Write the memory copy but keep it as VSO-",
+          "Usage example": "A probe makeShared asked it"
+        },
+        {
+          "Name": "writeUnique",
+          "Initial state": "VUO-",
+          "Description": "Write the memory copy but keep it as VUO-",
+          "Usage example": "A probe probeOnce need to read the data"
+        },
+        {
+          "Name": "evict",
+          "Initial state": "V---, !V-OD",
+          "Description": "Notify the interconnect that the cache line is now I---",
+          "Usage example": "Need to free a clean cache line"
+        },
+        {
+          "Name": "writeBarrier",
+          "Initial state": "N/A",
+          "Description": "Ensure that the visibility of the memory operations of this channel do not cross the barrier",
+          "Usage example": "ISA fence"
+        }
+      ],
+      "context_heading": "Write commands",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/doc/smp/smp.md",
+        "header_line": 145,
+        "alignment_line": 146,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Name",
+        "From command",
+        "Description"
+      ],
+      "rows": [
+        {
+          "Name": "writeSuccess",
+          "From command": "*",
+          "Description": "-"
+        }
+      ],
+      "context_heading": "Write responses",
+      "table_kind": "command",
+      "evidence": {
+        "source": "input/docs/doc/smp/smp.md",
+        "header_line": 157,
+        "alignment_line": 158,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Name",
+        "Description",
+        "Usage example"
+      ],
+      "rows": [
+        {
+          "Name": "makeInvalid",
+          "Description": "Make the memory copy I---",
+          "Usage example": "Another cache want to make his shared copy unique to write it"
+        },
+        {
+          "Name": "makeShared",
+          "Description": "Make the memory copy VS--",
+          "Usage example": "Another cache want to read a memory block, so unique copy need to be shared"
+        },
+        {
+          "Name": "probeOnce",
+          "Description": "Read the V-O- memory copy",
+          "Usage example": "A non coherent agent did a readOnce"
+        }
+      ],
+      "context_heading": "Probe commands",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/doc/smp/smp.md",
+        "header_line": 165,
+        "alignment_line": 166,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Name",
+        "From command",
+        "Description"
+      ],
+      "rows": [
+        {
+          "Name": "probeSuccess",
+          "From command": "*",
+          "Description": "-"
+        }
+      ],
+      "context_heading": "Probe responses",
+      "table_kind": "command",
+      "evidence": {
+        "source": "input/docs/doc/smp/smp.md",
+        "header_line": 181,
+        "alignment_line": 182,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    }
+  ],
+  "auto_discovered_identifiers": [
+    {
+      "name": "CPU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GDB",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GCC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CSR",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NONE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "STATIC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DYNAMIC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DYNAMIC_TARGET",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32I",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DMIPS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPGA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AXI4",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MUL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DIV",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "F32",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "F64",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MMU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JTAG",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISCV",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LUT",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32IM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IPC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32IMA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ADD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SUB",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JAVA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JDK",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SBT",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VERILATOR_ROOT",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NOTES",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RVC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RUN_HEX",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TCP",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VCD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TRACE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VEXRISCV_YAML",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IDE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CDT",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SR2",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UART",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VGA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GUI",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BRIEY_CPU0_YAML",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VJTAG",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DE1",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DE0",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ICE40",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "APB",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPIO",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MURAX_CPU0_YAML",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BSP",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IDEA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WIP",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PATH",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ARCH",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SYNC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SIMD_ADD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RS1",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RS2",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IS_SIMD_ADD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EXECUTE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RS1_USE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RS2_USE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CUSTOM_SIMD_ADD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IBUS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SIMPLE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DBUS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DEBUG_PLUGIN",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DHRYSTONE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "REDO",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IEEE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RNE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTZ",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RDN",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RUP",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RMM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FMA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SGNJ",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TLB",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ASYNC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRC1",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRC2",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRC_ADD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRC_SUB",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRC_LESS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SLT",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SLTU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XOR",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LUI",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AUIPC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SLL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JAL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JALR",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BEQ",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BNE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BLT",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BGE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BLTU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BGEU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BHT",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BTB",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LBU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LHU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LWU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DSP",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "READ_ONLY",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WRITE_ONLY",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "READ_WRITE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PMP",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NAPOT",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HERE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "YOUR",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ADAPTER",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SETTINGS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BSCANE2",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TCK",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TAP",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TCL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TAP_NAME",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AES",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ROM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SBOX",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VHDL",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISC",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UART",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPIO",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GCD",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTL",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "APB",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AXI",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FSM",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DFF",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTD",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "API",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UML",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HDL",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VCD",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "APB3",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GCD_H_",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RES",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "READY",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VALID",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPIO_A",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TIMER_PRESCALER",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TIMER_INTERRUPT",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TIMER_A",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TIMER_B",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RAM",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BOOT",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CTRL",
+      "source_doc": "doc__gcdPeripheral__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PROJ_NAME",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DEBUG",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BENCH",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MULDIV",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRCS",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OBJDIR",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "INC",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LIBS",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LIBSINC",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LDSCRIPT",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GCC",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SIFIVE_GCC_PACK",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISCV_NAME",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISCV_PATH",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MABI",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MARCH",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COMPRESSED",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CFLAGS",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DNDEBUG",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LDFLAGS",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISCV_CLIB",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISCV_OBJCOPY",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISCV_OBJDUMP",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISCV_CC",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OBJS",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "D__ASSEMBLY__",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PHONY",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SECONDARY",
+      "source_doc": "doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PCB",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JTAG",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BSCANE2",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OFFIS",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BMBF",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPGA",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FTDI",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "USB",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "README",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LED",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GDB",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TAP_NAME",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU0_YAML",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPINAL_SIM",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GNU",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPL",
+      "source_doc": "doc__nativeJtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DDR",
+      "source_doc": "doc__smp__smp.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU",
+      "source_doc": "doc__smp__smp.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VSOC",
+      "source_doc": "doc__smp__smp.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ACK",
+      "source_doc": "doc__smp__smp.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VUO",
+      "source_doc": "doc__smp__smp.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "doc__smp__smp.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VSO",
+      "source_doc": "doc__smp__smp.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DMA",
+      "source_doc": "doc__smp__smp.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VJTAG",
+      "source_doc": "doc__vjtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JTAG",
+      "source_doc": "doc__vjtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPGA",
+      "source_doc": "doc__vjtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "USB",
+      "source_doc": "doc__vjtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPIO",
+      "source_doc": "doc__vjtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VJAG",
+      "source_doc": "doc__vjtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU0_YAML",
+      "source_doc": "doc__vjtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GNU",
+      "source_doc": "doc__vjtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPL",
+      "source_doc": "doc__vjtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DEPRECATED",
+      "source_doc": "doc__vjtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NOTE",
+      "source_doc": "doc__vjtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DE1",
+      "source_doc": "doc__vjtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DE0",
+      "source_doc": "doc__vjtag__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    }
+  ],
+  "vendor_short_literals": [
+    {
+      "literal": "2%",
+      "kind": "percent",
+      "source": "README.md"
+    },
+    {
+      "literal": "2in",
+      "kind": "dimension",
+      "source": "README.md"
+    },
+    {
+      "literal": "0xF",
+      "kind": "short_hex",
+      "source": "README.md"
+    },
+    {
+      "literal": "0x00",
+      "kind": "short_hex",
+      "source": "README.md"
+    },
+    {
+      "literal": "0x04",
+      "kind": "short_hex",
+      "source": "README.md"
+    },
+    {
+      "literal": "inv",
+      "kind": "primitive_cell",
+      "source": "README.md"
+    },
+    {
+      "literal": "85.55%",
+      "kind": "percent",
+      "source": "doc__gcdPeripheral__README.md"
+    },
+    {
+      "literal": "0x0",
+      "kind": "short_hex",
+      "source": "doc__nativeJtag__README.md"
+    }
+  ]
+}

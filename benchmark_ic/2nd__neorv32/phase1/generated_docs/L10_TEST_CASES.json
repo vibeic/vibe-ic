@@ -1,0 +1,140 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_cases",
+  "ic_name": "SSE",
+  "test_cases": [],
+  "no_test_cases_in_input": true,
+  "bring_up_sequence": [
+    {
+      "step": 1,
+      "description": "The CPU executes an `ebreak` instruction (when in machine-mode and `ebreakm` in <<_dcsr>> is set OR when in user-mode and `ebreaku` in <<_dcsr>> is set).",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 2,
+      "description": "A debug halt request is issued by the DM (via CPU `db_halt_req_i` signal, high-active).",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 3,
+      "description": "The CPU completes executing of a single instruction while being in single-step debugging mode (`step` in <<_dcsr>> is set).",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 4,
+      "description": "A hardware trigger from the <<_trigger_module>> fires (if `exe` in <<_tdata1>> / `mcontrol` is set).",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 5,
+      "description": "wake-up CPU if it was send to sleep mode by the `wfi` instruction",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 6,
+      "description": "switch to debug-mode privilege level",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 7,
+      "description": "move the current program counter to <<_dpc>>",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 8,
+      "description": "copy the hart's current privilege level to the `prv` flags in <<_dcsr>>",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 9,
+      "description": "set `cause` in <<_dcsr>> according to the cause why debug mode is entered",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 10,
+      "description": "no update** of `mtval`, `mcause`, `mtval` and `mstatus[h]` CSRs",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 11,
+      "description": "load the address configured via the CPU's (<<_cpu_top_entity_generics, `CPU_DEBUG_PARK_ADDR`>>) generic to the program counter jumping to the",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 12,
+      "description": "while in debug mode, the CPU executes the parking loop and - if requested by the DM - the program buffer",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 13,
+      "description": "effective CPU privilege level is `machine` mode; any active physical memory protection (PMP) configuration is bypassed",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 14,
+      "description": "the `wfi` instruction acts as a `nop` (also during single-stepping)",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 15,
+      "description": "if an exception occurs while being in debug mode:",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    },
+    {
+      "step": 16,
+      "description": "interrupts are disabled; however, they will remain pending and will get executed after the CPU has left debug mode and is not being single-stepped",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc"
+    }
+  ],
+  "no_bring_up_sequence_in_input": false,
+  "extraction_evidence": {},
+  "class_path": "processor_cpu"
+}

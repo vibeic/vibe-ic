@@ -1,0 +1,105 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "Released core",
+  "analog_blocks_detected": false,
+  "analog_blocks": [],
+  "no_analog": true,
+  "external_components": [],
+  "electrical_specs": [],
+  "design_parameters": [
+    {
+      "parameter": "FPU_ADDMUL_LAT",
+      "value": "0",
+      "type": "int",
+      "description": "Number of pipeline registers for Floating-Point addition and multiplication instructions, see :ref:`fpu`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "FPU_OTHERS_LAT",
+      "value": "0",
+      "type": "int",
+      "description": "Number of pipeline registers for Floating-Point comparison, conversion and classify instructions, see :ref:`fpu`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "ZFINX",
+      "value": "0",
+      "type": "bit",
+      "description": "Enable Floating Point instructions to use the General Purpose register file instead of requiring a dedicated Floating Point register file, see :ref:`fpu`. Only allowed to be set to 1 if ``FPU`` = 1",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "COREV_PULP",
+      "value": "0",
+      "type": "bit",
+      "description": "Enable all of the custom PULP ISA extensions (except **cv.elw**) (see :ref:`custom-isa-extensions`) and all custom CSRs (see :ref:`cs-registers`).",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "NUM_MHPMCOUNTERS",
+      "value": "1",
+      "type": "int (0..29)",
+      "description": "Number of MHPMCOUNTER performance counters, see :ref:`performance-counters`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "FPU",
+      "value": "0",
+      "type": "bit",
+      "description": "Enable Floating Point Unit (FPU) support, see :ref:`fpu`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "COREV_CLUSTER",
+      "value": "0",
+      "type": "bit",
+      "description": "Enable PULP Cluster support (**cv.elw**), see :ref:`pulp_cluster`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/Makefile": [],
+    "input/docs/README.md": [],
+    "input/docs/images__CV32E40P_Block_Diagram.svg": [],
+    "input/docs/images__blockdiagram.svg": [],
+    "input/docs/images__debug_halted.svg": [],
+    "input/docs/images__debug_running.svg": [],
+    "input/docs/images__load_event.svg": [],
+    "input/docs/images__obi_data_back_to_back.svg": [],
+    "input/docs/images__obi_data_basic.svg": [],
+    "input/docs/images__obi_data_multiple_outstanding.svg": [],
+    "input/docs/images__obi_data_slow_response.svg": [],
+    "input/docs/images__obi_instruction_basic.svg": [],
+    "input/docs/images__obi_instruction_multiple_outstanding.svg": [],
+    "input/docs/images__wfi.svg": [],
+    "input/docs/requirements.txt": [],
+    "input/docs/source__control_status_registers.rst": [],
+    "input/docs/source__core_versions.rst": [],
+    "input/docs/source__corev_hw_loop.rst": [],
+    "input/docs/source__debug.rst": [],
+    "input/docs/source__exceptions_interrupts.rst": [],
+    "input/docs/source__fpu.rst": [],
+    "input/docs/source__glossary.rst": [],
+    "input/docs/source__index.rst": [],
+    "input/docs/source__instruction_fetch.rst": [],
+    "input/docs/source__instruction_set_extensions.rst": [],
+    "input/docs/source__integration.rst": [],
+    "input/docs/source__intro.rst": [],
+    "input/docs/source__load_store_unit.rst": [],
+    "input/docs/source__perf_counters.rst": [],
+    "input/docs/source__pipeline.rst": [],
+    "input/docs/source__preface.rst": [],
+    "input/docs/source__register_file.rst": [],
+    "input/docs/source__sleep.rst": [],
+    "input/docs/source__verification.rst": []
+  },
+  "class_path": "processor_cpu"
+}

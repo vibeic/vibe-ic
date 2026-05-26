@@ -1,0 +1,788 @@
+{
+  "schema_version": 2,
+  "doc_class": "frs",
+  "ic_name": "Phase-1 Fact-Graph Provenance Audit",
+  "frs_sections": [
+    {
+      "section": "h2",
+      "title": "WARN_INSUFFICIENT_REQUIRED_FIELDS",
+      "content": "_required_facts_satisfied_pct = 0.92 (36 / 39 satisfied)_\n\nPhase 2b's `phase1_doc_presence_check` and downstream hard-gates expect 100% required-fact coverage. The following required facts had no textual support in the input prompt / docs:",
+      "evidence": "input/docs/PROVENANCE.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "L2",
+      "content": "  - `L2.issue_width`\n  - `L2.pipeline_depth`\n  - `L2.pipeline_style`",
+      "evidence": "input/docs/PROVENANCE.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Systems using SERV",
+      "content": "SERV can be easily integrated into any design, but if you are looking at just quickly trying it out, here is a list of some systems that are already using SERV:\n\n[Servant](https://serv.readthedocs.io/en/latest/servant.html) is the reference platform for SERV. It is a very basic SoC that contains just enough to run Zephyr RTOS. Servant is intended for FPGAs and has been ported to around 20 different FPGA boards. It is also used to run the RISC-V regression test suite.\n\n[CoreScore](https://corescore.store/) is an award-giving benchmark for FPGAs and their synthesis/P&R tools. It tests how many SERV cores that can be put into a particular FPGA.\n\n[Observer](https://github.com/olofk/observer) is a configurable and software-programmable sensor aggregation platform for heterogeneous sensors.\n\n[Su…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Running pre-built test software",
+      "content": "Build and run the single threaded zephyr hello world example with verilator (should be stopped with Ctrl-C):\n\n    fusesoc run --target=verilator_tb servant --uart_baudrate=57600 --firmware=$SERV/sw/zephyr_hello.hex\n\n..or... the multithreaded version\n\n    fusesoc run --target=verilator_tb servant --uart_baudrate=57600 --firmware=$SERV/sw/zephyr_hello_mt.hex --memsize=16384\n\nBoth should yield an output ending with\n\n    ***** Booting Zephyr OS zephyr-v1.14.1-4-gc7c2d62513fe *****\n    Hello World! service\n\nFor a more advanced example, we can also run the Dining philosophers demo\n\n    fusesoc run --target=verilator_tb servant --uart_baudrate=57600 --firmware=$SERV/sw/zephyr_phil.hex --memsize=32768\n\n...or... the synchronization example\n\n    fusesoc run --target=verilator_tb servant --uart_baudr…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Verification",
+      "content": "SERV is verified using RISC-V compliance tests for the base ISA (RV32I) and the implemented extensions (M, C, Zicsr). The instructions on running Compliance tests using RISCOF framework are given in [verif](/verif/) directory.",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Other targets",
+      "content": "The above targets are run on the servant SoC, but there are some targets defined for the CPU itself. Verilator can be run in lint mode to check for design problems by running\n\n    fusesoc run --target=lint serv\n\nIt's also possible to just synthesise for different targets to check resource usage and such. To do that for the iCE40 devices, run\n\n    fusesoc run --tool=icestorm serv --pnr=none\n\n...or to synthesize with vivado for Xilinx targets, run\n\n    fusesoc run --tool=vivado serv --pnr=none\n\nThis will synthesize for the default Vivado part. To synthesise for a specific device, run e.g.\n\n    fusesoc run --tool=vivado serv --pnr=none --part=xc7a100tcsg324-1",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Zephyr support",
+      "content": "SERV, or rather the Servant SoC, can run the [Zephyr RTOS](https://www.zephyrproject.org). The Servant-specific drivers and BSP is located in the zephyr subdirectory of the SERV repository. In order to use Zephyr on Servant, a project directory structure must be set up that allows Zephyr to load the Servant-specific files as a module.\n\nFirst, the Zephyr SDK and the \"west\" build tool must be installed. The [Zephyr getting started guide](https://docs.zephyrproject.org/latest/getting_started/index.html) describes these steps in more detail.\n\nAssuming that SERV was installed into `$WORKSPACE/fusesoc_libraries/serv` as per the prerequisites, run the following command to make the workspace also work as a Zephyr workspace.\n\n    west init\n\nSpecify the SERV repository as the manifest repository, me…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Good to know",
+      "content": "Don't feed serv any illegal instructions after midnight. Many logic expressions are hand-optimized using the old-fashioned method with Karnaugh maps on paper, and shamelessly take advantage of the fact that some opcodes aren't supposed to appear. As serv was written with 4-input LUT FPGAs as target, and opcodes are 5 bits, this can save quite a bit of resources in the decoder.\n\nThe bus interface is kind of Wishbone, but with most signals removed. There's an important difference though. Don't send acks on the instruction or data buses unless serv explicitly asks for something by raising its cyc signal. Otherwise serv becomes very confused.\n\nDon't go changing the clock frequency on a whim when running Zephyr. Or well, it's ok I guess, but since the UART is bitbanged, this will change the bau…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h5",
+      "title": "Datasheet",
+      "content": ".. include:: overview.rst\n.. include:: interface.rst",
+      "evidence": "input/docs/doc__datasheet.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h5",
+      "title": "SERV user manual",
+      "content": "Welcome to the user manual of the award-winning SERV, the world's smallest RISC-V CPU.\n\n.. toctree::\n   :maxdepth: 4\n   :caption: Contents:\n\n   datasheet.rst\n   internals.rst\n   reservoir.rst",
+      "evidence": "input/docs/doc__index.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h1",
+      "title": "Interface",
+      "content": "",
+      "evidence": "input/docs/doc__interface.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Top level",
+      "content": "Users of SERV can choose to use either serv_top or serv_rf_top depending on what best fits the application. serv_top contains all the main logic of SERV except for the actual storage for the register file (RF).\n\n.. image:: serv_top.png\n\nserv_rf_top is a convenience wrapper that combines serv_top with a memory-based RF (serf_rf_ram) and an adapter between them (serv_rf_ram_if). This allows users to choose between a drop-in implementation when the memory-based RF is good enough or supply an alternative RF implementation, such as a shift-register based one or a combined SRAM for instruction/data memory and RF.\n\n.. image:: serv_rf_top.png\n\nThis means that serv_top exposes some additional pins to connect the RF which are not in serv_rf_top, while serv_rf_top has some extra parameters for config…",
+      "evidence": "input/docs/doc__interface.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Parameters",
+      "content": ".. list-table:: Parameters\n   :header-rows: 1\n   :widths: 10 20 80\n\n   * - Parameter\n     - Values\n     - Description\n   * - MDU\n     - 0 (default), 1\n     - Enables the interface for connecting SERV and the Multiplication and Division Unit (MDU). Note that this only enables the interface and the decoder logic. The MDU itself must be connected externally as well.\n   * - PRE_REGISTER\n     - 0, 1 (default)\n     - | Register signals before or after the decoder\n       | 0 : Register after the decoder. Faster but uses more resources\n       | 1 : (default) Register before the decoder. Slower but uses less resources\n   * - RESET_PC\n     - 0x00000000 (default) - 0xFFFFFFFC\n     - Address of first instruction to fetch from memory after reset (Reset vector)\n   * - RESET_STRATEGY\n     - \"MINI\" (defau…",
+      "evidence": "input/docs/doc__interface.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Signals",
+      "content": ".. list-table:: Signals\n   :header-rows: 1\n   :widths: 30 10 5 75\n\n   * - Signal\n     - Width\n     - Direction\n     -  Description\n   * - clk\n     - 1\n     - in\n     - Clock\n   * - i_rst\n     - 1\n     - in\n     - Synchronous reset\n   * - i_timer_irq\n     - 1\n     - in\n     - Timer interrupt\n   * - o_ibus_adr\n     - 32\n     - out\n     - Instruction bus address\n   * - o_ibus_cyc\n     - 1\n     - out\n     - Instruction bus active cycle\n   * - i_ibus_rdt\n     - 32\n     - in\n     - Instruction bus read data\n   * - i_ibus_ack\n     - 1\n     - in\n     - Instruction bus cycle acknowledged\n   * - o_dbus_adr\n     - 32\n     - out\n     - Data bus address\n   * - o_dbus_dat\n     - 32\n     - out\n     - Data bus write data\n   * - o_dbus_sel\n     - 4\n     - out\n     - Data bus write data byte select mask\n   …",
+      "evidence": "input/docs/doc__interface.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Extension interface",
+      "content": "The SERV CPU, being the smallest RISC-V CPU, has a design that is primarily focused on simplicity and minimalism. However, to increase its utility without complicating the core design, it can be extended using an extension interface. The extension interface allows additional functionality to be added to the SERV CPU core through custom accelerators that are called for when specific instructions are encountered. SERV has built-in support for connecting an MDU (Multiplication/Division Unit) that implements the M ISA extension by setting the MDU parameter. Other accelerators need changes to the decoder.\n\nWhen SERV detects instructions to be executed by an external accelerator through the extension interface, it will treat them as :ref:`two-stage operations`. In stage 1, the values in `o_ext_r…",
+      "evidence": "input/docs/doc__interface.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h5",
+      "title": "Internals",
+      "content": ".. include:: modules.rst",
+      "evidence": "input/docs/doc__internals.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Modules",
+      "content": "SERV is a bit-serial CPU which means that the internal datapath is one bit wide. :ref:`dataflow` shows the internal dataflow. For each instruction, data is read from the register file or the immediate fields of the instruction word and the result of the operation is stored back into the register file. Reading and writing memory is handled through the memory interface module.\n\n.. _dataflow:\n\n.. figure:: serv_dataflow.png\n\n   SERV internal dataflow\n\nserv_rf_top\n^^^^^^^^^^^\n\n.. image:: serv_rf_top.png\n\nserv_rf_top is a top-level convenience wrapper that includes SERV and the default RF implementation and just exposes the timer IRQ and instruction/data wishbone buses.\n\nserv_top\n^^^^^^^^\n\nserv_top is the top-level of the SERV core without an RF\n\nserv_alu\n^^^^^^^^\n\n.. image:: serv_alu.png\n\nserv_…",
+      "evidence": "input/docs/doc__modules.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Instruction life cycle",
+      "content": "The life cycle of an instruction starts by the core issuing a request for a new instruction on the ibus and ends when the PC has been updated with the address of the next instruction. This section goes through what happens between those points for the various types of instructions. SERV distinguishes between two-stage and one-stage operations with the former category being all jump (branch), shift, slt and load/store instructions and the latter all other operations. In addition to this, exceptions are a special case. Only two-stage operations (jump, load/store) can cause an exception. Regardless of instruction type, they all start out the same way.\n\n.. image:: life_cycle.png",
+      "evidence": "input/docs/doc__modules.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Fetch",
+      "content": "The bus requests begin by SERV raising o_ibus_cyc until the memory responds with an i_ibus_ack and presents the instruction on i_ibus_rdt. Upon seeing the ack, SERV will lower cyc to indicate the end of the bus cycle.\n\n.. wavedrom::\n\n        { signal: [\n          { name: \"clk\"       , wave: \"0P|......\"},\n          { name: \"o_ibus_cyc\", wave: \"01|.0.....\", node: \".a...\"},\n          { name: \"i_ibus_ack\", wave: \"0.|10.....\", node: \"...b\", data: \"r0\"},\n          { name: \"rf_rreq\"   , wave: \"0.|10.....\", node: \"...c.\", data: \"r1\"},\n          { name: \"i_ibus_rdt\", wave: \"x.|2x.....\", node: \"...\", data: \"i0\"},\n          { name: \"opcode\"    , wave: \"x.|.2.....\", data: \"i0[6:2]\"},\n          { name: \"funct3\"    , wave: \"x.|.2.....\", data: \"i0[14:12]\"},\n          { name: \"imm30\"     , wave: \"x.|.2...…",
+      "evidence": "input/docs/doc__modules.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Decode",
+      "content": "When the ack appears, two things happen in SERV. The relevant portions of the instruction such as opcode, funct3 and immediate value are saved in serv_decode and serv_immdec. The saved bits of the instruction is then decoded to create the internal control signals that corresponds to the current instruction. The decoded control signals remain static throughout the instruction life cycle.\n\nThe other thing to happen is that a request to start accessing the register file is sent by strobing rf_rreq which prepares the register file for both read and write access.\n\n.. wavedrom::\n\n        { signal: [\n          { name: \"clk\"    , wave: \"0P.|.....\"},\n          { name: \"rreq\"   , wave: \"010|.....\", node: \".a...\"},\n          { name: \"rreg0\"  , wave: \"x.2|.....\", node: \"....\", data: \"r0\"},\n          {…",
+      "evidence": "input/docs/doc__modules.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Execute",
+      "content": "After the instruction has been decoded and the register file prepared for reads (and possibly writes) the core knows whether it is a one-stage or two-stage instruction. These are handled differently and we will begin by looking at one-stage instructions. A stage in SERV is 32 consecutive cycles during which the core is active and processes inputs and creates results one bit at a time, starting with the LSB.\n\nOne-stage instructions\n::::::::::::::::::::::\n\nMost operations are one-stage operations which finish in 32 cycles + fetch overhead. During a one-stage operation, the RF is read and written simultaneously as well as the PC which is increased by four to point to the next instruction. trap and init signals are low to distinguish from other stages.\n\n.. wavedrom::\n\n        { signal: [\n     …",
+      "evidence": "input/docs/doc__modules.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h1",
+      "title": "Overview",
+      "content": "The SERV RISC-V CPU is an award-winning and highly compact processor core based on the RISC-V instruction set architecture (ISA). It is designed to be the smallest possible RISC-V compliant CPU and is particularly well-suited for embedded systems and applications where silicon area is critical.",
+      "evidence": "input/docs/doc__overview.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Key Features",
+      "content": "* **ISA:** RISC-V RV32IZifencei\n* **Optional ISA extensions:** C, M, Zicsr\n* **Optional features:** Timer interrupts, Extension interface\n* **Architecture:** Bit-serial (one bit processed per clock cycle)\n* **License:** ISC (available under other commercial licenses upon request)\n* **OS support:** Zephyr 3.7\n* **SW support:** Compatible with standard RISC-V toolchains\n* **Area:** Smallest RISC-V core available",
+      "evidence": "input/docs/doc__overview.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Applications",
+      "content": "* **Embedded Systems:** Ideal for minimalistic embedded control tasks\n* **IoT Devices:** Suitable for Internet of Things devices where space and power are limited\n* **Education:** Excellent resource for teaching and understanding the RISC-V architecture and CPU design\n* **Research:** Platform for research in minimalistic computing designs and for bringing up new fabrication processes",
+      "evidence": "input/docs/doc__overview.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Area",
+      "content": ".. list-table:: Area for minimal configuration [#]_\n   :widths: 25 25 25 25\n   :header-rows: 1\n\n   * - Lattice iCE40\n     - Altera Cyclone10LP\n     - AMD Artix-7\n     - CMOS\n   * - 198LUT/164FF\n     - 239LUT/164FF\n     - 125LUT/164FF\n     - 2.1kGE\n\n.. [#] Excluding register file",
+      "evidence": "input/docs/doc__overview.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h5",
+      "title": "Building systems with SERV",
+      "content": "A CPU is only as good as its ecosystem. In order to make use of SERV, it needs to be combined with other components such as memories, accelerators and peripheral controllers.\n\nWelcome to the reservoir, a pool of ready-made designs and subsystems for different purposes that you can use to quickly get started with SERV or integrate it into larger designs.\n\n.. include::   servile.rst\n.. include::   serving.rst\n.. include::   servant.rst\n.. include::   subservient.rst",
+      "evidence": "input/docs/doc__reservoir.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Available targets",
+      "content": "The servant SoC has been ported to an increasing number of different FPGA boards and is easy to modify for new targets. To see all currently supported targets run:\n\n    fusesoc core show servant\n\nBy default, these targets have the program memory preloaded with a small Zephyr hello world example that writes its output on a UART pin. Don't forget to install the appropriate toolchain (e.g. icestorm, Vivado, Quartus...) and add to your PATH\n\nSome targets also depend on functionality in the FuseSoC base library (fusesoc-cores). Running `fusesoc library list` should tell you if fusesoc-cores is already available. If not, add it to your workspace with\n\n    fusesoc library add fusesoc-cores https://github.com/fusesoc/fusesoc-cores\n\nNow we're ready to build. Note, for all the cases below, it's poss…",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Alchistry AU",
+      "content": "    fusesoc run --target=alchistry_au servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Alhambra II",
+      "content": "Pin 61 is used for UART output with 115200 baud rate. This pin is connected to a FT2232H chip in board, that manages the communications between the FPGA and the computer.\n\n    fusesoc run --target=alhambra servant\n    iceprog -d i:0x0403:0x6010:0 build/servant_1.0.1/alhambra-icestorm/servant_1.0.1.bin",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Arty A7 35T",
+      "content": "Pin D10 (uart_rxd_out) is used for UART output with 57600 baud rate (to use\nblinky.hex change D10 to H5 (led[4]) in data/arty_a7_35t.xdc).\n\n    fusesoc run --target=arty_a7_35t servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Arty S7 50T",
+      "content": "Pin R12 (uart_rxd_out) is used for UART output with 57600 baud rate (to use\nblinky.hex change R12 to E18 (led[4]) in data/arty_s7_50t.xdc).\n\n    fusesoc run --target=arty_s7_50t servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Chameleon96 (Arrow 96 CV SoC Board)",
+      "content": "FPGA Pin W14 (1V8, pin 5 low speed connector) is used for UART Tx output with 115200 baud rate. No reset key. Yellow Wifi led is q output.\n\n    fusesoc run --target=chameleon96 servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "CMOD A7 35t",
+      "content": "FPGA Pin J18 is used for UART output with 57600 baud rate. btn0 is used for reset.\n\n    fusesoc run --target=cmod_a7_35t servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "CYC1000",
+      "content": "    fusesoc run --target=cyc1000 servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "DE0 Nano",
+      "content": "FPGA Pin D11 (Connector JP1, pin 38) is used for UART output with 57600 baud rate. DE0 Nano needs an external 3.3V UART to connect to this pin\n\n    fusesoc run --target=de0_nano servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "DE10 Nano",
+      "content": "FPGA Pin Y15 (Connector JP7, pin 1) is used for UART output with 57600 baud rate. DE10 Nano needs an external 3.3V UART to connect to this pin\n\n    fusesoc run --target=de10_nano servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "DE1 SoC revF",
+      "content": "FPGA PIN_AC18 (Connector GPIO0, pin 0) is used for UART output with 57600 baud rate. DE1 SoC revF needs an external 3.3V UART to connect to this pin. The UART pin has not been tested.\n\n    fusesoc run --target=de1_soc_revF servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "DECA development kit",
+      "content": "FPGA Pin W18 (Pin 3 P8 connector) is used for UART output with 57600 baud rate. Key 0 is reset and Led 0 q output.\n\n    fusesoc run --target=deca servant\n\nEBAZ4205 'Development' Board\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\nPin B20 is used for UART output with 57600 baud rate. To use `blinky.hex`\nchange B20 to W14 (red led) in `data/ebaz4205.xdc` file).\n\n    fusesoc run --target=ebaz4205 servant\n\n    fusesoc run --target=ebaz4205 servant --memfile=$SERV/sw/blinky.hex\n\nReference: https://github.com/fusesoc/blinky#ebaz4205-development-board",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Icebreaker",
+      "content": "Pin 9 is used for UART output with 57600 baud rate.\n\n    fusesoc run --target=icebreaker servant\n\niCEstick\n^^^^^^^^\n\nPin 95 is used as the GPIO output which is connected to the board's green LED. Due to this board's limited Embedded BRAM, programs with a maximum of 7168 bytes can be loaded. The default program for this board is blinky.hex.\n\n    fusesoc run --target=icestick servant\n    iceprog build/servant_1.4.0/icestick-icestorm/servant_1.4.0.bin\n\niCESugar\n^^^^^^^^\n\nPin 6 is used for UART output with 115200 baud rate. Thanks to the onboard\ndebugger, you can just connect the USB Type-C connector to the PC, and a\nserial console will show up.\n\n    fusesoc run --target=icesugar servant\n\niCESugar-nano\n^^^^^^^^^^^^^\n\nPin B3 is used for LED output. As the default clock of 12 MHz is rather slow\n…",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "ICE-V Wireless",
+      "content": "Pin 9 is used for UART output with 57600 baud rate.\n\n    fusesoc run --target=icev_wireless servant\n\n    iceprog build/servant_1.4.0/icestick-icestorm/servant_1.4.0.bin",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "GMM7550",
+      "content": "    fusesoc run --target=gmm7550 servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "LX9 Microboard",
+      "content": "    fusesoc run --target=lx9_microboard servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Machdyne Kolibri",
+      "content": "Pin B1 is used for UART output with 115200 baud rate. The serial port on Kolibri is accessible as a USB-CDC device.\n\n    fusesoc run --target=machdyne_kolibri servant\n\n    ldprog -Ks build/servant_1.4.0/machdyne_kolibri-icestorm/servant_1.4.0.bin",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "MAX10 10M08 Evaluation Kit",
+      "content": "FPGA Pin 75 (Arduino_IO01 J5 pin 7) is used for UART output with 57600 baud rate. SW1 is reset and Led 1 q output.\n\n    fusesoc run --target=max10_10m08evk servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Nandland Go Board",
+      "content": "Pin 56 is used as the GPIO output which is connected to the board's LED1. Due to this board's limited Embedded BRAM, programs with a maximum of 7168 bytes can be loaded. The default program for this board is blinky.hex.\n\n    fusesoc run --target=go_board servant\n    iceprog build/servant_1.4.0/go_board-icestorm/servant_1.4.0.bin",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Nexys 2",
+      "content": "Pmod pin JA1 is connected to UART tx with 57600 baud rate. A USB to TTL connector is used to display to hello world message on the serial monitor.\n(To use blinky.hex change L15 to J14 (led[0]) in data/nexys_2.ucf).\n\n    fusesoc run --target=nexys_2_500 servant --uart_baudrate=57600 --firmware=$SERV/sw/zephyr_hello.hex",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Nexys A7",
+      "content": "    fusesoc run --target=nexys_a7 servant\n\nOrangeCrab R0.2\n^^^^^^^^^^^^^^^\n\nPin D1 is used for UART output with 115200 baud rate.\n\n    fusesoc run --target=orangecrab_r0.2 servant\n    dfu-util -d 1209:5af0 -D build/servant_1.4.0/orangecrab_r0.2-trellis/servant_1.4.0.bit",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "SoCKit development kit",
+      "content": "FPGA Pin F14 (HSTC GPIO addon connector J2, pin 2) is used for UART output with 57600 baud rate.\n\n    fusesoc run --target=sockit servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Trenz Electronic TE0802",
+      "content": "PMOD A marked J5, pin two, on the board is used for UART output with 115200 baud rate.  \n\n    fusesoc run --target=te0802 servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "TinyFPGA BX",
+      "content": "Pin A6 is used for UART output with 115200 baud rate.\n\n    fusesoc run --target=tinyfpga_bx servant\n    tinyprog --program build/servant_1.0.1/tinyfpga_bx-icestorm/servant_1.0.1.bin\n\nULX3S\n^^^^^\n\n    fusesoc run --target=ulx3s servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Upduino2",
+      "content": "    fusesoc run --target=upduino2 servant\n\nzcu106\n^^^^^^\n\n    fusesoc run --target=zcu106 servant",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Porting Servant to a new target",
+      "content": "Mostly any FPGA board can be used to run the Servant SoC. In its simplest form it just needs an FPGA with a clock input and an output that can be used to connect an UART or a LED.\n\nThe porting process consists of FIXME steps.\nWe will use `<name>` as a placeholder for the name of the FPGA board.\n1. Locate the pins used for clock input and for the outputs. Outputs should preferably be both a LED and an UART, but either works if not both are available. Optionally, locate an input pin connected to the reset as well. This is not required, but can be handy.\n2. Write a pin constraints file with your located pins in the format of the FPGA toolchain you intend to use. For Vivado this would be an .xdc file. For Quartus a .tcl file, for nextpnr a .pcf file and so on. Save this as `data/<name>.{pcf,uc…",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "3",
+      "title": "Create a clock generation file",
+      "content": "",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "4",
+      "title": "Create a top-level",
+      "content": "",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "5",
+      "title": "Create a fileset",
+      "content": "",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "6",
+      "title": "Create a target",
+      "content": "",
+      "evidence": "input/docs/doc__servant.rst",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "h2",
+      "title": "Parameters",
+      "content": ".. list-table:: Parameters\n   :header-rows: 1\n   :widths: 10 20 80\n\n   * - Parameter\n     - Values\n     - Description\n   * - reset_pc\n     - 0x00000000 (default) - 0xFFFFFFFC\n     - Address of first instruction to fetch from memory after reset (Reset vector)\n   * - reset_strategy\n     - \"MINI\" (default), \"NONE\"\n     - | Amount of reset applied to design\n       | \"NONE\" : No reset at all. Relies on a POR to set correct initialization values and that core isn't reset during runtime\n       | \"MINI\" : Standard setting. Resets the minimal amount of FFs needed to restart execution from the instruction at RESET_PC.\n   * - rf_width\n     - 2 (default), 4, 8, 16, 32\n     - Width of the data bus to the RF memory. Typically smaller values use less resources, but can be implementation-dependant.\n   * -…",
+      "evidence": "input/docs/doc__servile.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Signals",
+      "content": ".. list-table:: Signals\n   :header-rows: 1\n   :widths: 30 10 5 75\n\n   * - Signal\n     - Width\n     - Direction\n     -  Description\n   * - i_clk\n     - 1\n     - in\n     - Clock\n   * - i_rst\n     - 1\n     - in\n     - Synchronous reset\n   * - i_timer_irq\n     - 1\n     - in\n     - Timer interrupt\n   * - **Memory interface**\n     -\n     -\n     - Connect to instruction/data memory\n   * - o_wb_mem_adr\n     - 32\n     - out\n     - Memory bus address\n   * - o_wb_mem_dat\n     - 32\n     - out\n     - Memory bus data\n   * - o_wb_mem_sel\n     - 4\n     - out\n     - Memory bus write data byte select mask\n   * - o_wb_mem_we\n     - 1\n     - out\n     - Memory bus write transaction\n   * - o_wb_mem_stb\n     - 1\n     - out\n     - Memory bus active strobe\n   * - i_wb_mem_rdt\n     - 32\n     - in\n     - Memory bus …",
+      "evidence": "input/docs/doc__servile.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Parameters",
+      "content": ".. list-table:: Parameters\n   :header-rows: 1\n   :widths: 10 20 80\n\n   * - Parameter\n     - Values\n     - Description\n   * - memfile\n     - \"\" (default)\n     - Verilog hex file containing a RISC-V application to be preloaded into memory\n   * - memsize\n     -  1-4294967296 (default 8192)\n     - Size of memory (in bytes). Needs to be at least large enough to fit the application supplied by memsize. Note that the RF occupies the highest 128 bytes of memory in the RAM.\n   * - sim\n     - 0 (default), 1\n     - | Enable simulation mode. In simulation mode, two memory addresses have special purposes.\n       | 0x80000000: Writes to this address puts the byte in the lowest data byte into a log file decided by the \"signature\" plusarg.\n       | 0x90000000: Writes to this address ends the simulation.\n …",
+      "evidence": "input/docs/doc__serving.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Signals",
+      "content": ".. list-table:: Signals\n   :header-rows: 1\n   :widths: 30 10 5 75\n\n   * - Signal\n     - Width\n     - Direction\n     -  Description\n   * - i_clk\n     - 1\n     - in\n     - Clock\n   * - i_rst\n     - 1\n     - in\n     - Synchronous reset\n   * - i_timer_irq\n     - 1\n     - in\n     - Timer interrupt\n   * - **Extension interface**\n     -\n     -\n     - Connect to peripheral controllers\n   * - o_wb_adr\n     - 32\n     - out\n     - Data bus address\n   * - o_wb_dat\n     - 32\n     - out\n     - Data bus write data\n   * - o_wb_sel\n     - 4\n     - out\n     - Data bus write data byte select mask\n   * - o_wb_we\n     - 1\n     - out\n     - Data bus write transaction\n   * - o_wb_cyc\n     - 1\n     - out\n     - Data bus active cycle\n   * - i_wb_rdt\n     - 32\n     - in\n     - Data bus return data\n   * - i_wb_ack\n …",
+      "evidence": "input/docs/doc__serving.rst",
+      "heading_shape": "rst_underline"
+    }
+  ],
+  "no_frs_sections_in_input": false,
+  "protocol_overview": null,
+  "no_protocol_overview_in_input": true,
+  "compliance_requirements": [],
+  "timing_parameters": [
+    {
+      "name": "metric3_CMOS",
+      "parameter": "metric3_CMOS",
+      "value": 2.1,
+      "unit": "kGE",
+      "platform": "CMOS",
+      "evidence": "input/docs/doc__overview.rst",
+      "raw": ".. list-table:: Area for minimal configuration [#]_\n   :widths: 25 25 25 25\n   :header-rows: 1\n\n   * - Lattice iCE40\n     - Altera Cyclone10LP\n     - AMD Artix-",
+      "extraction_strategy": "rst_list_table_transposed"
+    }
+  ],
+  "fmax_mhz": null,
+  "no_fmax_mhz_in_input": true,
+  "extraction_strategy": {
+    "frs_repo_meta_skipped_v1_6_392": 1
+  },
+  "extraction_evidence": {
+    "input/docs/PROVENANCE.md": [
+      {
+        "literal": "h2 WARN_INSUFFICIENT_REQUIRED_FIELDS",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 L2",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/README.md": [
+      {
+        "literal": "h2 Systems using SERV",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Getting started",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Running pre-built test software",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Verification",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Other targets",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Zephyr support",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Good to know",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/doc__datasheet.rst": [
+      {
+        "literal": "h5 Datasheet",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/doc__index.rst": [
+      {
+        "literal": "h5 SERV user manual",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/doc__interface.rst": [
+      {
+        "literal": "h1 Interface",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Top level",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Parameters",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Signals",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Extension interface",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/doc__internals.rst": [
+      {
+        "literal": "h5 Internals",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/doc__modules.rst": [
+      {
+        "literal": "h2 Modules",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Instruction life cycle",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Fetch",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Decode",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Execute",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/doc__overview.rst": [
+      {
+        "literal": "h1 Overview",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Key Features",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Applications",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Area",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/doc__reservoir.rst": [
+      {
+        "literal": "h5 Building systems with SERV",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/doc__servant.rst": [
+      {
+        "literal": "h2 Available targets",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Alchistry AU",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Alhambra II",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Arty A7 35T",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Arty S7 50T",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Chameleon96 (Arrow 96 CV SoC Board)",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 CMOD A7 35t",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 CYC1000",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 DE0 Nano",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 DE10 Nano",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 DE1 SoC revF",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 DECA development kit",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Icebreaker",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 ICE-V Wireless",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 GMM7550",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 LX9 Microboard",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Machdyne Kolibri",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 MAX10 10M08 Evaluation Kit",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Nandland Go Board",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Nexys 2",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Nexys A7",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 SoCKit development kit",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Trenz Electronic TE0802",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 TinyFPGA BX",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/doc__servile.rst": [
+      {
+        "literal": "h2 Parameters",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Signals",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/doc__serving.rst": [
+      {
+        "literal": "h2 Parameters",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Signals",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/doc__subservient.rst": [],
+    "v1.6.295.protocol_overview_class_gate_suppressed": [
+      {
+        "literal": "class_path='processor_cpu', hd_signal_count=0",
+        "label": "v1.6.295 (#180) — protocol_overview suppressed: CPU / analog class OR fewer than 2 half-duplex shape signals in source"
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "auto_cited_sections": [
+    {
+      "file_ref": "phase1/input_doc/doc__servant.txt:88",
+      "sec_id": "",
+      "heading": "DE0 Nano",
+      "slug": "de0_nano"
+    },
+    {
+      "file_ref": "phase1/input_doc/doc__servant.txt:95",
+      "sec_id": "",
+      "heading": "DE10 Nano",
+      "slug": "de10_nano"
+    },
+    {
+      "file_ref": "phase1/input_doc/doc__servant.txt:129",
+      "sec_id": "",
+      "heading": "ECP5 EVN",
+      "slug": "ecp5_evn"
+    },
+    {
+      "file_ref": "phase1/input_doc/doc__servant.txt:171",
+      "sec_id": "",
+      "heading": "ICE-V Wireless",
+      "slug": "ice_v_wireless"
+    },
+    {
+      "file_ref": "phase1/input_doc/doc__servant.txt:185",
+      "sec_id": "",
+      "heading": "LX9 Microboard",
+      "slug": "lx9_microboard"
+    },
+    {
+      "file_ref": "phase1/input_doc/doc__servant.txt:190",
+      "sec_id": "",
+      "heading": "Machdyne Kolibri",
+      "slug": "machdyne_kolibri"
+    },
+    {
+      "file_ref": "phase1/input_doc/doc__servant.txt:236",
+      "sec_id": "",
+      "heading": "PolarFire Splash Kit",
+      "slug": "polarfire_splash_kit"
+    },
+    {
+      "file_ref": "phase1/input_doc/doc__servant.txt:264",
+      "sec_id": "",
+      "heading": "Trenz Electronic TE0802",
+      "slug": "trenz_electronic_te0802"
+    },
+    {
+      "file_ref": "phase1/input_doc/doc__servant.txt:303",
+      "sec_id": "3",
+      "heading": "Create a clock generation file",
+      "slug": "create_a_clock_generation_file"
+    },
+    {
+      "file_ref": "phase1/input_doc/doc__servant.txt:304",
+      "sec_id": "4",
+      "heading": "Create a top-level",
+      "slug": "create_a_top_level"
+    },
+    {
+      "file_ref": "phase1/input_doc/doc__servant.txt:305",
+      "sec_id": "5",
+      "heading": "Create a fileset",
+      "slug": "create_a_fileset"
+    },
+    {
+      "file_ref": "phase1/input_doc/doc__servant.txt:306",
+      "sec_id": "6",
+      "heading": "Create a target",
+      "slug": "create_a_target"
+    },
+    {
+      "file_ref": "phase1/input_doc/doc__serving.txt:6",
+      "sec_id": "",
+      "heading": "Serving SoClet",
+      "slug": "serving_soclet"
+    },
+    {
+      "file_ref": "phase1/input_doc/doc__overview.txt:6",
+      "sec_id": "",
+      "heading": "Key Features",
+      "slug": "key_features"
+    }
+  ]
+}

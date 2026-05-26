@@ -1,0 +1,231 @@
+{
+  "schema_version": 2,
+  "doc_class": "integration_spec",
+  "ic_name": "SHA256",
+  "top_module": "DarkSoCV",
+  "top_module_extraction_strategy": "rtl_top_prose_v1_6_545",
+  "no_top_module_in_input": false,
+  "ports": [],
+  "top_ports": [],
+  "top_module_pins": [],
+  "no_integration_in_input": true,
+  "submodules": [
+    {
+      "name": "darksocv",
+      "instances": 1,
+      "extraction_strategy": "ascii_art_hierarchy_walker_v1_6_526",
+      "evidence": {
+        "file": "rtl_README.md"
+      }
+    },
+    {
+      "name": "darkpll",
+      "instances": 1,
+      "extraction_strategy": "ascii_art_hierarchy_walker_v1_6_526",
+      "evidence": {
+        "file": "rtl_README.md"
+      }
+    },
+    {
+      "name": "darkbridge",
+      "instances": 1,
+      "extraction_strategy": "ascii_art_hierarchy_walker_v1_6_526",
+      "evidence": {
+        "file": "rtl_README.md"
+      }
+    },
+    {
+      "name": "darkriscv",
+      "instances": 1,
+      "extraction_strategy": "ascii_art_hierarchy_walker_v1_6_526",
+      "evidence": {
+        "file": "rtl_README.md"
+      }
+    },
+    {
+      "name": "darkcache",
+      "instances": 1,
+      "extraction_strategy": "ascii_art_hierarchy_walker_v1_6_526",
+      "evidence": {
+        "file": "rtl_README.md"
+      }
+    },
+    {
+      "name": "darkram",
+      "instances": 1,
+      "extraction_strategy": "ascii_art_hierarchy_walker_v1_6_526",
+      "evidence": {
+        "file": "rtl_README.md"
+      }
+    },
+    {
+      "name": "darkio",
+      "instances": 1,
+      "extraction_strategy": "ascii_art_hierarchy_walker_v1_6_526",
+      "evidence": {
+        "file": "rtl_README.md"
+      }
+    },
+    {
+      "name": "darkuart",
+      "instances": 1,
+      "extraction_strategy": "ascii_art_hierarchy_walker_v1_6_526",
+      "evidence": {
+        "file": "rtl_README.md"
+      }
+    },
+    {
+      "name": "darkspi",
+      "instances": 1,
+      "extraction_strategy": "ascii_art_hierarchy_walker_v1_6_526",
+      "evidence": {
+        "file": "rtl_README.md"
+      }
+    },
+    {
+      "name": "sdram",
+      "instances": 1,
+      "extraction_strategy": "ascii_art_hierarchy_walker_v1_6_526",
+      "evidence": {
+        "file": "rtl_README.md"
+      }
+    }
+  ],
+  "no_submodules_in_input": false,
+  "sim_only_modules": [],
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
+  "pipeline_stages": [
+    {
+      "name": "PF",
+      "evidence": "input/docs/README.md (pipeline stage inline-bracket/numbered prose)"
+    },
+    {
+      "name": "IF",
+      "evidence": "input/docs/README.md (pipeline stage inline-bracket/numbered prose)"
+    },
+    {
+      "name": "ID",
+      "evidence": "input/docs/README.md (pipeline stage inline-bracket/numbered prose)"
+    }
+  ],
+  "no_pipeline_stages_in_input": false,
+  "internal_wires": [],
+  "no_internal_wires_in_input": true,
+  "expected_verdict_byte_hex": null,
+  "expected_verdict_byte_offset": null,
+  "expected_verdict_byte_extraction_strategy": null,
+  "expected_verdict_byte_offset_low_confidence": false,
+  "expected_verdict_byte_hex_low_confidence": false,
+  "cpu_interrupts": [],
+  "no_cpu_interrupts_in_input": true,
+  "memories": [
+    {
+      "name": "darkram",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "openroad_README.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    }
+  ],
+  "memory_candidates": [
+    {
+      "name": null,
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "README.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "rom",
+      "type": "rom",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "README.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "ram",
+      "type": "ram",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "README.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "memory",
+      "type": "memory",
+      "port_count": "dual",
+      "depth": null,
+      "width": null,
+      "evidence_file": "README.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    }
+  ],
+  "no_memory_candidates_in_input": false,
+  "no_memories_in_input": false,
+  "memory_map": [],
+  "no_memory_map_in_input": true,
+  "no_instantiation_template_in_input": true,
+  "extraction_evidence": {
+    "derived_from_L3": []
+  },
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 75.0,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 75.0,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 190,
+        "matched_substring": "75MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 75000000,
+      "period_ns": 13.333333,
+      "domain_kind": "primary",
+      "source_pin": "clk",
+      "low_mhz": 1.0,
+      "high_mhz": 367.0,
+      "merged_extractor_count_v1_6_397": 2
+    }
+  ],
+  "synthesis_targets": [
+    {
+      "name": "fmax_prose_100mhz",
+      "fmax_mhz": 100.0,
+      "target_fpga": null,
+      "role": "chip_internal_proposed",
+      "extraction_strategy": "fmax_prose_v1_6_538",
+      "v1_6_538_extracted": true,
+      "evidence": {
+        "source": "input/docs/README.md"
+      }
+    }
+  ],
+  "interface_type": null,
+  "no_interface_type_in_input": true,
+  "interface_types": [],
+  "no_interface_types_in_input": true,
+  "chip_top_interfaces": [],
+  "class_path": "processor_cpu"
+}

@@ -1,0 +1,131 @@
+{
+  "schema_version": 2,
+  "doc_class": "frs",
+  "ic_name": "EE628",
+  "frs_sections": [
+    {
+      "section": "h2",
+      "title": "WARN_INSUFFICIENT_REQUIRED_FIELDS",
+      "content": "_required_facts_satisfied_pct = 0.19 (3 / 16 satisfied)_\n\nPhase 2b's `phase1_doc_presence_check` and downstream hard-gates expect 100% required-fact coverage. The following required facts had no textual support in the input prompt / docs:",
+      "evidence": "input/docs/PROVENANCE.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "L1",
+      "content": "  - `L1.differential_capable`\n  - `L1.input_voltage_range_v`",
+      "evidence": "input/docs/PROVENANCE.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "L2",
+      "content": "  - `L2.digital_interface`\n  - `L2.power_modes`",
+      "evidence": "input/docs/PROVENANCE.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "L3",
+      "content": "  - `L3.protocol_present`",
+      "evidence": "input/docs/PROVENANCE.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "L4",
+      "content": "  - `L4.pointer_register_present`\n  - `L4.register_map`",
+      "evidence": "input/docs/PROVENANCE.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "L5",
+      "content": "  - `L5.alert_pin_present`\n  - `L5.reference_source`",
+      "evidence": "input/docs/PROVENANCE.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "L6",
+      "content": "  - `L6.submodule_control_logic`",
+      "evidence": "input/docs/PROVENANCE.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "L8",
+      "content": "  - `L8.conversion_timing`",
+      "evidence": "input/docs/PROVENANCE.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "L8R",
+      "content": "  - `L8R.clock_frequency_hz`",
+      "evidence": "input/docs/PROVENANCE.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "L9",
+      "content": "  - `L9.pad_list`",
+      "evidence": "input/docs/PROVENANCE.md",
+      "heading_shape": "md_atx"
+    }
+  ],
+  "no_frs_sections_in_input": false,
+  "protocol_overview": null,
+  "no_protocol_overview_in_input": true,
+  "compliance_requirements": [],
+  "timing_parameters": [],
+  "fmax_mhz": null,
+  "no_fmax_mhz_in_input": true,
+  "extraction_evidence": {
+    "input/docs/L1_DATASHEET_handwritten.md": [],
+    "input/docs/PROVENANCE.md": [
+      {
+        "literal": "h2 WARN_INSUFFICIENT_REQUIRED_FIELDS",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 L1",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 L2",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 L3",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 L4",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 L5",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 L6",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 L8",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 L8R",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 L9",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/README.md": [],
+    "input/docs/_extract_raw.txt": []
+  }
+}

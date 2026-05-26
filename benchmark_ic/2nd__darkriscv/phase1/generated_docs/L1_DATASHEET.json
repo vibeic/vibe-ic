@@ -1,0 +1,1194 @@
+{
+  "schema_version": 2,
+  "doc_class": "datasheet",
+  "ic_name": "SHA256",
+  "no_ic_name_in_input": false,
+  "package_info": null,
+  "no_package_in_input": true,
+  "pin_table": [],
+  "no_pin_table_in_input": true,
+  "electrical_specs": [],
+  "no_electrical_specs_in_input": true,
+  "ordering_info": {
+    "part_number": "SHA256",
+    "vendor": "darklife",
+    "vendor_extraction_strategy": "vendor_github_repo_url_v1_6_536",
+    "no_vendor_in_input": false
+  },
+  "tapeout_metadata": null,
+  "no_tapeout_metadata_in_input": true,
+  "description": "Developed in a magic night of 19 Aug, 2018 between 2am and 8am, the DarkRISCV softcore started as an proof of concept for the opensource RISC-V instruction set.",
+  "description_evidence": {
+    "source": "input/docs/README.md",
+    "line": 48,
+    "extraction_strategy": "doc_intro_paragraph",
+    "anchor": "intro_heading",
+    "filename_score": 2,
+    "filename_demoted": false,
+    "attribution_url_rejected": false,
+    "list_introducer_handling": "none"
+  },
+  "features": [
+    "implements the UCB RISC-V RV32E and RV32I user space instruction set",
+    "optional CSRs for interrupts and debug",
+    "works up to 250MHz in a ultrascale ku040 (400MHz w/ overclock!)",
+    "up to 100MHz in a cheap spartan-6, fits in small spartan-3E such as XC3S100E!",
+    "can sustain 1 clock per instruction most of time (typically 70% of time)",
+    "flexible harvard architecture (easy to integrate a cache controller, bus bridges, etc)",
+    "works fine in a real xilinx (spartan-3, spartan-6, spartan-7, artix-7, kintex-7 and kintex ultrascale)",
+    "works fine with some real Altera and Lattice FPGAs too!",
+    "works fine with gcc 9.0.0 or above for RISC-V (no patches required!)",
+    "uses between 850-1500LUTs (core only with LUT6 technology, depending of enabled features and optimizations)",
+    "optional RV32E support (smaller and faster, works better with LUT4 FPGAs)",
+    "optional 16x16-bit MAC instruction (for digital signal processing)",
+    "optional coarse-grained multi-threading (MT)",
+    "DSP-like pipeline: no interlock/stall/forward between pipeline stages!",
+    "optional interrupt handled on machine level",
+    "optional breakpoints handled on supervisor level",
+    "optional instruction and data caches",
+    "optional harvard to von neumann bridge (DarkBridge)",
+    "optional SDRAM controller (from kianRiscV project)",
+    "optional support for big-endian",
+    "optional M-extension (single clock mul only, no div, use -mno-div)",
+    "BSD license: can be used anywhere with no restrictions!",
+    "ethernet controller (GbE)",
+    "multi-processing (SMP)",
+    "network on chip (NoC)",
+    "rv64i support (not so easy as it appears...)",
+    "dynamic bus sizing and big-endian support",
+    "user/supervisor modes",
+    "misaligned memory access",
+    "bridge for 8/16/32-bit buses"
+  ],
+  "features_evidence": {
+    "source": "input/docs/README.md",
+    "line": 47,
+    "extraction_strategy": "doc_features_bullet_list",
+    "anchor": "overview_heading_atx",
+    "fallback_source": "overview_bullets",
+    "filename_demoted": false
+  },
+  "isa_base": [
+    "RV32E",
+    "RV32I",
+    "RV32IMA",
+    "RV32IM"
+  ],
+  "isa_base_evidence": [
+    {
+      "file": "input/docs/README.md",
+      "line": 57,
+      "matched_substring": "RV32E"
+    },
+    {
+      "file": "input/docs/README.md",
+      "line": 57,
+      "matched_substring": "RV32I"
+    },
+    {
+      "file": "input/docs/README.md",
+      "line": 940,
+      "matched_substring": "RV32IMA"
+    },
+    {
+      "file": "input/docs/README.md",
+      "line": 1246,
+      "matched_substring": "RV32IM"
+    }
+  ],
+  "endianness": [
+    "big-endian",
+    "little-endian"
+  ],
+  "endianness_evidence": [
+    {
+      "file": "input/docs/README.md",
+      "line": 76,
+      "matched_substring": "big-endian"
+    },
+    {
+      "file": "input/docs/README.md",
+      "line": 602,
+      "matched_substring": "little-endian"
+    }
+  ],
+  "references": [
+    {
+      "name": "099924910X",
+      "ref_id": "1",
+      "url": "https://www.amazon.com/RISC-V-Reader-Open-Architecture-Atlas/dp/099924910X",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 1281,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "numbered-bracket bibliography"
+      },
+      "extraction_strategy": "numbered_bracket_bibliography"
+    },
+    {
+      "name": "item",
+      "ref_id": "2",
+      "url": "https://news.ycombinator.com/item?id=17852876",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 1283,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "numbered-bracket bibliography"
+      },
+      "extraction_strategy": "numbered_bracket_bibliography"
+    },
+    {
+      "name": "the rise of the dark risc v ddb49764f392",
+      "ref_id": "3",
+      "url": "https://blog.hackster.io/the-rise-of-the-dark-risc-v-ddb49764f392",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 1284,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "numbered-bracket bibliography"
+      },
+      "extraction_strategy": "numbered_bracket_bibliography"
+    },
+    {
+      "name": "darkriscv an overnight bsd licensed risc v implementation",
+      "ref_id": "4",
+      "url": "https://abopen.com/news/darkriscv-an-overnight-bsd-licensed-risc-v-implementation/",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 1285,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "numbered-bracket bibliography"
+      },
+      "extraction_strategy": "numbered_bracket_bibliography"
+    },
+    {
+      "name": "riscv32 custom instruction and its simulation",
+      "ref_id": "5",
+      "url": "http://quasilyte.dev/blog/post/riscv32-custom-instruction-and-its-simulation/",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 1286,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "numbered-bracket bibliography"
+      },
+      "extraction_strategy": "numbered_bracket_bibliography"
+    },
+    {
+      "name": "riscv logo",
+      "ref_id": "6",
+      "url": "https://github.com/riscv/riscv-pk/blob/master/bbl/riscv_logo.txt",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 1287,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "numbered-bracket bibliography"
+      },
+      "extraction_strategy": "numbered_bracket_bibliography"
+    }
+  ],
+  "implementation_results": [
+    {
+      "platform": "History",
+      "metrics": {
+        "fmax_mhz": 50.0
+      },
+      "evidence_line": 141,
+      "source_form": "inline_kv"
+    },
+    {
+      "platform": "Implementation Notes*",
+      "metrics": {
+        "fmax_mhz": 100.0
+      },
+      "evidence_line": 719,
+      "source_form": "inline_kv"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/README.md": [
+      {
+        "literal": "250MHz",
+        "label": "frequency"
+      },
+      {
+        "literal": "400MHz",
+        "label": "frequency"
+      },
+      {
+        "literal": "100MHz",
+        "label": "frequency"
+      }
+    ],
+    "input/docs/boards__README.md": [],
+    "input/docs/openroad_README.md": [],
+    "input/docs/rtl_README.md": [],
+    "input/docs/src__README.md": [],
+    "L1_description.doc_intro": [
+      {
+        "literal": "Developed in a magic night of 19 Aug, 2018 between 2am and 8am, the DarkRISCV so",
+        "label": "L1.description (doc intro paragraph)",
+        "source": "input/docs/README.md",
+        "line": 48,
+        "extraction_strategy": "doc_intro_paragraph",
+        "anchor": "intro_heading",
+        "filename_score": 2,
+        "filename_demoted": false,
+        "attribution_url_rejected": false,
+        "list_introducer_handling": "none"
+      }
+    ],
+    "L1_features.doc_bullets": [
+      {
+        "literal": "implements the UCB RISC-V RV32E and RV32I user space instruction set",
+        "label": "L1.features (doc Features bullet list)",
+        "count": 30,
+        "source": "input/docs/README.md",
+        "line": 47,
+        "extraction_strategy": "doc_features_bullet_list",
+        "anchor": "overview_heading_atx",
+        "fallback_source": "overview_bullets",
+        "filename_demoted": false
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "no_class_path_in_input": false,
+  "class_path_evidence": {
+    "source": "input/docs/README.md",
+    "line": 4,
+    "extraction_strategy": "readme_class_token_match",
+    "matched_token": "RISC-V",
+    "score": 221.5,
+    "all_scores": {
+      "processor_cpu": 221.5,
+      "memory_controller": 3.0,
+      "crypto_hash": 6.0,
+      "digital_arithmetic_primitive": 1.0
+    }
+  },
+  "auto_discovered_identifiers": [
+    {
+      "name": "RISC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VCD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RISCV",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UCB",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32E",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32I",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XC3S100E",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LUT6",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LUT4",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MAC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DSP",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SDRAM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BSD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SMP",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BRAM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GCC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IPC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TG68",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MUL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DIV",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "README",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LICENSE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GNU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FLEX",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CROSS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CCPATH",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ICARUS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BOARD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PATH",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ARCH",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HARVARD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "D__RISCV__",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DBUILD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DARCH",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DHARVARD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PROGBITS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WARNING",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "INSTRUCTION",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SETS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WANT",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FREE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UART",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPGA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JTAG",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ASCII",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ELF",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ROM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RAM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OBJS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ASMS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRCS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HYF",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MODEL_TECH",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XP2",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LUT",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPI",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FLUSH",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WSMEM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DADDR",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "REG",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPTR",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EXTSIG",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IMM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DATAI",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MIPS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "OPORT",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MSB",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "G711",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ACC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BEGIN",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "THREADING",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AC701",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UCF",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XDC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DBNZ",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "Z80",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SUBI",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BNE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DBNZD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LED",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "WSL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LX9",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "A200",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LX16",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NORAM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "S15",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RS485",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "S200",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RESET",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DEBUG",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "QMTECH",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "USB",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FLASH",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SERV",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TBD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LCD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VLIW",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "NEORV32",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RSA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SHA256",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HDL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "VHDL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "K420",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "REPO",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RPU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32IM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "KU040",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DMIPS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LDATA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BCC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AUIPC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AVNET",
+      "source_doc": "boards__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LX9",
+      "source_doc": "boards__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BOARD",
+      "source_doc": "boards__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPGA",
+      "source_doc": "boards__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "JTAG",
+      "source_doc": "boards__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "README",
+      "source_doc": "boards__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ASAP7",
+      "source_doc": "openroad_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PDK",
+      "source_doc": "openroad_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GUI",
+      "source_doc": "openroad_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRAM",
+      "source_doc": "openroad_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RTL",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ROM",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RAM",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UART",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SDRAM",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PLL",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XCLK",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XRES",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CLK",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RES",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPIO",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISC",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPI",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LIS3DH",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GPL",
+      "source_doc": "rtl_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MLEN",
+      "source_doc": "src__README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    }
+  ],
+  "vendor_short_literals": [
+    {
+      "literal": "70%",
+      "kind": "percent",
+      "source": "README.md"
+    },
+    {
+      "literal": "30%",
+      "kind": "percent",
+      "source": "README.md"
+    },
+    {
+      "literal": "91%",
+      "kind": "percent",
+      "source": "README.md"
+    },
+    {
+      "literal": "68%",
+      "kind": "percent",
+      "source": "README.md"
+    },
+    {
+      "literal": "20%",
+      "kind": "percent",
+      "source": "README.md"
+    },
+    {
+      "literal": "10%",
+      "kind": "percent",
+      "source": "README.md"
+    },
+    {
+      "literal": "5%",
+      "kind": "percent",
+      "source": "README.md"
+    },
+    {
+      "literal": "32%",
+      "kind": "percent",
+      "source": "README.md"
+    },
+    {
+      "literal": "6%",
+      "kind": "percent",
+      "source": "README.md"
+    },
+    {
+      "literal": "25%",
+      "kind": "percent",
+      "source": "README.md"
+    },
+    {
+      "literal": "15%",
+      "kind": "percent",
+      "source": "README.md"
+    },
+    {
+      "literal": "60%",
+      "kind": "percent",
+      "source": "README.md"
+    },
+    {
+      "literal": "95%",
+      "kind": "percent",
+      "source": "README.md"
+    },
+    {
+      "literal": "0.8in",
+      "kind": "dimension",
+      "source": "README.md"
+    },
+    {
+      "literal": "68020in",
+      "kind": "dimension",
+      "source": "README.md"
+    }
+  ]
+}

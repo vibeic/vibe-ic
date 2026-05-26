@@ -1,0 +1,39 @@
+{
+  "schema_version": 2,
+  "doc_class": "control_logic",
+  "ic_name": "Phase-1 Fact-Graph Provenance Audit",
+  "reject_rules": [],
+  "fsm_states": [],
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
+  "fsm_tokens": [
+    {
+      "name": "Timer",
+      "type": "structure",
+      "source": "doc__interface.rst"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/PROVENANCE.md": [],
+    "input/docs/README.md": [],
+    "input/docs/doc__datasheet.rst": [],
+    "input/docs/doc__index.rst": [],
+    "input/docs/doc__interface.rst": [
+      {
+        "literal": "Timer",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/doc__internals.rst": [],
+    "input/docs/doc__modules.rst": [],
+    "input/docs/doc__overview.rst": [],
+    "input/docs/doc__reservoir.rst": [],
+    "input/docs/doc__servant.rst": [],
+    "input/docs/doc__servile.rst": [],
+    "input/docs/doc__serving.rst": [],
+    "input/docs/doc__subservient.rst": []
+  },
+  "class_path": "processor_cpu"
+}

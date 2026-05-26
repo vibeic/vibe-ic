@@ -1,0 +1,90 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_debug",
+  "ic_name": "SSE",
+  "test_modes": [],
+  "no_test_modes_in_input": true,
+  "debug_observability": [
+    {
+      "method": "JTAG TAP",
+      "signals": [
+        "jtag_tck_i",
+        "jtag_tdi_i",
+        "jtag_tdo_o",
+        "jtag_tms_i"
+      ],
+      "kind": "jtag",
+      "extraction_strategy": "cross_walk_from_l9_ports_v1_6_551",
+      "evidence": "synthesised-from-L9.ports"
+    },
+    {
+      "method": "Trace Port",
+      "signals": [
+        "trace_cpu0_o",
+        "trace_cpu1_o",
+        "trace_o"
+      ],
+      "kind": "trace",
+      "extraction_strategy": "cross_walk_from_l9_ports_v1_6_551",
+      "evidence": "synthesised-from-L9.ports"
+    }
+  ],
+  "no_debug_observability_in_input": false,
+  "debug_registers": [],
+  "debug_parameters": [],
+  "no_debug_parameters_in_input": true,
+  "formal_interfaces": [],
+  "no_formal_interfaces_in_input": true,
+  "verification_strategy": [
+    {
+      "phase": "riscv-formal",
+      "method": "riscv-formal",
+      "evidence": "input/docs/datasheet__cpu.adoc",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "openocd",
+      "method": "openocd",
+      "evidence": "input/docs/datasheet__cpu_dual_core.adoc",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "openocd",
+      "method": "A simple example on how to use NEORV32 on-chip debugger in combination with OpenOCD and the GNU debugger is shown in",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "riscv-arch-test",
+      "method": "├─ riscv-arch-test     - Test RISC-V compatibility using the official test framework",
+      "evidence": "input/docs/datasheet__overview.adoc",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "riscv-arch-test",
+      "method": "of this test framework is available in `sw/riscv-arch-test`.",
+      "evidence": "input/docs/datasheet__overview.adoc",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "JTAG debug",
+      "method": "JTAG Debug Transport Module .",
+      "evidence": "input/docs/references__riscv-debug-specification.pdf",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "verilator",
+      "method": "verilator",
+      "evidence": "input/docs/userguide__neorv32_in_verilog.adoc",
+      "extraction_strategy": "test_suite_reference"
+    }
+  ],
+  "no_verification_strategy_in_input": false,
+  "engineer_mode_unlock_sequence": null,
+  "no_engineer_mode_unlock_in_input": true,
+  "vsuite_per_kw_cap_skipped_v1_6_373": 0,
+  "extraction_evidence": {
+    "input/docs/datasheet__soc_tracer.adoc": []
+  },
+  "class_path": "processor_cpu"
+}

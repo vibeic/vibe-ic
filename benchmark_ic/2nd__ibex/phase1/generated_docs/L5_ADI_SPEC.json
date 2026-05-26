@@ -1,0 +1,227 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "Bit-Manipulation Extension",
+  "analog_blocks_detected": false,
+  "analog_blocks": [],
+  "no_analog": true,
+  "external_components": [],
+  "electrical_specs": [],
+  "design_parameters": [
+    {
+      "parameter": "PMPEnable",
+      "value": "0",
+      "type": "bit",
+      "description": "Enable PMP support",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "PMPGranularity",
+      "value": "0",
+      "type": "int (0..31)",
+      "description": "Minimum granularity of PMP address matching",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "PMPNumRegions",
+      "value": "4",
+      "type": "int (1..16)",
+      "description": "Number implemented PMP regions (ignored if PMPEnable == 0)",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "MHPMCounterNum",
+      "value": "0",
+      "type": "int (0..10)",
+      "description": "Number of performance monitor event counters",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "MHPMCounterWidth",
+      "value": "40",
+      "type": "int (64..1)",
+      "description": "Bit width of performance monitor event counters",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "RV32E",
+      "value": "0",
+      "type": "bit",
+      "description": "RV32E mode enable (16 integer registers only)",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "RV32M",
+      "value": "RV32MFast",
+      "type": "ibex_pkg::rv32m_e",
+      "description": "M(ultiply) extension select: \"ibex_pkg::RV32MNone\": No M-extension \"ibex_pkg::RV32MSlow\": Slow multi-cycle multiplier, iterative divider \"ibex_pkg::RV32MFast\": 3-4 cycle multiplier, iterative divider \"ibex_pkg::RV32MSingleCycle\": 1-2 cycle multiplier, iterative divider",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "RV32B",
+      "value": "RV32BNone",
+      "type": "ibex_pkg::rv32b_e",
+      "description": "B(itmanipulation) extension select: \"ibex_pkg::RV32BNone\": No B-extension \"ibex_pkg::RV32BBalanced\": Sub-extensions Zba, Zbb, Zbs, Zbf and Zbt \"ibex_pkg::RV32BOTEarlGrey\": All sub-extensions except Zbe \"ibex_pkg::RV32BFull\": All sub-extensions",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "RV32ZC",
+      "value": "RV32ZcaZcbZcmp",
+      "type": "ibex_pkg::rv32zc_e",
+      "description": "Zc code-size saving extension select: \"ibex_pkg::RV32Zca\": The Zca extension \"ibex_pkg::RV32ZcaZcb\": Zca and Zcb extensions \"ibex_pkg::RV32ZcaZcmp\": Zca and Zcmp extensions \"ibex_pkg::RV32ZcaZcbZcmp\": Zca, Zcb, and Zcmp extensions",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "RegFile",
+      "value": "RegFileFF",
+      "type": "ibex_pkg::regfile_e",
+      "description": "Register file implementation select: \"ibex_pkg::RegFileFF\": Generic flip-flop-based register file \"ibex_pkg::RegFileFPGA\": Register file for FPGA targets \"ibex_pkg::RegFileLatch\": Latch-based register file for ASIC targets",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "BranchTargetALU",
+      "value": "0",
+      "type": "bit",
+      "description": "Enables branch target ALU removing a stall cycle from taken branches",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "WritebackStage",
+      "value": "0",
+      "type": "bit",
+      "description": "Enables third pipeline stage (writeback) improving performance of loads and stores",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "ICache",
+      "value": "0",
+      "type": "bit",
+      "description": "Enable instruction cache instead of prefetch buffer",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "ICacheECC",
+      "value": "0",
+      "type": "bit",
+      "description": "Enable SECDED ECC protection in ICache (if  ICache == 1)",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "ICacheScramble",
+      "value": "0",
+      "type": "bit",
+      "description": "Enabling this parameter replaces tag and data RAMs of ICache with scrambling RAM primitives.",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "BranchPrediction",
+      "value": "0",
+      "type": "bit",
+      "description": "*EXPERIMENTAL* Enable Static branch prediction",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "SecureIbex",
+      "value": "0",
+      "type": "bit",
+      "description": "Enable various additional features targeting secure code execution. Note: SecureIbex == 1'b1 and  RV32M == ibex_pkg::RV32MNone is an illegal combination.",
+      "source": "doc__02_user__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "parameter": "Features",
+      "value": "RV32EC",
+      "type": "RV32IMC, 3 cycle mult",
+      "description": "RV32IMC, 1 cycle mult, Branch target ALU, Writeback stage",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "Performance (CoreMark/MHz)",
+      "value": "0.904",
+      "type": "2.47",
+      "description": "3.13",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "Area - Yosys (kGE)",
+      "value": "16.85",
+      "type": "26.60",
+      "description": "32.48",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "Area - Commercial (estimated kGE)",
+      "value": "~15",
+      "type": "~24",
+      "description": "~30",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "Verification status",
+      "value": "Red",
+      "type": "Green",
+      "description": "Green",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/README.md": [],
+    "input/docs/doc__01_overview__compliance.rst": [],
+    "input/docs/doc__01_overview__index.rst": [],
+    "input/docs/doc__01_overview__licensing.rst": [],
+    "input/docs/doc__01_overview__targets.rst": [],
+    "input/docs/doc__01_overview__verification_overview.rst": [],
+    "input/docs/doc__02_user__configuration.rst": [],
+    "input/docs/doc__02_user__examples.rst": [],
+    "input/docs/doc__02_user__getting_started.rst": [],
+    "input/docs/doc__02_user__index.rst": [],
+    "input/docs/doc__02_user__integration.rst": [],
+    "input/docs/doc__02_user__system_requirements.rst": [],
+    "input/docs/doc__03_reference__cosim.rst": [],
+    "input/docs/doc__03_reference__coverage_plan.rst": [],
+    "input/docs/doc__03_reference__cs_registers.rst": [],
+    "input/docs/doc__03_reference__debug.rst": [],
+    "input/docs/doc__03_reference__exception_interrupts.rst": [],
+    "input/docs/doc__03_reference__history.rst": [],
+    "input/docs/doc__03_reference__icache.rst": [],
+    "input/docs/doc__03_reference__index.rst": [],
+    "input/docs/doc__03_reference__instruction_decode_execute.rst": [],
+    "input/docs/doc__03_reference__instruction_fetch.rst": [],
+    "input/docs/doc__03_reference__load_store_unit.rst": [],
+    "input/docs/doc__03_reference__performance_counters.rst": [],
+    "input/docs/doc__03_reference__pipeline_details.rst": [],
+    "input/docs/doc__03_reference__pmp.rst": [],
+    "input/docs/doc__03_reference__register_file.rst": [],
+    "input/docs/doc__03_reference__rvfi.rst": [],
+    "input/docs/doc__03_reference__security.rst": [],
+    "input/docs/doc__03_reference__testplan.rst": [],
+    "input/docs/doc__03_reference__tracer.rst": [],
+    "input/docs/doc__03_reference__verification.rst": [],
+    "input/docs/doc__03_reference__verification_stages.rst": [],
+    "input/docs/doc__04_developer__concierge.rst": [],
+    "input/docs/doc__04_developer__index.rst": [],
+    "input/docs/doc__index.rst": []
+  },
+  "class_path": "processor_cpu"
+}

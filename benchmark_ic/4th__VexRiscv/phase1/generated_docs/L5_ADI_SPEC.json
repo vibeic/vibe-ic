@@ -1,0 +1,533 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "GCD",
+  "analog_blocks_detected": false,
+  "analog_blocks": [],
+  "no_analog": true,
+  "external_components": [],
+  "electrical_specs": [],
+  "design_parameters": [
+    {
+      "parameter": "withDouble",
+      "value": null,
+      "type": "Boolean",
+      "description": "Enable 64 bits floating point (32 bits always enabled)",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "asyncRegFile",
+      "value": null,
+      "type": "Boolean",
+      "description": "Implement the register file using combinatorial reads (instead of syncronous reads)",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "mulWidthA",
+      "value": null,
+      "type": "Boolean",
+      "description": "Specify the width of the left operand of multiplication blocks",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "mulWidthB",
+      "value": null,
+      "type": "Boolean",
+      "description": "Same than above but the the right operand",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "catchAccessFault",
+      "value": null,
+      "type": "Boolean",
+      "description": "When true, an instruction read response with read error asserted results in a CPU exception trap.",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "resetVector",
+      "value": null,
+      "type": "BigInt",
+      "description": "Address of the program counter after the reset.",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "cmdForkOnSecondStage",
+      "value": null,
+      "type": "Boolean",
+      "description": "When false, branches immediately update the program counter. This minimizes branch penalties but might reduce FMax because the instruction bus address signal is a combinatorial path. When true, this c",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "cmdForkPersistence",
+      "value": null,
+      "type": "Boolean",
+      "description": "When false, requests on the iBus can disappear/change before they are acknowledged. This reduces area but isn't safe/supported by many arbitration/slaves. When true, once initiated, iBus requests will",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "compressedGen",
+      "value": null,
+      "type": "Boolean",
+      "description": "Enable RISC-V compressed instruction (RVC) support.",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "busLatencyMin",
+      "value": null,
+      "type": "Int",
+      "description": "Specifies the minimal latency between the iBus.cmd and iBus.rsp. A corresponding number of stages are added to the frontend to keep the IPC to 1.",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "injectorStage",
+      "value": null,
+      "type": "Boolean",
+      "description": "When true, a stage between the frontend and the decode stage of the CPU is added to improve FMax. (busLatencyMin + injectorStage) should be at least two.",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "prediction",
+      "value": null,
+      "type": "BranchPrediction",
+      "description": "Can be set to NONE/STATIC/DYNAMIC/DYNAMIC_TARGET to specify the branch predictor implementation. See below for more details.",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "historyRamSizeLog2",
+      "value": null,
+      "type": "Int",
+      "description": "Specify the number of entries in the direct mapped prediction cache of DYNAMIC/DYNAMIC_TARGET implementation. 2 pow historyRamSizeLog2 entries.",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "relaxedPcCalculation",
+      "value": null,
+      "type": "Boolean",
+      "description": "When false, branches immediately update the program counter. This minimizes branch penalties but might reduce FMax because the instruction bus address signal is a combinatorial path. When true, this c",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "config.cacheSize",
+      "value": null,
+      "type": "Int",
+      "description": "Total storage capacity of the cache in bytes.",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "config.bytePerLine",
+      "value": null,
+      "type": "Int",
+      "description": "Number of bytes per cache line",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "config.wayCount",
+      "value": null,
+      "type": "Int",
+      "description": "Number of cache ways",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "config.twoCycleRam",
+      "value": null,
+      "type": "Boolean",
+      "description": "Check the tags values in the decode stage instead of the fetch stage to relax timings",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "config.asyncTagMemory",
+      "value": null,
+      "type": "Boolean",
+      "description": "Read the cache tags in an asynchronous manner instead of syncronous one",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "config.addressWidth",
+      "value": null,
+      "type": "Int",
+      "description": "CPU address width. Should be 32",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "config.cpuDataWidth",
+      "value": null,
+      "type": "Int",
+      "description": "CPU data width. Should be 32",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "config.memDataWidth",
+      "value": null,
+      "type": "Int",
+      "description": "Memory data width. Could potentialy be something else than 32, but only 32 is currently tested",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "config.catchIllegalAccess",
+      "value": null,
+      "type": "Boolean",
+      "description": "Catch when a memory access is done on non-valid memory address (MMU)",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "config.catchAccessFault",
+      "value": null,
+      "type": "Boolean",
+      "description": "Catch when the memeory bus is responding with an error",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "config.catchMemoryTranslationMiss",
+      "value": null,
+      "type": "Boolean",
+      "description": "Catch when the MMU miss a TLB",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "catchIllegalInstruction",
+      "value": null,
+      "type": "Boolean",
+      "description": "When true, instructions that don't match a decoding specification will generate a trap exception",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "regFileReadyKind",
+      "value": null,
+      "type": "RegFileReadKind",
+      "description": "Can be set to ASYNC or SYNC. Specifies the kind of memory read used to implement the register file. ASYNC means zero cycle latency memory read, while SYNC means one cycle latency memory read which can",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "zeroBoot",
+      "value": null,
+      "type": "Boolean",
+      "description": "Load all registers with zeroes at the beginning of the simulation to keep everything deterministic in logs/traces",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "bypassExecute",
+      "value": null,
+      "type": "Boolean",
+      "description": "Enable the bypassing of instruction results coming from the Execute stage",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "bypassMemory",
+      "value": null,
+      "type": "Boolean",
+      "description": "Enable the bypassing of instruction results coming from the Memory stage",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "bypassWriteBack",
+      "value": null,
+      "type": "Boolean",
+      "description": "Enable the bypassing of instruction results coming from the WriteBack stage",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "bypassWriteBackBuffer",
+      "value": null,
+      "type": "Boolean",
+      "description": "Enable the bypassing of the previous cycle register file written value",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "separatedAddSub",
+      "value": null,
+      "type": "RegFileReadKind",
+      "description": "By default SRC_ADD/SRC_SUB are generated from a single controllable adder/substractor, but if this is set to true, it use separate adder/substractors",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "executeInsertion",
+      "value": null,
+      "type": "Boolean",
+      "description": "By default SRC1/SRC2 are generated in the Decode stage, but if this parameter is true, it is done in the Execute stage (It will relax the bypassing network)",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "earlyInjection",
+      "value": null,
+      "type": "Boolean",
+      "description": "By default the result of the shift is injected into the pipeline in the Memory stage to relax timings, but if this option is true it will be done in the Execute stage",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "earlyBranch",
+      "value": null,
+      "type": "Boolean",
+      "description": "By default the branch is done in the Memory stage to relax timings, but if this option is set it's done in the Execute stage",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "catchAddressMisaligned",
+      "value": null,
+      "type": "Boolean",
+      "description": "If a jump/branch is done in an unaligned PC address, it will fire an trap exception",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "genMul",
+      "value": null,
+      "type": "Boolean",
+      "description": "Enables multiplication support. Can be set to false if you want to use the MulPlugin instead",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "genDiv",
+      "value": null,
+      "type": "Boolean",
+      "description": "Enables division support",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "mulUnrollFactor",
+      "value": null,
+      "type": "Int",
+      "description": "Number of combinatorial stages used to speed up the multiplication, should be > 0",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "divUnrollFactor",
+      "value": null,
+      "type": "Int",
+      "description": "Number of combinatorial stages used to speed up the division, should be > 0",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "catchIllegalAccess",
+      "value": null,
+      "type": "Boolean",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "mvendorid",
+      "value": null,
+      "type": "BigInt",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "marchid",
+      "value": null,
+      "type": "BigInt",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "mimpid",
+      "value": null,
+      "type": "BigInt",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "mhartid",
+      "value": null,
+      "type": "BigInt",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "misaExtensionsInit",
+      "value": null,
+      "type": "Int",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "misaAccess",
+      "value": null,
+      "type": "CsrAccess",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "mtvecAccess",
+      "value": null,
+      "type": "CsrAccess",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "mtvecInit",
+      "value": null,
+      "type": "BigInt",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "mepcAccess",
+      "value": null,
+      "type": "CsrAccess",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "mscratchGen",
+      "value": null,
+      "type": "Boolean",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "mcauseAccess",
+      "value": null,
+      "type": "CsrAccess",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "mbadaddrAccess",
+      "value": null,
+      "type": "CsrAccess",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "mcycleAccess",
+      "value": null,
+      "type": "CsrAccess",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "minstretAccess",
+      "value": null,
+      "type": "CsrAccess",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "ucycleAccess",
+      "value": null,
+      "type": "CsrAccess",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "wfiGen",
+      "value": null,
+      "type": "Boolean",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "ecallGen",
+      "value": null,
+      "type": "Boolean",
+      "description": "",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "readOnly",
+      "value": null,
+      "type": "Boolean",
+      "description": "When true (default), mstatush is read-only. When false, writes are accepted but have no effect.",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "ioRange",
+      "value": null,
+      "type": "UInt => Bool",
+      "description": "Function reference which eat an address and return true if the address should be uncached. ex : ioRange= _(31 downto 28) === 0xF => all 0xFXXXXXXX will be uncached",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "debugClockDomain",
+      "value": null,
+      "type": "ClockDomain",
+      "description": "As the debug unit is able to reset the CPU itself, it should use another clock domain to avoid killing itself (only the reset wire should differ)",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "externalFpu",
+      "value": null,
+      "type": "Boolean",
+      "description": "When false the FPU is instanciated in Vex, else the plugin has a `port` interface to which you can connect an external FPU",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "parameter": "p",
+      "value": null,
+      "type": "FpuParameter",
+      "description": "Parameter with which the connected FPU will be created",
+      "source": "README.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/README.md": [],
+    "input/docs/doc__gcdPeripheral__README.md": [],
+    "input/docs/doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile": [],
+    "input/docs/doc__nativeJtag__README.md": [],
+    "input/docs/doc__smp__smp.md": [],
+    "input/docs/doc__vjtag__README.md": []
+  },
+  "class_path": "processor_cpu"
+}

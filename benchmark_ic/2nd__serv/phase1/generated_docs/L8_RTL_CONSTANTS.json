@@ -1,0 +1,316 @@
+{
+  "schema_version": 2,
+  "doc_class": "rtl_constants",
+  "ic_name": "Phase-1 Fact-Graph Provenance Audit",
+  "rx_classifier_ticks": null,
+  "no_rx_classifier_ticks_in_input": true,
+  "timing_constants": [],
+  "no_timing_constants_in_input": true,
+  "timing_parameters": [],
+  "clock_mhz": 32.0,
+  "no_clock_mhz_in_input": false,
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 32.0,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 32.0,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 213,
+        "matched_substring": "32 MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 32000000,
+      "period_ns": 31.25,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    },
+    {
+      "name": "clk",
+      "freq_mhz": 24.0,
+      "freq_hz": 24000000,
+      "low_mhz": 12.0,
+      "high_mhz": 24.0,
+      "role": "extracted_from_doc_freq_mention",
+      "source": "input/docs/README.md",
+      "reset_strategy": "unspecified",
+      "extraction_strategy": "doc_freq_mention_keyword_window",
+      "freq_evidence_count_v1_6_368": 2,
+      "best_rank_v1_6_370": 0,
+      "primary_evidence_v1_6_370": "input/docs/README.md",
+      "derived_from": "clk",
+      "period_ns": 41.666667,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    }
+  ],
+  "no_clock_domains_in_input": false,
+  "synthesis_targets": [],
+  "no_synthesis_targets_in_input": true,
+  "parameters": [
+    {
+      "name": "MDU",
+      "default": "0",
+      "type": "logic",
+      "description": "Enables the interface for connecting SERV and the Multiplication and Division Unit (MDU). Note that this only enables the interface and the decoder logic. The MDU itself must be connected externally a",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "PRE_REGISTER",
+      "default": "0",
+      "type": null,
+      "description": "| Register signals before or after the decoder | 0 : Register after the decoder. Faster but uses more resources | 1 : (default) Register before the decoder. Slower but uses less resources",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "RESET_PC",
+      "default": "0x00000000",
+      "type": "address",
+      "description": "Address of first instruction to fetch from memory after reset (Reset vector)",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "RESET_STRATEGY",
+      "default": "\"MINI\"",
+      "type": null,
+      "description": "| Amount of reset applied to design | \"NONE\" : No reset at all. Relies on a POR to set correct initialization values and that core isn't reset during runtime | \"MINI\" : Standard setting. Resets the mi",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "RF_WIDTH",
+      "default": "2",
+      "type": null,
+      "description": "(serv_rf_top only) Width of the RF memory. Typically smaller values use less resources, but can be implementation-dependant.",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "WITH_CSR",
+      "default": "0",
+      "type": null,
+      "description": "Enable Zicsr extension. This also enables timer IRQ and exception handling. Note that SERV only implements a small subset of the CSR registers.",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "sim",
+      "default": "0",
+      "type": "address",
+      "description": "| Enable simulation mode. In simulation mode, two memory addresses have special purposes. | 0x80000000: Writes to this address puts the byte in the lowest data byte into a log file decided by the \"sig",
+      "source": "doc__servile.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "with_c",
+      "default": "0",
+      "type": null,
+      "description": "Enable the C extension. This also makes SERV support misaligned loads and stores.",
+      "source": "doc__servile.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "with_mdu",
+      "default": "0",
+      "type": "logic",
+      "description": "Enables the Multiplication and Division Unit (MDU) to support the M extension. Note that this only enables the interface and the decoder logic. The MDU itself is external from SERV.",
+      "source": "doc__servile.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "memfile",
+      "default": "\"\"",
+      "type": null,
+      "description": "Verilog hex file containing a RISC-V application to be preloaded into memory",
+      "source": "doc__serving.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "memsize",
+      "default": "1-4294967296",
+      "type": null,
+      "description": "Size of memory (in bytes). Needs to be at least large enough to fit the application supplied by memsize. Note that the RF occupies the highest 128 bytes of memory in the RAM.",
+      "source": "doc__serving.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    }
+  ],
+  "peripheral_only_emit_skipped_v1_6_376": 0,
+  "extraction_strategy": {
+    "l8_evidence_population_v1_6_395": 12
+  },
+  "extraction_evidence": {
+    "input/docs/PROVENANCE.md": [],
+    "input/docs/README.md": [
+      {
+        "literal": "32 MHz",
+        "label": "clock_domain_doc_prose_fmax_primary"
+      }
+    ],
+    "input/docs/doc__datasheet.rst": [],
+    "input/docs/doc__index.rst": [],
+    "input/docs/doc__interface.rst": [],
+    "input/docs/doc__internals.rst": [],
+    "input/docs/doc__modules.rst": [],
+    "input/docs/doc__overview.rst": [],
+    "input/docs/doc__reservoir.rst": [],
+    "input/docs/doc__servant.rst": [],
+    "input/docs/doc__servile.rst": [],
+    "input/docs/doc__serving.rst": [],
+    "input/docs/doc__subservient.rst": [],
+    "doc__interface.rst": [
+      {
+        "literal": "MDU = 0",
+        "label": "rst_list_table_parameters_v1_6_399"
+      },
+      {
+        "literal": "PRE_REGISTER = 0",
+        "label": "rst_list_table_parameters_v1_6_399"
+      },
+      {
+        "literal": "RESET_PC = 0x00000000",
+        "label": "rst_list_table_parameters_v1_6_399"
+      },
+      {
+        "literal": "RESET_STRATEGY = \"MINI\"",
+        "label": "rst_list_table_parameters_v1_6_399"
+      },
+      {
+        "literal": "RF_WIDTH = 2",
+        "label": "rst_list_table_parameters_v1_6_399"
+      },
+      {
+        "literal": "WITH_CSR = 0",
+        "label": "rst_list_table_parameters_v1_6_399"
+      }
+    ],
+    "doc__servile.rst": [
+      {
+        "literal": "sim = 0",
+        "label": "rst_list_table_parameters_v1_6_399"
+      },
+      {
+        "literal": "with_c = 0",
+        "label": "rst_list_table_parameters_v1_6_399"
+      },
+      {
+        "literal": "with_mdu = 0",
+        "label": "rst_list_table_parameters_v1_6_399"
+      }
+    ],
+    "doc__serving.rst": [
+      {
+        "literal": "memfile = \"\"",
+        "label": "rst_list_table_parameters_v1_6_399"
+      },
+      {
+        "literal": "memsize = 1-4294967296",
+        "label": "rst_list_table_parameters_v1_6_399"
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "auto_discovered_literals": [
+    {
+      "literal": "198LUT",
+      "value": "198",
+      "unit": "LUT",
+      "source_doc": "README.md",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "239LUT",
+      "value": "239",
+      "unit": "LUT",
+      "source_doc": "README.md",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "125LUT",
+      "value": "125",
+      "unit": "LUT",
+      "source_doc": "README.md",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2.1kGE",
+      "value": "2.1",
+      "unit": "kGE",
+      "source_doc": "README.md",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "32MHz",
+      "value": "32",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "24MHz",
+      "value": "24",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "198LUT",
+      "value": "198",
+      "unit": "LUT",
+      "source_doc": "doc__overview.rst",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "239LUT",
+      "value": "239",
+      "unit": "LUT",
+      "source_doc": "doc__overview.rst",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "125LUT",
+      "value": "125",
+      "unit": "LUT",
+      "source_doc": "doc__overview.rst",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2.1kGE",
+      "value": "2.1",
+      "unit": "kGE",
+      "source_doc": "doc__overview.rst",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "12MHz",
+      "value": "12",
+      "unit": "MHz",
+      "source_doc": "doc__servant.rst",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1Hz",
+      "value": "1",
+      "unit": "Hz",
+      "source_doc": "doc__servant.rst",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    }
+  ]
+}

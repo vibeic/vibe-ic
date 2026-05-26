@@ -1,0 +1,47 @@
+type: enhancement
+severity: P1
+component: program:phase3_one_shot_runner
+plugin_version: "0.1.2"
+
+title: >-
+  Synth + reference-TB steps should auto-select an advanced-SystemVerilog
+  frontend (slang / sv2v) instead of yosys built-in read_verilog -sv
+
+pattern: |
+  Phase 2 yosys-synth, Phase 3 synth, and the reference-TB step read RTL
+  with yosys built-in `read_verilog -sv` and with iverilog respectively.
+  Both frontends fail on advanced SystemVerilog constructs that are
+  pervasive in production open-source CPU / SoC IP pulled by the catalog
+  integrator path: packages with typed/parameterised members, package-scoped
+  types used as port/parameter types, and named-field struct assignment
+  patterns ('{field: value, ...}). For any catalog IP authored in modern
+  SystemVerilog (a RISC-V core, a root-of-trust IP set, a parameterised
+  bus fabric), every backend step fails at the first such construct even
+  though the RTL is fully synthesizable.
+
+  The EDA container already ships frontends that handle these constructs:
+  a yosys slang plugin (yosys -m slang / read_slang) and a standalone
+  sv2v converter. The deterministic runner does not detect the need for
+  them and never invokes them, so a sound design is reported FAIL purely
+  on a frontend-selection gap rather than any real RTL defect.
+
+suggested_fix: |
+  In the synth steps, when any input file has a .sv extension (or a quick
+  probe of read_verilog -sv returns a parse error), fall through to
+  `yosys -m slang` with read_slang (preferred — preserves hierarchy and
+  needs no temp files) or to a sv2v pre-pass that emits Verilog-2005 the
+  built-in frontend can read. Apply the same SV-capable-frontend
+  selection to the reference-TB / simulation step (e.g. verilator or a
+  slang-elaborated netlist) so .sv DUTs can be elaborated. Record which
+  frontend was used in the step extras for provenance.
+
+id: "ORGANIC-20260526-sv-synth-frontend"
+submitted_at: "2026-05-26T11:54:09+08:00"
+session_context: >-
+  Fresh-agent full Vibe-IC run on a SystemVerilog RV32IMC CPU pulled via
+  the catalog-glue integrator path. The genuine RTL elaborated cleanly
+  through read_slang (hierarchy -check PASS) and synthesised to ~14.8k
+  sky130 standard cells through OpenROAD, but the runner's built-in
+  read_verilog -sv aborted at the first package named-field struct literal,
+  and iverilog likewise rejected the same line, forcing a synth/ref-TB FAIL
+  that was a frontend gap, not a design defect.

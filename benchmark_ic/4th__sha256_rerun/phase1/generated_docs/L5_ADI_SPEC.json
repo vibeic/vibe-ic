@@ -1,0 +1,37 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "UNKNOWN_IC",
+  "analog_blocks_detected": false,
+  "analog_blocks": [],
+  "no_analog": true,
+  "external_components": [],
+  "electrical_specs": [],
+  "design_parameters": [],
+  "extraction_evidence": {
+    "input/docs/L1_product_metadata.md": [],
+    "input/docs/L2_architecture.md": [],
+    "input/docs/L3_external_interface.md": [
+      {
+        "literal": "ESD",
+        "label": "l5_parity_stub class=esd (low_confidence stub for parity-with-detector gate)"
+      }
+    ],
+    "input/docs/L4_command_protocol.md": [],
+    "input/docs/L5_register_map.md": [],
+    "input/docs/L6_calibration.md": [
+      {
+        "literal": "DAC",
+        "label": "analog keyword class=dac (low_confidence)"
+      },
+      {
+        "literal": "無 analog / mixed-signal 內容",
+        "label": "no_analog=True; sha256 pure-digital per L6. dac/esd blocks were negated-mention false positives."
+      }
+    ],
+    "input/docs/L7_verification_plan.md": [],
+    "input/docs/L8_submodule_integration.md": [],
+    "input/docs/L9_constraints_floorplan.md": []
+  },
+  "class_path": "digital_arithmetic_primitive"
+}

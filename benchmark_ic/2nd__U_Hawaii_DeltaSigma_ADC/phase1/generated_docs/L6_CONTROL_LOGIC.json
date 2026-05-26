@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "doc_class": "control_logic",
+  "ic_name": "EE628",
+  "reject_rules": [],
+  "fsm_states": [],
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
+  "fsm_tokens": [],
+  "extraction_evidence": {
+    "input/docs/L1_DATASHEET_handwritten.md": [],
+    "input/docs/PROVENANCE.md": [],
+    "input/docs/README.md": [],
+    "input/docs/_extract_raw.txt": []
+  }
+}

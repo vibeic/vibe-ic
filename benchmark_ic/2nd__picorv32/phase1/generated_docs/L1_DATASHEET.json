@@ -1,0 +1,1581 @@
+{
+  "schema_version": 2,
+  "doc_class": "datasheet",
+  "ic_name": "PicoRV32",
+  "no_ic_name_in_input": false,
+  "package_info": null,
+  "no_package_in_input": true,
+  "pin_table": [
+    {
+      "name": "mem_valid",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "mem_valid",
+      "board_name": "mem_valid",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "output",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_instr",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "mem_instr",
+      "board_name": "mem_instr",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "output",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_ready",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "mem_ready",
+      "board_name": "mem_ready",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "input",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_addr",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "mem_addr",
+      "board_name": "mem_addr",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "output",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_wdata",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "mem_wdata",
+      "board_name": "mem_wdata",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "output",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_wstrb",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "mem_wstrb",
+      "board_name": "mem_wstrb",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "output",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0
+    },
+    {
+      "name": "mem_rdata",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "mem_rdata",
+      "board_name": "mem_rdata",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "input",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_read",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "mem_la_read",
+      "board_name": "mem_la_read",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "output",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_write",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "mem_la_write",
+      "board_name": "mem_la_write",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "output",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_addr",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "mem_la_addr",
+      "board_name": "mem_la_addr",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "output",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_wdata",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "mem_la_wdata",
+      "board_name": "mem_la_wdata",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "output",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_wstrb",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "mem_la_wstrb",
+      "board_name": "mem_la_wstrb",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "output",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_valid",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "pcpi_valid",
+      "board_name": "pcpi_valid",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "output",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_insn",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "pcpi_insn",
+      "board_name": "pcpi_insn",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "output",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_rs1",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "pcpi_rs1",
+      "board_name": "pcpi_rs1",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "output",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_rs2",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "pcpi_rs2",
+      "board_name": "pcpi_rs2",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "output",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_wr",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "pcpi_wr",
+      "board_name": "pcpi_wr",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "input",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_rd",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "pcpi_rd",
+      "board_name": "pcpi_rd",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "input",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_wait",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "pcpi_wait",
+      "board_name": "pcpi_wait",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "input",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_ready",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "pcpi_ready",
+      "board_name": "pcpi_ready",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "input",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    }
+  ],
+  "no_pin_table_in_input": false,
+  "electrical_specs": [],
+  "no_electrical_specs_in_input": true,
+  "ordering_info": {
+    "part_number": "PicoRV32",
+    "vendor": "riscv",
+    "vendor_extraction_strategy": "vendor_github_repo_url_v1_6_536",
+    "no_vendor_in_input": false
+  },
+  "tapeout_metadata": null,
+  "no_tapeout_metadata_in_input": true,
+  "description": "This is a simple PicoRV32 example design that can run code directly from an SPI flash chip. It can be used as a turn-key solution for simple control tasks in ASIC and FPGA designs.",
+  "description_evidence": {
+    "source": "input/docs/picosoc_README.md",
+    "line": 7,
+    "extraction_strategy": "doc_intro_paragraph",
+    "anchor": "readme_first_prose",
+    "attribution_url_rejected": false,
+    "list_introducer_handling": "none"
+  },
+  "features": [
+    "Small (750-2000 LUTs in 7-Series Xilinx Architecture)",
+    "High fmax (250-450 MHz on 7-Series Xilinx FPGAs)",
+    "Selectable native memory interface or AXI4-Lite master",
+    "Optional IRQ support (using a simple custom ISA)",
+    "Optional Co-Processor Interface"
+  ],
+  "features_evidence": {
+    "source": "input/docs/README.md",
+    "line": 34,
+    "extraction_strategy": "doc_features_bullet_list",
+    "anchor": "features_heading_rst_setext",
+    "filename_demoted": false
+  },
+  "isa_base": [
+    "RV32IMC",
+    "RV32E",
+    "RV32I",
+    "RV32IC",
+    "RV32IM"
+  ],
+  "isa_base_evidence": [
+    {
+      "file": "input/docs/README.md",
+      "line": 6,
+      "matched_substring": "RV32IMC"
+    },
+    {
+      "file": "input/docs/README.md",
+      "line": 7,
+      "matched_substring": "RV32E"
+    },
+    {
+      "file": "input/docs/README.md",
+      "line": 7,
+      "matched_substring": "RV32I"
+    },
+    {
+      "file": "input/docs/README.md",
+      "line": 7,
+      "matched_substring": "RV32IC"
+    },
+    {
+      "file": "input/docs/README.md",
+      "line": 7,
+      "matched_substring": "RV32IM"
+    }
+  ],
+  "references": [
+    {
+      "name": "RISC-V RV32IMC Instruction Set",
+      "url": "http://riscv.org/",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 6,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "RISC-V Website",
+      "url": "https://riscv.org/software-status/",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 10,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "ISC license",
+      "url": "http://en.wikipedia.org/wiki/ISC_license",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 17,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    },
+    {
+      "name": "riscv-tools",
+      "url": "https://github.com/riscv/riscv-tools",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 622,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "markdown reference"
+      },
+      "extraction_strategy": "markdown_inline_link"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/README.md": [
+      {
+        "literal": "output        mem_valid",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "output        mem_instr",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "input         mem_ready",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "output [31:0] mem_addr",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "output [31:0] mem_wdata",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "output [ 3:0] mem_wstrb",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "input  [31:0] mem_rdata",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "output        mem_la_read",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "output        mem_la_write",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "output [31:0] mem_la_addr",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "output [31:0] mem_la_wdata",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "output [ 3:0] mem_la_wstrb",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "output        pcpi_valid",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "output [31:0] pcpi_insn",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "output [31:0] pcpi_rs1",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "output [31:0] pcpi_rs2",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "input         pcpi_wr",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "input  [31:0] pcpi_rd",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "input         pcpi_wait",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "input         pcpi_ready",
+        "label": "pin (Verilog port-decl, indented)"
+      },
+      {
+        "literal": "450 MHz",
+        "label": "frequency"
+      },
+      {
+        "literal": "416 MHz",
+        "label": "frequency"
+      },
+      {
+        "literal": "454 MHz",
+        "label": "frequency"
+      }
+    ],
+    "input/docs/picosoc_README.md": [],
+    "L1_description.doc_intro": [
+      {
+        "literal": "This is a simple PicoRV32 example design that can run code directly from an SPI ",
+        "label": "L1.description (doc intro paragraph)",
+        "source": "input/docs/picosoc_README.md",
+        "line": 7,
+        "extraction_strategy": "doc_intro_paragraph",
+        "anchor": "readme_first_prose",
+        "attribution_url_rejected": false,
+        "list_introducer_handling": "none"
+      }
+    ],
+    "L1_features.doc_bullets": [
+      {
+        "literal": "Small (750-2000 LUTs in 7-Series Xilinx Architecture)",
+        "label": "L1.features (doc Features bullet list)",
+        "count": 5,
+        "source": "input/docs/README.md",
+        "line": 34,
+        "extraction_strategy": "doc_features_bullet_list",
+        "anchor": "features_heading_rst_setext",
+        "filename_demoted": false
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "no_class_path_in_input": false,
+  "class_path_evidence": {
+    "source": "input/docs/README.md",
+    "line": 3,
+    "extraction_strategy": "readme_class_token_match",
+    "matched_token": "RISC-V",
+    "score": 144.0,
+    "all_scores": {
+      "processor_cpu": 144.0,
+      "digital_arithmetic_primitive": 2.0
+    }
+  },
+  "comparison_tables": [
+    {
+      "headers": [
+        "Module",
+        "Description"
+      ],
+      "rows": [
+        {
+          "Module": "`picorv32`",
+          "Description": "The PicoRV32 CPU"
+        },
+        {
+          "Module": "`picorv32_axi`",
+          "Description": "The version of the CPU with AXI4-Lite interface"
+        },
+        {
+          "Module": "`picorv32_axi_adapter`",
+          "Description": "Adapter from PicoRV32 Memory Interface to AXI4-Lite"
+        },
+        {
+          "Module": "`picorv32_wb`",
+          "Description": "The version of the CPU with Wishbone Master interface"
+        },
+        {
+          "Module": "`picorv32_pcpi_mul`",
+          "Description": "A PCPI core that implements the `MUL[H[SU\\"
+        },
+        {
+          "Module": "`picorv32_pcpi_fast_mul`",
+          "Description": "A version of `picorv32_pcpi_fast_mul` using a single cycle multiplier"
+        },
+        {
+          "Module": "`picorv32_pcpi_div`",
+          "Description": "A PCPI core that implements the `DIV[U]/REM[U]` instructions"
+        }
+      ],
+      "context_heading": "picorv32.v",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 93,
+        "alignment_line": 94,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Instruction",
+        "CPI",
+        "CPI (SP)"
+      ],
+      "rows": [
+        {
+          "Instruction": "direct jump (jal)",
+          "CPI": "3",
+          "CPI (SP)": "3"
+        },
+        {
+          "Instruction": "ALU reg + immediate",
+          "CPI": "3",
+          "CPI (SP)": "3"
+        },
+        {
+          "Instruction": "ALU reg + reg",
+          "CPI": "3",
+          "CPI (SP)": "4"
+        },
+        {
+          "Instruction": "branch (not taken)",
+          "CPI": "3",
+          "CPI (SP)": "4"
+        },
+        {
+          "Instruction": "memory load",
+          "CPI": "5",
+          "CPI (SP)": "5"
+        },
+        {
+          "Instruction": "memory store",
+          "CPI": "5",
+          "CPI (SP)": "6"
+        },
+        {
+          "Instruction": "branch (taken)",
+          "CPI": "5",
+          "CPI (SP)": "6"
+        },
+        {
+          "Instruction": "indirect jump (jalr)",
+          "CPI": "6",
+          "CPI (SP)": "6"
+        },
+        {
+          "Instruction": "shift operations",
+          "CPI": "4-14",
+          "CPI (SP)": "4-15"
+        }
+      ],
+      "context_heading": "Cycles per Instruction Performance",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 344,
+        "alignment_line": 345,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "IRQ",
+        "Interrupt Source"
+      ],
+      "rows": [
+        {
+          "IRQ": "0",
+          "Interrupt Source": "Timer Interrupt"
+        },
+        {
+          "IRQ": "1",
+          "Interrupt Source": "EBREAK/ECALL or Illegal Instruction"
+        },
+        {
+          "IRQ": "2",
+          "Interrupt Source": "BUS Error (Unalign Memory Access)"
+        }
+      ],
+      "context_heading": "Custom Instructions for IRQ Handling",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 501,
+        "alignment_line": 502,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Command",
+        "Install Directory",
+        "ISA"
+      ],
+      "rows": [
+        {
+          "Command": "`make -j$(nproc) build-riscv32i-tools`",
+          "Install Directory": "`/opt/riscv32i/`",
+          "ISA": "`RV32I`"
+        },
+        {
+          "Command": "`make -j$(nproc) build-riscv32ic-tools`",
+          "Install Directory": "`/opt/riscv32ic/`",
+          "ISA": "`RV32IC`"
+        },
+        {
+          "Command": "`make -j$(nproc) build-riscv32im-tools`",
+          "Install Directory": "`/opt/riscv32im/`",
+          "ISA": "`RV32IM`"
+        },
+        {
+          "Command": "`make -j$(nproc) build-riscv32imc-tools`",
+          "Install Directory": "`/opt/riscv32imc/`",
+          "ISA": "`RV32IMC`"
+        }
+      ],
+      "context_heading": "Ubuntu packages needed:",
+      "table_kind": "command",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 657,
+        "alignment_line": 658,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Device",
+        "Device",
+        "Speedgrade",
+        "Clock Period (Freq.)"
+      ],
+      "rows": [
+        {
+          "Device": "xc7k70t-fbg676-2",
+          "Speedgrade": "-2",
+          "Clock Period (Freq.)": "2.4 ns (416 MHz)"
+        },
+        {
+          "Device": "xc7k70t-fbg676-3",
+          "Speedgrade": "-3",
+          "Clock Period (Freq.)": "2.2 ns (454 MHz)"
+        },
+        {
+          "Device": "xc7v585t-ffg1761-2",
+          "Speedgrade": "-2",
+          "Clock Period (Freq.)": "2.3 ns (434 MHz)"
+        },
+        {
+          "Device": "xc7v585t-ffg1761-3",
+          "Speedgrade": "-3",
+          "Clock Period (Freq.)": "2.2 ns (454 MHz)"
+        },
+        {
+          "Device": "xcku035-fbva676-2-e",
+          "Speedgrade": "-2",
+          "Clock Period (Freq.)": "2.0 ns (500 MHz)"
+        },
+        {
+          "Device": "xcku035-fbva676-3-e",
+          "Speedgrade": "-3",
+          "Clock Period (Freq.)": "1.8 ns (555 MHz)"
+        },
+        {
+          "Device": "xcvu065-ffvc1517-2-e",
+          "Speedgrade": "-2",
+          "Clock Period (Freq.)": "2.1 ns (476 MHz)"
+        },
+        {
+          "Device": "xcvu065-ffvc1517-3-e",
+          "Speedgrade": "-3",
+          "Clock Period (Freq.)": "2.0 ns (500 MHz)"
+        },
+        {
+          "Device": "xcku3p-ffva676-2-e",
+          "Speedgrade": "-2",
+          "Clock Period (Freq.)": "1.4 ns (714 MHz)"
+        },
+        {
+          "Device": "xcku3p-ffva676-3-e",
+          "Speedgrade": "-3",
+          "Clock Period (Freq.)": "1.3 ns (769 MHz)"
+        },
+        {
+          "Device": "xcvu3p-ffvc1517-2-e",
+          "Speedgrade": "-2",
+          "Clock Period (Freq.)": "1.5 ns (666 MHz)"
+        },
+        {
+          "Device": "xcvu3p-ffvc1517-3-e",
+          "Speedgrade": "-3",
+          "Clock Period (Freq.)": "1.4 ns (714 MHz)"
+        }
+      ],
+      "context_heading": "Timing on Xilinx 7-Series FPGAs",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 705,
+        "alignment_line": 706,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Core Variant",
+        "Slice LUTs",
+        "LUTs as Memory",
+        "Slice Registers"
+      ],
+      "rows": [
+        {
+          "Core Variant": "PicoRV32 (small)",
+          "Slice LUTs": "761",
+          "LUTs as Memory": "48",
+          "Slice Registers": "442"
+        },
+        {
+          "Core Variant": "PicoRV32 (regular)",
+          "Slice LUTs": "917",
+          "LUTs as Memory": "48",
+          "Slice Registers": "583"
+        },
+        {
+          "Core Variant": "PicoRV32 (large)",
+          "Slice LUTs": "2019",
+          "LUTs as Memory": "88",
+          "Slice Registers": "1085"
+        }
+      ],
+      "context_heading": "Utilization on Xilinx 7-Series FPGAs",
+      "table_kind": "variant",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "header_line": 736,
+        "alignment_line": 737,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "File",
+        "Description"
+      ],
+      "rows": [
+        {
+          "File": "[picosoc.v](picosoc.v)",
+          "Description": "Top-level PicoSoC Verilog module"
+        },
+        {
+          "File": "[spimemio.v](spimemio.v)",
+          "Description": "Memory controller that interfaces to external SPI flash"
+        },
+        {
+          "File": "[simpleuart.v](simpleuart.v)",
+          "Description": "Simple UART core connected directly to SoC TX/RX lines"
+        },
+        {
+          "File": "[start.s](start.s)",
+          "Description": "Assembler source for firmware.hex/firmware.bin"
+        },
+        {
+          "File": "[firmware.c](firmware.c)",
+          "Description": "C source for firmware.hex/firmware.bin"
+        },
+        {
+          "File": "[sections.lds](sections.lds)",
+          "Description": "Linker script for firmware.hex/firmware.bin"
+        },
+        {
+          "File": "[hx8kdemo.v](hx8kdemo.v)",
+          "Description": "FPGA-based example implementation on iCE40-HX8K Breakout Board"
+        },
+        {
+          "File": "[hx8kdemo.pcf](hx8kdemo.pcf)",
+          "Description": "Pin constraints for implementation on iCE40-HX8K Breakout Board"
+        },
+        {
+          "File": "[hx8kdemo\\_tb.v](hx8kdemo_tb.v)",
+          "Description": "Testbench for implementation on iCE40-HX8K Breakout Board"
+        },
+        {
+          "File": "[icebreaker.v](icebreaker.v)",
+          "Description": "FPGA-based example implementation on iCEBreaker Board"
+        },
+        {
+          "File": "[icebreaker.pcf](icebreaker.pcf)",
+          "Description": "Pin constraints for implementation on iCEBreaker Board"
+        },
+        {
+          "File": "[icebreaker\\_tb.v](icebreaker_tb.v)",
+          "Description": "Testbench for implementation on iCEBreaker Board"
+        }
+      ],
+      "context_heading": "PicoSoC - A simple example SoC using PicoRV32",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/picosoc_README.md",
+        "header_line": 31,
+        "alignment_line": 32,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Address Range",
+        "Description"
+      ],
+      "rows": [
+        {
+          "Address Range": "0x00000000 .. 0x00FFFFFF",
+          "Description": "Internal SRAM"
+        },
+        {
+          "Address Range": "0x01000000 .. 0x01FFFFFF",
+          "Description": "External Serial Flash"
+        },
+        {
+          "Address Range": "0x02000000 .. 0x02000003",
+          "Description": "SPI Flash Controller Config Register"
+        },
+        {
+          "Address Range": "0x02000004 .. 0x02000007",
+          "Description": "UART Clock Divider Register"
+        },
+        {
+          "Address Range": "0x02000008 .. 0x0200000B",
+          "Description": "UART Send/Recv Data Register"
+        },
+        {
+          "Address Range": "0x03000000 .. 0xFFFFFFFF",
+          "Description": "Memory mapped user peripherals"
+        }
+      ],
+      "context_heading": "Memory map:",
+      "table_kind": "register",
+      "evidence": {
+        "source": "input/docs/picosoc_README.md",
+        "header_line": 48,
+        "alignment_line": 49,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "Bit(s)",
+        "Description"
+      ],
+      "rows": [
+        {
+          "Bit(s)": "31",
+          "Description": "MEMIO Enable (reset=1, set to 0 to bit bang SPI commands)"
+        },
+        {
+          "Bit(s)": "30:23",
+          "Description": "Reserved (read 0)"
+        },
+        {
+          "Bit(s)": "22",
+          "Description": "DDR Enable bit (reset=0)"
+        },
+        {
+          "Bit(s)": "21",
+          "Description": "QSPI Enable bit (reset=0)"
+        },
+        {
+          "Bit(s)": "20",
+          "Description": "CRM Enable bit (reset=0)"
+        },
+        {
+          "Bit(s)": "19:16",
+          "Description": "Read latency (dummy) cycles (reset=8)"
+        },
+        {
+          "Bit(s)": "15:12",
+          "Description": "Reserved (read 0)"
+        },
+        {
+          "Bit(s)": "11:8",
+          "Description": "IO Output enable bits in bit bang mode"
+        },
+        {
+          "Bit(s)": "7:6",
+          "Description": "Reserved (read 0)"
+        },
+        {
+          "Bit(s)": "5",
+          "Description": "Chip select (CS) line in bit bang mode"
+        },
+        {
+          "Bit(s)": "4",
+          "Description": "Serial clock line in bit bang mode"
+        },
+        {
+          "Bit(s)": "3:0",
+          "Description": "IO data bits in bit bang mode"
+        }
+      ],
+      "context_heading": "SPI Flash Controller Config Register:",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/picosoc_README.md",
+        "header_line": 71,
+        "alignment_line": 72,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    },
+    {
+      "headers": [
+        "CRM",
+        "QSPI",
+        "DDR",
+        "Read Command Byte",
+        "Mode Byte"
+      ],
+      "rows": [
+        {
+          "CRM": "0",
+          "QSPI": "0",
+          "DDR": "0",
+          "Read Command Byte": "03h Read",
+          "Mode Byte": "N/A"
+        },
+        {
+          "CRM": "0",
+          "QSPI": "0",
+          "DDR": "1",
+          "Read Command Byte": "BBh Dual I/O Read",
+          "Mode Byte": "FFh"
+        },
+        {
+          "CRM": "1",
+          "QSPI": "0",
+          "DDR": "1",
+          "Read Command Byte": "BBh Dual I/O Read",
+          "Mode Byte": "A5h"
+        },
+        {
+          "CRM": "0",
+          "QSPI": "1",
+          "DDR": "0",
+          "Read Command Byte": "EBh Quad I/O Read",
+          "Mode Byte": "FFh"
+        },
+        {
+          "CRM": "1",
+          "QSPI": "1",
+          "DDR": "0",
+          "Read Command Byte": "EBh Quad I/O Read",
+          "Mode Byte": "A5h"
+        },
+        {
+          "CRM": "0",
+          "QSPI": "1",
+          "DDR": "1",
+          "Read Command Byte": "EDh DDR Quad I/O Read",
+          "Mode Byte": "FFh"
+        },
+        {
+          "CRM": "1",
+          "QSPI": "1",
+          "DDR": "1",
+          "Read Command Byte": "EDh DDR Quad I/O Read",
+          "Mode Byte": "A5h"
+        }
+      ],
+      "context_heading": "SPI Flash Controller Config Register:",
+      "table_kind": "command",
+      "evidence": {
+        "source": "input/docs/picosoc_README.md",
+        "header_line": 88,
+        "alignment_line": 89,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    }
+  ],
+  "auto_discovered_identifiers": [
+    {
+      "name": "RISC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32IMC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32E",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32I",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32IC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32IM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TOOLCHAIN_PREFIX",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISC",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MIT",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BSD",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PCPI",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IRQ",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AXI4",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ISA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPGA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RDCYCLE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RDTIME",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RDINSTRET",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "AXI",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RAM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ROM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MUL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DIV",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "REM",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "README",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPI",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ENABLE_COUNTERS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RDCYCLEH",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RDTIMEH",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RDINSTRETH",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TWO_STAGE_SHIFT",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BARREL_SHIFTER",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "TWO_CYCLE_ALU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ALU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "COMPRESSED_ISA",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CATCH_MISALIGN",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CATCH_ILLINSN",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EBREAK",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ENABLE_PCPI",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ENABLE_MUL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ENABLE_FAST_MUL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ENABLE_DIV",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ENABLE_IRQ",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ENABLE_IRQ_QREGS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ABI",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ENABLE_IRQ_TIMER",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ENABLE_TRACE",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "REGS_INIT_ZERO",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MASKED_IRQ",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LATCHED_IRQ",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PROGADDR_RESET",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "PROGADDR_IRQ",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "STACKADDR",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CPI",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MULH",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DMIPS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EOI",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ECALL",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "BUS",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LSB",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "GNU",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "XXXXX",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV32G",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "RV64G",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "USER",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ELF",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SPI",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "ASIC",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "FPGA",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "HX8K",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SRAM",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "UART",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "MEMIO",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "DDR",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "QSPI",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CRM",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "QUAD",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CR1V",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "CR1NV",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IO2",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IO3",
+      "source_doc": "picosoc_README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    }
+  ]
+}

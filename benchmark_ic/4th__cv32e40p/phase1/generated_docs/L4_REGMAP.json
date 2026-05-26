@@ -1,0 +1,912 @@
+{
+  "schema_version": 2,
+  "doc_class": "regmap",
+  "ic_name": "Released core",
+  "registers": [
+    {
+      "address": "0x001",
+      "address_int": 1,
+      "name": "fflags",
+      "access": "URW",
+      "default": "",
+      "description": "Floating-point accrued exceptions.",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x002",
+      "address_int": 2,
+      "name": "frm",
+      "access": "URW",
+      "default": "",
+      "description": "Floating-point dynamic rounding mode.",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x003",
+      "address_int": 3,
+      "name": "fcsr",
+      "access": "URW",
+      "default": "",
+      "description": "Floating-point control and status register.",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xC00",
+      "address_int": 3072,
+      "name": "cycle",
+      "access": "URO",
+      "default": "",
+      "description": "(HPM) Cycle Counter",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xC02",
+      "address_int": 3074,
+      "name": "instret",
+      "access": "URO",
+      "default": "",
+      "description": "(HPM) Instructions-Retired Counter",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xC03",
+      "address_int": 3075,
+      "name": "hpmcounter3",
+      "access": "URO",
+      "default": "",
+      "description": "(HPM) Performance-Monitoring Counter 3",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xC1F",
+      "address_int": 3103,
+      "name": "hpmcounter31",
+      "access": "URO",
+      "default": "",
+      "description": "(HPM) Performance-Monitoring Counter 31",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xC80",
+      "address_int": 3200,
+      "name": "cycleh",
+      "access": "URO",
+      "default": "",
+      "description": "(HPM) Upper 32 bits Cycle Counter",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xC82",
+      "address_int": 3202,
+      "name": "instreth",
+      "access": "URO",
+      "default": "",
+      "description": "(HPM) Upper 32 bits Instructions-Retired Counter",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xC83",
+      "address_int": 3203,
+      "name": "hpmcounterh3",
+      "access": "URO",
+      "default": "",
+      "description": "(HPM) Upper 32 bits Performance-Monitoring Counter 3",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566"
+    },
+    {
+      "address": "0xC9F",
+      "address_int": 3231,
+      "name": "hpmcounterh31",
+      "access": "URO",
+      "default": "",
+      "description": "(HPM) Upper 32 bits Performance-Monitoring Counter 31",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566"
+    },
+    {
+      "address": "0xCC0",
+      "address_int": 3264,
+      "name": "lpstart0",
+      "access": "URO",
+      "default": "",
+      "description": "Hardware Loop 0 Start.",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xCC1",
+      "address_int": 3265,
+      "name": "lpend0",
+      "access": "URO",
+      "default": "",
+      "description": "Hardware Loop 0 End.",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xCC2",
+      "address_int": 3266,
+      "name": "lpcount0",
+      "access": "URO",
+      "default": "",
+      "description": "Hardware Loop 0 Counter.",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xCC4",
+      "address_int": 3268,
+      "name": "lpstart1",
+      "access": "URO",
+      "default": "",
+      "description": "Hardware Loop 1 Start.",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566"
+    },
+    {
+      "address": "0xCC5",
+      "address_int": 3269,
+      "name": "lpend1",
+      "access": "URO",
+      "default": "",
+      "description": "Hardware Loop 1 End.",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566"
+    },
+    {
+      "address": "0xCC6",
+      "address_int": 3270,
+      "name": "lpcount1",
+      "access": "URO",
+      "default": "",
+      "description": "Hardware Loop 1 Counter.",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566"
+    },
+    {
+      "address": "0xCD0",
+      "address_int": 3280,
+      "name": "uhartid",
+      "access": "URO",
+      "default": "",
+      "description": "Hardware Thread ID",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xCD1",
+      "address_int": 3281,
+      "name": "privlv",
+      "access": "URO",
+      "default": "",
+      "description": "Privilege Level",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000003",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xCD2",
+      "address_int": 3282,
+      "name": "zfinx",
+      "access": "URO",
+      "default": "",
+      "description": "ZFINX`` ISA",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566"
+    },
+    {
+      "address": "0x300",
+      "address_int": 768,
+      "name": "mstatus",
+      "access": "MRW",
+      "default": "",
+      "description": "Machine Status",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00001800",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x301",
+      "address_int": 769,
+      "name": "misa",
+      "access": "MRW",
+      "default": "",
+      "description": "Machine ISA",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000602",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x304",
+      "address_int": 772,
+      "name": "mie",
+      "access": "MRW",
+      "default": "",
+      "description": "Machine Interrupt Enable register",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x305",
+      "address_int": 773,
+      "name": "mtvec",
+      "access": "MRW",
+      "default": "",
+      "description": "Machine Trap-Handler Base Address",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x0000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x320",
+      "address_int": 800,
+      "name": "mcountinhibit",
+      "access": "MRW",
+      "default": "",
+      "description": "(HPM) Machine Counter-Inhibit register",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x0000000d",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x323",
+      "address_int": 803,
+      "name": "mhpmevent3",
+      "access": "MRW",
+      "default": "",
+      "description": "(HPM) Machine Performance-Monitoring Event Selector 3",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x33F",
+      "address_int": 831,
+      "name": "mhpmevent31",
+      "access": "MRW",
+      "default": "",
+      "description": "(HPM) Machine Performance-Monitoring Event Selector 31",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x340",
+      "address_int": 832,
+      "name": "mscratch",
+      "access": "MRW",
+      "default": "",
+      "description": "Machine Scratch",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x341",
+      "address_int": 833,
+      "name": "mepc",
+      "access": "MRW",
+      "default": "",
+      "description": "Machine Exception Program Counter",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x342",
+      "address_int": 834,
+      "name": "mcause",
+      "access": "MRW",
+      "default": "",
+      "description": "Machine Trap Cause",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x343",
+      "address_int": 835,
+      "name": "mtval",
+      "access": "MRW",
+      "default": "",
+      "description": "Machine Trap Value",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x344",
+      "address_int": 836,
+      "name": "mip",
+      "access": "MRW",
+      "default": "",
+      "description": "Machine Interrupt Pending register",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x7A0",
+      "address_int": 1952,
+      "name": "tselect",
+      "access": "MRW",
+      "default": "",
+      "description": "Trigger Select register",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x7A1",
+      "address_int": 1953,
+      "name": "tdata1",
+      "access": "MRW",
+      "default": "",
+      "description": "Trigger Data register 1",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x28001040",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x7A2",
+      "address_int": 1954,
+      "name": "tdata2",
+      "access": "MRW",
+      "default": "",
+      "description": "Trigger Data register 2",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x7A3",
+      "address_int": 1955,
+      "name": "tdata3",
+      "access": "MRW",
+      "default": "",
+      "description": "Trigger Data register 3",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x7A4",
+      "address_int": 1956,
+      "name": "tinfo",
+      "access": "MRO",
+      "default": "",
+      "description": "Trigger Info",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000004",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x7A8",
+      "address_int": 1960,
+      "name": "mcontext",
+      "access": "MRW",
+      "default": "",
+      "description": "Machine Context register",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x7AA",
+      "address_int": 1962,
+      "name": "scontext",
+      "access": "MRW",
+      "default": "",
+      "description": "Machine Context register",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x7B0",
+      "address_int": 1968,
+      "name": "dcsr",
+      "access": "DRW",
+      "default": "",
+      "description": "Debug Control and Status",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x40000003",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x7B1",
+      "address_int": 1969,
+      "name": "dpc",
+      "access": "DRW",
+      "default": "",
+      "description": "Debug PC",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x7B2",
+      "address_int": 1970,
+      "name": "dscratch0",
+      "access": "DRW",
+      "default": "",
+      "description": "Debug Scratch register 0",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x7B3",
+      "address_int": 1971,
+      "name": "dscratch1",
+      "access": "DRW",
+      "default": "",
+      "description": "Debug Scratch register 1",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566"
+    },
+    {
+      "address": "0xB00",
+      "address_int": 2816,
+      "name": "mcycle",
+      "access": "MRW",
+      "default": "",
+      "description": "(HPM) Machine Cycle Counter",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xB02",
+      "address_int": 2818,
+      "name": "minstret",
+      "access": "MRW",
+      "default": "",
+      "description": "(HPM) Machine Instructions-Retired Counter",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xB03",
+      "address_int": 2819,
+      "name": "mhpmcounter3",
+      "access": "MRW",
+      "default": "",
+      "description": "(HPM) Machine Performance-Monitoring Counter 3",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xB1F",
+      "address_int": 2847,
+      "name": "mhpmcounter31",
+      "access": "MRW",
+      "default": "",
+      "description": "(HPM) Machine Performance-Monitoring Counter 31",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xB80",
+      "address_int": 2944,
+      "name": "mcycleh",
+      "access": "MRW",
+      "default": "",
+      "description": "(HPM) Upper 32 bits Machine Cycle Counter",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xB82",
+      "address_int": 2946,
+      "name": "minstreth",
+      "access": "MRW",
+      "default": "",
+      "description": "(HPM) Upper 32 bits Machine Instructions-Retired Counter",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xB83",
+      "address_int": 2947,
+      "name": "mhpmcounterh3",
+      "access": "MRW",
+      "default": "",
+      "description": "(HPM) Upper 32 bits Machine Performance-Monitoring Counter 3",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566"
+    },
+    {
+      "address": "0xB9F",
+      "address_int": 2975,
+      "name": "mhpmcounterh31",
+      "access": "MRW",
+      "default": "",
+      "description": "(HPM) Upper 32 bits Machine Performance-Monitoring Counter 31",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566"
+    },
+    {
+      "address": "0xF11",
+      "address_int": 3857,
+      "name": "mvendorid",
+      "access": "MRO",
+      "default": "",
+      "description": "Machine Vendor ID",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000602",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xF12",
+      "address_int": 3858,
+      "name": "marchid",
+      "access": "MRO",
+      "default": "",
+      "description": "Machine Architecture ID",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000004",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xF13",
+      "address_int": 3859,
+      "name": "mimpid",
+      "access": "MRO",
+      "default": "",
+      "description": "Machine Implementation ID",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x1",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xF14",
+      "address_int": 3860,
+      "name": "mhartid",
+      "access": "MRO",
+      "default": "",
+      "description": "Hardware Thread ID",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000003",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x000",
+      "address_int": 0,
+      "name": "ustatus",
+      "access": "URW",
+      "default": "",
+      "description": "User Status",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x005",
+      "address_int": 5,
+      "name": "utvec",
+      "access": "URW",
+      "default": "",
+      "description": "User Trap-Handler Base Address",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566"
+    },
+    {
+      "address": "0x041",
+      "address_int": 65,
+      "name": "uepc",
+      "access": "URW",
+      "default": "",
+      "description": "User Exception Program Counter",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x042",
+      "address_int": 66,
+      "name": "ucause",
+      "access": "URW",
+      "default": "",
+      "description": "User Trap Cause",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0x306",
+      "address_int": 774,
+      "name": "mcounteren",
+      "access": "MRW",
+      "default": "",
+      "description": "Machine Counter Enable",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "extraction_strategy": "rst_grid_csr_v1_6_566",
+      "reset_value": "0x00000000",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    }
+  ],
+  "no_registers_in_input": false,
+  "otp_layout": {
+    "fields": [],
+    "depth_bytes": 128,
+    "width_bits": 8,
+    "read_map": [],
+    "write_map": [],
+    "lockbits": [],
+    "otp_ip_specs": null,
+    "trim_registers": [],
+    "mask_sources": []
+  },
+  "no_otp_layout_in_input": false,
+  "otp_ip_macro": {},
+  "internal_registers": [],
+  "extraction_evidence": {
+    "input/docs/source__control_status_registers.rst": [
+      {
+        "literal": "| 0x001           | ``fflags``        | URW           | Floating-point accrued e",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0x002           | ``frm``           | URW           | Floating-point dynamic r",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0x003           | ``fcsr``          | URW           | Floating-point control a",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xC00           | ``cycle``         | URO           | (HPM) Cycle Counter     ",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xC02           | ``instret``       | URO           | (HPM) Instructions-Retir",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xC03           | ``hpmcounter3``   | URO           | (HPM) Performance-Monito",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xC1F           | ``hpmcounter31``  | URO           | (HPM) Performance-Monito",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xC80           | ``cycleh``        | URO           | (HPM) Upper 32 bits Cycl",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xC82           | ``instreth``      | URO           | (HPM) Upper 32 bits Inst",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xC83           | ``hpmcounterh3``  | URO           | (HPM) Upper 32 bits Perf",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xC9F           | ``hpmcounterh31`` | URO           | (HPM) Upper 32 bits Perf",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xCC0           | ``lpstart0``      | URO           | Hardware Loop 0 Start.  ",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xCC1           | ``lpend0``        | URO           | Hardware Loop 0 End.    ",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xCC2           | ``lpcount0``      | URO           | Hardware Loop 0 Counter.",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xCC4           | ``lpstart1``      | URO           | Hardware Loop 1 Start.  ",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xCC5           | ``lpend1``        | URO           | Hardware Loop 1 End.    ",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xCC6           | ``lpcount1``      | URO           | Hardware Loop 1 Counter.",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xCD0           | ``uhartid``       | URO           | Hardware Thread ID      ",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xCD1           | ``privlv``        | URO           | Privilege Level         ",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0xCD2           | ``zfinx``         | URO           | ``ZFINX`` ISA           ",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0x300           | ``mstatus``       | MRW           | Machine Status          ",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0x301           | ``misa``          | MRW           | Machine ISA             ",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0x304           | ``mie``           | MRW           | Machine Interrupt Enable",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0x305           | ``mtvec``         | MRW           | Machine Trap-Handler Bas",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0x320           | ``mcountinhibit`` | MRW           | (HPM) Machine Counter-In",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0x323           | ``mhpmevent3``    | MRW           | (HPM) Machine Performanc",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0x33F           | ``mhpmevent31``   | MRW           | (HPM) Machine Performanc",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0x340           | ``mscratch``      | MRW           | Machine Scratch         ",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0x341           | ``mepc``          | MRW           | Machine Exception Progra",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0x342           | ``mcause``        | MRW           | Machine Trap Cause      ",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0x343           | ``mtval``         | MRW           | Machine Trap Value      ",
+        "label": "register row (RST grid table)"
+      },
+      {
+        "literal": "| 0x344           | ``mip``           | MRW           | Machine Interrupt Pendin",
+        "label": "register row (RST grid table)"
+      }
+    ],
+    "input/docs/source__register_file.rst": [],
+    "internal/architecture/scalar_prose_adjacency": [
+      {
+        "literal": "Scalar MMIO prose-adjacency reset lift (v1.6.503, count=50)",
+        "label": "scalar_prose_adjacency_v1_6_503"
+      }
+    ]
+  },
+  "class_path": "processor_cpu"
+}

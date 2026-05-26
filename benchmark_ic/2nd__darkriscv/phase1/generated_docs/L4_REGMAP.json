@@ -1,0 +1,39 @@
+{
+  "schema_version": 2,
+  "doc_class": "regmap",
+  "ic_name": "SHA256",
+  "registers": [
+    {
+      "name": "LED",
+      "role": "unspecified",
+      "extraction_strategy": "register_name_direct_from_readme",
+      "low_confidence": true,
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 1082,
+        "regex": "register_anchor",
+        "sentence": "In the software side, a small shell is available with some basic commands:\n\n- clear: clear display\n- dump <val>: dumps an area of the RAM\n- led <val>: change the LED register (which turns on/off the LEDs)\n- timer <val>: change the timer pre"
+      }
+    },
+    {
+      "name": "OPORT",
+      "role": "unspecified",
+      "extraction_strategy": "register_name_direct_from_readme",
+      "low_confidence": true,
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 1084,
+        "regex": "register_anchor",
+        "sentence": "In the software side, a small shell is available with some basic commands:\n\n- clear: clear display\n- dump <val>: dumps an area of the RAM\n- led <val>: change the LED register (which turns on/off the LEDs)\n- timer <val>: change the timer pre"
+      }
+    }
+  ],
+  "no_registers_in_input": false,
+  "otp_layout": null,
+  "no_otp_layout_in_input": true,
+  "otp_ip_macro": {},
+  "internal_registers": [],
+  "extraction_evidence": {},
+  "class_path": "processor_cpu",
+  "registers_extraction_strategy": "register_name_direct_from_readme"
+}

@@ -1,0 +1,150 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_debug",
+  "ic_name": "Released core",
+  "test_modes": [],
+  "no_test_modes_in_input": true,
+  "debug_observability": [
+    {
+      "signal": "debug_req_i",
+      "direction": "input",
+      "description": "Request to enter Debug Mode",
+      "purpose": "debug observability pin (extracted from RST Interface table)",
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_grid_interface_table"
+    },
+    {
+      "signal": "debug_havereset_o",
+      "direction": "output",
+      "description": "Debug status: Core has been reset",
+      "purpose": "debug observability pin (extracted from RST Interface table)",
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_grid_interface_table"
+    },
+    {
+      "signal": "debug_running_o",
+      "direction": "output",
+      "description": "Debug status: Core is running",
+      "purpose": "debug observability pin (extracted from RST Interface table)",
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_grid_interface_table"
+    },
+    {
+      "signal": "debug_halted_o",
+      "direction": "output",
+      "description": "Debug status: Core is halted",
+      "purpose": "debug observability pin (extracted from RST Interface table)",
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_grid_interface_table"
+    }
+  ],
+  "no_debug_observability_in_input": false,
+  "debug_registers": [
+    {
+      "name": "dcsr",
+      "value": null,
+      "description": "CV32E40P implements four core debug registers, namely :ref:`csr-dcsr`, :ref:`csr-dpc` and two debug scratch registers.",
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_ref_csr_prefix_v1_6_386"
+    },
+    {
+      "name": "dpc",
+      "value": null,
+      "description": "CV32E40P implements four core debug registers, namely :ref:`csr-dcsr`, :ref:`csr-dpc` and two debug scratch registers.",
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_ref_csr_prefix_v1_6_386"
+    },
+    {
+      "name": "tselect",
+      "value": null,
+      "description": "Several trigger registers are required to adhere to specification. The following are the most relevant: :ref:`csr-tselect`, :ref:`csr-tdata1`,  :ref:`csr-tdata2` and :ref:`csr-tinfo`.",
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_ref_csr_prefix_v1_6_386"
+    },
+    {
+      "name": "tdata1",
+      "value": null,
+      "description": "Several trigger registers are required to adhere to specification. The following are the most relevant: :ref:`csr-tselect`, :ref:`csr-tdata1`,  :ref:`csr-tdata2` and :ref:`csr-tinfo`.",
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_ref_csr_prefix_v1_6_386"
+    },
+    {
+      "name": "tdata2",
+      "value": null,
+      "description": "Several trigger registers are required to adhere to specification. The following are the most relevant: :ref:`csr-tselect`, :ref:`csr-tdata1`,  :ref:`csr-tdata2` and :ref:`csr-tinfo`.",
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_ref_csr_prefix_v1_6_386"
+    },
+    {
+      "name": "tinfo",
+      "value": null,
+      "description": "Several trigger registers are required to adhere to specification. The following are the most relevant: :ref:`csr-tselect`, :ref:`csr-tdata1`,  :ref:`csr-tdata2` and :ref:`csr-tinfo`.",
+      "evidence": "input/docs/source__debug.rst",
+      "extraction_strategy": "rst_ref_csr_prefix_v1_6_386"
+    }
+  ],
+  "debug_parameters": [],
+  "no_debug_parameters_in_input": true,
+  "formal_interfaces": [],
+  "no_formal_interfaces_in_input": true,
+  "verification_strategy": [
+    {
+      "phase": "formal verification",
+      "method": "formal verification",
+      "evidence": "input/docs/source__verification.rst",
+      "extraction_strategy": "test_suite_reference"
+    }
+  ],
+  "no_verification_strategy_in_input": false,
+  "engineer_mode_unlock_sequence": null,
+  "no_engineer_mode_unlock_in_input": true,
+  "vsuite_per_kw_cap_skipped_v1_6_373": 0,
+  "extraction_evidence": {
+    "input/docs/images__debug_halted.svg": [],
+    "input/docs/images__debug_running.svg": [],
+    "input/docs/source__debug.rst": [
+      {
+        "literal": "| ``debug_req_i``               | input         | Request to enter Debug Mode                |",
+        "label": "debug observability (RST Interface table)"
+      },
+      {
+        "literal": "| ``debug_havereset_o``         | output        | Debug status: Core has been reset          |",
+        "label": "debug observability (RST Interface table)"
+      },
+      {
+        "literal": "| ``debug_running_o``           | output        | Debug status: Core is running              |",
+        "label": "debug observability (RST Interface table)"
+      },
+      {
+        "literal": "| ``debug_halted_o``            | output        | Debug status: Core is halted               |",
+        "label": "debug observability (RST Interface table)"
+      },
+      {
+        "literal": ":ref:`csr-dcsr`",
+        "label": "debug register (RST :ref: link)"
+      },
+      {
+        "literal": ":ref:`csr-dpc`",
+        "label": "debug register (RST :ref: link)"
+      },
+      {
+        "literal": ":ref:`csr-tselect`",
+        "label": "debug register (RST :ref: link)"
+      },
+      {
+        "literal": ":ref:`csr-tdata1`",
+        "label": "debug register (RST :ref: link)"
+      },
+      {
+        "literal": ":ref:`csr-tdata2`",
+        "label": "debug register (RST :ref: link)"
+      },
+      {
+        "literal": ":ref:`csr-tinfo`",
+        "label": "debug register (RST :ref: link)"
+      }
+    ],
+    "input/docs/source__verification.rst": []
+  },
+  "class_path": "processor_cpu"
+}

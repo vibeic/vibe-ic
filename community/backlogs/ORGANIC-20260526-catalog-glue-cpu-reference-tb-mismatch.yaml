@@ -1,0 +1,62 @@
+type: enhancement
+severity: P1
+component: program:phase2_one_shot_runner
+plugin_version: "0.1.2"
+
+title: >-
+  digital_cmd_driven class routes processor / SoC catalog-glue IPs to the
+  single-wire half-duplex protocol reference TB whose hardcoded 3-port DUT
+  contract (clk/reset_n/id_bus) cannot match a memory-bus CPU top, forcing an
+  unrecoverable FAIL_ECO_INERT even when synthesis passes
+
+pattern: |
+  When the deterministic rtl_gen step WAIVES with fallback_skill
+  `catalog-glue-author` and the pulled IP is a processor / SoC-class core
+  (top-level interface = wide valid/ready or AXI/Wishbone memory bus plus
+  interrupt and co-processor ports, NOT a single serial protocol wire), the
+  phase2 reference_tb step still instantiates the protocol-class reference
+  testbench. That TB hardcodes a DUT port contract of exactly three ports —
+  a clock, an active-low reset, and a single bidirectional protocol bus wire
+  — matching only cable-side ID / 1-wire / half-duplex command ICs.
+
+  Elaboration then fails (`port not a port of u_dut`) because the CPU top
+  exposes a multi-bit memory interface and no single-wire bus. The ECO loop
+  has no remediable RTL signature (the RTL is the correct, tapeout-proven
+  upstream core), so it correctly declares FAIL_ECO_INERT after producing a
+  byte-identical RTL on retry. Net effect: a design whose RTL synthesizes
+  cleanly (gate-level netlist produced, correct top module) is reported as a
+  phase2 FAIL purely because the wrong reference-TB template was selected for
+  its IC sub-class.
+
+  Generality: any agent integrating a memory-bus or bus-mastering IP from the
+  catalog (CPU core, DMA engine, cache controller, bus bridge) under the
+  generic command-driven digital class hits the same template mismatch — the
+  reference TB is only valid for single-wire serial protocol DUTs.
+
+suggested_fix: |
+  Sub-classify catalog-glue IPs by their top-level interface family before
+  choosing the reference-TB template, instead of applying the single-wire
+  protocol TB to the whole digital_cmd_driven class. Concretely:
+    1. Read the integrated top module's port list (or the catalog manifest
+       `interface.ports`) and detect the interface family: single-wire
+       serial protocol vs memory-bus master vs bus slave.
+    2. For memory-bus / bus-master tops, either (a) generate a bus-functional
+       reference TB driving the valid/ready (or AXI/Wishbone) interface, or
+       (b) when no bus-BFM template exists, SKIP/WAIVE reference_tb with an
+       explicit "interface family not covered by reference TB" reason rather
+       than FAIL — and let the gate-level synthesis + Phase 3 ASIC backend be
+       the verification path for that IC family.
+    3. Apply the same family check to qsf_gen / FPGA pin-mapping: a
+       memory-bus CPU core has no fixed board-pin contract on a DE10-class
+       board, so qsf_gen should SKIP (not FAIL) for that family unless a
+       board-level harness top is supplied.
+
+id: "ORGANIC-20260526-catalog-glue-cpu-reference-tb-mismatch"
+submitted_at: "2026-05-26T02:46:40+00:00"
+session_context: >-
+  Fresh field-agent full Vibe-IC run on an open-source RV32IMC CPU core
+  benchmark. Phase 1 (docs mode) produced 14 L docs at 100% coverage; phase2
+  rtl_gen WAIVED to catalog-glue-author, which pulled the ISC-licensed CPU
+  core and authored a pass-through chip_top wrapper; yosys synthesis PASSED
+  (gate-level netlist, ~10.5k cells, correct top). reference_tb and qsf_gen
+  FAILed solely on interface-family template mismatch.

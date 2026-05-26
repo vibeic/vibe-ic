@@ -1,0 +1,728 @@
+{
+  "schema_version": 2,
+  "doc_class": "rtl_constants",
+  "ic_name": "PicoRV32",
+  "rx_classifier_ticks": null,
+  "no_rx_classifier_ticks_in_input": true,
+  "timing_constants": [],
+  "no_timing_constants_in_input": true,
+  "timing_parameters": [],
+  "clock_mhz": null,
+  "no_clock_mhz_in_input": true,
+  "clock_domains": [],
+  "no_clock_domains_in_input": true,
+  "synthesis_targets": [
+    {
+      "name": "fmax_xilinx_kintex_7t_xc7k70t_fbg676_2_416mhz",
+      "fmax_mhz": 416.0,
+      "freq_mhz": 416.0,
+      "freq_low_mhz": 416.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 707,
+        "matched_substring": "| Xilinx Kintex-7T          | xc7k70t-fbg676-2     | -2         |     2.4 ns (416 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_kintex_7t_xc7k70t_fbg676_3_454mhz",
+      "fmax_mhz": 454.0,
+      "freq_mhz": 454.0,
+      "freq_low_mhz": 454.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 708,
+        "matched_substring": "| Xilinx Kintex-7T          | xc7k70t-fbg676-3     | -3         |     2.2 ns (454 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_virtex_7t_xc7v585t_ffg1761_2_434mhz",
+      "fmax_mhz": 434.0,
+      "freq_mhz": 434.0,
+      "freq_low_mhz": 434.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 709,
+        "matched_substring": "| Xilinx Virtex-7T          | xc7v585t-ffg1761-2   | -2         |     2.3 ns (434 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_virtex_7t_xc7v585t_ffg1761_3_454mhz",
+      "fmax_mhz": 454.0,
+      "freq_mhz": 454.0,
+      "freq_low_mhz": 454.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 710,
+        "matched_substring": "| Xilinx Virtex-7T          | xc7v585t-ffg1761-3   | -3         |     2.2 ns (454 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_kintex_ultrascale_xcku035_fbva676_2_e_500mhz",
+      "fmax_mhz": 500.0,
+      "freq_mhz": 500.0,
+      "freq_low_mhz": 500.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 711,
+        "matched_substring": "| Xilinx Kintex UltraScale  | xcku035-fbva676-2-e  | -2         |     2.0 ns (500 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_kintex_ultrascale_xcku035_fbva676_3_e_555mhz",
+      "fmax_mhz": 555.0,
+      "freq_mhz": 555.0,
+      "freq_low_mhz": 555.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 712,
+        "matched_substring": "| Xilinx Kintex UltraScale  | xcku035-fbva676-3-e  | -3         |     1.8 ns (555 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_virtex_ultrascale_xcvu065_ffvc1517_2_e_476mhz",
+      "fmax_mhz": 476.0,
+      "freq_mhz": 476.0,
+      "freq_low_mhz": 476.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 713,
+        "matched_substring": "| Xilinx Virtex UltraScale  | xcvu065-ffvc1517-2-e | -2         |     2.1 ns (476 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_virtex_ultrascale_xcvu065_ffvc1517_3_e_500mhz",
+      "fmax_mhz": 500.0,
+      "freq_mhz": 500.0,
+      "freq_low_mhz": 500.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 714,
+        "matched_substring": "| Xilinx Virtex UltraScale  | xcvu065-ffvc1517-3-e | -3         |     2.0 ns (500 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_kintex_ultrascale_xcku3p_ffva676_2_e_714mhz",
+      "fmax_mhz": 714.0,
+      "freq_mhz": 714.0,
+      "freq_low_mhz": 714.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 715,
+        "matched_substring": "| Xilinx Kintex UltraScale+ | xcku3p-ffva676-2-e   | -2         |     1.4 ns (714 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_kintex_ultrascale_xcku3p_ffva676_3_e_769mhz",
+      "fmax_mhz": 769.0,
+      "freq_mhz": 769.0,
+      "freq_low_mhz": 769.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 716,
+        "matched_substring": "| Xilinx Kintex UltraScale+ | xcku3p-ffva676-3-e   | -3         |     1.3 ns (769 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_virtex_ultrascale_xcvu3p_ffvc1517_2_e_666mhz",
+      "fmax_mhz": 666.0,
+      "freq_mhz": 666.0,
+      "freq_low_mhz": 666.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 717,
+        "matched_substring": "| Xilinx Virtex UltraScale+ | xcvu3p-ffvc1517-2-e  | -2         |     1.5 ns (666 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_virtex_ultrascale_xcvu3p_ffvc1517_3_e_714mhz",
+      "fmax_mhz": 714.0,
+      "freq_mhz": 714.0,
+      "freq_low_mhz": 714.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 718,
+        "matched_substring": "| Xilinx Virtex UltraScale+ | xcvu3p-ffvc1517-3-e  | -3         |     1.4 ns (714 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_html_inline",
+      "fmax_mhz": 250.0,
+      "freq_mhz": 250.0,
+      "freq_low_mhz": 250.0,
+      "freq_high_mhz": 450.0,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 38,
+        "matched_substring": "f<sub>max</sub> (250-450 MHz on 7-Series Xilinx FPGAs)"
+      },
+      "extraction_strategy": "clock_domain_html_sub_inline_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    }
+  ],
+  "no_synthesis_targets_in_input": false,
+  "parameters": [
+    {
+      "name": "ENABLE_COUNTERS",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_COUNTERS64",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_REGS_16_31",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_REGS_DUALPORT",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "LATCHED_MEM_RDATA",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "TWO_STAGE_SHIFT",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "BARREL_SHIFTER",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "TWO_CYCLE_COMPARE",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "TWO_CYCLE_ALU",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "COMPRESSED_ISA",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "CATCH_MISALIGN",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "CATCH_ILLINSN",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_PCPI",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_MUL",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_FAST_MUL",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_DIV",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_IRQ",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_IRQ_QREGS",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_IRQ_TIMER",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_TRACE",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "REGS_INIT_ZERO",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "MASKED_IRQ",
+      "default": "32'h0000_0000",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "LATCHED_IRQ",
+      "default": "32'hffff_ffff",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "PROGADDR_RESET",
+      "default": "32'h0000_0000",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "PROGADDR_IRQ",
+      "default": "32'h0000_0010",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "STACKADDR",
+      "default": "32'hffff_ffff",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    }
+  ],
+  "peripheral_only_emit_skipped_v1_6_376": 0,
+  "extraction_strategy": {
+    "l8_evidence_population_v1_6_395": 39
+  },
+  "fmax_mhz": 769.0,
+  "fmax_mhz_extraction_strategy": "max_of_synthesis_targets_v1_6_561",
+  "extraction_evidence": {
+    "input/docs/README.md": [
+      {
+        "literal": "| Xilinx Kintex-7T          | xc7k70t-fbg676-2     | -2         |     2.4 ns (416 MHz) |",
+        "label": "clock_domain_md_pipe_table_v1_6_459"
+      },
+      {
+        "literal": "| Xilinx Kintex-7T          | xc7k70t-fbg676-3     | -3         |     2.2 ns (454 MHz) |",
+        "label": "clock_domain_md_pipe_table_v1_6_459"
+      },
+      {
+        "literal": "| Xilinx Virtex-7T          | xc7v585t-ffg1761-2   | -2         |     2.3 ns (434 MHz) |",
+        "label": "clock_domain_md_pipe_table_v1_6_459"
+      },
+      {
+        "literal": "| Xilinx Virtex-7T          | xc7v585t-ffg1761-3   | -3         |     2.2 ns (454 MHz) |",
+        "label": "clock_domain_md_pipe_table_v1_6_459"
+      },
+      {
+        "literal": "| Xilinx Kintex UltraScale  | xcku035-fbva676-2-e  | -2         |     2.0 ns (500 MHz) |",
+        "label": "clock_domain_md_pipe_table_v1_6_459"
+      },
+      {
+        "literal": "| Xilinx Kintex UltraScale  | xcku035-fbva676-3-e  | -3         |     1.8 ns (555 MHz) |",
+        "label": "clock_domain_md_pipe_table_v1_6_459"
+      },
+      {
+        "literal": "| Xilinx Virtex UltraScale  | xcvu065-ffvc1517-2-e | -2         |     2.1 ns (476 MHz) |",
+        "label": "clock_domain_md_pipe_table_v1_6_459"
+      },
+      {
+        "literal": "| Xilinx Virtex UltraScale  | xcvu065-ffvc1517-3-e | -3         |     2.0 ns (500 MHz) |",
+        "label": "clock_domain_md_pipe_table_v1_6_459"
+      },
+      {
+        "literal": "| Xilinx Kintex UltraScale+ | xcku3p-ffva676-2-e   | -2         |     1.4 ns (714 MHz) |",
+        "label": "clock_domain_md_pipe_table_v1_6_459"
+      },
+      {
+        "literal": "| Xilinx Kintex UltraScale+ | xcku3p-ffva676-3-e   | -3         |     1.3 ns (769 MHz) |",
+        "label": "clock_domain_md_pipe_table_v1_6_459"
+      },
+      {
+        "literal": "| Xilinx Virtex UltraScale+ | xcvu3p-ffvc1517-2-e  | -2         |     1.5 ns (666 MHz) |",
+        "label": "clock_domain_md_pipe_table_v1_6_459"
+      },
+      {
+        "literal": "| Xilinx Virtex UltraScale+ | xcvu3p-ffvc1517-3-e  | -3         |     1.4 ns (714 MHz) |",
+        "label": "clock_domain_md_pipe_table_v1_6_459"
+      },
+      {
+        "literal": "f<sub>max</sub> (250-450 MHz on 7-Series Xilinx FPGAs)",
+        "label": "clock_domain_html_sub_inline_v1_6_459"
+      }
+    ],
+    "input/docs/picosoc_README.md": [],
+    "README.md": [
+      {
+        "literal": "ENABLE_COUNTERS = 1",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "ENABLE_COUNTERS64 = 1",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "ENABLE_REGS_16_31 = 1",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "ENABLE_REGS_DUALPORT = 1",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "LATCHED_MEM_RDATA = 0",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "TWO_STAGE_SHIFT = 1",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "BARREL_SHIFTER = 0",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "TWO_CYCLE_COMPARE = 0",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "TWO_CYCLE_ALU = 0",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "COMPRESSED_ISA = 0",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "CATCH_MISALIGN = 1",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "CATCH_ILLINSN = 1",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "ENABLE_PCPI = 0",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "ENABLE_MUL = 0",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "ENABLE_FAST_MUL = 0",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "ENABLE_DIV = 0",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "ENABLE_IRQ = 0",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "ENABLE_IRQ_QREGS = 1",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "ENABLE_IRQ_TIMER = 1",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "ENABLE_TRACE = 0",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "REGS_INIT_ZERO = 0",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "MASKED_IRQ = 32'h0000_0000",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "LATCHED_IRQ = 32'hffff_ffff",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "PROGADDR_RESET = 32'h0000_0000",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "PROGADDR_IRQ = 32'h0000_0010",
+        "label": "md_param_h4_heading_v1_6_390"
+      },
+      {
+        "literal": "STACKADDR = 32'hffff_ffff",
+        "label": "md_param_h4_heading_v1_6_390"
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "auto_discovered_literals": [
+    {
+      "literal": "2000LUTs",
+      "value": "2000",
+      "unit": "LUTs",
+      "source_doc": "README.md",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "450MHz",
+      "value": "450",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2.4ns",
+      "value": "2.4",
+      "unit": "ns",
+      "source_doc": "README.md",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "416MHz",
+      "value": "416",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2.2ns",
+      "value": "2.2",
+      "unit": "ns",
+      "source_doc": "README.md",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "454MHz",
+      "value": "454",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2.3ns",
+      "value": "2.3",
+      "unit": "ns",
+      "source_doc": "README.md",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "434MHz",
+      "value": "434",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2.0ns",
+      "value": "2.0",
+      "unit": "ns",
+      "source_doc": "README.md",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "500MHz",
+      "value": "500",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1.8ns",
+      "value": "1.8",
+      "unit": "ns",
+      "source_doc": "README.md",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "555MHz",
+      "value": "555",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2.1ns",
+      "value": "2.1",
+      "unit": "ns",
+      "source_doc": "README.md",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "476MHz",
+      "value": "476",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1.4ns",
+      "value": "1.4",
+      "unit": "ns",
+      "source_doc": "README.md",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "714MHz",
+      "value": "714",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1.3ns",
+      "value": "1.3",
+      "unit": "ns",
+      "source_doc": "README.md",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "769MHz",
+      "value": "769",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1.5ns",
+      "value": "1.5",
+      "unit": "ns",
+      "source_doc": "README.md",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "666MHz",
+      "value": "666",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    }
+  ]
+}

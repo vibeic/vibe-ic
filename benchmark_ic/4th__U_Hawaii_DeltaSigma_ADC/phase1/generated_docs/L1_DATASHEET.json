@@ -1,0 +1,307 @@
+{
+  "schema_version": 2,
+  "doc_class": "datasheet",
+  "ic_name": "EE628",
+  "no_ic_name_in_input": false,
+  "package_info": null,
+  "no_package_in_input": true,
+  "pin_table": [],
+  "no_pin_table_in_input": true,
+  "electrical_specs": {
+    "channel_count": "6"
+  },
+  "no_electrical_specs_in_input": true,
+  "ordering_info": {
+    "part_number": "EE628",
+    "vendor": "bmurmann",
+    "vendor_extraction_strategy": "vendor_github_repo_url_v1_6_536",
+    "no_vendor_in_input": false
+  },
+  "tapeout_metadata": {
+    "die_size_um": [
+      1300,
+      1300
+    ],
+    "die_dimensions_evidence": "chip dimensions are 1300 x 1300",
+    "die_dimensions_unit_inferred": true,
+    "foundry": "IHP SG13G2",
+    "extraction_evidence": [
+      {
+        "file": "input/docs/README.md"
+      }
+    ],
+    "tapeout_date": "May 2024"
+  },
+  "no_tapeout_metadata_in_input": false,
+  "description": "This chip contains six copies of an incremental delta-sigma modulator (one of them is powered by an an LDO). The chip dimensions are 1300 x 1300 (without seal ring).",
+  "description_evidence": {
+    "source": "input/docs/README.md",
+    "line": 6,
+    "extraction_strategy": "doc_intro_paragraph",
+    "anchor": "readme_first_prose",
+    "attribution_url_rejected": true,
+    "list_introducer_handling": "none"
+  },
+  "features": [
+    "six copies of incremental delta-sigma modulator"
+  ],
+  "features_evidence": {
+    "source": "input/docs/README.md",
+    "extraction_strategy": "doc_features_quantifier_prose",
+    "anchor": "quantifier_prose_fallback",
+    "fallback_source": "quantifier_prose"
+  },
+  "functional_overview": {
+    "converter_type": "incremental_delta_sigma_modulator"
+  },
+  "provenance": {
+    "source_url": "https://github.com/bmurmann/EE628"
+  },
+  "extraction_evidence": {
+    "input/docs/L1_DATASHEET_handwritten.md": [
+      {
+        "literal": "6",
+        "label": "L1.electrical_specs.channel_count",
+        "key": "channel_count",
+        "extraction_strategy": "handwritten_bullet_v1_6_575"
+      },
+      {
+        "literal": "incremental_delta_sigma_modulator",
+        "label": "L1.functional_overview.converter_type",
+        "key": "converter_type",
+        "extraction_strategy": "handwritten_bullet_v1_6_575"
+      },
+      {
+        "literal": "https://github.com/bmurmann/EE628",
+        "label": "L1.provenance.source_url",
+        "key": "source_url",
+        "extraction_strategy": "handwritten_bullet_v1_6_575"
+      },
+      {
+        "literal": "May 2024",
+        "label": "L1.tapeout_metadata.tapeout_date",
+        "key": "tapeout_date",
+        "extraction_strategy": "handwritten_bullet_v1_6_575"
+      }
+    ],
+    "input/docs/PROVENANCE.md": [],
+    "input/docs/README.md": [],
+    "input/docs/_extract_raw.txt": [],
+    "L1_description.doc_intro": [
+      {
+        "literal": "This chip contains six copies of an incremental delta-sigma modulator (one of th",
+        "label": "L1.description (doc intro paragraph)",
+        "source": "input/docs/README.md",
+        "line": 6,
+        "extraction_strategy": "doc_intro_paragraph",
+        "anchor": "readme_first_prose",
+        "attribution_url_rejected": true,
+        "list_introducer_handling": "none"
+      }
+    ],
+    "L1_features.doc_bullets": [
+      {
+        "literal": "six copies of incremental delta-sigma modulator",
+        "label": "L1.features (doc Features bullet list)",
+        "count": 1,
+        "source": "input/docs/README.md",
+        "extraction_strategy": "doc_features_quantifier_prose",
+        "anchor": "quantifier_prose_fallback",
+        "fallback_source": "quantifier_prose"
+      }
+    ]
+  },
+  "class_path": null,
+  "no_class_path_in_input": true,
+  "comparison_tables": [
+    {
+      "headers": [
+        "uuid",
+        "path",
+        "source",
+        "origin",
+        "auto_decided",
+        "reasoning"
+      ],
+      "rows": [
+        {
+          "uuid": "`f-c61dac23`",
+          "path": "`L1.channel_count`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-921be0d6`",
+          "path": "`L1.converter_type`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-86ceaa96`",
+          "path": "`L1.physical.die_size_um`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-182ccc46`",
+          "path": "`L1.physical.seal_ring_included`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-cdd7e19e`",
+          "path": "`L1.process.pdk`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-aef26c2a`",
+          "path": "`L1.project.affiliation`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-82c30237`",
+          "path": "`L1.project.source_url`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-b81a8911`",
+          "path": "`L1.project.tapeout_date`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-4003f032`",
+          "path": "`L9.instances.modulator_count`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-9ab2b8de`",
+          "path": "`L9.instances.modulator_with_ldo_count`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        },
+        {
+          "uuid": "`f-5c5a483a`",
+          "path": "`L9.power_domains`",
+          "source": "inferred",
+          "origin": "nl_ingest",
+          "auto_decided": "True",
+          "reasoning": "extracted from user's natural-language description"
+        }
+      ],
+      "context_heading": "Phase-1 Fact-Graph Provenance Audit",
+      "table_kind": "unknown",
+      "evidence": {
+        "source": "input/docs/PROVENANCE.md",
+        "header_line": 7,
+        "alignment_line": 8,
+        "extraction_strategy": "markdown_pipe_table"
+      }
+    }
+  ],
+  "auto_discovered_identifiers": [
+    {
+      "name": "L1_DATASHEET",
+      "source_doc": "L1_DATASHEET_handwritten.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IHP",
+      "source_doc": "L1_DATASHEET_handwritten.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SG13G2",
+      "source_doc": "L1_DATASHEET_handwritten.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EE628",
+      "source_doc": "L1_DATASHEET_handwritten.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "L8R",
+      "source_doc": "PROVENANCE.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IHP",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SG13G2",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EE628",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "LDO",
+      "source_doc": "README.md",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "EE628",
+      "source_doc": "_extract_raw.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "IHP",
+      "source_doc": "_extract_raw.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "name": "SG13G2",
+      "source_doc": "_extract_raw.txt",
+      "kind": "upper_ident",
+      "source": "phase1_auto_extraction"
+    }
+  ],
+  "vendor_short_literals": [
+    {
+      "literal": "100%",
+      "kind": "percent",
+      "source": "PROVENANCE.md"
+    }
+  ]
+}

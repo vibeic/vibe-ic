@@ -1,0 +1,637 @@
+{
+  "schema_version": 2,
+  "doc_class": "integration_spec",
+  "ic_name": "Phase-1 Fact-Graph Provenance Audit",
+  "top_module": "chip_top",
+  "top_module_extraction_strategy": "catalog_glue_author_wrapper_v1 (was l1_ic_name_fallback \u2014 corrected; serv_rf_top instantiated in chip_top.v)",
+  "no_top_module_in_input": false,
+  "ports": [
+    {
+      "name": "clk",
+      "dir": "in",
+      "width": 1
+    },
+    {
+      "name": "i_rst",
+      "dir": "in",
+      "width": 1
+    },
+    {
+      "name": "i_timer_irq",
+      "dir": "in",
+      "width": 1
+    },
+    {
+      "name": "o_ibus_adr",
+      "dir": "out",
+      "width": 32
+    },
+    {
+      "name": "o_ibus_cyc",
+      "dir": "out",
+      "width": 1
+    },
+    {
+      "name": "i_ibus_rdt",
+      "dir": "in",
+      "width": 32
+    },
+    {
+      "name": "i_ibus_ack",
+      "dir": "in",
+      "width": 1
+    },
+    {
+      "name": "o_dbus_adr",
+      "dir": "out",
+      "width": 32
+    },
+    {
+      "name": "o_dbus_dat",
+      "dir": "out",
+      "width": 32
+    },
+    {
+      "name": "o_dbus_sel",
+      "dir": "out",
+      "width": 4
+    },
+    {
+      "name": "o_dbus_we",
+      "dir": "out",
+      "width": 1
+    },
+    {
+      "name": "o_dbus_cyc",
+      "dir": "out",
+      "width": 1
+    },
+    {
+      "name": "i_dbus_rdt",
+      "dir": "in",
+      "width": 32
+    },
+    {
+      "name": "i_dbus_ack",
+      "dir": "in",
+      "width": 1
+    },
+    {
+      "name": "o_ext_rs1",
+      "dir": "out",
+      "width": 32
+    },
+    {
+      "name": "o_ext_rs2",
+      "dir": "out",
+      "width": 32
+    },
+    {
+      "name": "o_ext_funct3",
+      "dir": "out",
+      "width": 3
+    },
+    {
+      "name": "i_ext_rd",
+      "dir": "in",
+      "width": 32
+    },
+    {
+      "name": "i_ext_ready",
+      "dir": "in",
+      "width": 1
+    },
+    {
+      "name": "o_mdu_valid",
+      "dir": "out",
+      "width": 1
+    }
+  ],
+  "top_ports": [
+    {
+      "name": "clk",
+      "dir": "in",
+      "width": 1
+    },
+    {
+      "name": "i_rst",
+      "dir": "in",
+      "width": 1
+    },
+    {
+      "name": "i_timer_irq",
+      "dir": "in",
+      "width": 1
+    },
+    {
+      "name": "o_ibus_adr",
+      "dir": "out",
+      "width": 32
+    },
+    {
+      "name": "o_ibus_cyc",
+      "dir": "out",
+      "width": 1
+    },
+    {
+      "name": "i_ibus_rdt",
+      "dir": "in",
+      "width": 32
+    },
+    {
+      "name": "i_ibus_ack",
+      "dir": "in",
+      "width": 1
+    },
+    {
+      "name": "o_dbus_adr",
+      "dir": "out",
+      "width": 32
+    },
+    {
+      "name": "o_dbus_dat",
+      "dir": "out",
+      "width": 32
+    },
+    {
+      "name": "o_dbus_sel",
+      "dir": "out",
+      "width": 4
+    },
+    {
+      "name": "o_dbus_we",
+      "dir": "out",
+      "width": 1
+    },
+    {
+      "name": "o_dbus_cyc",
+      "dir": "out",
+      "width": 1
+    },
+    {
+      "name": "i_dbus_rdt",
+      "dir": "in",
+      "width": 32
+    },
+    {
+      "name": "i_dbus_ack",
+      "dir": "in",
+      "width": 1
+    },
+    {
+      "name": "o_ext_rs1",
+      "dir": "out",
+      "width": 32
+    },
+    {
+      "name": "o_ext_rs2",
+      "dir": "out",
+      "width": 32
+    },
+    {
+      "name": "o_ext_funct3",
+      "dir": "out",
+      "width": 3
+    },
+    {
+      "name": "i_ext_rd",
+      "dir": "in",
+      "width": 32
+    },
+    {
+      "name": "i_ext_ready",
+      "dir": "in",
+      "width": 1
+    },
+    {
+      "name": "o_mdu_valid",
+      "dir": "out",
+      "width": 1
+    }
+  ],
+  "top_module_pins": [
+    {
+      "name": "clk",
+      "dir": "in"
+    },
+    {
+      "name": "i_rst",
+      "dir": "in"
+    },
+    {
+      "name": "i_timer_irq",
+      "dir": "in"
+    },
+    {
+      "name": "o_ibus_adr",
+      "dir": "out"
+    },
+    {
+      "name": "o_ibus_cyc",
+      "dir": "out"
+    },
+    {
+      "name": "i_ibus_rdt",
+      "dir": "in"
+    },
+    {
+      "name": "i_ibus_ack",
+      "dir": "in"
+    },
+    {
+      "name": "o_dbus_adr",
+      "dir": "out"
+    },
+    {
+      "name": "o_dbus_dat",
+      "dir": "out"
+    },
+    {
+      "name": "o_dbus_sel",
+      "dir": "out"
+    },
+    {
+      "name": "o_dbus_we",
+      "dir": "out"
+    },
+    {
+      "name": "o_dbus_cyc",
+      "dir": "out"
+    },
+    {
+      "name": "i_dbus_rdt",
+      "dir": "in"
+    },
+    {
+      "name": "i_dbus_ack",
+      "dir": "in"
+    },
+    {
+      "name": "o_ext_rs1",
+      "dir": "out"
+    },
+    {
+      "name": "o_ext_rs2",
+      "dir": "out"
+    },
+    {
+      "name": "o_ext_funct3",
+      "dir": "out"
+    },
+    {
+      "name": "i_ext_rd",
+      "dir": "in"
+    },
+    {
+      "name": "i_ext_ready",
+      "dir": "in"
+    },
+    {
+      "name": "o_mdu_valid",
+      "dir": "out"
+    }
+  ],
+  "no_integration_in_input": false,
+  "submodules": [
+    {
+      "name": "serv_rf_top",
+      "instances": 1,
+      "extraction_strategy": "rst_underline_module_section_v1_6_354",
+      "low_confidence": false,
+      "evidence": {
+        "file": "doc__modules.rst"
+      }
+    },
+    {
+      "name": "serv_top",
+      "instances": 1,
+      "extraction_strategy": "rst_underline_module_section_v1_6_354",
+      "low_confidence": false,
+      "evidence": {
+        "file": "doc__modules.rst"
+      }
+    },
+    {
+      "name": "serv_alu",
+      "instances": 1,
+      "extraction_strategy": "rst_underline_module_section_v1_6_354",
+      "low_confidence": false,
+      "evidence": {
+        "file": "doc__modules.rst"
+      }
+    },
+    {
+      "name": "serv_bufreg",
+      "instances": 1,
+      "extraction_strategy": "rst_underline_module_section_v1_6_354",
+      "low_confidence": false,
+      "evidence": {
+        "file": "doc__modules.rst"
+      }
+    },
+    {
+      "name": "serv_bufreg2",
+      "instances": 1,
+      "extraction_strategy": "rst_underline_module_section_v1_6_354",
+      "low_confidence": false,
+      "evidence": {
+        "file": "doc__modules.rst"
+      }
+    },
+    {
+      "name": "serv_csr",
+      "instances": 1,
+      "extraction_strategy": "rst_underline_module_section_v1_6_354",
+      "low_confidence": false,
+      "evidence": {
+        "file": "doc__modules.rst"
+      }
+    },
+    {
+      "name": "serv_ctrl",
+      "instances": 1,
+      "extraction_strategy": "rst_underline_module_section_v1_6_354",
+      "low_confidence": false,
+      "evidence": {
+        "file": "doc__modules.rst"
+      }
+    },
+    {
+      "name": "serv_decode",
+      "instances": 1,
+      "extraction_strategy": "rst_underline_module_section_v1_6_354",
+      "low_confidence": false,
+      "evidence": {
+        "file": "doc__modules.rst"
+      }
+    },
+    {
+      "name": "serv_immdec",
+      "instances": 1,
+      "extraction_strategy": "rst_underline_module_section_v1_6_354",
+      "low_confidence": false,
+      "evidence": {
+        "file": "doc__modules.rst"
+      }
+    },
+    {
+      "name": "serv_mem_if",
+      "instances": 1,
+      "extraction_strategy": "rst_underline_module_section_v1_6_354",
+      "low_confidence": false,
+      "evidence": {
+        "file": "doc__modules.rst"
+      }
+    },
+    {
+      "name": "serv_rf_if",
+      "instances": 1,
+      "extraction_strategy": "rst_underline_module_section_v1_6_354",
+      "low_confidence": false,
+      "evidence": {
+        "file": "doc__modules.rst"
+      }
+    },
+    {
+      "name": "serv_rf_ram",
+      "instances": 1,
+      "extraction_strategy": "rst_underline_module_section_v1_6_354",
+      "low_confidence": false,
+      "evidence": {
+        "file": "doc__modules.rst"
+      }
+    },
+    {
+      "name": "serv_rf_ram_if",
+      "instances": 1,
+      "extraction_strategy": "rst_underline_module_section_v1_6_354",
+      "low_confidence": false,
+      "evidence": {
+        "file": "doc__modules.rst"
+      }
+    },
+    {
+      "name": "serv_state",
+      "instances": 1,
+      "extraction_strategy": "rst_underline_module_section_v1_6_354",
+      "low_confidence": false,
+      "evidence": {
+        "file": "doc__modules.rst"
+      }
+    }
+  ],
+  "no_submodules_in_input": false,
+  "sim_only_modules": [],
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "internal_wires": [],
+  "no_internal_wires_in_input": true,
+  "expected_verdict_byte_hex": null,
+  "expected_verdict_byte_offset": null,
+  "expected_verdict_byte_extraction_strategy": null,
+  "expected_verdict_byte_offset_low_confidence": false,
+  "expected_verdict_byte_hex_low_confidence": false,
+  "cpu_interrupts": [],
+  "no_cpu_interrupts_in_input": true,
+  "reset_domains": [
+    {
+      "name": "i_rst",
+      "polarity": "active_high",
+      "sync": "unknown",
+      "scan_prefixed": false,
+      "direction_prefix": "i_",
+      "extraction_strategy": "l9_port_reset_shape_v1_6_369"
+    }
+  ],
+  "memories": [],
+  "memory_candidates": [
+    {
+      "name": null,
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": "single",
+      "depth": null,
+      "width": null,
+      "evidence_file": "README.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "ram",
+      "type": "RAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "README.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "regfile",
+      "type": "register file",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "doc__interface.rst",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "memory",
+      "type": "memory",
+      "port_count": null,
+      "depth": 0,
+      "width": 0,
+      "evidence_file": "doc__servile.rst",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    }
+  ],
+  "no_memory_candidates_in_input": false,
+  "no_memories_in_input": false,
+  "memory_map": [],
+  "no_memory_map_in_input": true,
+  "no_instantiation_template_in_input": true,
+  "top_module_pins_evidence": {
+    "source": "interface.rst + L1 pinout fact-graph; serv_rf_top port list (catalog cpu/serv@1.4.0)"
+  },
+  "extraction_evidence": {
+    "derived_from_L3": []
+  },
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 32.0,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 32.0,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 213,
+        "matched_substring": "32 MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 32000000,
+      "period_ns": 31.25,
+      "domain_kind": "primary",
+      "source_pin": "clk",
+      "low_mhz": 12.0,
+      "high_mhz": 24.0,
+      "merged_extractor_count_v1_6_397": 2
+    }
+  ],
+  "parameters": [
+    {
+      "name": "MDU",
+      "default": "0",
+      "type": "logic",
+      "description": "Enables the interface for connecting SERV and the Multiplication and Division Unit (MDU). Note that this only enables the interface and the decoder logic. The MDU itself must be connected externally a",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "PRE_REGISTER",
+      "default": "0",
+      "type": null,
+      "description": "| Register signals before or after the decoder | 0 : Register after the decoder. Faster but uses more resources | 1 : (default) Register before the decoder. Slower but uses less resources",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "RESET_PC",
+      "default": "0x00000000",
+      "type": "address",
+      "description": "Address of first instruction to fetch from memory after reset (Reset vector)",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "RESET_STRATEGY",
+      "default": "\"MINI\"",
+      "type": null,
+      "description": "| Amount of reset applied to design | \"NONE\" : No reset at all. Relies on a POR to set correct initialization values and that core isn't reset during runtime | \"MINI\" : Standard setting. Resets the mi",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "RF_WIDTH",
+      "default": "2",
+      "type": null,
+      "description": "(serv_rf_top only) Width of the RF memory. Typically smaller values use less resources, but can be implementation-dependant.",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "WITH_CSR",
+      "default": "0",
+      "type": null,
+      "description": "Enable Zicsr extension. This also enables timer IRQ and exception handling. Note that SERV only implements a small subset of the CSR registers.",
+      "source": "doc__interface.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "sim",
+      "default": "0",
+      "type": "address",
+      "description": "| Enable simulation mode. In simulation mode, two memory addresses have special purposes. | 0x80000000: Writes to this address puts the byte in the lowest data byte into a log file decided by the \"sig",
+      "source": "doc__servile.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "with_c",
+      "default": "0",
+      "type": null,
+      "description": "Enable the C extension. This also makes SERV support misaligned loads and stores.",
+      "source": "doc__servile.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "with_mdu",
+      "default": "0",
+      "type": "logic",
+      "description": "Enables the Multiplication and Division Unit (MDU) to support the M extension. Note that this only enables the interface and the decoder logic. The MDU itself is external from SERV.",
+      "source": "doc__servile.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "memfile",
+      "default": "\"\"",
+      "type": null,
+      "description": "Verilog hex file containing a RISC-V application to be preloaded into memory",
+      "source": "doc__serving.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    },
+    {
+      "name": "memsize",
+      "default": "1-4294967296",
+      "type": null,
+      "description": "Size of memory (in bytes). Needs to be at least large enough to fit the application supplied by memsize. Note that the RF occupies the highest 128 bytes of memory in the RAM.",
+      "source": "doc__serving.rst",
+      "extraction_strategy": "rst_list_table_parameters_v1_6_399"
+    }
+  ],
+  "interface_type": "uart",
+  "no_interface_type_in_input": false,
+  "interface_types": [
+    {
+      "name": "uart",
+      "occurrences": 35,
+      "first_line": 213,
+      "matched_token": "UART"
+    }
+  ],
+  "no_interface_types_in_input": false,
+  "chip_top_interfaces": [
+    {
+      "name": "uart",
+      "matched_token": "UART"
+    }
+  ],
+  "class_path": "processor_cpu"
+}

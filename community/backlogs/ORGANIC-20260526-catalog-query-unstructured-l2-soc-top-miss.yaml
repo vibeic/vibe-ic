@@ -1,0 +1,57 @@
+type: enhancement
+severity: P1
+component: program:ip_catalog_query
+plugin_version: "unknown"
+
+title: >-
+  Catalog query misses SoC-top / memory-topology IPs because L2 facts are
+  matched as raw markdown instead of structured fields
+
+pattern: |
+  ip_catalog_query evaluates each catalog IP's `matches_when` predicates
+  against Phase-1 generated docs. Several high-value IP manifests gate on
+  STRUCTURED L2 fields (e.g. `L2.cpu_family == 'risc-v'`,
+  `L2.memory_topology == 'unified'`, `L2.cpu_arch contains 'bit_serial'`),
+  but the L2 doc emitted by the doc-extraction track stores architecture
+  facts as raw markdown section content, not as those discrete keys. As a
+  result, an IP whose match depends on a structured field never fires even
+  when the spec clearly describes that architecture.
+
+  Concrete failure shape (chip-agnostic): for a minimal RISC-V SoC whose
+  spec says "shared single SRAM combining I-mem + D-mem + register file",
+  the CPU-core IP matched (via a loose substring on the ISA name) but the
+  SoC-TOP IP — the one carrying the actual top module + the memory
+  topology + `depends_on` the CPU core — did NOT match, because its
+  predicate keyed on `L2.memory_topology`/`unified` which the L2 doc did
+  not expose as a field. The agent had to pull the SoC-top IP manually.
+  Simultaneously, two SPURIOUS matches fired on over-broad substring rules
+  (a floating-point unit on a bare "contains 'F'" ISA test for an
+  integer-only core, and a wrong micro-architecture CPU on a generic
+  "rv32" + "multi-cycle" test), which the agent had to prune by hand.
+
+  Net effect: the catalog under-matches the IP that matters most
+  (the integration top) and over-matches incidental IPs, so the
+  catalog-glue path cannot run unattended on SoC-class designs.
+
+suggested_fix: |
+  1. Have the Phase-1 doc-extraction track populate structured L2
+     architecture fields (cpu_family, cpu_isa, cpu_arch, cpu_extensions,
+     memory_topology, submodule_required) in addition to the human
+     markdown, so `matches_when` predicates have real keys to read.
+  2. In ip_catalog_query, when a structured field is absent, fall back to
+     a SCOPED keyword search over the relevant L2 section only (not the
+     whole doc), and lower the confidence of substring-only matches so
+     spurious hits rank below structured hits.
+  3. Auto-include `depends_on` IPs and auto-prefer SoC-top IPs
+     (manifests that declare a top module) over leaf-core IPs when both
+     match, so the integration top is pulled without manual intervention.
+  4. Add an extension-negation guard: an ISA "contains 'F'" rule must not
+     fire when the spec lists integer-only extensions.
+
+id: "ORGANIC-20260526-catalog-query-unstructured-l2-soc-top-miss"
+submitted_at: "2026-05-26T11:25:00+08:00"
+session_context: >-
+  Fresh-agent full Phase1-2-3 run on a Path-B (vendor-docs) minimal
+  RISC-V SoC benchmark; catalog-glue-author path required manual IP
+  selection + spurious-match pruning because the SoC-top IP did not
+  auto-match and two incidental IPs over-matched.

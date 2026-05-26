@@ -1,0 +1,10 @@
+# Vibe-IC benchmark_ic — version only human-readable records + the canonical
+# Phase-1 L-docs. Everything else (input copies, phase2/phase3 EDA working
+# data, gate-report JSONs, logs) is large + regeneratable and stays out of git.
+# Allowlist pattern:
+*
+!*/
+!*.md
+!**/*.md
+!*/phase1/generated_docs/
+!*/phase1/generated_docs/*.json

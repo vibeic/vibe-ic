@@ -1,0 +1,39 @@
+{
+  "schema_version": 2,
+  "doc_class": "regmap",
+  "ic_name": "GCD",
+  "registers": [
+    {
+      "name": "CYCLE",
+      "role": "unspecified",
+      "extraction_strategy": "register_name_direct_from_readme",
+      "low_confidence": true,
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 1048,
+        "regex": "register_anchor",
+        "sentence": "| Parameters | type | description |\n| ------ | ----------- | ------ |\n| bypassExecute | Boolean | Enable the bypassing of instruction results coming from the Execute stage |\n| bypassMemory | Boolean | Enable the bypassing of instruction res"
+      }
+    },
+    {
+      "name": "MODE",
+      "role": "unspecified",
+      "extraction_strategy": "register_name_direct_from_readme",
+      "low_confidence": true,
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 1264,
+        "regex": "register_anchor",
+        "sentence": "#### CsrPlugin\n\nImplements most of the Machine mode and a few of the User mode registers, as specified in the RISC-V priviledged spec."
+      }
+    }
+  ],
+  "no_registers_in_input": false,
+  "otp_layout": null,
+  "no_otp_layout_in_input": true,
+  "otp_ip_macro": {},
+  "internal_registers": [],
+  "extraction_evidence": {},
+  "class_path": "processor_cpu",
+  "registers_extraction_strategy": "register_name_direct_from_readme"
+}

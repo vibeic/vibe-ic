@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "doc_class": "control_logic",
+  "ic_name": "PicoRV32",
+  "reject_rules": [],
+  "fsm_states": [],
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
+  "fsm_tokens": [
+    {
+      "name": "Timer",
+      "type": "structure",
+      "source": "README.md"
+    },
+    {
+      "name": "set_flash_qspi_flag",
+      "type": "flag",
+      "source": "picosoc_README.md"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/README.md": [
+      {
+        "literal": "Timer",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/picosoc_README.md": [
+      {
+        "literal": "set_flash_qspi_flag",
+        "label": "FSM flag token"
+      }
+    ]
+  },
+  "class_path": "processor_cpu"
+}

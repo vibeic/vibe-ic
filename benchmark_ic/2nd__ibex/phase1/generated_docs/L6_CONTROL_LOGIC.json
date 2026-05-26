@@ -1,0 +1,259 @@
+{
+  "schema_version": 2,
+  "doc_class": "control_logic",
+  "ic_name": "Bit-Manipulation Extension",
+  "reject_rules": [],
+  "fsm_states": [
+    {
+      "name": "BOOT_SET",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "FIRST_FETCH",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "DECODE",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "IRQ_TAKEN",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "DBG_TAKEN_IF",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "FLUSH",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "MUXES",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__instruction_decode_execute.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "CHOOSE",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__instruction_decode_execute.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "SENT",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__instruction_decode_execute.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "USED",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__instruction_decode_execute.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "CONTROL",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__instruction_decode_execute.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "JUMP",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__instruction_decode_execute.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "APPROPRIATE",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__instruction_decode_execute.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "BLOCK",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__instruction_decode_execute.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "PERFORM",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__instruction_decode_execute.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "IDLE",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__load_store_unit.rst (prose transition v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "PART",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__load_store_unit.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "COMPLETE",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__load_store_unit.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "RETURNS",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__load_store_unit.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "COMMUNICATE",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__load_store_unit.rst (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    }
+  ],
+  "pipeline_stages": [
+    {
+      "name": "writeback",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__02_user__integration.rst (pipeline stage inline-bracket/numbered prose)",
+      "extraction_strategy": "pipeline_stages_inline_bracket_v1_6_462"
+    },
+    {
+      "name": "IF",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__cosim.rst (pipeline stage)"
+    },
+    {
+      "name": "EX",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__cosim.rst (pipeline stage)"
+    },
+    {
+      "name": "ID",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst (pipeline stage)"
+    },
+    {
+      "name": "WB",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst (pipeline stage)"
+    }
+  ],
+  "no_pipeline_stages_in_input": false,
+  "no_fsm_states_in_input": false,
+  "no_fsm_in_input": false,
+  "fsm_tokens": [
+    {
+      "name": "Counter",
+      "type": "structure",
+      "source": "doc__03_reference__cs_registers.rst"
+    },
+    {
+      "name": "Timer",
+      "type": "structure",
+      "source": "doc__03_reference__cs_registers.rst"
+    },
+    {
+      "name": "FIFO",
+      "type": "structure",
+      "source": "doc__03_reference__icache.rst"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/README.md": [],
+    "input/docs/doc__01_overview__compliance.rst": [],
+    "input/docs/doc__01_overview__index.rst": [],
+    "input/docs/doc__01_overview__licensing.rst": [],
+    "input/docs/doc__01_overview__targets.rst": [],
+    "input/docs/doc__01_overview__verification_overview.rst": [],
+    "input/docs/doc__02_user__configuration.rst": [],
+    "input/docs/doc__02_user__examples.rst": [],
+    "input/docs/doc__02_user__getting_started.rst": [],
+    "input/docs/doc__02_user__index.rst": [],
+    "input/docs/doc__02_user__integration.rst": [],
+    "input/docs/doc__02_user__system_requirements.rst": [],
+    "input/docs/doc__03_reference__cosim.rst": [],
+    "input/docs/doc__03_reference__coverage_plan.rst": [],
+    "input/docs/doc__03_reference__cs_registers.rst": [
+      {
+        "literal": "Counter",
+        "label": "FSM structure token"
+      },
+      {
+        "literal": "Timer",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/doc__03_reference__debug.rst": [],
+    "input/docs/doc__03_reference__exception_interrupts.rst": [],
+    "input/docs/doc__03_reference__history.rst": [],
+    "input/docs/doc__03_reference__icache.rst": [
+      {
+        "literal": "FIFO",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/doc__03_reference__index.rst": [],
+    "input/docs/doc__03_reference__instruction_decode_execute.rst": [],
+    "input/docs/doc__03_reference__instruction_fetch.rst": [],
+    "input/docs/doc__03_reference__load_store_unit.rst": [],
+    "input/docs/doc__03_reference__performance_counters.rst": [],
+    "input/docs/doc__03_reference__pipeline_details.rst": [],
+    "input/docs/doc__03_reference__pmp.rst": [],
+    "input/docs/doc__03_reference__register_file.rst": [],
+    "input/docs/doc__03_reference__rvfi.rst": [],
+    "input/docs/doc__03_reference__security.rst": [],
+    "input/docs/doc__03_reference__testplan.rst": [],
+    "input/docs/doc__03_reference__tracer.rst": [],
+    "input/docs/doc__03_reference__verification.rst": [],
+    "input/docs/doc__03_reference__verification_stages.rst": [],
+    "input/docs/doc__04_developer__concierge.rst": [],
+    "input/docs/doc__04_developer__index.rst": [],
+    "input/docs/doc__index.rst": []
+  },
+  "class_path": "processor_cpu"
+}

@@ -1,0 +1,261 @@
+{
+  "schema_version": 2,
+  "doc_class": "rtl_constants",
+  "ic_name": "Released core",
+  "rx_classifier_ticks": null,
+  "no_rx_classifier_ticks_in_input": true,
+  "timing_constants": [],
+  "no_timing_constants_in_input": true,
+  "timing_parameters": [],
+  "clock_mhz": 100.0,
+  "no_clock_mhz_in_input": false,
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 100.0,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 100.0,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/source__integration.rst",
+        "line": 253,
+        "matched_substring": "100 MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 100000000,
+      "period_ns": 10.0,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    }
+  ],
+  "no_clock_domains_in_input": false,
+  "synthesis_targets": [
+    {
+      "name": "fmax_prose_100mhz_on_a_32_kb_memory_connected_on_each_of_its_obi_interface",
+      "fmax_mhz": 100.0,
+      "target_fpga": "a 32 KB memory connected on each of its OBI interface",
+      "role": "synthesis_fmax",
+      "extraction_strategy": "fmax_prose_v1_6_538",
+      "v1_6_538_extracted": true,
+      "evidence": {
+        "source": "input/docs/source__integration.rst"
+      }
+    }
+  ],
+  "no_synthesis_targets_in_input": false,
+  "parameters": [
+    {
+      "name": "FPU_ADDMUL_LAT",
+      "default": "0",
+      "type": "int",
+      "description": "Number of pipeline registers for Floating-Point addition and multiplication instructions, see :ref:`fpu`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "FPU_OTHERS_LAT",
+      "default": "0",
+      "type": "int",
+      "description": "Number of pipeline registers for Floating-Point comparison, conversion and classify instructions, see :ref:`fpu`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "ZFINX",
+      "default": "0",
+      "type": "bit",
+      "description": "Enable Floating Point instructions to use the General Purpose register file instead of requiring a dedicated Floating Point register file, see :ref:`fpu`. Only allowed to be set to 1 if ``FPU`` = 1",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "COREV_PULP",
+      "default": "0",
+      "type": "bit",
+      "description": "Enable all of the custom PULP ISA extensions (except **cv.elw**) (see :ref:`custom-isa-extensions`) and all custom CSRs (see :ref:`cs-registers`).",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "NUM_MHPMCOUNTERS",
+      "default": "1",
+      "type": "int (0..29)",
+      "description": "Number of MHPMCOUNTER performance counters, see :ref:`performance-counters`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "FPU",
+      "default": "0",
+      "type": "bit",
+      "description": "Enable Floating Point Unit (FPU) support, see :ref:`fpu`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    },
+    {
+      "name": "COREV_CLUSTER",
+      "default": "0",
+      "type": "bit",
+      "description": "Enable PULP Cluster support (**cv.elw**), see :ref:`pulp_cluster`",
+      "source": "source__integration.rst",
+      "extraction_strategy": "rst_param_grid_table_v1_6_329"
+    }
+  ],
+  "peripheral_only_emit_skipped_v1_6_376": 0,
+  "extraction_strategy": {
+    "l8_evidence_population_v1_6_395": 9
+  },
+  "fmax_mhz": 100.0,
+  "fmax_mhz_extraction_strategy": "max_of_synthesis_targets_v1_6_561",
+  "extraction_evidence": {
+    "input/docs/Makefile": [],
+    "input/docs/README.md": [],
+    "input/docs/images__CV32E40P_Block_Diagram.svg": [],
+    "input/docs/images__blockdiagram.svg": [],
+    "input/docs/images__debug_halted.svg": [],
+    "input/docs/images__debug_running.svg": [],
+    "input/docs/images__load_event.svg": [],
+    "input/docs/images__obi_data_back_to_back.svg": [],
+    "input/docs/images__obi_data_basic.svg": [],
+    "input/docs/images__obi_data_multiple_outstanding.svg": [],
+    "input/docs/images__obi_data_slow_response.svg": [],
+    "input/docs/images__obi_instruction_basic.svg": [],
+    "input/docs/images__obi_instruction_multiple_outstanding.svg": [],
+    "input/docs/images__wfi.svg": [],
+    "input/docs/requirements.txt": [],
+    "input/docs/source__control_status_registers.rst": [],
+    "input/docs/source__core_versions.rst": [],
+    "input/docs/source__corev_hw_loop.rst": [],
+    "input/docs/source__debug.rst": [],
+    "input/docs/source__exceptions_interrupts.rst": [],
+    "input/docs/source__fpu.rst": [],
+    "input/docs/source__glossary.rst": [],
+    "input/docs/source__index.rst": [],
+    "input/docs/source__instruction_fetch.rst": [],
+    "input/docs/source__instruction_set_extensions.rst": [],
+    "input/docs/source__integration.rst": [
+      {
+        "literal": "100 MHz",
+        "label": "clock_domain_doc_prose_fmax_primary"
+      },
+      {
+        "literal": "(100.0, 'a 32 KB memory connected on each of its OBI interface')",
+        "label": "fmax_prose_v1_6_538"
+      }
+    ],
+    "input/docs/source__intro.rst": [],
+    "input/docs/source__load_store_unit.rst": [],
+    "input/docs/source__perf_counters.rst": [],
+    "input/docs/source__pipeline.rst": [],
+    "input/docs/source__preface.rst": [],
+    "input/docs/source__register_file.rst": [],
+    "input/docs/source__sleep.rst": [],
+    "input/docs/source__verification.rst": [],
+    "source__integration.rst": [
+      {
+        "literal": "FPU_ADDMUL_LAT = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "FPU_OTHERS_LAT = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "ZFINX = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "COREV_PULP = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "NUM_MHPMCOUNTERS = 1",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "FPU = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      },
+      {
+        "literal": "COREV_CLUSTER = 0",
+        "label": "rst_param_grid_table_v1_6_329"
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "auto_discovered_literals": [
+    {
+      "literal": "100MHz",
+      "value": "100",
+      "unit": "MHz",
+      "source_doc": "source__integration.rst",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "130.000ns",
+      "value": "130.000",
+      "unit": "ns",
+      "source_doc": "source__verification.rst",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "132.000ns",
+      "value": "132.000",
+      "unit": "ns",
+      "source_doc": "source__verification.rst",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "134.000ns",
+      "value": "134.000",
+      "unit": "ns",
+      "source_doc": "source__verification.rst",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "136.000ns",
+      "value": "136.000",
+      "unit": "ns",
+      "source_doc": "source__verification.rst",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "142.000ns",
+      "value": "142.000",
+      "unit": "ns",
+      "source_doc": "source__verification.rst",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "138.000ns",
+      "value": "138.000",
+      "unit": "ns",
+      "source_doc": "source__verification.rst",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "144.000ns",
+      "value": "144.000",
+      "unit": "ns",
+      "source_doc": "source__verification.rst",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "152.000ns",
+      "value": "152.000",
+      "unit": "ns",
+      "source_doc": "source__verification.rst",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    }
+  ]
+}

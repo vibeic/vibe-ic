@@ -1,0 +1,264 @@
+{
+  "schema_version": "1",
+  "doc_class": "timing_waveform",
+  "ic_name": "SSE",
+  "timing_windows": [],
+  "timing_constants": [],
+  "waveforms": [
+    {
+      "file_ref": "datasheet__cpu.adoc",
+      "raw_payload": "{signal: [\n  {name: 'clk', wave: 'p..|.......|..'},\n  [\n    \"request\",\n    {name: 'meta',  wave: 'x3.|.x4.x5.|.x'},\n    {name: 'addr',  wave: 'x3.|.x4.x5.|.x', data: ['A_addr', 'B_addr', 'C_addr']},\n    {name: 'data',  wave: 'x..|..4.x..|..', data: ['wdata']},\n    {name: 'ben',   wave: 'x3.|.x4.x5.|.x', data: ['ben', 'ben', 'ben']},\n    {name: 'stb',   wave: '010|..10.10|..', node: '.a....c..e....'},\n    {name: 'rw',    wave: 'x0.|.x1.x0.|.x', node: '..............'},\n    {name: 'amo',   wave: 'x0.|.x0.x0.|.x'},\n    {name: 'amoop', wave: 'x..|.......|..'},\n    {name: 'lock',  wave: 'x0.|.......|.x'},\n    {name: 'burst', wave: 'x0.|.......|.x'},\n    {name: 'fence', wave: '0..|.......|..'},\n  ],\n  {},\n  [\n    \"response\",\n    {name: 'ack',  wave: '0..|10.10..|10', node: '....b..d....f.'},\n    {name: 'err',  wave: '0..|.......|10'},\n    {name: 'data', wave: '2..|32.....|x2', data: ['0', 'rdata', '0']},\n  ]\n],\n edge: ['a~>b', 'c~>d', 'e~>f']\n}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_1",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__cpu.adoc",
+      "raw_payload": "{signal: [\n  {name: 'clk', wave: 'p................'},\n  [\n    \"request\",\n    {name: 'meta',  wave: 'x2...x.|.2....x..'},\n    {name: 'addr',  wave: 'x2...x.|.3.456x..', data: ['addr', '0', '4', '8', '12']},\n    {name: 'data',  wave: 'x..2.x.|.........', data: ['wdata', '0', '4', '8', '12']},\n    {name: 'ben',   wave: 'x2.2.x.|.2....x..', data: ['1111', '1111', '1111']},\n    {name: 'stb',   wave: '01010..|.101..0..', node: '.a.d.....h.k.'},\n    {name: 'rw',    wave: 'x0.1.x.|.0....x..'},\n    {name: 'amo',   wave: 'x1...x.|.........'},\n    {name: 'amoop', wave: 'x2...x.|.........'},\n    {name: 'burst', wave: 'x0....x|.1...0..x', node: '.............m..'},\n    {name: 'lock',  wave: 'x1...0x|.1.....0x', node: '.b...f...i.....n'},\n    {name: 'fence', wave: '0................'},\n  ],\n  {},\n  [\n    \"response\",\n    {name: 'ack',  wave: '0.1010.|..101..0.', node: '..c.eg....j.l..o'},\n    {name: 'err',  wave: 'x.0x0x.|x.0x0..x.'},\n    {name: 'data', wave: 'x.2x...|x.3x456x.', data: ['rdata', '[0]', '[4]', '[8]', '[12]']},\n  ]\n],\n edge: ['ab', 'a~>c', 'c~>d', 'd~>e', 'fg', 'hi', 'h~>j', 'j~>k', 'k~>l', 'm', 'no']\n}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_2",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__cpu_cfu.adoc",
+      "raw_payload": "{reg: [\n  {bits: 7, name: 'opcode', type: 1},\n  {bits: 5, name: 'rd'      },\n  {bits: 3, name: 'funct3', type: 1},\n  {bits: 5, name: 'rs1'     },\n  {bits: 5, name: 'rs2'     },\n  {bits: 7, name: 'funct7', type: 1}\n]}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_3",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__cpu_cfu.adoc",
+      "raw_payload": "{reg: [\n  {bits:  7, name: 'opcode', type: 1},\n  {bits:  5, name: 'rd'      },\n  {bits:  3, name: 'funct3', type: 1},\n  {bits:  5, name: 'rs1'     },\n  {bits: 12, name: 'imm12',  type: 1}\n]}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_4",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__cpu_cfu.adoc",
+      "raw_payload": "{signal: [\n  {name: 'clk_i',    wave: 'p....|..'},\n  {name: 'start_i',  wave: '01010|..', node: '.a.c'},\n  {name: 'inst_i',   wave: 'x4x5.|.0'},\n  {name: 'rs1_i',    wave: 'x4x5.|.x'},\n  {name: 'rs2_i',    wave: 'x4x5.|.x'},\n  {},\n  {name: 'result_o', wave: 'x4x..|5x'},\n  {name: 'valid_o',  wave: '010..|10', node: '.b....d'},\n],\n  edge: ['a~>b', 'c~>d']\n}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_5",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__on_chip_debugger.adoc",
+      "raw_payload": "{reg: [\n    {bits: 8, name: 'Halt (HLT)',  attr: '-/w'},\n    {bits: 8, name: 'Resume (RES)', attr: 'r/w'},\n    {bits: 8, name: 'Execute (EXE)', attr: 'r/w'},\n    {bits: 8, name: 'Exception (EXC)', attr: '-/w'},\n]}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_6",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__soc_neoled.adoc",
+      "raw_payload": "{signal: [\n  {name: '0-code', wave: '01...0...1',  node: '.a...b...c' },\n  {name: '1-code', wave: '01....0..1',  node: '.d....e..f' },\n  {name: 'reset',  wave: '10.......1',  node: '.g.......h' },\n],\n edge: ['a~>b T0H', 'b~>c T0L', 'd~>e T1H', 'e~>f T1L', 'g~>h TRESET']\n}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_7",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__soc_onewire.adoc",
+      "raw_payload": "{ signal: [\n  { wave: '10x....1.', node: '.........'},\n  {                    node: '.ab......'},\n  {                    node: '.X..c....'},\n  {                    node: '.Y.....d.'},\n  {                    node: '.Z......e'}\n  ],\n  edge: [\n    'a-b t0',\n    'X-c t1',\n    'Y-d t2',\n    'Z-e t3'\n  ]\n}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_8",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__soc_onewire.adoc",
+      "raw_payload": "{ signal: [\n  { wave: '10..x...1', node: '.........'},\n  {                    node: '.f..g....'},\n  {                    node: '.X.. h...'},\n  {                    node: '.Y......i'}\n  ],\n  edge: [\n    'f-g t4',\n    'X-h t5',\n    'Y-i t6',\n  ]\n}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_9",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__soc_slink.adoc",
+      "raw_payload": "{signal: [\n  {name: 'clk',      wave: 'p.........'},\n  {name: 'dat',      wave: 'x345..6x7x', data: [\"A\", \"B\", \"C\", \"D\", \"E\"]},\n  {name: 'val',      wave: '01.....010'},\n  {name: 'rdy',      wave: '01.0.1...0'},\n  {name: 'lst',      wave: '0.......10'},\n  {name: 'src/dst',  wave: 'x345..6x7x'}\n]}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_10",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__soc_spi.adoc",
+      "raw_payload": "{signal: [\n  [\n    \"SCK\",\n    {name: 'CPOL=0', wave: 'l.hlhlhlhlhlhlhlhl.'},\n    {name: 'CPOL=1', wave: 'h.lhlhlhlhlhlhlhlh.'},\n  ],\n  {},\n  [\n    \"CPHA=0\",\n    {name: 'Host in',  wave: 'x2.3.4.5.6.7.8.9.x.', data: ['1', '2', '3', '4', '5', '6', '7', '8']},\n    {name: 'Host out', wave: 'x2.3.4.5.6.7.8.9.x.', data: ['1', '2', '3', '4', '5', '6', '7', '8']},\n  ],\n  {},\n  [\n    \"CPHA=1\",\n    {name: 'Host in',  wave: 'x.2.3.4.5.6.7.8.9.x', data: ['1', '2', '3', '4', '5', '6', '7', '8']},\n    {name: 'Host out', wave: 'x.2.3.4.5.6.7.8.9.x', data: ['1', '2', '3', '4', '5', '6', '7', '8']},\n  ]\n],\n edge: ['ab', 'a~>c', 'c~>d', 'd~>e', 'fg', 'hi', 'h~>j', 'j~>k', 'k~>l', 'mn']\n}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_11",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__soc_twd.adoc",
+      "raw_payload": "{signal: [\n  {name: 'SDA', wave: '10.7..7..7..7..7..7..7..1..0..x|.', node: 'a.b.....................c..d..e', data: ['A6', 'A5', 'A4', 'A3', 'A2', 'A1', 'A0']},\n  {name: 'SCL', wave: '1.0.10.10.10.10.10.10.10.10.10.|.'},\n  {},\n  {name: 'SDA', wave: 'x|.9..9..9..9..9..9..9..9..0..0.1', node: '...........................f..gh.i', data: ['D7', 'D6', 'D5', 'D4', 'D3', 'D2', 'D1', 'D0']},\n  {name: 'SCL', wave: '0|..10.10.10.10.10.10.10.10.10.1.'}\n ],\n   edge: [\n    'a-b START',\n    'c-d READ',\n    'd-e ACK by TWD',\n    'f-g ACK by HOST',\n    'h-i STOP'\n ]\n}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_12",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__soc_twd.adoc",
+      "raw_payload": "{signal: [\n  {name: 'SDA', wave: '10.7..7..7..7..7..7..7..0..0..x|.', node: 'a.b.....................c..d..e', data: ['A6', 'A5', 'A4', 'A3', 'A2', 'A1', 'A0']},\n  {name: 'SCL', wave: '1.0.10.10.10.10.10.10.10.10.10.|.'},\n  {},\n  {name: 'SDA', wave: 'x|.5..5..5..5..5..5..5..5..0..0.1', node: '...........................f..gh.i', data: ['D7', 'D6', 'D5', 'D4', 'D3', 'D2', 'D1', 'D0']},\n  {name: 'SCL', wave: '0|..10.10.10.10.10.10.10.10.10.1.'}\n ],\n   edge: [\n    'a-b START',\n    'c-d WRITE',\n    'd-e ACK by TWD',\n    'f-g ACK by TWD',\n    'h-i STOP'\n ]\n}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_13",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__soc_xbus.adoc",
+      "raw_payload": "{signal: [\n  {name: 'clk',         wave: 'p....|......|...'},\n  {name: 'xbus_adr_o',  wave: 'x3...|.x4...|.x.', data: ['write_address', 'read_address']},\n  {name: 'xbus_dat_o',  wave: 'x3...|.x....|.x.', data: ['wdata']},\n  {name: 'xbus_cti_o',  wave: 'x3...|.x4...|.x.', data: ['000 (classic cycle)', '000 (classic cycle)']},\n  {name: 'xbus_tag_o',  wave: 'x3...|.x4...|.x.', data: ['tag', 'tag']},\n  {name: 'xbus_we_o',   wave: 'x1...|.x0...|.x.'},\n  {name: 'xbus_sel_o',  wave: 'x3...|.x4...|.x.', data: ['byte_enable', 'byte_enable']},\n  {name: 'xbus_stb_o',  wave: '010..|..10..|...', node: '.a......e......'},\n  {name: 'xbus_cyc_o',  wave: '01...|.01...|.0.', node: '.b... .df.....h'},\n  {},\n  {name: 'xbus_ack_i',  wave: 'x0...|1x0...|1x.', node: '......c......g.'},\n  {name: 'xbus_err_i',  wave: 'x0...|.x0...|.x.'},\n  {name: 'xbus_dat_i',  wave: 'x....|.x....|4x.', data: ['rdata']},\n],\n edge: ['a~>c', 'b~>c', 'c~>d', 'e~>g', 'f~>g', 'g~>h']\n}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_14",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__soc_xbus.adoc",
+      "raw_payload": "{signal: [\n  {name: 'clk',         wave: 'p.......'},\n  {name: 'xbus_adr_o',  wave: 'x2.....x', data: ['addr']},\n  {name: 'xbus_dat_o',  wave: 'x.......', data: ['wdata']},\n  {name: 'xbus_cti_o',  wave: 'x7.....x', data: ['001 (constant address burst)']},\n  {name: 'xbus_tag_o',  wave: 'x2.....x'},\n  {name: 'xbus_we_o',   wave: 'x0..1..x'},\n  {name: 'xbus_sel_o',  wave: 'x2.....x'},\n  {name: 'xbus_stb_o',  wave: '010.10..', node: '.a..c...'},\n  {name: 'xbus_cyc_o',  wave: '01.....0', node: '.......e'},\n  {},\n  {name: 'xbus_ack_i',  wave: '0..10.10', node: '...b..df'},\n  {name: 'xbus_err_i',  wave: '0.......'},\n  {name: 'xbus_dat_i',  wave: 'x..2x...', data: ['rdata']},\n],\n edge: ['a~>b', 'b~>c', 'c~>d', 'ef']\n}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_15",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    },
+    {
+      "file_ref": "datasheet__soc_xbus.adoc",
+      "raw_payload": "{signal: [\n  {name: 'clk',         wave: 'p........'},\n  {name: 'xbus_adr_o',  wave: 'x3.456.x.', data: ['0', '4', '8', '12']},\n  {name: 'xbus_dat_o',  wave: 'x........'},\n  {name: 'xbus_cti_o',  wave: 'x7.....x.', data: ['010 (incrementing address burst)']},\n  {name: 'xbus_tag_o',  wave: 'x2.....x.'},\n  {name: 'xbus_we_o',   wave: 'x0.....x.'},\n  {name: 'xbus_sel_o',  wave: 'x2.....x.'},\n  {name: 'xbus_stb_o',  wave: '0101..0..', node: '.a.cegi.'},\n  {name: 'xbus_cyc_o',  wave: '01.....0.', node: '.......k'},\n  {},\n  {name: 'xbus_ack_i',  wave: '0.101..0.', node: '..b.dfhj'},\n  {name: 'xbus_err_i',  wave: '0........'},\n  {name: 'xbus_dat_i',  wave: 'x.3x456x.', data: ['[0]', '[4]', '[8]', '[12]']},\n],\n edge: ['a~>b', 'b~>c', 'c~>d', 'e~>f', 'g~>h', 'i~>j', 'kj']\n}",
+      "extraction_strategy": "adoc_wavedrom_fenced_block_v1_6_325",
+      "name": "wavedrom_16",
+      "name_lifted_v1_6_473": false,
+      "name_auto_id_v1_6_473": true
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/datasheet__cpu_isa.adoc": [],
+    "input/docs/datasheet__cpu.adoc": [
+      {
+        "literal": "{signal: [\n  {name: 'clk', wave: 'p..|.......|..'},\n  [\n    \"request\",\n    {name: 'meta',  wave: 'x3.|.x4.x5.|.x'},",
+        "label": "adoc [wavedrom, ...] fenced block"
+      },
+      {
+        "literal": "{signal: [\n  {name: 'clk', wave: 'p................'},\n  [\n    \"request\",\n    {name: 'meta',  wave: 'x2...x.|.2....x..'}",
+        "label": "adoc [wavedrom, ...] fenced block"
+      }
+    ],
+    "input/docs/datasheet__cpu_cfu.adoc": [
+      {
+        "literal": "{reg: [\n  {bits: 7, name: 'opcode', type: 1},\n  {bits: 5, name: 'rd'      },\n  {bits: 3, name: 'funct3', type: 1},\n  {bi",
+        "label": "adoc [wavedrom, ...] fenced block"
+      },
+      {
+        "literal": "{reg: [\n  {bits:  7, name: 'opcode', type: 1},\n  {bits:  5, name: 'rd'      },\n  {bits:  3, name: 'funct3', type: 1},",
+        "label": "adoc [wavedrom, ...] fenced block"
+      },
+      {
+        "literal": "{signal: [\n  {name: 'clk_i',    wave: 'p....|..'},\n  {name: 'start_i',  wave: '01010|..', node: '.a.c'},\n  {name: 'inst_",
+        "label": "adoc [wavedrom, ...] fenced block"
+      }
+    ],
+    "input/docs/datasheet__on_chip_debugger.adoc": [
+      {
+        "literal": "{reg: [\n    {bits: 8, name: 'Halt (HLT)',  attr: '-/w'},\n    {bits: 8, name: 'Resume (RES)', attr: 'r/w'},\n    {bits: 8,",
+        "label": "adoc [wavedrom, ...] fenced block"
+      }
+    ],
+    "input/docs/datasheet__soc_neoled.adoc": [
+      {
+        "literal": "{signal: [\n  {name: '0-code', wave: '01...0...1',  node: '.a...b...c' },\n  {name: '1-code', wave: '01....0..1',  node: '",
+        "label": "adoc [wavedrom, ...] fenced block"
+      }
+    ],
+    "input/docs/datasheet__soc_onewire.adoc": [
+      {
+        "literal": "{ signal: [\n  { wave: '10x....1.', node: '.........'},\n  {                    node: '.ab......'},\n  {",
+        "label": "adoc [wavedrom, ...] fenced block"
+      },
+      {
+        "literal": "{ signal: [\n  { wave: '10..x...1', node: '.........'},\n  {                    node: '.f..g....'},\n  {",
+        "label": "adoc [wavedrom, ...] fenced block"
+      }
+    ],
+    "input/docs/datasheet__soc_slink.adoc": [
+      {
+        "literal": "{signal: [\n  {name: 'clk',      wave: 'p.........'},\n  {name: 'dat',      wave: 'x345..6x7x', data: [\"A\", \"B\", \"C\", \"D\",",
+        "label": "adoc [wavedrom, ...] fenced block"
+      }
+    ],
+    "input/docs/datasheet__soc_spi.adoc": [
+      {
+        "literal": "{signal: [\n  [\n    \"SCK\",\n    {name: 'CPOL=0', wave: 'l.hlhlhlhlhlhlhlhl.'},\n    {name: 'CPOL=1', wave: 'h.lhlhlhlhlhlhl",
+        "label": "adoc [wavedrom, ...] fenced block"
+      }
+    ],
+    "input/docs/datasheet__soc_twd.adoc": [
+      {
+        "literal": "{signal: [\n  {name: 'SDA', wave: '10.7..7..7..7..7..7..7..1..0..x|.', node: 'a.b.....................c..d..e', data: ['A",
+        "label": "adoc [wavedrom, ...] fenced block"
+      },
+      {
+        "literal": "{signal: [\n  {name: 'SDA', wave: '10.7..7..7..7..7..7..7..0..0..x|.', node: 'a.b.....................c..d..e', data: ['A",
+        "label": "adoc [wavedrom, ...] fenced block"
+      }
+    ],
+    "input/docs/datasheet__soc_xbus.adoc": [
+      {
+        "literal": "{signal: [\n  {name: 'clk',         wave: 'p....|......|...'},\n  {name: 'xbus_adr_o',  wave: 'x3...|.x4...|.x.', data: ['",
+        "label": "adoc [wavedrom, ...] fenced block"
+      },
+      {
+        "literal": "{signal: [\n  {name: 'clk',         wave: 'p.......'},\n  {name: 'xbus_adr_o',  wave: 'x2.....x', data: ['addr']},\n  {name",
+        "label": "adoc [wavedrom, ...] fenced block"
+      },
+      {
+        "literal": "{signal: [\n  {name: 'clk',         wave: 'p........'},\n  {name: 'xbus_adr_o',  wave: 'x3.456.x.', data: ['0', '4', '8',",
+        "label": "adoc [wavedrom, ...] fenced block"
+      }
+    ]
+  },
+  "clock_domains": [
+    {
+      "name": "clk_i",
+      "source_pin": "clk_i",
+      "domain_kind": "primary",
+      "role": "master",
+      "source": "synthesised-from-L9.top_ports",
+      "evidence": "L9.top_ports",
+      "reset_strategy": "unspecified",
+      "freq_hz": null,
+      "freq_mhz": null,
+      "period_ns": null
+    },
+    {
+      "name": "spi_clk_o",
+      "source_pin": "spi_clk_o",
+      "domain_kind": "secondary",
+      "role": "derived",
+      "source": "synthesised-from-L9.top_ports",
+      "evidence": "L9.top_ports",
+      "reset_strategy": "unspecified",
+      "freq_hz": null,
+      "freq_mhz": null,
+      "period_ns": null
+    },
+    {
+      "name": "jtag_tck_i",
+      "domain_kind": "secondary",
+      "derived_from": "clk_i",
+      "extraction_strategy": "peripheral_clock_pin",
+      "evidence": "input/docs/datasheet__on_chip_debugger.txt"
+    }
+  ],
+  "clocks": [
+    {
+      "name": "clk_i",
+      "type": "input",
+      "freq_mhz": 130.0,
+      "extraction_strategy": "seeded_from_l1_clock_port_v1_6_571"
+    }
+  ],
+  "class_path": "processor_cpu"
+}

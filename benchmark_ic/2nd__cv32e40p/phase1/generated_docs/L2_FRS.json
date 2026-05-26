@@ -1,0 +1,1412 @@
+{
+  "schema_version": 2,
+  "doc_class": "frs",
+  "ic_name": "Released core",
+  "frs_sections": [
+    {
+      "section": "h2",
+      "title": "Verification",
+      "content": "The verification environment for the CV32E40P is _not_ in this Repository.  There is a small, simple testbench here which is\nuseful for experimentation only and should not be used to validate any changes to the RTL prior to pushing to the master\nbranch of this repo.\n\nThe verification environment for this core as well as other cores in the OpenHW Group CORE-V family is at the\n[core-v-verif](https://github.com/openhwgroup/core-v-verif) repository on GitHub.\n\nThe Makefiles supported in the **core-v-verif** project automatically clone the appropriate version of the **cv32e40p**  RTL sources.",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Constraints",
+      "content": "Example synthesis constraints for the CV32E40P are provided.",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h1",
+      "title": "Control and Status Registers",
+      "content": "CV32E40P does not implement all control and status registers specified in\nthe RISC-V privileged specifications, but is limited to the registers\nthat were needed for the PULP system. The reason for this is that we\nwanted to keep the footprint of the core as low as possible and avoid\nany overhead that we do not explicitly need.",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "CSR Map",
+      "content": ":numref:`Control and Status Register Map` lists all\nimplemented CSRs.  Two columns in :numref:`Control and Status Register Map` may require additional explanation:\n\nThe **Privilege** column indicates the access mode of a CSR. The first letter\nindicates the lowest privilege level required to access the CSR. Attempts to\naccess a CSR with a higher privilege level than the core is currently running\nin will throw an illegal instruction exception.  This is largely a moot point\nfor the CV32E40P as it only supports machine and debug modes. The remaining\nletters indicate the read and/or write behavior of the CSR when accessed by\nthe indicated or higher privilge level:\n\n* **RW**: CSR is **read-write**.  That is, CSR instructions (e.g. csrrw) may\n  write any value and that value will be returned on a…",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "CSR Descriptions",
+      "content": "What follows is a detailed definition of each of the CSRs listed above. The\n**Mode** column defines the access mode behavior of each bit field when\naccessed by the privilege level specified in :numref:`Control and Status Register Map` (or a higher privilege\nlevel):\n\n* **RO**: **read-only** fields are not affect by CSR write instructions.  Such\n  fields either return a fixed value, or a value determined by the operation of\n  the core.\n\n* **RW**: **read/write** fields store the value written by CSR writes. Subsequent\n  reads return either the previously written value or a value determined by the\n  operation of the core.\n\nFloating-point CSRs\n:::::::::::::::::::\n\n.. _csr-fflags:\n\nFloating-point accrued exceptions (``fflags``)\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n\nCSR Address: 0x001 (…",
+      "evidence": "input/docs/source__control_status_registers.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h1",
+      "title": "Core Versions and RTL Freeze Rules",
+      "content": "The CV32E40P is defined by the ``marchid`` and ``mimpid`` tuple.\nThe tuple identify which sets of parameters have been verified\nby OpenHW Group, and once RTL Freeze is achieved, no further\nnon-logically equivalent changes are allowed on that set of parameters.\n\nThe RTL Freeze version of the core is indentified by a GitHub\ntag with the format cv32e40p_vMAJOR.MINOR.PATCH (e.g. cv32e40p_v1.0.0).\nIn addition, the release date is reported in the documentation.\n\nWhat happens after RTL Freeze?\n------------------------------",
+      "evidence": "input/docs/source__core_versions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "RTL changes on verified parameters",
+      "content": "Minor changes to the RTL on a frozen parameter set (e.g., nicer RTL code, clearer RTL code, etc) are allowed if, and only if, they are logically equivalent to the frozen (tagged) version of the core.\nThis is guaranteed by a CI flow that checks that pull requests are logically equivalent to a specific tag of the core as \nexplained `here <https://github.com/openhwgroup/cv32e40p/blob/master/.github/workflows/aws_cv32e40p.md>`_.\nFor example, suppose we re-write \"better\" a portion of the ALU that affects the frozen set of parameters of the version cv32e40p_v1.0.0, \nfor instance, the adder. In that case, the proposed changes are compared with the code based on cv32e40p_v1.0.0, and if they are logically equivalent, they are accepted. Otherwise, they are rejected. See below for more case scenarios…",
+      "evidence": "input/docs/source__core_versions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "A bug is found",
+      "content": "If a bug is found that affect the already frozen parameter set,\nthe RTL changes required to fix such bug are non-logically equivalent by definition.\nTherefore, the RTL changes are applied only on a different  ``mimpid``\nvalue and the bug and the fix must be documented.\nThese changes are visible by software as the ``mimpid`` has a different value.\nEvery bug or set of bugs found must be followed by another RTL Freeze release and a new GitHub tag.",
+      "evidence": "input/docs/source__core_versions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "RTL changes on non-verified yet parameters",
+      "content": "If changes affecting the core on a non-frozen parameter set are required,\nas for example, to fix bugs found in the communication to the FPU (e.g., affecting the core only if ``FPU=1``),\nor to change the ISA Extensions decoding of PULP instructions (e.g., affecting the core only if ``PULP_XPULP=1``),\nthen such changes must remain logically equivalent for the already frozen set of parameters (except for the required ``mimpid`` update), and they must be applied on a different ``mimpid`` value. They can be non-logically equivalent to a non-frozen set of parameters.\nThese changes are visible by software as the ``mimpid`` has a different value.\nOnce the new set of parameters is verified and achieved the sign-off for RTL freeze,\na new GitHub tag and version of the core is released.",
+      "evidence": "input/docs/source__core_versions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "PPA optimizations and new features",
+      "content": "Non-logically equivalent PPA optimizations and new features are not allowed on a given set\nof RTL frozen parameters (e.g., a faster divider).\nIf PPA optimizations are logically-equivalent instead, they can be applied without\nchanging the ``mimpid`` value (as such changes are not visible in software).\nHowever, a new GitHub tag should be release and changes documented.\n\n:numref:`rtl_freeze_rules` shows the aforementioned rules.\n\n.. figure:: ../images/rtl_freeze_rules.png\n   :name: rtl_freeze_rules\n   :align: center\n   :alt:\n\n   Versions control of CV32E40P\n\n.. _backward_compatibility:",
+      "evidence": "input/docs/source__core_versions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Non-backward compatibility",
+      "content": "For cv32e40p_v2.0.0, some modifications have been done on ``cv32e40p_top`` and ``cv32e40p_core`` parameters names.\n\nIt is worth mentioning that if the core in its v1 version was/is instantiated without parameters setting, backward compatibility is still correct as all parameters default values are set to v1 values.",
+      "evidence": "input/docs/source__core_versions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Parameters",
+      "content": "As RTL has been updated to fully support ratified RISC-V Zfinx, old PULP_ZFINX parameter has been renamed ZFINX in all design and verification files.\n\nTo differentiate v1 to v2 encoding of PULP instructions, old PULP_XPULP and PULP_CLUSTER parameters have been renamed COREV_PULP and COREV_CLUSTER in all design and verification files.\n\nTo easily change FPU instructions latencies, 2 new parameters have been added, FPU_ADDMUL_LAT for Addition/Multiplication lane and FPU_OTHERS_LAT for the other instructions (move, conversion, comparison...).",
+      "evidence": "input/docs/source__core_versions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Released core versions",
+      "content": "The verified parameter sets of the core, their implementation version, GitHub tags, and dates are reported here.\n\ncv32e40p_v1.0.0\n^^^^^^^^^^^^^^^\n\n+--------------------+-------------------+------------+--------------------+---------+\n| Git Tag            | Tagged By         | Date       | Reason for Release | Comment |\n+====================+===================+============+====================+=========+\n| cv32e40p_v1.0.0    | Arjan Bink        | 2020-12-10 | RTL Freeze         |         |\n+--------------------+-------------------+------------+--------------------+---------+\n\nFor this release ``mimpid`` value is fixed and is equal to ``0``.\n\nIt refers to the CV32E40P core verified with the following parameters:\n\n+---------------------------+-------+\n| Name                      | Value |\n+=…",
+      "evidence": "input/docs/source__core_versions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h1",
+      "title": "CORE-V Hardware Loop feature",
+      "content": "To increase the efficiency of small loops, CV32E40P supports hardware\nloops (HWLoop). They can be enabled by setting the ``COREV_PULP`` parameter.\nHardware loops make executing a piece of code\nmultiple times possible, without the overhead of branches penalty or updating a counter.\nHardware loops involve zero stall cycles for jumping to the first\ninstruction of a loop.\n\nA hardware loop is defined by its start address (pointing to the first\ninstruction in the loop), its end address (pointing to the instruction\njust after the last one executed by the loop) and a counter that is\ndecremented every time the last instruction of the loop body is executed.\n\nCV32E40P contains two hardware loop register sets to support nested hardware loops,\neach of them can store these three values in separate flip …",
+      "evidence": "input/docs/source__corev_hw_loop.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Hardware Loop constraints",
+      "content": "Following constraints must be respected by any toolchain compiler or by hand-written assembly code.\n``Violation of these constraints will not generate any hardware exception`` and behaviour is undefined.\n\nIn order to catch **as early as possible** those software exceptions when executing a program either\non a verification Reference Model or on a virtual platform Instruction Set Simulator, ``those model/simulation platforms\nshould generate an error`` with a meaningfull message related to Hardware Loops constraints violation.\nThose constraint checks could be done only for each instruction in the hardware loop body, meaning when (lpstartX <= PC <= lpendX - 4) and (lpcountX > 0).\n\nThe HWLoop constraints are:\n\n-  HWLoop starti, endi, setupi and setup instructions addresses must be 32-bit aligne…",
+      "evidence": "input/docs/source__corev_hw_loop.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Hardware loops impact on application, exception handlers and debug program",
+      "content": "",
+      "evidence": "input/docs/source__corev_hw_loop.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Application and ebreak/ecall exception handlers",
+      "content": "When an ebreak or an ecall instruction is used in an application, special care should be given for their respective exception handler in case those instructions are the last one of an HWLoop.\nThose handlers should manage MEPC and lpcountX CSRs updates because an hw loop early-exit could happen if not done.\n\nAt the end of the handlers after restoring the context/CSRs, a piece of smart code should be added with following highest to lowest order of priority:\n\n1. if MEPC = lpend0 - 4 and lpcount0 > 1 then MEPC should be set to lpstart0 and lpcount0 should be decremented by 1,\n2. else if MEPC = lpend0 - 4 and lpcount0 = 1 then MEPC should be incremented by 4 and lpcount0 should be decremented by 1,\n3. else if MEPC = lpend1 - 4 and lpcount1 > 1 then MEPC should be set to lpstart1 and lpcount1 sh…",
+      "evidence": "input/docs/source__corev_hw_loop.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Interrupt handlers",
+      "content": "When an interrupt is happening on the last HWLoop instruction, its execution is cancelled, its address is saved in MEPC and its execution will be resumed when returning from interrupt handler.\nThere is nothing special to be done in those interrupt handlers with respect to MEPC and lpcountX updates (except HWloop CSRs save/restore mentioned below), they will be correctly managed by design when executing this last HWLoop instruction after interrupt handler execution.",
+      "evidence": "input/docs/source__corev_hw_loop.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Illegal instruction exception handler",
+      "content": "Depending if an application is going to resume or not after Illegal instruction exception handler, same MEPC/HWLoops CSRs management than ebreak/ecall could be necessary.",
+      "evidence": "input/docs/source__corev_hw_loop.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Debugger",
+      "content": "If ebreak is used to enter in Debug Mode (:ref:`ebreak_scenario_2`) and put at the last instruction location of an HWLoop, same management than above should be done but on DPC rather than on MEPC.\n\nWhen ebreak instruction is used as Software Breakpoint by a debugger when in debug mode and is placed at the last instruction location of an HWLoop in instruction memory, no special management is foreseen.\nWhen executing the Software Breakpoint/ebreak instruction, control is given back to the debugger which will manage the different cases.\nFor instance in Single-Step case, original instruction is put back in instruction memory, a Single-Step command is executed on this last instruction (with design updating PC and lpcountX to correct values) and Software Breakpoint/ebreak is put back by the debu…",
+      "evidence": "input/docs/source__corev_hw_loop.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "HWloop CSRs save and restore",
+      "content": "As synchronous/asynchronous exception or a debug event happening during HWloop execution is interrupting the normal HWloop execution, special care should be given to HWloop CSRs in case any exception handler or debug program is going to use HWloop feature (or even just call functions using them like memmove, memcpy...).\n\nSo HWloop CSRs save/restore should be added together with the general purpose registers to exception handlers or debug program.",
+      "evidence": "input/docs/source__corev_hw_loop.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h1",
+      "title": "Debug & Trigger",
+      "content": "CV32E40P offers support for execution-based debug according to the `RISC-V Debug Specification <https://github.com/riscv/riscv-debug-spec/blob/release/riscv-debug-release.pdf>`_, version 0.13.2.\nThe main requirements for the core are described in Chapter 4: RISC-V Debug, Chapter 5: Trigger Module, and Appendix A.2: Execution Based.\n\nThe following list shows the simplified overview of events that occur in the core when debug is requested:\n\n #. Enters Debug Mode\n #. Saves the PC to DPC\n #. Updates the cause in the DCSR\n #. Points the PC to the location determined by the input port dm_haltaddr_i\n #. Begins executing debug control code.\n\n\nDebug Mode can be entered by one of the following conditions:\n\n - External debug event using the debug_req_i signal\n - Trigger Module match event\n - ebreak i…",
+      "evidence": "input/docs/source__debug.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Debug Interface",
+      "content": ".. table:: Debug interface signals\n  :name: Debug interface signals\n  :widths: 30 15 55\n  :class: no-scrollbar-table\n\n  +-------------------------------+---------------+--------------------------------------------+\n  | **Signal**                    | **Direction** | **Description**                            |\n  +===============================+===============+============================================+\n  | ``debug_req_i``               | input         | Request to enter Debug Mode                |\n  +-------------------------------+---------------+--------------------------------------------+\n  | ``debug_havereset_o``         | output        | Debug status: Core has been reset          |\n  +-------------------------------+---------------+--------------------------------------------+\n  |…",
+      "evidence": "input/docs/source__debug.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Core Debug Registers",
+      "content": "CV32E40P implements four core debug registers, namely :ref:`csr-dcsr`, :ref:`csr-dpc` and two debug scratch registers.\nAccess to these registers in non Debug Mode results in an illegal instruction.\n\nSeveral trigger registers are required to adhere to specification. The following are the most relevant: :ref:`csr-tselect`, :ref:`csr-tdata1`,  :ref:`csr-tdata2` and :ref:`csr-tinfo`.\n\nThe TDATA1.DMODE is hardwired to a value of 1. In non Debug Mode, writes to Trigger registers are ignored and reads reflect CSR values.",
+      "evidence": "input/docs/source__debug.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Debug state",
+      "content": "As specified in `RISC-V Debug Specification <https://github.com/riscv/riscv-debug-spec/blob/release/riscv-debug-release.pdf>`_ every hart that can be selected by\nthe Debug Module is in exactly one of four states: ``nonexistent``, ``unavailable``, ``running`` or ``halted``.\n\nThe remainder of this section assumes that the CV32E40P will not be classified as ``nonexistent`` by the integrator.\n\nThe CV32E40P signals to the Debug Module whether it is ``running`` or ``halted`` via its ``debug_running_o`` and ``debug_halted_o`` pins\nrespectively. Therefore, assuming that this core will not be integrated as a ``nonexistent`` core, the CV32E40P is classified as ``unavailable``\nwhen neither ``debug_running_o`` or ``debug_halted_o`` is asserted. Upon ``rst_ni`` assertion the debug state will be ``unava…",
+      "evidence": "input/docs/source__debug.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "EBREAK Behavior",
+      "content": "The EBREAK instruction description is distributed across several RISC-V specifications: `RISC-V Debug Specification <https://github.com/riscv/riscv-debug-spec/blob/release/riscv-debug-release.pdf>`_,\n`RISC-V Priveleged Specification <https://github.com/riscv/riscv-isa-manual/releases/tag/Ratified-IMFDQC-and-Priv-v1.11>`_,\n`RISC-V ISA <https://github.com/riscv/riscv-isa-manual/releases/tag/Ratified-IMAFDQC>`_. The following is a summary of the behavior for three common scenarios.\n\n.. _ebreak_scenario_1:\n\nScenario 1 : Enter Exception\n\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\n\nExecuting the EBREAK instruction when the core is **not** in Debug Mode and the DCSR.EBREAKM == 0 shall result in the following actions:\n\n - The core enters the exception handler routine located at MTVEC (Debug Mode is not entered)\n…",
+      "evidence": "input/docs/source__debug.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Interrupts during Single-Step Behavior",
+      "content": "The CV32E40P is not compliant with the intended interpretation of the RISC-V Debug spec 0.13.2 specification when interrupts occur during Single-Steps. \nHowever, the intended behavior has been clarified a posteriori only in version 1.0.0.\nSee https://github.com/riscv/riscv-debug-spec/issues/510. \nThe CV32E40P executes the first instruction of the interrupt handler and retires it before re-entering in Debug Mode, which is prohibited in version 1.0.0 but not specified in 0.13.2.\nFor details about the specific use-case, please refer to https://github.com/openhwgroup/core-v-verif/issues/904.",
+      "evidence": "input/docs/source__debug.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h1",
+      "title": "Exceptions and Interrupts",
+      "content": "CV32E40P implements trap handling for interrupts and exceptions according to the RISC-V Privileged Specification, version 1.11.\nThe ``irq_i[31:16]`` interrupts are a custom extension.\n\nWhen entering an interrupt/exception handler, the core sets the ``mepc`` CSR to the current program counter and saves ``mstatus``.MIE to ``mstatus``.MPIE.\nAll exceptions cause the core to jump to the base address of the vector table in the ``mtvec`` CSR.\nInterrupts are handled in either direct mode or vectored mode depending on the value of ``mtvec``.MODE. In direct mode the core\njumps to the base address of the vector table in the ``mtvec`` CSR. In vectored mode the core jumps to the base address\nplus four times the interrupt ID. Upon executing an MRET instruction, the core jumps to the program counter prev…",
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Interrupt Interface",
+      "content": ":numref:`Interrupt interface signals` describes the interrupt interface.\n\n.. table:: Interrupt interface signals\n  :name: Interrupt interface signals\n  :widths: 20 15 65\n  :class: no-scrollbar-table\n\n  +-------------------------+---------------+--------------------------------------------------+\n  | **Signal**              | **Direction** | **Description**                                  |\n  +=========================+===============+==================================================+\n  | ``irq_i[31:0]``         | input         | Level sensistive active high interrupt inputs.   |\n  |                         |               | Not all interrupt inputs can be used on          |\n  |                         |               | CV32E40P. Specifically irq_i[15:12],             |\n  |               …",
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Interrupts",
+      "content": "The ``irq_i[31:0]`` interrupts are controlled via the ``mstatus``, ``mie`` and ``mip`` CSRs. CV32E40P uses the upper 16 bits of ``mie`` and ``mip`` for custom interrupts (``irq_i[31:16]``),\nwhich reflects an intended custom extension in the RISC-V Basic (a.k.a. CLINT) interrupt architecture.\nAfter reset, all interrupts are disabled.\nTo enable interrupts, both the global interrupt enable (MIE) bit in the ``mstatus`` CSR and the corresponding individual interrupt enable bit in the ``mie`` CSR need to be set.\nFor more information, see the :ref:`cs-registers` documentation.\n\nIf multiple interrupts are pending, they are handled in the fixed priority order defined by the RISC-V Privileged Specification, version 1.11 (see Machine Interrupt Registers, Section 3.1.9).\nThe highest priority is given …",
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Exceptions",
+      "content": "CV32E40P can trigger an exception due to the following exception causes:\n\n.. table:: Exceptions\n  :name: Exceptions\n  :widths: 20 80\n  :class: no-scrollbar-table\n\n  +--------------------+---------------------------------------------------------------+\n  | **Exception Code** | **Description**                                               |\n  +====================+===============================================================+\n  | 2                  | Illegal instruction                                           |\n  +--------------------+---------------------------------------------------------------+\n  | 3                  | Breakpoint                                                    |\n  +--------------------+---------------------------------------------------------------+\n  | 11        …",
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Nested Interrupt/Exception Handling",
+      "content": "CV32E40P does support nested interrupt/exception handling in software.\nThe hardware automatically disables interrupts upon entering an interrupt/exception handler.\nOtherwise, interrupts/exceptions during the critical part of the handler, i.e. before software has saved the ``mepc`` and ``mstatus`` CSRs, would cause those CSRs to be overwritten.\nIf desired, software can explicitly enable interrupts by setting ``mstatus``.MIE to 1 from within the handler.\nHowever, software should only do this after saving ``mepc`` and ``mstatus``.\nThere is no limit on the maximum number of nested interrupts.\nNote that, after enabling interrupts by setting ``mstatus``.MIE to 1, the current handler will be interrupted also by lower priority interrupts.\nTo allow higher priority interrupts only, the handler must …",
+      "evidence": "input/docs/source__exceptions_interrupts.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h1",
+      "title": "Floating Point Unit (FPU)",
+      "content": "The RV32F ISA extension for floating-point support in the form of IEEE-754 single\nprecision can be enabled by setting the parameter **FPU** of the ``cv32e40p_top`` top level module\nto 1. This will extend the CV32E40P decoder accordingly and will instantiate the FPU.\nThe FPU repository used by the CV32E40P is available at `https://github.com/openhwgroup/cvfpu <https://github.com/openhwgroup/cvfpu/tree/3116391bf66660f806b45e212b9949c528b4e270>`_ and\nits documentation can be found `here <https://github.com/openhwgroup/cvfpu/blob/3116391bf66660f806b45e212b9949c528b4e270/docs/README.md>`_.\nCVFPU v0.8.1 release has been copied in CV32E40P repository inside rtl/vendor (used for verification and implementation) so all core and FPU RTL files should be taken from CV32E40P repository.\n\ncv32e40p_fpu_m…",
+      "evidence": "input/docs/source__fpu.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "CVFPU parameters",
+      "content": "As CVFPU is an highly configurable IP, here is the list of its parameters and their actual value used when CVFPU is intantiated through a wrapper in ``cv32e40p_top`` module.\n\n.. table:: CVFPU Features parameter\n  :name: CVFPU Features parameter\n  :widths: 17 15 17 51\n  :class: no-scrollbar-table\n\n  +------------------------------+----------------+------------------+--------------------------------------------------------------------------+\n  | **Name**                     | **Type/Range** | **Value**        | **Description**                                                          |\n  +==============================+================+==================+==========================================================================+\n  | ``Width``                    | int            | 32          …",
+      "evidence": "input/docs/source__fpu.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "FP Register File",
+      "content": "By default a dedicated register file consisting of 32\nfloating-point registers, ``f0``-``f31``, is instantiated. This default behavior\ncan be overruled by setting the parameter **ZFINX** of the ``cv32e40p_top`` top level\nmodule to 1, in which case the dedicated register file is\nnot included and the general purpose register file is used instead to\nhost the floating-point operands.\n\nThe latency of the individual instructions are explained in :ref:`instructions_latency_table` table.",
+      "evidence": "input/docs/source__fpu.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "FP CSR",
+      "content": "When using floating-point extensions the standard specifies a\nfloating-point status and control register (:ref:`csr-fcsr`) which contains the\nexceptions that occurred since it was last reset and the rounding mode.\n:ref:`csr-fflags` and :ref:`csr-frm` can be accessed directly or via :ref:`csr-fcsr` which is mapped to\nthose two registers.",
+      "evidence": "input/docs/source__fpu.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "FPU Sleeping mode",
+      "content": "To reduce power consumption, FPU clock is stopped when no FP instruction is being executed. To do so a dedicated clock gating cell is instantiated in ``cv32e40p_top`` top level module with its enable signal depending of both ``apu_req_o`` and ``apu_busy_o`` core outputs.",
+      "evidence": "input/docs/source__fpu.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Reminder for programmers",
+      "content": "As mentioned in RISC-V Privileged Architecture specification, ``mstatus``.FS should be set to Initial to be able to use FP instructions.\nIf ``mstatus``.FS = Off (reset value), any instruction that attempts to read or write the Floating-Point state (F registers or F CSRs) will cause an illegal instruction exception. \n\nUpon interrupt or context switch events, ``mstatus``.SD should be read to see if Floating-Point state has been altered.\nIf following executed program (interrupt routine or whatsover) is going to use FP instructions and only if ``mstatus``.SD = 1 (means FS = Dirty),\nthen the whole FP state (F registers and F CSRs) should be saved in memory and program should set ``mstatus``.FS to Clean.\nWhen returning to interrupted or main program, if ``mstatus``.FS = Clean then the whole FP s…",
+      "evidence": "input/docs/source__fpu.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h1",
+      "title": "Glossary",
+      "content": "* **ALU**: Arithmetic/Logic Unit\n* **ASIC**: Application-Specific Integrated Circuit\n* **Byte**: 8-bit data item\n* **CPU**: Central Processing Unit, processor\n* **CSR**: Control and Status Register\n* **Custom extension**: Non-Standard extension to the RISC-V base instruction set (RISC-V Instruction Set Manual, Volume I: User-Level ISA)\n* **EX**: Instruction Execute\n* **FPGA**: Field Programmable Gate Array\n* **FPU**: Floating Point Unit\n* **Halfword**: 16-bit data item\n* **Halfword aligned address**: An address is halfword aligned if it is divisible by 2\n* **ID**: Instruction Decode\n* **IF**: Instruction Fetch (:ref:`instruction-fetch`)\n* **ISA**: Instruction Set Architecture\n* **KGE**: kilo gate equivalents (NAND2)\n* **LSU**: Load Store Unit (:ref:`load-store-unit`)\n* **M-Mode**: Machine …",
+      "evidence": "input/docs/source__glossary.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h1",
+      "title": "OpenHW Group CV32E40P User Manual",
+      "content": ".. toctree::\n   :maxdepth: 3\n   :caption: Contents:\n\n   preface\n   intro\n   integration\n   fpu\n   verification\n   corev_hw_loop\n   instruction_set_extensions\n   perf_counters\n   control_status_registers\n   exceptions_interrupts\n   debug\n   pipeline\n   instruction_fetch\n   load_store_unit\n   register_file\n   sleep\n   core_versions\n   glossary",
+      "evidence": "input/docs/source__index.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h1",
+      "title": "Instruction Fetch",
+      "content": "The Instruction Fetch (IF) stage of the CV32E40P is able to supply one instruction per cycle to\nthe Instruction Decode (ID ) stage if the external bus interface is able\nto serve one fetch request per cycle. In case of executing compressed instructions,\non average less than one 32-bit fetch request will be needed per instruction\nin the ID stage.\n\nFor optimal performance and timing closure reasons, a prefetcher is used\nwhich fetches instructions via the external bus interface from for example\nan externally connected instruction memory or instruction cache.\n\nThe prefetch buffer performs word-aligned 32-bit prefetches and stores the\nfetched words in a FIFO with a number of entries depending of a local parameter.\nIt is called ``DEPTH`` and can be found in ``cv32e40p_prefetch_buffer.sv`` (defaul…",
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Misaligned Accesses",
+      "content": "Externally, the IF interface performs word-aligned instruction fetches only.\nMisaligned instruction fetches are handled by performing two separate word-aligned instruction fetches.\nInternally, the core can deal with both word- and half-word-aligned instruction addresses to support compressed instructions.\nThe LSB of the instruction address is ignored internally.",
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Protocol",
+      "content": "The CV32E40P instruction fetch interface does not implement the following optional OBI signals: we, be, wdata, auser, wuser, aid,\nrready, err, ruser, rid. These signals can be thought of as being tied off as specified in the OBI specification.\n\n.. note::\n\n  **Transactions Ordering**\n  As mentioned above, instruction fetch interface can generate up to ``DEPTH`` outstanding transactions.\n  OBI specification states that links are always in-order from master point of view. So as the fetch interface does not generate transaction id (aid),\n  interconnect infrastructure should ensure that transaction responses come back in the same order they were sent by adding its own additional information.\n\n:numref:`obi-instruction-basic` and :numref:`obi-instruction-multiple-outstanding` show example timing …",
+      "evidence": "input/docs/source__instruction_fetch.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h1",
+      "title": "CORE-V Instruction Set Custom Extensions",
+      "content": "CV32E40P supports the following CORE-V ISA X Custom Extensions, which can be enabled by setting ``COREV_PULP`` == 1.\n\n * Post-Increment load and stores, see :ref:`corev_load_store`, invoked in the tool chain with ``-march=rv32i*_xcvmem``.\n * Hardware Loop extension, see :ref:`corev_hardware_loop`, invoked in the tool chain with ``-march=rv32i*_xcvhwlp``.\n * ALU extensions, see :ref:`corev_alu`, which are divided into three sub-extensions:\n\n   * bit manipulation instructions, invoked in the tool chain with ``-march=rv32i*_xcvbitmanip``;\n   * miscellaneous ALU instructions, invoked in the tool chain with ``-march=rv32i*_xcvalu``; and\n   * immediate branch instructions, invoked in the tool chain with ``-march=rv32i*_xcvbi``.\n\n * Multiply-Accumulate extensions, see :ref:`corev_multiply_accumul…",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Pseudo-instructions",
+      "content": "This specification also includes documentation of some CORE-V pseudo-instructions. Pseudo-instructions are implemented in the assembler\nthat are similar to a base instruction but provides control information to the assembler as opposed to generating its base instruction.\nThis makes it easier to program as we gain clarity on the intention of the programmer.\n\n  * 16-Bit x 16-Bit Multiplication pseudo-instructions, see :ref:`corev_16_bit_multiply_pseudo_instructions`.\n\n.. _corev_load_store:\n\nPost-Increment Load & Store Instructions and Register-Register Load & Store Instructions\n----------------------------------------------------------------------------------------\n\nPost-Increment load and store instructions perform a load, or a\nstore, respectively, while at the same time incrementing the ad…",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Load operations",
+      "content": ".. note::\n\n  When same register is used as address and destination (rD == rs1) for post-incremented loads,\n  loaded data has highest priority over incremented address when writing to this same register.\n\n.. table:: Load operations\n  :name: Load operations\n  :widths: 30 70\n  :class: no-scrollbar-table\n\n  +----------------------------------------------------+-------------------------------+\n  | **Mnemonic**                                       | **Description**               |\n  +====================================================+===============================+\n  | **Register-Immediate Loads with Post-Increment**                                   |\n  +----------------------------------------------------+-------------------------------+\n  | **cv.lb rD, (rs1), Imm**                        …",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Store operations",
+      "content": ".. table:: Store operations\n  :name: Store operations\n  :widths: 30 70\n  :class: no-scrollbar-table\n\n  +-----------------------------------------------------+--------------------------+\n  | **Mnemonic**                                        | **Description**          |\n  +=====================================================+==========================+\n  | **Register-Immediate Stores with Post-Increment**                              |\n  +-----------------------------------------------------+--------------------------+\n  | **cv.sb rs2, (rs1), Imm**                           | Mem8(rs1) = rs2          |\n  |                                                     |                          |\n  |                                                     | rs1 += Sext(Imm[11:0])   |\n  +----------------…",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Encoding",
+      "content": ".. table:: Post-Increment Register-Immediate Load operations encoding\n  :name: Post-Increment Register-Immediate Load operations encoding\n  :widths: 25 10 10 15 15 25\n  :class: no-scrollbar-table\n\n  +---------------+---------+------------+--------+------------+---------------------------+\n  | 31    :    20 | 19 : 15 | 14   :  12 | 11 : 7 | 6    :   0 |                           |\n  +---------------+---------+------------+--------+------------+---------------------------+\n  | **imm[11:0]** | **rs1** | **funct3** | **rD** | **opcode** | **Mnemonic**              |\n  +===============+=========+============+========+============+===========================+\n  | offset        | base    | 000        | dest   | 000 1011   | **cv.lb rD, (rs1), Imm**  |\n  +---------------+---------+------------+---…",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Event Load Instruction",
+      "content": "The event load instruction **cv.elw** is only supported if the ``COREV_CLUSTER`` parameter is set to 1.\nThe event load performs a load word and can cause the CV32E40P to enter a sleep state as explained\nin :ref:`pulp_cluster`.",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Event Load operation",
+      "content": ".. table:: Event Load operation\n  :name: Event Load operation\n  :widths: 30 70\n  :class: no-scrollbar-table\n\n  +----------------------------------------------------+-------------------------------+\n  | **Mnemonic**                                       | **Description**               |\n  +====================================================+===============================+\n  | **Event Load**                                                                     |\n  +----------------------------------------------------+-------------------------------+\n  | **cv.elw rD, Imm(rs1)**                            | rD = Mem32(Sext(Imm) + rs1)   |\n  +----------------------------------------------------+-------------------------------+\n\nEncoding\n^^^^^^^^\n\n.. table:: Event Load operation encoding\n  :name…",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Hardware Loops",
+      "content": "The loop has to be setup before entering the loop body. For this purpose, there are two\nmethods, either the long commands that separately set start- and\nend-addresses of the loop and the number of iterations, or the short\ncommand that does all of this in a single instruction. The short command\nhas a limited range for the number of instructions contained in the loop\nand the loop must start in the next instruction after the setup\ninstruction.\n\nDue to start/end addresses constraint, the 2 LSBs are hardwired to 0.\nWhen using cv.start and cv.end instructions, the 2 LSBs of rs1 are ignored.\n\nHardware loop instructions and related CSRs are only supported if ``COREV_PULP`` == 1.\n\nDetails about the hardware loop constraints are provided in :ref:`hwloop-specs`.\n\nIn the following tables, the hardware…",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Hardware Loops operations",
+      "content": ".. table:: Long Hardware Loop Setup operations\n  :name: Long Hardware Loop Setup operations\n  :widths: 30 70\n  :class: no-scrollbar-table\n\n  +----------------------------------------------+----------------------------------------------------------+\n  | **Mnemonic**                                 | **Description**                                          |\n  +==============================================+==========================================================+\n  | **cv.starti L, uimmL**                       | lpstart[L] = PC + (uimmL << 2)                           |\n  +----------------------------------------------+----------------------------------------------------------+\n  | **cv.start L, rs1**                          | lpstart[L] = rs1                                         |\n …",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Bit Reverse Instruction",
+      "content": "This section will describe the `cv.bitrev` instruction from a bit manipulation\nperspective without describing it's application as part of an FFT. The bit\nreverse instruction will reverse bits in groupings of 1, 2 or 3 bits. The\nnumber of grouped bits is described by *Is3* as follows:\n\n* **0** - reverse single bits\n* **1** - reverse groups of 2 bits\n* **2** - reverse groups of 3 bits\n\nThe number of bits that are reversed can be controlled by *Is2*. This will\nspecify the number of bits that will be removed by a left shift prior to\nthe reverse operation resulting in the *32-Is2* least significant bits of\nthe input value being reversed and the *Is2* most significant bits of the\ninput value being thrown out.\n\nWhat follows is a few examples.\n\n.. highlight:: none\n\n::\n\n   cv.bitrev x18, x20, 0, 4 …",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Bit Manipulation operations",
+      "content": ".. table:: Bit Manipulation operations\n  :name: Bit Manipulation operations\n  :widths: 30 70\n  :class: no-scrollbar-table\n\n  +---------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------+\n  | **Mnemonic**                                | **Description**                                                                                                                          |\n  +=============================================+==========================================================================================================================================+\n  | **cv.extract rD, rs1, Is3, Is2**            | rD = Sext(rs1[min(Is3+Is2,31):Is2])                         …",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Bit Manipulation Encoding",
+      "content": ".. table:: Immediate Bit Manipulation operations encoding\n  :name: Immediate Bit Manipulation operations encoding\n  :widths: 5 14 13 5 8 6 16 33\n  :class: no-scrollbar-table\n\n  +--------+----------------------+---------------+---------+------------+--------+------------+------------------------------------+\n  | 31: 30 | 29       :        25 | 24    :    20 | 19 : 15 | 14   :  12 | 11 : 7 | 6    :   0 |                                    |\n  +--------+----------------------+---------------+---------+------------+--------+------------+------------------------------------+\n  | **f2** | **Is3[4:0]**         | **Is2[4:0]**  | **rs1** | **funct3** | **rD** | **opcode** | **Mnemonic**                       |\n  +========+======================+===============+=========+============+========+======…",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "General ALU operations",
+      "content": ".. table:: General ALU operations\n  :name: General ALU operations\n  :widths: 30 70\n  :class: no-scrollbar-table\n\n  +-------------------------------------------+------------------------------------------------------------------------+\n  | **Mnemonic**                              | **Description**                                                        |\n  +===========================================+========================================================================+\n  | **cv.abs rD, rs1**                        | rD = rs1 < 0 ? -rs1 : rs1                                              |\n  +-------------------------------------------+------------------------------------------------------------------------+\n  | **cv.sle rD, rs1, rs2**                   | rD = rs1 <= rs2 ? 1 : 0           …",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "General ALU Encoding",
+      "content": ".. table:: General ALU operations encoding\n  :name: General ALU operations encoding\n  :widths: 21 13 9 9 9 11 28\n  :class: no-scrollbar-table\n\n  +------------+---------+---------+------------+--------+------------+---------------------------+\n  | 31   :  25 | 24 : 20 | 19 : 15 | 14   :  12 | 11 : 7 | 6  :     0 |                           |\n  +------------+---------+---------+------------+--------+------------+---------------------------+\n  | **funct7** | **rs2** | **rs1** | **funct3** | **rD** | **opcode** |                           |\n  +============+=========+=========+============+========+============+===========================+\n  | 010 1000   | 00000   | src1    | 011        | dest   | 010 1011   | **cv.abs rD, rs1**        |\n  +------------+---------+---------+------------+--------…",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Immediate Branching operations",
+      "content": ".. table:: Immediate Branching operations\n  :name: Immediate Branching operations\n  :widths: 30 70\n  :class: no-scrollbar-table\n\n  +---------------------------------+------------------------------------------------------------------------+\n  | **Mnemonic**                    | **Description**                                                        |\n  +=================================+========================================================================+\n  | **cv.beqimm rs1, Imm5, Imm12**  | Branch to PC + (Imm12 << 1) if rs1 is equal to Imm5.                   |\n  |                                 |                                                                        |\n  |                                 | Note: Imm5 is signed.                                                  |\n  +--…",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "Immediate Branching Encoding",
+      "content": ".. table:: Immediate Branching encoding\n  :name: Immediate Branching encoding\n  :widths: 13 14 8 6 8 12 12 11 16\n  :class: no-scrollbar-table\n\n  +---------------+-----------------+----------+----------+------------+-------------+------------+------------+---------------------------------+\n  | 31            | 30     :     25 | 24  : 20 | 19  : 15 | 14   :  12 | 11   :    8 | 7          | 6   :    0 |                                 |\n  +---------------+-----------------+----------+----------+------------+-------------+------------+------------+---------------------------------+\n  | **Imm12[12]** | **Imm12[10:5]** | **Imm5** | **rs1**  | **funct3** | **Imm12**   | **Imm12**  | **opcode** |                                 |\n  +===============+=================+==========+==========+==========…",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h2",
+      "title": "Multiply-Accumulate",
+      "content": "CV32E40P supports custom extensions for multiply-accumulate and half-word multiplications with\nan optional post-multiplication shift.\n\nThe custom multiply-accumulate extensions are only supported if ``COREV_PULP`` == 1.\n\n16-Bit x 16-Bit Multiplication operations\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n.. table:: 16-Bit x 16-Bit Multiplication operations\n  :name: 16-Bit x 16-Bit Multiplication operations\n  :widths: 30 70\n  :class: no-scrollbar-table\n\n  +-----------------------------------------------+------------------------------------------------------------------------------+\n  | **Mnemonic**                                  | **Description**                                                              |\n  +===============================================+==============================…",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h4",
+      "title": "SIMD ALU operations",
+      "content": ".. table:: SIMD ALU operations\n  :name: SIMD ALU operations\n  :widths: 50 50\n  :class: no-scrollbar-table\n\n  +------------------------------------------------------------+------------------------------------------------------------------+\n  | **Mnemonic**                                               | **Description**                                                  |\n  +============================================================+==================================================================+\n  | **cv.add[.sc,.sci]{.h,.b} rD, rs1, [rs2, Imm6]**           | rD[i] = (rs1[i] + op2[i]) & {0xFFFF, 0xFF}                       |\n  +------------------------------------------------------------+------------------------------------------------------------------+\n  | **cv.sub[.sc,.sci]{.h,.b} rD,…",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h3",
+      "title": "SIMD Bit Manipulation operations",
+      "content": ".. table:: SIMD Bit Manipulation operations\n  :name: SIMD Bit Manipulation operations\n  :widths: 50 50\n  :class: no-scrollbar-table\n\n  +---------------------------------------+---------------------------------------------------------------------------------------+\n  | **Mnemonic**                          | **Description**                                                                       |\n  +=======================================+=======================================================================================+\n  | **cv.extract.h rD, rs1, Imm6**        | rD = Sext(rs1[I0\\*16+15:I0\\*16])                                                      |\n  |                                       |                                                                                       |\n  |    …",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h3",
+      "title": "SIMD Dot Product operations",
+      "content": ".. table:: SIMD Dot Product operations\n  :name: SIMD Dot Product operations\n  :widths: 50 50\n  :class: no-scrollbar-table\n\n  +------------------------------------------------------------+---------------------------------------------------------------------------------------+\n  | **Mnemonic**                                               | **Description**                                                                       |\n  +============================================================+=======================================================================================+\n  | **cv.dotup[.sc,.sci].h rD, rs1, [rs2, Imm6]**              | rD = rs1[0] \\* op2[0] + rs1[1] \\* op2[1]                                              |\n  |                                                            | …",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    },
+    {
+      "section": "h3",
+      "title": "SIMD Shuffle and Pack operations",
+      "content": ".. table:: SIMD Shuffle and Pack operations\n  :name: SIMD Shuffle and Pack operations\n  :widths: 35 65\n  :class: no-scrollbar-table\n\n  +---------------------------------------+---------------------------------------------------------------------------------------+\n  | **Mnemonic**                          | **Description**                                                                       |\n  +=======================================+=======================================================================================+\n  | **cv.shuffle.h rD, rs1, rs2**         | rD[31:16] = rs1[rs2[16]\\*16+15:rs2[16]\\*16]                                           |\n  |                                       |                                                                                       |\n  |    …",
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "heading_shape": "rst_underline"
+    }
+  ],
+  "no_frs_sections_in_input": false,
+  "protocol_overview": null,
+  "no_protocol_overview_in_input": true,
+  "compliance_requirements": [],
+  "timing_parameters": [
+    {
+      "name": "operating_frequency",
+      "parameter": "operating_frequency",
+      "value": 100,
+      "unit": "MHz",
+      "evidence": "input/docs/source__integration.rst",
+      "raw": "synthetized at 100 MHz",
+      "extraction_strategy": "prose_freq_promotion_verb_form_v1_6_570",
+      "low_confidence": true
+    }
+  ],
+  "fmax_mhz": 100.0,
+  "fmax_mhz_extraction_strategy": "max_of_operating_frequency_v1_6_570",
+  "no_fmax_mhz_in_input": false,
+  "extraction_strategy": {
+    "frs_repo_meta_skipped_v1_6_392": 9
+  },
+  "extraction_evidence": {
+    "input/docs/Makefile": [],
+    "input/docs/README.md": [
+      {
+        "literal": "h2 Documentation",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Verification",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Changelog",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Constraints",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Contributing",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Issues and Troubleshooting",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 References",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/requirements.txt": [],
+    "input/docs/source__control_status_registers.rst": [
+      {
+        "literal": "h1 Control and Status Registers",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 CSR Map",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 CSR Descriptions",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__core_versions.rst": [
+      {
+        "literal": "h1 Core Versions and RTL Freeze Rules",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 RTL changes on verified parameters",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 A bug is found",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 RTL changes on non-verified yet parameters",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 PPA optimizations and new features",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Non-backward compatibility",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Parameters",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Released core versions",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__corev_hw_loop.rst": [
+      {
+        "literal": "h1 CORE-V Hardware Loop feature",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Hardware Loop constraints",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Hardware loops impact on application, exception handlers and debug program",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Application and ebreak/ecall exception handlers",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Interrupt handlers",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Illegal instruction exception handler",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Debugger",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 HWloop CSRs save and restore",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__debug.rst": [
+      {
+        "literal": "h1 Debug & Trigger",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Debug Interface",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Core Debug Registers",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Debug state",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 EBREAK Behavior",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Interrupts during Single-Step Behavior",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__exceptions_interrupts.rst": [
+      {
+        "literal": "h1 Exceptions and Interrupts",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Interrupt Interface",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Interrupts",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Exceptions",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Nested Interrupt/Exception Handling",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__fpu.rst": [
+      {
+        "literal": "h1 Floating Point Unit (FPU)",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 CVFPU parameters",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 FP Register File",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 FP CSR",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 FPU Sleeping mode",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Reminder for programmers",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__glossary.rst": [
+      {
+        "literal": "h1 Glossary",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__index.rst": [
+      {
+        "literal": "h1 OpenHW Group CV32E40P User Manual",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__instruction_fetch.rst": [
+      {
+        "literal": "h1 Instruction Fetch",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Misaligned Accesses",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Protocol",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__instruction_set_extensions.rst": [
+      {
+        "literal": "h1 CORE-V Instruction Set Custom Extensions",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Pseudo-instructions",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Load operations",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Store operations",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Encoding",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Event Load Instruction",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Event Load operation",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Hardware Loops",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Hardware Loops operations",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Bit Reverse Instruction",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Bit Manipulation operations",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Bit Manipulation Encoding",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 General ALU operations",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 General ALU Encoding",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Immediate Branching operations",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Immediate Branching Encoding",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Multiply-Accumulate",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 SIMD ALU operations",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 SIMD Bit Manipulation operations",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 SIMD Dot Product operations",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 SIMD Shuffle and Pack operations",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 SIMD ALU Encoding",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 SIMD Comparison operations",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 SIMD Comparison Encoding",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__integration.rst": [
+      {
+        "literal": "h1 Core Integration",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Instantiation Template",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Parameters",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Interfaces",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Clock Gating Cell",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Synthesis guidelines",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 ASIC Synthesis",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 FPGA Synthesis",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Synthesizing with the FPU",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__intro.rst": [
+      {
+        "literal": "h1 Introduction",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 License",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Bus Interfaces",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Standards Compliance",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Contents",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 History",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Memory-Protocol",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 RV32F Extensions",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 RV32A Extensions, Security and Memory Protection",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 CSR Address Re-Mapping",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Interrupts",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 PULP HWLoop Spec",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Compliancy, bug fixing, code clean-up, and documentation",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 References",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Contributors",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__load_store_unit.rst": [
+      {
+        "literal": "h1 Load-Store-Unit (LSU)",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Misaligned Accesses",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Protocol",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Post-Incrementing Load and Store Instructions",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__perf_counters.rst": [
+      {
+        "literal": "h1 Performance Counters",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Event Selector",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Controlling the counters from software",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Parametrization at synthesis time",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__pipeline.rst": [
+      {
+        "literal": "h1 Pipeline Details",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Hazards",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Single- and Multi-Cycle Instructions",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__preface.rst": [
+      {
+        "literal": "h1 Changelog",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__register_file.rst": [
+      {
+        "literal": "h1 Register File",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Floating-Point Register File",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__sleep.rst": [
+      {
+        "literal": "h1 Sleep Unit",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Startup behavior",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 PULP Cluster Extension",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/source__verification.rst": [
+      {
+        "literal": "h1 Verification",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 RISC-V ISA Formal verification",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Simulation verification",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Results summary",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Tracer",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Output file",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Trace output format",
+        "label": "FRS section"
+      }
+    ],
+    "v1.6.295.protocol_overview_class_gate_suppressed": [
+      {
+        "literal": "class_path='processor_cpu', hd_signal_count=0",
+        "label": "v1.6.295 (#180) — protocol_overview suppressed: CPU / analog class OR fewer than 2 half-duplex shape signals in source"
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "auto_cited_sections": [
+    {
+      "file_ref": "phase1/input_doc/source__intro.txt:51",
+      "sec_id": "",
+      "heading": "Bus Interfaces",
+      "slug": "bus_interfaces"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__intro.txt:58",
+      "sec_id": "",
+      "heading": "Standards Compliance",
+      "slug": "standards_compliance"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__intro.txt:173",
+      "sec_id": "",
+      "heading": "RV32F Extensions",
+      "slug": "rv32f_extensions"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__intro.txt:186",
+      "sec_id": "",
+      "heading": "CSR Address Re-Mapping",
+      "slug": "csr_address_re_mapping"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__intro.txt:198",
+      "sec_id": "",
+      "heading": "PULP HWLoop Spec",
+      "slug": "pulp_hwloop_spec"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__register_file.txt:20",
+      "sec_id": "",
+      "heading": "Register File",
+      "slug": "register_file"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__register_file.txt:32",
+      "sec_id": "",
+      "heading": "Floating-Point Register File",
+      "slug": "floating_point_register_file"
+    },
+    {
+      "file_ref": "phase1/input_doc/images__debug_running.txt:33",
+      "sec_id": "",
+      "heading": "Controller FSM",
+      "slug": "controller_fsm"
+    },
+    {
+      "file_ref": "phase1/input_doc/images__blockdiagram.txt:113",
+      "sec_id": "",
+      "heading": "Debug Interface",
+      "slug": "debug_interface"
+    },
+    {
+      "file_ref": "phase1/input_doc/images__blockdiagram.txt:117",
+      "sec_id": "",
+      "heading": "Debug Unit",
+      "slug": "debug_unit"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__load_store_unit.txt:56",
+      "sec_id": "",
+      "heading": "Misaligned Accesses",
+      "slug": "misaligned_accesses"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__load_store_unit.txt:109",
+      "sec_id": "",
+      "heading": "Basic Memory Transaction",
+      "slug": "basic_memory_transaction"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__load_store_unit.txt:116",
+      "sec_id": "",
+      "heading": "Back-to-back Memory Transactions",
+      "slug": "back_to_back_memory_transactions"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__load_store_unit.txt:123",
+      "sec_id": "",
+      "heading": "Slow Response Memory Transaction",
+      "slug": "slow_response_memory_transaction"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__load_store_unit.txt:130",
+      "sec_id": "",
+      "heading": "Multiple Outstanding Memory Transactions",
+      "slug": "multiple_outstanding_memory_transactions"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__verification.txt:324",
+      "sec_id": "1",
+      "heading": "**Time**: The current simulation time.",
+      "slug": "time_the_current_simulation_time"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__verification.txt:325",
+      "sec_id": "2",
+      "heading": "**Cycle**: The number of cycles since the last reset.",
+      "slug": "cycle_the_number_of_cycles_since_the_last_reset"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__verification.txt:326",
+      "sec_id": "3",
+      "heading": "**PC**: The program counter",
+      "slug": "pc_the_program_counter"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__verification.txt:327",
+      "sec_id": "4",
+      "heading": "**Instr**: The executed instruction (base 16).",
+      "slug": "instr_the_executed_instruction_base_16"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__verification.txt:343",
+      "sec_id": "130.000",
+      "heading": "ns             61 00000150 4481         c.li    x9,0          x9=0x00000000",
+      "slug": "ns_61_00000150_4481_c_li_x9_0_x9_0x00000000"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__verification.txt:344",
+      "sec_id": "132.000",
+      "heading": "ns             62 00000152 00008437     lui     x8,0x8        x8=0x00008000",
+      "slug": "ns_62_00000152_00008437_lui_x8_0x8_x8_0x00008000"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__verification.txt:349",
+      "sec_id": "144.000",
+      "heading": "ns             68 00000160 36067a73 (C) csrrci  x0, 0x00000000, 0x360",
+      "slug": "ns_68_00000160_36067a73_c_csrrci_x0_0x00000000_0x360"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__verification.txt:350",
+      "sec_id": "152.000",
+      "heading": "ns             72 00033200 0800006f     jal               x0, 128",
+      "slug": "ns_72_00033200_0800006f_jal_x0_128"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__perf_counters.txt:20",
+      "sec_id": "",
+      "heading": "Performance Counters",
+      "slug": "performance_counters"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__perf_counters.txt:44",
+      "sec_id": "",
+      "heading": "Event Selector",
+      "slug": "event_selector"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_fetch.txt:20",
+      "sec_id": "",
+      "heading": "Instruction Fetch",
+      "slug": "instruction_fetch"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__debug.txt:107",
+      "sec_id": "",
+      "heading": "Core Debug Registers",
+      "slug": "core_debug_registers"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__debug.txt:158",
+      "sec_id": "",
+      "heading": "EBREAK Behavior",
+      "slug": "ebreak_behavior"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__integration.txt:20",
+      "sec_id": "",
+      "heading": "Core Integration",
+      "slug": "core_integration"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__integration.txt:36",
+      "sec_id": "",
+      "heading": "Instantiation Template",
+      "slug": "instantiation_template"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__integration.txt:209",
+      "sec_id": "",
+      "heading": "Clock Gating Cell",
+      "slug": "clock_gating_cell"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__integration.txt:248",
+      "sec_id": "",
+      "heading": "ASIC Synthesis",
+      "slug": "asic_synthesis"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__integration.txt:301",
+      "sec_id": "",
+      "heading": "FPGA Synthesis",
+      "slug": "fpga_synthesis"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:20",
+      "sec_id": "",
+      "heading": "CORE-V Instruction Set Custom Extensions",
+      "slug": "core_v_instruction_set_custom_extensions"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:314",
+      "sec_id": "",
+      "heading": "Event Load Instruction",
+      "slug": "event_load_instruction"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:355",
+      "sec_id": "",
+      "heading": "Hardware Loops",
+      "slug": "hardware_loops"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:491",
+      "sec_id": "",
+      "heading": "Bit Reverse Instruction",
+      "slug": "bit_reverse_instruction"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:523",
+      "sec_id": "0",
+      "heading": "1 1 0 0 1 0 0 1 0 1 0 0 1 0 1 1 0 0 1 0 0 1 1 0 0 1 1 0 0 0 0",
+      "slug": "1_1_0_0_1_0_0_1_0_1_0_0_1_0_1_1_0_0_1_0_0_1_1_0_0_1_1_0_0_0_"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:525",
+      "sec_id": "0",
+      "heading": "0 0 0 1 1 0 0 1 1 0 0 1 0 0 1 1 0 1 0 0 1 0 1 0 0 1 0 0 1 1 0",
+      "slug": "0_0_0_1_1_0_0_1_1_0_0_1_0_0_1_1_0_1_0_0_1_0_1_0_0_1_0_0_1_1_"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:540",
+      "sec_id": "01",
+      "heading": "10 01 00 10 10 01 01 10 01 00 11 00 11 00 00",
+      "slug": "10_01_00_10_10_01_01_10_01_00_11_00_11_00_00"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:542",
+      "sec_id": "00",
+      "heading": "00 11 00 11 00 01 10 01 01 10 10 00 01 10 01",
+      "slug": "00_11_00_11_00_01_10_01_01_10_10_00_01_10_01"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:559",
+      "sec_id": "011",
+      "heading": "001 001 010 010 110 010 011 001 100 00",
+      "slug": "001_001_010_010_110_010_011_001_100_00"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:561",
+      "sec_id": "00",
+      "heading": "100 001 011 010 110 010 010 001 001 011",
+      "slug": "100_001_011_010_110_010_010_001_001_011"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:566",
+      "sec_id": "26",
+      "heading": "are swapped with 7, 6 and 5, etc. Notice in this example that bits 0 and 1",
+      "slug": "are_swapped_with_7_6_and_5_etc_notice_in_this_example_that_b"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:664",
+      "sec_id": "",
+      "heading": "Bit Manipulation Encoding",
+      "slug": "bit_manipulation_encoding"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:887",
+      "sec_id": "",
+      "heading": "General ALU Encoding",
+      "slug": "general_alu_encoding"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:1018",
+      "sec_id": "",
+      "heading": "Immediate Branching Encoding",
+      "slug": "immediate_branching_encoding"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:1297",
+      "sec_id": "1",
+      "heading": "Normal mode, vector-vector operation. Both operands, from rs1 and",
+      "slug": "normal_mode_vector_vector_operation_both_operands_from_rs1_a"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:1306",
+      "sec_id": "2",
+      "heading": "Scalar replication mode (.sc), vector-scalar operation. Operand 1 is",
+      "slug": "scalar_replication_mode_sc_vector_scalar_operation_operand_1"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:1317",
+      "sec_id": "3",
+      "heading": "Immediate scalar replication mode (.sci), vector-scalar operation.",
+      "slug": "immediate_scalar_replication_mode_sci_vector_scalar_operatio"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:1622",
+      "sec_id": "",
+      "heading": "SIMD ALU Encoding",
+      "slug": "simd_alu_encoding"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:1972",
+      "sec_id": "",
+      "heading": "SIMD Comparison Encoding",
+      "slug": "simd_comparison_encoding"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__instruction_set_extensions.txt:2167",
+      "sec_id": "",
+      "heading": "SIMD Complex-number Encoding",
+      "slug": "simd_complex_number_encoding"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__control_status_registers.txt:29",
+      "sec_id": "",
+      "heading": "CSR Map",
+      "slug": "csr_map"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__control_status_registers.txt:243",
+      "sec_id": "",
+      "heading": "CSR Descriptions",
+      "slug": "csr_descriptions"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__control_status_registers.txt:259",
+      "sec_id": "",
+      "heading": "Floating-point CSRs",
+      "slug": "floating_point_csrs"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__control_status_registers.txt:357",
+      "sec_id": "",
+      "heading": "Hardware Loops CSRs",
+      "slug": "hardware_loops_csrs"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__control_status_registers.txt:421",
+      "sec_id": "",
+      "heading": "Other CSRs",
+      "slug": "other_csrs"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__control_status_registers.txt:725",
+      "sec_id": "",
+      "heading": "Trigger CSRs",
+      "slug": "trigger_csrs"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__control_status_registers.txt:937",
+      "sec_id": "",
+      "heading": "Debug CSRs",
+      "slug": "debug_csrs"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__control_status_registers.txt:1656",
+      "sec_id": "",
+      "heading": "Non-RISC-V CSRs",
+      "slug": "non_risc_v_csrs"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__exceptions_interrupts.txt:39",
+      "sec_id": "",
+      "heading": "Interrupt Interface",
+      "slug": "interrupt_interface"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__pipeline.txt:20",
+      "sec_id": "",
+      "heading": "Pipeline Details",
+      "slug": "pipeline_details"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__pipeline.txt:27",
+      "sec_id": "",
+      "heading": "CV32E40P Pipeline",
+      "slug": "cv32e40p_pipeline"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__sleep.txt:20",
+      "sec_id": "",
+      "heading": "Sleep Unit",
+      "slug": "sleep_unit"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__sleep.txt:134",
+      "sec_id": "",
+      "heading": "PULP Cluster Extension",
+      "slug": "pulp_cluster_extension"
+    },
+    {
+      "file_ref": "phase1/input_doc/source__index.txt:18",
+      "sec_id": "",
+      "heading": "OpenHW Group CV32E40P User Manual",
+      "slug": "openhw_group_cv32e40p_user_manual"
+    }
+  ]
+}

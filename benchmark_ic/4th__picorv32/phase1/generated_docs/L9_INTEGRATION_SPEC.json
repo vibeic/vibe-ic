@@ -1,0 +1,1308 @@
+{
+  "schema_version": 2,
+  "doc_class": "integration_spec",
+  "ic_name": "PicoRV32",
+  "top_module": "picorv32",
+  "top_module_extraction_strategy": "doc_module_decl_or_heading",
+  "no_top_module_in_input": false,
+  "ports": [
+    {
+      "name": "mem_valid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_instr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_ready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_addr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_wstrb",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0
+    },
+    {
+      "name": "mem_rdata",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_read",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_write",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_addr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_wstrb",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_valid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_insn",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_rs1",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_rs2",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_wr",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_rd",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_wait",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_ready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    }
+  ],
+  "top_ports": [
+    {
+      "name": "mem_valid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_instr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_ready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_addr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_wstrb",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0
+    },
+    {
+      "name": "mem_rdata",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_read",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_write",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_addr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_wstrb",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_valid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_insn",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_rs1",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_rs2",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_wr",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_rd",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_wait",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_ready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    }
+  ],
+  "top_module_pins": [
+    {
+      "name": "mem_valid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_instr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_ready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_addr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_wstrb",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0
+    },
+    {
+      "name": "mem_rdata",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_read",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_write",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_addr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "mem_la_wstrb",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 4,
+      "msb": 3,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_valid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_insn",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_rs1",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_rs2",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_wr",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_rd",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_port_decl_indented",
+      "width": 32,
+      "msb": 31,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_wait",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    },
+    {
+      "name": "pcpi_ready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "verilog_implicit_1bit_v1_6_320",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0
+    }
+  ],
+  "no_integration_in_input": false,
+  "submodules": [
+    {
+      "name": "picorv32",
+      "instances": 1,
+      "type": "module catalog pipe-table row (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 95,
+        "label": "The PicoRV32 CPU",
+        "extraction_strategy": "md_pipe_table_backtick_module_row"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "picorv32_axi",
+      "instances": 1,
+      "type": "module catalog pipe-table row (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 96,
+        "label": "The version of the CPU with AXI4-Lite interface",
+        "extraction_strategy": "md_pipe_table_backtick_module_row"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "picorv32_axi_adapter",
+      "instances": 1,
+      "type": "module catalog pipe-table row (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 97,
+        "label": "Adapter from PicoRV32 Memory Interface to AXI4-Lite",
+        "extraction_strategy": "md_pipe_table_backtick_module_row"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "picorv32_wb",
+      "instances": 1,
+      "type": "module catalog pipe-table row (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 98,
+        "label": "The version of the CPU with Wishbone Master interface",
+        "extraction_strategy": "md_pipe_table_backtick_module_row"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "picorv32_pcpi_mul",
+      "instances": 1,
+      "type": "module catalog pipe-table row (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 99,
+        "label": "A PCPI core that implements the `MUL[H[SU\\",
+        "extraction_strategy": "md_pipe_table_backtick_module_row"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "picorv32_pcpi_fast_mul",
+      "instances": 1,
+      "type": "module catalog pipe-table row (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 100,
+        "label": "A version of `picorv32_pcpi_fast_mul` using a single cycle multiplier",
+        "extraction_strategy": "md_pipe_table_backtick_module_row"
+      },
+      "low_confidence": true
+    },
+    {
+      "name": "picorv32_pcpi_div",
+      "instances": 1,
+      "type": "module catalog pipe-table row (README)",
+      "evidence": {
+        "source": "input/docs/README.md",
+        "line": 101,
+        "label": "A PCPI core that implements the `DIV[U]/REM[U]` instructions",
+        "extraction_strategy": "md_pipe_table_backtick_module_row"
+      },
+      "low_confidence": true
+    }
+  ],
+  "no_submodules_in_input": false,
+  "sim_only_modules": [],
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "internal_wires": [],
+  "no_internal_wires_in_input": true,
+  "expected_verdict_byte_hex": null,
+  "expected_verdict_byte_offset": null,
+  "expected_verdict_byte_extraction_strategy": null,
+  "expected_verdict_byte_offset_low_confidence": false,
+  "expected_verdict_byte_hex_low_confidence": false,
+  "cpu_interrupts": [],
+  "no_cpu_interrupts_in_input": true,
+  "memories": [
+    {
+      "name": "x31",
+      "kind": "regfile",
+      "type": "register file",
+      "port_count": "single",
+      "depth": null,
+      "width": null,
+      "evidence_file": "README.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "picorv32_axi_adapter",
+      "kind": "ram",
+      "type": "RAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "README.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "picorv32_axi_adapter",
+      "kind": "rom",
+      "type": "ROM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "README.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    }
+  ],
+  "memory_candidates": [
+    {
+      "name": null,
+      "kind": "regfile",
+      "type": "register file",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "README.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "README.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "picosoc_README.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    }
+  ],
+  "no_memory_candidates_in_input": false,
+  "no_memories_in_input": false,
+  "memory_map": [
+    {
+      "base": "0x00000000",
+      "end": "0x00ffffff",
+      "size_bytes": 16777216,
+      "region_name": "Internal SRAM",
+      "extraction_strategy": "memory_map_md_pipe_table_v1_6_509",
+      "evidence_file": "input/docs/picosoc_README.md"
+    },
+    {
+      "base": "0x01000000",
+      "end": "0x01ffffff",
+      "size_bytes": 16777216,
+      "region_name": "External Serial Flash",
+      "extraction_strategy": "memory_map_md_pipe_table_v1_6_509",
+      "evidence_file": "input/docs/picosoc_README.md"
+    },
+    {
+      "base": "0x02000000",
+      "end": "0x02000003",
+      "size_bytes": 4,
+      "region_name": "SPI Flash Controller Config Register",
+      "extraction_strategy": "memory_map_md_pipe_table_v1_6_509",
+      "evidence_file": "input/docs/picosoc_README.md"
+    },
+    {
+      "base": "0x02000004",
+      "end": "0x02000007",
+      "size_bytes": 4,
+      "region_name": "UART Clock Divider Register",
+      "extraction_strategy": "memory_map_md_pipe_table_v1_6_509",
+      "evidence_file": "input/docs/picosoc_README.md"
+    },
+    {
+      "base": "0x03000000",
+      "end": "0xffffffff",
+      "size_bytes": 4244635648,
+      "region_name": "Memory mapped user peripherals",
+      "extraction_strategy": "memory_map_md_pipe_table_v1_6_509",
+      "evidence_file": "input/docs/picosoc_README.md"
+    }
+  ],
+  "no_memory_map_in_input": false,
+  "no_instantiation_template_in_input": true,
+  "extraction_evidence": {
+    "derived_from_L3": []
+  },
+  "synthesis_targets": [
+    {
+      "name": "fmax_xilinx_kintex_7t_xc7k70t_fbg676_2_416mhz",
+      "fmax_mhz": 416.0,
+      "freq_mhz": 416.0,
+      "freq_low_mhz": 416.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 707,
+        "matched_substring": "| Xilinx Kintex-7T          | xc7k70t-fbg676-2     | -2         |     2.4 ns (416 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_kintex_7t_xc7k70t_fbg676_3_454mhz",
+      "fmax_mhz": 454.0,
+      "freq_mhz": 454.0,
+      "freq_low_mhz": 454.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 708,
+        "matched_substring": "| Xilinx Kintex-7T          | xc7k70t-fbg676-3     | -3         |     2.2 ns (454 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_virtex_7t_xc7v585t_ffg1761_2_434mhz",
+      "fmax_mhz": 434.0,
+      "freq_mhz": 434.0,
+      "freq_low_mhz": 434.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 709,
+        "matched_substring": "| Xilinx Virtex-7T          | xc7v585t-ffg1761-2   | -2         |     2.3 ns (434 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_virtex_7t_xc7v585t_ffg1761_3_454mhz",
+      "fmax_mhz": 454.0,
+      "freq_mhz": 454.0,
+      "freq_low_mhz": 454.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 710,
+        "matched_substring": "| Xilinx Virtex-7T          | xc7v585t-ffg1761-3   | -3         |     2.2 ns (454 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_kintex_ultrascale_xcku035_fbva676_2_e_500mhz",
+      "fmax_mhz": 500.0,
+      "freq_mhz": 500.0,
+      "freq_low_mhz": 500.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 711,
+        "matched_substring": "| Xilinx Kintex UltraScale  | xcku035-fbva676-2-e  | -2         |     2.0 ns (500 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_kintex_ultrascale_xcku035_fbva676_3_e_555mhz",
+      "fmax_mhz": 555.0,
+      "freq_mhz": 555.0,
+      "freq_low_mhz": 555.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 712,
+        "matched_substring": "| Xilinx Kintex UltraScale  | xcku035-fbva676-3-e  | -3         |     1.8 ns (555 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_virtex_ultrascale_xcvu065_ffvc1517_2_e_476mhz",
+      "fmax_mhz": 476.0,
+      "freq_mhz": 476.0,
+      "freq_low_mhz": 476.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 713,
+        "matched_substring": "| Xilinx Virtex UltraScale  | xcvu065-ffvc1517-2-e | -2         |     2.1 ns (476 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_virtex_ultrascale_xcvu065_ffvc1517_3_e_500mhz",
+      "fmax_mhz": 500.0,
+      "freq_mhz": 500.0,
+      "freq_low_mhz": 500.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 714,
+        "matched_substring": "| Xilinx Virtex UltraScale  | xcvu065-ffvc1517-3-e | -3         |     2.0 ns (500 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_kintex_ultrascale_xcku3p_ffva676_2_e_714mhz",
+      "fmax_mhz": 714.0,
+      "freq_mhz": 714.0,
+      "freq_low_mhz": 714.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 715,
+        "matched_substring": "| Xilinx Kintex UltraScale+ | xcku3p-ffva676-2-e   | -2         |     1.4 ns (714 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_kintex_ultrascale_xcku3p_ffva676_3_e_769mhz",
+      "fmax_mhz": 769.0,
+      "freq_mhz": 769.0,
+      "freq_low_mhz": 769.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 716,
+        "matched_substring": "| Xilinx Kintex UltraScale+ | xcku3p-ffva676-3-e   | -3         |     1.3 ns (769 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_virtex_ultrascale_xcvu3p_ffvc1517_2_e_666mhz",
+      "fmax_mhz": 666.0,
+      "freq_mhz": 666.0,
+      "freq_low_mhz": 666.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 717,
+        "matched_substring": "| Xilinx Virtex UltraScale+ | xcvu3p-ffvc1517-2-e  | -2         |     1.5 ns (666 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_xilinx_virtex_ultrascale_xcvu3p_ffvc1517_3_e_714mhz",
+      "fmax_mhz": 714.0,
+      "freq_mhz": 714.0,
+      "freq_low_mhz": 714.0,
+      "freq_high_mhz": null,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 718,
+        "matched_substring": "| Xilinx Virtex UltraScale+ | xcvu3p-ffvc1517-3-e  | -3         |     1.4 ns (714 MHz) |"
+      },
+      "extraction_strategy": "clock_domain_md_pipe_table_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    },
+    {
+      "name": "fmax_html_inline",
+      "fmax_mhz": 250.0,
+      "freq_mhz": 250.0,
+      "freq_low_mhz": 250.0,
+      "freq_high_mhz": 450.0,
+      "role": "synthesis_fmax",
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/README.md",
+        "line": 38,
+        "matched_substring": "f<sub>max</sub> (250-450 MHz on 7-Series Xilinx FPGAs)"
+      },
+      "extraction_strategy": "clock_domain_html_sub_inline_v1_6_459",
+      "typed_mhz_lifted_v1_6_472": true,
+      "v1_6_510_classified": "synthesis_fmax"
+    }
+  ],
+  "parameters": [
+    {
+      "name": "ENABLE_COUNTERS",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_COUNTERS64",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_REGS_16_31",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_REGS_DUALPORT",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "LATCHED_MEM_RDATA",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "TWO_STAGE_SHIFT",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "BARREL_SHIFTER",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "TWO_CYCLE_COMPARE",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "TWO_CYCLE_ALU",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "COMPRESSED_ISA",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "CATCH_MISALIGN",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "CATCH_ILLINSN",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_PCPI",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_MUL",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_FAST_MUL",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_DIV",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_IRQ",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_IRQ_QREGS",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_IRQ_TIMER",
+      "default": "1",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "ENABLE_TRACE",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "REGS_INIT_ZERO",
+      "default": "0",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "MASKED_IRQ",
+      "default": "32'h0000_0000",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "LATCHED_IRQ",
+      "default": "32'hffff_ffff",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "PROGADDR_RESET",
+      "default": "32'h0000_0000",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "PROGADDR_IRQ",
+      "default": "32'h0000_0010",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    },
+    {
+      "name": "STACKADDR",
+      "default": "32'hffff_ffff",
+      "source": "README.md",
+      "extraction_strategy": "md_param_h4_heading_v1_6_390"
+    }
+  ],
+  "interface_type": "axi",
+  "no_interface_type_in_input": false,
+  "interface_types": [
+    {
+      "name": "axi",
+      "occurrences": 14,
+      "first_line": 39,
+      "matched_token": "AXI4"
+    },
+    {
+      "name": "spi",
+      "matched_token": "SPI",
+      "occurrences": 9,
+      "extraction_strategy": "readme_interface_vocab_extended_v1_6_457"
+    }
+  ],
+  "no_interface_types_in_input": false,
+  "chip_top_interfaces": [
+    {
+      "name": "axi",
+      "matched_token": "AXI4"
+    },
+    {
+      "name": "spi",
+      "matched_token": "SPI"
+    }
+  ],
+  "class_path": "processor_cpu",
+  "submodules_extraction_strategy": "module_catalog_bullet"
+}

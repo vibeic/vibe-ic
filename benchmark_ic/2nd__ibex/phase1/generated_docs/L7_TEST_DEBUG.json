@@ -1,0 +1,230 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_debug",
+  "ic_name": "Bit-Manipulation Extension",
+  "test_modes": [],
+  "no_test_modes_in_input": true,
+  "debug_observability": [
+    {
+      "signal": "debug_req_i",
+      "direction": "input",
+      "description": "Request to enter Debug Mode",
+      "purpose": "debug observability pin (extracted from RST Interface table)",
+      "evidence": "input/docs/doc__03_reference__debug.rst",
+      "extraction_strategy": "rst_grid_interface_table"
+    }
+  ],
+  "no_debug_observability_in_input": false,
+  "debug_registers": [
+    {
+      "name": "dcsr",
+      "value": null,
+      "description": "Ibex implements four core debug registers, namely :ref:`csr-dcsr`, :ref:`csr-dpc`, and two debug scratch registers.",
+      "evidence": "input/docs/doc__03_reference__debug.rst",
+      "extraction_strategy": "rst_ref_csr_prefix_v1_6_386"
+    },
+    {
+      "name": "dpc",
+      "value": null,
+      "description": "Ibex implements four core debug registers, namely :ref:`csr-dcsr`, :ref:`csr-dpc`, and two debug scratch registers.",
+      "evidence": "input/docs/doc__03_reference__debug.rst",
+      "extraction_strategy": "rst_ref_csr_prefix_v1_6_386"
+    },
+    {
+      "name": "tselect",
+      "value": null,
+      "description": "See :ref:`csr-tselect`, :ref:`csr-tdata1` and :ref:`csr-tdata2` for details.",
+      "evidence": "input/docs/doc__03_reference__debug.rst",
+      "extraction_strategy": "rst_ref_csr_prefix_v1_6_386"
+    },
+    {
+      "name": "tdata1",
+      "value": null,
+      "description": "See :ref:`csr-tselect`, :ref:`csr-tdata1` and :ref:`csr-tdata2` for details.",
+      "evidence": "input/docs/doc__03_reference__debug.rst",
+      "extraction_strategy": "rst_ref_csr_prefix_v1_6_386"
+    },
+    {
+      "name": "tdata2",
+      "value": null,
+      "description": "See :ref:`csr-tselect`, :ref:`csr-tdata1` and :ref:`csr-tdata2` for details.",
+      "evidence": "input/docs/doc__03_reference__debug.rst",
+      "extraction_strategy": "rst_ref_csr_prefix_v1_6_386"
+    }
+  ],
+  "debug_parameters": [
+    {
+      "name": "DmBaseAddr",
+      "description": "Base address of the Debug Module",
+      "evidence_file": "doc__03_reference__debug.rst",
+      "extraction_strategy": "rst_grid_debug_param_table_v1_6_469"
+    },
+    {
+      "name": "DmAddrMask",
+      "description": "Address mask of the Debug Module",
+      "evidence_file": "doc__03_reference__debug.rst",
+      "extraction_strategy": "rst_grid_debug_param_table_v1_6_469"
+    },
+    {
+      "name": "DmHaltAddr",
+      "description": "Address to jump to when entering Debug Mode",
+      "evidence_file": "doc__03_reference__debug.rst",
+      "extraction_strategy": "rst_grid_debug_param_table_v1_6_469"
+    },
+    {
+      "name": "DmExceptionAddr",
+      "description": "Address to jump to when an exception occurs while in Debug Mode",
+      "evidence_file": "doc__03_reference__debug.rst",
+      "extraction_strategy": "rst_grid_debug_param_table_v1_6_469"
+    },
+    {
+      "name": "DbgTriggerEn",
+      "description": "Enable support for debug triggers",
+      "evidence_file": "doc__03_reference__debug.rst",
+      "extraction_strategy": "rst_grid_debug_param_table_v1_6_469"
+    },
+    {
+      "name": "DbgHwBreakNum",
+      "description": "Number of debug triggers",
+      "evidence_file": "doc__03_reference__debug.rst",
+      "extraction_strategy": "rst_grid_debug_param_table_v1_6_469"
+    }
+  ],
+  "no_debug_parameters_in_input": false,
+  "formal_interfaces": [
+    {
+      "kind": "rvfi",
+      "signal_prefix": null,
+      "evidence_heading": "RISC-V Formal Interface\n=======================",
+      "evidence_file": "doc__03_reference__rvfi.rst",
+      "signal_match_count": 0,
+      "signals": [],
+      "extraction_strategy": "formal_interface_section_v1_6_485"
+    }
+  ],
+  "no_formal_interfaces_in_input": false,
+  "verification_strategy": [
+    {
+      "phase": "Coverage Plan",
+      "method": "Coverage Plan",
+      "evidence": "input/docs/doc__03_reference__coverage_plan.rst",
+      "extraction_strategy": "section_heading"
+    },
+    {
+      "phase": "openocd",
+      "method": "openocd",
+      "evidence": "input/docs/README.md",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "UVM",
+      "method": "Ibex is verified using a :ref:UVM based testbench that employs a :ref:`co-simulation methodology<c",
+      "evidence": "input/docs/doc__01_overview__verification_overview.rst",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "verilator",
+      "method": "Verilator is the primary simulator it is designed for, though other simulators are also s",
+      "evidence": "input/docs/doc__02_user__examples.rst",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "UVM",
+      "method": "To run the UVM testbench a RTL simulator which supports SystemVerilog and UVM 1.",
+      "evidence": "input/docs/doc__02_user__system_requirements.rst",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "UVM",
+      "method": "A co-simulation system is provided that can run in either the Ibex UVM DV environment or with Simple System.",
+      "evidence": "input/docs/doc__03_reference__cosim.rst",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "riscv-formal",
+      "method": "riscv-formal",
+      "evidence": "input/docs/doc__03_reference__rvfi.rst",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "formal verification",
+      "method": "formal verification",
+      "evidence": "input/docs/doc__03_reference__rvfi.rst",
+      "extraction_strategy": "test_suite_reference"
+    }
+  ],
+  "no_verification_strategy_in_input": false,
+  "engineer_mode_unlock_sequence": null,
+  "no_engineer_mode_unlock_in_input": true,
+  "vsuite_per_kw_cap_skipped_v1_6_373": 43,
+  "extraction_evidence": {
+    "input/docs/doc__01_overview__verification_overview.rst": [],
+    "input/docs/doc__03_reference__coverage_plan.rst": [
+      {
+        "literal": "verification phases extracted (1)",
+        "label": "verification strategy"
+      }
+    ],
+    "input/docs/doc__03_reference__debug.rst": [
+      {
+        "literal": "| ``debug_req_i`` | input     | Request to enter Debug Mode |",
+        "label": "debug observability (RST Interface table)"
+      },
+      {
+        "literal": "Base address of the Debug Module",
+        "label": "debug parameter (RST Debug-section grid)"
+      },
+      {
+        "literal": "Address mask of the Debug Module",
+        "label": "debug parameter (RST Debug-section grid)"
+      },
+      {
+        "literal": "Address to jump to when entering Debug Mode",
+        "label": "debug parameter (RST Debug-section grid)"
+      },
+      {
+        "literal": "Address to jump to when an exception occurs while in Debug Mode",
+        "label": "debug parameter (RST Debug-section grid)"
+      },
+      {
+        "literal": "Enable support for debug triggers",
+        "label": "debug parameter (RST Debug-section grid)"
+      },
+      {
+        "literal": "Number of debug triggers",
+        "label": "debug parameter (RST Debug-section grid)"
+      },
+      {
+        "literal": ":ref:`csr-dcsr`",
+        "label": "debug register (RST :ref: link)"
+      },
+      {
+        "literal": ":ref:`csr-dpc`",
+        "label": "debug register (RST :ref: link)"
+      },
+      {
+        "literal": ":ref:`csr-tselect`",
+        "label": "debug register (RST :ref: link)"
+      },
+      {
+        "literal": ":ref:`csr-tdata1`",
+        "label": "debug register (RST :ref: link)"
+      },
+      {
+        "literal": ":ref:`csr-tdata2`",
+        "label": "debug register (RST :ref: link)"
+      }
+    ],
+    "input/docs/doc__03_reference__rvfi.rst": [
+      {
+        "literal": "RISC-V Formal Interface\n=======================",
+        "label": "formal-interface section (rvfi)"
+      }
+    ],
+    "input/docs/doc__03_reference__testplan.rst": [],
+    "input/docs/doc__03_reference__tracer.rst": [],
+    "input/docs/doc__03_reference__verification.rst": [],
+    "input/docs/doc__03_reference__verification_stages.rst": []
+  },
+  "class_path": "processor_cpu"
+}

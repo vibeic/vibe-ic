@@ -1,0 +1,60 @@
+{
+  "schema_version": 2,
+  "doc_class": "regmap",
+  "ic_name": "UNKNOWN_IC",
+  "registers": [
+    {
+      "address": "0x08",
+      "address_int": 8,
+      "name": "CTRL",
+      "access": "R/W",
+      "default": "",
+      "description": "32",
+      "evidence": "input/docs/L5_register_map.md",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "32",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x1",
+      "reset_value_source": "scalar_prose_broader_v1_6_505",
+      "reset_value_kind": "numeric"
+    }
+  ],
+  "no_registers_in_input": false,
+  "otp_layout": {
+    "fields": [],
+    "depth_bytes": 128,
+    "width_bits": 8,
+    "read_map": [],
+    "write_map": [],
+    "lockbits": [],
+    "otp_ip_specs": null,
+    "trim_registers": [],
+    "mask_sources": []
+  },
+  "no_otp_layout_in_input": false,
+  "otp_ip_macro": {},
+  "internal_registers": [],
+  "extraction_evidence": {
+    "input/docs/L5_register_map.md": [
+      {
+        "literal": "| `0x08` | `CTRL` | R/W | 32 |",
+        "label": "register row (RST grid table)"
+      }
+    ],
+    "internal/architecture/scalar_prose_adjacency": [
+      {
+        "literal": "Scalar MMIO prose-adjacency reset lift (v1.6.503, count=1)",
+        "label": "scalar_prose_adjacency_v1_6_503"
+      }
+    ]
+  },
+  "class_path": "digital_arithmetic_primitive"
+}

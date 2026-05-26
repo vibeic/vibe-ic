@@ -1,0 +1,4258 @@
+{
+  "schema_version": 2,
+  "doc_class": "regmap",
+  "ic_name": "SSE",
+  "registers": [
+    {
+      "address": "0xffeb0000",
+      "address_int": 4293591040,
+      "name": "REG",
+      "access": "(R)/(W)",
+      "default": "",
+      "description": "custom CFS register 0",
+      "evidence": "input/docs/datasheet__soc_cfs.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "(R)/(W)",
+          "description": "custom CFS register 0",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "array_size": 16384,
+      "array_size_source": "register_array_ellipsis_inferred_v1_6_450",
+      "base_addr": "0xffeb0000",
+      "stride_bytes": 4,
+      "elements": [
+        {
+          "address": "0xffeb0000",
+          "address_int": 4293591040,
+          "name": "REG[0]",
+          "access": "(R)/(W)",
+          "default": "",
+          "description": "custom CFS register 0",
+          "evidence": "input/docs/datasheet__soc_cfs.adoc",
+          "bits": "31:0",
+          "fields": [
+            {
+              "bits": "WHOLE_REG",
+              "field_name": "WHOLE_REG",
+              "access": "(R)/(W)",
+              "description": "custom CFS register 0",
+              "access_inherited_from_register": true,
+              "synthesised_whole_register_field": true,
+              "synthesised_source": "summary_table_only"
+            }
+          ]
+        },
+        {
+          "address": "0xffeb0004",
+          "address_int": 4293591044,
+          "name": "REG[1]",
+          "access": "(R)/(W)",
+          "default": "",
+          "description": "custom CFS register 1",
+          "evidence": "input/docs/datasheet__soc_cfs.adoc",
+          "bits": "31:0",
+          "fields": [
+            {
+              "bits": "WHOLE_REG",
+              "field_name": "WHOLE_REG",
+              "access": "(R)/(W)",
+              "description": "custom CFS register 1",
+              "access_inherited_from_register": true,
+              "synthesised_whole_register_field": true,
+              "synthesised_source": "summary_table_only"
+            }
+          ]
+        },
+        {
+          "address": "0xffebfff8",
+          "address_int": 4293656568,
+          "name": "REG[16382]",
+          "access": "(R)/(W)",
+          "default": "",
+          "description": "custom CFS register 16382",
+          "evidence": "input/docs/datasheet__soc_cfs.adoc",
+          "bits": "31:0",
+          "fields": [
+            {
+              "bits": "WHOLE_REG",
+              "field_name": "WHOLE_REG",
+              "access": "(R)/(W)",
+              "description": "custom CFS register 16382",
+              "access_inherited_from_register": true,
+              "synthesised_whole_register_field": true,
+              "synthesised_source": "summary_table_only"
+            }
+          ]
+        },
+        {
+          "address": "0xffebfffc",
+          "address_int": 4293656572,
+          "name": "REG[16383]",
+          "access": "(R)/(W)",
+          "default": "",
+          "description": "custom CFS register 16383",
+          "evidence": "input/docs/datasheet__soc_cfs.adoc",
+          "bits": "31:0",
+          "fields": [
+            {
+              "bits": "WHOLE_REG",
+              "field_name": "WHOLE_REG",
+              "access": "(R)/(W)",
+              "description": "custom CFS register 16383",
+              "access_inherited_from_register": true,
+              "synthesised_whole_register_field": true,
+              "synthesised_source": "summary_table_only"
+            }
+          ]
+        }
+      ],
+      "extraction_strategy": "register_array_collapsed_v1_6_295"
+    },
+    {
+      "name": "MTIMECMP",
+      "array": true,
+      "count": 2,
+      "base_addr": "0xfff44000",
+      "last_addr": "0xfff44008",
+      "first_index": 0,
+      "last_index": 1,
+      "extraction_strategy": "array_index_collapse_v1_6_326",
+      "stride": 8,
+      "reset_value": "0x0",
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff4bff8",
+      "address_int": 4294230008,
+      "name": "MTIME",
+      "access": "R/W",
+      "default": "",
+      "description": "64-bit global machine timer",
+      "evidence": "input/docs/datasheet__soc_clint.adoc",
+      "bits": "63:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "64-bit global machine timer",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff40000",
+      "address_int": 4294180864,
+      "name": "MSWI",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "0",
+          "field_name": "BITS_0",
+          "access": "R/W",
+          "description": "trigger machine software interrupt for hart 0 when set",
+          "extraction_strategy": "asciidoc_rowspan_fields_bits_fallback"
+        },
+        {
+          "bits": "31:1",
+          "field_name": "BITS_31_1",
+          "access": "R/-",
+          "description": "hardwired to zero",
+          "extraction_strategy": "asciidoc_rowspan_fields_bits_fallback"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_clint.adoc",
+      "reset_value": "0x0",
+      "array_size": 2,
+      "base_addr": "0xfff40000",
+      "stride_bytes": 4,
+      "elements": [
+        {
+          "address": "0xfff40000",
+          "address_int": 4294180864,
+          "name": "MSWI[0]",
+          "access": "R/W",
+          "default": "",
+          "description": "",
+          "fields": [
+            {
+              "bits": "0",
+              "field_name": "BITS_0",
+              "access": "R/W",
+              "description": "trigger machine software interrupt for hart 0 when set",
+              "extraction_strategy": "asciidoc_rowspan_fields_bits_fallback"
+            },
+            {
+              "bits": "31:1",
+              "field_name": "BITS_31_1",
+              "access": "R/-",
+              "description": "hardwired to zero",
+              "extraction_strategy": "asciidoc_rowspan_fields_bits_fallback"
+            }
+          ],
+          "extraction_strategy": "asciidoc_rowspan_fields",
+          "evidence": "input/docs/datasheet__soc_clint.adoc",
+          "reset_value": "unspecified"
+        },
+        {
+          "address": "0xfff40004",
+          "address_int": 4294180868,
+          "name": "MSWI[1]",
+          "access": "R/W",
+          "default": "",
+          "description": "",
+          "fields": [
+            {
+              "bits": "0",
+              "field_name": "BITS_0",
+              "access": "R/W",
+              "description": "trigger machine software interrupt for hart 1 when set",
+              "extraction_strategy": "asciidoc_rowspan_fields_bits_fallback"
+            },
+            {
+              "bits": "31:1",
+              "field_name": "BITS_31_1",
+              "access": "R/-",
+              "description": "hardwired to zero",
+              "extraction_strategy": "asciidoc_rowspan_fields_bits_fallback"
+            }
+          ],
+          "extraction_strategy": "asciidoc_rowspan_fields",
+          "evidence": "input/docs/datasheet__soc_clint.adoc",
+          "reset_value": "unspecified"
+        }
+      ],
+      "reset_value_source": "scalar_prose_adjacency_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xffed0000",
+      "address_int": 4293722112,
+      "name": "DMA_CTRL",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "0",
+          "field_name": "DMA_CTRL_EN",
+          "access": "R/W",
+          "description": "DMA module enable; reset module when cleared",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "19:16",
+          "field_name": "DMA_CTRL_DFIFO",
+          "access": "R/-",
+          "description": "Descriptor FIFO depth, log2(`IO_DMA_DSC_FIFO`)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "DMA_CTRL_DFIFO_MSB : DMA_CTRL_DFIFO_LSB"
+        },
+        {
+          "bits": "27",
+          "field_name": "DMA_CTRL_DEMPTY",
+          "access": "R/-",
+          "description": "Descriptor FIFO is empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "28",
+          "field_name": "DMA_CTRL_DFULL",
+          "access": "R/-",
+          "description": "Descriptor FIFO is full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "29",
+          "field_name": "DMA_CTRL_ERROR",
+          "access": "R/-",
+          "description": "Bus access error during transfer or incomplete descriptor data",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "31",
+          "field_name": "DMA_CTRL_BUSY",
+          "access": "R/-",
+          "description": "DMA transfer(s) in progress",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_dma.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "CTRL",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfffc0000",
+      "address_int": 4294705152,
+      "name": "PORT_IN",
+      "access": "R/-",
+      "default": "",
+      "description": "Parallel input port; `PORT_IN(i)` corresponds to `gpio_i(i)`",
+      "evidence": "input/docs/datasheet__soc_gpio.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/-",
+          "description": "Parallel input port; `PORT_IN(i)` corresponds to `gpio_i(i)`",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfffc0004",
+      "address_int": 4294705156,
+      "name": "PORT_OUT",
+      "access": "R/W",
+      "default": "",
+      "description": "Parallel output port; `PORT_OUT(i)` corresponds to `gpio_o(i)`",
+      "evidence": "input/docs/datasheet__soc_gpio.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Parallel output port; `PORT_OUT(i)` corresponds to `gpio_o(i)`",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfffc0008",
+      "address_int": 4294705160,
+      "name": "PORT_DIR",
+      "access": "R/W",
+      "default": "",
+      "description": "Port direction; `PORT_DIR(i)` corresponds to `gpio_o(i)`; `0` = input (default), `1` = output; this register is hardwired to all-zero if `IO_GPIO_DIR_EN = false`",
+      "evidence": "input/docs/datasheet__soc_gpio.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Port direction; `PORT_DIR(i)` corresponds to `gpio_o(i)`; `0` = input (default), `1` = output; this register is hardwired to all-zero if `IO_GPIO_DIR_EN = false`",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfffc0010",
+      "address_int": 4294705168,
+      "name": "IRQ_TYPE",
+      "access": "R/W",
+      "default": "",
+      "description": "Trigger type select (`0` = level trigger, `1` = edge trigger); `IRQ_TYPE(i)` corresponds to `gpio_i(i)`",
+      "evidence": "input/docs/datasheet__soc_gpio.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Trigger type select (`0` = level trigger, `1` = edge trigger); `IRQ_TYPE(i)` corresponds to `gpio_i(i)`",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfffc0014",
+      "address_int": 4294705172,
+      "name": "IRQ_POLARITY",
+      "access": "R/W",
+      "default": "",
+      "description": "Trigger polarity select (`0` = low-level/falling-edge, `1` = high-level/rising-edge); `IRQ_POLARITY(i)` corresponds to `gpio_i(i)`",
+      "evidence": "input/docs/datasheet__soc_gpio.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Trigger polarity select (`0` = low-level/falling-edge, `1` = high-level/rising-edge); `IRQ_POLARITY(i)` corresponds to `gpio_i(i)`",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfffc0018",
+      "address_int": 4294705176,
+      "name": "IRQ_ENABLE",
+      "access": "R/W",
+      "default": "",
+      "description": "Per-pin interrupt enable; `IRQ_ENABLE(i)` corresponds to `gpio_i(i)`",
+      "evidence": "input/docs/datasheet__soc_gpio.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Per-pin interrupt enable; `IRQ_ENABLE(i)` corresponds to `gpio_i(i)`",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ]
+    },
+    {
+      "address": "0xfffc001c",
+      "address_int": 4294705180,
+      "name": "IRQ_PENDING",
+      "access": "R/C",
+      "default": "",
+      "description": "Per-pin interrupt pending, can be cleared by writing zero to the according bit(s); `IRQ_PENDING(i)` corresponds to `gpio_i(i)`",
+      "evidence": "input/docs/datasheet__soc_gpio.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/C",
+          "description": "Per-pin interrupt pending, can be cleared by writing zero to the according bit(s); `IRQ_PENDING(i)` corresponds to `gpio_i(i)`",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ]
+    },
+    {
+      "address": "0xfff10000",
+      "address_int": 4293984256,
+      "name": "CSR0.WORD",
+      "access": "R/W",
+      "default": "",
+      "description": "Control and status register 0 full-word access.",
+      "evidence": "input/docs/datasheet__soc_gptmr.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Control and status register 0 full-word access.",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff10002",
+      "address_int": 4293984258,
+      "name": "CSR0.MODE",
+      "access": "R/W",
+      "default": "",
+      "description": "Control and status register 0 - Slice operation mode: 0 = single shot, 1 = continuous (one bit per implemented slice starting at LSB).",
+      "evidence": "input/docs/datasheet__soc_gptmr.adoc",
+      "bits": "15:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Control and status register 0 - Slice operation mode: 0 = single shot, 1 = continuous (one bit per implemented slice starting at LSB).",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff10004",
+      "address_int": 4293984260,
+      "name": "CSR1.WORD",
+      "access": "R/W",
+      "default": "",
+      "description": "Control and status register 1 full-word access.",
+      "evidence": "input/docs/datasheet__soc_gptmr.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Control and status register 1 full-word access.",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff10006",
+      "address_int": 4293984262,
+      "name": "CSR1.PRSC",
+      "access": "R/W",
+      "default": "",
+      "description": "Control and status register 1 - Global clock prescaler select.",
+      "evidence": "input/docs/datasheet__soc_gptmr.adoc",
+      "bits": "2:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Control and status register 1 - Global clock prescaler select.",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff10080",
+      "address_int": 4293984384,
+      "name": "SLICE[0].CNT",
+      "access": "R/W",
+      "default": "",
+      "description": "Slice 0 counter register.",
+      "evidence": "input/docs/datasheet__soc_gptmr.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Slice 0 counter register.",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "is_counter": true,
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff10084",
+      "address_int": 4293984388,
+      "name": "SLICE[0].THR",
+      "access": "R/W",
+      "default": "",
+      "description": "Slice 0 threshold register.",
+      "evidence": "input/docs/datasheet__soc_gptmr.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Slice 0 threshold register.",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff100F8",
+      "address_int": 4293984504,
+      "name": "SLICE[15].CNT",
+      "access": "R/W",
+      "default": "",
+      "description": "Slice 15 counter register.",
+      "evidence": "input/docs/datasheet__soc_gptmr.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Slice 15 counter register.",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "is_counter": true,
+      "reset_value": "0x0",
+      "reset_value_source": "array_field_reset_union_v1_6_501",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff100FC",
+      "address_int": 4293984508,
+      "name": "SLICE[15].THR",
+      "access": "R/W",
+      "default": "",
+      "description": "Slice 15 threshold register.",
+      "evidence": "input/docs/datasheet__soc_gptmr.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Slice 15 threshold register.",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "array_field_reset_union_v1_6_501",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfffd0000",
+      "address_int": 4294770688,
+      "name": "NEOLED_CTRL",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "0",
+          "field_name": "NEOLED_CTRL_EN",
+          "access": "R/W",
+          "description": "module enable",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "3:1",
+          "field_name": "NEOLED_CTRL_PRSC",
+          "access": "R/W",
+          "description": "clock prescaler select",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "NEOLED_CTRL_PRSC_MSB : NEOLED_CTRL_PRSC_LSB"
+        },
+        {
+          "bits": "8:4",
+          "field_name": "NEOLED_CTRL_T_TOT",
+          "access": "R/W",
+          "description": "pre-scaled clock ticks per total single-bit period (T~total~)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "NEOLED_CTRL_T_TOT_MSB : NEOLED_CTRL_T_TOT_LSB"
+        },
+        {
+          "bits": "13:9",
+          "field_name": "NEOLED_CTRL_T_0H",
+          "access": "R/W",
+          "description": "pre-scaled clock ticks per high-time for sending a zero-bit (T~0H~)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "NEOLED_CTRL_T_0H_MSB : NEOLED_CTRL_T_0H_LSB"
+        },
+        {
+          "bits": "18:14",
+          "field_name": "NEOLED_CTRL_T_1H",
+          "access": "R/W",
+          "description": "pre-scaled clock ticks per high-time for sending a one-bit (T~1H~)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "NEOLED_CTRL_T_1H_MSB : NEOLED_CTRL_T_1H_LSB"
+        },
+        {
+          "bits": "28:25",
+          "field_name": "NEOLED_CTRL_FIFO",
+          "access": "R/W",
+          "description": "log(FIFO size)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "NEOLED_CTRL_FIFO_MSB : NEOLED_CTRL_FIFO_LSB"
+        },
+        {
+          "bits": "29",
+          "field_name": "NEOLED_CTRL_TX_EMPTY",
+          "access": "R/-",
+          "description": "TX FIFO is empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "30",
+          "field_name": "NEOLED_CTRL_TX_FULL",
+          "access": "R/-",
+          "description": "TX FIFO is full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "31",
+          "field_name": "NEOLED_CTRL_TX_BUSY",
+          "access": "R/-",
+          "description": "TX serial engine is busy when set",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_neoled.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "CTRL",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfff20000",
+      "address_int": 4294049792,
+      "name": "ONEWIRE_CTRL",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "0",
+          "field_name": "ONEWIRE_CTRL_EN",
+          "access": "R/W",
+          "description": "ONEWIRE enable, reset if cleared",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "3:2",
+          "field_name": "ONEWIRE_CTRL_PRSC1 : ONEWIRE_CTRL_PRSC0",
+          "access": "R/W",
+          "description": "2-bit clock prescaler select",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "11:4",
+          "field_name": "ONEWIRE_CTRL_CLKDIV7 : ONEWIRE_CTRL_CLKDIV0",
+          "access": "R/W",
+          "description": "8-bit clock divider value",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "18:15",
+          "field_name": "ONEWIRE_CTRL_FIFO",
+          "access": "R/-",
+          "description": "FIFO depth; log2(`IO_ONEWIRE_FIFO`)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "ONEWIRE_CTRL_FIFO_MSB : ONEWIRE_CTRL_FIFO_LSB"
+        },
+        {
+          "bits": "28",
+          "field_name": "ONEWIRE_CTRL_TX_FULL",
+          "access": "R/-",
+          "description": "TX FIFO full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "29",
+          "field_name": "ONEWIRE_CTRL_RX_AVAIL",
+          "access": "R/-",
+          "description": "RX FIFO data available",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "30",
+          "field_name": "ONEWIRE_CTRL_SENSE",
+          "access": "R/-",
+          "description": "current state of the bus line",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "31",
+          "field_name": "ONEWIRE_CTRL_BUSY",
+          "access": "R/-",
+          "description": "operation in progress when set or TX FIFO not empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "10",
+          "field_name": "ONEWIRE_DCMD_PRESENCE",
+          "access": "R/-",
+          "description": "bus presence detected",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_onewire.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "CTRL",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfff20004",
+      "address_int": 4294049796,
+      "name": "ONEWIRE_DCMD",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "7:0",
+          "field_name": "ONEWIRE_DCMD_DATA",
+          "access": "R/W",
+          "description": "receive/transmit data",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "ONEWIRE_DCMD_DATA_MSB : ONEWIRE_DCMD_DATA_LSB"
+        },
+        {
+          "bits": "10",
+          "field_name": "ONEWIRE_DCMD_PRESENCE",
+          "access": "R/-",
+          "description": "bus presence detected",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_onewire.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "DCMD",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfff00000",
+      "address_int": 4293918720,
+      "name": "ENABLE",
+      "access": "R/W",
+      "default": "",
+      "description": "Channel enable, one bit per channel",
+      "evidence": "input/docs/datasheet__soc_pwm.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Channel enable, one bit per channel",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff00004",
+      "address_int": 4293918724,
+      "name": "POLARITY",
+      "access": "R/W",
+      "default": "",
+      "description": "Channel polarity, one bit per channel",
+      "evidence": "input/docs/datasheet__soc_pwm.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Channel polarity, one bit per channel",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff00008",
+      "address_int": 4293918728,
+      "name": "CLKPRSC",
+      "access": "R/W",
+      "default": "",
+      "description": "Global clock prescaler select",
+      "evidence": "input/docs/datasheet__soc_pwm.adoc",
+      "bits": "2:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Global clock prescaler select",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff0000c",
+      "address_int": 4293918732,
+      "name": "MODE",
+      "access": "R/W",
+      "default": "",
+      "description": "Channel operation mode (0 = fast-PWM, 1 = phase-correct PWM), one bit per channel",
+      "evidence": "input/docs/datasheet__soc_pwm.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Channel operation mode (0 = fast-PWM, 1 = phase-correct PWM), one bit per channel",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "prose_adjacency_v1_6_482",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff00080",
+      "address_int": 4293918848,
+      "name": "CHANNEL[0].TOPCMP",
+      "access": "R/W",
+      "default": "",
+      "description": "Channel 0 full word access alias (`TOP` and `CMP` together at 32-bit value)",
+      "evidence": "input/docs/datasheet__soc_pwm.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Channel 0 full word access alias (`TOP` and `CMP` together at 32-bit value)",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "array_prose_seed_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff00082",
+      "address_int": 4293918850,
+      "name": "CHANNEL[0].TOP",
+      "access": "R/W",
+      "default": "",
+      "description": "Channel 0 compare value register",
+      "evidence": "input/docs/datasheet__soc_pwm.adoc",
+      "bits": "15:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Channel 0 compare value register",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "array_prose_seed_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff000fc",
+      "address_int": 4293918972,
+      "name": "CHANNEL[31].TOPCMP",
+      "access": "R/W",
+      "default": "",
+      "description": "Channel 31 full word access alias (`TOP` and `CMP` together at 32-bit value)",
+      "evidence": "input/docs/datasheet__soc_pwm.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Channel 31 full word access alias (`TOP` and `CMP` together at 32-bit value)",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "array_prose_seed_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff000fe",
+      "address_int": 4293918974,
+      "name": "CHANNEL[31].TOP",
+      "access": "R/W",
+      "default": "",
+      "description": "Channel 31 compare value register",
+      "evidence": "input/docs/datasheet__soc_pwm.adoc",
+      "bits": "15:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Channel 31 compare value register",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ],
+      "reset_value": "0x0",
+      "reset_value_source": "array_prose_seed_v1_6_503",
+      "reset_value_kind": "numeric"
+    },
+    {
+      "address": "0xfff70000",
+      "address_int": 4294377472,
+      "name": "SDI_CTRL",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "0",
+          "field_name": "SDI_CTRL_EN",
+          "access": "R/W",
+          "description": "SDI module enable",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "7:4",
+          "field_name": "SDI_CTRL_FIFO",
+          "access": "R/-",
+          "description": "FIFO depth; log2(_IO_SDI_FIFO_)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "SDI_CTRL_FIFO_MSB : SDI_CTRL_FIFO_LSB"
+        },
+        {
+          "bits": "16",
+          "field_name": "SDI_CTRL_IRQ_RX_NEMPTY",
+          "access": "R/W",
+          "description": "fire interrupt if RX FIFO is not empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "17",
+          "field_name": "SDI_CTRL_IRQ_RX_FULL",
+          "access": "R/W",
+          "description": "fire interrupt if if RX FIFO is full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "18",
+          "field_name": "SDI_CTRL_IRQ_TX_EMPTY",
+          "access": "R/W",
+          "description": "fire interrupt if TX FIFO is empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "24",
+          "field_name": "SDI_CTRL_RX_EMPTY",
+          "access": "R/-",
+          "description": "RX FIFO empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "25",
+          "field_name": "SDI_CTRL_RX_FULL",
+          "access": "R/-",
+          "description": "RX FIFO full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "26",
+          "field_name": "SDI_CTRL_TX_EMPTY",
+          "access": "R/-",
+          "description": "TX FIFO empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "27",
+          "field_name": "SDI_CTRL_TX_FULL",
+          "access": "R/-",
+          "description": "TX FIFO full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "31",
+          "field_name": "SDI_CTRL_CS_ACTIVE",
+          "access": "R/-",
+          "description": "Chip-select is active when set",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_sdi.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "CTRL",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfff70004",
+      "address_int": 4294377476,
+      "name": "SDI_DATA",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "7:0",
+          "field_name": "SDI_DATA",
+          "access": "R/W",
+          "description": "receive/transmit data (FIFO)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "SDI_DATA_MSB : SDI_DATA_LSB"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_sdi.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "DATA",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xffec0008",
+      "address_int": 4293656584,
+      "name": "SLINK_DATA",
+      "access": "R/W",
+      "default": "",
+      "description": "Write data to TX FIFO; read data from RX FIFO",
+      "evidence": "input/docs/datasheet__soc_slink.adoc",
+      "bits": "31:0",
+      "name_unqualified": "DATA",
+      "qualified_by_source_v1_6_577": true,
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Write data to TX FIFO; read data from RX FIFO",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ]
+    },
+    {
+      "address": "0xffec000c",
+      "address_int": 4293656588,
+      "name": "DATA_LAST",
+      "access": "R/W",
+      "default": "",
+      "description": "Write data to TX FIFO (and also set end-of-stream delimiter); read data from RX FIFO",
+      "evidence": "input/docs/datasheet__soc_slink.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Write data to TX FIFO (and also set end-of-stream delimiter); read data from RX FIFO",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ]
+    },
+    {
+      "address": "0xffec0000",
+      "address_int": 4293656576,
+      "name": "SLINK_CTRL",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "0",
+          "field_name": "SLINK_CTRL_EN",
+          "access": "R/W",
+          "description": "SLINK global enable",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "8",
+          "field_name": "SLINK_CTRL_RX_EMPTY",
+          "access": "R/-",
+          "description": "RX FIFO empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "9",
+          "field_name": "SLINK_CTRL_RX_FULL",
+          "access": "R/-",
+          "description": "RX FIFO full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "10",
+          "field_name": "SLINK_CTRL_TX_EMPTY",
+          "access": "R/-",
+          "description": "TX FIFO empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "11",
+          "field_name": "SLINK_CTRL_TX_FULL",
+          "access": "R/-",
+          "description": "TX FIFO full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "12",
+          "field_name": "SLINK_CTRL_RX_LAST",
+          "access": "R/-",
+          "description": "Last word read from `DATA` is end-of-stream",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "16",
+          "field_name": "SLINK_CTRL_IRQ_RX_NEMPTY",
+          "access": "R/W",
+          "description": "Fire interrupt if RX FIFO not empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "17",
+          "field_name": "SLINK_CTRL_IRQ_RX_FULL",
+          "access": "R/W",
+          "description": "Fire interrupt if RX FIFO full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "18",
+          "field_name": "SLINK_CTRL_IRQ_TX_EMPTY",
+          "access": "R/W",
+          "description": "Fire interrupt if TX FIFO empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "19",
+          "field_name": "SLINK_CTRL_IRQ_TX_NFULL",
+          "access": "R/W",
+          "description": "Fire interrupt if TX FIFO not full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "27:24",
+          "field_name": "SLINK_CTRL_RX_FIFO",
+          "access": "R/-",
+          "description": "log2(RX FIFO size)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "SLINK_CTRL_RX_FIFO_MSB : SLINK_CTRL_RX_FIFO_LSB"
+        },
+        {
+          "bits": "31:28",
+          "field_name": "SLINK_CTRL_TX_FIFO",
+          "access": "R/-",
+          "description": "log2(TX FIFO size)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "SLINK_CTRL_TX_FIFO_MSB : SLINK_CTRL_TX_FIFO_LSB"
+        },
+        {
+          "bits": "3:0",
+          "field_name": "slink_rx_src_i",
+          "access": "R/-",
+          "description": "RX source routing information (`slink_rx_src_i`)",
+          "extraction_strategy": "asciidoc_rowspan_fields_acronym_tier11_v1_6_451"
+        },
+        {
+          "bits": "31:4",
+          "field_name": "BITS_31_4",
+          "access": "R/-",
+          "description": "_reserved_, read as zero",
+          "extraction_strategy": "asciidoc_rowspan_fields_bits_fallback"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_slink.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "CTRL",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfff80000",
+      "address_int": 4294443008,
+      "name": "SPI_CTRL",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "0",
+          "field_name": "SPI_CTRL_EN",
+          "access": "R/W",
+          "description": "SPI module enable",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "1",
+          "field_name": "SPI_CTRL_CPHA",
+          "access": "R/W",
+          "description": "clock phase",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "2",
+          "field_name": "SPI_CTRL_CPOL",
+          "access": "R/W",
+          "description": "clock polarity",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "5:3",
+          "field_name": "SPI_CTRL_PRSC2 : SPI_CTRL_PRSC0",
+          "access": "R/W",
+          "description": "3-bit clock prescaler select",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "9:6",
+          "field_name": "SPI_CTRL_CDIV3 : SPI_CTRL_CDIV0",
+          "access": "R/W",
+          "description": "4-bit clock divider for fine-tuning",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "16",
+          "field_name": "SPI_CTRL_RX_AVAIL",
+          "access": "R/-",
+          "description": "RX FIFO data available (RX FIFO not empty)",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "17",
+          "field_name": "SPI_CTRL_TX_EMPTY",
+          "access": "R/-",
+          "description": "TX FIFO empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "18",
+          "field_name": "SPI_CTRL_TX_FULL",
+          "access": "R/-",
+          "description": "TX FIFO full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "27:24",
+          "field_name": "SPI_CTRL_FIFO",
+          "access": "R/-",
+          "description": "FIFO depth; log2(`IO_SPI_FIFO`)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "SPI_CTRL_FIFO_MSB : SPI_CTRL_FIFO_LSB"
+        },
+        {
+          "bits": "30",
+          "field_name": "SPI_CS_ACTIVE",
+          "access": "R/-",
+          "description": "Set if any chip-select line is active",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "31",
+          "field_name": "SPI_CTRL_BUSY",
+          "access": "R/-",
+          "description": "SPI module busy when set (serial engine operation in progress and TX FIFO not empty yet)",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_spi.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "CTRL",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfff80004",
+      "address_int": 4294443012,
+      "name": "SPI_DATA",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "7:0",
+          "field_name": "SPI_DATA",
+          "access": "R/W",
+          "description": "receive/transmit data (FIFO), only for data mode (`SPI_DATA_CMD = 0`)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "SPI_DATA_MSB : SPI_DATA_LSB"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_spi.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "DATA",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfffe0000",
+      "address_int": 4294836224,
+      "name": "CLK",
+      "access": "R/W",
+      "default": "",
+      "description": "clock frequency in Hz (initialized from top's `CLOCK_FREQUENCY` generic)",
+      "evidence": "input/docs/datasheet__soc_sysinfo.adoc",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "clock frequency in Hz (initialized from top's `CLOCK_FREQUENCY` generic)",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ]
+    },
+    {
+      "address": "0xfffe0004",
+      "address_int": 4294836228,
+      "name": "MISC[4]",
+      "access": "R/-",
+      "default": "",
+      "description": "miscellaneous system configurations (see <<_sysinfo_miscellaneous_configuration>>)",
+      "evidence": "input/docs/datasheet__soc_sysinfo.adoc",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/-",
+          "description": "miscellaneous system configurations (see <<_sysinfo_miscellaneous_configuration>>)",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ]
+    },
+    {
+      "address": "0xfffe0008",
+      "address_int": 4294836232,
+      "name": "SOC",
+      "access": "R/-",
+      "default": "",
+      "description": "specific SoC configuration (see <<_sysinfo_soc_configuration>>)",
+      "evidence": "input/docs/datasheet__soc_sysinfo.adoc",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/-",
+          "description": "specific SoC configuration (see <<_sysinfo_soc_configuration>>)",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ]
+    },
+    {
+      "address": "0xfffe000c",
+      "address_int": 4294836236,
+      "name": "CACHE",
+      "access": "R/-",
+      "default": "",
+      "description": "cache configuration information (see <<_sysinfo_cache_configuration>>)",
+      "evidence": "input/docs/datasheet__soc_sysinfo.adoc",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/-",
+          "description": "cache configuration information (see <<_sysinfo_cache_configuration>>)",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ]
+    },
+    {
+      "address": "0xfff30004",
+      "address_int": 4294115332,
+      "name": "STOP_ADDR",
+      "access": "R/W",
+      "default": "",
+      "description": "Stop-tracing-address register",
+      "evidence": "input/docs/datasheet__soc_tracer.adoc",
+      "bits": "31:0",
+      "fields": [
+        {
+          "bits": "WHOLE_REG",
+          "field_name": "WHOLE_REG",
+          "access": "R/W",
+          "description": "Stop-tracing-address register",
+          "access_inherited_from_register": true,
+          "synthesised_whole_register_field": true,
+          "synthesised_source": "summary_table_only"
+        }
+      ]
+    },
+    {
+      "address": "0xfff30000",
+      "address_int": 4294115328,
+      "name": "TRACER_CTRL",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "0",
+          "field_name": "TRACER_CTRL_EN",
+          "access": "R/W",
+          "description": "TRACER enable, reset module when 0",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "1",
+          "field_name": "TRACER_CTRL_HSEL",
+          "access": "R/W",
+          "description": "Hart select for tracing (`0` = CPU0, `1` = CPU1)",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "2",
+          "field_name": "TRACER_CTRL_START",
+          "access": "R/W",
+          "description": "Start tracing, flag always reads as zero",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "3",
+          "field_name": "TRACER_CTRL_STOP",
+          "access": "R/W",
+          "description": "Manually stop tracing, flag always reads as zero",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "4",
+          "field_name": "TRACER_CTRL_RUN",
+          "access": "R/-",
+          "description": "Tracing in progress when set",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "5",
+          "field_name": "TRACER_CTRL_AVAIL",
+          "access": "R/-",
+          "description": "Trace data available when set",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "6",
+          "field_name": "TRACER_CTRL_IRQ_CLR",
+          "access": "R/W",
+          "description": "Clear pending interrupt when writing `1`, flag always reads as zero",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "10:7",
+          "field_name": "TRACER_CTRL_TBM",
+          "access": "R/-",
+          "description": "`log2(IO_TRACER_BUFFER)`: trace buffer depth",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "TRACER_CTRL_TBM_MSB : TRACER_CTRL_TBM_LSB"
+        },
+        {
+          "bits": "0",
+          "field_name": "BITS_0",
+          "access": "R/-",
+          "description": "`1` = very first instruction delta in current trace; `0` = any further instruction delta",
+          "extraction_strategy": "asciidoc_rowspan_fields_bits_fallback"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_tracer.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "CTRL",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfff30008",
+      "address_int": 4294115336,
+      "name": "DELTA_SRC",
+      "access": "R/-",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "31:1",
+          "field_name": "BITS_31_1",
+          "access": "R/-",
+          "description": "Branch source address, set to `-1` to disable automatic stopping",
+          "extraction_strategy": "asciidoc_rowspan_fields_bits_fallback"
+        },
+        {
+          "bits": "0",
+          "field_name": "BITS_0",
+          "access": "R/-",
+          "description": "`1` = very first instruction delta in current trace; `0` = any further instruction delta",
+          "extraction_strategy": "asciidoc_rowspan_fields_bits_fallback"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_tracer.adoc",
+      "reset_value": "unspecified",
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfff3000c",
+      "address_int": 4294115340,
+      "name": "DELTA_DST",
+      "access": "R/-",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "31:1",
+          "field_name": "BITS_31_1",
+          "access": "R/-",
+          "description": "Branch destination address",
+          "extraction_strategy": "asciidoc_rowspan_fields_bits_fallback"
+        },
+        {
+          "bits": "0",
+          "field_name": "BITS_0",
+          "access": "R/-",
+          "description": "`1` = branch due trap entry (interrupt or synchronous exception); `0` = branch due to jump/call/branch instruction",
+          "extraction_strategy": "asciidoc_rowspan_fields_bits_fallback"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_tracer.adoc",
+      "reset_value": "unspecified",
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfffa0000",
+      "address_int": 4294574080,
+      "name": "TRNG_CTRL",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "0",
+          "field_name": "TRNG_CTRL_EN",
+          "access": "R/W",
+          "description": "TRNG enable",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "2",
+          "field_name": "TRNG_CTRL_SIM_MODE",
+          "access": "R/-",
+          "description": "simulation mode (PRNG!)",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "3",
+          "field_name": "TRNG_CTRL_AVAIL",
+          "access": "R/-",
+          "description": "random data available when set",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "7:4",
+          "field_name": "TRNG_CTRL_FIFO",
+          "access": "R/-",
+          "description": "FIFO depth (`log2(IO_TRNG_FIFO)`)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "TRNG_CTRL_FIFO_MSB : TRNG_CTRL_FIFO_LSB"
+        },
+        {
+          "bits": "11:8",
+          "field_name": "TRNG_CTRL_NBIT",
+          "access": "R/-",
+          "description": "FIFO depth (`log2(IO_TRNG_NUM_RBIT)`)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "TRNG_CTRL_NBIT_MSB : TRNG_CTRL_NBIT_LSB"
+        },
+        {
+          "bits": "19:12",
+          "field_name": "TRNG_CTRL_NRO",
+          "access": "R/-",
+          "description": "Total number of ring-oscillators (`IO_TRNG_NUM_RO`)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "TRNG_CTRL_NRO_MSB : TRNG_CTRL_NRO_LSB"
+        },
+        {
+          "bits": "31:20",
+          "field_name": "TRNG_CTRL_NINV",
+          "access": "R/-",
+          "description": "Number of inverters in first ring-oscillator (`IO_TRNG_NUM_INV`)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "TRNG_CTRL_NINV_MSB : TRNG_CTRL_NINV_LSB"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_trng.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "CTRL",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfffa0004",
+      "address_int": 4294574084,
+      "name": "TRNG_DATA",
+      "access": "R/-",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "7:0",
+          "field_name": "TRNG_DATA",
+          "access": "R/-",
+          "description": "random data byte",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "TRNG_DATA_MSB : TRNG_DATA_LSB"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_trng.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "DATA",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xffea0000",
+      "address_int": 4293525504,
+      "name": "TWD_CTRL",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "0",
+          "field_name": "TWD_CTRL_EN",
+          "access": "R/W",
+          "description": "TWD enable, reset if cleared",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "3",
+          "field_name": "TWD_CTRL_FSEL",
+          "access": "R/W",
+          "description": "Bus sample clock / filter select",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "10:4",
+          "field_name": "TWD_CTRL_DEV_ADDR6 : TWD_CTRL_DEV_ADDR0",
+          "access": "R/W",
+          "description": "Device address (7-bit)",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "11",
+          "field_name": "TWD_CTRL_IRQ_RX_AVAIL",
+          "access": "R/W",
+          "description": "IRQ if RX FIFO data available",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "12",
+          "field_name": "TWD_CTRL_IRQ_RX_FULL",
+          "access": "R/W",
+          "description": "IRQ if RX FIFO full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "13",
+          "field_name": "TWD_CTRL_IRQ_TX_EMPTY",
+          "access": "R/W",
+          "description": "IRQ if TX FIFO empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "14",
+          "field_name": "TWD_CTRL_IRQ_TX_NFULL",
+          "access": "R/W",
+          "description": "IRQ if TX FIFO is not full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "15",
+          "field_name": "TWD_CTRL_IRQ_COM_BEG",
+          "access": "R/W",
+          "description": "IRQ if begin of communication",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "16",
+          "field_name": "TWD_CTRL_IRQ_COM_END",
+          "access": "R/W",
+          "description": "IRQ if end of communication",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "20:17",
+          "field_name": "TWD_CTRL_RX_FIFO",
+          "access": "R/-",
+          "description": "FIFO depth; log2(`IO_TWD_RX_FIFO`)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "TWD_CTRL_RX_FIFO_MSB : TWD_CTRL_RX_FIFO_LSB"
+        },
+        {
+          "bits": "24:21",
+          "field_name": "TWD_CTRL_TX_FIFO",
+          "access": "R/-",
+          "description": "FIFO depth; log2(`IO_TWD_TX_FIFO`)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "TWD_CTRL_TX_FIFO_MSB : TWD_CTRL_TX_FIFO_LSB"
+        },
+        {
+          "bits": "25",
+          "field_name": "TWD_CTRL_RX_AVAIL",
+          "access": "R/-",
+          "description": "RX FIFO data available",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "26",
+          "field_name": "TWD_CTRL_RX_FULL",
+          "access": "R/-",
+          "description": "RX FIFO full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "27",
+          "field_name": "TWD_CTRL_TX_EMPTY",
+          "access": "R/-",
+          "description": "TX FIFO empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "28",
+          "field_name": "TWD_CTRL_TX_FULL",
+          "access": "R/-",
+          "description": "TX FIFO full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "29",
+          "field_name": "TWD_CTRL_COM_BEG",
+          "access": "R/C",
+          "description": "Communication has started; clear by writing 1",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "30",
+          "field_name": "TWD_CTRL_COM_END",
+          "access": "R/C",
+          "description": "Communication has ended; clear by writing 1",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "31",
+          "field_name": "TWD_CTRL_COM",
+          "access": "R/-",
+          "description": "Active communication",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_twd.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "CTRL",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xffea0004",
+      "address_int": 4293525508,
+      "name": "TWD_DATA",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "7:0",
+          "field_name": "TWD_DATA",
+          "access": "R/W",
+          "description": "RX/TX data FIFO access",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "TWD_DATA_MSB : TWD_DATA_LSB"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_twd.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "DATA",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfff90000",
+      "address_int": 4294508544,
+      "name": "TWI_CTRL",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "0",
+          "field_name": "TWI_CTRL_EN",
+          "access": "R/W",
+          "description": "TWI enable, reset if cleared",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "3:1",
+          "field_name": "TWI_CTRL_PRSC2 : TWI_CTRL_PRSC0",
+          "access": "R/W",
+          "description": "3-bit clock prescaler select",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "7:4",
+          "field_name": "TWI_CTRL_CDIV3 : TWI_CTRL_CDIV0",
+          "access": "R/W",
+          "description": "4-bit clock divider",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "8",
+          "field_name": "TWI_CTRL_CLKSTR",
+          "access": "R/W",
+          "description": "Enable (allow) clock stretching",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "18:15",
+          "field_name": "TWI_CTRL_FIFO",
+          "access": "R/-",
+          "description": "FIFO depth; log2(`IO_TWI_FIFO`)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "TWI_CTRL_FIFO_MSB : TWI_CTRL_FIFO_LSB"
+        },
+        {
+          "bits": "27",
+          "field_name": "TWI_CTRL_SENSE_SCL",
+          "access": "R/-",
+          "description": "current state of the SCL bus line",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "28",
+          "field_name": "TWI_CTRL_SENSE_SDA",
+          "access": "R/-",
+          "description": "current state of the SDA bus line",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "29",
+          "field_name": "TWI_CTRL_TX_FULL",
+          "access": "R/-",
+          "description": "set if the TWI bus is claimed by any controller",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "30",
+          "field_name": "TWI_CTRL_RX_AVAIL",
+          "access": "R/-",
+          "description": "RX FIFO data available",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "31",
+          "field_name": "TWI_CTRL_BUSY",
+          "access": "R/-",
+          "description": "TWI bus engine busy or TX FIFO not empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "8",
+          "field_name": "TWI_DCMD_ACK",
+          "access": "R/W",
+          "description": "write: ACK issued by controller; read: `1` = device NACK, `0` = device ACK",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_twi.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "CTRL",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfff90004",
+      "address_int": 4294508548,
+      "name": "TWI_DCMD",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "7:0",
+          "field_name": "TWI_DCMD",
+          "access": "R/W",
+          "description": "write: TX data byte; read: RX data byte",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "TWI_DCMD_MSB : TWI_DCMD_LSB"
+        },
+        {
+          "bits": "8",
+          "field_name": "TWI_DCMD_ACK",
+          "access": "R/W",
+          "description": "write: ACK issued by controller; read: `1` = device NACK, `0` = device ACK",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_twi.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "DCMD",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfff50000",
+      "address_int": 4294246400,
+      "name": "UART_CTRL",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "0",
+          "field_name": "UART_CTRL_EN",
+          "access": "R/W",
+          "description": "UART enable",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "1",
+          "field_name": "UART_CTRL_SIM_MODE",
+          "access": "R/W",
+          "description": "enable **simulation mode**",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "2",
+          "field_name": "UART_CTRL_HWFC_EN",
+          "access": "R/W",
+          "description": "enable RTS/CTS hardware flow-control",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "5:3",
+          "field_name": "UART_CTRL_PRSC",
+          "access": "R/W",
+          "description": "baud rate clock prescaler select",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "UART_CTRL_PRSC_MSB : UART_CTRL_PRSC_LSB"
+        },
+        {
+          "bits": "15:6",
+          "field_name": "UART_CTRL_BAUD",
+          "access": "R/W",
+          "description": "10-bit baud value configuration value",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "UART_CTRL_BAUD_MSB : UART_CTRL_BAUD_LSB"
+        },
+        {
+          "bits": "16",
+          "field_name": "UART_CTRL_RX_NEMPTY",
+          "access": "R/-",
+          "description": "RX FIFO not empty (data available)",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "17",
+          "field_name": "UART_CTRL_RX_FULL",
+          "access": "R/-",
+          "description": "RX FIFO full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "18",
+          "field_name": "UART_CTRL_TX_EMPTY",
+          "access": "R/-",
+          "description": "TX FIFO empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "19",
+          "field_name": "UART_CTRL_TX_NFULL",
+          "access": "R/-",
+          "description": "TX FIFO not full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "20",
+          "field_name": "UART_CTRL_IRQ_RX_NEMPTY",
+          "access": "R/W",
+          "description": "fire RX-IRQ if RX FIFO not empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "21",
+          "field_name": "UART_CTRL_IRQ_RX_FULL",
+          "access": "R/W",
+          "description": "fire RX-IRQ if RX FIFO full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "22",
+          "field_name": "UART_CTRL_IRQ_TX_EMPTY",
+          "access": "R/W",
+          "description": "fire TX-IRQ if TX FIFO empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "23",
+          "field_name": "UART_CTRL_IRQ_TX_NFULL",
+          "access": "R/W",
+          "description": "fire TX-IRQ if TX not full",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "30",
+          "field_name": "UART_CTRL_RX_OVER",
+          "access": "R/-",
+          "description": "RX FIFO overflow; cleared by disabling the module",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "31",
+          "field_name": "UART_CTRL_TX_BUSY",
+          "access": "R/-",
+          "description": "TX busy or TX FIFO not empty",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "11:8",
+          "field_name": "UART_DATA_RX_FIFO",
+          "access": "R/-",
+          "description": "log2(RX FIFO size)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "UART_DATA_RX_FIFO_MSB : UART_DATA_RX_FIFO_LSB"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_uart.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "CTRL",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfff50004",
+      "address_int": 4294246404,
+      "name": "UART_DATA",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "7:0",
+          "field_name": "UART_DATA_RTX",
+          "access": "R/W",
+          "description": "receive/transmit data",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "UART_DATA_RTX_MSB : UART_DATA_RTX_LSB"
+        },
+        {
+          "bits": "11:8",
+          "field_name": "UART_DATA_RX_FIFO",
+          "access": "R/-",
+          "description": "log2(RX FIFO size)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "UART_DATA_RX_FIFO_MSB : UART_DATA_RX_FIFO_LSB"
+        },
+        {
+          "bits": "15:12",
+          "field_name": "UART_DATA_TX_FIFO",
+          "access": "R/-",
+          "description": "log2(TX FIFO size)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "UART_DATA_TX_FIFO_MSB : UART_DATA_TX_FIFO_LSB"
+        },
+        {
+          "bits": "31:16",
+          "field_name": "BITS_31_16",
+          "access": "R/-",
+          "description": "_reserved_, read as zero",
+          "extraction_strategy": "asciidoc_rowspan_fields_bits_fallback"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_uart.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "DATA",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0xfffb0000",
+      "address_int": 4294639616,
+      "name": "WDT_CTRL",
+      "access": "R/W",
+      "default": "",
+      "description": "",
+      "fields": [
+        {
+          "bits": "0",
+          "field_name": "WDT_CTRL_EN",
+          "access": "R/W",
+          "description": "Watchdog enable",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "1",
+          "field_name": "WDT_CTRL_LOCK",
+          "access": "R/W",
+          "description": "Lock configuration when set, clears only on system reset",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "3:2",
+          "field_name": "WDT_CTRL_RCAUSE_HI : WDT_CTRL_RCAUSE_LO",
+          "access": "R/-",
+          "description": "Cause of last system reset",
+          "extraction_strategy": "asciidoc_rowspan_fields"
+        },
+        {
+          "bits": "31:8",
+          "field_name": "WDT_CTRL_TIMEOUT",
+          "access": "R/W",
+          "description": "Timeout value (24-bit)",
+          "extraction_strategy": "asciidoc_rowspan_fields+msb_lsb_constant_pair_v1_6_460",
+          "field_name_original": "WDT_CTRL_TIMEOUT_MSB : WDT_CTRL_TIMEOUT_LSB"
+        }
+      ],
+      "extraction_strategy": "asciidoc_rowspan_fields",
+      "evidence": "input/docs/datasheet__soc_wdt.adoc",
+      "reset_value": "unspecified",
+      "name_unqualified": "CTRL",
+      "qualified_by_source_v1_6_577": true,
+      "reset_value_kind": "symbolic"
+    },
+    {
+      "address": "0x001",
+      "address_int": 1,
+      "name": "fflags",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x002",
+      "address_int": 2,
+      "name": "frm",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x003",
+      "address_int": 3,
+      "name": "fcsr",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x300",
+      "address_int": 768,
+      "name": "mstatus",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x301",
+      "address_int": 769,
+      "name": "misa",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "DEFINED",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "symbolic",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x304",
+      "address_int": 772,
+      "name": "mie",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x305",
+      "address_int": 773,
+      "name": "mtvec",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x306",
+      "address_int": 774,
+      "name": "mcounteren",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x310",
+      "address_int": 784,
+      "name": "mstatush",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x340",
+      "address_int": 832,
+      "name": "mscratch",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x341",
+      "address_int": 833,
+      "name": "mepc",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x342",
+      "address_int": 834,
+      "name": "mcause",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x343",
+      "address_int": 835,
+      "name": "mtval",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x344",
+      "address_int": 836,
+      "name": "mip",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x34a",
+      "address_int": 842,
+      "name": "mtinst",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x30a",
+      "address_int": 778,
+      "name": "menvcfg",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x31a",
+      "address_int": 794,
+      "name": "menvcfgh",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x320",
+      "address_int": 800,
+      "name": "mcountinhibit",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0xf11",
+      "address_int": 3857,
+      "name": "mvendorid",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0xf12",
+      "address_int": 3858,
+      "name": "marchid",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000013",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0xf13",
+      "address_int": 3859,
+      "name": "mimpid",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "DEFINED",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "symbolic",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0xf14",
+      "address_int": 3860,
+      "name": "mhartid",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "DEFINED",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "symbolic",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0xf15",
+      "address_int": 3861,
+      "name": "mconfigptr",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__cpu_csr.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x7b0",
+      "address_int": 1968,
+      "name": "dcsr",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x40000410",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x7b1",
+      "address_int": 1969,
+      "name": "dpc",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x7b2",
+      "address_int": 1970,
+      "name": "dscratch0",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x7a0",
+      "address_int": 1952,
+      "name": "tselect",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x7a1",
+      "address_int": 1953,
+      "name": "tdata1",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x60000048",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x7a2",
+      "address_int": 1954,
+      "name": "tdata2",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x00000000",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    },
+    {
+      "address": "0x7a4",
+      "address_int": 1956,
+      "name": "tinfo",
+      "access": "",
+      "default": "",
+      "description": "",
+      "evidence": "input/docs/datasheet__on_chip_debugger.adoc",
+      "extraction_strategy": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value": "0x01000040",
+      "reset_value_source": "asciidoc_csr_def_heading_v1_6_491",
+      "reset_value_kind": "numeric",
+      "asciidoc_summary_strategy": "asciidoc_summary_addr_v1_6_576"
+    }
+  ],
+  "no_registers_in_input": false,
+  "otp_layout": {
+    "fields": [],
+    "depth_bytes": 128,
+    "width_bits": 8,
+    "read_map": [],
+    "write_map": [],
+    "lockbits": [
+      {
+        "name": "LOCKBIT",
+        "rule": "evidence: see source"
+      }
+    ],
+    "otp_ip_specs": null,
+    "trim_registers": [],
+    "mask_sources": []
+  },
+  "no_otp_layout_in_input": false,
+  "otp_ip_macro": {},
+  "internal_registers": [
+    {
+      "name": "x1",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 1,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x2",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 2,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x3",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 3,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x4",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 4,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x5",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 5,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x6",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 6,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x7",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 7,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x8",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 8,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x9",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 9,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x10",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 10,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x11",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 11,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x12",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 12,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x13",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 13,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x14",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 14,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x15",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 15,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x16",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 16,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x17",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 17,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x18",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 18,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x19",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 19,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x20",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 20,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x21",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 21,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x22",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 22,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x23",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 23,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x24",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 24,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x25",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 25,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x26",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 26,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x27",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 27,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x28",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 28,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x29",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 29,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x30",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 30,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "x31",
+      "width": null,
+      "array_prefix": "x",
+      "array_index": 31,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-asm.pdf",
+      "evidence": "x1 to x31 are all\nequally general-use registers",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "ft0",
+      "width": null,
+      "array_prefix": "ft",
+      "array_index": 0,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-calling.pdf",
+      "evidence": "ft0–ft11 are temporary registers",
+      "routed_reason_v1_6_567": "no_mmio_anchor",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "ft1",
+      "width": null,
+      "array_prefix": "ft",
+      "array_index": 1,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-calling.pdf",
+      "evidence": "ft0–ft11 are temporary registers",
+      "routed_reason_v1_6_567": "no_mmio_anchor",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "ft2",
+      "width": null,
+      "array_prefix": "ft",
+      "array_index": 2,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-calling.pdf",
+      "evidence": "ft0–ft11 are temporary registers",
+      "routed_reason_v1_6_567": "no_mmio_anchor",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "ft3",
+      "width": null,
+      "array_prefix": "ft",
+      "array_index": 3,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-calling.pdf",
+      "evidence": "ft0–ft11 are temporary registers",
+      "routed_reason_v1_6_567": "no_mmio_anchor",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "ft4",
+      "width": null,
+      "array_prefix": "ft",
+      "array_index": 4,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-calling.pdf",
+      "evidence": "ft0–ft11 are temporary registers",
+      "routed_reason_v1_6_567": "no_mmio_anchor",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "ft5",
+      "width": null,
+      "array_prefix": "ft",
+      "array_index": 5,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-calling.pdf",
+      "evidence": "ft0–ft11 are temporary registers",
+      "routed_reason_v1_6_567": "no_mmio_anchor",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "ft6",
+      "width": null,
+      "array_prefix": "ft",
+      "array_index": 6,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-calling.pdf",
+      "evidence": "ft0–ft11 are temporary registers",
+      "routed_reason_v1_6_567": "no_mmio_anchor",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "ft7",
+      "width": null,
+      "array_prefix": "ft",
+      "array_index": 7,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-calling.pdf",
+      "evidence": "ft0–ft11 are temporary registers",
+      "routed_reason_v1_6_567": "no_mmio_anchor",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "ft8",
+      "width": null,
+      "array_prefix": "ft",
+      "array_index": 8,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-calling.pdf",
+      "evidence": "ft0–ft11 are temporary registers",
+      "routed_reason_v1_6_567": "no_mmio_anchor",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "ft9",
+      "width": null,
+      "array_prefix": "ft",
+      "array_index": 9,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-calling.pdf",
+      "evidence": "ft0–ft11 are temporary registers",
+      "routed_reason_v1_6_567": "no_mmio_anchor",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "ft10",
+      "width": null,
+      "array_prefix": "ft",
+      "array_index": 10,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-calling.pdf",
+      "evidence": "ft0–ft11 are temporary registers",
+      "routed_reason_v1_6_567": "no_mmio_anchor",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "ft11",
+      "width": null,
+      "array_prefix": "ft",
+      "array_index": 11,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-calling.pdf",
+      "evidence": "ft0–ft11 are temporary registers",
+      "routed_reason_v1_6_567": "no_mmio_anchor",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "s0",
+      "width": null,
+      "array_prefix": "s",
+      "array_index": 0,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-unprivileged.pdf",
+      "evidence": "s0-s2 are pre-\nset to the same value",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "s1",
+      "width": null,
+      "array_prefix": "s",
+      "array_index": 1,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-unprivileged.pdf",
+      "evidence": "s0-s2 are pre-\nset to the same value",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    },
+    {
+      "name": "s2",
+      "width": null,
+      "array_prefix": "s",
+      "array_index": 2,
+      "extraction_strategy": "l4_register_range_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "references__riscv-unprivileged.pdf",
+      "evidence": "s0-s2 are pre-\nset to the same value",
+      "routed_reason_v1_6_567": "abi_prefix",
+      "reset_value": "0x0",
+      "reset_value_source": "riscv_gpr_arch_default_v1_6_497"
+    }
+  ],
+  "msb_lsb_collapsed_count_v1_6_460": 32,
+  "extraction_evidence": {
+    "input/docs/attrs.adoc": [],
+    "input/docs/datasheet__content.adoc": [],
+    "input/docs/datasheet__cpu.adoc": [],
+    "input/docs/datasheet__cpu_cfu.adoc": [],
+    "input/docs/datasheet__cpu_csr.adoc": [
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=fflags)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=frm)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=fcsr)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mstatus)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=misa)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mie)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mtvec)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mcounteren)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mstatush)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mscratch)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mepc)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mcause)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mtval)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mip)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mtinst)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=menvcfg)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=menvcfgh)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mcountinhibit)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mvendorid)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=marchid)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mimpid)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mhartid)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=mconfigptr)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      }
+    ],
+    "input/docs/datasheet__cpu_dual_core.adoc": [],
+    "input/docs/datasheet__cpu_isa.adoc": [],
+    "input/docs/datasheet__index.adoc": [],
+    "input/docs/datasheet__main.adoc": [],
+    "input/docs/datasheet__on_chip_debugger.adoc": [
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=dcsr)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=dpc)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=dscratch0)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=tselect)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=tdata1)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=tdata2)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      },
+      {
+        "literal": "CSR-doc heading + reset row (v1.6.491, name=tinfo)",
+        "label": "register heading + reset row (asciidoc_csr_def_heading_v1_6_491)"
+      }
+    ],
+    "input/docs/datasheet__overview.adoc": [],
+    "input/docs/datasheet__soc.adoc": [],
+    "input/docs/datasheet__soc_bootrom.adoc": [],
+    "input/docs/datasheet__soc_cfs.adoc": [
+      {
+        "literal": "| `0xffeb0000` | `REG[0]`     |`31:0` | (r)/(w) | custom CFS register 0",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xffeb0004` | `REG[1]`     |`31:0` | (r)/(w) | custom CFS register 1",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xffebfff8` | `REG[16382]` |`31:0` | (r)/(w) | custom CFS register 16382",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xffebfffc` | `REG[16383]` |`31:0` | (r)/(w) | custom CFS register 16383",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "partial-ellipsis sentinels injected (v1.6.455, n=1)",
+        "label": "register-array partial-ellipsis sentinel (asciidoc_table_partial_ellipsis_marker_v1_6_455)"
+      }
+    ],
+    "input/docs/datasheet__soc_clint.adoc": [
+      {
+        "literal": "| `0xfff44000` | `MTIMECMP[0]` | 63:0 | r/w | 64-bit time compare for hart 0",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff44008` | `MTIMECMP[1]` | 63:0 | r/w | 64-bit time compare for hart 1",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff4bff8` | `MTIME`       | 63:0 | r/w | 64-bit global machine timer",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": ".2+<| `0xfff40000` .2+<| `MSWI[0]` ^| 0    ^| r/w <| trigger machine software in",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "^| 31:1 ^| r/- <| hardwired to zero",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": ".2+<| `0xfff40004` .2+<| `MSWI[1]` ^| 0    ^| r/w <| trigger machine software in",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "^| 31:1 ^| r/- <| hardwired to zero",
+        "label": "register row (AsciiDoc row-span continuation)"
+      }
+    ],
+    "input/docs/datasheet__soc_dcache.adoc": [],
+    "input/docs/datasheet__soc_dma.adoc": [
+      {
+        "literal": ".11+<| `0xffed0000` .11+<| `CTRL` <|`0`     `DMA_CTRL_EN`                       ",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<|`19:16` `DMA_CTRL_DFIFO_MSB : DMA_CTRL_DFIFO_LSB` ^| r/- <| Descriptor FIFO de",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`27`    `DMA_CTRL_DEMPTY`                         ^| r/- <| Descriptor FIFO is",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`28`    `DMA_CTRL_DFULL`                          ^| r/- <| Descriptor FIFO is",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`29`    `DMA_CTRL_ERROR`                          ^| r/- <| Bus access error d",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`31`    `DMA_CTRL_BUSY`                           ^| r/- <| DMA transfer(s) in",
+        "label": "register row (AsciiDoc row-span continuation)"
+      }
+    ],
+    "input/docs/datasheet__soc_dmem.adoc": [],
+    "input/docs/datasheet__soc_gpio.adoc": [
+      {
+        "literal": "| `0xfffc0000` | `PORT_IN`      | 31:0   | r/- | Parallel input port; `PORT_IN(i",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfffc0004` | `PORT_OUT`     | 31:0   | r/w | Parallel output port; `PORT_OUT",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfffc0008` | `PORT_DIR`     | 31:0   | r/w | Port direction; `PORT_DIR(i)` c",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfffc0010` | `IRQ_TYPE`     | 31:0   | r/w | Trigger type select (`0` = leve",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfffc0014` | `IRQ_POLARITY` | 31:0   | r/w | Trigger polarity select (`0` = ",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfffc0018` | `IRQ_ENABLE`   | 31:0   | r/w | Per-pin interrupt enable; `IRQ_",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfffc001c` | `IRQ_PENDING`  | 31:0   | r/c | Per-pin interrupt pending, can ",
+        "label": "register row (AsciiDoc cell-block)"
+      }
+    ],
+    "input/docs/datasheet__soc_gptmr.adoc": [
+      {
+        "literal": "| `0xfff10000` | `CSR0.WORD`     | `31:0` | r/w | Control and status register 0 ",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff10000` | `CSR0.ENABLE`   | `15:0` | r/w | Control and status register 0 ",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff10002` | `CSR0.MODE`     | `15:0` | r/w | Control and status register 0 ",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff10004` | `CSR1.WORD`     | `31:0` | r/w | Control and status register 1 ",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff10004` | `CSR1.IRQ`      | `15:0` | r/w | Control and status register 1 ",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff10006` | `CSR1.PRSC`     |  `2:0` | r/w | Control and status register 1 ",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff10080` | `SLICE[0].CNT`  | `31:0` | r/w | Slice 0 counter register.",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff10084` | `SLICE[0].THR`  | `31:0` | r/w | Slice 0 threshold register.",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff100F8` | `SLICE[15].CNT` | `31:0` | r/w | Slice 15 counter register.",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff100FC` | `SLICE[15].THR` | `31:0` | r/w | Slice 15 threshold register.",
+        "label": "register row (AsciiDoc cell-block)"
+      }
+    ],
+    "input/docs/datasheet__soc_icache.adoc": [],
+    "input/docs/datasheet__soc_imem.adoc": [],
+    "input/docs/datasheet__soc_neoled.adoc": [
+      {
+        "literal": ".10+<| `0xfffd0000` .10+<| `CTRL` <|`0`     `NEOLED_CTRL_EN`                    ",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<|`3:1`   `NEOLED_CTRL_PRSC_MSB : NEOLED_CTRL_PRSC_LSB`   ^| r/w <| clock presca",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`8:4`   `NEOLED_CTRL_T_TOT_MSB : NEOLED_CTRL_T_TOT_LSB` ^| r/w <| pre-scaled c",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`13:9`  `NEOLED_CTRL_T_0H_MSB : NEOLED_CTRL_T_0H_LSB`   ^| r/w <| pre-scaled c",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`18:14` `NEOLED_CTRL_T_1H_MSB : NEOLED_CTRL_T_1H_LSB`   ^| r/w <| pre-scaled c",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`28:25` `NEOLED_CTRL_FIFO_MSB : NEOLED_CTRL_FIFO_LSB`   ^| r/w <| log(FIFO siz",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`29`    `NEOLED_CTRL_TX_EMPTY`                          ^| r/- <| TX FIFO is e",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`30`    `NEOLED_CTRL_TX_FULL`                           ^| r/- <| TX FIFO is f",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`31`    `NEOLED_CTRL_TX_BUSY`                           ^| r/- <| TX serial en",
+        "label": "register row (AsciiDoc row-span continuation)"
+      }
+    ],
+    "input/docs/datasheet__soc_onewire.adoc": [
+      {
+        "literal": ".11+<| `0xfff20000` .11+<| `CTRL` <|`0`     `ONEWIRE_CTRL_EN`                   ",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<|`3:2`   `ONEWIRE_CTRL_PRSC1 : ONEWIRE_CTRL_PRSC0`       ^| r/w <| 2-bit clock ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`11:4`  `ONEWIRE_CTRL_CLKDIV7 : ONEWIRE_CTRL_CLKDIV0`   ^| r/w <| 8-bit clock ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`18:15` `ONEWIRE_CTRL_FIFO_MSB : ONEWIRE_CTRL_FIFO_LSB` ^| r/- <| FIFO depth; ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`28`    `ONEWIRE_CTRL_TX_FULL`                          ^| r/- <| TX FIFO full",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`29`    `ONEWIRE_CTRL_RX_AVAIL`                         ^| r/- <| RX FIFO data",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`30`    `ONEWIRE_CTRL_SENSE`                            ^| r/- <| current stat",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`31`    `ONEWIRE_CTRL_BUSY`                             ^| r/- <| operation in",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`10`   `ONEWIRE_DCMD_PRESENCE`                         ^| r/- <| bus presence ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": ".4+<| `0xfff20004` .4+<| `DCMD` <|`7:0`  `ONEWIRE_DCMD_DATA_MSB : ONEWIRE_DCMD_D",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<|`10`   `ONEWIRE_DCMD_PRESENCE`                         ^| r/- <| bus presence ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      }
+    ],
+    "input/docs/datasheet__soc_pwm.adoc": [
+      {
+        "literal": "| `0xfff00000` | `ENABLE`             | `31:0` | r/w | Channel enable, one bit p",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff00004` | `POLARITY`           | `31:0` | r/w | Channel polarity, one bit",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff00008` | `CLKPRSC`            | `2:0`  | r/w | Global clock prescaler se",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff0000c` | `MODE`               | `31:0` | r/w | Channel operation mode (0",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff00080` | `CHANNEL[0].TOPCMP`  | `31:0` | r/w | Channel 0 full word acces",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff00080` | `CHANNEL[0].CMP`     | `15:0` | r/w | Channel 0 top/wrap value ",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff00082` | `CHANNEL[0].TOP`     | `15:0` | r/w | Channel 0 compare value r",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff000fc` | `CHANNEL[31].TOPCMP` | `31:0` | r/w | Channel 31 full word acce",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff000fc` | `CHANNEL[31].CMP`    | `15:0` | r/w | Channel 31 top/wrap value",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfff000fe` | `CHANNEL[31].TOP`    | `15:0` | r/w | Channel 31 compare value ",
+        "label": "register row (AsciiDoc cell-block)"
+      }
+    ],
+    "input/docs/datasheet__soc_sdi.adoc": [
+      {
+        "literal": ".16+<| `0xfff70000` .16+<| `CTRL` <|`0`     `SDI_CTRL_EN`                       ",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<|`7:4`   `SDI_CTRL_FIFO_MSB : SDI_CTRL_FIFO_LSB` ^| r/- <| FIFO depth; log2(_IO",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`16`    `SDI_CTRL_IRQ_RX_NEMPTY`                ^| r/w <| fire interrupt if RX",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`17`    `SDI_CTRL_IRQ_RX_FULL`                  ^| r/w <| fire interrupt if if",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`18`    `SDI_CTRL_IRQ_TX_EMPTY`                 ^| r/w <| fire interrupt if TX",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`24`    `SDI_CTRL_RX_EMPTY`                     ^| r/- <| RX FIFO empty",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`25`    `SDI_CTRL_RX_FULL`                      ^| r/- <| RX FIFO full",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`26`    `SDI_CTRL_TX_EMPTY`                     ^| r/- <| TX FIFO empty",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`27`    `SDI_CTRL_TX_FULL`                      ^| r/- <| TX FIFO full",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`31`    `SDI_CTRL_CS_ACTIVE`                    ^| r/- <| Chip-select is activ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": ".2+<| `0xfff70004` .2+<| `DATA` <|`7:0`  `SDI_DATA_MSB : SDI_DATA_LSB` ^| r/w <|",
+        "label": "register row (AsciiDoc row-span starter)"
+      }
+    ],
+    "input/docs/datasheet__soc_slink.adoc": [
+      {
+        "literal": "| `0xffec0008` | `DATA`      | `31:0` | r/w | Write data to TX FIFO; read data f",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xffec000c` | `DATA_LAST` | `31:0` | r/w | Write data to TX FIFO (and also se",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": ".15+<| `0xffec0000` .15+<| `CTRL` <| `0`    `SLINK_CTRL_EN`                     ",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<| `8`    `SLINK_CTRL_RX_EMPTY`                              ^| r/- <| RX FIFO e",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `9`    `SLINK_CTRL_RX_FULL`                               ^| r/- <| RX FIFO f",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `10`   `SLINK_CTRL_TX_EMPTY`                              ^| r/- <| TX FIFO e",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `11`   `SLINK_CTRL_TX_FULL`                               ^| r/- <| TX FIFO f",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `12`   `SLINK_CTRL_RX_LAST`                               ^| r/- <| Last word",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `16`   `SLINK_CTRL_IRQ_RX_NEMPTY`                         ^| r/w <| Fire inte",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `17`   `SLINK_CTRL_IRQ_RX_FULL`                           ^| r/w <| Fire inte",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `18`   `SLINK_CTRL_IRQ_TX_EMPTY`                          ^| r/w <| Fire inte",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `19`   `SLINK_CTRL_IRQ_TX_NFULL`                          ^| r/w <| Fire inte",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `27:24` `SLINK_CTRL_RX_FIFO_MSB : SLINK_CTRL_RX_FIFO_LSB` ^| r/- <| log2(RX F",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `31:28` `SLINK_CTRL_TX_FIFO_MSB : SLINK_CTRL_TX_FIFO_LSB` ^| r/- <| log2(TX F",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `3:0`  ^| r/- <| RX source routing information (`slink_rx_src_i`)",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `31:4` ^| r/- <| _reserved_, read as zero",
+        "label": "register row (AsciiDoc row-span continuation)"
+      }
+    ],
+    "input/docs/datasheet__soc_spi.adoc": [
+      {
+        "literal": ".14+<| `0xfff80000` .14+<| `CTRL` <|`0`     `SPI_CTRL_EN`                       ",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<|`1`     `SPI_CTRL_CPHA`                         ^| r/w <| clock phase",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`2`     `SPI_CTRL_CPOL`                         ^| r/w <| clock polarity",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`5:3`   `SPI_CTRL_PRSC2 : SPI_CTRL_PRSC0`       ^| r/w <| 3-bit clock prescale",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`9:6`   `SPI_CTRL_CDIV3 : SPI_CTRL_CDIV0`       ^| r/w <| 4-bit clock divider ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`16`    `SPI_CTRL_RX_AVAIL`                     ^| r/- <| RX FIFO data availab",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`17`    `SPI_CTRL_TX_EMPTY`                     ^| r/- <| TX FIFO empty",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`18`    `SPI_CTRL_TX_FULL`                      ^| r/- <| TX FIFO full",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`27:24` `SPI_CTRL_FIFO_MSB : SPI_CTRL_FIFO_LSB` ^| r/- <| FIFO depth; log2(`IO",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`30`    `SPI_CS_ACTIVE`                         ^| r/- <| Set if any chip-sele",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`31`    `SPI_CTRL_BUSY`                         ^| r/- <| SPI module busy when",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": ".4+<| `0xfff80004` .4+<| `DATA` <|`7:0`  `SPI_DATA_MSB : SPI_DATA_LSB` ^| r/w <|",
+        "label": "register row (AsciiDoc row-span starter)"
+      }
+    ],
+    "input/docs/datasheet__soc_sysinfo.adoc": [
+      {
+        "literal": "| `0xfffe0000` | `CLK`     | r/w | clock frequency in Hz (initialized from top's",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfffe0004` | `MISC[4]` | r/- | miscellaneous system configurations (see <<_s",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfffe0008` | `SOC`     | r/- | specific SoC configuration (see <<_sysinfo_so",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": "| `0xfffe000c` | `CACHE`   | r/- | cache configuration information (see <<_sysin",
+        "label": "register row (AsciiDoc cell-block)"
+      }
+    ],
+    "input/docs/datasheet__soc_tracer.adoc": [
+      {
+        "literal": "| `0xfff30004` | `STOP_ADDR` | `31:0` | r/w | Stop-tracing-address register",
+        "label": "register row (AsciiDoc cell-block)"
+      },
+      {
+        "literal": ".9+<| `0xfff30000` .9+<| `CTRL` <| `0`    `TRACER_CTRL_EN`                      ",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<| `1`    `TRACER_CTRL_HSEL`                          ^| r/w <| Hart select for ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `2`    `TRACER_CTRL_START`                         ^| r/w <| Start tracing, f",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `3`    `TRACER_CTRL_STOP`                          ^| r/w <| Manually stop tr",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `4`    `TRACER_CTRL_RUN`                           ^| r/- <| Tracing in progr",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `5`    `TRACER_CTRL_AVAIL`                         ^| r/- <| Trace data avail",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `6`    `TRACER_CTRL_IRQ_CLR`                       ^| r/w <| Clear pending in",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `10:7` `TRACER_CTRL_TBM_MSB : TRACER_CTRL_TBM_LSB` ^| r/- <| `log2(IO_TRACER_",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<| `0`    ^| r/- | `1` = very first instruction delta in current trace; `0` = an",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": ".2+<| `0xfff30008` .2+<| `DELTA_SRC` <| `31:1` ^| r/- | Branch source address, s",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<| `0`    ^| r/- | `1` = very first instruction delta in current trace; `0` = an",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": ".2+<| `0xfff3000c` .2+<| `DELTA_DST` <| `31:1` ^| r/- | Branch destination addre",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<| `0`    ^| r/- | `1` = branch due trap entry (interrupt or synchronous excepti",
+        "label": "register row (AsciiDoc row-span continuation)"
+      }
+    ],
+    "input/docs/datasheet__soc_trng.adoc": [
+      {
+        "literal": ".8+<| `0xfffa0000` .8+<| `CTRL` <|`0`     `TRNG_CTRL_EN`                        ",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<|`2`     `TRNG_CTRL_SIM_MODE`                      ^| r/- <| simulation mode (P",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`3`     `TRNG_CTRL_AVAIL`                         ^| r/- <| random data availa",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`7:4`   `TRNG_CTRL_FIFO_MSB : TRNG_CTRL_FIFO_LSB` ^| r/- <| FIFO depth (`log2(",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`11:8`  `TRNG_CTRL_NBIT_MSB : TRNG_CTRL_NBIT_LSB` ^| r/- <| FIFO depth (`log2(",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`19:12` `TRNG_CTRL_NRO_MSB : TRNG_CTRL_NRO_LSB`   ^| r/- <| Total number of ri",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`31:20` `TRNG_CTRL_NINV_MSB : TRNG_CTRL_NINV_LSB` ^| r/- <| Number of inverter",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": ".2+<| `0xfffa0004` .2+<| `DATA` <|`7:0`  `TRNG_DATA_MSB : TRNG_DATA_LSB`        ",
+        "label": "register row (AsciiDoc row-span starter)"
+      }
+    ],
+    "input/docs/datasheet__soc_twd.adoc": [
+      {
+        "literal": ".20+<| `0xffea0000` .20+<| `CTRL` <|`0`     `TWD_CTRL_EN`                       ",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<|`3`     `TWD_CTRL_FSEL`                               ^| r/w <| Bus sample clo",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`10:4`  `TWD_CTRL_DEV_ADDR6 : TWD_CTRL_DEV_ADDR0`     ^| r/w <| Device address",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`11`    `TWD_CTRL_IRQ_RX_AVAIL`                       ^| r/w <| IRQ if RX FIFO",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`12`    `TWD_CTRL_IRQ_RX_FULL`                        ^| r/w <| IRQ if RX FIFO",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`13`    `TWD_CTRL_IRQ_TX_EMPTY`                       ^| r/w <| IRQ if TX FIFO",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`14`    `TWD_CTRL_IRQ_TX_NFULL`                       ^| r/w <| IRQ if TX FIFO",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`15`    `TWD_CTRL_IRQ_COM_BEG`                        ^| r/w <| IRQ if begin o",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`16`    `TWD_CTRL_IRQ_COM_END`                        ^| r/w <| IRQ if end of ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`20:17` `TWD_CTRL_RX_FIFO_MSB : TWD_CTRL_RX_FIFO_LSB` ^| r/- <| FIFO depth; lo",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`24:21` `TWD_CTRL_TX_FIFO_MSB : TWD_CTRL_TX_FIFO_LSB` ^| r/- <| FIFO depth; lo",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`25`    `TWD_CTRL_RX_AVAIL`                           ^| r/- <| RX FIFO data a",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`26`    `TWD_CTRL_RX_FULL`                            ^| r/- <| RX FIFO full",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`27`    `TWD_CTRL_TX_EMPTY`                           ^| r/- <| TX FIFO empty",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`28`    `TWD_CTRL_TX_FULL`                            ^| r/- <| TX FIFO full",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`29`    `TWD_CTRL_COM_BEG`                            ^| r/c <| Communication ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`30`    `TWD_CTRL_COM_END`                            ^| r/c <| Communication ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`31`    `TWD_CTRL_COM`                                ^| r/- <| Active communi",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": ".2+<| `0xffea0004` .2+<| `DATA`   <|`7:0`   `TWD_DATA_MSB : TWD_DATA_LSB`       ",
+        "label": "register row (AsciiDoc row-span starter)"
+      }
+    ],
+    "input/docs/datasheet__soc_twi.adoc": [
+      {
+        "literal": ".12+<| `0xfff90000` .12+<| `CTRL` <|`0`     `TWI_CTRL_EN`                       ",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<|`3:1`   `TWI_CTRL_PRSC2 : TWI_CTRL_PRSC0`       ^| r/w <| 3-bit clock prescale",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`7:4`   `TWI_CTRL_CDIV3 : TWI_CTRL_CDIV0`       ^| r/w <| 4-bit clock divider",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`8`     `TWI_CTRL_CLKSTR`                       ^| r/w <| Enable (allow) clock",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`18:15` `TWI_CTRL_FIFO_MSB : TWI_CTRL_FIFO_LSB` ^| r/- <| FIFO depth; log2(`IO",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`27`    `TWI_CTRL_SENSE_SCL`                    ^| r/- <| current state of the",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`28`    `TWI_CTRL_SENSE_SDA`                    ^| r/- <| current state of the",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`29`    `TWI_CTRL_TX_FULL`                      ^| r/- <| set if the TWI bus i",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`30`    `TWI_CTRL_RX_AVAIL`                     ^| r/- <| RX FIFO data availab",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`31`    `TWI_CTRL_BUSY`                         ^| r/- <| TWI bus engine busy ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`8`     `TWI_DCMD_ACK`                          ^| r/w <| write: ACK issued by",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": ".4+<| `0xfff90004` .4+<| `DCMD`   <|`7:0`   `TWI_DCMD_MSB : TWI_DCMD_LSB`       ",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<|`8`     `TWI_DCMD_ACK`                          ^| r/w <| write: ACK issued by",
+        "label": "register row (AsciiDoc row-span continuation)"
+      }
+    ],
+    "input/docs/datasheet__soc_uart.adoc": [
+      {
+        "literal": ".16+<| `0xfff50000` .16+<| `CTRL` <|`0`     `UART_CTRL_EN`                      ",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<|`1`     `UART_CTRL_SIM_MODE`                      ^| r/w <| enable **simulatio",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`2`     `UART_CTRL_HWFC_EN`                       ^| r/w <| enable RTS/CTS har",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`5:3`   `UART_CTRL_PRSC_MSB : UART_CTRL_PRSC_LSB` ^| r/w <| baud rate clock pr",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`15:6`  `UART_CTRL_BAUD_MSB : UART_CTRL_BAUD_LSB` ^| r/w <| 10-bit baud value ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`16`    `UART_CTRL_RX_NEMPTY`                     ^| r/- <| RX FIFO not empty ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`17`    `UART_CTRL_RX_FULL`                       ^| r/- <| RX FIFO full",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`18`    `UART_CTRL_TX_EMPTY`                      ^| r/- <| TX FIFO empty",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`19`    `UART_CTRL_TX_NFULL`                      ^| r/- <| TX FIFO not full",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`20`    `UART_CTRL_IRQ_RX_NEMPTY`                 ^| r/w <| fire RX-IRQ if RX ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`21`    `UART_CTRL_IRQ_RX_FULL`                   ^| r/w <| fire RX-IRQ if RX ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`22`    `UART_CTRL_IRQ_TX_EMPTY`                  ^| r/w <| fire TX-IRQ if TX ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`23`    `UART_CTRL_IRQ_TX_NFULL`                  ^| r/w <| fire TX-IRQ if TX ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`30`    `UART_CTRL_RX_OVER`                       ^| r/- <| RX FIFO overflow; ",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`31`    `UART_CTRL_TX_BUSY`                       ^| r/- <| TX busy or TX FIFO",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`11:8`  `UART_DATA_RX_FIFO_MSB : UART_DATA_RX_FIFO_LSB` ^| r/- <| log2(RX FIFO",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": ".4+<| `0xfff50004` .4+<| `DATA` <|`7:0`   `UART_DATA_RTX_MSB : UART_DATA_RTX_LSB",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<|`11:8`  `UART_DATA_RX_FIFO_MSB : UART_DATA_RX_FIFO_LSB` ^| r/- <| log2(RX FIFO",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`15:12` `UART_DATA_TX_FIFO_MSB : UART_DATA_TX_FIFO_LSB` ^| r/- <| log2(TX FIFO",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`31:16` ^| r/- <| _reserved_, read as zero",
+        "label": "register row (AsciiDoc row-span continuation)"
+      }
+    ],
+    "input/docs/datasheet__soc_wdt.adoc": [
+      {
+        "literal": ".5+<| `0xfffb0000` .5+<| `CTRL` <|`0`    `WDT_CTRL_EN`                          ",
+        "label": "register row (AsciiDoc row-span starter)"
+      },
+      {
+        "literal": "<|`1`    `WDT_CTRL_LOCK`                               ^| r/w ^| `0` ^| no  <| L",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`3:2`  `WDT_CTRL_RCAUSE_HI : WDT_CTRL_RCAUSE_LO`     ^| r/- ^| `0` ^| -   <| C",
+        "label": "register row (AsciiDoc row-span continuation)"
+      },
+      {
+        "literal": "<|`31:8` `WDT_CTRL_TIMEOUT_MSB : WDT_CTRL_TIMEOUT_LSB` ^| r/w ^| 0   ^| no  <| T",
+        "label": "register row (AsciiDoc row-span continuation)"
+      }
+    ],
+    "input/docs/datasheet__soc_xbus.adoc": [],
+    "input/docs/datasheet__software.adoc": [],
+    "input/docs/datasheet__software_bootloader.adoc": [],
+    "input/docs/datasheet__software_rte.adoc": [],
+    "input/docs/legal.adoc": [],
+    "input/docs/references__riscv-debug-specification.pdf": [],
+    "input/docs/userguide__adding_custom_hw_modules.adoc": [],
+    "input/docs/userguide__application_program_compilation.adoc": [],
+    "input/docs/userguide__building_the_documentation.adoc": [],
+    "input/docs/userguide__content.adoc": [],
+    "input/docs/userguide__eclipse_ide.adoc": [],
+    "input/docs/userguide__free_rtos_support.adoc": [],
+    "input/docs/userguide__general_hw_setup.adoc": [],
+    "input/docs/userguide__index.adoc": [],
+    "input/docs/userguide__installing_an_executable.adoc": [],
+    "input/docs/userguide__litex_support.adoc": [],
+    "input/docs/userguide__main.adoc": [],
+    "input/docs/userguide__micropython_port.adoc": [],
+    "input/docs/userguide__neorv32_in_verilog.adoc": [],
+    "input/docs/userguide__packaging_vivado.adoc": [],
+    "input/docs/userguide__rust_support.adoc": [],
+    "input/docs/userguide__simulating_the_processor.adoc": [],
+    "input/docs/userguide__sw_toolchain_setup.adoc": [],
+    "input/docs/userguide__using_ocd.adoc": [],
+    "input/docs/userguide__zephyr_support.adoc": [],
+    "internal/architecture/riscv": [
+      {
+        "literal": "RISC-V ISA GPR / FPR default reset (v1.6.497, count=46)",
+        "label": "riscv_gpr_arch_default_v1_6_497"
+      }
+    ],
+    "internal/architecture/array_field_union": [
+      {
+        "literal": "Indexed-array field reset_value union (v1.6.501, count=2)",
+        "label": "array_field_reset_union_v1_6_501"
+      }
+    ],
+    "internal/architecture/array_prose_seed": [
+      {
+        "literal": "No-seed indexed-array prose seed injection (v1.6.503, count=4)",
+        "label": "array_prose_seed_v1_6_503"
+      }
+    ],
+    "internal/architecture/scalar_prose_adjacency": [
+      {
+        "literal": "Scalar MMIO prose-adjacency reset lift (v1.6.503, count=2)",
+        "label": "scalar_prose_adjacency_v1_6_503"
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "aliases_index": [
+    {
+      "canonical": "LOCK_BIT",
+      "aliases": [
+        "LockBit",
+        "Lockbit",
+        "lock_bit"
+      ],
+      "source_doc": "(derived from L docs)"
+    }
+  ]
+}

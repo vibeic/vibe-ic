@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "doc_class": "regmap",
+  "ic_name": "PicoRV32",
+  "registers": [],
+  "no_registers_in_input": true,
+  "otp_layout": null,
+  "no_otp_layout_in_input": true,
+  "otp_ip_macro": {},
+  "internal_registers": [
+    {
+      "name": "q0",
+      "width": 32,
+      "array_prefix": "q",
+      "array_index": 0,
+      "extraction_strategy": "l4_register_array_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "README.md",
+      "evidence": "4 additional 32-bit registers `q0 .. q3`",
+      "routed_reason_v1_6_567": "abi_prefix"
+    },
+    {
+      "name": "q1",
+      "width": 32,
+      "array_prefix": "q",
+      "array_index": 1,
+      "extraction_strategy": "l4_register_array_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "README.md",
+      "evidence": "4 additional 32-bit registers `q0 .. q3`",
+      "routed_reason_v1_6_567": "abi_prefix"
+    },
+    {
+      "name": "q2",
+      "width": 32,
+      "array_prefix": "q",
+      "array_index": 2,
+      "extraction_strategy": "l4_register_array_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "README.md",
+      "evidence": "4 additional 32-bit registers `q0 .. q3`",
+      "routed_reason_v1_6_567": "abi_prefix"
+    },
+    {
+      "name": "q3",
+      "width": 32,
+      "array_prefix": "q",
+      "array_index": 3,
+      "extraction_strategy": "l4_register_array_prose_v1_6_470+routed_to_internal_v1_6_567",
+      "evidence_file": "README.md",
+      "evidence": "4 additional 32-bit registers `q0 .. q3`",
+      "routed_reason_v1_6_567": "abi_prefix"
+    }
+  ],
+  "extraction_evidence": {},
+  "class_path": "processor_cpu"
+}

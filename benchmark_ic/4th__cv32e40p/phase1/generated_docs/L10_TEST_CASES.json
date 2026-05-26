@@ -1,0 +1,76 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_cases",
+  "ic_name": "Released core",
+  "test_cases": [],
+  "no_test_cases_in_input": true,
+  "bring_up_sequence": [
+    {
+      "step": 1,
+      "description": "``debug_req_i`` = 1 or a debug request is pending",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/source__sleep.rst"
+    },
+    {
+      "step": 2,
+      "description": "The core is in debug mode",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/source__sleep.rst"
+    },
+    {
+      "step": 3,
+      "description": "The core is performing single stepping (debug)",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/source__sleep.rst"
+    },
+    {
+      "step": 4,
+      "description": "The core has a trigger match (debug)",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/source__sleep.rst"
+    },
+    {
+      "step": 5,
+      "description": "``COREV_CLUSTER`` = 1",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/source__sleep.rst"
+    },
+    {
+      "step": 6,
+      "description": "A locally enabled interrupt is pending",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/source__sleep.rst"
+    },
+    {
+      "step": 7,
+      "description": "A debug request is pending",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/source__sleep.rst"
+    },
+    {
+      "step": 8,
+      "description": "Core is in debug mode",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/source__sleep.rst"
+    }
+  ],
+  "no_bring_up_sequence_in_input": false,
+  "extraction_evidence": {},
+  "class_path": "processor_cpu"
+}

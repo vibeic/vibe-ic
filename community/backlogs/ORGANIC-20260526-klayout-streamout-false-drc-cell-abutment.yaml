@@ -1,0 +1,63 @@
+type: bug
+severity: P0
+component: program:phase3_one_shot_runner
+
+plugin_version: "0.1.2"
+
+title: >-
+  Phase 3 KLayout DEF->GDS streamout leaves abutting same-layer cell-boundary
+  shapes as separate near-coincident polygons, so the KLayout sign-off DRC
+  deck reports tens of thousands of false min-spacing / min-width violations
+  on a layout the router proved clean — re-streaming via Magic yields 0 DRC
+
+pattern: |
+  After place-and-route succeeds and the open-source router reports the
+  layout route-clean (≈1 violation), the GDS step streams the DEF to GDS with
+  KLayout by reading the tech/cell LEFs, then the DEF, then the standard-cell
+  GDS, and pruning to the design top. The resulting GDS, when checked with the
+  PDK's own KLayout sign-off DRC deck, reports a very large violation count
+  (here ~84k) overwhelmingly on the local-interconnect layer: min-spacing and
+  min-width edge-pairs with sub-0.05um gaps clustered at standard-cell
+  boundaries.
+
+  Root cause is NOT the design: each standard cell in the streamed GDS carries
+  exactly the same per-cell layer geometry as the library cell (verified by
+  polygon count), and the router's own DRC is clean. The violations are an
+  artifact of KLayout's raw stream-out leaving abutting same-layer shapes from
+  adjacent placed cells (and from cell pins meeting routing) as distinct
+  polygons separated by a near-zero gap, which the flat DRC deck then flags as
+  min-spacing/min-width failures. Re-streaming the exact same DEF + cell GDS
+  through Magic (which merges abutting same-layer geometry on write) and
+  running the identical KLayout sign-off deck yields ZERO violations —
+  confirming the layout is genuinely clean and the streamout was the defect.
+
+  Generality: every digital design taken through this Phase-3 GDS path on a
+  layer-merge-sensitive PDK hits the same false-positive wall at DRC, so the
+  DRC gate reports FAIL for essentially all clean layouts. It is not specific
+  to any IC or cell library.
+
+suggested_fix: |
+  Make the Phase-3 GDS streamout produce a merge-correct layout before the
+  sign-off DRC gate runs. Options, in preference order:
+    1. Add a Magic-based DEF->GDS streamout path (Magic is already present in
+       the reference container and the runner comments already treat
+       "magic-streamed" GDS as the reference); use it as the default when
+       Magic is available, falling back to KLayout only when it is not.
+    2. If staying on KLayout, add a layer-merge / boolean-OR pass per routing
+       and local-interconnect layer in the stream_out script before write, so
+       abutting same-layer shapes become single polygons.
+    3. At minimum, when the KLayout-streamed GDS produces a DRC count that is
+       dominated (>90%) by min-spacing/min-width edge-pairs with sub-grid gaps
+       at cell boundaries, re-stream via Magic and re-run DRC automatically
+       before declaring the DRC gate FAIL, and record both counts.
+
+id: "ORGANIC-20260526-klayout-streamout-false-drc-cell-abutment"
+submitted_at: "2026-05-26T02:46:40+00:00"
+session_context: >-
+  Fresh field-agent full Vibe-IC run on an open-source RV32IMC CPU core. Phase
+  3 synth+PnR+GDS all PASSED and the router reported the layout route-clean,
+  but the KLayout sign-off DRC reported ~84k local-interconnect violations.
+  Diagnosis showed per-cell geometry matched the library and the violations
+  were sub-0.05um cell-abutment gaps; re-streaming the same DEF via Magic and
+  re-running the identical KLayout deck produced 0 violations, proving the
+  layout clean and the KLayout streamout path the root cause.

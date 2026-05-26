@@ -1,0 +1,707 @@
+{
+  "schema_version": 2,
+  "doc_class": "frs",
+  "ic_name": "GCD",
+  "frs_sections": [
+    {
+      "section": "h2",
+      "title": "Index",
+      "content": "- [Index](#index)\n- [Description](#description)\n- [Area usage and maximal frequency](#area-usage-and-maximal-frequency)\n- [Dependencies](#dependencies)\n- [CPU generation](#cpu-generation)\n- [Regression tests](#regression-tests)\n- [Interactive debug of the simulated CPU via GDB OpenOCD and Verilator](#interactive-debug-of-the-simulated-cpu-via-gdb-openocd-and-verilator)\n- [Using Eclipse to run and debug the software](#using-eclipse-to-run-and-debug-the-software)\n  - [By using gnu-mcu-eclipse](#by-using-gnu-mcu-eclipse)\n  - [By using Zylin plugin (old)](#by-using-zylin-plugin-old)\n- [Briey SoC](#briey-soc)\n- [Murax SoC](#murax-soc)\n- [Running Linux](#running-linux)\n- [Build the RISC-V GCC](#build-the-risc-v-gcc)\n- [CPU parametrization and instantiation example](#cpu-parametrization-and-insta…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Description",
+      "content": "This repository hosts a RISC-V implementation written in SpinalHDL. Here are some specs :\n\n- RV32I[M][A][F[D]][C] instruction set\n- Pipelined from 2 to 5+ stages ([Fetch*X], Decode, Execute, [Memory], [WriteBack])\n- 1.44 DMIPS/MHz --no-inline when nearly all features are enabled (1.57 DMIPS/MHz when the divider lookup table is enabled)\n- Optimized for FPGA, does not use any vendor specific IP block / primitive\n- AXI4, Avalon, wishbone ready\n- Optional MUL/DIV extensions\n- Optional F32/F64 FPU (require data cache for now)\n- Optional instruction and data caches\n- Optional hardware refilled MMU\n- Optional debug extension allowing Eclipse debugging via a GDB >> openOCD >> JTAG connection\n- Optional interrupts and exception handling with Machine, [Supervisor] and [User] modes as defined in the …",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Area usage and maximal frequency",
+      "content": "The following numbers were obtained by synthesizing the CPU as toplevel on the fastest speed grade without any specific synthesis options to save area or to get better maximal frequency (neutral).<br>\nThe clock constraint is set to an unattainable value, which tends to increase the design area.<br>\nThe dhrystone benchmark was compiled with the `-O3 -fno-inline` option.<br>\nAll the cached configurations have some cache trashing during the dhrystone benchmark except the `VexRiscv full max perf` one. This, of course, reduces the performance. It is possible to produce\ndhrystone binaries which fit inside a 4KB I$ and 4KB D$ (I already had this case once) but currently it isn't the case.<br>\nThe CPU configurations used below can be found in the `src/scala/vexriscv/demo` directory.\n\n```\nVexRiscv …",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Dependencies",
+      "content": "On Ubuntu 14:\n\n```sh\n# JAVA JDK 8\nsudo add-apt-repository -y ppa:openjdk-r/ppa\nsudo apt-get update\nsudo apt-get install openjdk-8-jdk -y\nsudo update-alternatives --config java\nsudo update-alternatives --config javac\n\n# Install SBT - https://www.scala-sbt.org/\necho \"deb https://repo.scala-sbt.org/scalasbt/debian all main\" | sudo tee /etc/apt/sources.list.d/sbt.list\necho \"deb https://repo.scala-sbt.org/scalasbt/debian /\" | sudo tee /etc/apt/sources.list.d/sbt_old.list\ncurl -sL \"https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823\" | sudo apt-key add\nsudo apt-get update\nsudo apt-get install sbt\n\n# Verilator (for sim only, really needs 3.9+, in general apt-get will give you 3.8)\nsudo apt-get install git make autoconf g++ flex bison\ngit clone http://g…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "CPU generation",
+      "content": "We now have twenty-two CPU configurations [in this directory](./src/main/scala/vexriscv/demo).  Look at the files called Gen*.scala.  Here is the [full configuration](./src/main/scala/vexriscv/demo/GenFull.scala), and the [smallest configuration](./src/main/scala/vexriscv/demo/GenSmallest.scala). \n\nTo generate the corresponding RTL as a `VexRiscv.v` file, run the following commands in the root directory of this repository:\n\n```sh\nsbt \"runMain vexriscv.demo.GenFull\"\n```\n\nor\n\n```sh\nsbt \"runMain vexriscv.demo.GenSmallest\"\n```\n\nNOTES:\n- It could take time the first time you run it.\n- The VexRiscv project may need an unreleased master-head of the SpinalHDL repo. If it fails to compile, just get the SpinalHDL repository and\n   do a \"sbt clean compile publishLocal\" in it as described in the depen…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Regression tests",
+      "content": "To run tests (need java, scala, verilator), just do :\n\n```sh\nexport VEXRISCV_REGRESSION_SEED=42\nexport VEXRISCV_REGRESSION_TEST_ID=\nsbt \"testOnly vexriscv.TestIndividualFeatures\"\n```\n\nThis will generate random VexRiscv configuration and test them with: \n- ISA tests from https://github.com/riscv/riscv-tests/tree/master/isa and  https://github.com/riscv/riscv-compliance\n- Dhrystone benchmark\n- Coremark benchmark\n- Zephyr os\n- Buildroot/Linux os\n- Some handwritten tests to check the CSR, debug module and MMU plugins\n\nYou can rerun some specific test by setting VEXRISCV_REGRESSION_TEST_ID by their id. For instance, if you want to rerun :\n- test_id_5_test_IBus_CachedS1024W1BPL32Relaxvexriscv.plugin.DYNAMIC_DBus_CachedS8192W2BPL16_MulDiv_MulDivFpga_Shift_FullLate_Branch_Late_Hazard_BypassAll_Reg…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Using Eclipse to run and debug the software",
+      "content": "",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "By using gnu-mcu-eclipse",
+      "content": "You can download releases of the IDE here: <https://github.com/gnu-mcu-eclipse/org.eclipse.epp.packages/releases>\n\nIn the IDE, you can import a makefile project by:\n- file -> import -> C/C++ -> existing Code as Makefile Project\n- Select the folder which contains the makefile, then select \"Cross GCC\" (not \"RISC-V Cross GCC\")\n\nTo create a new debug configuration:\n- run -> Debug Configurations -> GDB OpenOCD Debugging double click\n- Look at https://drive.google.com/open?id=1c46tyEV0xLwOsk76b0y2qqs8CYy7Zq3f for a configuration example",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "By using Zylin plugin (old)",
+      "content": "You can use the Eclipse + Zylin embedded CDT plugin to do it (http://opensource.zylin.com/embeddedcdt.html). Tested with Helios Service Release 2 (http://www.Eclipse.org/downloads/download.php?file=/technology/epp/downloads/release/helios/SR2/Eclipse-cpp-helios-SR2-linux-gtk-x86_64.tar.gz) and the corresponding zylin plugin.\n\nTo following commands will download Eclipse and install the plugin.\n\n```sh\nwget http://www.eclipse.org/downloads/download.php?file=/technology/epp/downloads/release/helios/SR2/eclipse-cpp-helios-SR2-linux-gtk-x86_64.tar.gz\ntar -xvzf download.php?file=%2Ftechnology%2Fepp%2Fdownloads%2Frelease%2Fhelios%2FSR2%2Feclipse-cpp-helios-SR2-linux-gtk-x86_64.tar.gz\ncd eclipse\n./eclipse -application org.eclipse.equinox.p2.director -repository http://opensource.zylin.com/zylincdt …",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Briey SoC",
+      "content": "As a demonstration, a SoC named Briey is implemented in `src/main/scala/vexriscv/demo/Briey.scala`. This SoC is very similar to\nthe [Pinsec SoC](https://spinalhdl.github.io/SpinalDoc-RTD/v1.3.1/SpinalHDL/Legacy/pinsec/hardware_toplevel.html):\n\n\n\nTo generate the Briey SoC Hardware:\n\n```sh\nsbt \"runMain vexriscv.demo.Briey\"\n```\n\nTo run the verilator simulation of the Briey SoC, which can then be connected to OpenOCD/GDB, first get these dependencies:\n\n```sh\nsudo apt-get install build-essential xorg-dev libudev-dev libgl1-mesa-dev libglu1-mesa-dev libasound2-dev libpulse-dev libopenal-dev libogg-dev libvorbis-dev libaudiofile-dev libpng12-dev libfreetype6-dev libusb-dev libdbus-1-dev zlib1g-dev libdirectfb-dev libsdl2-dev\n```\n\nThen go in `src/test/cpp/briey` and run the simulation with (UART T…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Murax SoC",
+      "content": "Murax is a very light SoC (it fits in an ICE40 FPGA) which can work without any external components:\n- VexRiscv RV32I[M]\n- JTAG debugger (Eclipse/GDB/openocd ready)\n- 8 kB of on-chip ram\n- Interrupt support\n- APB bus for peripherals\n- 32 GPIO pin\n- one 16 bits prescaler, two 16 bits timers\n- one UART with tx/rx fifo\n\nDepending on the CPU configuration, on the ICE40-hx8k FPGA with icestorm for synthesis, the full SoC has the following area/performance:\n- RV32I interlocked stages => 51 MHz, 2387 LC 0.45 DMIPS/MHz\n- RV32I bypassed stages    => 45 MHz, 2718 LC 0.65 DMIPS/MHz\n\nIts implementation can be found here: `src/main/scala/vexriscv/demo/Murax.scala`.\n\nTo generate the Murax SoC Hardware:\n\n```sh\n# To generate the SoC without any content in the ram\nsbt \"runMain vexriscv.demo.Murax\"\n\n# To ge…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Build all above with mill",
+      "content": "Mill is a simple tool to build Scala/Java, also fits in off-line environment very well.\n\nGithub url is here: https://github.com/com-lihaoyi/mill\n\nDocument is here: https://mill-build.com/mill/Intro_to_Mill.html\n\nDownload executable mill: \n\n```sh\ncurl --fail -L -o mill https://github.com/com-lihaoyi/mill/releases/download/0.11.6/0.11.6-assembly\nchmod +x mill\n```\nUsing mill to generate the corresponding RTL as a `VexRiscv.v` file, run the following commands in the root directory of this repository:\n\n```sh\n./mill VexRiscv.runMain vexriscv.demo.GenFull\n```\nor\n\n```sh\n./mill VexRiscv.runMain vexriscv.demo.GenSmallest\n```\n\nUsing mill to run tests (need java, scala, verilator), do :\n\n```sh\nexport VEXRISCV_REGRESSION_SEED=42\nexport VEXRISCV_REGRESSION_TEST_ID=\n./mill VexRiscv.test.testOnly vexriscv…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Running Linux",
+      "content": "A default configuration is located in `src/main/scala/vexriscv/demo/Linux.scala`.\n\nThis file also contains \n- The commands to compile the buildroot image\n- How to run the Verilator simulation in interative mode\n\nThere is currently no SoC to run it on hardware, it is WIP. But the CPU simulation can already boot linux and run user space applications (even python).\n\nNote that VexRiscv can run Linux on both cache full and cache less design.",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "CPU parametrization and instantiation example",
+      "content": "You can find many examples of different configurations in the https://github.com/SpinalHDL/VexRiscv/tree/master/src/main/scala/vexriscv/demo folder.\n\nHere is one such example:\n\n```scala\nimport vexriscv._\nimport vexriscv.plugin._\n\n//Instanciate one VexRiscv\nval cpu = new VexRiscv(\n  //Provide a configuration instance\n  config = VexRiscvConfig(\n    //Provide a list of plugins which will futher add their logic into the CPU\n    plugins = List(\n      new IBusSimplePlugin(\n        resetVector = 0x00000000l,\n        cmdForkOnSecondStage = true,\n        cmdForkPersistence  = true\n      ),\n      new DBusSimplePlugin(\n        catchAddressMisaligned = false,\n        catchAccessFault = false\n      ),\n      new DecoderSimplePlugin(\n        catchIllegalInstruction = false\n      ),\n      new RegFilePlugi…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Add a custom instruction to the CPU via the plugin system",
+      "content": "Here is an example of a simple plugin which adds a simple SIMD_ADD instruction:\n\n```scala\nimport spinal.core._\nimport vexriscv.plugin.Plugin\nimport vexriscv.{Stageable, DecoderService, VexRiscv}\n\n//This plugin example will add a new instruction named SIMD_ADD which does the following:\n//\n//RD : Regfile Destination, RS : Regfile Source\n//RD( 7 downto  0) = RS1( 7 downto  0) + RS2( 7 downto  0)\n//RD(16 downto  8) = RS1(16 downto  8) + RS2(16 downto  8)\n//RD(23 downto 16) = RS1(23 downto 16) + RS2(23 downto 16)\n//RD(31 downto 24) = RS1(31 downto 24) + RS2(31 downto 24)\n//\n//Instruction encoding :\n//0000011----------000-----0110011\n//       |RS2||RS1|   |RD |\n//\n//Note :  RS1, RS2, RD positions follow the RISC-V spec and are common for all instruction of the ISA\n\nclass SimdAddPlugin extends Pl…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Adding a new CSR via the plugin system",
+      "content": "Here are two examples about how to add a custom CSR to the CPU via the plugin system:\nhttps://github.com/SpinalHDL/VexRiscv/blob/master/src/main/scala/vexriscv/demo/CustomCsrDemoPlugin.scala\n\nThe first one (`CustomCsrDemoPlugin`) adds an instruction counter and a clock cycle counter into the CSR mapping (and also do tricky stuff as a demonstration).\n\nThe second one (`CustomCsrDemoGpioPlugin`) creates a GPIO peripheral directly mapped into the CSR.",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "CPU clock and resets",
+      "content": "Without the debug plugin, the CPU will have a standard `clk` input and a `reset` input. But with the debug plugin the situation is the following:\n\n- `clk`: as before, the clock which drives the whole CPU design, including the debug logic\n- `reset`: reset all the CPU states except the debug logic\n- `debugReset`: reset the debug logic of the CPU\n- `debug_resetOut`: a CPU output signal which allows the JTAG to reset the CPU + the memory interconnect + the peripherals\n\nSo here is the reset interconnect, in case you use the debug plugin:\n\n```\n                                VexRiscv\n                            +------------------+\n                            |                  |\ntoplevelReset >----+--------> debugReset       |\n                   |        |                  |\n                   …",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "VexRiscv Architecture",
+      "content": "VexRiscv is implemented via a 5 stage in-order pipeline on which many optional and complementary plugins add functionalities to provide a functional RISC-V CPU.\nThis approach is completely unconventional and only possible through meta hardware description languages (SpinalHDL, in the current case) but has proven its advantages\nvia the VexRiscv implementation:\n\n- You can swap/turn on/turn off parts of the CPU directly via the plugin system\n- You can add new functionalities/instructions without having to modify any of the sources of the CPU\n- It allows the CPU configuration to cover a very large spectrum of implementations without cooking spaghetti code\n- It allows your codebase to truly produce a parametrized CPU design\n\nIf you generate the CPU without any plugin, it will only contain the d…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "FPU",
+      "content": "Features : \n\n- Support IEEE 754 float and optionaly double\n- Implement Subnormal (few cycles lost in case of subnormal load/store)\n- Implement exceptions flags\n- The FPU can be shared between multiple CPU\n- Can be integrated inside or outside the CPU via the FpuPlugin\n- Fully pipelined, can produce one result per cycle for most operations (add,sub, mul, fma, load, store), as long there is no inter-dependancies\n- Implement multiplication using multiple sub multiplication operations in parallel (\"FPGA friendly\")\n- Division done with radix 4 (2 bits per cycle)\n- Square root done with radix 2 (1 bit per cycle)\n- Currently only compatible with the DBusCachedPlugin for load and store\n- 64 bits Load and store can be done in one cycle via the DBusCachedPlugin (even if VexRiscv is RV32)\n\nAccuracy, …",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Plugins",
+      "content": "This chapter describes the currently implemented plugins.\n\n- [IBusSimplePlugin](#ibussimpleplugin)\n- [IBusCachedPlugin](#ibuscachedplugin)\n- [DecoderSimplePlugin](#decodersimpleplugin)\n- [RegFilePlugin](#regfileplugin)\n- [HazardSimplePlugin](#hazardsimpleplugin)\n- [SrcPlugin](#srcplugin)\n- [IntAluPlugin](#intaluplugin)\n- [LightShifterPlugin](#lightshifterplugin)\n- [FullBarrelShifterPlugin](#fullbarrelshifterplugin)\n- [BranchPlugin](#branchplugin)\n- [DBusSimplePlugin](#dbussimpleplugin)\n- [DBusCachedPlugin](#dbuscachedplugin)\n- [MulPlugin](#mulplugin)\n- [DivPlugin](#divplugin)\n- [MulDivIterativePlugin](#muldiviterativeplugin)\n- [CsrPlugin](#csrplugin)\n- [MstatushPlugin](#mstatushplugin)\n- [StaticMemoryTranslatorPlugin](#staticmemorytranslatorplugin)\n- [MemoryTranslatorPlugin](#memorytransla…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "IBusSimplePlugin",
+      "content": "This plugin implements the CPU frontend (instruction fetch) via a very simple and neutral memory interface going outside the CPU.\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| catchAccessFault | Boolean | When true, an instruction read response with read error asserted results in a CPU exception trap. |\n| resetVector | BigInt | Address of the program counter after the reset. |\n| cmdForkOnSecondStage | Boolean | When false, branches immediately update the program counter. This minimizes branch penalties but might reduce FMax because the instruction bus address signal is a combinatorial path. When true, this combinatorial path is removed and the program counter is updated one cycle after a branch is detected. While FMax may improve, an additional branch penalty wil…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "IBusCachedPlugin",
+      "content": "Simple and light multi-way instruction cache.\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| resetVector | BigInt | Address of the program counter after the reset. |\n| relaxedPcCalculation | Boolean | When false, branches immediately update the program counter. This minimizes branch penalties but might reduce FMax because the instruction bus address signal is a combinatorial path. When true, this combinatorial path is removed and the program counter is updated one cycle after a branch is detected. While FMax may improve, an additional branch penalty will be incurred as well. |\n| prediction | BranchPrediction | Can be set to NONE/STATIC/DYNAMIC/DYNAMIC_TARGET to specify the branch predictor implementation. See below for more details. |\n| historyRamSizeLog2 | Int | …",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "DecoderSimplePlugin",
+      "content": "This plugin provides instruction decoding capabilities to other plugins.\n\nFor instance, for a given instruction, the pipeline hazard plugin needs to know if it uses the register file source 1/2 in order to stall the pipeline until the hazard is gone.\nEach plugin that implements an instruction provides this kind of information to the DecoderSimplePlugin plugin.\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| catchIllegalInstruction | Boolean | When true, instructions that don't match a decoding specification will generate a trap exception  |\n\nHere is a usage example:\n\n```scala\n    //Specify the instruction decoding which should be applied when the instruction matches the 'key' pattern\n    decoderService.add(\n      //Bit pattern of the new instruction\n      key = M\"0…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "RegFilePlugin",
+      "content": "This plugin implements the register file.\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| regFileReadyKind | RegFileReadKind | Can be set to ASYNC or SYNC. Specifies the kind of memory read used to implement the register file. ASYNC means zero cycle latency memory read, while SYNC means one cycle latency memory read which can be mapped into standard FPGA memory blocks   |\n| zeroBoot | Boolean | Load all registers with zeroes at the beginning of the simulation to keep everything deterministic in logs/traces|\n\nThis register file use a `don't care` read-during-write policy, so the bypassing/hazard plugin should take care of this.\n\nIf you get a `Missing inserts : INSTRUCTION_ANTICIPATE` error, that's because the RegFilePlugin is configured to use SYNC memory read ports…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "HazardSimplePlugin",
+      "content": "This plugin checks the pipeline instruction dependencies and, if necessary or possible, will stop the instruction in the decoding stage or bypass the instruction results\nfrom the later stages of the decode stage.\n\nSince the register file is implemented with a `don't care` read-during-write policy, this plugin also manages these kind of hazards.\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| bypassExecute | Boolean | Enable the bypassing of instruction results coming from the Execute stage |\n| bypassMemory | Boolean | Enable the bypassing of instruction results coming from the Memory stage |\n| bypassWriteBack | Boolean | Enable the bypassing of instruction results coming from the WriteBack stage |\n| bypassWriteBackBuffer | Boolean | Enable the bypassing of the prev…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "SrcPlugin",
+      "content": "This plugin muxes different input values to produce SRC1/SRC2/SRC_ADD/SRC_SUB/SRC_LESS values which are common values used by many plugins in the execute stage (ALU/Branch/Load/Store).\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| separatedAddSub | RegFileReadKind | By default SRC_ADD/SRC_SUB are generated from a single controllable adder/substractor, but if this is set to true, it use separate adder/substractors |\n| executeInsertion | Boolean | By default SRC1/SRC2 are generated in the Decode stage, but if this parameter is true, it is done in the Execute stage (It will relax the bypassing network) |\n\nExcept for SRC1/SRC2, this plugin does everything at the begining of Execute stage.",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "IntAluPlugin",
+      "content": "This plugin implements all ADD/SUB/SLT/SLTU/XOR/OR/AND/LUI/AUIPC instructions in the execute stage by using the SrcPlugin outputs. It is a really simple plugin.\n\nThe result is injected into the pipeline directly at the end of the execute stage.",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "LightShifterPlugin",
+      "content": "Implements SLL/SRL/SRA instructions by using an iterative shifter register, while using one cycle per bit shift.\n\nThe result is injected into the pipeline directly at the end of the execute stage.",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "FullBarrelShifterPlugin",
+      "content": "Implements SLL/SRL/SRA instructions by using a full barrel shifter, so it executes all shifts in a single cycle.\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| earlyInjection | Boolean | By default the result of the shift is injected into the pipeline in the Memory stage to relax timings, but if this option is true it will be done in the Execute stage |",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "BranchPlugin",
+      "content": "This plugin implements all branch/jump instructions (JAL/JALR/BEQ/BNE/BLT/BGE/BLTU/BGEU) with primitives used by the cpu frontend plugins to implement branch prediction. The prediction implementation is set in the frontend plugins (IBusX).\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| earlyBranch | Boolean | By default the branch is done in the Memory stage to relax timings, but if this option is set it's done in the Execute stage|\n| catchAddressMisaligned | Boolean | If a jump/branch is done in an unaligned PC address, it will fire an trap exception |\n\nEach miss predicted jumps will produce between 2 and 4 cycles penalty depending the `earlyBranch` and the `PcManagerSimplePlugin.relaxedPcCalculation` configurations\n\n##### Prediction NONE\n\nNo prediction: each PC …",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "DBusSimplePlugin",
+      "content": "This plugin implements the load and store instructions (LB/LH/LW/LBU/LHU/LWU/SB/SH/SW) via a simple memory bus going out of the CPU.\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| catchAddressMisaligned | Boolean | If a memory access is done to an unaligned memory address, it will fire a trap exception |\n| catchAccessFault | Boolean | If a memory read returns an error, it will fire a trap exception  |\n| earlyInjection | Boolean | By default, the memory read values are injected into the pipeline in the WriteBack stage to relax the timings. If this parameter is true, it's done in the Memory stage |\n\nHere is the DBusSimpleBus\n\n```scala\ncase class DBusSimpleCmd() extends Bundle{\n  val wr = Bool\n  val address = UInt(32 bits)\n  val data = Bits(32 bit)\n  val size = UInt(…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "DBusCachedPlugin",
+      "content": "Multi way cache implementation with writh-through and allocate on read strategy. (Documentation is WIP)\n\nYou can invalidate the whole cache via the 0x500F instruction, and you can invalidate a address range (single line size) via the instruction 0x500F | RS1 << 15 where RS1 should not be X0 and point to one byte of the desired address to invalidate.\n\n\nThe memory bus is defined as :\n\n```scala\ncase class DataCacheMemCmd(p : DataCacheConfig) extends Bundle{\n  val wr = Bool\n  val uncached = Bool\n  val address = UInt(p.addressWidth bit)\n  val data = Bits(p.cpuDataWidth bits)\n  val mask = Bits(p.cpuDataWidth/8 bits)\n  val size   = UInt(p.sizeWidth bits) //... 1 => 2 bytes ... 2 => 4 bytes ...\n  val exclusive = p.withExclusive generate Bool()\n  val last = Bool\n}\ncase class DataCacheMemRsp(p : Dat…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "MulPlugin",
+      "content": "Implements the multiplication instruction from the RISC-V M extension. Its implementation was done in a FPGA friendly way by using 4 17*17 bit multiplications.\nThe processing is fully pipelined between the Execute/Memory/Writeback stage. The results of the instructions are always inserted in the WriteBack stage.",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "DivPlugin",
+      "content": "Implements the division/modulo instruction from the RISC-V M extension. It is done in a simple iterative way which always takes 34 cycles. The result is inserted into the\nMemory stage.\n\nThis plugin is now based on MulDivIterativePlugin.",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "MulDivIterativePlugin",
+      "content": "This plugin implements the multiplication, division and modulo of the RISC-V M extension in an iterative way, which is friendly for small FPGAs that don't have DSP blocks.\n\nThis plugin is able to unroll the iterative calculation process to reduce the number of cycles used to execute mul/div instructions.\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| genMul    | Boolean | Enables multiplication support. Can be set to false if you want to use the MulPlugin instead |\n| genDiv    | Boolean |  Enables division support |\n| mulUnrollFactor    | Int | Number of combinatorial stages used to speed up the multiplication, should be > 0 |\n| divUnrollFactor    | Int | Number of combinatorial stages used to speed up the division, should be > 0 |\n\nThe number of cycles used to ex…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "CsrPlugin",
+      "content": "Implements most of the Machine mode and a few of the User mode registers, as specified in the RISC-V priviledged spec.\nThe access mode of most of the CSR is parameterizable to reduce the area usage of unneeded features.\n\n(CsrAccess can be `NONE/READ_ONLY/WRITE_ONLY/READ_WRITE`)\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| catchIllegalAccess   | Boolean |  |\n| mvendorid            | BigInt |  |\n| marchid              | BigInt |  |\n| mimpid               | BigInt |  |\n| mhartid              | BigInt |  |\n| misaExtensionsInit   | Int |  |\n| misaAccess           | CsrAccess |  |\n| mtvecAccess          | CsrAccess |  |\n| mtvecInit            | BigInt |  |\n| mepcAccess           | CsrAccess |  |\n| mscratchGen          | Boolean |  |\n| mcauseAccess         | CsrAccess …",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "MstatushPlugin",
+      "content": "Implements the mstatush CSR (0x310) for RV32 systems. This CSR represents the upper 32 bits of the conceptual 64-bit mstatus register.\n\nFor VexRiscv (RV32, little-endian, no hypervisor extension), mstatush is hardwired to zero.\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| readOnly | Boolean | When true (default), mstatush is read-only. When false, writes are accepted but have no effect. |\n\nThis plugin is optional. Include it in your configuration only if you need mstatush CSR support.\n\nExample usage:\n```scala\n// In your VexRiscv configuration plugins list:\nnew MstatushPlugin(readOnly = true)  // Read-only (default)\nnew MstatushPlugin(readOnly = false) // Allow writes (no effect)\n```\n\nSee [GenWithMstatush.scala](./src/main/scala/vexriscv/demo/GenWithMstatush.scal…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "StaticMemoryTranslatorPlugin",
+      "content": "Static memory translator plugin which allows to specify which range of the memory addresses is I/O mapped and shouldn't be cached.\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| ioRange   | UInt => Bool | Function reference which eat an address and return true if the address should be uncached. ex : ioRange= _(31 downto 28) === 0xF => all 0xFXXXXXXX will be uncached|",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "MmuPlugin",
+      "content": "Hardware refilled MMU implementation. Allows other plugins such as DBusCachedPlugin/IBusCachedPlugin to instanciate memory address translation ports. Each port has a small dedicated\nfully associative TLB cache which is refilled automaticaly via a dbus access sharing.",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "PmpPlugin",
+      "content": "This is a physical memory protection (PMP) plugin which conforms to the v1.12 RISC-V privilege specification, without ePMP (`Smepmp`) extension support. PMP is configured by writing two special CSRs: `pmpcfg#` and `pmpaddr#`. The former contains the permissions and addressing modes for four protection regions, and the latter contains the encoded start address for a single region. Since the actual region bounds must be computed from the values written to these registers, writing them takes a few CPU cylces. This delay is necessary in order to centralize all of the decoding logic into a single component. Otherwise, it would have to be duplicated for each region, even though the decoding operation happens only when PMP is reprogrammed (e.g., on some context switches).\n\n##### PmpPluginNapot\n\nT…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "DebugPlugin",
+      "content": "This plugin implements enough CPU debug features to allow comfortable GDB/Eclipse debugging. To access those debug features, it provides a simple memory bus interface.\nThe JTAG interface is provided by another bridge, which makes it possible to efficiently connect multiple CPUs to the same JTAG.\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| debugClockDomain   | ClockDomain | As the debug unit is able to reset the CPU itself, it should use another clock domain to avoid killing itself (only the reset wire should differ) |\n\nThe internals of the debug plugin are done in a manner which reduces the area usage and the FMax impact of this plugin.\n\nHere is the simple bus to access it, the rsp comes one cycle after the request:\n\n```scala\ncase class DebugExtensionCmd() exte…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "EmbeddedRiscvJtag",
+      "content": "VexRiscv also support the official RISC-V debug specification (Thanks Efinix for the funding !).\n\nTo enable it, you need to add the EmbeddedRiscvJtag to the plugin list : \n\n```scala\nnew EmbeddedRiscvJtag(\n  p = DebugTransportModuleParameter(\n    addressWidth = 7,\n    version      = 1,\n    idle         = 7\n  ),\n  withTunneling = false,\n  withTap = true,\n  jtagId = 0x10002FFF\n)\n```\n\nAnd turn on the withPrivilegedDebug option in the CsrPlugin config.\n\nHere is an example of openocd tcl script to connect : \n\n```tcl\n# ADD HERE YOUR JTAG ADAPTER SETTINGS\n\nset _CHIPNAME riscv\njtag newtap $_CHIPNAME cpu -irlen 5 -expected-id 0x10002FFF\n\nset _TARGETNAME $_CHIPNAME.cpu\n\ntarget create $_TARGETNAME.0 riscv -chain-position $_TARGETNAME\n\ninit\nhalt\n```\n\nA full example can be found in GenFullWithOfficialRi…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "YamlPlugin",
+      "content": "This plugin offers a service to other plugins to generate a useful Yaml file describing the CPU configuration. It contains, for instance, the sequence of instructions required\nto flush the data cache (information used by openocd).",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "FpuPlugin",
+      "content": "Allow the integration of a internal or a external FPU into VexRiscv (See the FPU chapter)\n\n| Parameters | type | description |\n| ------ | ----------- | ------ |\n| externalFpu   | Boolean | When false the FPU is instanciated in Vex, else the plugin has a `port` interface to which you can connect an external FPU |\n| p   | FpuParameter | Parameter with which the connected FPU will be created |",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "AesPlugin",
+      "content": "This plugin allow to accelerate AES encryption/decryption by using an internal ROM to solve SBOX and permutations, allowing in practice to execute one AES round in about 21 cycles.\n\nFor more documentation, check src/main/scala/vexriscv/plugin/AesPlugin.scala, a software C driver can be found here : <https://github.com/SpinalHDL/SaxonSoc/blob/dev-0.3/software/standalone/driver/aes_custom.h>\n\nIt was also ported on libressl via the following patch :\n<https://github.com/SpinalHDL/buildroot-spinal-saxon/blob/main/patches/libressl/0000-vexriscv-aes.patch>\n\nSpeed up of 4 was observed in libressl running in linux. <https://github.com/SpinalHDL/SaxonSoc/pull/53#issuecomment-730133020>",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Programming the FPGA",
+      "content": "* Create a new project and choose the board. In our case it is the Arty A7-35 (`xc7a35ticsg324-1L`).\n* Copy the mentioned files (.v and .bin) of the previous section from the Vexriscv folder into the Vivado project\nin e.g. the path:\t`project_name.srcs\\sources_1\\imports\\Downloads`\n* Create a toplevel file by instantiating Murax I/O ports in it to blink the LED’s on the Digilent board. (Note: The program to blink the LED’s is already present in the four `.bin` files with the `Murax.v` file). The toplevel file and constraint `arty_a7.xdc` file, if required, can be found and reused from the path: `VexRiscv/scripts/Murax/arty_a7`, but you need to make sure that all the JTAG ports of Murax are commented or deleted in the toplevel file. Remember: we removed them in Section 2 and connected them in…",
+      "evidence": "input/docs/doc__nativeJtag__README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "A few hint to help reading the spec",
+      "content": "In order to make the spec more readable, there is some definitions :",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Stream",
+      "content": "A stream is a primitive interface which carry transactions using a valid/ready handshake.",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Memory copy",
+      "content": "To talk in a non abstract way, in a system with multiple caches, a given memory address can potentialy be loaded in multiple caches at the same time. So let's define that : \n\n- The DDR memory is named `main memory`\n- Each cache line can be loaded with a part of the main memory, let's name that a `memory copy`",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Master / Interconnect / Slave",
+      "content": "A master could be for instance a CPU cache, the side of the interconnect toward the main memory or toward a more general interconnect.\n\nA slave could be main memory, the side of the interconnect toward a CPU cache or toward a less general interconnect. \n\nThe spec will try to stay abstract and define the coherent interface as something which can be used between two agents (cpu, interconnect, main memory)",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Memory copy status",
+      "content": "Memory copy, in other words, cache line, have more states than non coherent systems :\n\n| Name          | Description |\n|---------------|-------------|\n| Valid/Invalid | Line loaded or not |\n| Shared/Unique | shared => multiple copy of the cache line in different caches, unique => no other caches has a copy of the line |\n| Owner/Lodger  | lodger => copy of the line, but no other responsibility, owner => the given cache is responsible to write back dirty data and answer probes with the data |\n| Clean/Dirty   | clean => match main memory, dirty => main memory need updates |\n\nAll combination of those cache flag are valid. But if a cache line is invalid, the other status have no meaning.\n\nLater in the spec, memory copy state can be described for example as :\n\n- VSOC for (Valid, Shared, Owner, C…",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Coherent interface",
+      "content": "One full coherent interface is composed of 3 inner interfaces, them-self composed of 7 stream described bellow as `interfaceName (Side -> StreamName -> Side -> StreamName -> ...)` \n- write (M -> writeCmd -> S -> writeRsp -> M)\n- read  (M -> readCmd- > S -> readRsp -> M -> readAck -> S)\n- probe (S -> probeCmd -> M -> probeRsp -> S)\n\nThe following streams could physically be merges in order to reduce the number of arbitration : \n\n- writeCmd, probeRsp, readAck\n- writeRsp, readRsp",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Read interface",
+      "content": "Used by masters to obtain new memory copies and make copies unique (used to write them).\n\nComposed of 3 stream :\n\n| Name    | Direction | Description |\n|---------|-----------|----------|\n| readCmd | M -> S    | Emit memory read and cache management commands |\n| readRsp | M <- S    | Return some data and/or a status from readCmd |\n| readAck | M -> S    | Return ACK from readRsp to synchronize the interconnect status |",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Write interface",
+      "content": "Used by masters to write data back to the memory and notify the interconnect of memory copies eviction (used to keep potential directories updated).\n\nComposed of 2 stream :\n\n| Name    | Direction | Description |\n|---------|-----------|----------|\n| writeCmd | M -> S    | Emit memory writes and cache management commands |\n| writeRsp | M <- S    | Return a status from writeCmd |",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Probe interface",
+      "content": "Used by the interconnect to order master to change their memory copies status and get memory copies owners data. \n\nComposed of 2 stream :\n\n| Name     | Direction | Description |\n|----------|-----------|----------|\n| probeCmd | M <- S    | Used for cache management |\n| probeRsp | M -> S    | Acknowledgment |",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Transactions",
+      "content": "This chapter define transactions moving over the 3 previously defined interface (read/write/probe).",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Read commands",
+      "content": "Emitted on the readCmd channel (master -> slave)\n\n| Command     | Initial state | Description | Usage example |\n|-------------|---------------|----------|------|\n| readShared  | I---          | Get a memory copy as V--- | Want to read a uncached address |\n| readUnique  | I---          | Get a memory copy as VUO- | Want to write a uncached address |\n| readOnce    | I---          | Get a memory copy without coherency tracking | Instruction cache read |\n| makeUnique  | VS--          | Make other memory copy as I--- and make yourself VUO- | Want to write into a shared line |\n| readBarrier | N/A           | Ensure that the visibility of the memory operations of this channel do not cross the barrier | ISA fence |\n\nmakeUnique should be designed with care. There is a few corner cases : \n- While a …",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Read responses",
+      "content": "Emitted on the readRsp channel (master <- slave)\n\nreadSuccess, readError, data shared/unique clean/dirty owner/notOwner\n\n| Responses   | From command | Description |\n|-------------|---------------|----------|\n| readSuccess | makeUnique, readBarrier | - |\n| readError   | readShared, readUnique, readOnce | Bad address |\n| readData    | readShared, readUnique, readOnce | Data + coherency status (V---) |",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Read ack",
+      "content": "Emitted on the readAck channel (master -> slave), it carry no information, just a notification that the master received the read response\n\n| Name         | From command | Description |\n|--------------|---------------|----------|\n| readSuccess  | * | - |",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Write commands",
+      "content": "Write commands can be emitted on the writeCmd channel (master -> slave)\n\n| Name         | Initial state | Description | Usage example |\n|--------------|---------------|----------|----------|\n| writeInvalid | V-O-          | Write the memory copy and update it status to I--- | Need to free the dirty cache line |\n| writeShare   | V-O-          | Write the memory copy but keep it as VSO- | A probe makeShared asked it |\n| writeUnique  | VUO-          | Write the memory copy but keep it as VUO- | A probe probeOnce need to read the data |\n| evict        | V---, !V-OD   | Notify the interconnect that the cache line is now I--- | Need to free a clean cache line |\n| writeBarrier | N/A           | Ensure that the visibility of the memory operations of this channel do not cross the barrier | ISA fenc…",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Write responses",
+      "content": "Emitted on the writeRsp channel (master <- slave), it carry no information, just a notification that the corresponding command is done.\n\n| Name         | From command | Description |\n|--------------|---------------|----------|\n| writeSuccess   | * | - |",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Probe commands",
+      "content": "Probe commands can be emitted on the probeCmd channel (slave -> master)\n\n| Name        | Description  | Usage example |\n|-------------|-------------|---------------|\n| makeInvalid | Make the memory copy I--- | Another cache want to make his shared copy unique to write it |\n| makeShared  | Make the memory copy VS-- | Another cache want to read a memory block, so unique copy need to be shared |\n| probeOnce   | Read the V-O- memory copy | A non coherent agent did a readOnce  |\n\nmakeInvalid and makeShared could result into one of the following probeSuccess, writeInvalid, writeShare\n\nprobeOnce can result into one of the following probeSuccess, writeShare, writeUnique\n\nTo help the slave matching the writeInvalid and writeShare generated from a probe, those request are tagged with a matching ID. …",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h3",
+      "title": "Probe responses",
+      "content": "Emitted on the probeRsp channel (master -> slave), it carry no information, just a notification that the corresponding command is done.\n\n| Name         | From command | Description |\n|--------------|---------------|----------|\n| probeSuccess   | * | - |",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Channel interlocking",
+      "content": "This is a delicate subject as if everything was permited, it would be easy to end up with deadlocks.\n\nThere is the streams priority (top => high priority, bottom => low priority) A lower priority stream should not block a higher priority stream in order to avoid deadlocks.\n- writeCmd, writeRsp, readRsp, readAck, probeRsp. Nothing should realy block them excepted bandwidth\n- probeCmd. Can be blocked by inflight/generated writes\n- readCmd. Can be blocked by inflight/generated probes\n\nIn other words : \n\nMasters can emit writeCmd and wait their writeRsp completion before answering probes commands.\nSlaves can emit probeCmd and wait their proveRsp completion before answering reads.\nSlaves can emit readRsp and wait on their readAck completion before doing anything else",
+      "evidence": "input/docs/doc__smp__smp.md",
+      "heading_shape": "md_atx"
+    }
+  ],
+  "no_frs_sections_in_input": false,
+  "protocol_overview": null,
+  "no_protocol_overview_in_input": true,
+  "compliance_requirements": [],
+  "timing_parameters": [
+    {
+      "name": "operating_frequency",
+      "parameter": "operating_frequency",
+      "value": 5,
+      "unit": "MHz",
+      "evidence": "input/docs/doc__nativeJtag__README.md",
+      "raw": "clock speed 5000 kHz",
+      "extraction_strategy": "prose_freq_promotion_verb_form_v1_6_570",
+      "low_confidence": true
+    }
+  ],
+  "fmax_mhz": 5.0,
+  "fmax_mhz_extraction_strategy": "max_of_operating_frequency_v1_6_570",
+  "no_fmax_mhz_in_input": false,
+  "extraction_evidence": {
+    "input/docs/README.md": [
+      {
+        "literal": "h2 Index",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Description",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Area usage and maximal frequency",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Dependencies",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 CPU generation",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Regression tests",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Using Eclipse to run and debug the software",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 By using gnu-mcu-eclipse",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 By using Zylin plugin (old)",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Briey SoC",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Murax SoC",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Build all above with mill",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Running Linux",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 CPU parametrization and instantiation example",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Add a custom instruction to the CPU via the plugin system",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Adding a new CSR via the plugin system",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 CPU clock and resets",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 VexRiscv Architecture",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 FPU",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Plugins",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 IBusSimplePlugin",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 IBusCachedPlugin",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 DecoderSimplePlugin",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 RegFilePlugin",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/doc__gcdPeripheral__README.md": [],
+    "input/docs/doc__gcdPeripheral__src__main__c__murax__gcd_world__makefile": [],
+    "input/docs/doc__nativeJtag__README.md": [
+      {
+        "literal": "h3 Programming the FPGA",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/doc__smp__smp.md": [
+      {
+        "literal": "h2 A few hint to help reading the spec",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Stream",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Memory copy",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Master / Interconnect / Slave",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Memory copy status",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Coherent interface",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Read interface",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Write interface",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Probe interface",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Transactions",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Read commands",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Read responses",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Read ack",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Write commands",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Write responses",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Probe commands",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Probe responses",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Channel interlocking",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Interface subsets",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 ReadOnly interface without maintained coherency",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 WriteOnly interface",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/doc__vjtag__README.md": [
+      {
+        "literal": "h2 How to use VJTAG with Briey",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Method 1",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h3 Method 2",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Using OpenOCD",
+        "label": "FRS section"
+      }
+    ],
+    "v1.6.295.protocol_overview_class_gate_suppressed": [
+      {
+        "literal": "class_path='processor_cpu', hd_signal_count=0",
+        "label": "v1.6.295 (#180) — protocol_overview suppressed: CPU / analog class OR fewer than 2 half-duplex shape signals in source"
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "auto_cited_sections": [
+    {
+      "file_ref": "phase1/input_doc/doc__nativeJtag__README.txt:72",
+      "sec_id": "1",
+      "heading": "`usb_connect.cfg` (interface configuration)",
+      "slug": "usb_connect_cfg_interface_configuration"
+    },
+    {
+      "file_ref": "phase1/input_doc/doc__nativeJtag__README.txt:73",
+      "sec_id": "2",
+      "heading": "`soc_init.cfg` (take over the control of the CPU)",
+      "slug": "soc_init_cfg_take_over_the_control_of_the_cpu"
+    }
+  ]
+}

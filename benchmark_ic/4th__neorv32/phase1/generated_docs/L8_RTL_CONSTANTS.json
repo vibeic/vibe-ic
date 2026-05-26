@@ -1,0 +1,95 @@
+{
+  "schema_version": 2,
+  "doc_class": "rtl_constants",
+  "ic_name": "NEORV32 RISC-V Processor",
+  "rx_classifier_ticks": null,
+  "no_rx_classifier_ticks_in_input": true,
+  "timing_constants": [],
+  "no_timing_constants_in_input": true,
+  "timing_parameters": [],
+  "clock_mhz": null,
+  "no_clock_mhz_in_input": true,
+  "clock_domains": [],
+  "no_clock_domains_in_input": true,
+  "synthesis_targets": [
+    {
+      "name": "fmax_prose_130mhz",
+      "fmax_mhz": 130.0,
+      "target_fpga": null,
+      "role": "chip_internal_proposed",
+      "extraction_strategy": "fmax_prose_v1_6_538",
+      "v1_6_538_extracted": true,
+      "evidence": {
+        "source": "input/docs/overview.md"
+      }
+    }
+  ],
+  "no_synthesis_targets_in_input": false,
+  "parameters": [],
+  "peripheral_only_emit_skipped_v1_6_376": 0,
+  "extraction_strategy": {
+    "l8_evidence_population_v1_6_395": 1
+  },
+  "fmax_mhz": 130.0,
+  "fmax_mhz_extraction_strategy": "max_of_synthesis_targets_v1_6_561",
+  "extraction_evidence": {
+    "input/docs/README.md": [],
+    "input/docs/overview.md": [
+      {
+        "literal": "(130.0, None)",
+        "label": "fmax_prose_v1_6_538"
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "auto_discovered_literals": [
+    {
+      "literal": "2300LUTs",
+      "value": "2300",
+      "unit": "LUTs",
+      "source_doc": "README.md",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1000FFs",
+      "value": "1000",
+      "unit": "FFs",
+      "source_doc": "README.md",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "130MHz",
+      "value": "130",
+      "unit": "MHz",
+      "source_doc": "README.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2300LUTs",
+      "value": "2300",
+      "unit": "LUTs",
+      "source_doc": "overview.md",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1000FFs",
+      "value": "1000",
+      "unit": "FFs",
+      "source_doc": "overview.md",
+      "kind": "resource_count",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "130MHz",
+      "value": "130",
+      "unit": "MHz",
+      "source_doc": "overview.md",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    }
+  ]
+}

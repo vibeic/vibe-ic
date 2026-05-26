@@ -1,0 +1,68 @@
+type: bug
+severity: P0
+component: program:phase1_one_shot_runner
+
+plugin_version: "0.1.2"
+
+title: >-
+  Phase 1 with raw vendor docs under input/docs/ never produces L docs — the
+  runner routes raw prose to the wrong (reverse-extract) engine path and
+  invokes the engine CLI in three broken ways (script-mode import error,
+  unsupported --facts arg, wrong cwd for the relative class_kb path)
+
+pattern: |
+  A project whose only Phase-1 input is a directory of raw vendor documents
+  (Markdown / PDF / text datasheets, NOT pre-structured layer JSON) fails to
+  produce any L1-L13 documents, even though a dedicated doc-extraction runner
+  exists and works correctly when invoked directly. Four independent defects
+  compound:
+
+  1. Input-mode mis-routing: the runner's input-mode detector sends a
+     populated raw-docs directory to the structured/prompt engine path. That
+     path's ingester is a *reverse-extractor* that only reads already-emitted
+     layer JSON and emits zero facts from raw prose, so zero L docs render.
+     The raw-corpus → L-docs ingester (the doc-extraction runner) is never
+     reached.
+
+  2. Engine CLI run as a script: the runner invokes the engine entry file as
+     a standalone script, but that file uses package-relative imports, so it
+     dies with "attempted relative import with no known parent package". It
+     must be run as a module with the package parent on the import path.
+
+  3. Unsupported CLI argument: the runner passes a facts-output flag to the
+     engine's run-all verb, which does not accept it (run-all writes facts
+     internally), producing an argparse "unrecognized arguments" failure.
+
+  4. Wrong working directory: the engine's default class knowledge-base path
+     is *relative* (resolved from the repo root), but the runner executes the
+     engine with a working directory that does not contain that relative
+     tree, so a class-tree lookup throws FileNotFoundError.
+
+  Generality: any agent running Phase 1 on a fresh project whose spec arrives
+  as raw vendor documents (the most common real-world entry point) hits this.
+  The structured-YAML / prompt entry path masks the bug because it doesn't
+  exercise the engine's class-KB lookup the same way.
+
+suggested_fix: |
+  1. In the input-mode detector, treat a populated raw-docs directory as the
+     doc-extraction ("docs") mode unless it actually contains layer-JSON
+     files; only layer-JSON dirs belong to the reverse-extract/prompt path.
+  2. Invoke the engine CLI as a module (package.module form) with the package
+     parent directory on the import path, not as a bare script.
+  3. Drop the unsupported facts-output flag from the run-all invocation; rely
+     on the verb's internal facts emission.
+  4. Run the engine with its working directory set to the repo root that
+     contains the relative class-KB tree (discover it by walking up for the
+     marketplace/plugins directory), or pass an absolute class-KB-root so the
+     run-all verb is cwd-independent. (run-all currently exposes no
+     class-KB-root flag — adding one would make the deterministic fix
+     fully cwd-independent.)
+
+id: "ORGANIC-20260526-phase1-rawdocs-routing-and-engine-invocation"
+submitted_at: "2026-05-26T02:46:40+00:00"
+session_context: >-
+  Fresh field-agent full Vibe-IC run. Phase 1 was the first gate and failed
+  outright on raw-Markdown vendor docs; after routing to the doc-extraction
+  runner and fixing the engine invocation, Phase 1 produced 14 L docs at
+  100% input-coverage. Fixes were applied locally to the runner to unblock
+  the run; recording the general defect class here for upstream absorption.

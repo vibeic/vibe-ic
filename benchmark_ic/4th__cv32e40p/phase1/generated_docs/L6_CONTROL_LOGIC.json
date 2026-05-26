@@ -1,0 +1,128 @@
+{
+  "schema_version": 2,
+  "doc_class": "control_logic",
+  "ic_name": "Released core",
+  "reject_rules": [],
+  "fsm_states": [],
+  "pipeline_stages": [
+    {
+      "name": "ID",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/source__instruction_fetch.rst (pipeline stage)"
+    },
+    {
+      "name": "EX",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/source__intro.rst (pipeline stage)"
+    },
+    {
+      "name": "IF",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/source__pipeline.rst (pipeline stage)"
+    },
+    {
+      "name": "WB",
+      "source_kind": "cpu_pipeline_stage",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/source__pipeline.rst (pipeline stage)"
+    }
+  ],
+  "no_pipeline_stages_in_input": false,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
+  "fsm_tokens": [
+    {
+      "name": "Buffer",
+      "type": "structure",
+      "source": "images__blockdiagram.svg"
+    },
+    {
+      "name": "FSM",
+      "type": "structure",
+      "source": "images__debug_halted.svg"
+    },
+    {
+      "name": "Counter",
+      "type": "structure",
+      "source": "source__control_status_registers.rst"
+    },
+    {
+      "name": "Timer",
+      "type": "structure",
+      "source": "source__control_status_registers.rst"
+    },
+    {
+      "name": "FIFO",
+      "type": "structure",
+      "source": "source__instruction_fetch.rst"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/images__load_event.svg": [],
+    "input/docs/Makefile": [],
+    "input/docs/README.md": [],
+    "input/docs/images__CV32E40P_Block_Diagram.svg": [],
+    "input/docs/images__blockdiagram.svg": [
+      {
+        "literal": "Buffer",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/images__debug_halted.svg": [
+      {
+        "literal": "FSM",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/images__debug_running.svg": [],
+    "input/docs/images__obi_data_back_to_back.svg": [],
+    "input/docs/images__obi_data_basic.svg": [],
+    "input/docs/images__obi_data_multiple_outstanding.svg": [],
+    "input/docs/images__obi_data_slow_response.svg": [],
+    "input/docs/images__obi_instruction_basic.svg": [],
+    "input/docs/images__obi_instruction_multiple_outstanding.svg": [],
+    "input/docs/images__wfi.svg": [],
+    "input/docs/requirements.txt": [],
+    "input/docs/source__control_status_registers.rst": [
+      {
+        "literal": "Counter",
+        "label": "FSM structure token"
+      },
+      {
+        "literal": "Timer",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/source__core_versions.rst": [],
+    "input/docs/source__corev_hw_loop.rst": [],
+    "input/docs/source__debug.rst": [],
+    "input/docs/source__exceptions_interrupts.rst": [],
+    "input/docs/source__fpu.rst": [],
+    "input/docs/source__glossary.rst": [],
+    "input/docs/source__index.rst": [],
+    "input/docs/source__instruction_fetch.rst": [
+      {
+        "literal": "FIFO",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/source__instruction_set_extensions.rst": [],
+    "input/docs/source__integration.rst": [],
+    "input/docs/source__intro.rst": [],
+    "input/docs/source__load_store_unit.rst": [],
+    "input/docs/source__perf_counters.rst": [],
+    "input/docs/source__pipeline.rst": [],
+    "input/docs/source__preface.rst": [],
+    "input/docs/source__register_file.rst": [],
+    "input/docs/source__sleep.rst": [],
+    "input/docs/source__verification.rst": []
+  },
+  "class_path": "processor_cpu"
+}

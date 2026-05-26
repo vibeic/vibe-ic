@@ -1,0 +1,265 @@
+{
+  "schema_version": 2,
+  "doc_class": "frs",
+  "ic_name": "PicoRV32",
+  "frs_sections": [
+    {
+      "section": "h1",
+      "title": "PicoRV32 - A Size-Optimized RISC-V CPU",
+      "content": "PicoRV32 is a CPU core that implements the [RISC-V RV32IMC Instruction Set](http://riscv.org/).\nIt can be configured as RV32E, RV32I, RV32IC, RV32IM, or RV32IMC core, and optionally\ncontains a built-in interrupt controller.\n\nTools (gcc, binutils, etc..) can be obtained via the [RISC-V Website](https://riscv.org/software-status/).\nThe examples bundled with PicoRV32 expect various RV32 toolchains to be installed in `/opt/riscv32i[m][c]`. See\nthe [build instructions below](#building-a-pure-rv32i-toolchain) for details.\nMany Linux distributions now include the tools for RISC-V (for example\nUbuntu 20.04 has `gcc-riscv64-unknown-elf`). To compile using those set\n`TOOLCHAIN_PREFIX` accordingly (eg. `make TOOLCHAIN_PREFIX=riscv64-unknown-elf-`).\n\nPicoRV32 is free and open hardware licensed under t…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_setext"
+    },
+    {
+      "section": "h2",
+      "title": "Features and Typical Applications",
+      "content": "- Small (750-2000 LUTs in 7-Series Xilinx Architecture)\n- High f<sub>max</sub> (250-450 MHz on 7-Series Xilinx FPGAs)\n- Selectable native memory interface or AXI4-Lite master\n- Optional IRQ support (using a simple custom ISA)\n- Optional Co-Processor Interface\n\nThis CPU is meant to be used as auxiliary processor in FPGA designs and ASICs. Due\nto its high f<sub>max</sub> it can be integrated in most existing designs without crossing\nclock domains. When operated on a lower frequency, it will have a lot of timing\nslack and thus can be added to a design without compromising timing closure.\n\nFor even smaller size it is possible disable support for registers `x16`..`x31` as\nwell as `RDCYCLE[H]`, `RDTIME[H]`, and `RDINSTRET[H]` instructions, turning the\nprocessor into an RV32E core.\n\nFurthermore i…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_setext"
+    },
+    {
+      "section": "h2",
+      "title": "Files in this Repository",
+      "content": "#### README.md\n\nYou are reading it right now.\n\n#### picorv32.v\n\nThis Verilog file contains the following Verilog modules:\n\n| Module                   | Description                                                           |\n| ------------------------ | --------------------------------------------------------------------- |\n| `picorv32`               | The PicoRV32 CPU                                                      |\n| `picorv32_axi`           | The version of the CPU with AXI4-Lite interface                       |\n| `picorv32_axi_adapter`   | Adapter from PicoRV32 Memory Interface to AXI4-Lite                   |\n| `picorv32_wb`            | The version of the CPU with Wishbone Master interface                 |\n| `picorv32_pcpi_mul`      | A PCPI core that implements the `MUL[H[SU\\…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_setext"
+    },
+    {
+      "section": "h4",
+      "title": "Makefile and testbenches",
+      "content": "A basic test environment. Run `make test` to run the standard test bench (`testbench.v`)\nin the standard configurations. There are other test benches and configurations. See\nthe `test_*` make target in the Makefile for details.\n\nRun `make test_ez` to run `testbench_ez.v`, a very simple test bench that does\nnot require an external firmware .hex file. This can be useful in environments\nwhere the RISC-V compiler toolchain is not available.\n\n*Note: The test bench is using Icarus Verilog. However, Icarus Verilog 0.9.7\n(the latest release at the time of writing) has a few bugs that prevent the\ntest bench from running. Upgrade to the latest github master of Icarus Verilog\nto run the test bench.*\n\n#### firmware/\n\nA simple test firmware. This runs the basic tests from `tests/`, some C code, tests I…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Verilog Module Parameters",
+      "content": "The following Verilog module parameters can be used to configure the PicoRV32\ncore.\n\n#### ENABLE_COUNTERS (default = 1)\n\nThis parameter enables support for the `RDCYCLE[H]`, `RDTIME[H]`, and\n`RDINSTRET[H]` instructions. This instructions will cause a hardware\ntrap (like any other unsupported instruction) if `ENABLE_COUNTERS` is set to zero.\n\n*Note: Strictly speaking the `RDCYCLE[H]`, `RDTIME[H]`, and `RDINSTRET[H]`\ninstructions are not optional for an RV32I core. But chances are they are not\ngoing to be missed after the application code has been debugged and profiled.\nThis instructions are optional for an RV32E core.*\n\n#### ENABLE_COUNTERS64 (default = 1)\n\nThis parameter enables support for the `RDCYCLEH`, `RDTIMEH`, and `RDINSTRETH`\ninstructions. If this parameter is set to 0, and `ENABLE…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_setext"
+    },
+    {
+      "section": "h2",
+      "title": "Cycles per Instruction Performance",
+      "content": "*A short reminder: This core is optimized for size and f<sub>max</sub>, not performance.*\n\nUnless stated otherwise, the following numbers apply to a PicoRV32 with\nENABLE_REGS_DUALPORT active and connected to a memory that can accommodate\nrequests within one clock cycle.\n\nThe average Cycles per Instruction (CPI) is approximately 4, depending on the mix of\ninstructions in the code. The CPI numbers for the individual instructions can\nbe found in the table below. The column \"CPI (SP)\" contains the CPI numbers for\na core built without ENABLE_REGS_DUALPORT.\n\n| Instruction          |  CPI | CPI (SP) |\n| ---------------------| ----:| --------:|\n| direct jump (jal)    |    3 |        3 |\n| ALU reg + immediate  |    3 |        3 |\n| ALU reg + reg        |    3 |        4 |\n| branch (not taken)   |  …",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_setext"
+    },
+    {
+      "section": "h2",
+      "title": "PicoRV32 Native Memory Interface",
+      "content": "The native memory interface of PicoRV32 is a simple valid-ready interface\nthat can run one memory transfer at a time:\n\n    output        mem_valid\n    output        mem_instr\n    input         mem_ready\n\n    output [31:0] mem_addr\n    output [31:0] mem_wdata\n    output [ 3:0] mem_wstrb\n    input  [31:0] mem_rdata\n\nThe core initiates a memory transfer by asserting `mem_valid`. The valid\nsignal stays high until the peer asserts `mem_ready`. All core outputs\nare stable over the `mem_valid` period. If the memory transfer is an\ninstruction fetch, the core asserts `mem_instr`.",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_setext"
+    },
+    {
+      "section": "h4",
+      "title": "Read Transfer",
+      "content": "In a read transfer `mem_wstrb` has the value 0 and `mem_wdata` is unused.\n\nThe memory reads the address `mem_addr` and makes the read value available on\n`mem_rdata` in the cycle `mem_ready` is high.\n\nThere is no need for an external wait cycle. The memory read can be implemented\nasynchronously with `mem_ready` going high in the same cycle as `mem_valid`, or\n`mem_ready` being tied to constant 1.",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "Write Transfer",
+      "content": "In a write transfer `mem_wstrb` is not 0 and `mem_rdata` is unused. The memory\nwrite the data at `mem_wdata` to the address `mem_addr` and acknowledges the\ntransfer by asserting `mem_ready`.\n\nThe 4 bits of `mem_wstrb` are write enables for the four bytes in the addressed\nword. Only the 8 values `0000`, `1111`, `1100`, `0011`, `1000`, `0100`, `0010`,\nand `0001` are possible, i.e. no write, write 32 bits, write upper 16 bits,\nwrite lower 16, or write a single byte respectively.\n\nThere is no need for an external wait cycle. The memory can acknowledge the\nwrite immediately  with `mem_ready` going high in the same cycle as\n`mem_valid`, or `mem_ready` being tied to constant 1.",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "Look-Ahead Interface",
+      "content": "The PicoRV32 core also provides a \"Look-Ahead Memory Interface\" that provides\nall information about the next memory transfer one clock cycle earlier than the\nnormal interface.\n\n    output        mem_la_read\n    output        mem_la_write\n    output [31:0] mem_la_addr\n    output [31:0] mem_la_wdata\n    output [ 3:0] mem_la_wstrb\n\nIn the clock cycle before `mem_valid` goes high, this interface will output a\npulse on `mem_la_read` or `mem_la_write` to indicate the start of a read or\nwrite transaction in the next clock cycle.\n\n*Note: The signals `mem_la_read`, `mem_la_write`, and `mem_la_addr` are driven\nby combinatorial circuits within the PicoRV32 core. It might be harder to\nachieve timing closure with the look-ahead interface than with the normal\nmemory interface described above.*",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h2",
+      "title": "Pico Co-Processor Interface (PCPI)",
+      "content": "The Pico Co-Processor Interface (PCPI) can be used to implement non-branching\ninstructions in external cores:\n\n    output        pcpi_valid\n    output [31:0] pcpi_insn\n    output [31:0] pcpi_rs1\n    output [31:0] pcpi_rs2\n    input         pcpi_wr\n    input  [31:0] pcpi_rd\n    input         pcpi_wait\n    input         pcpi_ready\n\nWhen an unsupported instruction is encountered and the PCPI feature is\nactivated (see ENABLE_PCPI above), then `pcpi_valid` is asserted, the\ninstruction word itself is output on `pcpi_insn`, the `rs1` and `rs2`\nfields are decoded and the values in those registers are output\non `pcpi_rs1` and `pcpi_rs2`.\n\nAn external PCPI core can then decode the instruction, execute it, and assert\n`pcpi_ready` when execution of the instruction is finished. Optionally a\nresult valu…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_setext"
+    },
+    {
+      "section": "h2",
+      "title": "Custom Instructions for IRQ Handling",
+      "content": "*Note: The IRQ handling features in PicoRV32 do not follow the RISC-V\nPrivileged ISA specification. Instead a small set of very simple custom\ninstructions is used to implement IRQ handling with minimal hardware\noverhead.*\n\nThe following custom instructions are only supported when IRQs are enabled\nvia the `ENABLE_IRQ` parameter (see above).\n\nThe PicoRV32 core has a built-in interrupt controller with 32 interrupt inputs. An\ninterrupt can be triggered by asserting the corresponding bit in the `irq`\ninput of the core.\n\nWhen the interrupt handler is started, the `eoi` End Of Interrupt (EOI) signals\nfor the handled interrupts go high. The `eoi` signals go low again when the\ninterrupt handler returns.\n\nThe IRQs 0-2 can be triggered internally by the following built-in interrupt sources:\n\n| IRQ | …",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_setext"
+    },
+    {
+      "section": "h2",
+      "title": "Building a pure RV32I Toolchain",
+      "content": "TL;DR: Run the following commands to build the complete toolchain:\n\n    make download-tools\n    make -j$(nproc) build-tools\n\nThe default settings in the [riscv-tools](https://github.com/riscv/riscv-tools) build\nscripts will build a compiler, assembler and linker that can target any RISC-V ISA,\nbut the libraries are built for RV32G and RV64G targets. Follow the instructions\nbelow to build a complete toolchain (including libraries) that target a pure RV32I\nCPU.\n\nThe following commands will build the RISC-V GNU toolchain and libraries for a\npure RV32I target, and install it in `/opt/riscv32i`:\n\n    # Ubuntu packages needed:\n    sudo apt-get install autoconf automake autotools-dev curl libmpc-dev \\\n            libmpfr-dev libgmp-dev gawk build-essential bison flex texinfo \\\n\t    gperf libtool …",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_setext"
+    },
+    {
+      "section": "h2",
+      "title": "Linking binaries with newlib for PicoRV32",
+      "content": "The tool chains (see last section for install instructions) come with a version of\nthe newlib C standard library.\n\nUse the linker script [firmware/riscv.ld](firmware/riscv.ld) for linking binaries\nagainst the newlib library. Using this linker script will create a binary that\nhas its entry point at 0x10000. (The default linker script does not have a static\nentry point, thus a proper ELF loader would be needed that can determine the\nentry point at runtime while loading the program.)\n\nNewlib comes with a few syscall stubs. You need to provide your own implementation\nof those syscalls and link your program with this implementation, overwriting the\ndefault stubs from newlib. See `syscalls.c` in [scripts/cxxdemo/](scripts/cxxdemo/)\nfor an example of how to do that.\n\n\nEvaluation: Timing and Utili…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_setext"
+    },
+    {
+      "section": "h4",
+      "title": "Timing on Xilinx 7-Series FPGAs",
+      "content": "The `picorv32_axi` module with enabled `TWO_CYCLE_ALU` has been placed and\nrouted for Xilinx Artix-7T, Kintex-7T, Virtex-7T, Kintex UltraScale, and Virtex\nUltraScale devices in all speed grades. A binary search is used to find the\nshortest clock period for which the design meets timing.\n\nSee `make table.txt` in [scripts/vivado/](scripts/vivado/).\n\n| Device                    | Device               | Speedgrade | Clock Period (Freq.) |\n|:------------------------- |:---------------------|:----------:| --------------------:|\n| Xilinx Kintex-7T          | xc7k70t-fbg676-2     | -2         |     2.4 ns (416 MHz) |\n| Xilinx Kintex-7T          | xc7k70t-fbg676-3     | -3         |     2.2 ns (454 MHz) |\n| Xilinx Virtex-7T          | xc7v585t-ffg1761-2   | -2         |     2.3 ns (434 MHz) |\n| Xil…",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h4",
+      "title": "Utilization on Xilinx 7-Series FPGAs",
+      "content": "The following table lists the resource utilization in area-optimized synthesis\nfor the following three cores:\n\n- **PicoRV32 (small):** The `picorv32` module without counter instructions,\n  without two-stage shifts, with externally latched `mem_rdata`, and without\n  catching of misaligned memory accesses and illegal instructions.\n\n- **PicoRV32 (regular):** The `picorv32` module in its default configuration.\n\n- **PicoRV32 (large):** The `picorv32` module with enabled PCPI, IRQ, MUL,\n  DIV, BARREL_SHIFTER, and COMPRESSED_ISA features.\n\nSee `make area` in [scripts/vivado/](scripts/vivado/).\n\n| Core Variant       | Slice LUTs | LUTs as Memory | Slice Registers |\n|:------------------ | ----------:| --------------:| ---------------:|\n| PicoRV32 (small)   |        761 |             48 |           …",
+      "evidence": "input/docs/README.md",
+      "heading_shape": "md_atx"
+    },
+    {
+      "section": "h1",
+      "title": "PicoSoC - A simple example SoC using PicoRV32",
+      "content": "This is a simple PicoRV32 example design that can run code directly from an SPI\nflash chip. It can be used as a turn-key solution for simple control tasks in\nASIC and FPGA designs.\n\nAn example implementation targeting the Lattice iCE40-HX8K Breakout Board is\nincluded.\n\nThe flash is mapped to the memory regions starting at 0x00000000 and\n0x01000000, with the SRAM overlayed for the mapping at 0x00000000. The SRAM\nis just a small scratchpad memory (default 256 words, i.e. 1 kB).\n\nThe reset vector is set to 0x00100000, i.e. at 1MB into in the flash memory.\n\nSee the included demo firmware and linker script for how to build a firmware\nimage for this system.\n\nRun `make hx8ksim` or `make icebsim` to run the test bench (and create `testbench.vcd`).\n\nRun `make hx8kprog` to build the configuration bi…",
+      "evidence": "input/docs/picosoc_README.md",
+      "heading_shape": "md_setext"
+    }
+  ],
+  "no_frs_sections_in_input": false,
+  "protocol_overview": null,
+  "no_protocol_overview_in_input": true,
+  "compliance_requirements": [],
+  "timing_parameters": [],
+  "fmax_mhz": null,
+  "no_fmax_mhz_in_input": true,
+  "extraction_strategy": {
+    "frs_repo_meta_skipped_v1_6_392": 1
+  },
+  "extraction_evidence": {
+    "input/docs/README.md": [
+      {
+        "literal": "h1 PicoRV32 - A Size-Optimized RISC-V CPU",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Table of Contents",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Features and Typical Applications",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Files in this Repository",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Makefile and testbenches",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Verilog Module Parameters",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Cycles per Instruction Performance",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 PicoRV32 Native Memory Interface",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Read Transfer",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Write Transfer",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Look-Ahead Interface",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Pico Co-Processor Interface (PCPI)",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Custom Instructions for IRQ Handling",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Building a pure RV32I Toolchain",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h2 Linking binaries with newlib for PicoRV32",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Timing on Xilinx 7-Series FPGAs",
+        "label": "FRS section"
+      },
+      {
+        "literal": "h4 Utilization on Xilinx 7-Series FPGAs",
+        "label": "FRS section"
+      }
+    ],
+    "input/docs/picosoc_README.md": [
+      {
+        "literal": "h1 PicoSoC - A simple example SoC using PicoRV32",
+        "label": "FRS section"
+      }
+    ],
+    "v1.6.295.protocol_overview_class_gate_suppressed": [
+      {
+        "literal": "class_path='processor_cpu', hd_signal_count=0",
+        "label": "v1.6.295 (#180) — protocol_overview suppressed: CPU / analog class OR fewer than 2 half-duplex shape signals in source"
+      }
+    ]
+  },
+  "class_path": "processor_cpu",
+  "auto_cited_sections": [
+    {
+      "file_ref": "phase1/input_doc/README.txt:145",
+      "sec_id": "",
+      "heading": "Verilog Module Parameters",
+      "slug": "verilog_module_parameters"
+    },
+    {
+      "file_ref": "phase1/input_doc/README.txt:376",
+      "sec_id": "",
+      "heading": "PicoRV32 Native Memory Interface",
+      "slug": "picorv32_native_memory_interface"
+    },
+    {
+      "file_ref": "phase1/input_doc/README.txt:538",
+      "sec_id": "0000000",
+      "heading": "----- 000XX --- XXXXX 0001011",
+      "slug": "000xx_xxxxx_0001011"
+    },
+    {
+      "file_ref": "phase1/input_doc/README.txt:550",
+      "sec_id": "0000001",
+      "heading": "----- XXXXX --- 000XX 0001011",
+      "slug": "xxxxx_000xx_0001011"
+    },
+    {
+      "file_ref": "phase1/input_doc/README.txt:562",
+      "sec_id": "0000010",
+      "heading": "----- 00000 --- 00000 0001011",
+      "slug": "00000_00000_0001011"
+    },
+    {
+      "file_ref": "phase1/input_doc/README.txt:575",
+      "sec_id": "0000011",
+      "heading": "----- XXXXX --- XXXXX 0001011",
+      "slug": "xxxxx_xxxxx_0001011"
+    },
+    {
+      "file_ref": "phase1/input_doc/README.txt:592",
+      "sec_id": "0000100",
+      "heading": "----- 00000 --- XXXXX 0001011",
+      "slug": "00000_xxxxx_0001011"
+    }
+  ]
+}

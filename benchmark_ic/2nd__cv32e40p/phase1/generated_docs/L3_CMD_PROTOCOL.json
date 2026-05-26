@@ -1,0 +1,426 @@
+{
+  "schema_version": 2,
+  "doc_class": "cmd_protocol",
+  "ic_name": "Released core",
+  "opcodes": [
+    {
+      "name": "cv.lb",
+      "mnemonic": "cv.lb",
+      "encoding_pattern": "0000000 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.lbu",
+      "mnemonic": "cv.lbu",
+      "encoding_pattern": "0001000 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.lh",
+      "mnemonic": "cv.lh",
+      "encoding_pattern": "0000001 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.lhu",
+      "mnemonic": "cv.lhu",
+      "encoding_pattern": "0001001 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.lw",
+      "mnemonic": "cv.lw",
+      "encoding_pattern": "0000010 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.lb",
+      "mnemonic": "cv.lb",
+      "encoding_pattern": "0000100 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.lbu",
+      "mnemonic": "cv.lbu",
+      "encoding_pattern": "0001100 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.lh",
+      "mnemonic": "cv.lh",
+      "encoding_pattern": "0000101 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.lhu",
+      "mnemonic": "cv.lhu",
+      "encoding_pattern": "0001101 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.lw",
+      "mnemonic": "cv.lw",
+      "encoding_pattern": "0000110 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.sb",
+      "mnemonic": "cv.sb",
+      "encoding_pattern": "0010000 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.sh",
+      "mnemonic": "cv.sh",
+      "encoding_pattern": "0010001 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.sw",
+      "mnemonic": "cv.sw",
+      "encoding_pattern": "0010010 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.sb",
+      "mnemonic": "cv.sb",
+      "encoding_pattern": "0010100 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.sh",
+      "mnemonic": "cv.sh",
+      "encoding_pattern": "0010101 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "name": "cv.sw",
+      "mnemonic": "cv.sw",
+      "encoding_pattern": "0010110 011 0101011",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": null,
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/source__instruction_set_extensions.rst",
+      "extraction_strategy": "rst_grid_instruction_encoding_v1_6_552",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": null,
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    }
+  ],
+  "no_opcodes_in_input": false,
+  "placeholder_opcode_count": 0,
+  "no_opcode_names_in_input": false,
+  "crc_parameters": null,
+  "no_crc_parameters_in_input": true,
+  "verdict_byte_offset": null,
+  "verdict_byte_hex": null,
+  "no_verdict_byte_in_input": true,
+  "addr_max": null,
+  "len_max": null,
+  "payload_semantics": "see opcodes[].response_payload_template",
+  "no_payload_semantics_in_input": false,
+  "opcode_synthesis_skipped_reason": null,
+  "extraction_evidence": {
+    "input/docs/Makefile": [],
+    "input/docs/README.md": [],
+    "input/docs/requirements.txt": [],
+    "input/docs/source__control_status_registers.rst": [],
+    "input/docs/source__core_versions.rst": [],
+    "input/docs/source__corev_hw_loop.rst": [],
+    "input/docs/source__debug.rst": [],
+    "input/docs/source__exceptions_interrupts.rst": [],
+    "input/docs/source__fpu.rst": [],
+    "input/docs/source__glossary.rst": [],
+    "input/docs/source__index.rst": [],
+    "input/docs/source__instruction_fetch.rst": [],
+    "input/docs/source__instruction_set_extensions.rst": [
+      {
+        "literal": "cv.lb (0000000 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.lbu (0001000 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.lh (0000001 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.lhu (0001001 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.lw (0000010 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.lb (0000100 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.lbu (0001100 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.lh (0000101 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.lhu (0001101 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.lw (0000110 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.sb (0010000 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.sh (0010001 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.sw (0010010 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.sb (0010100 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.sh (0010101 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      },
+      {
+        "literal": "cv.sw (0010110 011 0101011)",
+        "label": "instruction (RST grid funct7/funct3/opcode/Mnemonic)"
+      }
+    ],
+    "input/docs/source__integration.rst": [],
+    "input/docs/source__intro.rst": [],
+    "input/docs/source__load_store_unit.rst": [],
+    "input/docs/source__perf_counters.rst": [],
+    "input/docs/source__pipeline.rst": [],
+    "input/docs/source__preface.rst": [],
+    "input/docs/source__register_file.rst": [],
+    "input/docs/source__sleep.rst": [],
+    "input/docs/source__verification.rst": [],
+    "input/docs/images__CV32E40P_Block_Diagram.svg": [],
+    "input/docs/images__blockdiagram.svg": [],
+    "input/docs/images__debug_halted.svg": [],
+    "input/docs/images__debug_running.svg": [],
+    "input/docs/images__load_event.svg": [],
+    "input/docs/images__obi_data_back_to_back.svg": [],
+    "input/docs/images__obi_data_basic.svg": [],
+    "input/docs/images__obi_data_multiple_outstanding.svg": [],
+    "input/docs/images__obi_data_slow_response.svg": [],
+    "input/docs/images__obi_instruction_basic.svg": [],
+    "input/docs/images__obi_instruction_multiple_outstanding.svg": [],
+    "input/docs/images__wfi.svg": []
+  },
+  "class_path": "processor_cpu"
+}
