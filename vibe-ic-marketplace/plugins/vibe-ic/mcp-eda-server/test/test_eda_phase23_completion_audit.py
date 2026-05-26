@@ -16,13 +16,29 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 INDEX_JS = ROOT / "src" / "index.js"
-# Wave 82: vibe-ic-d / vibe-ic-core merged into vibe-ic. Try the
-# merged path first; fall back to the legacy split for older checkouts.
-_MERGED = (ROOT / ".." / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
-           / "programs" / "phase23_completion_self_audit_check.py").resolve()
-_LEGACY = (ROOT / ".." / "vibe-ic-marketplace" / "plugins" / "vibe-ic-d"
-           / "programs" / "phase23_completion_self_audit_check.py").resolve()
-GATE = _MERGED if _MERGED.exists() else _LEGACY
+# Locate the canonical phase23 gate. This test file is mirrored byte-for-byte
+# between two layouts, and ROOT differs in each, so we probe candidates for
+# both rather than assuming one:
+#   - canonical repo:  ROOT = <repo>/mcp-eda-server
+#       → gate at ROOT/../vibe-ic-marketplace/plugins/vibe-ic/programs/
+#   - plugin mirror:   ROOT = .../plugins/vibe-ic/mcp-eda-server  (bundled copy)
+#       → gate at ROOT/../programs/   (sibling of the bundled mcp-eda-server)
+# Wave 82 merged vibe-ic-d / vibe-ic-core into vibe-ic; the legacy split path
+# is kept last as a fallback for older checkouts. Probing both layouts is what
+# lets the broad CI collection (run from the plugin root, which picks up the
+# mirror copy) resolve the gate — a single canonical-only path silently
+# doubled into a non-existent dir there.
+_GATE_CANDIDATES = [
+    ROOT / ".." / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+         / "programs" / "phase23_completion_self_audit_check.py",
+    ROOT / ".." / "programs" / "phase23_completion_self_audit_check.py",
+    ROOT / ".." / "vibe-ic-marketplace" / "plugins" / "vibe-ic-d"
+         / "programs" / "phase23_completion_self_audit_check.py",
+]
+GATE = next(
+    (c.resolve() for c in _GATE_CANDIDATES if c.resolve().exists()),
+    _GATE_CANDIDATES[0].resolve(),
+)
 
 
 def _slice():
