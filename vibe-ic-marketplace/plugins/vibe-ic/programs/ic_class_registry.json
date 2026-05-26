@@ -8,6 +8,7 @@
       "synonyms": [
         "aid_class",
         "aid_class_half_duplex",
+        "aid_class_half_duplex_single_wire",
         "aid_class_single_wire",
         "apple_id_class"
       ],
@@ -22,6 +23,10 @@
       "min_marker_score": 2,
       "default_top": "chip_top",
       "fallback_skill": "spec-to-rtl",
+      "verification_track": "aid_protocol",
+      "command_protocol_applicable": true,
+      "analog_applicable": false,
+      "half_duplex_bus": true,
       "owner_plugin": "vibe-ic"
     },
     {
@@ -30,6 +35,10 @@
       "synonyms": ["digital_cmd", "uart_cmd", "spi_cmd", "i2c_cmd"],
       "rtl_gen": null,
       "fallback_skill": "spec-to-rtl",
+      "verification_track": "aid_protocol",
+      "command_protocol_applicable": true,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
       "owner_plugin": "vibe-ic"
     },
     {
@@ -39,6 +48,10 @@
       "rtl_gen": "aid_class_rtl_gen.py",
       "rtl_gen_args": ["--spec-compliance"],
       "fallback_skill": "spec-to-rtl",
+      "verification_track": "aid_protocol",
+      "command_protocol_applicable": true,
+      "analog_applicable": true,
+      "half_duplex_bus": true,
       "owner_plugin": "vibe-ic"
     },
     {
@@ -47,6 +60,10 @@
       "synonyms": ["analog_only"],
       "rtl_gen": null,
       "fallback_skill": null,
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": true,
+      "half_duplex_bus": false,
       "owner_plugin": "vibe-ic"
     },
     {
@@ -55,6 +72,10 @@
       "synonyms": ["fpga_only"],
       "rtl_gen": null,
       "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
       "owner_plugin": "vibe-ic"
     },
     {
@@ -67,14 +88,41 @@
       ],
       "rtl_gen": null,
       "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic"
+    },
+    {
+      "name": "processor_cpu",
+      "description": "v1.6.523 — CPU / processor core / SoC with a memory-bus / data top (instruction-fetch, load/store, register file). No SW-visible half-duplex command protocol on a single-wire bus and no analog content. The AID 3-port (clk/reset_n/id_bus) reference TB cannot bind a memory-bus top, so Phase 2 verification runs the generic full-stack TB driven from L9.top_ports + gate-level synth + Phase 3 instead. RTL gen via fallback_skill / IP-catalog glue (open-source RISC-V / SoC cores).",
+      "synonyms": [
+        "cpu",
+        "processor",
+        "soc",
+        "riscv_core",
+        "cpu_core",
+        "microprocessor"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
       "owner_plugin": "vibe-ic"
     },
     {
       "name": "unknown_protocol_class",
       "description": "Detection failed or class not yet registered. Runner fall-throughs to fallback_skill — AI takes over via /spec-to-rtl skill.",
-      "synonyms": [],
+      "synonyms": ["unknown"],
       "rtl_gen": null,
       "fallback_skill": "spec-to-rtl",
+      "verification_track": "aid_protocol",
+      "command_protocol_applicable": true,
+      "analog_applicable": true,
+      "half_duplex_bus": true,
       "owner_plugin": "vibe-ic"
     }
   ]

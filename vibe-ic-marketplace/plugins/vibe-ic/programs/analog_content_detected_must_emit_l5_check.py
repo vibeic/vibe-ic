@@ -168,6 +168,64 @@ _NEGATION_RE = re.compile(
 )
 
 
+# v1.6.523 — per-keyword negation/exclusion awareness. A keyword that
+# appears ONLY inside a negation ("does not need a DAC", "no DAC",
+# "without analog", "❌ LDO", "~~bandgap~~") must NOT count as analog
+# content and must NOT force the spec layer to declare analog blocks.
+# These markers are matched in the LOCAL window immediately preceding
+# the keyword hit (a few words back) plus crossed-out / strikethrough
+# markers adjacent to it. Chip-AGNOSTIC.
+#
+# Negation lead-ins that appear *before* the keyword. We allow up to a
+# few short filler words (articles / adjectives like "an", "any",
+# "analog", "the", "real") between the negation token and the keyword,
+# anchored to the end of the preceding window.
+_FILLER = r"(?:\s+(?:an?|any|the|a|real|extra|on-?chip|internal|external|dedicated|separate|additional|analog|digital)\b){0,3}"
+_PRE_NEGATION_RE = re.compile(
+    r"\b("
+    r"no|without|w/o|not\s+need(?:ed|s)?|do(?:es)?\s+not\s+need|"
+    r"does\s+not\s+(?:have|require|use|include|contain)|"
+    r"don'?t\s+need|never\s+need|"
+    r"not\s+(?:required|needed|used|present|applicable)|"
+    r"excludes?|excluding|omit(?:s|ted)?|"
+    r"無需|不需要|沒有|無|不含"
+    r")" + _FILLER + r"\s*$",
+    re.IGNORECASE,
+)
+# Crossed-out / strikethrough / explicit-removal markers adjacent to the
+# keyword (e.g. "❌ DAC", "~~LDO~~", "[removed] bandgap", "× oscillator").
+_STRIKE_MARKER_RE = re.compile(
+    r"(❌|✗|✘|×|~~|\[removed\]|\[deleted\]|<del>|<s>|\bN/?A\b\s*[:\-])",
+    re.IGNORECASE,
+)
+
+
+def _keyword_is_negated(line: str, match_start: int, match_end: int) -> bool:
+    """True iff the keyword hit at [match_start:match_end] in ``line``
+    appears only inside a negation / exclusion / crossed-out context.
+
+    Looks at the ~40-char window immediately before the keyword for a
+    negation lead-in, and at strike markers adjacent on either side.
+    Conservative: only suppresses when an explicit negation token is
+    found local to the hit — a positive mention elsewhere on the same
+    line is unaffected (per-hit, not per-line).
+    """
+    win_start = max(0, match_start - 40)
+    pre = line[win_start:match_start]
+    if _PRE_NEGATION_RE.search(pre):
+        return True
+    # Strike markers immediately before (within 6 chars) or wrapping.
+    near_pre = line[max(0, match_start - 6):match_start]
+    near_post = line[match_end:match_end + 4]
+    if _STRIKE_MARKER_RE.search(near_pre) or _STRIKE_MARKER_RE.search(near_post):
+        return True
+    # "~~keyword~~" strikethrough wrapping both sides.
+    if "~~" in line[max(0, match_start - 2):match_start] and \
+       "~~" in line[match_end:match_end + 2]:
+        return True
+    return False
+
+
 # Mapping rule — how each keyword class is satisfied by an L5
 # analog_blocks entry. Matches against entry["type"] OR entry["name"]
 # OR entry["spec"].
@@ -256,7 +314,18 @@ def _scan_docs(project: Path) -> Dict[str, List[Tuple[str, int, str]]]:
                 if _NEGATION_RE.search(line):
                     continue
                 for cid, (pat, _) in _KEYWORD_CLASSES.items():
-                    if pat.search(line):
+                    # v1.6.523 — per-keyword negation awareness. A hit is
+                    # only counted if at least one OCCURRENCE on the line
+                    # is NOT inside a negation / exclusion / crossed-out
+                    # context. A keyword that appears only as "no DAC" /
+                    # "does not need" / "❌ LDO" / "~~bandgap~~" does not
+                    # count and must not force an L5 analog block.
+                    positive_hit = False
+                    for m in pat.finditer(line):
+                        if not _keyword_is_negated(line, m.start(), m.end()):
+                            positive_hit = True
+                            break
+                    if positive_hit:
                         if len(hits[cid]) < 50:
                             hits[cid].append((rel, i, line.strip()[:120]))
     return hits

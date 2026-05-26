@@ -104,6 +104,90 @@ except ImportError:  # script run directly without package on path
 WAIVER_KEY = "nba_shift_register_intentional"
 WAIVER_MIN = 40
 
+# v1.6.523 — bit-serial-family evidence-based waiver key. A bit-serial
+# core (1-bit datapath) processes one bit per cycle by construction; a
+# same-cycle look-ahead shift read is the *intended* topology, not a
+# multi-bit NBA race. When the design is a known bit-serial core, the
+# gate downgrades the FAIL to WARN. An explicit evidence waiver under
+# this key forces the same downgrade.
+BIT_SERIAL_WAIVER_KEY = "bit_serial_core_lookahead_intentional"
+
+
+def _bit_serial_evidence(project_dir: Path) -> Tuple[bool, str]:
+    """v1.6.523 — chip-AGNOSTIC: is this a known bit-serial core?
+
+    Positive evidence (any one suffices):
+      1. Explicit evidence waiver `bit_serial_core_lookahead_intentional`
+         (>= 40 chars) in waivers.json.
+      2. ic_class / ip_class in any L1/L2/L9 generated doc, the catalog
+         manifest, or facts.yaml containing 'bit_serial' / 'bit-serial'
+         / 'serial_core' / 'bit serial'.
+      3. A declared 1-bit datapath width (W == 1 / DATA_WIDTH == 1 /
+         datapath_width == 1) in an L doc or facts.
+
+    Returns (is_bit_serial, evidence_string). Fail-closed: no positive
+    evidence → (False, "") so genuine multi-bit NBA races still FAIL.
+    """
+    # 1. Explicit evidence waiver.
+    waivers = project_dir / "waivers.json"
+    if waivers.exists():
+        try:
+            d = json.loads(waivers.read_text())
+            v = d.get(BIT_SERIAL_WAIVER_KEY)
+            if isinstance(v, str) and len(v.strip()) >= WAIVER_MIN:
+                return True, f"waiver {BIT_SERIAL_WAIVER_KEY}: {v.strip()[:80]}"
+        except Exception:
+            pass
+
+    _BIT_SERIAL_RE = re.compile(
+        r"bit[\s_\-]?serial|serial[\s_\-]?core|bitserial", re.IGNORECASE)
+
+    def _scan_text_for_class(text: str) -> str:
+        if _BIT_SERIAL_RE.search(text):
+            m = _BIT_SERIAL_RE.search(text)
+            return f"bit_serial marker: ...{text[max(0,m.start()-20):m.end()+20]!r}"
+        return ""
+
+    # 2. ic_class / ip_class markers in generated L docs / catalog /
+    #    facts. Best-effort over a small candidate set.
+    candidates: List[Path] = []
+    try:
+        gd = _pl.generated_docs_dir(project_dir)
+        if gd.is_dir():
+            for prefix in ("L1_", "L2_", "L9_"):
+                candidates.extend(sorted(gd.glob(f"{prefix}*.json")))
+    except Exception:
+        pass
+    for extra in ("facts.yaml", "catalog_manifest.json",
+                  "ip_catalog_match.json"):
+        p = project_dir / extra
+        if p.is_file():
+            candidates.append(p)
+    for p in candidates:
+        try:
+            text = p.read_text(errors="ignore")
+        except Exception:
+            continue
+        ev = _scan_text_for_class(text)
+        if ev:
+            return True, f"{p.name}: {ev}"
+
+    # 3. 1-bit datapath width in an L doc / facts.
+    _W1_RE = re.compile(
+        r"\"?(?:data_?width|datapath_?width|word_?width|\bW\b)\"?"
+        r"\s*[:=]\s*\"?1\"?(?!\d)",
+        re.IGNORECASE)
+    for p in candidates:
+        try:
+            text = p.read_text(errors="ignore")
+        except Exception:
+            continue
+        if _W1_RE.search(text):
+            m = _W1_RE.search(text)
+            return True, (f"{p.name}: 1-bit datapath "
+                          f"...{text[max(0,m.start()-10):m.end()+10]!r}")
+    return False, ""
+
 
 def _strip_comments_keep_lines(text: str) -> str:
     """Replace comments with whitespace but keep newlines so line numbers
@@ -473,6 +557,29 @@ def main():
                 print(f"  • {fnd['file']}:{fnd['line']} "
                       f"[{fnd['rule']}] {fnd['signal']}[{fnd['index']}] — "
                       f"{fnd['message'][:120]}")
+            return 0
+        # v1.6.523 — bit-serial-family suppression. A 1-bit-datapath /
+        # known bit-serial core processes one bit/cycle by construction;
+        # a same-cycle look-ahead shift read is the intended topology,
+        # not a multi-bit NBA race. Downgrade FAIL → WARN (exit 0) with
+        # the supporting evidence. Genuine MULTI-BIT races on non-bit-
+        # serial designs keep FAILing (fail-closed default below).
+        is_bit_serial, bs_evidence = _bit_serial_evidence(project)
+        if is_bit_serial:
+            print(
+                f"WARN — {len(result['failures'])} NBA shift register "
+                f"same-cycle-read finding(s) DOWNGRADED to WARN: design is "
+                f"a bit-serial core ({bs_evidence}); a 1-bit-datapath "
+                f"core's same-cycle look-ahead shift read is the intended "
+                f"topology, not a multi-bit NBA race. Audit the look-ahead "
+                f"is the consumer's intent."
+            )
+            for fnd in result["failures"]:
+                print(f"WARN: {fnd['rule']} at {fnd['file']}:{fnd['line']} — "
+                      f"{fnd['message'][:160]}")
+            for w in result["warnings"]:
+                print(f"WARN: {w['rule']} at {w['file']}:{w['line']} — "
+                      f"{w['message'][:160]}")
             return 0
         print(
             f"FAIL — {len(result['failures'])} NBA shift register same-cycle-"

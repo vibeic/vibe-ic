@@ -288,10 +288,19 @@ def check_submodule_presence(l9: dict,
 
 
 _INSTANTIATION_TEMPLATE = (
-    # `<module_name> <instance_name> (...)` — `\b` + word breaks. We exclude
-    # cases where this matches a module-declaration header by also requiring
-    # absence of the literal keyword `module ` immediately before.
-    r"(?<!module\s)\b{name}\b\s+\w+\s*(?:#\s*\([^)]*\)\s*)?\("
+    # `<module_name> [#(params)] <instance_name> (...)` — `\b` + word breaks.
+    # We exclude cases where this matches a module-declaration header by also
+    # requiring absence of the literal keyword `module ` immediately before.
+    #
+    # The optional parameter override `#(...)` is placed BEFORE the instance
+    # name (correct Verilog ordering: `serv_alu #(.W(W)) alu (...)`), not
+    # after it. The previous template put `#(...)` after `\w+` and used a
+    # flat `[^)]*` body, so it (a) required the wrong token order and (b)
+    # failed on nested parens inside the param list (e.g. `#(.W (W))`),
+    # yielding false SUBMODULE_NOT_INSTANTIATED findings on standard,
+    # synthesizable Verilog (whitespace/newlines between tokens are also
+    # absorbed by `\s+`). The body now allows one level of nested parens.
+    r"(?<!module\s)\b{name}\b\s+(?:#\s*\((?:[^()]|\([^()]*\))*\)\s*)?\w+\s*\("
 )
 
 

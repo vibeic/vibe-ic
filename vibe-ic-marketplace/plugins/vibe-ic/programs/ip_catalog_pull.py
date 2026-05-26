@@ -189,7 +189,24 @@ def pull_catalog_ip(match: CatalogMatch,
     }
 
     # 5. Append provenance.jsonl
+    # provenance_output_hash_completeness_check expects each entry to carry an
+    # `outputs` dict mapping project-relative path → "sha256:<hex>" (the same
+    # shape the in-runner yosys/iverilog provenance entries use). The earlier
+    # `outputs_sha256` list form did not satisfy that gate (PROVENANCE_OUTPUTS_
+    # MISSING), so we now emit `outputs` as the canonical dict and keep
+    # `outputs_sha256` as a backward-compatible alias.
     provenance_path = project / "provenance.jsonl"
+
+    def _rel(dest: str) -> str:
+        try:
+            return str(Path(dest).resolve().relative_to(project.resolve()))
+        except Exception:
+            # dest is recorded project-relative already (e.g. "phase2/stage1/rtl/x.v")
+            return dest
+
+    outputs_map = {
+        _rel(f["dest"]): f"sha256:{f['sha256']}" for f in files_copied
+    }
     with provenance_path.open("a") as f:
         f.write(json.dumps({
             "event": "ip_catalog_pull",
@@ -198,6 +215,7 @@ def pull_catalog_ip(match: CatalogMatch,
             "license": match.license,
             "commit_pinned": match.canonical_commit,
             "files_pulled": len(files_copied),
+            "outputs": outputs_map,
             "outputs_sha256": sorted(f["sha256"] for f in files_copied),
             "ran_at_epoch": time.time(),
         }) + "\n")

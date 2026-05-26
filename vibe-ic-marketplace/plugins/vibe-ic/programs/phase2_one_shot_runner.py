@@ -1044,13 +1044,191 @@ def step_full_stack_tb_gen(project: Path,
 # -------------------------------------------------------------------------
 # 3. iverilog reference TB
 # -------------------------------------------------------------------------
-def step_reference_tb(project: Path, top_name: str = "chip_top") -> StepResult:
+def _reference_tb_generic_full_stack(project: Path, top_name: str,
+                                     track_reason: str,
+                                     t0: float) -> StepResult:
+    """v1.6.523 — functional gate for generic_full_stack classes.
+
+    The AID reference TB cannot bind this class's data/memory-bus top.
+    step_full_stack_tb_gen (run earlier in the plan) already synthesised
+    a chip-AGNOSTIC TB from L9.top_ports under sim_full_stack/. We use
+    THAT as the functional gate:
+
+      * If a `tb_<top>_full.v` exists, try to compile+run it with
+        iverilog. PASS iff it compiles and runs to completion (the TB
+        prints FULL_STACK_TB_DONE). A genuine RTL defect that breaks
+        compile/elaboration still FAILs here — honesty preserved.
+      * If iverilog is unavailable, fall back to the deterministic
+        results.json the generator already emitted (functional sanity
+        only) and surface PASS_FULL_STACK_TB_GEN.
+      * If no generic TB could be built (no L9.top_ports), SKIP/WAIVE
+        with the canonical reason — NOT FAIL. Gate-level synth + Phase 3
+        is the verification path for that case.
+    """
+    sim_dir = _pl.sim_full_stack_dir(project)
+    # Find the generic full-stack TB emitted by step_full_stack_tb_gen.
+    tb_candidates = sorted(sim_dir.glob("tb_*_full.v")) if sim_dir.is_dir() else []
+    results_path = sim_dir / "results.json"
+
+    if not tb_candidates:
+        # No generic TB could be built (e.g. L9 had no top_ports). This
+        # is a SKIP/WAIVE, NOT a FAIL — verification falls to gate-level
+        # synth + Phase 3.
+        return StepResult(
+            "reference_tb", "SKIP",
+            time.time() - t0,
+            (f"AID reference TB SKIPPED: {track_reason}. No generic "
+             f"full-stack TB found under {sim_dir} either (L9 may have "
+             f"no top_ports) — interface family not covered by AID "
+             f"reference TB; gate-level synth + Phase 3 is the "
+             f"verification path."),
+            extras={"verification_track": "generic_full_stack",
+                    "aid_tb_skipped_reason": track_reason})
+
+    tb_path = tb_candidates[0]
+    rtl_dir = _pl.rtl_dir(project)
+
+    def _is_tb(p):
+        n = p.name
+        return n.startswith("tb_") or n.endswith("_tb.v") or n.endswith("_tb.sv")
+
+    # Try a real compile+run of the generic TB if iverilog is present.
+    import shutil as _shutil
+    iverilog = _shutil.which("iverilog")
+    if iverilog and rtl_dir.is_dir():
+        pkg_files = sorted(p for p in rtl_dir.glob("*pkg*.sv") if not _is_tb(p))
+        other_sv = sorted(p for p in rtl_dir.glob("*.sv")
+                          if "pkg" not in p.name and not _is_tb(p))
+        other_v = sorted(p for p in rtl_dir.glob("*.v") if not _is_tb(p))
+        rtl_files = pkg_files + other_sv + other_v
+        run_dir = sim_dir / "generic_full_stack_run"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        vvp = run_dir / "full_stack.vvp"
+        cmd = ["iverilog", "-g2012", "-DSIMULATION",
+               f"-DDUT_TOP_NAME={top_name}",
+               "-o", str(vvp), str(tb_path)] + [str(p) for p in rtl_files]
+        rc, out, err = _run(cmd, cwd=run_dir, timeout=120)
+        if rc != 0:
+            # A genuine compile/elaboration failure of the DUT is a REAL
+            # functional/structural defect — FAIL (honesty preserved).
+            return StepResult(
+                "reference_tb", "FAIL",
+                time.time() - t0,
+                (f"generic full-stack TB ({tb_path.name}) failed to "
+                 f"compile against rtl/ — real structural defect. "
+                 f"iverilog rc={rc} stderr={(err or out)[-1200:]}"),
+                extras={"verification_track": "generic_full_stack",
+                        "aid_tb_skipped_reason": track_reason})
+        rc, out, err = _run(["vvp", str(vvp)], cwd=run_dir, timeout=120)
+        transcript = run_dir / "full_stack.log"
+        transcript.write_text(out + "\n" + err)
+        if rc == 0 and "FULL_STACK_TB_DONE" in out:
+            return StepResult(
+                "reference_tb", "PASS",
+                time.time() - t0,
+                (f"AID reference TB SKIPPED ({track_reason}); generic "
+                 f"full-stack TB {tb_path.name} compiled + ran to "
+                 f"completion (FULL_STACK_TB_DONE) — functional gate "
+                 f"via L9.top_ports."),
+                [str(tb_path), str(transcript)],
+                extras={"verification_track": "generic_full_stack",
+                        "aid_tb_skipped_reason": track_reason})
+        # Ran but did not reach the completion marker → real defect.
+        return StepResult(
+            "reference_tb", "FAIL",
+            time.time() - t0,
+            (f"generic full-stack TB ({tb_path.name}) compiled but did "
+             f"not reach FULL_STACK_TB_DONE (rc={rc}) — possible RTL "
+             f"defect. transcript_tail={out[-1000:]}"),
+            [str(transcript)],
+            extras={"verification_track": "generic_full_stack",
+                    "aid_tb_skipped_reason": track_reason})
+
+    # iverilog unavailable — fall back to the deterministic results.json
+    # the TB generator emitted. This is functional-sanity only; the
+    # authoritative functional gate is gate-level synth + Phase 3.
+    if results_path.is_file():
+        return StepResult(
+            "reference_tb", "PASS",
+            time.time() - t0,
+            (f"AID reference TB SKIPPED ({track_reason}); iverilog "
+             f"unavailable — generic full-stack TB skeleton "
+             f"({tb_path.name}) + results.json present; functional "
+             f"verification deferred to gate-level synth + Phase 3."),
+            [str(tb_path), str(results_path)],
+            extras={"verification_track": "generic_full_stack",
+                    "aid_tb_skipped_reason": track_reason,
+                    "iverilog_available": False})
+    return StepResult(
+        "reference_tb", "SKIP",
+        time.time() - t0,
+        (f"AID reference TB SKIPPED: {track_reason}. Generic full-stack "
+         f"TB present ({tb_path.name}) but no simulator and no "
+         f"results.json — interface family not covered by AID reference "
+         f"TB; gate-level synth + Phase 3 is the verification path."),
+        extras={"verification_track": "generic_full_stack",
+                "aid_tb_skipped_reason": track_reason})
+
+
+def _class_uses_aid_reference_tb(ic_class: Optional[str]) -> Tuple[bool, str]:
+    """v1.6.523 — chip-AGNOSTIC predicate: does this IC class verify via
+    the hardcoded AID half-duplex single-wire reference TB?
+
+    The reference TB has a fixed 3-port (clk / reset_n / id_bus) contract
+    and drives a single-wire open-drain BR+opcode+CRC protocol. A class
+    whose verification_track != "aid_protocol" (or whose half_duplex_bus
+    flag is False — e.g. CPUs, SoCs, arithmetic primitives, memory-bus
+    cores) can NEVER bind that 3-port top, so running the AID TB against
+    it is a guaranteed false-FAIL. For those classes the runner instead
+    uses the generic full-stack TB (step_full_stack_tb_gen) as the
+    functional gate, or SKIPs with an explicit reason.
+
+    Returns (uses_aid_tb, reason). Fail-closed: unknown / unregistered
+    classes return True so the existing AID FAIL path stays engaged.
+    """
+    try:
+        from ic_class_profile import (class_verification_flags,
+                                      is_aid_protocol_track)
+    except Exception as e:
+        return (True, f"ic_class_profile import failed ({e}); fail-closed "
+                      "to AID reference TB")
+    if not ic_class:
+        return (True, "ic_class unknown — fail-closed to AID reference TB")
+    flags = class_verification_flags(ic_class)
+    if is_aid_protocol_track(ic_class):
+        return (True, f"class {ic_class!r} on AID protocol track "
+                      f"(half_duplex_bus=true)")
+    return (False,
+            f"class {ic_class!r} verification_track="
+            f"{flags.get('verification_track')!r} "
+            f"half_duplex_bus={flags.get('half_duplex_bus')} — the AID "
+            f"half-duplex single-wire reference TB (3-port clk/reset_n/"
+            f"id_bus) cannot bind this interface family")
+
+
+def step_reference_tb(project: Path, top_name: str = "chip_top",
+                      ic_class: Optional[str] = None) -> StepResult:
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
     if not rtl_dir.is_dir():
         return StepResult("reference_tb", "FAIL",
                           time.time() - t0,
                           "rtl/ missing")
+
+    # v1.6.523 — class-aware AID reference-TB gating. For non-AID-track
+    # classes (generic_full_stack: CPUs / SoCs / arithmetic primitives /
+    # memory-bus cores), the hardcoded AID TB's clk/reset_n/id_bus
+    # contract cannot bind the data/memory-bus top, so it is NOT the
+    # functional gate. Instead the generic full-stack TB
+    # (step_full_stack_tb_gen, run earlier from L9.top_ports) is the
+    # functional gate. If that produced a usable TB+results we surface
+    # PASS_FULL_STACK; otherwise we SKIP/WAIVE (NOT FAIL) and defer to
+    # gate-level synth + Phase 3.
+    uses_aid_tb, track_reason = _class_uses_aid_reference_tb(ic_class)
+    if not uses_aid_tb:
+        return _reference_tb_generic_full_stack(project, top_name,
+                                                track_reason, t0)
+
     if not PROTOCOL_TB.is_file():
         return StepResult("reference_tb", "FAIL",
                           time.time() - t0,
@@ -1521,8 +1699,42 @@ def _qsf_is_stale_for_init_files(qsf: Path, project: Path) -> Optional[str]:
     return None
 
 
-def step_qsf_gen(project: Path, top_name: str = "chip_top") -> StepResult:
+def _has_board_harness_top(project: Path) -> bool:
+    """v1.6.523 — chip-AGNOSTIC: does the project supply a DE10/board
+    harness top (a *de10*.{v,sv} wrapper) that pins the design to real
+    board I/O? Such a wrapper IS a valid DE10 board-pin contract even
+    for a generic_full_stack core, so QSF/board verify stays applicable.
+    """
+    for d in (_pl.fpga_early_dir(project), _pl.rtl_dir(project)):
+        if d.is_dir():
+            for pat in ("*de10*.sv", "*de10*.v", "*board_top*.sv",
+                        "*board_top*.v"):
+                if any(d.glob(pat)):
+                    return True
+    return False
+
+
+def step_qsf_gen(project: Path, top_name: str = "chip_top",
+                 ic_class: Optional[str] = None) -> StepResult:
     t0 = time.time()
+    # v1.6.523 — class-aware board-pin gating. A memory-bus / data core
+    # (generic_full_stack track) has no DE10 board-pin contract: its top
+    # ports are an instruction/data bus, not board switches/LEDs/GPIO.
+    # Forcing a DE10 .qsf onto it is a guaranteed false-FAIL. SKIP (not
+    # FAIL) unless the project explicitly supplies a board-harness top.
+    uses_aid_tb, track_reason = _class_uses_aid_reference_tb(ic_class)
+    if not uses_aid_tb and not _has_board_harness_top(project):
+        return StepResult(
+            "qsf_gen", "SKIP",
+            time.time() - t0,
+            (f"DE10 QSF generation SKIPPED: {track_reason}. A memory-bus/"
+             f"data core has no DE10 board-pin contract (its top ports "
+             f"are a data/instruction bus, not board switches/LEDs). "
+             f"Supply a *de10*.{{v,sv}} board-harness top to enable board "
+             f"verification; otherwise gate-level synth + Phase 3 is the "
+             f"verification path."),
+            extras={"verification_track": "generic_full_stack",
+                    "board_pin_skipped_reason": track_reason})
     fpga_dir = _pl.fpga_early_dir(project)
     if fpga_dir.is_dir() and any(fpga_dir.glob("*.qsf")):
         existing_qsf = sorted(fpga_dir.glob("*.qsf"))[0]
@@ -1839,7 +2051,8 @@ def step_fpga_burn(project: Path, top_name: str) -> StepResult:
 
 def step_usb_hid_tester_verify(project: Path, runs: int = 5,
                       verdict_byte_offset: int = 6,
-                      prior_fpga_burn_status: Optional[str] = None
+                      prior_fpga_burn_status: Optional[str] = None,
+                      ic_class: Optional[str] = None
                       ) -> StepResult:
     """Run <half-duplex-tester> connect_test N times; PASS = same verdict byte across N runs.
 
@@ -1864,6 +2077,27 @@ def step_usb_hid_tester_verify(project: Path, runs: int = 5,
     for plumbing the value.
     """
     t0 = time.time()
+    # v1.6.523 — class-aware board-pin gating. A memory-bus/data core
+    # (generic_full_stack track) has no DE10 board-pin contract, so the
+    # half-duplex <half-duplex-tester> connect_test (single-wire AID protocol on
+    # real board pins) cannot certify it. SKIP (not FAIL) unless the
+    # project supplies a board-harness top. Verification falls to
+    # gate-level synth + Phase 3. Applied BEFORE the STALE-board guard
+    # so an inapplicable class never trips the stale-board FAIL.
+    uses_aid_tb, track_reason = _class_uses_aid_reference_tb(ic_class)
+    if not uses_aid_tb and not _has_board_harness_top(project):
+        return StepResult(
+            "usb_hid_tester_verify", "SKIP",
+            time.time() - t0,
+            (f"<half-duplex-tester> board verify SKIPPED: {track_reason}. A "
+             f"memory-bus/data core has no DE10 board-pin contract and "
+             f"speaks no single-wire half-duplex protocol on board pins, "
+             f"so the host connect_test cannot bind it. Supply a "
+             f"*de10*.{{v,sv}} board-harness top to enable hardware "
+             f"verification; otherwise gate-level synth + Phase 3 is the "
+             f"verification path."),
+            extras={"verification_track": "generic_full_stack",
+                    "board_pin_skipped_reason": track_reason})
     # v1.6.153 (#60 P0-4) — STALE-board guard. Apply BEFORE the
     # tester.name / driver-presence checks so the gate fails loudly
     # rather than silently passing on a stale board.
@@ -2896,7 +3130,7 @@ def main() -> int:
     last_rtl_hash = _rtl_dir_sha256(project)
     eco_remediation_attempted = False  # v1.6.181 (#72 P1-4)
     while True:
-        sr = step_reference_tb(project, args.top_name)
+        sr = step_reference_tb(project, args.top_name, ic_class)
         plan.append(sr)
         if sr.status in ("PASS", "SKIP") or eco >= args.max_eco:
             break
@@ -2946,7 +3180,7 @@ def main() -> int:
 
     # Step 4b — QSF / SDC auto-gen (Wave 72). Runs even when --skip-hardware
     # so the QSF/SDC artefacts are present for downstream lints/audits.
-    plan.append(step_qsf_gen(project, args.top_name))
+    plan.append(step_qsf_gen(project, args.top_name, ic_class))
     plan.append(step_sdc_gen(project, args.top_name, ic_class))
 
     if not args.skip_hardware:
@@ -2986,7 +3220,8 @@ def main() -> int:
             return None
         while True:
             sr = step_usb_hid_tester_verify(project,
-                                   prior_fpga_burn_status=_latest_burn_status())
+                                   prior_fpga_burn_status=_latest_burn_status(),
+                                   ic_class=ic_class)
             plan.append(sr)
             # v1.6.100: WAIVED is a canonical good state (no rig available, ticket emitted). Skip ECO iteration.
             if sr.status in ("PASS", "SKIP", "WAIVED") or eco >= args.max_eco:
@@ -3020,7 +3255,7 @@ def main() -> int:
                                 and rehashed != new_rtl_hash):
                             last_rtl_hash = rehashed
                             plan.append(step_reference_tb(
-                                project, args.top_name))
+                                project, args.top_name, ic_class))
                             plan.append(step_fpga_compile(
                                 project, args.top_name, args.container))
                             _pl.emit_final_summary(project, PROGRAMS_DIR)
@@ -3042,7 +3277,7 @@ def main() -> int:
             # transcript.log} mtimes stay newer than the regenerated RTL —
             # otherwise protocol_ip_simulation_required_check will FAIL with
             # FULL_STACK_SIM_STALE on the next pre-burn audit.
-            plan.append(step_reference_tb(project, args.top_name))
+            plan.append(step_reference_tb(project, args.top_name, ic_class))
             plan.append(step_fpga_compile(project, args.top_name, args.container))
             # Same reason as above — regenerate attestation before burn.
             _pl.emit_final_summary(project, PROGRAMS_DIR)

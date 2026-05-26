@@ -610,9 +610,100 @@ def required_layers(profile: Dict[str, Any]) -> Dict[str, List[str]]:
     return {"mandatory": mandatory, "skip": skip}
 
 
+# ---------------------------------------------------------------------
+# v1.6.523 — verification-track accessor (for #358-followon: generic
+# digital IP / CPUs / arithmetic primitives that the AID half-duplex
+# reference TB can NEVER bind). Reads programs/ic_class_registry.json
+# and surfaces the per-class `verification_track` + applicability flags
+# so the phase2 runner + flow_compliance_check can SKIP (not FAIL)
+# gates that are structurally inapplicable to the detected class.
+#
+# Fail-closed default: an unknown / unregistered class is treated as
+# `aid_protocol` with every flag applicable, so existing AID-class FAIL
+# logic stays fully engaged when we have no positive evidence.
+# ---------------------------------------------------------------------
+_REGISTRY_PATH = Path(__file__).resolve().parent / "ic_class_registry.json"
+
+# Fail-closed default — applies when the class is unknown / unregistered
+# OR the registry is missing the verification-track fields.
+_DEFAULT_VERIFICATION_FLAGS: Dict[str, Any] = {
+    "verification_track": "aid_protocol",
+    "command_protocol_applicable": True,
+    "analog_applicable": True,
+    "half_duplex_bus": True,
+    "registry_matched": False,
+}
+
+
+def _load_registry() -> dict:
+    try:
+        return json.loads(_REGISTRY_PATH.read_text())
+    except Exception:
+        return {"classes": []}
+
+
+def _lookup_registry_class(ic_class: str) -> Optional[dict]:
+    """Find a registry class entry by name OR synonym (chip-AGNOSTIC)."""
+    if not ic_class:
+        return None
+    reg = _load_registry()
+    for c in (reg.get("classes") or []):
+        if c.get("name") == ic_class:
+            return c
+        if ic_class in (c.get("synonyms") or []):
+            return c
+    return None
+
+
+def class_verification_flags(ic_class: str) -> Dict[str, Any]:
+    """Return the verification-track applicability flags for ``ic_class``.
+
+    Keys:
+      verification_track            -- "aid_protocol" | "generic_full_stack"
+      command_protocol_applicable   -- bool
+      analog_applicable             -- bool
+      half_duplex_bus               -- bool
+      registry_matched              -- bool (False = fail-closed default)
+
+    Fail-closed: an unknown / unregistered class returns the AID-protocol
+    default (every flag applicable) so no existing FAIL path is weakened.
+    """
+    cfg = _lookup_registry_class(ic_class)
+    flags = dict(_DEFAULT_VERIFICATION_FLAGS)
+    if cfg is None:
+        flags["ic_class"] = ic_class
+        return flags
+    flags["registry_matched"] = True
+    flags["ic_class"] = ic_class
+    # Only override defaults with explicitly-present registry fields, so
+    # a partially-annotated entry still fails closed on absent fields.
+    if isinstance(cfg.get("verification_track"), str):
+        flags["verification_track"] = cfg["verification_track"]
+    for k in ("command_protocol_applicable", "analog_applicable",
+              "half_duplex_bus"):
+        if isinstance(cfg.get(k), bool):
+            flags[k] = cfg[k]
+    return flags
+
+
+def is_aid_protocol_track(ic_class: str) -> bool:
+    """True iff the class verifies via the AID half-duplex reference TB.
+
+    A class is on the AID track iff verification_track == "aid_protocol"
+    AND half_duplex_bus is True. Anything else (generic_full_stack, or a
+    protocol-track class whose half_duplex_bus flag is explicitly False)
+    cannot bind the 3-port clk/reset_n/id_bus reference TB.
+    """
+    flags = class_verification_flags(ic_class)
+    return (flags.get("verification_track") == "aid_protocol"
+            and flags.get("half_duplex_bus") is True)
+
+
 __all__ = [
     "detect_ic_class",
     "required_layers",
+    "class_verification_flags",
+    "is_aid_protocol_track",
 ]
 
 

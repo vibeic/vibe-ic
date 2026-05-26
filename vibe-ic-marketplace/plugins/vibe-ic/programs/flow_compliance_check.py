@@ -1885,6 +1885,86 @@ def _is_thin_input_eligible(project: Path) -> bool:
     return False
 
 
+# v1.6.523 — class-aware gate skip-set. The hardwired Phase-2 protocol
+# + analog gates assume an AID-class half-duplex command-driven IC with
+# analog content. Generic digital IP (CPUs, crypto, arithmetic
+# primitives, bit-serial cores) legitimately have NO SW-visible command
+# protocol and NO analog content — running these gates against them is a
+# guaranteed false-FAIL. When the detected class marks command_protocol
+# / analog as not-applicable, these gates SKIP (with an explicit
+# "N/A for class X" reason) instead of FAIL. Core functional/structural
+# gates (lint, synth, CDC, sim correctness) are NEVER in this set.
+#
+# Each entry: gate_name -> applicability-flag key in class_verification_flags.
+#   "command_protocol_applicable" — protocol opcode-argument / typed-
+#       electrical-spec / protocol-behavioral-step / protocol-sim gates
+#   "analog_applicable"           — analog block-coverage / hardmacro /
+#       mixed-signal / analog-content-must-emit gates
+_CLASS_SKIPPABLE_PROTOCOL_GATES: frozenset[str] = frozenset({
+    "l3_opcode_argument_constraints_check",     # opcode addr_max/len_max
+    "l1_electrical_specs_typed_depth_check",     # typed electrical spec
+    "l12_behavioral_sequences_steps_typed_check",  # protocol behavioral step
+    "protocol_ip_simulation_required_check",     # protocol sim required
+})
+_CLASS_SKIPPABLE_ANALOG_GATES: frozenset[str] = frozenset({
+    "analog_block_coverage_check",
+    "analog_hardmacro_check",
+    "mixed_signal_cosim_check",
+    "analog_content_detected_must_emit_l5_check",
+})
+
+
+def _class_skipped_gates(project: Path) -> Dict[str, str]:
+    """v1.6.523 — return {gate_name: skip_reason} for gates that are
+    N/A for the detected IC class (chip-AGNOSTIC).
+
+    Fail-closed: if the class is unknown / unregistered, or the profile
+    helper is unavailable, returns {} so EVERY gate runs (no weakening
+    of existing FAIL logic). Only opens a skip when there is positive
+    evidence that command_protocol / analog is not-applicable for the
+    class.
+    """
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        from ic_class_profile import (detect_ic_class,
+                                      class_verification_flags)
+    except Exception:
+        return {}
+    try:
+        profile = detect_ic_class(project) or {}
+    except Exception:
+        return {}
+    ic_class = str(profile.get("ic_class") or "unknown")
+    flags = class_verification_flags(ic_class)
+    # Fail-closed: only act on registry-matched classes with explicit
+    # not-applicable flags. An unmatched class keeps every gate.
+    if not flags.get("registry_matched"):
+        return {}
+    skipped: Dict[str, str] = {}
+    if flags.get("command_protocol_applicable") is False:
+        for g in _CLASS_SKIPPABLE_PROTOCOL_GATES:
+            skipped[g] = (
+                f"N/A for class {ic_class!r}: command_protocol_applicable"
+                f"=false (verification_track="
+                f"{flags.get('verification_track')!r}). This IC has no "
+                f"SW-visible command protocol / opcode argument map / "
+                f"protocol behavioral steps, so the protocol gate does "
+                f"not apply. Core functional gates (lint/synth/CDC/sim) "
+                f"still run.")
+    if flags.get("analog_applicable") is False:
+        for g in _CLASS_SKIPPABLE_ANALOG_GATES:
+            skipped[g] = (
+                f"N/A for class {ic_class!r}: analog_applicable=false "
+                f"(verification_track={flags.get('verification_track')!r}). "
+                f"This IC has no analog content, so the analog "
+                f"block-coverage / hardmacro / mixed-signal gate does "
+                f"not apply. Core functional gates (lint/synth/CDC/sim) "
+                f"still run.")
+    return skipped
+
+
 def _run_structural_rtl_gates(project: Path,
                               strict_timing: bool = False,
                               allow_thin_input: bool = False
@@ -1924,9 +2004,16 @@ def _run_structural_rtl_gates(project: Path,
     fails: List[str] = []
     skips: List[str] = []
     waivers: List[Dict[str, Any]] = []
+    # v1.6.523 — class-aware skip-set. Compute once; gates that are N/A
+    # for the detected IC class SKIP with an explicit reason instead of
+    # FAILing. Fail-closed: empty dict (unknown class) runs every gate.
+    class_skips = _class_skipped_gates(project)
     for gate_name in _STRUCTURAL_RTL_GATES:
         prog = PROGRAMS_DIR / f"{gate_name}.py"
         if not prog.exists():
+            continue
+        if gate_name in class_skips:
+            skips.append(f"{gate_name} (SKIP: {class_skips[gate_name]})")
             continue
         try:
             # v0.118 fix: pass `project` (not `rtl_dir`) so gates can
