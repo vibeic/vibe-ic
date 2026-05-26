@@ -98,10 +98,11 @@ def test_step_detail_explains_missing_input(tmp_path):
 
 
 def test_input_docs_directory_changes_branch(tmp_path):
-    """Stage input/docs/ → ingest step is exercised. Whether the
-    actual phase1_engine cli runs depends on the host install; if not
-    found, the step FAILs with a clear message — but the orchestrator
-    still emits a report.
+    """Stage input/docs/ → the doc-extraction branch is taken. Per the v0.1.x
+    raw-docs routing fix, a populated input/docs/ (with no layer-JSON) routes to
+    `mode="docs"` and is delegated to phase1_doc_one_shot_runner; the orchestrator
+    emits the JSON report regardless of host engine availability. (The older
+    inline-`steps` report shape is also accepted for backward compat.)
     """
     project = tmp_path / "proj"
     docs = project / "input" / "docs"
@@ -109,12 +110,15 @@ def test_input_docs_directory_changes_branch(tmp_path):
     (docs / "tst_chip_spec.txt").write_text(
         "TST_CHIP — minimal stub for orchestrator test\n")
     cp = _run([str(project), "--ic-name", "TST_CHIP"])
-    # Either PASS (if engine available) or non-zero with a report. Both
-    # paths must emit the JSON report.
     rep = project / "reports" / "phase1_one_shot.json"
     assert rep.is_file()
     body = json.loads(rep.read_text())
     assert body["ic_name"] == "TST_CHIP"
-    ingest = next(s for s in body["steps"]
-                  if s["name"] == "phase1_ingest_render")
-    assert ingest["status"] in ("PASS", "FAIL", "SKIP")
+    if "steps" in body:  # legacy inline-steps report shape
+        ingest = next(s for s in body["steps"]
+                      if s["name"] == "phase1_ingest_render")
+        assert ingest["status"] in ("PASS", "FAIL", "SKIP")
+    else:  # v0.1.x delegated docs-mode report — input/docs/ took the docs branch
+        assert body.get("mode") == "docs"
+        assert body.get("delegated_to")
+        assert body.get("verdict") in ("PASS", "FAIL", "SKIP")

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 404
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 404)
+- **Total programs (excluding helpers / shims):** 408
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 408)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 395 |
+| `any` | 399 |
 
 ## Alphabetical listing
 
@@ -60,6 +60,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `auto_diagnostic_led_synth` | any | v0.114 | v0.114 (BACKLOG-v6 D1). |
 | `backlog_sanitize_check` | any | — | Organic Plugin gate: verify that a community |
 | `behavioral_evidence_per_spec_item_check` | any | v0.100 | v0.100 J1 |
+| `benchmark_verify_report` | any | — | normalized per-benchmark-IC verification report. |
 | `binary_doc_low_extraction_warn` | any | — | gate (LL-36). |
 | `bist_window_calculator` | any | — | Size BIST response-capture windows for worst-case. |
 | `bit_count_modulo_check` | any | — | M3: Verify that serial RX bit assemblers |
@@ -180,6 +181,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_utils` | any | v0.117 | Shared helpers for v0.117+ structural-RTL gates. |
 | `gds_ip_attribution` | any | — | Embed IP attribution metadata into the foundry |
 | `gds_size_check` | any | — | Deterministic GDS file existence and size checker. |
+| `gen_skill_inventory` | any | — | single source of truth for the AI-skill count. |
 | `half_duplex_frame_end_idle_reset_check` | any | — | structural-RTL gate for |
 | `half_duplex_response_window_check` | any | — | LL-4. |
 | `half_duplex_wrapper_open_drain_check` | any | — | structural-RTL gate that |
@@ -373,6 +375,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `single_bus_driver_check` | any | Wave 10 | structural-RTL gate that catches the |
 | `slave_tx_no_device_break_check` | any | Wave 25 | Wave 25/34 silent-bug gate. |
 | `source_chip_agnostic_check` | any | — | anti-fabrication gate (v1.6.38). |
+| `spare_cell_coverage_check` | any | — | Design-for-ECO READINESS gate (Step 18). |
+| `spare_cell_preservation_check` | any | — | Design-for-ECO PRESERVATION gate. |
 | `spec_response_delay_check` | any | — | Response path must honour spec-declared |
 | `spef_extraction_check` | any | — | Verify parasitic extraction (SPEF) was produced after routing. |
 | `spice_correlation_check` | any | — | deterministic gate for post-layout SPICE verification |
@@ -476,7 +480,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (395 programs)
+### `any` (399 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -512,6 +516,7 @@ _(no programs in this group)_
 - `auto_diagnostic_led_synth` — v0.114 (BACKLOG-v6 D1).  _[v0.114]_
 - `backlog_sanitize_check` — Organic Plugin gate: verify that a community
 - `behavioral_evidence_per_spec_item_check` — v0.100 J1  _[v0.100]_
+- `benchmark_verify_report` — normalized per-benchmark-IC verification report.
 - `binary_doc_low_extraction_warn` — gate (LL-36).
 - `bist_window_calculator` — Size BIST response-capture windows for worst-case.
 - `bit_count_modulo_check` — M3: Verify that serial RX bit assemblers
@@ -628,6 +633,7 @@ _(no programs in this group)_
 - `gate_utils` — Shared helpers for v0.117+ structural-RTL gates.  _[v0.117]_
 - `gds_ip_attribution` — Embed IP attribution metadata into the foundry
 - `gds_size_check` — Deterministic GDS file existence and size checker.
+- `gen_skill_inventory` — single source of truth for the AI-skill count.
 - `half_duplex_frame_end_idle_reset_check` — structural-RTL gate for
 - `half_duplex_response_window_check` — LL-4.
 - `half_duplex_wrapper_open_drain_check` — structural-RTL gate that
@@ -818,6 +824,8 @@ _(no programs in this group)_
 - `single_bus_driver_check` — structural-RTL gate that catches the  _[Wave 10]_
 - `slave_tx_no_device_break_check` — Wave 25/34 silent-bug gate.  _[Wave 25]_
 - `source_chip_agnostic_check` — anti-fabrication gate (v1.6.38).
+- `spare_cell_coverage_check` — Design-for-ECO READINESS gate (Step 18).
+- `spare_cell_preservation_check` — Design-for-ECO PRESERVATION gate.
 - `spec_response_delay_check` — Response path must honour spec-declared
 - `spef_extraction_check` — Verify parasitic extraction (SPEF) was produced after routing.
 - `spice_correlation_check` — deterministic gate for post-layout SPICE verification
