@@ -34,6 +34,17 @@ Go through every category. For each issue found, record: file, line number, seve
 - Reset recovery/removal violations
 - Gated clocks without explicit clock-gating cells
 
+> **Deterministic backing — run it, don't eyeball it.** The first two items are
+> enforced by `programs/reset_discipline_check.py` (a hard ERROR on contradictory
+> sync/async mode or polarity for the same reset; a WARN on a state reg missing
+> from its reset branch or a fully-unreset flop). Run it and fold the findings
+> into your report:
+> ```bash
+> python3 programs/reset_discipline_check.py --rtl-dir <rtl>   # ERROR → score ≤5
+> ```
+> It is also part of `programs/rtl_precheck_gate.py`, so the same verdict gates
+> the pre-burn flow.
+
 ### 3. Style and readability (WARN/INFO)
 - `always @(posedge clk)` vs `always_ff` consistency
 - `reg`/`wire` vs `logic` in SystemVerilog
@@ -53,6 +64,19 @@ Go through every category. For each issue found, record: file, line number, seve
 - Implicit width mismatches in assignments
 - Hard-coded widths that should be parameterized
 - Parameter ranges that allow illegal values
+
+### 6. Port fidelity (ERROR/WARN)
+- Port names/widths/directions match the spec exactly (no drift)
+- No garbled/misread interface (e.g. an indexed family `Y1, Y3` with a missing
+  `Y2` — a misread-spec signature)
+
+> **Deterministic backing.** `programs/spec_rtl_port_fidelity_check.py` detects
+> indexed-name gaps + duplicate ports standalone, and does an exact
+> name+width+direction diff against an integration-spec port list when given one:
+> ```bash
+> python3 programs/spec_rtl_port_fidelity_check.py --rtl-dir <rtl>            # sanity
+> python3 programs/spec_rtl_port_fidelity_check.py --rtl-dir <rtl> --spec ports.json
+> ```
 
 ## Output format
 

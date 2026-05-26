@@ -96,6 +96,11 @@ _AUDITORS: List[Auditor] = [
     Auditor("l12_sequence_implementation_check", "l12_sequence_implementation_check.py",
             extra_args_key="l12_json", required=False),
     Auditor("timer_freeze_after_state_check",    "timer_freeze_after_state_check.py"),
+    # reset-discipline: ERROR-only by default (sync/async-mode + polarity
+    # contradictions on the same reset signal). incomplete-reset /
+    # flop-without-reset stay WARN so the gate does not fail legit unreset
+    # pipeline regs. Verified 0-ERROR across the spm/sha256/subservient RTL.
+    Auditor("reset_discipline_check",            "reset_discipline_check.py"),
 ]
 
 

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 408
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 408)
+- **Total programs (excluding helpers / shims):** 412
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 412)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 399 |
+| `any` | 403 |
 
 ## Alphabetical listing
 
@@ -55,6 +55,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_pre_vs_post_layout_check` | any | — | deterministic gate for pre/post-layout comparison |
 | `analog_real_corner_sweep` | any | — | v1.6.207 (ORGANIC-20260512). |
 | `arbiter_starvation_check` | any | v0.116 | BACKLOG-v11 P0.6. |
+| `arith_ss_corner_risk_check` | any | — | slow-corner arithmetic-architecture advisor. |
 | `assertion_covers_l3_constraints_check` | any | Wave 39 | Wave 39 / D3 |
 | `assertion_property_check` | any | — | Deterministic compliance check for assertion-gen. |
 | `auto_diagnostic_led_synth` | any | v0.114 | v0.114 (BACKLOG-v6 D1). |
@@ -264,6 +265,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `otp_module_uses_supported_pattern_check` | any | Wave 21 | Wave 21 (v0.119.53). |
 | `otp_write_lock_gate_check` | any | — | Static heuristic audit for OTP / fuse / NVM |
 | `output_artifact_check` | any | — | Deterministic output artifact existence checker. |
+| `output_latency_advisor` | any | — | output sampling/latency advisor. |
 | `packaging_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
 | `packet_length_check_present` | any | — | Static audit for packet-length sanity |
 | `pad_drive_high_active_check` | any | v0.114 | v0.114 (BACKLOG-v6 P1). |
@@ -333,6 +335,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `regression_issue_intake_check` | any | — | v1.6.63 |
 | `reports_subfolder_taxonomy_check` | any | — | enforce that `<project>/reports/` |
 | `reset_dependency_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
+| `reset_discipline_check` | any | — | deterministic reset-discipline lint. |
 | `response_latency_observability_check` | any | — | LL-5. |
 | `response_payload_template_check` | any | — | M5: Verify that response payload bytes |
 | `result_md_audit_provenance_check` | any | Wave 33 | Wave 33 (v0.119.65). |
@@ -378,6 +381,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spare_cell_coverage_check` | any | — | Design-for-ECO READINESS gate (Step 18). |
 | `spare_cell_preservation_check` | any | — | Design-for-ECO PRESERVATION gate. |
 | `spec_response_delay_check` | any | — | Response path must honour spec-declared |
+| `spec_rtl_port_fidelity_check` | any | — | spec↔RTL port-fidelity + garbled-port lint. |
 | `spef_extraction_check` | any | — | Verify parasitic extraction (SPEF) was produced after routing. |
 | `spice_correlation_check` | any | — | deterministic gate for post-layout SPICE verification |
 | `sta_report_check` | any | — | wrapper for eda_report_audit --mode sta. |
@@ -480,7 +484,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (399 programs)
+### `any` (403 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -511,6 +515,7 @@ _(no programs in this group)_
 - `analog_pre_vs_post_layout_check` — deterministic gate for pre/post-layout comparison
 - `analog_real_corner_sweep` — v1.6.207 (ORGANIC-20260512).
 - `arbiter_starvation_check` — BACKLOG-v11 P0.6.  _[v0.116]_
+- `arith_ss_corner_risk_check` — slow-corner arithmetic-architecture advisor.
 - `assertion_covers_l3_constraints_check` — Wave 39 / D3  _[Wave 39]_
 - `assertion_property_check` — Deterministic compliance check for assertion-gen.
 - `auto_diagnostic_led_synth` — v0.114 (BACKLOG-v6 D1).  _[v0.114]_
@@ -715,6 +720,7 @@ _(no programs in this group)_
 - `otp_module_uses_supported_pattern_check` — Wave 21 (v0.119.53).  _[Wave 21]_
 - `otp_write_lock_gate_check` — Static heuristic audit for OTP / fuse / NVM
 - `output_artifact_check` — Deterministic output artifact existence checker.
+- `output_latency_advisor` — output sampling/latency advisor.
 - `packaging_intake_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
 - `packet_length_check_present` — Static audit for packet-length sanity
 - `pad_drive_high_active_check` — v0.114 (BACKLOG-v6 P1).  _[v0.114]_
@@ -784,6 +790,7 @@ _(no programs in this group)_
 - `regression_issue_intake_check` — v1.6.63
 - `reports_subfolder_taxonomy_check` — enforce that `<project>/reports/`
 - `reset_dependency_check` — deterministic compliance check derived from <chip-class> v040 debug.
+- `reset_discipline_check` — deterministic reset-discipline lint.
 - `response_latency_observability_check` — LL-5.
 - `response_payload_template_check` — M5: Verify that response payload bytes
 - `result_md_audit_provenance_check` — Wave 33 (v0.119.65).  _[Wave 33]_
@@ -827,6 +834,7 @@ _(no programs in this group)_
 - `spare_cell_coverage_check` — Design-for-ECO READINESS gate (Step 18).
 - `spare_cell_preservation_check` — Design-for-ECO PRESERVATION gate.
 - `spec_response_delay_check` — Response path must honour spec-declared
+- `spec_rtl_port_fidelity_check` — spec↔RTL port-fidelity + garbled-port lint.
 - `spef_extraction_check` — Verify parasitic extraction (SPEF) was produced after routing.
 - `spice_correlation_check` — deterministic gate for post-layout SPICE verification
 - `sta_report_check` — wrapper for eda_report_audit --mode sta.

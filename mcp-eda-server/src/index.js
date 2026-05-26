@@ -441,7 +441,7 @@ function cellgdsPath(cfg) {
 // field-agents to tell at runtime whether a given handler patch
 // was actually loaded. Resolution: keep them in lockstep; if you
 // bump package.json, also bump this constant.
-const SERVER_VERSION = "0.114.5";
+const SERVER_VERSION = "0.114.6";
 function wrapResult({ success, t0, toolVersion, error, output, headLines = 40, tailLines = 80, ...rest }) {
   const dur = t0 ? (Date.now() - t0) : 0;
   const text = (output || "").toString();
@@ -2703,6 +2703,13 @@ server.tool(
       "corner_coverage_audit",
       "rtl_hygiene_lint",
       "protocol_gap_check",
+      // general structural lints derived from the benchmark-IC + VerilogEval-v2
+      // failure analysis (all accept a positional rtl_dir, print PASS/FAIL +
+      // "findings: N"):
+      "reset_discipline_check",        // sync/async-mode + polarity + partial reset
+      "arith_ss_corner_risk_check",    // wide ripple-carry → SS-corner risk (advisory)
+      "output_latency_advisor",        // registered-output / sampling latency (advisory)
+      "spec_rtl_port_fidelity_check",  // L9↔RTL port match + garbled-index detection
     ])).describe("List of audit programs to run"),
     programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing audit program scripts. v2.5.2: auto-detected from this file's location (sibling vibe-ic-marketplace/plugins/vibe-ic-d/programs/) — overridable via $VIBE_IC_PROGRAMS_DIR. v2.4.1 hardcoded /home/user/ was wrong on most installs."),
   },

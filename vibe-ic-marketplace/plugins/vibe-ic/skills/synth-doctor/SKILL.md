@@ -47,6 +47,36 @@ python3 tools/vibe_ic_tools/pnr_doctor.py pnr.log --drc drc.rpt # with DRC
 | NO_CLOCK | Add virtual clock |
 | CONGESTION | Reduce density |
 
+### arith_ss_corner_risk_check.py — slow-corner timing-risk predictor (pre-synth)
+
+A `TIMING_FAIL` at the **SS** (slow-slow, cold, low-V) corner is most often a
+wide, single-cycle **ripple-carry add / accumulate / compare** chain. The spm
+and sha256 benchmark ICs both closed at TT but failed cold SS, and were rebuilt
+with carry-save / carry-select / CSA-tree architectures. Run this **before**
+synth to localise the risk, and again when triaging a `TIMING_FAIL` instead of
+guessing which path to pipeline:
+
+```bash
+python3 programs/arith_ss_corner_risk_check.py --rtl-dir <rtl>            # advisory
+python3 programs/arith_ss_corner_risk_check.py --strict --rtl-dir <rtl>   # exit 1 on HIGH
+```
+
+HIGH findings name the destination register, the carry-chain width, and the
+add-chain depth. The fix is a carry-save / carry-select / parallel-prefix adder
+or a pipeline stage — **not** a clock-period relax when the spec clock is fixed.
+Designs that document a carry-save / carry-select / prefix / pipelined strategy
+(in module name, signal names, or comments) are recognised and not flagged.
+
+### output_latency_advisor.py — registered-output / sampling-latency notes
+
+Surfaces outputs that are registered (valid **+1 cycle** after their inputs).
+Confirm each against the spec's required valid-cycle — an off-by-one-cycle
+output (Moore/pipelined vs combinational) is a classic spec miss.
+
+```bash
+python3 programs/output_latency_advisor.py --rtl-dir <rtl>
+```
+
 ## Integration with flow-orchestrate
 
 When flow-orchestrate detects a tool failure:
