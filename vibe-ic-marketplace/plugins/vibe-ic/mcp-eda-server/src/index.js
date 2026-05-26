@@ -27,6 +27,7 @@
  *   eda_fpga_program — FPGA programming (SOF/BIT burn)
  *   eda_extraction   — Parasitic extraction (Magic)
  *   eda_fpga_adc_read — MAX10 internal 12-bit ADC read (JTAG)
+ *   eda_spinalhdl_gen — SpinalHDL/sbt → Verilog (OpenJDK 17 + sbt in container)
  *
  * Tools run inside IIC-OSIC-TOOLS Docker container unless noted.
  * FPGA tools (Quartus/Vivado), RTL audit, and ADC read run on host directly.
@@ -440,7 +441,7 @@ function cellgdsPath(cfg) {
 // field-agents to tell at runtime whether a given handler patch
 // was actually loaded. Resolution: keep them in lockstep; if you
 // bump package.json, also bump this constant.
-const SERVER_VERSION = "0.114.5";
+const SERVER_VERSION = "0.1.4";
 function wrapResult({ success, t0, toolVersion, error, output, headLines = 40, tailLines = 80, ...rest }) {
   const dur = t0 ? (Date.now() - t0) : 0;
   const text = (output || "").toString();
@@ -2702,6 +2703,13 @@ server.tool(
       "corner_coverage_audit",
       "rtl_hygiene_lint",
       "protocol_gap_check",
+      // general structural lints derived from the benchmark-IC + VerilogEval-v2
+      // failure analysis (all accept a positional rtl_dir, print PASS/FAIL +
+      // "findings: N"):
+      "reset_discipline_check",        // sync/async-mode + polarity + partial reset
+      "arith_ss_corner_risk_check",    // wide ripple-carry → SS-corner risk (advisory)
+      "output_latency_advisor",        // registered-output / sampling latency (advisory)
+      "spec_rtl_port_fidelity_check",  // L9↔RTL port match + garbled-index detection
     ])).describe("List of audit programs to run"),
     programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing audit program scripts. v2.5.2: auto-detected from this file's location (sibling vibe-ic-marketplace/plugins/vibe-ic-d/programs/) — overridable via $VIBE_IC_PROGRAMS_DIR. v2.4.1 hardcoded /home/user/ was wrong on most installs."),
   },
@@ -2767,6 +2775,89 @@ server.tool(
           success: all_pass,
           all_pass,
           programs: results,
+        }),
+      }],
+    };
+  }
+);
+
+// ─── Tool: eda_spec_conformance ───
+// First-class Spec↔RTL contract-conformance verb. Distinct from eda_rtl_audit
+// (RTL-only structural lints): this takes BOTH a spec and the RTL and proves the
+// implementation matches the *declared* contract — ports, reset semantics
+// (sync/async + polarity), and output latency. Motivated by two real misses:
+//   • a spec that said "synchronous reset" while the reference RTL was async
+//     (a blind spec-faithful design then failed the bench), and
+//   • VerilogEval-v2 port-interface misses that needed an auto-extracted
+//     expected port list (the prompt's "- input d (8 bits)" bullets).
+// Belongs at the Phase-1→Phase-2 checkpoint (see spec-validator / checkpoint-gate).
+server.tool(
+  "eda_spec_conformance",
+  "Prove RTL conforms to its spec contract: port (name/dir/width), reset mode+polarity, and output latency. Spec may be a natural-language prompt, a markdown module header, or a JSON contract. Returns PASS/FAIL + findings.",
+  {
+    spec: z.string().describe("Spec file: .json contract, .md/.txt natural-language/markdown, or a .v/.sv header"),
+    rtl_dir: z.string().optional().describe("Directory of RTL to check (use this OR verilog_files)"),
+    verilog_files: z.array(z.string()).optional().describe("Explicit RTL files (use this OR rtl_dir)"),
+    top: z.string().optional().describe("Top module name (default: first module / the spec's module)"),
+    strict: z.boolean().default(false).describe("Fail on WARN findings too, not just ERROR"),
+    programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing the conformance program (auto-detected; overridable via $VIBE_IC_PROGRAMS_DIR)"),
+  },
+  async ({ spec, rtl_dir, verilog_files, top, strict, programs_dir }) => {
+    try {
+      assertSafePath(spec, "spec");
+      if (rtl_dir) assertSafePath(rtl_dir, "rtl_dir");
+      if (verilog_files) assertSafePaths(verilog_files, "verilog_files");
+      if (top) assertSafeIdent(top, "top");
+      optPath(programs_dir, "programs_dir");
+    } catch (e) { return guardError(e); }
+    if (!rtl_dir && !(verilog_files && verilog_files.length)) {
+      return guardError(new Error("provide rtl_dir or verilog_files"));
+    }
+
+    const scriptPath = `${programs_dir}spec_conformance_check.py`;
+    const argv = [scriptPath, "--spec", spec];
+    if (rtl_dir) argv.push("--rtl-dir", rtl_dir);
+    (verilog_files || []).forEach((f) => argv.push(f));
+    if (top) argv.push("--top", top);
+    if (strict) argv.push("--strict");
+
+    let output = "", status = "ERROR", findings = 0, errors = 0;
+    try {
+      // run via argv (no shell); the program prints a summary line + findings
+      // and exits 0 = PASS, 1 = FAIL (ERROR or, with --strict, WARN).
+      const _r = _spawnSync("python3", argv, {
+        timeout: 60000, maxBuffer: 5 * 1024 * 1024, encoding: "utf-8",
+      });
+      if (_r.error) throw _r.error;
+      output = (_r.stdout || "") + (_r.stderr || "");
+      const m = output.match(/findings?:\s*(\d+)\s*\((\d+)\s*error/i);
+      findings = m ? parseInt(m[1]) : 0;
+      errors = m ? parseInt(m[2]) : 0;
+      status = (_r.status === 0) ? "PASS" : "FAIL";
+    } catch (err) {
+      output = (err.stdout || err.stderr || err.message || "").slice(-2000);
+      status = "ERROR";
+    }
+
+    const pass = status === "PASS";
+    if (rtl_dir) {
+      writeManifest(rtl_dir, {
+        step: "spec_conformance",
+        status,
+        tool: "vibe-ic",
+        findings,
+        errors,
+      });
+    }
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          success: pass,
+          status,
+          findings,
+          errors,
+          output: output.slice(-2000),
         }),
       }],
     };
@@ -5249,6 +5340,63 @@ server.tool(
     return { content: [{ type: "text",
       text: JSON.stringify({ ...parsed, exit_code: exitCode }, null, 2) }] };
   },
+);
+
+// ─── Tool: eda_spinalhdl_gen ───
+//
+// Elaborate a SpinalHDL / Chisel-style sbt project to synthesizable Verilog by
+// running `sbt "runMain <main_class>"` inside the IIC-OSIC-TOOLS container,
+// which ships OpenJDK 17 + sbt. This unblocks "Scala-source-only" RISC-V cores
+// (e.g. VexRiscv / Murax via `vexriscv.demo.GenSmallest`) that have no
+// checked-in .v — Phase 2 can then ingest the elaborated netlist instead of
+// stalling at rtl_gen with "rtl/ missing". SpinalHDL itself is resolved from
+// Maven Central by sbt on first run and cached thereafter in the container's
+// ~/.ivy2 / coursier. Everything runs in-container; no host FS writes.
+server.tool(
+  "eda_spinalhdl_gen",
+  "Elaborate a SpinalHDL/sbt project to Verilog by running `sbt runMain <main_class>` inside the iic-eda container (OpenJDK 17 + sbt present; SpinalHDL pulled from Maven Central, cached). Unblocks Scala-source-only cores like VexRiscv/Murax. Returns success, generated .v files (sha256 + line counts) and a log tail.",
+  {
+    project_dir: z.string().describe("sbt project root INSIDE the container (contains build.sbt), e.g. /foss/designs/_vexriscv_gen"),
+    main_class: z.string().describe("Fully-qualified runMain target, e.g. vexriscv.demo.GenSmallest"),
+    expected_verilog: z.string().optional().describe("Optional expected output .v path (inside container) to verify + hash"),
+    timeout_sec: z.number().int().min(30).max(3600).default(1200).describe("Max seconds for the sbt run (cold runs download deps and can take minutes)"),
+  },
+  async ({ project_dir, main_class, expected_verilog, timeout_sec }) => {
+    try {
+      assertSafePath(project_dir, "project_dir");
+      assertSafeToken(main_class, "main_class");
+      optPath(expected_verilog, "expected_verilog");
+    } catch (e) { return guardError(e); }
+
+    const cmdStr = `command -v sbt >/dev/null 2>&1 || { echo "SBT_MISSING (java=$(command -v java || echo none))"; exit 127; }; cd ${project_dir} && sbt -batch "runMain ${main_class}" 2>&1; echo "SBT_RC=$?"`;
+    const t0 = Date.now();
+    const result = dockerExec(cmdStr, timeout_sec * 1000);
+    const durationMs = Date.now() - t0;
+
+    const out = result.output || "";
+    const rcMatch = out.match(/SBT_RC=(\d+)/);
+    const sbtRc = rcMatch ? parseInt(rcMatch[1]) : null;
+    const success = result.success && /\[success\]/.test(out) && sbtRc === 0;
+
+    // discover generated .v/.sv at the project root (default SpinalHDL output dir)
+    const lsCmd = `cd ${project_dir} && for f in *.v *.sv; do [ -f "$f" ] && printf "%s\\t%s\\t" "$f" "$(wc -l < "$f")" && sha256sum "$f" | cut -d" " -f1; done 2>/dev/null`;
+    const ls = dockerExec(lsCmd, 30000);
+    const generated = (ls.output || "").trim().split("\n").filter(Boolean).map((ln) => {
+      const [name, lines, sha256] = ln.split("\t");
+      return { file: name, lines: parseInt(lines) || null, sha256: (sha256 || "").trim() };
+    });
+
+    const metrics = {
+      success,
+      sbt_rc: sbtRc,
+      main_class,
+      project_dir,
+      generated,
+      duration_ms: durationMs,
+      log_tail: out.slice(-6000),
+    };
+    return { content: [{ type: "text", text: JSON.stringify(metrics) }] };
+  }
 );
 
 async function main() {

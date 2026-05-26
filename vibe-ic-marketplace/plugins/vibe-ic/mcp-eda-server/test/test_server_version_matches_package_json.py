@@ -26,8 +26,10 @@ import pytest
 MCP_ROOT = Path(__file__).resolve().parent.parent
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_server_version_matches_package_json():
+    # v0.1.4: the version scheme was unified — SERVER_VERSION, package.json, and
+    # the plugin all carry the same 0.1.x string, so this invariant is now
+    # load-bearing (the prior xfail covered the 0.114.x↔0.1.x drift, now closed).
     pkg = json.loads((MCP_ROOT / "package.json").read_text())
     pkg_version = pkg.get("version")
     assert pkg_version, "package.json lacks `version` field"

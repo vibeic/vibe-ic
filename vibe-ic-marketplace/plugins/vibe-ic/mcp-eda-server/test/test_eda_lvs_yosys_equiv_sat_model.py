@@ -161,17 +161,16 @@ def test_v0_114_2_chip_agnostic_no_chip_class_literals():
             f"chip literal {forbidden!r} in live eda_lvs code path")
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_v0_114_2_package_json_version_bumped_past_pre_fix():
-    """The mcp-eda-server package.json must be at-or-past 0.114.2
-    (the version that first shipped the #94 structured verdict).
-    Subsequent bumps (e.g. 0.114.3 for SERVER_VERSION lockstep
-    follow-up) are also valid."""
+    """package.json carries a valid unified semver version.
+
+    v0.1.4 unified the version scheme (the previous 0.114.x numeric floor is
+    obsolete — the #94 structured verdict is guarded by the SAT-model tests
+    above, not by a version number). This now just asserts the version is
+    well-formed 3-part semver."""
     import json
     pkg = json.loads((MCP_ROOT / "package.json").read_text())
     v = pkg.get("version", "")
     parts = v.split(".")
-    assert len(parts) == 3, f"package.json version {v!r} not semver"
-    major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
-    assert (major, minor, patch) >= (0, 114, 2), (
-        f"package.json {v!r} predates 0.114.2 — #94 fix not shipped")
+    assert len(parts) == 3 and all(p.isdigit() for p in parts), (
+        f"package.json version {v!r} not 3-part semver")

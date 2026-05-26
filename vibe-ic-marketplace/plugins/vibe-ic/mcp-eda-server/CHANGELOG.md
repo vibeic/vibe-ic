@@ -1,3 +1,15 @@
+## [0.115.0] - 2026-05-26
+
+### `+eda_spinalhdl_gen` — SpinalHDL/Chisel sbt → Verilog frontend
+
+New MCP tool that elaborates a SpinalHDL/sbt project to synthesizable Verilog by running `sbt "runMain <main_class>"` inside the `iic-eda` (IIC-OSIC-TOOLS) container, which already ships **OpenJDK 17 + sbt**; SpinalHDL is resolved from Maven Central on first run and cached in the container's `~/.ivy2`/coursier.
+
+- **Why**: "Scala-source-only" RISC-V cores (VexRiscv / Murax) ship no checked-in `.v`, so Phase 2 previously stalled at `rtl_gen` with "rtl/ missing" and the IC was logged BLOCKED-BY-TOOLCHAIN. This tool closes that gap so the JVM/sbt/SpinalHDL elaboration step is a first-class part of the EDA flow.
+- **Validated**: `vexriscv.demo.GenSmallest` → `VexRiscv.v` (3346 lines, top `VexRiscv`) in ~22 s (warm deps) in `iic-eda`; staged into the benchmark VexRiscv projects to complete Phase 2/3.
+- Params: `project_dir` (in-container sbt root), `main_class`, optional `expected_verilog`, `timeout_sec` (default 1200). Returns `success`, `sbt_rc`, generated `.v`/`.sv` files (sha256 + line counts), and a log tail. Runs entirely in-container (no host FS writes). Added to the tool-coverage inventory's DEFERRED list (live-JVM/network dependency).
+
+Tool count: 41 `server.tool(...)` calls in `src/index.js` (+ device tools).
+
 ## [0.114.0] - 2026-05-08
 
 ### Version-label catch-up (v0.101 → v0.114)
