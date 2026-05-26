@@ -27,6 +27,7 @@
  *   eda_fpga_program — FPGA programming (SOF/BIT burn)
  *   eda_extraction   — Parasitic extraction (Magic)
  *   eda_fpga_adc_read — MAX10 internal 12-bit ADC read (JTAG)
+ *   eda_spinalhdl_gen — SpinalHDL/sbt → Verilog (OpenJDK 17 + sbt in container)
  *
  * Tools run inside IIC-OSIC-TOOLS Docker container unless noted.
  * FPGA tools (Quartus/Vivado), RTL audit, and ADC read run on host directly.
@@ -5249,6 +5250,63 @@ server.tool(
     return { content: [{ type: "text",
       text: JSON.stringify({ ...parsed, exit_code: exitCode }, null, 2) }] };
   },
+);
+
+// ─── Tool: eda_spinalhdl_gen ───
+//
+// Elaborate a SpinalHDL / Chisel-style sbt project to synthesizable Verilog by
+// running `sbt "runMain <main_class>"` inside the IIC-OSIC-TOOLS container,
+// which ships OpenJDK 17 + sbt. This unblocks "Scala-source-only" RISC-V cores
+// (e.g. VexRiscv / Murax via `vexriscv.demo.GenSmallest`) that have no
+// checked-in .v — Phase 2 can then ingest the elaborated netlist instead of
+// stalling at rtl_gen with "rtl/ missing". SpinalHDL itself is resolved from
+// Maven Central by sbt on first run and cached thereafter in the container's
+// ~/.ivy2 / coursier. Everything runs in-container; no host FS writes.
+server.tool(
+  "eda_spinalhdl_gen",
+  "Elaborate a SpinalHDL/sbt project to Verilog by running `sbt runMain <main_class>` inside the iic-eda container (OpenJDK 17 + sbt present; SpinalHDL pulled from Maven Central, cached). Unblocks Scala-source-only cores like VexRiscv/Murax. Returns success, generated .v files (sha256 + line counts) and a log tail.",
+  {
+    project_dir: z.string().describe("sbt project root INSIDE the container (contains build.sbt), e.g. /foss/designs/_vexriscv_gen"),
+    main_class: z.string().describe("Fully-qualified runMain target, e.g. vexriscv.demo.GenSmallest"),
+    expected_verilog: z.string().optional().describe("Optional expected output .v path (inside container) to verify + hash"),
+    timeout_sec: z.number().int().min(30).max(3600).default(1200).describe("Max seconds for the sbt run (cold runs download deps and can take minutes)"),
+  },
+  async ({ project_dir, main_class, expected_verilog, timeout_sec }) => {
+    try {
+      assertSafePath(project_dir, "project_dir");
+      assertSafeToken(main_class, "main_class");
+      optPath(expected_verilog, "expected_verilog");
+    } catch (e) { return guardError(e); }
+
+    const cmdStr = `command -v sbt >/dev/null 2>&1 || { echo "SBT_MISSING (java=$(command -v java || echo none))"; exit 127; }; cd ${project_dir} && sbt -batch "runMain ${main_class}" 2>&1; echo "SBT_RC=$?"`;
+    const t0 = Date.now();
+    const result = dockerExec(cmdStr, timeout_sec * 1000);
+    const durationMs = Date.now() - t0;
+
+    const out = result.output || "";
+    const rcMatch = out.match(/SBT_RC=(\d+)/);
+    const sbtRc = rcMatch ? parseInt(rcMatch[1]) : null;
+    const success = result.success && /\[success\]/.test(out) && sbtRc === 0;
+
+    // discover generated .v/.sv at the project root (default SpinalHDL output dir)
+    const lsCmd = `cd ${project_dir} && for f in *.v *.sv; do [ -f "$f" ] && printf "%s\\t%s\\t" "$f" "$(wc -l < "$f")" && sha256sum "$f" | cut -d" " -f1; done 2>/dev/null`;
+    const ls = dockerExec(lsCmd, 30000);
+    const generated = (ls.output || "").trim().split("\n").filter(Boolean).map((ln) => {
+      const [name, lines, sha256] = ln.split("\t");
+      return { file: name, lines: parseInt(lines) || null, sha256: (sha256 || "").trim() };
+    });
+
+    const metrics = {
+      success,
+      sbt_rc: sbtRc,
+      main_class,
+      project_dir,
+      generated,
+      duration_ms: durationMs,
+      log_tail: out.slice(-6000),
+    };
+    return { content: [{ type: "text", text: JSON.stringify(metrics) }] };
+  }
 );
 
 async function main() {
