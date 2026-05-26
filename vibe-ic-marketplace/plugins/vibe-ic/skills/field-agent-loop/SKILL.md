@@ -3,6 +3,20 @@ name: field-agent-loop
 description: Closed-loop field-agent that drives plugin quality improvements by running phase1/phase2/phase3 on benchmark IC projects, filing ORGANIC backlog issues for systematic plugin gaps, and verifying fixes the core-agent ships back. Invoke as a cron prompt with a target benchmark folder and an LLM-review prompt; the loop self-advances through review → file → monitor → verify until STOP CONDITION (no new gaps + no open primary/secondary issue).
 ---
 
+
+<!-- WAVE_76_CHIP_AGNOSTIC_BANNER -->
+
+> **Case-study notation.** This skill cites the IC-A / USB-HID tester /
+> MDV-A1101 BENCH-A reference project as concrete evidence for the
+> rules below. The rules themselves are chip-AGNOSTIC and apply to
+> any IC of the matching `ic_class` (see
+> `vibe-ic-marketplace/plugins/vibe-ic-d/programs/ic_class_profile.py`).
+> When you adopt this skill on a different IC, swap `IC-A` →
+> `<your IC name>` and `USB-HID tester` → `<your host-tester name>`; the
+> structural gates and rule bodies do not depend on those SKUs.
+> See `docs/design/CASE_STUDIES/IC-A_*.md` for the full BENCH-A
+> regression history.
+
 # Field-Agent Loop — Closed-Loop Plugin Quality Improvement
 
 ## Purpose

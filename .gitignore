@@ -52,3 +52,6 @@ greybox_tmp/
 
 # OS
 Thumbs.db
+
+# wave76 skill-md audit tool output (generated each test run)
+docs/reports/
