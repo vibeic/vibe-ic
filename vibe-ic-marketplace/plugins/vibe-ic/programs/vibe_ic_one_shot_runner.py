@@ -58,25 +58,55 @@ def _phase_runner(name: str) -> Path:
     return PROGRAMS_DIR / f"{name}_one_shot_runner.py"
 
 
-def _need_phase1(project: Path, force_skip: bool) -> bool:
+def _phase1_decision(project: Path, force_skip: bool) -> Tuple[bool, str]:
+    """Decide whether to run Phase 1 and in which mode.
+
+    Returns (run, mode) where:
+      run  -> True if phase1 must run before phase2
+      mode -> "prompt" (Path A NL inputs), "docs" (Path B vendor docs),
+              or "" when run is False.
+
+    Path-B fix (v-orch): when a project carries POPULATED vendor docs
+    (input/docs/ or phase1/input_doc/) but no generated L*.json yet,
+    phase2 hard-requires the L docs, so the orchestrator MUST auto-run
+    phase1 in docs mode rather than skip it. Previously docs-only
+    projects skipped phase1 and dead-ended at the phase2 precondition.
+
+    chip-AGNOSTIC — path existence + L-doc count only.
+    """
     if force_skip:
-        return False
+        return (False, "")
     p1_struct = project / "input" / "phase1_structured.yaml"
     p1_prompt = project / "input" / "phase1_prompt.md"
     docs = project / "input" / "docs"
+    # phase1/input_doc/ is the canonical Path-B raw-corpus location.
+    input_doc = (_pl.input_doc_dir(project)
+                 if hasattr(_pl, "input_doc_dir") else None)
     gd = _pl.generated_docs_dir(project)
     L_count = len(list(gd.glob("L*.json"))) if gd.is_dir() else 0
-    # Already has L docs → no need
+    # Already has the full L-doc set → nothing to do.
     if L_count >= 13:
-        return False
-    # Has Path A inputs → run phase1
+        return (False, "")
+    # Path A inputs (structured YAML / free-text prompt) → prompt mode.
     if p1_struct.is_file() or p1_prompt.is_file():
-        return True
-    # Has vendor docs only → Path B (phase1 will handle)
-    if docs.is_dir() and any(docs.iterdir()):
-        return False
-    # No inputs at all — phase1 will SKIP gracefully
-    return False
+        return (True, "prompt")
+    # Path B: populated vendor docs but no L docs yet → docs mode.
+    # phase1_one_shot_runner --mode docs routes raw corpora through the
+    # doc-extraction track; phase1 itself re-detects the precise mode,
+    # so passing --mode docs is the explicit, deterministic signal.
+    docs_populated = (docs.is_dir() and any(docs.iterdir()))
+    input_doc_populated = bool(
+        input_doc and input_doc.is_dir() and any(input_doc.iterdir()))
+    if docs_populated or input_doc_populated:
+        return (True, "docs")
+    # No inputs at all — phase1 will SKIP gracefully (don't run).
+    return (False, "")
+
+
+def _need_phase1(project: Path, force_skip: bool) -> bool:
+    """Back-compat boolean wrapper around `_phase1_decision`."""
+    run, _mode = _phase1_decision(project, force_skip)
+    return run
 
 
 def _need_analog(project: Path, force_skip: bool) -> bool:
@@ -150,10 +180,17 @@ def main() -> int:
     reports: Dict[str, Any] = {}
 
     # ---------------- Phase 1 ----------------
-    if _need_phase1(project, args.skip_phase1):
+    run_phase1, p1_mode = _phase1_decision(project, args.skip_phase1)
+    if run_phase1:
         runner = _phase_runner("phase1")
-        rc = _run_phase("PHASE 1 (NL → L1-L13)", runner,
-                         [str(project), "--ic-name", args.ic_name])
+        p1_args = [str(project), "--ic-name", args.ic_name]
+        # Path B (vendor docs, no L docs yet): force docs mode so the
+        # doc-extraction track runs and produces L*.json for phase2.
+        if p1_mode == "docs":
+            p1_args += ["--mode", "docs"]
+        label = ("PHASE 1 (vendor docs → L1-L13)" if p1_mode == "docs"
+                 else "PHASE 1 (NL → L1-L13)")
+        rc = _run_phase(label, runner, p1_args)
         rep = _read_report(_pl.report_path(project, "phase1_one_shot.json"))
         verdict = rep.get("verdict") or ("PASS" if rc == 0 else "FAIL")
         plan.append(("phase1", verdict, rc))

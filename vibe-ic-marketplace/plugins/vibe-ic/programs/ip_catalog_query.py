@@ -311,6 +311,10 @@ def load_project_facts(project: Path) -> Dict[str, Any]:
     """
     facts: Dict[str, Any] = {}
     full_text_parts: List[str] = []
+    # v-orch 4a — per-layer text so matches_when predicates keyed on a
+    # structured L2 field can fall back to a SCOPED keyword search over
+    # only the relevant layer section (not the whole-doc _full_text).
+    layer_text: Dict[str, str] = {}
     gen_dir = project / "phase1" / "generated_docs"
     if not gen_dir.is_dir():
         return facts
@@ -322,7 +326,13 @@ def load_project_facts(project: Path) -> Dict[str, Any]:
             continue
         layer_key = json_path.stem  # e.g. "L1_DATASHEET"
         _flatten_into(facts, layer_key, data)
-        full_text_parts.append(json.dumps(data, ensure_ascii=False))
+        doc_json = json.dumps(data, ensure_ascii=False)
+        full_text_parts.append(doc_json)
+        # Key the section by the bare layer id (L1, L2, ...) so a
+        # "L2.cpu_isa" predicate can scope to the L2 section regardless
+        # of the doc suffix ("L2_FRS" → "L2").
+        bare = layer_key.split("_", 1)[0]
+        layer_text[bare] = layer_text.get(bare, "") + "\n" + doc_json
 
     # Also include input/docs/L*.md (the original spec text — sometimes
     # more verbose than the extracted JSON)
@@ -330,11 +340,15 @@ def load_project_facts(project: Path) -> Dict[str, Any]:
     if docs_dir.is_dir():
         for md_path in sorted(docs_dir.glob("L*.md")):
             try:
-                full_text_parts.append(md_path.read_text())
+                md_txt = md_path.read_text()
             except Exception:
-                pass
+                continue
+            full_text_parts.append(md_txt)
+            bare = md_path.stem.split("_", 1)[0]
+            layer_text[bare] = layer_text.get(bare, "") + "\n" + md_txt
 
     facts["_full_text"] = "\n".join(full_text_parts)
+    facts["_layer_text"] = layer_text
     return facts
 
 
@@ -360,6 +374,101 @@ def _flatten_into(out: Dict[str, Any], prefix: str, obj: Any, depth: int = 0) ->
 # ---------------------------------------------------------------------------
 # Match pattern evaluation
 # ---------------------------------------------------------------------------
+# v-orch 4a — STRUCTURED L2 fields. When a matches_when predicate keys
+# on one of these and the L2 doc does NOT expose it as a discrete flat
+# key, fall back to a keyword search SCOPED to the relevant layer
+# section only (not the whole-doc _full_text), and lower the confidence
+# of substring-only hits so they rank below structured-field hits.
+_STRUCTURED_L2_FIELDS = {
+    "cpu_family", "cpu_isa", "cpu_arch", "cpu_extensions",
+    "memory_topology", "submodule_required",
+}
+# Substring-only (scoped or full-text) confidence ceilings. Structured
+# discrete-key hits keep the original high (0.9-1.0) scores.
+_CONF_SCOPED_SUBSTR = 0.45    # keyword found in the SCOPED layer section
+_CONF_FULLTEXT_SUBSTR = 0.3   # keyword found only in whole-doc fallback
+
+
+def _structured_field_name(field_ref: str) -> Optional[str]:
+    """Return the structured field name if `field_ref` keys on one of
+    the discrete L2 fields (e.g. "L2.cpu_isa" -> "cpu_isa"), else None."""
+    if "." not in field_ref:
+        return None
+    _, rest = field_ref.split(".", 1)
+    rest = rest.strip().lower()
+    return rest if rest in _STRUCTURED_L2_FIELDS else None
+
+
+def _layer_id(field_ref: str) -> Optional[str]:
+    """Return the bare layer id ("L2") from a field ref ("L2.cpu_isa")."""
+    head = field_ref.split(".", 1)[0].strip()
+    if re.fullmatch(r"L\d+R?", head):
+        # Strip a trailing reverse-extract 'R' so "L2R" scopes to "L2".
+        return re.sub(r"R$", "", head)
+    return None
+
+
+def _scoped_section_text(facts: Dict[str, Any], field_ref: str) -> str:
+    """Text scoped to the layer named in `field_ref`. Falls back to the
+    empty string when no per-layer text is captured."""
+    lid = _layer_id(field_ref)
+    layer_text = facts.get("_layer_text")
+    if lid and isinstance(layer_text, dict):
+        return str(layer_text.get(lid, ""))
+    return ""
+
+
+# Integer-only / extension-exclusion vocabulary (chip-AGNOSTIC). When a
+# spec asserts an integer-only ISA or explicitly excludes an extension,
+# an "ISA contains '<ext>'" rule must NOT fire on a stray substring.
+_INTEGER_ONLY_MARKERS = (
+    "integer-only", "integer only", "int-only", "int only",
+    "no floating point", "no floating-point", "no fpu",
+    "without fpu", "without floating point", "no float",
+    "soft-float", "soft float",
+)
+
+
+def _extension_excluded(ext: str, field_str: str, scoped_text: str,
+                        full_text: str) -> bool:
+    """v-orch 4c — extension-negation guard. Return True when the spec
+    indicates the given ISA extension is absent / excluded, so a
+    "contains '<ext>'" rule must be suppressed even if the letter
+    appears as a stray substring.
+
+    Fires on:
+      * an explicit integer-only / no-FPU marker (for the F/D float
+        extensions), OR
+      * a literal "no <ext>" / "without <ext>" / "excludes <ext>" /
+        "<ext> not supported" phrase for any extension.
+
+    chip-AGNOSTIC: pure phrase grammar; no chip-class literal.
+    """
+    ext_l = ext.strip().lower()
+    if not ext_l:
+        return False
+    haystacks = [s.lower() for s in (field_str, scoped_text, full_text) if s]
+    blob = "\n".join(haystacks)
+    if not blob:
+        return False
+    # Float extensions: any generic integer-only / no-FPU marker excludes.
+    if ext_l in ("f", "d", "q") and any(m in blob for m in _INTEGER_ONLY_MARKERS):
+        return True
+    # Generic explicit negation of THIS extension.
+    neg_patterns = [
+        rf"\bno\s+['\"]?{re.escape(ext_l)}['\"]?\b",
+        rf"\bwithout\s+['\"]?{re.escape(ext_l)}['\"]?\b",
+        rf"\bexcludes?\s+['\"]?{re.escape(ext_l)}['\"]?\b",
+        rf"\bno\s+{re.escape(ext_l)}[\s-]*extension\b",
+        rf"\b{re.escape(ext_l)}[\s-]*extension\s+(?:is\s+)?(?:not|excluded|unsupported|disabled)\b",
+        rf"\b{re.escape(ext_l)}\s+not\s+supported\b",
+    ]
+    for pat in neg_patterns:
+        if re.search(pat, blob):
+            return True
+    return False
+
+
 def _evaluate_match_rule(pattern: str, facts: Dict[str, Any]) -> Tuple[bool, float]:
     """Evaluate a single matches_when prose pattern against facts.
 
@@ -406,9 +515,17 @@ def _evaluate_match_rule(pattern: str, facts: Dict[str, Any]) -> Tuple[bool, flo
         field_val = _resolve_field(facts, field_ref)
         if field_val is not None and str(field_val).lower().startswith(value.lower()):
             return (True, 0.9)
-        # Fallback: substring search in full_text
+        # v-orch 4a — structured-field fallback. When the discrete key is
+        # absent, prefer a SCOPED keyword search over the layer section
+        # only; lower the confidence below structured hits.
+        scoped = _scoped_section_text(facts, field_ref)
+        if _structured_field_name(field_ref) and scoped:
+            if value.lower() in scoped.lower():
+                return (True, _CONF_SCOPED_SUBSTR)
+            return (False, 0.0)
+        # Generic fallback: substring search in full_text (lowered).
         if value.lower() in full_text.lower():
-            return (True, 0.5)
+            return (True, _CONF_FULLTEXT_SUBSTR)
         return (False, 0.0)
 
     # "X contains 'Y'" or "X contains 'Y' or 'Z'"
@@ -422,11 +539,27 @@ def _evaluate_match_rule(pattern: str, facts: Dict[str, Any]) -> Tuple[bool, flo
             return (False, 0.0)
         field_val = _resolve_field(facts, field_ref)
         field_str = str(field_val).lower() if field_val is not None else ""
+        structured = _structured_field_name(field_ref)
+        scoped = _scoped_section_text(facts, field_ref)
+        # v-orch 4c — extension-negation guard. For cpu_extensions /
+        # cpu_isa "contains '<ext>'" rules, suppress when the spec is
+        # integer-only or explicitly excludes that extension.
+        ext_field = structured in ("cpu_extensions", "cpu_isa")
         for v in values:
+            if ext_field and _extension_excluded(
+                    v, field_str, scoped, full_text):
+                continue
+            # Discrete structured key present → high-confidence hit.
             if v.lower() in field_str:
                 return (True, 0.9)
+            # Structured field with no discrete key → SCOPED fallback.
+            if structured:
+                if scoped and v.lower() in scoped.lower():
+                    return (True, _CONF_SCOPED_SUBSTR)
+                continue
+            # Generic field → whole-doc substring fallback (lowered).
             if v.lower() in full_text.lower():
-                return (True, 0.6)
+                return (True, _CONF_FULLTEXT_SUBSTR)
         return (False, 0.0)
 
     # "X == 'Y'"
@@ -523,8 +656,71 @@ def _resolve_field(facts: Dict[str, Any], field_ref: str) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# SoC-top detection (chip-AGNOSTIC heuristic)
+# ---------------------------------------------------------------------------
+# v-orch 4b — a manifest is treated as a SoC-top / integration-top IP
+# (preferred over leaf-core IPs when both match) when it declares a top
+# module. Detection (in priority order):
+#   1. explicit manifest key `top_module` / `is_soc_top: true`
+#      (forward-compatible — schema may add it).
+#   2. `implements.architecture` mentions soc / integration / chip-top.
+#   3. an rtl_file whose stem ends in `_top` / `_soc` or contains `soc`.
+_RE_SOC_TOP_RTL = re.compile(
+    r"(?:_top|_soc|chip_top|soc_top)\.(?:s?v|vhd|vhdl)$",
+    re.IGNORECASE,
+)
+
+
+def _is_soc_top(manifest: Dict[str, Any]) -> bool:
+    """Return True when the manifest declares a top / integration module."""
+    if manifest.get("is_soc_top") is True:
+        return True
+    tm = manifest.get("top_module")
+    if isinstance(tm, str) and tm.strip():
+        return True
+    impl = manifest.get("implements")
+    if isinstance(impl, dict):
+        arch = str(impl.get("architecture", "")).lower()
+        if any(k in arch for k in ("soc", "integration", "chip-top",
+                                   "chip_top")):
+            return True
+    rtl = manifest.get("rtl_files")
+    if isinstance(rtl, list):
+        for f in rtl:
+            if isinstance(f, str) and _RE_SOC_TOP_RTL.search(f):
+                return True
+    return False
+
+
+def _manifest_to_match(m: Dict[str, Any], pattern: str,
+                       confidence: float) -> CatalogMatch:
+    """Build a CatalogMatch from a manifest dict + firing pattern."""
+    return CatalogMatch(
+        ip_name=m.get("ip_name", "<unknown>"),
+        category=m.get("_category", ""),
+        version=str(m.get("ip_version", "")),
+        license=m.get("license", "<unknown>"),
+        canonical_url=m.get("canonical_url", ""),
+        canonical_commit=m.get("canonical_commit", ""),
+        matched_pattern=pattern,
+        confidence=confidence,
+        manifest_path=m.get("_manifest_path", ""),
+        rtl_files=m.get("rtl_files", []) if isinstance(m.get("rtl_files"), list) else [],
+        integration_notes=str(m.get("integration_notes", "")),
+        depends_on=m.get("depends_on", []) if isinstance(m.get("depends_on"), list) else [],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public API: query catalog
 # ---------------------------------------------------------------------------
+# v-orch 4b — SoC-top preference bias. When a SoC-top IP and a leaf-core
+# IP both match, the integration top should rank first so it gets pulled
+# without manual help. Applied as a small additive bias at sort time so
+# it never promotes a non-matching IP, only re-orders matched ones.
+_SOC_TOP_RANK_BIAS = 0.05
+
+
 def query_catalog(project: Path,
                   catalog_dir: Optional[Path] = None,
                   min_confidence: float = 0.4) -> List[CatalogMatch]:
@@ -534,11 +730,15 @@ def query_catalog(project: Path,
         return []
 
     facts = load_project_facts(project)
+    by_name: Dict[str, Dict[str, Any]] = {
+        m.get("ip_name", ""): m for m in manifests if m.get("ip_name")
+    }
     matches: List[CatalogMatch] = []
+    matched_names: set = set()
+    soc_top_names: set = set()
 
     for m in manifests:
         ip_name = m.get("ip_name", "<unknown>")
-        license_ = m.get("license", "<unknown>")
         patterns = m.get("matches_when", [])
         if not isinstance(patterns, list):
             continue
@@ -554,23 +754,40 @@ def query_catalog(project: Path,
                 best_pattern = pattern
 
         if best_confidence >= min_confidence:
-            matches.append(CatalogMatch(
-                ip_name=ip_name,
-                category=m.get("_category", ""),
-                version=str(m.get("ip_version", "")),
-                license=license_,
-                canonical_url=m.get("canonical_url", ""),
-                canonical_commit=m.get("canonical_commit", ""),
-                matched_pattern=best_pattern,
-                confidence=best_confidence,
-                manifest_path=m.get("_manifest_path", ""),
-                rtl_files=m.get("rtl_files", []) if isinstance(m.get("rtl_files"), list) else [],
-                integration_notes=str(m.get("integration_notes", "")),
-                depends_on=m.get("depends_on", []) if isinstance(m.get("depends_on"), list) else [],
-            ))
+            matches.append(_manifest_to_match(m, best_pattern, best_confidence))
+            matched_names.add(ip_name)
+            if _is_soc_top(m):
+                soc_top_names.add(ip_name)
 
-    # Rank by confidence descending
-    matches.sort(key=lambda x: x.confidence, reverse=True)
+    # v-orch 4b — auto-include depends_on IPs (transitive). A matched IP's
+    # declared dependencies are required for integration, so pull them in
+    # even if they did not independently match a predicate. Carry a
+    # confidence just at the threshold so they survive filtering but rank
+    # below organically-matched IPs.
+    pending = [d for mt in matches for d in mt.depends_on]
+    while pending:
+        dep = pending.pop()
+        if not isinstance(dep, str) or dep in matched_names:
+            continue
+        dm = by_name.get(dep)
+        if dm is None:
+            continue
+        matched_names.add(dep)
+        dep_match = _manifest_to_match(
+            dm, "depends_on(auto-included)", max(min_confidence, 0.4))
+        matches.append(dep_match)
+        if _is_soc_top(dm):
+            soc_top_names.add(dep)
+        pending.extend(d for d in dep_match.depends_on
+                       if isinstance(d, str) and d not in matched_names)
+
+    # Rank by confidence descending, with a SoC-top bias so the
+    # integration top precedes leaf cores at equal/near confidence.
+    def _rank_key(mt: CatalogMatch) -> float:
+        bias = _SOC_TOP_RANK_BIAS if mt.ip_name in soc_top_names else 0.0
+        return mt.confidence + bias
+
+    matches.sort(key=_rank_key, reverse=True)
     return matches
 
 

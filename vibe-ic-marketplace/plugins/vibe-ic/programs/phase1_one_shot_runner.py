@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -89,9 +90,21 @@ def _detect_input_mode(project: Path) -> str:
     new_input_doc = _pl.input_doc_dir(project) if hasattr(_pl, "input_doc_dir") else None
     if new_input_doc and new_input_doc.is_dir() and any(new_input_doc.iterdir()):
         return "docs"
+    # Raw vendor docs under input/docs/ (PDF/DOCX/MD/TXT/…) must go through
+    # the doc-extraction track (phase1_doc_one_shot_runner), NOT the
+    # phase1_engine "prompt" path: the engine's run-all reverse-extractor
+    # (from_existing_docs) only ingests pre-structured L1..L9 *.json and
+    # yields 0 facts on raw prose, producing zero L docs. The doc track is
+    # the canonical raw-corpus → L1-L13 ingester. Only treat input/docs/ as
+    # a "prompt"-mode engine input when it already holds L*.json layer files.
     legacy_input_docs = project / "input" / "docs"
     if legacy_input_docs.is_dir() and any(legacy_input_docs.iterdir()):
-        return "prompt"
+        has_layer_json = any(
+            f.is_file() and f.suffix == ".json" and f.name[:1] == "L"
+            and f.name[1:2].isdigit()
+            for f in legacy_input_docs.iterdir()
+        )
+        return "prompt" if has_layer_json else "docs"
     if (project / "input" / "phase1_structured.yaml").is_file():
         return "prompt"
     if (project / "input" / "phase1_prompt.md").is_file():
@@ -141,9 +154,32 @@ def step_ingest_render(project: Path, ic_name: str) -> StepResult:
                           "input/docs/ present — Phase 1 needs at least "
                           "one input. Caller (PM agent) must populate "
                           "input/phase1_structured.yaml from dialogue.")
-    cmd = [sys.executable, str(cli), "run-all", str(src), str(out_dir),
-           "--ic-name", ic_name, "--facts", str(facts)]
-    cp = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    # cli.py uses package-relative imports (``from .ingest import ...``),
+    # so it must be run as a module (``python -m phase1_engine.cli``) with
+    # the package parent dir on sys.path — NOT as a standalone script, which
+    # fails with "attempted relative import with no known parent package".
+    pkg_dir = cli.parent                 # .../tools/phase1_engine
+    pkg_parent = pkg_dir.parent          # .../tools
+    # NOTE: the engine's ``run-all`` verb does NOT accept ``--facts``; it
+    # writes facts.yaml internally (ingest → gaps → render). Passing
+    # ``--facts`` triggers an argparse "unrecognized arguments" rc=2.
+    cmd = [sys.executable, "-m", f"{pkg_dir.name}.{cli.stem}",
+           "run-all", str(src), str(out_dir),
+           "--ic-name", ic_name]
+    env = dict(os.environ)
+    env["PYTHONPATH"] = (str(pkg_parent) + os.pathsep +
+                         env.get("PYTHONPATH", "")).rstrip(os.pathsep)
+    # gap_detect.DEFAULT_CLASS_KB is a *relative* path
+    # ("vibe-ic-marketplace/plugins/.../class_kb"), so the engine must run
+    # with cwd = the repo root that contains vibe-ic-marketplace/. Walk up
+    # from the package dir to find it; fall back to pkg_parent.
+    repo_root = pkg_parent
+    for anc in (pkg_dir, *pkg_dir.parents):
+        if (anc / "vibe-ic-marketplace").is_dir():
+            repo_root = anc
+            break
+    cp = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
+                        cwd=str(repo_root), env=env)
     if cp.returncode != 0:
         return StepResult("phase1_ingest_render", "FAIL",
                           time.time() - t0,

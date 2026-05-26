@@ -23412,12 +23412,30 @@ _V1_6_566_HEADER_DESC_TOKENS = frozenset({
 # Row regex: 4 generic pipe-delimited cells. We do NOT enforce
 # column order here — caller routes captured cells via the
 # header-derived role mapping.
+# v1.6.x field-agent fix (cv32e40p L4 hang) — the previous shape
+#   \s*(?P<cN>[^|\n]{1,80}?)\s*\|
+# pairs a LAZY bounded `[^|\n]` run with adjacent `\s*` quantifiers.
+# Because `[^|\n]` already matches space/tab, the `\s*` on either
+# side overlaps the cell class, so for a pipe line that does NOT
+# satisfy the full 4-cell-then-`$` structure the engine explores an
+# exponential number of (cell-end / surrounding-\s*) split points →
+# catastrophic backtracking. CV32E40P's control_status_registers
+# RST chapter (104 KB, many wide pipe rows) wedged the walker at
+# 100% CPU indefinitely (no per-step watchdog covers gen_l4_regmap,
+# and SIGALRM cannot preempt a single C-level `re` match anyway).
+# Rewrite: one GREEDY bounded `[^|\n]` run per cell with NO adjacent
+# `\s*`. `[^|\n]` and the literal `|` delimiter are disjoint sets, so
+# there is exactly one way to match up to each pipe — zero
+# backtracking, linear time. Cells are `.strip()`-ed downstream
+# (lines 23571-23575), so folding the surrounding whitespace into the
+# capture is behaviour-preserving: identical post-strip cell values.
+# Chip-AGNOSTIC — pure RST grid grammar.
 _V1_6_566_RE_RST_GRID_4COL_ANY = re.compile(
     r"^[ \t]*\|"
-    r"\s*(?P<c0>[^|\n]{1,80}?)\s*\|"
-    r"\s*(?P<c1>[^|\n]{1,80}?)\s*\|"
-    r"\s*(?P<c2>[^|\n]{1,80}?)\s*\|"
-    r"\s*(?P<c3>[^|\n]{1,200}?)\s*\|\s*$",
+    r"(?P<c0>[^|\n]{1,82})\|"
+    r"(?P<c1>[^|\n]{1,82})\|"
+    r"(?P<c2>[^|\n]{1,82})\|"
+    r"(?P<c3>[^|\n]{1,202})\|[ \t]*$",
     re.MULTILINE,
 )
 # RST grid separator (used to bound the table block).
@@ -24034,6 +24052,83 @@ def _v1_6_591_backfill_reset_value_kind(
         r["reset_value_kind"] = _v1_6_589_classify_reset_kind(rv)
         backfilled += 1
     return backfilled
+
+
+# v-orch — prose memory-map RANGE extraction (chip-AGNOSTIC).
+# Real benchmark address-map prose renders ranges inline, e.g.
+#   "RAM occupies 0x0000 - 0x3FFF"
+#   "Flash: 0x40000000–0x4FFFFFFF"
+# Neither endpoint is a single-address `0xNN NAME R/W` row, so the
+# table-shape walkers in gen_l4_regmap never emit them. This pure helper
+# scans the extracted text for `0x... [-–—] 0x...` ranges and emits BOTH
+# endpoints as address-map / RTL constants (kind=indexed_register_address)
+# with provenance back to the source file + verbatim line. No AI.
+_RE_MEMMAP_RANGE = re.compile(
+    r"(?P<lo>0x[0-9A-Fa-f]{1,8})"      # low endpoint
+    r"\s*[-–—]\s*"            # ASCII hyphen / en-dash / em-dash
+    r"(?P<hi>0x[0-9A-Fa-f]{1,8})"      # high endpoint
+)
+
+
+def _extract_memmap_range_constants(
+        extracted: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Scan extracted docs for prose hex memory-map ranges and return
+    a list of L4 register-style constant entries — one per endpoint.
+
+    Each entry:
+      {address, address_int, name, access: "RO", kind:
+       "indexed_register_address", endpoint: "low"|"high",
+       range: "0x.. - 0x..", evidence: "input/docs/<file>",
+       evidence_line: "<verbatim source line>", extraction_strategy:
+       "memmap_range_prose_v_orch"}
+
+    chip-AGNOSTIC: pure hex-range grammar; no chip-class literals. The
+    low endpoint must be <= high endpoint (else the pair is not a
+    range and is skipped). Endpoints are deduped on (address_int).
+    """
+    out: List[Dict[str, Any]] = []
+    if not isinstance(extracted, dict):
+        return out
+    seen: Set[int] = set()
+    for fname, text in sorted(extracted.items()):
+        if not isinstance(text, str) or not text:
+            continue
+        for line in text.splitlines():
+            for m in _RE_MEMMAP_RANGE.finditer(line):
+                lo_s, hi_s = m.group("lo"), m.group("hi")
+                try:
+                    lo_i = int(lo_s, 16)
+                    hi_i = int(hi_s, 16)
+                except ValueError:
+                    continue
+                # Must be a real range (low strictly below high). Equal
+                # or inverted pairs are not address ranges.
+                if lo_i >= hi_i:
+                    continue
+                rng = f"{lo_s} - {hi_s}"
+                src_line = line.strip()[:200]
+                for endpoint, addr_s, addr_i in (
+                        ("low", lo_s, lo_i), ("high", hi_s, hi_i)):
+                    if addr_i in seen:
+                        continue
+                    seen.add(addr_i)
+                    out.append({
+                        "address": addr_s,
+                        "address_int": addr_i,
+                        "name": f"MEMMAP_{endpoint.upper()}_{addr_i:08X}",
+                        "access": "RO",
+                        "default": "",
+                        "description": (
+                            f"memory-map {endpoint} endpoint of range "
+                            f"{rng}"),
+                        "kind": "indexed_register_address",
+                        "endpoint": endpoint,
+                        "range": rng,
+                        "extraction_strategy": "memmap_range_prose_v_orch",
+                        "evidence": f"input/docs/{fname}",
+                        "evidence_line": src_line,
+                    })
+    return out
 
 
 def gen_l4_regmap(project: Path,
@@ -25132,6 +25227,21 @@ def gen_l4_regmap(project: Path,
     # Chip-AGNOSTIC: pure AsciiDoc grammar + hex-address shape; no
     # chip-class literal participates.
     _v1_6_576_apply_asciidoc_summary_addresses(registers, extracted)
+
+    # v-orch — prose memory-map RANGE constants. Scan extracted docs for
+    # `0x.. - 0x..` ranges (e.g. "RAM 0x0000 - 0x3FFF") and emit BOTH
+    # endpoints as address-map constants (kind=indexed_register_address).
+    # Dedup against already-emitted register addresses so a range whose
+    # endpoint coincides with a discrete register row is not duplicated.
+    _existing_addr_ints = {
+        r.get("address_int") for r in registers
+        if isinstance(r, dict) and r.get("address_int") is not None
+    }
+    for _mm in _extract_memmap_range_constants(extracted):
+        if _mm.get("address_int") in _existing_addr_ints:
+            continue
+        _existing_addr_ints.add(_mm.get("address_int"))
+        registers.append(_mm)
 
     # v1.6.577 — for #393 P3 ORGANIC. Peripheral-CSR namespace
     # collision qualifier. When N peripherals each have `CTRL` /
