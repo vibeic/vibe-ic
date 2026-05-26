@@ -5,6 +5,14 @@
 VerilogEval iverilog testbench. This sits at the published frontier (~90%) for the
 spec-to-RTL task.
 
+> **Note (v0.1.3 re-run).** This headline is scored over the **frozen** samples in
+> `samples/`; re-running `score_verilogeval.py` is deterministic and always returns
+> 146/156 — the plugin update lives in the flow's gate path, not in this blind-generation
+> or scoring path. A genuinely **fresh blind re-run** on v0.1.3 (regenerated from scratch)
+> scored **142/156 = 91.03%** — within blind single-shot variance — and its failures were
+> then used to demonstrate that the v0.1.3 port-fidelity lint catches 5/14 of them. See
+> [`run_rerun_v013/RESULT_rerun.md`](run_rerun_v013/RESULT_rerun.md).
+
 ## What was measured
 - **Benchmark:** NVlabs `verilog-eval`, `dataset_spec-to-rtl` (the 2024 v2 spec-to-RTL task,
   156 Human-Eval problems). Dataset @ commit `c498220` (not vendored here — clone

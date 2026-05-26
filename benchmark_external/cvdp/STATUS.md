@@ -1,6 +1,6 @@
 # CVDP (Comprehensive Verilog Design Problems) — status & path to a citable number
 
-## Honest status: NO citable pass-rate yet — two real blockers
+## Honest status: NO citable pass-rate yet — three real blockers
 CVDP is the benchmark that actually matches Vibe-IC's positioning (agentic, multi-file,
 real EDA tools, cross-flow). But a citable CVDP pass-rate **cannot be produced from the open
 repo alone** right now:
@@ -16,13 +16,35 @@ repo alone** right now:
    - **Agentic** (`README_AGENTIC.md`): runs **your custom Docker agent** in a container; the
      harness tracks the agent's file changes and scores them. This is the mode that matches
      Vibe-IC — but it requires packaging Vibe-IC's Phase 1→3 flow as a CVDP-contract Docker agent.
+3. **The OSS sim Docker image is GATED.** The harness's `docker-compose.yml` runs the cocotb
+   testbench inside `OSS_SIM_IMAGE` (default `nvidia/cvdp-sim:v1.0.0`). `docker pull
+   nvidia/cvdp-sim:v1.0.0` → **`pull access denied … repository does not exist or may require
+   'docker login'`**. So even the example problem cannot be scored with the *official* image
+   out-of-the-box. **Verified workaround:** the local `hpretl/iic-osic-tools` image carries
+   `iverilog 13.0` + `cocotb 2.0.1` + `cocotb_tools` + `pytest`, i.e. everything the harness's
+   `test_runner.py` needs (`SIM=icarus`); pointing `OSS_SIM_IMAGE` at a thin wrapper of it lets
+   the `no_commercial` (Icarus) subset run locally. Any number produced this way must disclose
+   the **substitute image + cocotb 2.x vs the harness's pinned version** as a deviation.
 
 ## Readiness verified (what DOES work)
 - The harness + example dataset clone and ingest cleanly (NVlabs/cvdp_benchmark).
-- The example agentic problem loads with all fields: `prompt`, `harness`, golden `patch`,
-  `categories` — confirming we can consume the CVDP problem format.
-- Docker is available on the host; iverilog is available in `iic-eda` for the `no_commercial`
-  (Icarus-runnable) subset. The `commercial` subset additionally needs Cadence Xcelium (absent).
+- `run_benchmark.py` runs once its Python deps (`requirements.txt`: nltk/openai/tiktoken/…)
+  are installed; it exposes a **golden mode** (no `-l`/`-g` → apply golden patch + run harness,
+  must PASS) and `--no-patch` (must FAIL) for harness-integrity checks.
+- The example agentic `no_commercial` problem (`cvdp_agentic_fixed_arbiter_0001`, cid003/easy)
+  loads with all fields: `prompt`, `context` (spec.md + cocotb TB), golden `patch`, `harness`
+  (docker-compose + cocotb `test_runner.py`, `SIM=icarus`) — confirming we consume the format.
+- Docker is available on the host. The official `OSS_SIM_IMAGE` is gated (blocker 3 above), but
+  `hpretl/iic-osic-tools` provides a verified local substitute (iverilog 13 + cocotb 2.0.1).
+  The `commercial` subset additionally needs Cadence Xcelium (absent).
+
+## End-to-end demonstration done (N=1, substitute image) — see `DEMO_RESULT.md`
+The full harness was actually run on the one open example problem with the local substitute
+image: **golden → PASS**, **no-patch → FAIL** (harness discriminates), and **Claude-as-agent
+→ PASS** (8/8) once the agent follows the in-context TB. It even surfaced a spec↔reference
+inconsistency (spec says *synchronous* reset; reference + TB require *asynchronous*). This is a
+smoke-test of the agentic loop, **not** a citable pass-rate — that still needs blockers 1 & 3
+cleared. Details: [`DEMO_RESULT.md`](DEMO_RESULT.md).
 
 ## Path to a real, citable CVDP number
 1. **Request the gated full dataset** from NVIDIA + Turing (CVDP access request). [draft below]
