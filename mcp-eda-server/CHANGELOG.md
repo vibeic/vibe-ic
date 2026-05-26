@@ -1,3 +1,33 @@
+## [0.1.5] - 2026-05-27
+
+> Versions from here on use the unified `0.1.x` scheme (SERVER_VERSION = package.json
+> = plugin = marketplace). Entries below labelled `0.1xx.x` predate the unification.
+
+### `+eda_spec_lint` — pre-RTL spec self-consistency lint
+
+New MCP tool that lints a spec / prompt for SELF-contradiction **before any RTL exists**.
+Complements `eda_spec_conformance` (which needs the RTL to compare against): catching a
+garbled spec at the source lets the agent stop and clarify instead of faithfully
+implementing a broken contract. Backed by `programs/spec_self_consistency_check.py`.
+
+- **Why** (motivated directly by the v0.1.5 benchmark re-run):
+  - **VerilogEval-v2 Prob099** is a *defective* problem — the interface declares outputs
+    `Y1, Y3` but the body says "implement the next-state signals *Y2 and Y4*"; even the
+    golden reference fails its own testbench. `eda_spec_conformance` PASSes it (RTL matches
+    the extracted interface) and the RTL-side port-fidelity lint only sees the gap *after*
+    generation. `eda_spec_lint` flags it from the prompt alone — `body-port-gap` (WARN).
+  - A **CVDP** arbiter spec asserted "synchronous reset" while its reference was async; a
+    spec asserting BOTH modes is unsatisfiable. `reset-mode-contradiction` /
+    `reset-polarity-contradiction` (ERROR) catch the inconsistency inside the spec text.
+- **Precision**: phrase-bound reset detection (the qualifier must sit within ≤2 words of a
+  reset noun) so "async areset + synchronous load/enable" (VerilogEval Prob085) is NOT a
+  false positive. Verified zero false positives across all 156 VerilogEval-v2 prompts —
+  only the genuinely-garbled Prob099 is flagged.
+- Params: `spec` (NL prompt / markdown / JSON / `.v` header), `strict` (fail on WARN too),
+  `programs_dir`. Returns `success`, `status`, `findings`, `errors`, `output`.
+
+Tool count: 50 MCP tools (42 eda + 7 device + 1 health) in `src/index.js`.
+
 ## [0.115.0] - 2026-05-26
 
 ### `+eda_spinalhdl_gen` — SpinalHDL/Chisel sbt → Verilog frontend

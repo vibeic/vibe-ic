@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 412
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 412)
+- **Total programs (excluding helpers / shims):** 414
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 414)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 403 |
+| `any` | 405 |
 
 ## Alphabetical listing
 
@@ -380,8 +380,10 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `source_chip_agnostic_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `spare_cell_coverage_check` | any | — | Design-for-ECO READINESS gate (Step 18). |
 | `spare_cell_preservation_check` | any | — | Design-for-ECO PRESERVATION gate. |
+| `spec_conformance_check` | any | — | Spec↔RTL contract-conformance gate. |
 | `spec_response_delay_check` | any | — | Response path must honour spec-declared |
 | `spec_rtl_port_fidelity_check` | any | — | spec↔RTL port-fidelity + garbled-port lint. |
+| `spec_self_consistency_check` | any | v0.1.5 | pre-RTL spec self-consistency lint. |
 | `spef_extraction_check` | any | — | Verify parasitic extraction (SPEF) was produced after routing. |
 | `spice_correlation_check` | any | — | deterministic gate for post-layout SPICE verification |
 | `sta_report_check` | any | — | wrapper for eda_report_audit --mode sta. |
@@ -484,7 +486,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (403 programs)
+### `any` (405 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -833,8 +835,10 @@ _(no programs in this group)_
 - `source_chip_agnostic_check` — anti-fabrication gate (v1.6.38).
 - `spare_cell_coverage_check` — Design-for-ECO READINESS gate (Step 18).
 - `spare_cell_preservation_check` — Design-for-ECO PRESERVATION gate.
+- `spec_conformance_check` — Spec↔RTL contract-conformance gate.
 - `spec_response_delay_check` — Response path must honour spec-declared
 - `spec_rtl_port_fidelity_check` — spec↔RTL port-fidelity + garbled-port lint.
+- `spec_self_consistency_check` — pre-RTL spec self-consistency lint.  _[v0.1.5]_
 - `spef_extraction_check` — Verify parasitic extraction (SPEF) was produced after routing.
 - `spice_correlation_check` — deterministic gate for post-layout SPICE verification
 - `sta_report_check` — wrapper for eda_report_audit --mode sta.

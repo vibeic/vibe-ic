@@ -441,7 +441,7 @@ function cellgdsPath(cfg) {
 // field-agents to tell at runtime whether a given handler patch
 // was actually loaded. Resolution: keep them in lockstep; if you
 // bump package.json, also bump this constant.
-const SERVER_VERSION = "0.1.4";
+const SERVER_VERSION = "0.1.5";
 function wrapResult({ success, t0, toolVersion, error, output, headLines = 40, tailLines = 80, ...rest }) {
   const dur = t0 ? (Date.now() - t0) : 0;
   const text = (output || "").toString();
@@ -2854,6 +2854,68 @@ server.tool(
         type: "text",
         text: JSON.stringify({
           success: pass,
+          status,
+          findings,
+          errors,
+          output: output.slice(-2000),
+        }),
+      }],
+    };
+  }
+);
+
+// ─── Tool: eda_spec_lint ───
+// since v0.1.5. Pre-RTL spec self-consistency lint — runs on the SPEC / prompt
+// ALONE, before any RTL exists, and flags a spec that contradicts *itself*.
+// Complements eda_spec_conformance (which needs the RTL to compare against):
+// catching a garbled spec at the source lets you stop and clarify instead of
+// faithfully implementing a broken contract. Two real benchmark misses motivate it:
+//   • VerilogEval-v2 Prob099: interface declares Y1,Y3 but the body says "Y2 and Y4"
+//     (defective problem; even the golden reference fails its own bench). The
+//     RTL-side port-fidelity lint only sees this after generation — this sees it
+//     in the prompt. → body-port-gap (WARN).
+//   • CVDP arbiter: a spec asserting BOTH synchronous and asynchronous reset.
+//     → reset-mode-contradiction / reset-polarity-contradiction (ERROR).
+// Belongs at the very front of the Phase-1→Phase-2 checkpoint (before spec-to-rtl).
+server.tool(
+  "eda_spec_lint",
+  "Lint a spec/prompt for SELF-contradiction before any RTL exists: garbled numbered-port gaps (body references Y2/Y4 absent from a declared Y1/Y3 interface) and reset-semantics contradictions (spec asserts both sync+async, or both active-high+low). Spec may be a natural-language prompt, markdown header, or .v/.sv header. Returns PASS/FAIL + findings.",
+  {
+    spec: z.string().describe("Spec file: .txt/.md prompt, .json contract, or .v/.sv header"),
+    strict: z.boolean().default(false).describe("Fail on WARN findings (e.g. body-port-gap) too, not just ERROR"),
+    programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing the lint program (auto-detected; overridable via $VIBE_IC_PROGRAMS_DIR)"),
+  },
+  async ({ spec, strict, programs_dir }) => {
+    try {
+      assertSafePath(spec, "spec");
+      optPath(programs_dir, "programs_dir");
+    } catch (e) { return guardError(e); }
+
+    const scriptPath = `${programs_dir}spec_self_consistency_check.py`;
+    const argv = [scriptPath, "--spec", spec];
+    if (strict) argv.push("--strict");
+
+    let output = "", status = "ERROR", findings = 0, errors = 0;
+    try {
+      const _r = _spawnSync("python3", argv, {
+        timeout: 60000, maxBuffer: 5 * 1024 * 1024, encoding: "utf-8",
+      });
+      if (_r.error) throw _r.error;
+      output = (_r.stdout || "") + (_r.stderr || "");
+      const m = output.match(/findings?:\s*(\d+)\s*\((\d+)\s*error/i);
+      findings = m ? parseInt(m[1]) : 0;
+      errors = m ? parseInt(m[2]) : 0;
+      status = (_r.status === 0) ? "PASS" : "FAIL";
+    } catch (err) {
+      output = (err.stdout || err.stderr || err.message || "").slice(-2000);
+      status = "ERROR";
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          success: status === "PASS",
           status,
           findings,
           errors,

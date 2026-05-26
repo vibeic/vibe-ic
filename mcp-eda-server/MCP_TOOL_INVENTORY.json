@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "_comment": "AUTHORITATIVE MCP tool inventory \u2014 generated from code by tools/gen_mcp_tool_inventory.py. Do NOT hand-edit; the website tool count must read `total` from here.",
-  "total": 49,
+  "total": 50,
   "by_category": {
-    "eda": 41,
+    "eda": 42,
     "device": 7,
     "other": 1
   },
@@ -41,6 +41,7 @@
     "eda_scope_protocol_decode",
     "eda_simulate",
     "eda_spec_conformance",
+    "eda_spec_lint",
     "eda_spice",
     "eda_spice_corner",
     "eda_spinalhdl_gen",
@@ -103,6 +104,7 @@
     "eda_scope_protocol_decode",
     "eda_simulate",
     "eda_spec_conformance",
+    "eda_spec_lint",
     "eda_spice",
     "eda_spice_corner",
     "eda_spinalhdl_gen",
