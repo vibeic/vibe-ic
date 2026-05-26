@@ -10,7 +10,8 @@
         "phase2-rtl-verify",
         "phase3-backend-verify",
         "analog-output-verify",
-        "compliance-gate-spot-check"
+        "compliance-gate-spot-check",
+        "benchmark-verify"
       ]
     },
     "judgment": {

@@ -1,0 +1,113 @@
+---
+name: benchmark-verify
+description: "Normalized, MANDATORY end-to-end verification for any benchmark IC after it has been driven from Design Documents → generated RTL → silicon through the full Vibe-IC flow. Produces ONE BENCHMARK_VERIFICATION_REPORT.md per IC covering all five pillars with hard gates: (1) Functional Verification Coverage == 100% (closed-loop until met), (2) 55-step Output Comparison vs the open-source reference (every applicable step PASS), (3) Code Coverage line >= 90%, (4) FPGA digital verification (test patterns on-board/BFM), (5) Analog closed-loop verification (or N/A for pure-digital). Use when: 'verify the benchmark', 'benchmark verification report', 'is this IC production-ready', 'cross-check vs open source', after /vibe-ic-all on a benchmark IC, or for any IC in benchmark_clean/."
+---
+
+# Benchmark Verify — normalized doc→production-ready verification
+
+We run benchmark ICs to validate the **whole Vibe-IC flow**: that starting from a
+complete set of **Design Documents** we can reach a **production-ready** result.
+A benchmark run is **not finished** when the flow returns a verdict — it is finished
+when this skill's five pillars all pass and the single report is written.
+
+This skill is **chip-AGNOSTIC** and **MANDATORY** for every benchmark IC. Apply it
+to each IC under `benchmark_clean/<ic>/` (and any future benchmark set).
+
+## ⛔ Prerequisite — honesty + the corrected protocol
+Read `benchmark_clean/METHODOLOGY.md` first. Non-negotiable:
+- **Input = Design Documents ONLY** (incl. explicit PDK); nothing produced by a later
+  phase is fed back as input.
+- **Phase-2 RTL must be GENERATED**; IP reuse is allowed but **every reused source MUST be
+  tagged `REUSED-IP` in `SOURCE_MANIFEST.md`** (vs `GENERATED`). Production-readiness credit
+  applies only to GENERATED content; reused content is reported separately.
+- **No vacuous result counts as PASS** (e.g. a Magic `gds read` that dropped geometry and
+  reports "0 DRC" is INCONCLUSIVE, not clean). A missing input is **PENDING**, never a silent PASS.
+- The upstream open-source IP is the **golden oracle for cross-check only** — never a Phase-1/2 input.
+
+## The five pillars (== report sections == hard gates)
+
+### Pillar 1 — Functional Verification Coverage  ▸ gate: **== 100%**
+Go back to the Design Documents and enumerate **every requirement** (walk L1–L13:
+functional spec, interface, register map, command/protocol, timing, behavioral sequences,
+test cases). For each requirement, bind a verification item (directed test, assertion,
+golden-vector check, or formal property) and confirm it PASSES against the generated RTL.
+- `Functional Coverage = verified_requirements / total_requirements` → **must be 100%**.
+- Emit `reports/functional_coverage.json`: `{"requirements":[{"id","source","desc","status":"PASS|FAIL|PENDING"}]}`.
+- **Closed-loop:** if < 100%, write the missing tests and/or fix the RTL (use `rtl-repair`)
+  and re-verify until 100%. Do not waive a requirement; if a doc requirement is genuinely
+  untestable, that is a spec defect to record, not a pass.
+
+### Pillar 2 — 55-step Output Comparison vs open-source reference  ▸ gate: **every applicable step PASS**
+For each of the 55 canonical flow steps (`flow/phase1_phase2_phase3.yaml`), compare OUR
+step output against the open-source reference's corresponding output. Comparison is
+**step-appropriate, not byte-identical**:
+- **equivalence steps** (RTL, sim, formal, LEC, post-layout sim): LEC / co-sim / proof → MATCH/EQUIVALENT.
+- **metric steps** (synth cells/area, SDC, DEF area/utilization, CTS skew, STA slack, SPEF R/C,
+  power): compare **magnitude / trend in a sensible range** → IN-RANGE.
+- **clean steps** (lint, CDC, DRC, LVS, IR, EM, antenna, SI): **both independently clean** → BOTH-CLEAN.
+- **layout endpoints** (GDS): a different micro-architecture (e.g. our carry-save vs the ref's
+  array) means GDS/netlist are **NOT pixel/structure-comparable** — the correct cross-check is
+  **"both independently pass DRC/LVS/STA + functionally equivalent"**. "Different" is expected,
+  not a failure.
+- **N/A**: analog A1–A9 / mixed-signal M1–M4 for a pure-digital IC; manufacturing 37–40 (no silicon).
+
+Produce one `cross_check/**/step_<id>.md` per step (what ran, OUR result, REF result, verdict
+token: MATCH / EQUIVALENT / IN-RANGE / BOTH-CLEAN / DIFFERENT-BUT-OK / N/A / GAP / NO-TOOL / FAIL).
+**Close runnable GAPs** (e.g. run SPEF/IR/EM/antenna/power if the flow skipped them). Genuine
+NO-TOOL items (e.g. open-source full-chip fast-SPICE) are recorded honestly — and noted if the
+reference shares the same limitation. No step may be left unresolved.
+
+### Pillar 3 — Test Cases & Code Coverage  ▸ gate: **line coverage >= 90%**
+Author unit-test-style test cases (cocotb / SV testbench, via `eda_cocotb` / `eda_simulate`)
+for the generated RTL and measure coverage (`coverage_metric_check.py` / `coverage_closure.py`).
+- **Line coverage >= 90%** (report branch + toggle too). Emit `reports/code_coverage.json`:
+  `{"line_pct","branch_pct","toggle_pct"}`.
+- **Closed-loop:** below 90% → add test cases targeting the uncovered lines until >= 90%.
+
+### Pillar 4 — FPGA digital verification  ▸ gate: **PASS** (or documented N/A)
+Generate **test patterns** and run the digital portion on FPGA (`fpga_test_harness_gen.py`,
+`eda_fpga_compile`, `eda_fpga_program`, on-board or BFM). Record `reports/hw_test.json`
+`{"verdict":"PASS|FAIL","patterns":N}`. A core with no board-pin contract may run a BFM/
+gate-level equivalent — state which. N/A only with explicit justification.
+
+### Pillar 5 — Analog verification  ▸ gate: **converged** (or N/A for pure-digital)
+If the IC has analog blocks (`analog/analog_block_list.json` or `phase3/analog/*`), run the
+analog **closed-loop**: `analog-sizing-loop` → corner sweep (`ams-sim` / `eda_spice_corner`) →
+post-layout resim (`analog-extraction-resim`) → per-block PV (`analog-output-verify`) →
+HIL if a bench is available (`analog-hw-tuning-loop`). Pure-digital ICs mark this N/A.
+
+## Procedure (run for each benchmark IC)
+1. Confirm the IC reached the flow end (RTL generated + phase3 attempted). Read `SOURCE_MANIFEST.md`.
+2. **Pillar 2:** dispatch the per-step cross-check (split phase1/2 and phase3 to keep tool
+   runs bounded), writing `cross_check/<half>/step_*.md`. Run REAL tools in `iic-eda`; close gaps.
+3. **Pillar 1:** build `reports/functional_coverage.json` from the L-doc requirements; close-loop to 100%.
+4. **Pillar 3:** author tests, measure coverage → `reports/code_coverage.json`; close-loop to >= 90%.
+5. **Pillar 4:** test patterns + FPGA/BFM run → `reports/hw_test.json`.
+6. **Pillar 5:** analog closed-loop if applicable.
+7. **Aggregate + gate** — generate the single report:
+   ```bash
+   python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_verify_report.py <project_dir> \
+       --ref <open_source_reference_dir>
+   ```
+   It emits `<project>/BENCHMARK_VERIFICATION_REPORT.md` with the 5-pillar gate summary +
+   the full 55-step comparison table, and exits non-zero until ALL gates pass.
+8. **Close the loop** on any failing/pending gate, then re-aggregate. The benchmark IC is
+   **DONE only when the report's OVERALL is PRODUCTION-READY** (functional 100% · 55/55 applicable
+   PASS · code line >= 90% · FPGA PASS · analog converged-or-N/A) — with honest, evidence-backed
+   results and source provenance tagged.
+
+## Acceptance
+A benchmark IC passes `benchmark-verify` iff its `BENCHMARK_VERIFICATION_REPORT.md` shows:
+- Functional Coverage **100%**, and
+- Every applicable step of the 55 = PASS (no GAP/PENDING/FAIL/unexplained NO-TOOL), and
+- Code line coverage **>= 90%**, and
+- FPGA digital verification **PASS** (or justified N/A), and
+- Analog **converged** (or N/A), and
+- `SOURCE_MANIFEST.md` present with GENERATED/REUSED-IP tagged.
+Anything short of that is **NOT complete** — keep working (closed-loop), do not claim done.
+
+## Worked example
+`benchmark_clean/spm/` — first IC verified under this skill: RTL 100% GENERATED, functional
+equivalence vs golden + upstream (10,013 vectors), 55-step cross-check under
+`benchmark_clean/spm/cross_check/`, signed-off DRC/LVS/STA. Use it as the reference shape for
+a complete report.
