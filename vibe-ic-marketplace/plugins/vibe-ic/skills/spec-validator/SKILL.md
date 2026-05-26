@@ -83,13 +83,40 @@ python3 tools/vibe_ic_tools/spec_validator.py \
 
 **Checkpoint 1 threshold: 0 ERROR-level mismatches**
 
+### 4. spec_conformance_check.py — Spec↔RTL contract gate (once RTL exists)
+
+The checks above keep the *documents* consistent. Once RTL is drafted, this gate
+proves the *implementation* matches the declared contract — the failure that
+slips past pure structural lints (e.g. a spec that says "synchronous reset"
+while the RTL is asynchronous, or an interface whose ports drifted from the
+spec). It extracts the expected interface + reset semantics + output latency
+straight from the spec (natural-language bullets `- input d (8 bits)`, a
+markdown ```verilog module(...)``` header, or a JSON contract) — no hand-built
+port list — and diffs it against the RTL.
+
+```bash
+# CLI
+python3 programs/spec_conformance_check.py --spec phase1_spec/04_datasheet.md \
+    --rtl-dir phase2/stage1/rtl --top <module>
+# MCP (preferred in-flow)
+#   eda_spec_conformance { spec, rtl_dir|verilog_files, top }
+```
+
+Findings: `port-missing/extra/direction/width`, `reset-mode-spec-mismatch`,
+`reset-polarity-spec-mismatch` (all ERROR); `reset-not-found` (WARN);
+`latency-mismatch` (INFO). **Threshold: 0 ERROR.** If a `reset-*-spec-mismatch`
+fires, reconcile the spec wording against the reference/testbench before Phase 2 —
+a blind spec-faithful RTL will otherwise mismatch the bench.
+
 ## Workflow
 
 1. Run `ds_quality_check.py` on the datasheet
 2. Run `an_validator.py` on the application note
 3. Run `spec_validator.py` to cross-check both (+ spec if available)
-4. If any check fails threshold, report findings and block Phase 2 entry
-5. Log results via `vibe_ic_log.py`
+4. Once RTL exists, run `spec_conformance_check.py` (or `eda_spec_conformance`)
+   to prove the RTL conforms to the spec's ports + reset + latency contract
+5. If any check fails threshold, report findings and block Phase 2 entry
+6. Log results via `vibe_ic_log.py`
 
 ## Output format
 

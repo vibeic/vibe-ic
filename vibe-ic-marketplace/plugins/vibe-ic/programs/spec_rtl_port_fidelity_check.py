@@ -38,25 +38,16 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-def strip_comments(src: str) -> str:
-    out, i, n = [], 0, len(src)
-    while i < n:
-        if src[i:i + 2] == '/*':
-            end = src.find('*/', i + 2)
-            if end == -1:
-                break
-            out.append(''.join('\n' if c == '\n' else ' ' for c in src[i:end + 2]))
-            i = end + 2
-        elif src[i:i + 2] == '//':
-            end = src.find('\n', i)
-            if end == -1:
-                break
-            out.append(' ' * (end - i))
-            i = end
-        else:
-            out.append(src[i])
-            i += 1
-    return ''.join(out)
+# Shared Spec↔RTL parsing primitives (single source of truth — see
+# _specrtl_common). load_spec now auto-handles NL prompts + markdown so the
+# `--spec` port-list need not be hand-built.
+try:
+    from _specrtl_common import (Port, extract_spec_contract, parse_rtl_ports,
+                                 parse_verilog_ports, strip_comments)
+except ImportError:  # allow running from another cwd
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from _specrtl_common import (Port, extract_spec_contract, parse_rtl_ports,
+                                 parse_verilog_ports, strip_comments)
 
 
 def collect_rtl_files(paths: List[str], rtl_dir: Optional[str]) -> List[Path]:
@@ -77,13 +68,6 @@ def collect_rtl_files(paths: List[str], rtl_dir: Optional[str]) -> List[Path]:
 
 
 @dataclass
-class Port:
-    name: str
-    direction: str   # input / output / inout
-    width: int       # 1 for scalar
-
-
-@dataclass
 class Finding:
     file: str
     severity: str   # ERROR / WARN
@@ -92,57 +76,12 @@ class Finding:
     message: str
 
 
-_PORT_DECL = re.compile(
-    r'\b(input|output|inout)\b\s*(?:reg|wire|logic|signed|unsigned|\s)*'
-    r'(?:\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*)?'
-    r'([A-Za-z_]\w*(?:\s*,\s*(?!(?:input|output|inout)\b)[A-Za-z_]\w*)*)')
-
-
-def _parse_ports(text: str) -> List[Port]:
-    ports: List[Port] = []
-    for m in _PORT_DECL.finditer(text):
-        direction = m.group(1)
-        if m.group(2) is not None:
-            width = abs(int(m.group(2)) - int(m.group(3))) + 1
-        else:
-            width = 1
-        for nm in re.split(r'\s*,\s*', m.group(4)):
-            nm = nm.strip()
-            if nm:
-                ports.append(Port(nm, direction, width))
-    return ports
-
-
-def parse_rtl_ports(src: str, top: Optional[str]) -> Tuple[str, List[Port]]:
-    """Return (module_name, ports) for the chosen/first module."""
-    mods = list(re.finditer(r'\bmodule\s+(\w+)\b', src))
-    if not mods:
-        return '', []
-    chosen = None
-    if top:
-        for m in mods:
-            if m.group(1) == top:
-                chosen = m
-                break
-    chosen = chosen or mods[0]
-    name = chosen.group(1)
-    # port region = module header up to the first ';' after the name (ANSI),
-    # plus the body for non-ANSI declarations up to the next 'module'/'endmodule'.
-    nxt = re.search(r'\bendmodule\b', src[chosen.end():])
-    region = src[chosen.end():chosen.end() + (nxt.start() if nxt else len(src))]
-    return name, _parse_ports(region)
-
-
 def load_spec(path: Path) -> List[Port]:
+    """Expected port list from a spec. Accepts a canonical .json contract, a
+    natural-language prompt ("- input d (8 bits)"), a markdown ```verilog
+    module(...)``` header, or a plain Verilog file — via the shared extractor."""
     txt = path.read_text(errors='replace')
-    if path.suffix == '.json':
-        data = json.loads(txt)
-        out = []
-        for d in data:
-            out.append(Port(d['name'], d.get('direction', 'input'),
-                            int(d.get('width', 1))))
-        return out
-    return _parse_ports(strip_comments(txt))
+    return extract_spec_contract(txt, is_json=path.suffix == '.json').ports
 
 
 def check_index_gaps(ports: List[Port], path: str) -> List[Finding]:

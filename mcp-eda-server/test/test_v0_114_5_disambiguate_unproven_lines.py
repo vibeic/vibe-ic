@@ -193,11 +193,14 @@ def test_v0_114_5_source_has_both_anchored_regexes():
 
 
 def test_v0_114_5_server_version_canonicalised():
+    # v0.1.4 unified the version scheme: the old 0.114.x numeric floor is
+    # obsolete. The disambiguation feature is guarded by the regex tests above;
+    # here we assert SERVER_VERSION equals the unified package.json version.
+    import json
     src = INDEX_JS.read_text()
     m = re.search(r'const SERVER_VERSION = "([^"]+)"', src)
     assert m
-    parts = m.group(1).split(".")
-    major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
-    assert (major, minor, patch) >= (0, 114, 5), (
-        f"SERVER_VERSION {m.group(1)!r} predates 0.114.5 — "
-        f"#94 follow-up 3 not shipped")
+    pkg_version = json.loads((MCP_ROOT / "package.json").read_text())["version"]
+    assert m.group(1) == pkg_version, (
+        f"SERVER_VERSION {m.group(1)!r} must equal package.json {pkg_version!r} "
+        f"(unified version scheme since v0.1.4)")

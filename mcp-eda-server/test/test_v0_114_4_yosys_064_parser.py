@@ -180,11 +180,17 @@ def test_v0_114_4_source_has_three_canonical_regexes():
 
 
 def test_v0_114_4_server_version_canonicalised():
-    """SERVER_VERSION must be at-or-past 0.114.4."""
+    """SERVER_VERSION is canonicalised to the unified package.json version.
+
+    v0.1.4 unified the scheme (was a 0.114.x runtime constant vs a 0.1.x
+    package). The meaningful invariant is now equality with package.json, not a
+    numeric floor — the yosys-0.64 parser feature itself is guarded by the
+    parsing tests above, independent of the version string."""
+    import json
     src = INDEX_JS.read_text()
     m = re.search(r'const SERVER_VERSION = "([^"]+)"', src)
     assert m
-    parts = m.group(1).split(".")
-    major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
-    assert (major, minor, patch) >= (0, 114, 4), (
-        f"SERVER_VERSION {m.group(1)!r} predates 0.114.4 — #94 follow-up 2 not shipped")
+    pkg_version = json.loads((MCP_ROOT / "package.json").read_text())["version"]
+    assert m.group(1) == pkg_version, (
+        f"SERVER_VERSION {m.group(1)!r} must equal package.json {pkg_version!r} "
+        f"(unified version scheme since v0.1.4)")

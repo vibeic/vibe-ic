@@ -57,6 +57,8 @@ and the project's `<host_tester>` then FAILs at integration.
 - [ ] `ds_quality_check.py` score >= 70/100
 - [ ] `an_validator.py` score >= 56/80
 - [ ] `spec_validator.py` reports 0 ERROR-level mismatches
+- [ ] If RTL is already drafted: `spec_conformance_check.py` reports 0 ERROR
+      (ports + reset mode/polarity + latency match the spec contract)
 
 ### Automated Quality Gate Commands
 
@@ -78,6 +80,12 @@ python3 tools/vibe_ic_tools/spec_validator.py \
     --spec phase1_spec/03_spec_confirmed.md \
     --json
 # Check: .consistent == true (i.e., .summary.errors == 0)
+
+# 3b. Spec↔RTL contract conformance (only if RTL already exists; must have 0 ERROR)
+python3 programs/spec_conformance_check.py \
+    --spec phase1_spec/04_datasheet.md \
+    --rtl-dir phase2/stage1/rtl --top <module> --json /tmp/conf.json
+# Check: 0 ERROR findings (port-missing/extra/dir/width, reset-*-spec-mismatch)
 
 # 4. Log results (unified JSONL)
 python3 tools/vibe_ic_tools/vibe_ic_log.py log \

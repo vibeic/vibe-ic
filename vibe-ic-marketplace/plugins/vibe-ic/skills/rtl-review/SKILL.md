@@ -72,11 +72,18 @@ Go through every category. For each issue found, record: file, line number, seve
 
 > **Deterministic backing.** `programs/spec_rtl_port_fidelity_check.py` detects
 > indexed-name gaps + duplicate ports standalone, and does an exact
-> name+width+direction diff against an integration-spec port list when given one:
+> name+width+direction diff against an integration-spec port list when given one.
+> `--spec` now accepts a raw natural-language prompt (`- input d (8 bits)`), a
+> markdown ```verilog module(...)``` header, or a JSON contract — no hand-built
+> port list needed:
 > ```bash
 > python3 programs/spec_rtl_port_fidelity_check.py --rtl-dir <rtl>            # sanity
-> python3 programs/spec_rtl_port_fidelity_check.py --rtl-dir <rtl> --spec ports.json
+> python3 programs/spec_rtl_port_fidelity_check.py --rtl-dir <rtl> --spec spec.md
 > ```
+> For the **full** Spec↔RTL contract (ports + reset mode/polarity + output
+> latency, not just ports) use `programs/spec_conformance_check.py` (MCP:
+> `eda_spec_conformance`) — it also catches a spec that says "synchronous reset"
+> while the RTL is asynchronous, the class of bug structural lints miss.
 
 ## Output format
 

@@ -1,0 +1,56 @@
+type: enhancement
+severity: P2
+component: program:spec_conformance_check
+plugin_version: "0.1.4"
+
+title: >-
+  spec_conformance_check contract-extractor coverage: datasheet pin/register
+  tables + non-keyword reset phrasings
+
+pattern: |
+  v0.1.4 shipped spec_conformance_check.py + the eda_spec_conformance MCP tool
+  (Spec↔RTL contract gate: ports + reset mode/polarity + output latency). The
+  contract EXTRACTOR (_specrtl_common.extract_spec_contract) currently
+  recognises three spec shapes well:
+    - natural-language interface bullets ("- input d (8 bits)")  [VerilogEval]
+    - a markdown ```verilog module(...)``` ANSI header           [CVDP spec.md]
+    - a JSON contract
+  It does NOT yet parse the most common *datasheet* interface form — a markdown
+  PIN-CONFIGURATION / register-map TABLE (| Signal | Dir | Width | ... |). When a
+  spec declares its interface only as a table, extract_spec_contract returns 0
+  ports and port-conformance is (correctly) skipped — so a real port drift can
+  go unflagged via this path.
+
+  Reset-semantics detection is keyword-based ("synchronous"/"asynchronous" +
+  "active-high"/"active-low" in a sentence containing "reset"). Unusual phrasings
+  ("reset is registered to the clock", "clears on the rising edge of nRST",
+  "POR holds the core in reset") are not classified, so reset-*-spec-mismatch
+  can be missed on prose that a human would read as a clear reset declaration.
+
+suggested_fix: |
+  1. Add a markdown-table port parser to _specrtl_common: detect a header row
+     containing a Signal/Pin/Name column + a Direction column (+ optional Width
+     or [msb:lsb]), and emit Port(name, direction, width) rows. Prefer it when
+     present, after NL bullets and the ANSI module header. Keep the "no raw
+     prose scan" rule so table cells, not sentence words, drive ports.
+  2. Broaden _detect_reset: add polarity inference from a named active-low
+     signal (rst_n / nrst / *_n) when no explicit "active-low" word appears, and
+     a small phrase set for edge/POR/registered-reset wording. Keep it
+     conservative (only set mode/polarity when confident) so it never invents a
+     mismatch.
+  3. Unit-test both against a representative datasheet pin-table and 3-4 reset
+     phrasings. Emit an INFO ("spec interface present as a table but N ports
+     parsed") when a table is detected but parsing is partial, so silent
+     0-port skips are visible.
+
+id: "ORGANIC-20260527-spec-conformance-extractor-coverage"
+submitted_at: "2026-05-27T01:51:13+08:00"
+session_context: >-
+  Filed by the same session that shipped v0.1.4 eda_spec_conformance. The tool
+  was validated end-to-end on the CVDP fixed_priority_arbiter spec (caught the
+  "synchronous reset" spec vs asynchronous reference-RTL mismatch) and on
+  VerilogEval-v2 prompts (auto-extracted the expected port list from
+  "- input d (8 bits)" bullets and flagged the port-swap regressions). The two
+  gaps above are the honest known-limitations of the extractor as shipped —
+  recorded so a future iteration absorbs datasheet-table interfaces and richer
+  reset phrasings rather than relying only on bullets / ANSI headers / JSON.

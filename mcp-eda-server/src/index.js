@@ -441,7 +441,7 @@ function cellgdsPath(cfg) {
 // field-agents to tell at runtime whether a given handler patch
 // was actually loaded. Resolution: keep them in lockstep; if you
 // bump package.json, also bump this constant.
-const SERVER_VERSION = "0.114.6";
+const SERVER_VERSION = "0.1.4";
 function wrapResult({ success, t0, toolVersion, error, output, headLines = 40, tailLines = 80, ...rest }) {
   const dur = t0 ? (Date.now() - t0) : 0;
   const text = (output || "").toString();
@@ -2775,6 +2775,89 @@ server.tool(
           success: all_pass,
           all_pass,
           programs: results,
+        }),
+      }],
+    };
+  }
+);
+
+// ─── Tool: eda_spec_conformance ───
+// First-class Spec↔RTL contract-conformance verb. Distinct from eda_rtl_audit
+// (RTL-only structural lints): this takes BOTH a spec and the RTL and proves the
+// implementation matches the *declared* contract — ports, reset semantics
+// (sync/async + polarity), and output latency. Motivated by two real misses:
+//   • a spec that said "synchronous reset" while the reference RTL was async
+//     (a blind spec-faithful design then failed the bench), and
+//   • VerilogEval-v2 port-interface misses that needed an auto-extracted
+//     expected port list (the prompt's "- input d (8 bits)" bullets).
+// Belongs at the Phase-1→Phase-2 checkpoint (see spec-validator / checkpoint-gate).
+server.tool(
+  "eda_spec_conformance",
+  "Prove RTL conforms to its spec contract: port (name/dir/width), reset mode+polarity, and output latency. Spec may be a natural-language prompt, a markdown module header, or a JSON contract. Returns PASS/FAIL + findings.",
+  {
+    spec: z.string().describe("Spec file: .json contract, .md/.txt natural-language/markdown, or a .v/.sv header"),
+    rtl_dir: z.string().optional().describe("Directory of RTL to check (use this OR verilog_files)"),
+    verilog_files: z.array(z.string()).optional().describe("Explicit RTL files (use this OR rtl_dir)"),
+    top: z.string().optional().describe("Top module name (default: first module / the spec's module)"),
+    strict: z.boolean().default(false).describe("Fail on WARN findings too, not just ERROR"),
+    programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing the conformance program (auto-detected; overridable via $VIBE_IC_PROGRAMS_DIR)"),
+  },
+  async ({ spec, rtl_dir, verilog_files, top, strict, programs_dir }) => {
+    try {
+      assertSafePath(spec, "spec");
+      if (rtl_dir) assertSafePath(rtl_dir, "rtl_dir");
+      if (verilog_files) assertSafePaths(verilog_files, "verilog_files");
+      if (top) assertSafeIdent(top, "top");
+      optPath(programs_dir, "programs_dir");
+    } catch (e) { return guardError(e); }
+    if (!rtl_dir && !(verilog_files && verilog_files.length)) {
+      return guardError(new Error("provide rtl_dir or verilog_files"));
+    }
+
+    const scriptPath = `${programs_dir}spec_conformance_check.py`;
+    const argv = [scriptPath, "--spec", spec];
+    if (rtl_dir) argv.push("--rtl-dir", rtl_dir);
+    (verilog_files || []).forEach((f) => argv.push(f));
+    if (top) argv.push("--top", top);
+    if (strict) argv.push("--strict");
+
+    let output = "", status = "ERROR", findings = 0, errors = 0;
+    try {
+      // run via argv (no shell); the program prints a summary line + findings
+      // and exits 0 = PASS, 1 = FAIL (ERROR or, with --strict, WARN).
+      const _r = _spawnSync("python3", argv, {
+        timeout: 60000, maxBuffer: 5 * 1024 * 1024, encoding: "utf-8",
+      });
+      if (_r.error) throw _r.error;
+      output = (_r.stdout || "") + (_r.stderr || "");
+      const m = output.match(/findings?:\s*(\d+)\s*\((\d+)\s*error/i);
+      findings = m ? parseInt(m[1]) : 0;
+      errors = m ? parseInt(m[2]) : 0;
+      status = (_r.status === 0) ? "PASS" : "FAIL";
+    } catch (err) {
+      output = (err.stdout || err.stderr || err.message || "").slice(-2000);
+      status = "ERROR";
+    }
+
+    const pass = status === "PASS";
+    if (rtl_dir) {
+      writeManifest(rtl_dir, {
+        step: "spec_conformance",
+        status,
+        tool: "vibe-ic",
+        findings,
+        errors,
+      });
+    }
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          success: pass,
+          status,
+          findings,
+          errors,
+          output: output.slice(-2000),
         }),
       }],
     };
