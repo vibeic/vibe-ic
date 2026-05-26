@@ -12,6 +12,15 @@ spec-to-RTL task.
 > scored **142/156 = 91.03%** — within blind single-shot variance — and its failures were
 > then used to demonstrate that the v0.1.3 port-fidelity lint catches 5/14 of them. See
 > [`run_rerun_v013/RESULT_rerun.md`](run_rerun_v013/RESULT_rerun.md).
+>
+> **Note (v0.1.4 re-run).** A second fresh blind re-run, regenerated from scratch on v0.1.4
+> by 8 parallel prompt-only Claude agents, scored **145/156 = 92.95%** (145/155 = 93.55% on
+> the scoreable set). Its single non-functional failure, **Prob099**, is a *defective dataset
+> problem*: the testbench wires ports `Y2/Y4` that the golden `RefModule` does not have, so
+> **even the official reference fails its own testbench** — and our blind output was byte-for-byte
+> the reference. The v0.1.4 `spec_rtl_port_fidelity_check` flagged exactly that garbled-spec
+> signature (and nothing else among the 11 fails). See
+> [`run_rerun_v014/RESULT_rerun.md`](run_rerun_v014/RESULT_rerun.md).
 
 ## What was measured
 - **Benchmark:** NVlabs `verilog-eval`, `dataset_spec-to-rtl` (the 2024 v2 spec-to-RTL task,
