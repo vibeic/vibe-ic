@@ -155,6 +155,48 @@ def _has_place_and_route(project: Path) -> bool:
     return False
 
 
+def _has_synth_digital_rtl(project: Path) -> bool:
+    """True iff the IC carries a synthesizable DIGITAL RTL block — i.e. there is
+    HDL the digital flow (RTL→synth→PnR→DFT→FPGA) can actually operate on.
+
+    chip-AGNOSTIC. Signals (any one):
+      * a phase2 RTL dir with HDL (phase2/**/rtl/*.v|*.sv|*.vhd), or
+      * a non-behavioral .v/.sv/.vhd anywhere under the project EXCEPT the
+        analog hardmacro behavioral wrappers (phase3/analog/**) and analog
+        cosim models (**/cosim/**), which are NOT synthesizable digital RTL.
+
+    An analog-front-end chip whose only Verilog is the analog hardmacro
+    wrapper + a behavioral mixed-signal cosim has NO synthesizable digital RTL.
+    """
+    for pat in ("phase2/**/rtl/*.v", "phase2/**/rtl/*.sv", "phase2/**/rtl/*.vhd",
+                "phase2/**/*.v", "phase2/**/*.sv"):
+        if glob.glob(str(project / pat), recursive=True):
+            return True
+    for ext in ("*.v", "*.sv", "*.vhd"):
+        for f in glob.glob(str(project / "**" / ext), recursive=True):
+            low = f.lower()
+            if (os.sep + "analog" + os.sep) in low:   # analog hardmacro wrapper
+                continue
+            if (os.sep + "cosim" + os.sep) in low:     # analog cosim model
+                continue
+            return True
+    return False
+
+
+def _is_analog_only_ic(project: Path) -> bool:
+    """True iff the IC is ANALOG-ONLY: it has analog blocks but NO synthesizable
+    digital RTL and never reached digital place-and-route. For such an IC the
+    pure-DIGITAL flow steps (RTL/synth/PnR/DFT/FPGA-class), Pillar 3 (code
+    coverage of digital RTL) and Pillar 4 (FPGA digital verification) are N/A —
+    there is no digital RTL for them to operate on. This MIRRORS how Pillar 6
+    (Design-for-ECO) already N/As when the IC never reached place-and-route.
+    chip-AGNOSTIC: keyed only on presence of analog blocks + absence of digital
+    RTL/PnR, never on a chip name."""
+    return (_is_analog_ic(project)
+            and not _has_synth_digital_rtl(project)
+            and not _has_place_and_route(project))
+
+
 def _load_json(p: Path):
     try:
         return json.loads(p.read_text())
@@ -177,6 +219,18 @@ def main():
     flow = Path(a.flow) if a.flow else (here.parent / "flow" / "phase1_phase2_phase3.yaml")
     out = Path(a.out) if a.out else (project / "BENCHMARK_VERIFICATION_REPORT.md")
     analog_ic = _is_analog_ic(project)
+    analog_only = _is_analog_only_ic(project)
+
+    # Pure-DIGITAL 56-step steps for an analog-only IC operate on synthesizable
+    # digital RTL or a digital PnR die — neither exists for an analog-front-end
+    # with no digital RTL. For such an IC the ONLY applicable steps are the spec
+    # cross-check (D1) + the analog/mixed-signal track (A*/M*); every other step
+    # (digital RTL/synth/PnR/DFT/STA/DRC kinds, the P0 structural-RTL checker
+    # bank, and the digital foundry-handoff doc step 36) N/As — exactly as
+    # A*/M* N/A for a pure-digital IC and as Pillar 6 N/As without
+    # place-and-route. chip-AGNOSTIC: keyed on step ID/kind, never a chip name.
+    def _is_analog_only_applicable_step(sid: str, kind: str) -> bool:
+        return kind == "analog" or sid == "D1"
 
     steps = _load_steps(flow)
     # ── Pillar 2: 56-step output comparison ──
@@ -188,6 +242,11 @@ def main():
             applicable = False; verdict = "N/A"
         elif kind == "mfg":
             applicable = False; verdict = "N/A (no silicon)"
+        elif analog_only and not _is_analog_only_applicable_step(sid, kind):
+            # analog-only IC: a pure-digital flow step (RTL/synth/PnR/DFT/
+            # FPGA/foundry-handoff). No digital RTL/PnR for it to operate on.
+            applicable = False
+            verdict = "N/A (analog-only — no digital RTL)"
         else:
             v, _ = _read_step_verdict(project, sid)
             verdict = v or "PENDING"
@@ -213,23 +272,45 @@ def main():
         func_pct, func_detail = None, "reports/functional_coverage.json MISSING"
 
     # ── Pillar 3: code coverage ──
-    cc = _load_json(project / "reports" / "code_coverage.json")
-    line_pct = cc.get("line_pct") if cc else None
-    cc_detail = (f"line {cc.get('line_pct')}% / branch {cc.get('branch_pct')}% / "
-                 f"toggle {cc.get('toggle_pct')}%") if cc else \
-                "reports/code_coverage.json MISSING"
+    # N/A for an analog-only IC: code coverage measures DIGITAL RTL line/branch/
+    # toggle exercise, but there is no synthesizable digital RTL to instrument.
+    # MIRRORS Pillar 6's N/A-without-place-and-route. A missing report on a
+    # DIGITAL IC stays PENDING (never a silent pass).
+    if analog_only:
+        cc = None
+        line_pct = None
+        cc_na = True
+        cc_detail = "analog-only IC — no synthesizable digital RTL to measure code coverage"
+    else:
+        cc = _load_json(project / "reports" / "code_coverage.json")
+        line_pct = cc.get("line_pct") if cc else None
+        cc_na = False
+        cc_detail = (f"line {cc.get('line_pct')}% / branch {cc.get('branch_pct')}% / "
+                     f"toggle {cc.get('toggle_pct')}%") if cc else \
+                    "reports/code_coverage.json MISSING"
 
     # ── Pillar 4: FPGA ──
-    hw = _load_json(project / "reports" / "hw_test.json")
-    fpga_verdict = (hw or {}).get("verdict") if hw else None
-    fpga_detail = (f"verdict={fpga_verdict}, patterns={hw.get('patterns')}"
-                   if hw else "reports/hw_test.json MISSING")
+    # N/A for an analog-only IC: FPGA digital verification runs test patterns
+    # through synthesizable digital RTL on an FPGA/BFM; there is no digital RTL.
+    # MIRRORS Pillar 6's N/A-without-place-and-route.
+    if analog_only:
+        hw = None
+        fpga_verdict = None
+        fpga_na = True
+        fpga_detail = "analog-only IC — no synthesizable digital RTL for FPGA/BFM verification"
+    else:
+        hw = _load_json(project / "reports" / "hw_test.json")
+        fpga_verdict = (hw or {}).get("verdict") if hw else None
+        fpga_na = False
+        fpga_detail = (f"verdict={fpga_verdict}, patterns={hw.get('patterns')}"
+                       if hw else "reports/hw_test.json MISSING")
 
     # ── Pillar 5: analog ──
     if not analog_ic:
         analog_state, analog_detail = "N/A", "pure-digital IC (no analog blocks)"
     else:
-        abl = _load_json(project / "analog" / "analog_block_list.json")
+        abl = _load_json(project / "analog" / "analog_block_list.json") or \
+              _load_json(project / "phase3" / "analog" / "analog_block_list.json")
         analog_state = "PRESENT"
         analog_detail = f"analog blocks: {abl if abl else '(see analog/ reports)'}"
 
@@ -282,8 +363,10 @@ def main():
     def gate(ok): return "✅ PASS" if ok else "❌ FAIL/PENDING"
     g_func = (func_pct == 100.0)
     g_steps = (n_unresolved == 0 and n_applicable > 0)
-    g_code = (line_pct is not None and float(line_pct) >= a.code_cov_floor)
-    g_fpga = (fpga_verdict == "PASS")
+    # Pillars 3 (code coverage) + 4 (FPGA) N/A-pass for an analog-only IC
+    # (no digital RTL), mirroring Pillar 6's N/A-without-place-and-route.
+    g_code = cc_na or (line_pct is not None and float(line_pct) >= a.code_cov_floor)
+    g_fpga = fpga_na or (fpga_verdict == "PASS")
     g_analog = (not analog_ic) or (analog_state == "PRESENT")  # presence; deep check via analog skills
     # Design-for-ECO gate: N/A passes; otherwise requires coverage PASS + preservation intact.
     g_dfe = (not dfe_applicable) or (dfe_state == "PASS")
@@ -302,8 +385,10 @@ def main():
     L.append("|---|---|---|---|")
     L.append(f"| 1. Functional Coverage | == 100% | {gate(g_func)} | {func_detail} ({func_pct if func_pct is not None else '—'}%) |")
     L.append(f"| 2. 56-step Output Comparison | all applicable PASS | {gate(g_steps)} | {n_pass}/{n_applicable} applicable PASS, {n_unresolved} unresolved |")
-    L.append(f"| 3. Code Coverage (line) | >= {a.code_cov_floor:.0f}% | {gate(g_code)} | {cc_detail} |")
-    L.append(f"| 4. FPGA digital verification | PASS | {gate(g_fpga)} | {fpga_detail} |")
+    _code_cell = "➖ N/A" if cc_na else gate(g_code)
+    _fpga_cell = "➖ N/A" if fpga_na else gate(g_fpga)
+    L.append(f"| 3. Code Coverage (line) | >= {a.code_cov_floor:.0f}% / N/A | {_code_cell} | {cc_detail} |")
+    L.append(f"| 4. FPGA digital verification | PASS / N/A | {_fpga_cell} | {fpga_detail} |")
     L.append(f"| 5. Analog verification | converged / N/A | {gate(g_analog)} | {analog_detail} |")
     # Pillar 6 status cell: show N/A / PENDING explicitly (gate() collapses both to FAIL/PENDING).
     _dfe_cell = {"PASS": "✅ PASS", "N/A": "➖ N/A",
@@ -354,9 +439,11 @@ def main():
     print(f"wrote {out}")
     print(f"OVERALL={'PRODUCTION-READY' if overall else 'NOT-COMPLETE'} "
           f"func={func_pct} steps={n_pass}/{n_applicable}(unresolved {n_unresolved}) "
-          f"code_line={line_pct} fpga={fpga_verdict} "
+          f"code_line={'N/A' if cc_na else line_pct} "
+          f"fpga={'N/A' if fpga_na else fpga_verdict} "
           f"analog={'N/A' if not analog_ic else analog_state} "
-          f"design_for_eco={dfe_state}")
+          f"design_for_eco={dfe_state} "
+          f"analog_only={analog_only}")
     sys.exit(0 if overall else 1)
 
 

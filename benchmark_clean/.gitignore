@@ -18,3 +18,7 @@
 !**/verify/*.v
 !**/verify/*.sv
 !**/verify/*.log
+# analog GENERATED evidence (the analog "source" + sized specs + corner results); heavy GDS stays out
+!**/phase3/analog/**/*.sp
+!**/phase3/analog/**/*.json
+!**/phase3/analog/**/*.flag
