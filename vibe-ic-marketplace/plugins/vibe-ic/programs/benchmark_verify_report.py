@@ -35,9 +35,13 @@ import argparse, json, re, sys, glob, os
 from pathlib import Path
 
 VERDICT_TOKENS = ["MATCH", "EQUIVALENT", "IN-RANGE", "BOTH-CLEAN", "PASS",
-                  "DIFFERENT-BUT-OK", "N/A", "GAP", "FAIL", "TODO", "NO-TOOL"]
+                  "DIFFERENT-BUT-OK", "BETTER-THAN-REF", "N/A", "GAP", "FAIL",
+                  "TODO", "NO-TOOL"]
+# A step PASSES the comparison gate if OURS is equivalent/in-range/clean vs REF,
+# beats REF, or the step is a justified N/A (e.g. analog on a digital IC, or a
+# capability neither the open-source flow nor the reference can produce).
 PASS_TOKENS = {"MATCH", "EQUIVALENT", "IN-RANGE", "BOTH-CLEAN", "PASS",
-               "DIFFERENT-BUT-OK", "N/A"}
+               "DIFFERENT-BUT-OK", "BETTER-THAN-REF", "N/A"}
 
 # ── Per-step output-comparison METHOD table (chip-agnostic) ──────────────────
 # Method describes HOW to cross-check OUR step output vs the open-source ref.

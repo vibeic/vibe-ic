@@ -91,6 +91,12 @@ This protocol fixes that.
   drops boundary I/O nets in extraction (not a layout defect). Honest verdict and
   full evidence in `spm/RESULT.md`. doc->RTL generation AND doc->signed-off-silicon
   (timing clean, DRC clean of real violations, LVS device-exact) both demonstrated.
+- [benchmark-verified 2026-05-26] `sha256` — SECOND fully benchmark-verified IC:
+  `benchmark_verify_report.py` OVERALL = PRODUCTION-READY (P1 functional coverage
+  100% = 26/26 reqs; P2 55-step output comparison 38/38 applicable PASS, 0 unresolved
+  — incl. OURS stronger than REF on DFT 94% & 9-corner STA & DRC; P3 code line 97.85%
+  (>=90); P4 FPGA PASS 101 patterns; P5 analog N/A). RTL 100% GENERATED. Full report:
+  `sha256/BENCHMARK_VERIFICATION_REPORT.md` + `sha256/cross_check/{p12,p3}/`.
 - [signed-off 2026-05-26] `sha256` — corrected-protocol run SIGNED OFF (doc ->
   production-ready): doc -> GENERATED RTL -> functionally-proven -> routed clean
   GDS -> **FULL 9-corner sign-off** DEMONSTRATED. RTL is **100% GENERATED** from
