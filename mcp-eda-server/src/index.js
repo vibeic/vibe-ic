@@ -561,9 +561,9 @@ server.tool(
   "eda_synth",
   "Synthesize RTL to gate-level netlist using Yosys. Returns cell count, area, and writes netlist file.",
   {
-    verilog_files: z.array(z.string()).describe("Paths to Verilog/SV source files (inside container; no whitespace or shell metacharacters)"),
+    verilog_files: z.array(z.string()).describe("Paths to Verilog/SV source files (inside container)"),
     top_module: z.string().describe("Top module name"),
-    output_netlist: z.string().describe("Output netlist path (inside container; no whitespace or shell metacharacters)"),
+    output_netlist: z.string().describe("Output netlist path (inside container)"),
     pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180").describe("Target PDK"),
     sv_mode: z.boolean().default(true).describe("Use -sv flag for SystemVerilog"),
     custom_lib: z.string().optional().describe("Path to Liberty .lib file (custom PDK)"),
@@ -699,7 +699,7 @@ server.tool(
   "eda_lint",
   "Run Verilator lint on RTL files. Returns warnings and errors. v0.99.2 adds a `strictness` selector — default 'error_only' lets stylistic warnings through (matching Quartus / Icarus tolerance), 'warnings_as_errors' restores the historical -Wall behaviour.",
   {
-    verilog_files: z.array(z.string()).describe("Paths to Verilog/SV source files (no whitespace or shell metacharacters)"),
+    verilog_files: z.array(z.string()).describe("Paths to Verilog/SV source files"),
     top_module: z.string().describe("Top module name"),
     strictness: z.enum(["error_only", "warnings_as_errors"]).default("error_only").describe("'error_only' (default) demotes WIDTHTRUNC / UNUSEDPARAM / UNUSEDSIGNAL / PINMISSING / DECLFILENAME / STMTDLY / SYNCASYNCNET to non-fatal — matches Quartus / Icarus tolerance. 'warnings_as_errors' uses verilator -Wall and fails on any warning."),
   },
@@ -779,8 +779,8 @@ server.tool(
   "eda_simulate",
   "Compile and run RTL simulation using Icarus Verilog. Returns PASS/FAIL. v0.99.3 adds `work_dir` so $readmemh / $readmemb / $fopen / `include resolve relative paths the way the testbench expects (default: dirname of the first source file).",
   {
-    verilog_files: z.array(z.string()).describe("All source + testbench files (no whitespace or shell metacharacters)"),
-    output_vvp: z.string().default("./sim/sim.vvp").describe("Compiled output path (no whitespace or shell metacharacters). v0.123: default changed from /tmp/sim.vvp to ./sim/sim.vvp so artifacts land in the project tree, not on a volatile tmpfs that gets cleared on reboot. Caller may override to absolute path if they want a different location."),
+    verilog_files: z.array(z.string()).describe("All source + testbench files"),
+    output_vvp: z.string().default("./sim/sim.vvp").describe("Compiled output path. v0.123: default changed from /tmp/sim.vvp to ./sim/sim.vvp so artifacts land in the project tree, not on a volatile tmpfs that gets cleared on reboot. Caller may override to absolute path if they want a different location."),
     work_dir: z.string().optional().describe("Working directory for the simulation. Both iverilog (compile) and vvp (run) are invoked from this directory so $readmemh(\"file.hex\") and similar relative paths resolve correctly. Defaults to the directory of the first verilog_files entry."),
   },
   async ({ verilog_files, output_vvp, work_dir }) => {
@@ -840,8 +840,8 @@ server.tool(
   "eda_formal",
   "Run formal verification using SymbiYosys. Writes .sby config and runs proof.",
   {
-    design_files: z.array(z.string()).describe("RTL design files (no whitespace or shell metacharacters)"),
-    assertion_file: z.string().describe("Assertion file (Yosys-compatible SVA; no whitespace or shell metacharacters)"),
+    design_files: z.array(z.string()).describe("RTL design files"),
+    assertion_file: z.string().describe("Assertion file (Yosys-compatible SVA)"),
     top_module: z.string().describe("Top module name"),
     work_dir: z.string().describe("Working directory"),
     depth: z.number().default(20).describe("Proof depth"),
@@ -895,9 +895,9 @@ server.tool(
   "eda_pnr",
   "Run OpenROAD place & route on a synthesized netlist. Optionally runs CTS + detailed_route + writes routed netlist. Returns area, utilization, timing slack.",
   {
-    netlist: z.string().describe("Synthesized Verilog netlist path (no whitespace or shell metacharacters)"),
+    netlist: z.string().describe("Synthesized Verilog netlist path"),
     top_module: z.string().describe("Top module name"),
-    output_def: z.string().describe("Output DEF file path (no whitespace or shell metacharacters)"),
+    output_def: z.string().describe("Output DEF file path"),
     pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
     clock_port: z.string().default("clk"),
     clock_period_ns: z.number().default(200),
@@ -1089,8 +1089,8 @@ server.tool(
   "eda_gds",
   "Generate GDS file by merging cell GDS library from PDK with routed DEF in a single call. Reads cell GDS first, then overlays DEF placement/routing, writes merged output GDS.",
   {
-    def_file: z.string().describe("Input routed DEF file path (no whitespace or shell metacharacters)"),
-    output_gds: z.string().describe("Output merged GDS file path (no whitespace or shell metacharacters)"),
+    def_file: z.string().describe("Input routed DEF file path"),
+    output_gds: z.string().describe("Output merged GDS file path"),
     pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
     cell_gds_override: z.string().optional().describe("Override cell GDS path (default: auto-resolved from PDK)"),
     custom_lib: z.string().optional().describe("Path to Liberty .lib file (custom PDK)"),
@@ -1208,7 +1208,7 @@ server.tool(
   "eda_sta",
   "Run static timing analysis on a placed design using OpenSTA (via OpenROAD).",
   {
-    netlist: z.string().describe("Gate-level netlist (no whitespace or shell metacharacters)"),
+    netlist: z.string().describe("Gate-level netlist"),
     top_module: z.string().describe("Top module"),
     pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
     clock_port: z.string().default("clk"),
@@ -4068,8 +4068,8 @@ server.tool(
   + "scope is attached. Auto-tunes exposure/contrast for LED visibility. "
   + "Returns the JPG path.",
   {
-    device: z.string().default("/dev/video0").describe("v4l2 device path (no whitespace or shell metacharacters)"),
-    output: z.string().describe("Output JPG path (parent dir auto-created; no whitespace or shell metacharacters)"),
+    device: z.string().default("/dev/video0").describe("v4l2 device path"),
+    output: z.string().describe("Output JPG path (parent dir auto-created)"),
     width: z.number().int().positive().max(7680).default(1280).describe("Capture width (pixels, 1-7680)"),
     height: z.number().int().positive().max(4320).default(720).describe("Capture height (pixels, 1-4320)"),
     led_mode: z.boolean().default(true).describe(
