@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "doc_class": "regmap",
+  "ic_name": "subservient",
+  "registers": [],
+  "no_registers_in_input": false,
+  "otp_layout": {
+    "fields": [],
+    "depth_bytes": 128,
+    "width_bits": 8,
+    "read_map": [],
+    "write_map": [],
+    "lockbits": [],
+    "otp_ip_specs": null,
+    "trim_registers": [],
+    "mask_sources": []
+  },
+  "no_otp_layout_in_input": false,
+  "otp_ip_macro": {},
+  "internal_registers": [],
+  "extraction_evidence": {
+    "input/docs/L5_register_map.md": []
+  }
+}
