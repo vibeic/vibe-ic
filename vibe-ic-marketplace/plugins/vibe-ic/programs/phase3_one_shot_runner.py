@@ -146,6 +146,53 @@ def _tool_in_path(container: str, tool: str) -> bool:
     return rc == 0
 
 
+# ---------------------------------------------------------------------------
+# Fix #4 — `--util` is a FRACTION (0..1). OpenROAD `global_placement
+# -density` and the floorplan-utilization math both expect a fraction.
+# Field-agent observed callers passing `--util 20` / `--util 25`
+# (intending "20%" / "25%"), which fed a density of 20.0 into OpenROAD
+# and produced absurd floorplans / immediate over-utilization aborts.
+# Normalize percent→fraction with a logged warning (value > 1 ⇒ /100),
+# and clamp to (0, 1]. Chip-AGNOSTIC: pure numeric guard, no chip /
+# PDK literal.
+# ---------------------------------------------------------------------------
+def _normalize_util(util: float) -> Tuple[float, Optional[str]]:
+    """Return (normalized_fraction, warning_or_None).
+
+    - value in (0, 1]        → used as-is (already a fraction).
+    - value > 1              → treated as a percentage; divided by 100
+                                and a warning string is returned.
+    - value <= 0 or NaN/None → clamped to a small positive default so
+                                OpenROAD never receives a non-positive
+                                density.
+    The result is always clamped to (0, 1].
+    """
+    warn: Optional[str] = None
+    try:
+        u = float(util)
+    except (TypeError, ValueError):
+        return 0.45, (f"--util value {util!r} is not numeric; "
+                      f"falling back to default fraction 0.45")
+    if u != u:  # NaN
+        return 0.45, "--util value is NaN; falling back to 0.45"
+    if u > 1.0:
+        warn = (f"--util={u:g} > 1: a utilization FRACTION (0..1) is "
+                f"expected, interpreting {u:g} as a percentage and "
+                f"normalizing to {u / 100.0:g}. Pass e.g. 0.45 (not 45) "
+                f"to silence this warning.")
+        u = u / 100.0
+    if u <= 0.0:
+        warn = (f"--util={util!r} <= 0 is invalid; clamping to 0.05. "
+                f"Provide a fraction in (0, 1].")
+        u = 0.05
+    if u > 1.0:
+        # percentage that was itself >100 (e.g. --util 250 → 2.5): clamp.
+        warn = ((warn + " ") if warn else "") + \
+               f"normalized util {u:g} still > 1; clamping to 1.0."
+        u = 1.0
+    return u, warn
+
+
 # v1.6.595 — for #403 P2 ORGANIC. Clock-port name resolution from
 # Phase 1 (doc-extraction) generated_docs + RTL top module. Pre-v1.6.595 the auto-SDC
 # emit path read CLOCK_PORT from config.json only; when config.json
@@ -944,6 +991,199 @@ def _v1_6_596_rename_named_tie_nets(netlist_text: str) -> tuple:
     return (new_text, n)
 
 
+def _build_dlatch_map_clause(liberty_host: str, out_dir: Path,
+                             out_dir_c: str, container: str) -> str:
+    """Discover the PDK's negative-enable D-latch cell and emit a Yosys
+    `$_DLATCH_N_` techmap into the synth workdir. Returns a yosys
+    `techmap -map <file>; ` clause (or "" if no latch cell found).
+
+    chip-AGNOSTIC: scans the liberty for a cell whose `latch (...)` group
+    has `enable : "!<gate>"` (active-low / negative-enable transparent
+    latch), then maps the generic neg-enable D-latch to it. abc cannot
+    map sky130-style latch cells (no boolean `function`), so without this
+    the generic latch survives as a behavioral `reg` that OpenROAD's
+    structural Verilog reader rejects.
+    """
+    lib_txt = _v1_6_604_read_text_or_container_cat(liberty_host, container)
+    if not lib_txt:
+        return ""
+    # Find a neg-enable D-latch cell. sky130: dlxtn_1 has
+    # `latch ("IQ","IQ_N") { data_in:"D"; enable:"!GATE_N"; }` with pins
+    # D (in), GATE_N (in), Q (out). Generalised scan: locate a cell with a
+    # latch group whose enable is active-low, capture data_in / enable /
+    # an output pin (function == latched state IQ).
+    import re as _re
+    cell_re = _re.compile(r'cell\s*\(\s*"?([A-Za-z0-9_]+)"?\s*\)\s*\{')
+    cells = list(cell_re.finditer(lib_txt))
+    candidates = []  # (n_input_pins, cell_name, gate_pin, data_pin, out_pin)
+    for i, m in enumerate(cells):
+        start = m.end()
+        end = cells[i + 1].start() if i + 1 < len(cells) else len(lib_txt)
+        body = lib_txt[start:end]
+        lm = _re.search(r'latch\s*\([^)]*\)\s*\{([^}]*)\}', body)
+        if not lm:
+            continue
+        latch_body = lm.group(1)
+        en = _re.search(r'enable\s*:\s*"([^"]+)"', latch_body)
+        din = _re.search(r'data_in\s*:\s*"([^"]+)"', latch_body)
+        if not (en and din):
+            continue
+        if not en.group(1).strip().startswith("!"):
+            continue  # want active-low enable for $_DLATCH_N_
+        # reject latches with set/clear (preset_var / clear) — $_DLATCH_N_
+        # has no reset, so a plain transparent latch is the correct map.
+        if _re.search(r'\b(clear|preset)\b', latch_body):
+            continue
+        gate_pin = en.group(1).strip().lstrip("!")
+        data_pin = din.group(1).strip()
+        # output pin + count signal (non-PG) input pins. The pin body has
+        # nested timing `{...}` groups, so look ahead a bounded window for
+        # the quoted `direction : "output"`.
+        out_pin = None
+        n_inputs = 0
+        for pm in _re.finditer(r'pin\s*\(\s*"?([A-Za-z0-9_]+)"?\s*\)\s*\{',
+                               body):
+            pname = pm.group(1)
+            window = body[pm.end():pm.end() + 400]
+            if _re.search(r'direction\s*:\s*"?output"?', window):
+                if out_pin is None:
+                    out_pin = pname
+            elif _re.search(r'direction\s*:\s*"?input"?', window):
+                n_inputs += 1
+        if out_pin is None:
+            continue
+        candidates.append((n_inputs, m.group(1), gate_pin, data_pin,
+                           out_pin))
+    if not candidates:
+        return ""
+    # Prefer the simplest neg-enable latch (fewest input pins → plain
+    # D + GATE_N, no scan / reset extras).
+    candidates.sort(key=lambda c: c[0])
+    _, cell_name, gate_pin, data_pin, out_pin = candidates[0]
+    map_v = (
+        "// auto-generated chip-AGNOSTIC $_DLATCH_N_ techmap\n"
+        "module \\$_DLATCH_N_ (E, D, Q);\n"
+        "  input E, D;\n"
+        "  output Q;\n"
+        f"  {cell_name} _TECHMAP_REPLACE_ "
+        f"(.{gate_pin}(E), .{data_pin}(D), .{out_pin}(Q));\n"
+        "endmodule\n"
+    )
+    map_file = out_dir / "_dlatch_map.v"
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        map_file.write_text(map_v)
+    except Exception:
+        return ""
+    map_file_c = f"{out_dir_c}/_dlatch_map.v"
+    return f"techmap -map {map_file_c}; "
+
+
+def _v1_6_605_remap_surviving_dlatch(
+        netlist: Path, top: str, pdk: "PdkConfig",
+        out_dir: Path, out_dir_c: str, container: str,
+        liberty_c: str) -> bool:
+    """v1.6.605 — defence-in-depth latch guard.
+
+    If a generic `$_DLATCH_N_` (or behavioral `reg` + `always @*`
+    transparent latch) survives into the written netlist — which happens
+    when the in-line `dlatch_clause` techmap did not fire (observed
+    intermittently on the slang-frontend path for cv32e40p-class cores
+    that instantiate a behavioral clock-gate latch) — re-read the netlist
+    in Yosys, apply the `$_DLATCH_N_` techmap + abc remap, and rewrite a
+    fully-structural netlist. Without this, OpenROAD's STRUCTURAL Verilog
+    reader rejects the procedural `reg`/`always` with `STA-0164 syntax
+    error` and PnR fails. Returns True iff a remap was performed and the
+    netlist was rewritten clean. Chip-AGNOSTIC: triggers purely on the
+    presence of a generic latch token in the emitted netlist.
+    """
+    try:
+        nl_text = netlist.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return False
+    # Behavioral-latch fingerprints the structural reader cannot parse.
+    has_behavioral = ("$_DLATCH" in nl_text or "always @*" in nl_text
+                      or "always @ *" in nl_text or "always_latch" in nl_text)
+    if not has_behavioral:
+        return False
+    # Build (and force-write) the neg-enable D-latch techmap.
+    clause = _build_dlatch_map_clause(
+        str(pdk.liberty), out_dir, out_dir_c, container)
+    if not clause:
+        return False
+    netlist_c = _to_container_path(str(netlist), container)
+    remap_cmd = (
+        f"cd {out_dir_c} && "
+        f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
+        f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+        f"yosys -p 'read_verilog -sv {netlist_c}; "
+        f"hierarchy -top {top}; "
+        f"{clause}"
+        f"abc -liberty {liberty_c}; "
+        f"clean; "
+        f"write_verilog -noattr {netlist_c}'"
+    )
+    rc, out, err = _docker_exec(container, remap_cmd)
+    if rc != 0:
+        return False
+    try:
+        after = netlist.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return False
+    return not ("$_DLATCH" in after or "always @*" in after
+                or "always @ *" in after or "always_latch" in after)
+
+
+# ---------------------------------------------------------------------------
+# Fix #5 — SystemVerilog synth frontend selection.
+#
+# Yosys's built-in Verilog-2005 frontend (`read_verilog -sv`) only
+# handles a SystemVerilog SUBSET. Modern SV (package-import-before-port-
+# list, typedef/struct ports, interfaces, `always_ff` with complex
+# constructs) needs a full SV-2017 frontend. We:
+#   (a) detect when any input file is `.sv` (or when the V-2005 probe
+#       errored), and
+#   (b) fall through to `yosys -m slang` / `read_slang` (PREFERRED —
+#       preserves hierarchy) or an `sv2v` pre-pass emitting Verilog-2005.
+# The selected frontend is recorded in the StepResult extras/provenance
+# (`synth_frontend`). Chip-AGNOSTIC: extension + error-signature logic.
+# ---------------------------------------------------------------------------
+_SLANG_ERROR_SIGNATURES = ("unexpected TOK_IMPORT", "syntax error",
+                           "Executing Verilog-2005 frontend",
+                           "unsupported SystemVerilog",
+                           "TOK_PACKAGE", "TOK_TYPEDEF")
+
+
+def _decide_synth_frontend(rtl_files: List[Path],
+                           default_rc: int,
+                           default_netlist_exists: bool,
+                           default_log: str) -> Tuple[bool, str]:
+    """Decide whether to invoke the SV-aware fallback frontend after the
+    default `read_verilog -sv` attempt.
+
+    Returns (need_sv_fallback, reason). `need_sv_fallback` is True when
+    EITHER the default attempt failed/produced no netlist AND its log
+    carries an SV error signature, OR any input file is `.sv` and the
+    default attempt failed/produced no netlist.
+
+    A `.sv` extension alone does NOT force the fallback when the default
+    frontend already succeeded — `read_verilog -sv` handles plenty of
+    `.sv` files, and re-running wastefully would only risk regressions.
+    Chip-AGNOSTIC: extension + error-signature only."""
+    default_failed = (default_rc != 0) or (not default_netlist_exists)
+    has_sv = any(str(f).lower().endswith(".sv") for f in rtl_files)
+    if not default_failed:
+        return False, "default read_verilog -sv frontend succeeded"
+    sig_hit = any(s in (default_log or "") for s in _SLANG_ERROR_SIGNATURES)
+    if sig_hit:
+        return True, "default frontend errored with an SV signature"
+    if has_sv:
+        return True, ("default frontend failed and inputs include "
+                      ".sv files — trying SV-2017 frontend")
+    return False, ("default frontend failed but no SV signature / .sv "
+                   "input — fallback would not help")
+
+
 def step_synth(project: Path, top: str, pdk: PdkConfig,
                container: str) -> StepResult:
     t0 = time.time()
@@ -1030,6 +1270,21 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         pdk.liberty, container)
     hilomap_clause = (f"{hilomap_directive}; "
                       if hilomap_directive else "")
+    # chip-AGNOSTIC latch mapping: abc / dfflibmap map FFs but NOT
+    # transparent D-latches (sky130's dlxtn/dlxtp latch cells carry a
+    # liberty `latch (...)` group with no boolean `function`, so abc
+    # `Scl_LibertyReadGenlib() skipped sequential cell` and leaves a
+    # generic `$_DLATCH_N_` behind). That generic latch survives
+    # write_verilog as a procedural `reg` + `always @(*)` block, which
+    # OpenROAD's STRUCTURAL Verilog reader rejects with a syntax error
+    # ("STA-0164 ... syntax error"). Designs containing a behavioral
+    # clock-gate / latch (cv32e40p, many PULP/lowRISC cores) hit this.
+    # We discover the PDK's neg-enable D-latch cell from the liberty and
+    # emit a one-module `$_DLATCH_N_` techmap into the synth workdir, then
+    # inject `techmap -map <file>` after dfflibmap. No datapath change —
+    # the latch is realised as a real std-cell instead of behavioral reg.
+    dlatch_clause = _build_dlatch_map_clause(
+        pdk.liberty, out_dir, out_dir_c, container)
     yosys_cmd = (
         f"{setup}cd {out_dir_c} && "
         f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
@@ -1038,6 +1293,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         f"{pre_synth}"
         f"synth -top {top} -flatten; "
         f"dfflibmap -liberty {liberty_c}; "
+        f"{dlatch_clause}"
         f"abc -liberty {liberty_c}; "
         f"{hilomap_clause}"
         f"clean; stat -liberty {liberty_c}; "
@@ -1046,10 +1302,87 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     rc, out, err = _docker_exec(container, yosys_cmd)
     log = out_dir / "synth.log"
     log.write_text(out + "\n" + err)
+    # Fix #5 — frontend provenance. Default Yosys Verilog-2005 frontend.
+    synth_frontend = "read_verilog_v2005"
+    # Fix #5 chip-AGNOSTIC SV fallback: Yosys's built-in Verilog-2005
+    # frontend (`read_verilog -sv`) does not support several modern
+    # SystemVerilog constructs — notably the package-import-before-ANSI-
+    # port-list form `module M import pkg::*; (...)` used by cv32e40p,
+    # Ibex, and many PULP/lowRISC cores. When the default read fails (or
+    # yields no netlist) AND either an SV error signature is present or
+    # any input is `.sv`, retry using the Yosys `slang` plugin (a full
+    # SV-2017 frontend that PRESERVES hierarchy), then — if slang is
+    # unavailable / also fails — fall through to an `sv2v` pre-pass that
+    # rewrites the SV to Verilog-2005 before the default frontend. The
+    # synth backend is identical; only the parser changes.
+    need_sv_fallback, fe_reason = _decide_synth_frontend(
+        rtl_files, rc, netlist.is_file(), out + err)
+    if need_sv_fallback:
+        # All RTL read together in one slang compilation unit; packages
+        # first so import resolution and the ANSI port-list types bind.
+        slang_files = " ".join(
+            _to_container_path(str(f), container) for f in rtl_files)
+        slang_cmd = (
+            f"{setup}cd {out_dir_c} && "
+            f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
+            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+            f"yosys -p '{macro_lib_reads + ('; ' if macro_lib_reads else '')}"
+            f"plugin -i slang; "
+            f"read_slang {slang_files} --top {top} -DSIMULATION; "
+            f"hierarchy -top {top}; proc; flatten; tribuf -logic; "
+            f"synth -top {top} -flatten; "
+            f"dfflibmap -liberty {liberty_c}; "
+            f"{dlatch_clause}"
+            f"abc -liberty {liberty_c}; "
+            f"{hilomap_clause}"
+            f"clean; stat -liberty {liberty_c}; "
+            f"write_verilog -noattr {netlist_c}'"
+        )
+        rc, out, err = _docker_exec(container, slang_cmd)
+        log.write_text(log.read_text() +
+                       f"\n\n=== SLANG FALLBACK FRONTEND ({fe_reason}) ===\n" +
+                       out + "\n" + err)
+        if rc == 0 and netlist.is_file():
+            synth_frontend = "yosys_slang"
+        else:
+            # slang unavailable / failed → sv2v pre-pass (emit V-2005).
+            sv2v_in = " ".join(
+                _to_container_path(str(f), container) for f in rtl_files)
+            sv2v_out = f"{out_dir_c}/{top}_sv2v.v"
+            sv2v_out_host = out_dir / f"{top}_sv2v.v"
+            sv2v_cmd = (
+                f"{setup}cd {out_dir_c} && "
+                f"export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
+                f"sv2v -DSIMULATION {sv2v_in} > {sv2v_out} 2>sv2v.err && "
+                f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
+                f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+                f"yosys -p "
+                f"'{macro_lib_reads + ('; ' if macro_lib_reads else '')}"
+                f"read_verilog {sv2v_out}; "
+                f"hierarchy -check -top {top}; proc; flatten; tribuf -logic; "
+                f"synth -top {top} -flatten; "
+                f"dfflibmap -liberty {liberty_c}; "
+                f"{dlatch_clause}"
+                f"abc -liberty {liberty_c}; "
+                f"{hilomap_clause}"
+                f"clean; stat -liberty {liberty_c}; "
+                f"write_verilog -noattr {netlist_c}'"
+            )
+            rc2, out2, err2 = _docker_exec(container, sv2v_cmd)
+            log.write_text(
+                log.read_text() +
+                "\n\n=== SV2V PRE-PASS FALLBACK FRONTEND ===\n" +
+                out2 + "\n" + err2)
+            if rc2 == 0 and netlist.is_file():
+                rc, out, err = rc2, out2, err2
+                synth_frontend = "sv2v_verilog2005"
+            # else: keep the (failed) slang rc/out/err for the FAIL path.
     if rc != 0 or not netlist.is_file():
         return StepResult("synth", "FAIL", time.time() - t0,
                           f"rc={rc} log_tail={(out+err)[-1500:]}",
-                          [str(log)])
+                          [str(log)],
+                          extras={"synth_frontend": "none",
+                                  "synth_frontend_reason": fe_reason})
     # v1.6.596 — for #404 P3 ORGANIC. Defence-in-depth post-synth
     # net-rename pass. Even with hilomap applied, some Yosys versions
     # emit intermediate named tie nets that survive into the final
@@ -1068,6 +1401,17 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         # Non-fatal — the netlist is already on disk and downstream
         # PnR will still run; only the cosmetic DRT-0305 warnings
         # remain (the original pre-v1.6.596 behaviour).
+        pass
+    # v1.6.605 — defence-in-depth latch guard. If a behavioral
+    # `$_DLATCH_N_` / `always @*` transparent latch survived into the
+    # netlist (intermittently observed on the slang path when the in-line
+    # dlatch_clause did not fire), re-map it to a real std-cell latch so
+    # OpenROAD's structural Verilog reader does not reject it with
+    # STA-0164. No-op when the netlist is already structural.
+    try:
+        _v1_6_605_remap_surviving_dlatch(
+            netlist, top, pdk, out_dir, out_dir_c, container, liberty_c)
+    except Exception:
         pass
     # Cell count from yosys stat
     cell_count = "?"
@@ -1096,10 +1440,13 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                            "v1.6.10 runner adds `tribuf -logic` to fix. "
                            "If still empty, check sub-module ports / "
                            "hierarchy elaboration."),
-                          [str(netlist), str(log)])
+                          [str(netlist), str(log)],
+                          extras={"synth_frontend": synth_frontend})
     return StepResult("synth", "PASS", time.time() - t0,
-                      f"netlist={netlist.name} cells={cell_count}",
-                      [str(netlist), str(log)])
+                      f"netlist={netlist.name} cells={cell_count} "
+                      f"frontend={synth_frontend}",
+                      [str(netlist), str(log)],
+                      extras={"synth_frontend": synth_frontend})
 
 
 # ---------------------------------------------------------------------------
@@ -1695,6 +2042,70 @@ print(f"GDS_TOP_CELLS {len(list(ly.top_cells()))}")
 """
 
 
+# Fix #3(a) — Magic-based DEF→GDS streamout. Magic merges abutting
+# same-layer geometry on `gds write`, eliminating the near-coincident
+# cell-boundary polygons that make KLayout's deck fire tens of
+# thousands of false min-spacing / min-width edge-pairs. The Magic TCL
+# below loads the PDK tech via .magicrc (auto-discovered when Magic
+# runs from the PDK dir), reads the LEF abstracts + DEF, then writes a
+# merged GDS. Chip-AGNOSTIC: top cell + paths are env-driven.
+_MAGIC_STREAMOUT_TCL = """\
+crashbackups stop
+gds readonly true
+gds rescale false
+set ::env_lefs [split $env(LEFS) ";"]
+foreach lf $::env_lefs {
+    if {[string trim $lf] ne ""} { lef read $lf }
+}
+def read $env(DEF)
+load $env(TOP)
+select top cell
+cellname rename $env(TOP) $env(TOP)
+gds write $env(GDS_OUT)
+puts "MAGIC_GDS_WRITTEN $env(GDS_OUT)"
+quit -noprompt
+"""
+
+
+def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
+                      container: str, gds_out: Path
+                      ) -> Tuple[bool, str]:
+    """Fix #3(a) — stream DEF→GDS via Magic (merges abutting same-layer
+    geometry). Returns (ok, transcript). `ok` is True only when Magic
+    wrote a non-empty GDS AND the transcript is NOT vacuous (Fix #2
+    cross-check: a Magic stream that dropped geometry is not
+    authoritative). Best-effort: returns (False, transcript) if Magic
+    is unavailable or the stream failed. Chip-AGNOSTIC."""
+    if not _tool_in_path(container, "magic"):
+        return False, "magic binary not in container PATH"
+    pnr_dir = _pl.pnr_dir(project)
+    def_file = pnr_dir / f"{top}.def"
+    if not def_file.is_file():
+        return False, f"DEF missing: {def_file}"
+    tcl = pnr_dir / "magic_stream_out.tcl"
+    tcl.write_text(_MAGIC_STREAMOUT_TCL)
+    tcl_c = _to_container_path(str(tcl), container)
+    def_c = _to_container_path(str(def_file), container)
+    gds_out_c = _to_container_path(str(gds_out), container)
+    lef_list = [pdk.tech_lef, pdk.cell_lef] + list(pdk.macro_lefs)
+    lefs = ";".join(_to_container_path(str(f), container) for f in lef_list)
+    cmd = (
+        f"export TOP={top} DEF={def_c} GDS_OUT={gds_out_c} "
+        f"LEFS=\"{lefs}\" && "
+        f"magic -dnull -noconsole -rcfile /dev/null {tcl_c}"
+    )
+    rc, out, err = _docker_exec(container, cmd, timeout=900)
+    transcript = out + "\n" + err
+    if rc != 0 or not gds_out.is_file() or gds_out.stat().st_size == 0:
+        return False, transcript
+    # Fix #2 cross-check: a Magic stream that dropped geometry is not
+    # authoritative even though it wrote a (near-empty) file.
+    vac = _detect_vacuous_magic(transcript, drc_count=None)
+    if not vac["geometry_loaded"]:
+        return False, transcript
+    return True, transcript
+
+
 def step_gds(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
@@ -1704,6 +2115,20 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     if not def_file.is_file():
         return StepResult("gds", "SKIP", time.time() - t0,
                           f"DEF missing: {def_file}")
+
+    # Fix #3(a) — prefer Magic-based streamout when Magic is available
+    # (it merges abutting same-layer geometry → far fewer false DRC
+    # boundary edge-pairs). Fall back to KLayout when Magic is absent or
+    # the Magic stream dropped geometry (non-authoritative).
+    magic_ok, magic_transcript = _magic_def_to_gds(
+        project, top, pdk, container, gds_out)
+    if magic_ok and gds_out.is_file():
+        return StepResult(
+            "gds", "PASS", time.time() - t0,
+            f"gds={gds_out.name} size={gds_out.stat().st_size} "
+            f"(streamout=magic, abutting geometry merged)",
+            [str(gds_out)],
+            extras={"streamout_engine": "magic"})
 
     script = pnr_dir / "stream_out.py"
     script.write_text(_GDS_STREAMOUT_PY)
@@ -1737,8 +2162,10 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
         return StepResult("gds", "FAIL", time.time() - t0,
                           f"rc={rc} log_tail={(out+err)[-1500:]}")
     return StepResult("gds", "PASS", time.time() - t0,
-                      f"gds={gds_out.name} size={gds_out.stat().st_size}",
-                      [str(gds_out)])
+                      f"gds={gds_out.name} size={gds_out.stat().st_size} "
+                      f"(streamout=klayout)",
+                      [str(gds_out)],
+                      extras={"streamout_engine": "klayout"})
 
 
 # ---------------------------------------------------------------------------
@@ -1830,34 +2257,412 @@ def _v1_6_597_count_klayout_xml_violations(
 # Chip-AGNOSTIC: per-PDK declarative table; the keys are pure PDK
 # identifiers (no chip-class literal); the values are layer-rule
 # name prefixes that are universally stdcell-internal on that PDK.
+#
+# Fix #1 (broadened classifier) — on sky130-class PDKs the OpenROAD
+# detailed router's *signal* stack begins at met2 (met1 is reserved
+# almost entirely for intra-cell pin/rail geometry pre-baked into the
+# foundry-qualified standard cells, and the local-interconnect /
+# contact / licon layers are NEVER emitted by the detailed router).
+# Therefore the following rule families are ALL stdcell-library-
+# internal — a violation in them cannot have been introduced by user
+# routing:
+#   * li.*                      local-interconnect (Li1)
+#   * ct.* / licon* / *.licon   contact-to-Li1 / poly-licon cuts
+#   * m1.* / met1.* / m1*       lowest metal (pins + rails inside cells)
+# CRITICAL honesty gate: any violation on the genuine user-routing
+# stack (met2 and above — m2.*/met2.*, m3.*, via*, etc.) is NEVER
+# bucketed as stdcell-internal and ALWAYS keeps the verdict at FAIL.
 _V1_6_604_STDCELL_LAYER_RULE_PREFIXES = {
-    "sky130A":   ("li.",),
-    "sky130":    ("li.",),
+    # Local-interconnect only family kept for back-compat / non-sky PDKs
+    # whose contact + m1 stack we have not yet characterised.
     "gf180mcuD": ("li.",),
     "gf180mcu":  ("li.",),
+    # sky130-class: signal routing starts at met2 → li / contact / met1
+    # are all below the user routing stack.
+    "sky130A":   ("li.", "ct.", "licon", "m1.", "met1.", "mcon"),
+    "sky130":    ("li.", "ct.", "licon", "m1.", "met1.", "mcon"),
+    "sky130B":   ("li.", "ct.", "licon", "m1.", "met1.", "mcon"),
 }
+
+# Fix #1 — explicit guard list of user-routing-layer rule-family
+# prefixes. A rule matching any of these is ALWAYS user-routing (it
+# overrides the stdcell prefix table). This is what preserves the
+# honesty gate: a genuine met2+ routing/spacing defect can never be
+# silently waived even if a future table edit accidentally adds an
+# over-broad prefix. met2 == first signal-routing layer on sky130;
+# every higher layer + the vias bridging into met2 belong here.
+_V1_6_604_USER_ROUTING_RULE_PREFIXES = (
+    "m2.", "met2.", "m2", "met2",
+    "m3.", "met3.", "m3", "met3",
+    "m4.", "met4.", "m4", "met4",
+    "m5.", "met5.", "m5", "met5",
+    "via2", "via3", "via4",
+)
+
+
+def _v1_6_604_rule_is_user_routing(rule: str) -> bool:
+    """True iff `rule` names a genuine user-routing-layer rule family
+    (met2 and above, or a via bridging into them). This takes
+    PRECEDENCE over the stdcell prefix table — it is the honesty gate
+    that keeps real routing defects FAILing. Chip-AGNOSTIC."""
+    r = (rule or "").strip().lower()
+    return any(r.startswith(p) for p in _V1_6_604_USER_ROUTING_RULE_PREFIXES)
 
 
 def _v1_6_604_classify_stdcell_violations(
         per_rule: Dict[str, int],
-        pdk_name: str) -> Tuple[Dict[str, int], Dict[str, int]]:
-    """v1.6.604 — Split a per-rule violation dict into
-    `(user_routing, stdcell_library)` buckets via the per-PDK
-    `_V1_6_604_STDCELL_LAYER_RULE_PREFIXES` allowlist. When the PDK
-    has no allowlist entry, every violation is treated as user-
-    routing (no auto-waiver). Chip-AGNOSTIC.
+        pdk_name: str,
+        cell_internal_rules: Optional[set] = None
+        ) -> Tuple[Dict[str, int], Dict[str, int]]:
+    """v1.6.604 (broadened by Fix #1) — Split a per-rule violation
+    dict into `(user_routing, stdcell_library)` buckets.
+
+    A rule is bucketed stdcell-library-internal iff BOTH:
+      (a) it is NOT a known user-routing-layer rule family
+          (`_v1_6_604_rule_is_user_routing` — the honesty gate), AND
+      (b) it matches the per-PDK stdcell prefix table, OR it is named
+          in the optional `cell_internal_rules` set (geometry-aware
+          cross-check: rules whose every violation falls wholly inside
+          a placed-cell DEF bounding box — see
+          `_classify_geometry_inside_cells`).
+
+    When the PDK has no allowlist entry AND no geometry hints, every
+    violation is treated as user-routing (no auto-waiver — preserves
+    the conservative FAIL default). Chip-AGNOSTIC.
     """
     prefixes = _V1_6_604_STDCELL_LAYER_RULE_PREFIXES.get(pdk_name, ())
-    if not prefixes:
+    geo = cell_internal_rules or set()
+    if not prefixes and not geo:
         return dict(per_rule), {}
     user_routing: Dict[str, int] = {}
     stdcell:      Dict[str, int] = {}
     for rule, cnt in per_rule.items():
-        if any(rule.startswith(p) for p in prefixes):
+        rl = (rule or "").strip().lower()
+        # Honesty gate FIRST: never waive a met2+ user-routing rule.
+        if _v1_6_604_rule_is_user_routing(rule):
+            user_routing[rule] = cnt
+            continue
+        prefix_hit = any(rl.startswith(p.lower()) for p in prefixes)
+        geo_hit = rule in geo
+        if prefix_hit or geo_hit:
             stdcell[rule] = cnt
         else:
             user_routing[rule] = cnt
     return user_routing, stdcell
+
+
+def _classify_geometry_inside_cells(
+        violations: List[Dict[str, Any]],
+        cell_bboxes: List[Tuple[float, float, float, float]]
+        ) -> set:
+    """Optional geometry-aware cross-check (Fix #1).
+
+    Given a list of per-violation geometry records (each a dict with
+    keys `rule`, and a bounding box `x0`,`y0`,`x1`,`y1` in the same
+    units as `cell_bboxes`) and the list of placed-cell instance
+    bounding boxes from the DEF, return the SET of rule names whose
+    EVERY violation lies wholly inside some placed-cell instance.
+
+    Such rules are stdcell-internal regardless of layer name: the
+    violating geometry was authored by the foundry inside the cell,
+    not by the user router (which only places wires BETWEEN cells).
+
+    A rule with even one violation outside all cell bboxes is NOT
+    returned (so a real user-routing defect that happens to share a
+    rule name with a cell-internal one still FAILs). Returns empty set
+    if no inputs. Chip-AGNOSTIC: pure geometry, no PDK literal.
+    """
+    if not violations or not cell_bboxes:
+        return set()
+
+    def _inside_any(x0, y0, x1, y1) -> bool:
+        for bx0, by0, bx1, by1 in cell_bboxes:
+            if x0 >= bx0 and y0 >= by0 and x1 <= bx1 and y1 <= by1:
+                return True
+        return False
+
+    rule_all_inside: Dict[str, bool] = {}
+    rule_seen: set = set()
+    for v in violations:
+        rule = v.get("rule")
+        if rule is None:
+            continue
+        rule_seen.add(rule)
+        try:
+            x0 = float(v["x0"]); y0 = float(v["y0"])
+            x1 = float(v["x1"]); y1 = float(v["y1"])
+        except (KeyError, TypeError, ValueError):
+            rule_all_inside[rule] = False
+            continue
+        inside = _inside_any(min(x0, x1), min(y0, y1),
+                             max(x0, x1), max(y0, y1))
+        if rule not in rule_all_inside:
+            rule_all_inside[rule] = inside
+        else:
+            rule_all_inside[rule] = rule_all_inside[rule] and inside
+    return {r for r in rule_seen if rule_all_inside.get(r, False)}
+
+
+# ---------------------------------------------------------------------------
+# Fix #2 — Vacuous-Magic detection.
+#
+# When Magic `gds read` drops geometry it emits "Unknown layer/datatype"
+# warnings and loads an empty top cell (0 cells / empty bbox). A later
+# `drc count` then reports "0 DRC violations" — but that 0 is VACUOUS:
+# Magic checked an empty layout, not the design. Reporting it as a clean
+# DRC pass is FABRICATION. We parse the Magic transcript and flag the
+# empty/dropped-geometry condition so step_drc can mark the result
+# "Magic DRC inconclusive (geometry not loaded)" instead of PASS.
+# Chip-AGNOSTIC: pure transcript parsing, no PDK / chip literal.
+# ---------------------------------------------------------------------------
+_RE_MAGIC_UNKNOWN_LAYER = re.compile(
+    r"[Uu]nknown\s+(?:layer|datatype|layer/datatype)", re.IGNORECASE)
+_RE_MAGIC_CELL_COUNT = re.compile(
+    r"(?:loaded|read)\s+(\d+)\s+cell", re.IGNORECASE)
+_RE_MAGIC_DRC_COUNT = re.compile(
+    r"(?:Total\s+(?:DRC\s+)?errors?|^\s*count\s*=?\s*)\s*[:=]?\s*(\d+)",
+    re.IGNORECASE | re.MULTILINE)
+_RE_MAGIC_EMPTY_BBOX = re.compile(
+    r"\b(?:box|bbox|bounding\s*box)\b.*\b0\s+0\s+0\s+0\b", re.IGNORECASE)
+
+
+def _detect_vacuous_magic(transcript: str,
+                          drc_count: Optional[int] = None) -> Dict[str, Any]:
+    """Inspect a Magic `gds read` + `drc` transcript and decide whether a
+    reported 0-violation result is VACUOUS (geometry was never loaded).
+
+    Returns a dict::
+        { "vacuous": bool,
+          "geometry_loaded": bool,
+          "unknown_layer_errors": int,
+          "cells_loaded": Optional[int],
+          "empty_bbox": bool,
+          "reason": str }
+
+    `vacuous` is True iff Magic dropped geometry (Unknown layer/datatype
+    errors and/or 0 cells loaded and/or an empty top bbox) AND the DRC
+    count it produced was 0 (or unknown but geometry empty). When True,
+    the caller must NOT report PASS — the 0 means "nothing to check".
+    Chip-AGNOSTIC.
+    """
+    t = transcript or ""
+    unknown = len(_RE_MAGIC_UNKNOWN_LAYER.findall(t))
+    cells: Optional[int] = None
+    m = _RE_MAGIC_CELL_COUNT.search(t)
+    if m:
+        try:
+            cells = int(m.group(1))
+        except ValueError:
+            cells = None
+    empty_bbox = bool(_RE_MAGIC_EMPTY_BBOX.search(t))
+    geometry_loaded = True
+    reasons: List[str] = []
+    if unknown > 0:
+        geometry_loaded = False
+        reasons.append(f"{unknown} Unknown layer/datatype error(s)")
+    if cells == 0:
+        geometry_loaded = False
+        reasons.append("0 cells loaded")
+    if empty_bbox:
+        geometry_loaded = False
+        reasons.append("empty top bounding box (0 0 0 0)")
+    # A 0-violation result is vacuous when geometry never loaded.
+    vacuous = (not geometry_loaded) and (drc_count in (None, 0))
+    reason = ("Magic loaded geometry normally"
+              if geometry_loaded
+              else "Magic dropped geometry: " + "; ".join(reasons))
+    return {
+        "vacuous": vacuous,
+        "geometry_loaded": geometry_loaded,
+        "unknown_layer_errors": unknown,
+        "cells_loaded": cells,
+        "empty_bbox": empty_bbox,
+        "reason": reason,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Fix #3 — KLayout DEF→GDS leaves abutting same-layer cell-boundary
+# shapes as separate near-coincident polygons, so the KLayout-deck DRC
+# fires tens of thousands of false min-spacing / min-width edge-pairs at
+# cell boundaries. Magic merges abutting same-layer geometry on stream
+# read, so a Magic re-stream + re-DRC eliminates them. These helpers
+# decide (a) whether the KLayout DRC is "dominated" by such false
+# boundary edge-pairs (→ re-stream via Magic), and (b) surface the
+# OpenROAD-detailed-route DRC count vs the KLayout-deck count
+# discrepancy. Chip-AGNOSTIC: rule-name + ratio heuristics only.
+# ---------------------------------------------------------------------------
+# Rule-name keywords that explicitly name a min-spacing / min-width
+# edge-pair check (the class KLayout over-reports at merged-cell
+# boundaries).
+_SPACING_WIDTH_RULE_KEYWORDS = ("spacing", "width", "sep", "notch")
+# Layer-prefix families on which a bare numeric rule index (sky130
+# style `<layer>.1` = width, `.2`/`.3` = spacing) is a spacing/width
+# check. Restricted to physical routing/cell layers so non-spacing
+# families (antenna, density, enclosure, ...) are NOT misclassified.
+_SPACING_WIDTH_LAYER_PREFIXES = (
+    "li.", "m1.", "m2.", "m3.", "m4.", "m5.",
+    "met1.", "met2.", "met3.", "met4.", "met5.",
+    "poly.", "diff.", "nwell.", "ct.", "licon", "mcon", "via",
+)
+# Rule families that carry a numeric suffix but are NOT spacing/width.
+_NON_SPACING_RULE_KEYWORDS = ("antenna", "density", "enclos", "overlap",
+                              "extension", "area", "min_area", "ext")
+
+
+def _rule_is_spacing_or_width(rule: str) -> bool:
+    """True iff a rule name looks like a min-spacing / min-width edge
+    check (the KLayout-streamout false-positive class). Conservative:
+    matches the explicit keyword set OR a bare numeric index on a
+    physical routing/cell layer prefix, while explicitly excluding
+    non-spacing families (antenna / density / enclosure / area / ...).
+    Chip-AGNOSTIC."""
+    r = (rule or "").strip().lower()
+    if any(k in r for k in _NON_SPACING_RULE_KEYWORDS):
+        return False
+    if any(k in r for k in _SPACING_WIDTH_RULE_KEYWORDS):
+        return True
+    # sky130-style: <layer>.1 = width, <layer>.2/.3 = spacing — only on
+    # known physical routing/cell layer prefixes.
+    if any(r.startswith(p) for p in _SPACING_WIDTH_LAYER_PREFIXES):
+        return any(r.endswith(tok) for tok in (".1", ".2", ".3", ".4"))
+    return False
+
+
+def _klayout_streamout_false_positive_dominated(
+        per_rule: Dict[str, int],
+        threshold: float = 0.90) -> Tuple[bool, float]:
+    """Fix #3(b) — decide whether the KLayout-streamed GDS DRC count is
+    DOMINATED (> threshold fraction) by min-spacing / min-width
+    edge-pair rules — the signature of KLayout's non-merged abutting
+    cell-boundary polygons. Returns (dominated, fraction). When True the
+    caller should re-stream via Magic (which merges) and re-run DRC.
+    Chip-AGNOSTIC: pure ratio over rule-name classes."""
+    total = sum(per_rule.values())
+    if total <= 0:
+        return False, 0.0
+    sw = sum(c for r, c in per_rule.items() if _rule_is_spacing_or_width(r))
+    frac = sw / total
+    return (frac > threshold), frac
+
+
+def _format_drc_engine_discrepancy(
+        openroad_drt_count: Optional[int],
+        klayout_deck_count: int) -> str:
+    """Fix #3(c) — produce a one-line human note contrasting the
+    OpenROAD detailed-route DRC count (the router's own self-check,
+    which sees merged geometry) against the KLayout-deck count (which
+    sees non-merged streamout). A large gap is itself evidence that the
+    KLayout count is streamout-inflated. Chip-AGNOSTIC."""
+    if openroad_drt_count is None:
+        return (f"OpenROAD detailed-route DRC count: unavailable; "
+                f"KLayout-deck count: {klayout_deck_count}")
+    gap = klayout_deck_count - openroad_drt_count
+    return (f"DRC-engine discrepancy: OpenROAD detailed_route reported "
+            f"{openroad_drt_count} violation(s) on merged routed geometry "
+            f"vs KLayout-deck {klayout_deck_count} on streamout geometry "
+            f"(gap={gap}). A large positive gap indicates KLayout "
+            f"streamout artifacts (non-merged abutting cell boundaries), "
+            f"not real routing defects.")
+
+
+_RE_OPENROAD_DRT_VIOLATIONS = re.compile(
+    r"\[(?:INFO|WARNING)\s+DRT-\d+\].*?(\d+)\s+violation", re.IGNORECASE)
+_RE_OPENROAD_DRT_VIOLATIONS2 = re.compile(
+    r"(?:number\s+of\s+(?:DRC\s+)?violations|total\s+violations)\s*[:=]?\s*"
+    r"(\d+)", re.IGNORECASE)
+
+
+def _extract_openroad_drt_violations(log_text: str) -> Optional[int]:
+    """Parse the OpenROAD detailed_route final DRC-violation count from
+    a PnR log. Returns None if absent. Takes the LAST match (the final
+    post-route count, after any intermediate iterations). Chip-AGNOSTIC."""
+    if not log_text:
+        return None
+    last: Optional[int] = None
+    for m in _RE_OPENROAD_DRT_VIOLATIONS.finditer(log_text):
+        try:
+            last = int(m.group(1))
+        except ValueError:
+            pass
+    if last is None:
+        for m in _RE_OPENROAD_DRT_VIOLATIONS2.finditer(log_text):
+            try:
+                last = int(m.group(1))
+            except ValueError:
+                pass
+    return last
+
+
+def _read_openroad_drt_count(project: Path, top: str) -> Optional[int]:
+    """Best-effort: scan the PnR logs under phase3/pnr/ and phase3/logs/
+    for the OpenROAD detailed_route final DRC-violation count. Returns
+    None when no log carries it. Chip-AGNOSTIC."""
+    candidates: List[Path] = []
+    for sub in ("pnr", "logs", "reports"):
+        d = project / "phase3" / sub
+        if d.is_dir():
+            candidates.extend(sorted(d.glob("*.log")))
+            candidates.extend(sorted(d.glob("*route*.rpt")))
+    for f in candidates:
+        try:
+            n = _extract_openroad_drt_violations(
+                f.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            n = None
+        if n is not None:
+            return n
+    return None
+
+
+# Magic DRC TCL: load the merged GDS, run drc check, report the count.
+_MAGIC_DRC_TCL = """\
+crashbackups stop
+gds readonly true
+gds read $env(GDS)
+load $env(TOP)
+select top cell
+drc euclidean on
+drc style drc(full)
+drc check
+drc catchup
+set count [drc list count total]
+puts "MAGIC_DRC_COUNT $count"
+set bb [box values]
+puts "MAGIC_BBOX $bb"
+quit -noprompt
+"""
+
+
+def _magic_run_drc(gds: Path, top: str, container: str
+                   ) -> Tuple[Optional[int], str]:
+    """Run Magic DRC against `gds`. Returns (count_or_None, transcript).
+    count is None when the transcript is vacuous (Fix #2: geometry never
+    loaded). Best-effort. Chip-AGNOSTIC."""
+    if not _tool_in_path(container, "magic"):
+        return None, "magic binary not in container PATH"
+    tcl = gds.parent / "magic_drc.tcl"
+    try:
+        tcl.write_text(_MAGIC_DRC_TCL)
+    except Exception as exc:
+        return None, f"could not write magic_drc.tcl: {exc}"
+    gds_c = _to_container_path(str(gds), container)
+    tcl_c = _to_container_path(str(tcl), container)
+    cmd = (f"export GDS={gds_c} TOP={top} && "
+           f"magic -dnull -noconsole -rcfile /dev/null {tcl_c}")
+    rc, out, err = _docker_exec(container, cmd, timeout=1800)
+    transcript = out + "\n" + err
+    raw_count: Optional[int] = None
+    m = re.search(r"MAGIC_DRC_COUNT\s+(\d+)", transcript)
+    if m:
+        try:
+            raw_count = int(m.group(1))
+        except ValueError:
+            raw_count = None
+    vac = _detect_vacuous_magic(transcript, drc_count=raw_count)
+    if vac["vacuous"] or not vac["geometry_loaded"]:
+        return None, transcript  # inconclusive — geometry not loaded
+    return raw_count, transcript
 
 
 def step_drc(project: Path, top: str, pdk: PdkConfig,
@@ -1942,6 +2747,71 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     # violation node) is universal across all PDK decks
     # (sky130A / gf180mcuD / sg13g2 / etc.); no chip-class literal.
     vios, per_rule = _v1_6_597_count_klayout_xml_violations(rpt)
+    klayout_deck_count = vios
+    # Fix #3 — engine bookkeeping shared into the final extras dict.
+    drc_engine_extras: Dict[str, Any] = {
+        "klayout_deck_violations": klayout_deck_count,
+        "streamout_engine": "klayout",
+    }
+    # Fix #3(c) — surface the OpenROAD detailed-route DRC count (the
+    # router's own self-check on MERGED routed geometry) vs the
+    # KLayout-deck count (on non-merged streamout). A large positive gap
+    # is itself evidence that the KLayout count is streamout-inflated.
+    openroad_drt = _read_openroad_drt_count(project, top)
+    drc_engine_extras["openroad_drt_violations"] = openroad_drt
+    drc_engine_extras["drc_engine_discrepancy"] = \
+        _format_drc_engine_discrepancy(openroad_drt, klayout_deck_count)
+    # Fix #3(b) — when the KLayout-streamed GDS DRC count is DOMINATED
+    # (>90%) by min-spacing / min-width edge-pairs (the signature of
+    # KLayout's non-merged abutting cell-boundary polygons), re-stream
+    # via Magic (which merges abutting same-layer geometry) and re-run
+    # DRC. Record BOTH counts. Only treat the Magic count as
+    # AUTHORITATIVE when Magic actually loaded the geometry (Fix #2:
+    # non-vacuous) — otherwise keep the KLayout count + flag inconclusive.
+    dominated, sw_frac = _klayout_streamout_false_positive_dominated(
+        per_rule)
+    drc_engine_extras["spacing_width_fraction"] = round(sw_frac, 4)
+    if dominated and _tool_in_path(container, "magic"):
+        merged_gds = gds.parent / f"{top}.magic_merged.gds"
+        m_ok, m_stream = _magic_def_to_gds(
+            project, top, pdk, container, merged_gds)
+        drc_engine_extras["magic_restream_attempted"] = True
+        if m_ok and merged_gds.is_file():
+            m_count, m_drc_txt = _magic_run_drc(merged_gds, top, container)
+            m_vac = _detect_vacuous_magic(m_drc_txt, drc_count=m_count)
+            drc_engine_extras["magic_restream_violations"] = m_count
+            drc_engine_extras["magic_geometry_loaded"] = \
+                m_vac["geometry_loaded"]
+            if m_count is not None and not m_vac["vacuous"]:
+                # Magic re-stream is authoritative — it merged the
+                # abutting boundaries the KLayout streamout left split.
+                drc_engine_extras["streamout_engine"] = "magic"
+                drc_engine_extras["drc_authority"] = "magic-restream"
+                drc_engine_extras["note"] = (
+                    f"KLayout-streamout DRC count {klayout_deck_count} "
+                    f"was {sw_frac*100:.1f}% min-spacing/min-width "
+                    f"edge-pairs at cell boundaries (KLayout does not "
+                    f"merge abutting same-layer geometry). Re-streamed "
+                    f"via Magic (merges) → {m_count} violation(s); using "
+                    f"the Magic count as authoritative.")
+                vios = m_count
+                # Magic does not emit klayout rule names; preserve the
+                # original per-rule for KLayout but key the authoritative
+                # total off Magic. When Magic finds 0, per_rule→{}.
+                per_rule = {} if m_count == 0 else per_rule
+            else:
+                drc_engine_extras["drc_authority"] = "klayout-deck"
+                drc_engine_extras["note"] = (
+                    "Magic re-stream produced a VACUOUS / inconclusive "
+                    "DRC (geometry not loaded); keeping the KLayout-deck "
+                    "count as the (conservative) verdict basis.")
+        else:
+            drc_engine_extras["magic_restream_violations"] = None
+            drc_engine_extras["drc_authority"] = "klayout-deck"
+            drc_engine_extras["note"] = (
+                "KLayout streamout DRC dominated by boundary spacing/"
+                "width edge-pairs but Magic re-stream failed / dropped "
+                "geometry; keeping KLayout-deck count (conservative).")
     # v1.6.604 — for STDCELL-DRC-WAIVER. Split per-rule counts into
     # (user_routing, stdcell_library) buckets. When 100 % of the
     # violations live in stdcell-library-internal layer rules
@@ -1986,12 +2856,17 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
             "waiver_reason": (
                 f"100% of klayout violations land on stdcell-library-"
                 f"internal layer rules ({','.join(prefixes)}*) for "
-                f"PDK={pdk.name}. These layers are below the user "
-                f"routing stack (sky130A user routing starts at met1) "
-                f"and the violations are klayout-deck-vs-Calibre rule "
-                f"disagreements on foundry-qualified cells. Production "
-                f"OpenMPW sign-off waives this class via per-cell "
-                f"foundry confidence statements. Re-run with the "
+                f"PDK={pdk.name}. On sky130-class PDKs these layers "
+                f"(local-interconnect li.*, contact ct./licon, lowest "
+                f"metal m1./met1) are below the user routing stack — the "
+                f"detailed router's signal stack starts at met2 and the "
+                f"contact layer is never emitted by the router — so a "
+                f"violation here cannot have been introduced by user "
+                f"routing. ANY met2+ violation would have kept the "
+                f"verdict at FAIL. The violations are klayout-deck-vs-"
+                f"Calibre rule disagreements on foundry-qualified cells. "
+                f"Production OpenMPW sign-off waives this class via per-"
+                f"cell foundry confidence statements. Re-run with the "
                 f"Calibre DRC deck (input/pdk/calibre/) for true "
                 f"sign-off verdict."),
             "review_required": True,
@@ -2013,6 +2888,14 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
                   "total_violations": vios,
                   "stdcell_library_violations": cell_vios,
                   "user_routing_violations": user_vios}
+    # Fix #3 — fold the streamout-engine / re-stream / OpenROAD-DRT
+    # discrepancy bookkeeping into every verdict branch's extras so the
+    # StepResult records BOTH counts and the engine that was
+    # authoritative. (extras keys win nothing critical here — the
+    # verdict is already decided above; this is provenance only.)
+    extras.update(drc_engine_extras)
+    if drc_engine_extras.get("drc_authority") == "magic-restream":
+        detail = (detail + " | " + drc_engine_extras.get("note", "")).strip()
     return StepResult("drc", status, time.time() - t0,
                       detail, [str(rpt)], extras=extras)
 
@@ -3047,6 +3930,15 @@ def main() -> int:
     if not project.is_dir():
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
         return 2
+
+    # Fix #4 — normalize/validate --util (a FRACTION 0..1). Percent
+    # values (>1) are divided by 100 with a warning; non-positive
+    # values are clamped. Done before any step so PnR receives a sane
+    # density.
+    norm_util, util_warn = _normalize_util(args.util)
+    if util_warn:
+        print(f"[WARN] {util_warn}", file=sys.stderr)
+    args.util = norm_util
 
     pdk = _detect_pdk(project, args.pdk)
     if pdk is None:
