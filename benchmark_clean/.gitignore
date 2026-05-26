@@ -8,3 +8,13 @@
 !**/generated_docs/*.json
 !**/plugin_output/declaration.json
 !**/stage1/rtl/*.v
+# verification evidence (small JSON): functional_coverage / code_coverage / hw_test
+!**/reports/*.json
+# test cases authored for code-coverage (the test deliverable; small)
+!**/tests/*.v
+!**/tests/*.sv
+!**/tests/*.py
+# Pillar-1/3 verification test cases + logs (the test deliverable)
+!**/verify/*.v
+!**/verify/*.sv
+!**/verify/*.log

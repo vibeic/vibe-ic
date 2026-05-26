@@ -1,0 +1,148 @@
+{
+  "schema_version": 2,
+  "doc_class": "integration_spec",
+  "ic_name": "sha256",
+  "top_module": "sha256",
+  "top_module_extraction_strategy": "l1_ic_name_fallback",
+  "no_top_module_in_input": true,
+  "ports": [],
+  "top_ports": [],
+  "top_module_pins": [],
+  "no_integration_in_input": false,
+  "submodules": [],
+  "no_submodules_in_input": true,
+  "sim_only_modules": [],
+  "fsm_states": [
+    {
+      "name": "BLOCK",
+      "transitions": [],
+      "evidence": "input/docs/L2_architecture.md (prose state-to-state v1.6.484)"
+    },
+    {
+      "name": "ADDR_BLOCK0",
+      "transitions": [],
+      "evidence": "input/docs/L2_architecture.md (prose state-to-state v1.6.484)"
+    }
+  ],
+  "no_fsm_states_in_input": false,
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "internal_wires": [],
+  "no_internal_wires_in_input": true,
+  "expected_verdict_byte_hex": null,
+  "expected_verdict_byte_offset": null,
+  "expected_verdict_byte_extraction_strategy": null,
+  "expected_verdict_byte_offset_low_confidence": false,
+  "expected_verdict_byte_hex_low_confidence": false,
+  "cpu_interrupts": [],
+  "no_cpu_interrupts_in_input": true,
+  "reset_domains": [
+    {
+      "name": "reset_n",
+      "polarity": "active_low",
+      "sync": "unknown",
+      "scan_prefixed": false,
+      "direction_prefix": null,
+      "extraction_strategy": "l9_port_reset_shape_v1_6_369"
+    }
+  ],
+  "memories": [
+    {
+      "name": "reset_n",
+      "kind": "regfile",
+      "type": "register file",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L2_architecture.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    }
+  ],
+  "memory_candidates": [
+    {
+      "name": null,
+      "kind": "regfile",
+      "type": "Register file",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L2_architecture.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "rom",
+      "type": "ROM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L2_architecture.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "ram",
+      "type": "RAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L2_architecture.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L8_submodule_integration.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    }
+  ],
+  "no_memory_candidates_in_input": false,
+  "no_memories_in_input": false,
+  "memory_map": [],
+  "no_memory_map_in_input": true,
+  "no_instantiation_template_in_input": true,
+  "top_module_pins_evidence": {
+    "reason": "no_module_declaration_in_input_docs",
+    "fallback_source": "L1.ic_name",
+    "extraction_strategy_marker": "fallback_explicit_v1_6_581"
+  },
+  "extraction_evidence": {
+    "derived_from_L3": []
+  },
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 38.6,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 38.6,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/L1_product_metadata.md",
+        "line": 35,
+        "matched_substring": "38.6 MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 38600000,
+      "period_ns": 25.906736,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    }
+  ],
+  "interface_type": null,
+  "no_interface_type_in_input": true,
+  "interface_types": [],
+  "no_interface_types_in_input": true,
+  "chip_top_interfaces": [],
+  "class_path": "digital_arithmetic_primitive"
+}
