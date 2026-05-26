@@ -22,3 +22,6 @@
 !**/phase3/analog/**/*.sp
 !**/phase3/analog/**/*.json
 !**/phase3/analog/**/*.flag
+# analog_block_list.json is a detection intermediate (false-positive on digital ICs;
+# real analog blocks are documented in SOURCE_MANIFEST + cross_check + per-block spec.json) — keep it out
+**/phase3/analog/**/analog_block_list.json
