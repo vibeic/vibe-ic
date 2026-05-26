@@ -1,7 +1,7 @@
-# Step 22 — Post-route 9-corner STA (SPEF-annotated)
+# Step 23 — Post-route 9-corner STA (SPEF-annotated)
 
 **What ran (real tool):** Two complementary STA runs:
-1. OpenSTA on OURS `routed.def` + freshly-extracted SPEF (Step 21) at TT — `report_checks max/min`, `report_wns/tns` (`xc_p3_signoff.tcl`).
+1. OpenSTA on OURS `routed.def` + freshly-extracted SPEF (Step 22) at TT — `report_checks max/min`, `report_wns/tns` (`xc_p3_signoff.tcl`).
 2. Re-state of OURS pre-existing 9-corner OpenSTA results (`sta_9corner_results.txt`, `sta_mcorner.txt`).
 
 **OURS post-route SPEF-annotated (TT, period 25.9 ns):**

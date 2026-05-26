@@ -1,4 +1,4 @@
-# Step 21 — SPEF / RC Extraction (GAP-CLOSE)
+# Step 22 — SPEF / RC Extraction (GAP-CLOSE)
 
 ## What ran
 OURS originally had a GAP: `extract_spm.tcl` used `estimate_parasitics -global_routing`

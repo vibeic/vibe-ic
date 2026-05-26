@@ -1,4 +1,4 @@
-# Step 19 — Post-CTS Hold
+# Step 20 — Post-CTS Hold
 
 ## What ran
 Re-stated OUR post-CTS/post-route hold cleanliness from PnR `openroad.log`

@@ -1761,10 +1761,20 @@ def _compute_spare_density(raw) -> Tuple[float, Optional[str]]:
 def _spare_count_from_density(placed_cells: int, density: float) -> int:
     """Number of spare cells to insert for a given placed-cell count and
     density. At least 1 spare when density>0 and there is any placed
-    logic (so even a tiny block gets an ECO budget). Pure math."""
+    logic (so even a tiny block gets an ECO budget). Uses CEIL (not
+    round) so the achieved density (count/placed) always MEETS OR
+    EXCEEDS the requested target — `round` could land just under the
+    target (e.g. 302*0.02=6.04 -> round 6 -> 6/302=0.0199 < 0.02, which
+    would fail the coverage gate). Pure math."""
     if placed_cells <= 0 or density <= 0.0:
         return 0
-    n = int(round(placed_cells * density))
+    # Integer ceil of (placed_cells * density) without importing math:
+    # add a tiny epsilon-free ceil via the -(-a // b) idiom on a scaled
+    # integer. density is a float fraction; scale to avoid fp drift.
+    scaled = placed_cells * density
+    n = int(scaled)
+    if scaled > n:
+        n += 1
     return max(1, n)
 
 
@@ -1848,8 +1858,12 @@ def _discover_spare_cells_from_liberty(
         "nand2":    re.compile(r"(?:^|_)nand2\w*$", re.I),
         "nor2":     re.compile(r"(?:^|_)nor2\w*$", re.I),
         "mux2":     re.compile(r"(?:^|_)mux2\w*$", re.I),
-        "aoi":      re.compile(r"(?:^|_)aoi\w*$", re.I),
-        "oai":      re.compile(r"(?:^|_)oai\w*$", re.I),
+        # AOI / OAI cells carry an AND-OR / OR-AND topology prefix in
+        # every real library (sky130 `a21oi`/`a221oi`, Nangate `AOI21`),
+        # not a literal `aoi`/`oai`. Match the topology-digit form
+        # (`a<digits>oi` / `o<digits>ai`) plus the literal as a fallback.
+        "aoi":      re.compile(r"(?:^|_)(?:a\d+oi|aoi)\w*$", re.I),
+        "oai":      re.compile(r"(?:^|_)(?:o\d+ai|oai)\w*$", re.I),
         "dff":      re.compile(r"(?:^|_)(?:dff|dfxtp|dfrtp|sdff)\w*$", re.I),
     }
     cells_sorted = sorted(set(cells), key=lambda n: (len(n), n))
@@ -1890,7 +1904,18 @@ def _build_spare_cells_plan(placed_cells: int, density: float,
     flat_classes: List[str] = []
     for cls, n in dist.items():
         flat_classes.extend([cls] * n)
+    # Drop classes that resolved to no concrete PDK cell — an instance
+    # with cell=None is never physically inserted (place_inst is
+    # skipped), so it must NOT appear in the plan as a "preserved"
+    # spare (the preservation check would otherwise flag it as removed).
+    # This honours the discovery contract ("the caller drops them from
+    # the mix"). dropped_classes is recorded for transparency.
+    dropped_classes: Dict[str, int] = {}
     for k, cls in enumerate(flat_classes):
+        concrete = cell_map.get(cls) if cell_map else None
+        if cell_map and concrete is None:
+            dropped_classes[cls] = dropped_classes.get(cls, 0) + 1
+            continue
         idx = per_class_idx.get(cls, 0)
         per_class_idx[cls] = idx + 1
         x, y = positions[pos_i] if pos_i < len(positions) else (llx, lly)
@@ -1898,7 +1923,7 @@ def _build_spare_cells_plan(placed_cells: int, density: float,
         instances.append({
             "name": f"spare_{cls}_{idx}",
             "type": cls,
-            "cell": cell_map.get(cls),
+            "cell": concrete,
             "llx": x,
             "lly": y,
             "keep": True,
@@ -1911,15 +1936,26 @@ def _build_spare_cells_plan(placed_cells: int, density: float,
             {"name": "spare_pad_in_0", "kind": "input", "keep": True},
             {"name": "spare_pad_out_0", "kind": "output", "keep": True},
         ]
-    return {
-        "count": count,
+    # Recompute count / types from the instances that actually carry a
+    # concrete cell (post-drop), so the plan's headline numbers match the
+    # spares that are physically inserted + later preservation-checked.
+    eff_types: Dict[str, int] = {}
+    for inst in instances:
+        eff_types[inst["type"]] = eff_types.get(inst["type"], 0) + 1
+    eff_count = len(instances)
+    plan = {
+        "count": eff_count,
         "density": round(density, 6),
-        "types": dist,
+        "types": eff_types,
         "tied_off": True,
         "instances": instances,
         "spare_pads": spare_pads,
         "cell_map": cell_map,
     }
+    if dropped_classes:
+        plan["dropped_classes_no_pdk_cell"] = dropped_classes
+        plan["requested_count"] = count
+    return plan
 
 
 def _spare_actual_density(plan: Dict[str, Any], placed_cells: int) -> float:
@@ -2009,11 +2045,20 @@ def _build_spare_protection_tcl(plan: Dict[str, Any], out_dir_c: str
             continue
         x = inst.get("llx", 0)
         y = inst.get("lly", 0)
-        # place_inst inserts a new instance; -status PLACED fixes it.
+        # place_inst inserts a new instance; -status FIXED writes a
+        # `+ FIXED` placement record into the DEF — the canonical
+        # physical protection for a spare (the legalizer / detailed
+        # placement / router cannot move or delete a FIXED instance), so
+        # the keep/dont_touch intent is durable in the final artefacts,
+        # not only in the TCL. Falls back to PLACED on builds whose
+        # place_inst rejects -status FIXED.
         lines.append(
             f"if {{[catch {{place_inst -name {name} -cell {cell} "
-            f"-location {{{x} {y}}} -status PLACED}} _se_{name}]}} {{ "
-            f"puts \"SPARE_INSERT_NONFATAL {name}: $_se_{name}\" }}")
+            f"-location {{{x} {y}}} -status FIXED}} _se_{name}]}} {{ "
+            f"if {{[catch {{place_inst -name {name} -cell {cell} "
+            f"-location {{{x} {y}}} -status PLACED}} _se2_{name}]}} {{ "
+            f"puts \"SPARE_INSERT_NONFATAL {name}: $_se_{name} / "
+            f"$_se2_{name}\" }} }}")
         # dont_touch protects from every opt / resize / legalization pass.
         lines.append(
             f"if {{[catch {{set_dont_touch {name}}} _dt_{name}]}} {{ "
@@ -2387,6 +2432,8 @@ exit
             "distribution_ok": distribution_ok,
             "tie_off_ok": bool(spare_plan.get("tied_off")),
             "verdict": cov_verdict,
+            # `status` mirrors `verdict` for the documented Pillar-6 schema.
+            "status": cov_verdict,
         }
         # Literal flow-declared path (not the report auto-router, which
         # would file an unknown name under reports/audit/).

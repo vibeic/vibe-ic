@@ -1,11 +1,11 @@
-# Step 26 — Signal Integrity / crosstalk
+# Step 27 — Signal Integrity / crosstalk
 
 **Verdict: N/A** (no dedicated open-source SI noise simulator exists in iic-eda; the
 reference shares the same limitation — SI is not a producible capability of this
 open-source flow on either side. SPEF coupling-capacitance data IS extracted and
 shown below as the best-available proxy; it is NOT fabricated as a 0-violation pass.)
 
-**What ran:** Signal-integrity here is driven from the coupling-capacitance data in the SPEF extracted in Step 21 (OpenROAD OpenRCX). REF's SI step is itself an OpenROAD/SPEF-derived crosstalk estimate (no dedicated open-source SI noise simulator was used by REF either).
+**What ran:** Signal-integrity here is driven from the coupling-capacitance data in the SPEF extracted in Step 22 (OpenROAD OpenRCX). REF's SI step is itself an OpenROAD/SPEF-derived crosstalk estimate (no dedicated open-source SI noise simulator was used by REF either).
 
 | Metric | OURS | REF |
 |---|---|---|

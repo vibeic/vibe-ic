@@ -1,4 +1,4 @@
-# Step 27 — Post-layout gate-level sim + SDF vs NIST KAT golden (GAP CLOSED)
+# Step 28 — Post-layout gate-level sim + SDF vs NIST KAT golden (GAP CLOSED)
 
 **Gap:** OURS had an SDF (`sha256.sdf`, 4.7 MB) but no GLS results/pass.flag. REF ran a real GLS producing the NIST 'abc' digest.
 

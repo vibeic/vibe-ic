@@ -13,6 +13,6 @@
 
 **Verdict: IN-RANGE / DIFFERENT-BUT-OK.** OURS uses a larger 900x900 die at ~14% util vs REF 700x700 at ~20%. OURS is a from-scratch carry-save CSA tree with 12,148 cells (vs REF 9,546) — more logic + lower density (larger die chosen by the runner), but both are valid, non-congested floorplans with util in the normal 14–22% band for sky130 sign-off flows. Target density 0.20 matches the L9 FP_CORE_UTIL=0.20 spec. Larger die/lower util on OURS is conservative, not a defect.
 
-**Note (PDN gap):** OURS `pnr.tcl` did NOT generate a power-distribution network (no `pdngen`, no SPECIALNETS in any DEF). REF has a full PDN (9,290 VPWR + 9,290 VGND special-net connections). This gap was closed in Step 23/24 by regenerating the PDN from `post_hold.def` (met1 followpins + met4/met5 straps) before IR/EM.
+**Note (PDN gap):** OURS `pnr.tcl` did NOT generate a power-distribution network (no `pdngen`, no SPECIALNETS in any DEF). REF has a full PDN (9,290 VPWR + 9,290 VGND special-net connections). This gap was closed in Step 24/25 by regenerating the PDN from `post_hold.def` (met1 followpins + met4/met5 straps) before IR/EM.
 
 **Evidence:** `phase3/stage3/pnr/{floorplan,routed,sha256}.def`, `phase3/stage3/pnr/openroad.log` (IFP-0104, GPL-0019), REF `phase3/stage3/pnr/openroad_full.log`.

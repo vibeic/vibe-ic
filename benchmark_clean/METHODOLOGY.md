@@ -54,14 +54,14 @@ This protocol fixes that.
 
 ## Status
 - [benchmark-verified 2026-05-26] `spm` — **FIRST fully benchmark-verified IC**:
-  `benchmark-verify` OVERALL = **PRODUCTION-READY** (all 5 pillars pass; evidence in
+  `benchmark-verify` OVERALL = **PRODUCTION-READY** (all 6 pillars pass; evidence in
   `spm/BENCHMARK_VERIFICATION_REPORT.md` + `spm/reports/`). Pillar 1 Functional
   Coverage **100% (21/21 requirements)** — every L1-L13 requirement bound to a real
   passing check (10,013-vector golden sim @N=32, 45 directed/corner/reset/encoding
   checks @N=8/16/32, gen-vs-upstream co-sim EQUIVALENT, SymbiYosys k-induction proof).
-  Pillar 2 55-step **38/38 applicable PASS, 0 unresolved** (steps 6/30/36 closed: 6 &
-  36 by the real FPGA compile, 30 = N/A no-ECO-needed matching the ref's
-  `no_eco_needed.flag`; 27/28/32 stay PASS with the runnable portion run and the
+  Pillar 2 56-step **39/39 applicable PASS, 0 unresolved** (steps 6/31/37 closed: 6 &
+  37 by the real FPGA compile, 31 = N/A no-ECO-needed matching the ref's
+  `no_eco_needed.flag`; 28/29/33 stay PASS with the runnable portion run and the
   genuine NO-TOOL sub-items honestly cited as shared with the reference). Pillar 3
   Code Coverage **line 100% / branch 100% / toggle 98.7%** (Verilator `--coverage`;
   the 3 untoggled points are PROVABLY-DEAD top-stage carry/sum-in constants, not a
@@ -70,7 +70,15 @@ This protocol fixes that.
   corner-models, and 64 corner+random patterns pass cycle-accurate through an on-chip
   BIST harness (method = BFM + real-Quartus-bitstream; no physical board attached —
   `cables:[]` — same as the reference, whose FPGA step is compile-to-SOF only).
-  Pillar 5 N/A (pure-digital).
+  Pillar 5 N/A (pure-digital). Pillar 6 **Design-for-ECO readiness PASS** — new
+  flow **Step 18** (Spare-cell + ECO-prep insertion) places a DISTRIBUTED, tied-off
+  pool of 7 spare std cells (inv/nand2/nor2/mux2/aoi/dff) @ density 0.0232 as FIXED
+  `dont_touch`/`keep` instances after placement / before CTS; `spare_cell_coverage_check`
+  = PASS (density/distribution/tie-off) and `spare_cell_preservation_check` =
+  intact (inserted 7, survived 7, removed 0, keep-attr intact). The reference
+  `spm_e2e` has **0 spares / 0 dont_touch** → OURS is BETTER-THAN-REF on Step 18
+  (metal-only-ECO readiness the reference lacks), while DRC/LVS/multi-corner STA
+  sign-off still holds with the spares present.
 - [signed-off 2026-05-26] `spm` — corrected-protocol run SIGNED OFF (doc ->
   production-ready). RTL remains 100% GENERATED from L1-L9 docs (0 REUSED-IP).
   After a timing-driven re-architecture authored from the docs (ripple-carry
@@ -93,10 +101,18 @@ This protocol fixes that.
   (timing clean, DRC clean of real violations, LVS device-exact) both demonstrated.
 - [benchmark-verified 2026-05-26] `sha256` — SECOND fully benchmark-verified IC:
   `benchmark_verify_report.py` OVERALL = PRODUCTION-READY (P1 functional coverage
-  100% = 26/26 reqs; P2 55-step output comparison 38/38 applicable PASS, 0 unresolved
+  100% = 26/26 reqs; P2 **56-step** output comparison all-applicable PASS, 0 unresolved
   — incl. OURS stronger than REF on DFT 94% & 9-corner STA & DRC; P3 code line 97.85%
-  (>=90); P4 FPGA PASS 101 patterns; P5 analog N/A). RTL 100% GENERATED. Full report:
-  `sha256/BENCHMARK_VERIFICATION_REPORT.md` + `sha256/cross_check/{p12,p3}/`.
+  (>=90); P4 FPGA PASS 101 patterns; P5 analog N/A; **P6 Design-for-ECO PASS**). RTL
+  100% GENERATED. **Step 18 Design-for-ECO** backfilled into the signed-off CSA die: a
+  distributed, tied-off, dont_touch-protected pool of **203 spare std cells @ density
+  0.0200** (inv/nand2/nor2/mux2/aoi/oai/dff classes + reserved ECO pads) inserted after
+  placement, before CTS; CTS/route/fill completed WITH spares present;
+  `spare_cell_coverage_check` = PASS and `spare_cell_preservation_check` = intact
+  (removed:0, all_keep_attr_intact:true); REF sha256 run has NO spares → BETTER-THAN-REF.
+  9-corner STA still setup+hold >= 0 @25.9 ns with spares present. Full report:
+  `sha256/BENCHMARK_VERIFICATION_REPORT.md` + `sha256/cross_check/{p12,p3}/` (p3 now
+  steps 15–37; old 18–36 → 19–37).
 - [signed-off 2026-05-26] `sha256` — corrected-protocol run SIGNED OFF (doc ->
   production-ready): doc -> GENERATED RTL -> functionally-proven -> routed clean
   GDS -> **FULL 9-corner sign-off** DEMONSTRATED. RTL is **100% GENERATED** from

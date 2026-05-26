@@ -1,4 +1,4 @@
-# Step 34 — GDSII
+# Step 35 — GDSII
 
 ## What ran
 Inspected OUR vs REF final GDS (size, layers, DRC/LVS state). Per the cross-check

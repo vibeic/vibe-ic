@@ -1,4 +1,4 @@
-# Step 33 — Tapeout Checklist
+# Step 34 — Tapeout Checklist
 
 ## What ran
 Compared OUR `reports/audit/tapeout_checklist.json` (signoff_audit:tapeout) against

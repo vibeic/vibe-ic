@@ -1,4 +1,4 @@
-# Step 28 — Post-layout SPICE critical-path correlation
+# Step 29 — Post-layout SPICE critical-path correlation
 
 **What ran (real tool):** ngspice (open-source v44) on a 10-stage `sky130_fd_sc_hd__inv_1` chain with 50 fF load, sky130_fd_pr models via combined `sky130.lib.spice` tt corner — the same methodology REF used. Deck: `phase3/stage3/spice/xc_critical_path.sp`.
 

@@ -1,6 +1,6 @@
-# Step 24 — Electromigration (analyze_power_grid -enable_em) (GAP CLOSED)
+# Step 25 — Electromigration (analyze_power_grid -enable_em) (GAP CLOSED)
 
-**Gap:** Same root cause as Step 23 — no PDN existed on OURS, so EM analysis could not run. Closed by rebuilding the PDN first.
+**Gap:** Same root cause as Step 24 — no PDN existed on OURS, so EM analysis could not run. Closed by rebuilding the PDN first.
 
 **What ran (real tool):** OpenROAD `analyze_power_grid -net VPWR/VGND -enable_em` on the PDN-rebuilt OURS design. Script: `phase3/stage3/ir_drop/xc_pdn_ir_em.tcl`.
 

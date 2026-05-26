@@ -1,4 +1,4 @@
-# Step 36 — FPGA final sign-off (recompile + on-board)
+# Step 37 — FPGA final sign-off (recompile + on-board)
 
 ## What ran
 A REAL final-sign-off Quartus recompile of the FPGA prototype (top entity

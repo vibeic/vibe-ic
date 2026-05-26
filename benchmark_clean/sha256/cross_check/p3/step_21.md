@@ -1,4 +1,4 @@
-# Step 20 — Routing: DRT violations ~0 + component / net counts
+# Step 21 — Routing: DRT violations ~0 + component / net counts
 
 **What ran:** Read OURS OpenROAD detailed_route summary + routed.def COMPONENTS/NETS; compared to REF routed.def.
 

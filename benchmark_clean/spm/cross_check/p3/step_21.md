@@ -1,4 +1,4 @@
-# Step 20 — Routing (DRT violations, component/net counts, layers)
+# Step 21 — Routing (DRT violations, component/net counts, layers)
 
 ## What ran
 OpenROAD detailed-route violation count from `openroad.log` (DRT-0199);

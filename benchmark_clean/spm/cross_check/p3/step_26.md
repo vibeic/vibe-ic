@@ -1,4 +1,4 @@
-# Step 25 — Antenna Check (GAP-CLOSE)
+# Step 26 — Antenna Check (GAP-CLOSE)
 
 ## What ran
 OpenROAD `check_antennas` on OUR routed.def in the iic-eda container.

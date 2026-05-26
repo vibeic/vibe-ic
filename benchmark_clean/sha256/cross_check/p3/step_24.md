@@ -1,4 +1,4 @@
-# Step 23 — IR drop (PDNSim on OURS) (GAP CLOSED)
+# Step 24 — IR drop (PDNSim on OURS) (GAP CLOSED)
 
 **Gap:** OURS `pnr.tcl` never generated a PDN — `routed.def` has **0 SPECIALNETS** and no VPWR/VGND nets. PDNSim could not run (PSM-0028 "Cannot find net VPWR"). REF had a full PDN (9,290 VPWR + 9,290 VGND).
 

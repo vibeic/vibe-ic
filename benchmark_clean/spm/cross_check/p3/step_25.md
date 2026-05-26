@@ -1,4 +1,4 @@
-# Step 24 — Electromigration (EM, GAP-CLOSE)
+# Step 25 — Electromigration (EM, GAP-CLOSE)
 
 ## What ran
 OpenROAD `analyze_power_grid -enable_em` on OUR routed.def with the regenerated

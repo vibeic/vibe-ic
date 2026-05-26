@@ -1,4 +1,4 @@
-# Step 25 — Antenna (check_antennas) (GAP CLOSED)
+# Step 26 — Antenna (check_antennas) (GAP CLOSED)
 
 **Gap:** OURS had no antenna report. REF had one (45 findings).
 

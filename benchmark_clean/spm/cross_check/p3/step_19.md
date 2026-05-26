@@ -1,4 +1,4 @@
-# Step 18 — CTS (clock-tree depth / skew / buffer count)
+# Step 19 — CTS (clock-tree depth / skew / buffer count)
 
 ## What ran
 Compared OUR vs REF `cts/clock_tree.rpt` (TritonCTS-extracted report).

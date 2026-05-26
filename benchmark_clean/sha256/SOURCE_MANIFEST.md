@@ -62,6 +62,17 @@ the L1-L9 docs + the public NIST FIPS-180-4 standard. No upstream/secworks RTL
 was read for any of them. The CSA/carry-select adder is textbook digital
 arithmetic (Wallace/CSA + carry-select), authored from first principles.
 
+## Design-for-ECO spare pool (flow-inserted, NOT REUSED-IP)
+
+The Step-18 Design-for-ECO spare-cell pool (203 distributed, tied-off,
+`dont_touch`-protected std cells of classes inv/nand2/nor2/mux2/dff + reserved
+ECO pads, density 0.0200) is **flow-inserted by the PnR step** (OpenROAD
+`place_inst` + `set_dont_touch` after placement, before CTS) — they are
+physical spare instances, NOT design RTL and NOT third-party IP. They do not
+change the GENERATED tally (still 3/3 RTL modules **100% GENERATED**, 0
+REUSED-IP). Coverage = PASS, preservation intact (removed:0) — see
+`reports/spare_cell_coverage.json` + `reports/spare_preservation.json`.
+
 ## RTL-vs-GDS consistency note (honest)
 
 The GDS/STA/DRC/LVS were produced from the synth netlist of the shipped RTL.

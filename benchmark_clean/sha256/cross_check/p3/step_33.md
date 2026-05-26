@@ -1,4 +1,4 @@
-# Step 32 — Metal fill density (measure; filler_placement)
+# Step 33 — Metal fill density (measure; filler_placement)
 
 **What ran (real tool):** OpenROAD `filler_placement` (sky130_fd_sc_hd__fill_{1,2,4,8}) on OURS `routed.def`, with `report_design_area` before/after. Deck: `phase3/stage3/fill/xc_fill_density.tcl`.
 

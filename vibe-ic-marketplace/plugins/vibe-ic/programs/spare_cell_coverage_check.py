@@ -194,6 +194,10 @@ def audit(project: Path,
         "coverage_summary_json": (str(cov_json)
                                   if cov_json.is_file() else None),
     })
+    # `status` mirrors `verdict` so consumers reading the documented
+    # coverage schema (benchmark_verify_report Pillar 6 expects a
+    # top-level "status": "PASS") see a PASS. Both kept for compat.
+    result["status"] = result.get("verdict")
     return result
 
 
@@ -214,6 +218,14 @@ def main(argv: Optional[list] = None) -> int:
 
     report = audit(project, args.target_density)
     out = json.dumps(report, indent=2, ensure_ascii=False)
+    # Canonical output: reports/spare_cell_coverage.json (Pillar 6 reads
+    # this literal path), in addition to any explicit --json path.
+    canon = project / "reports" / "spare_cell_coverage.json"
+    try:
+        canon.parent.mkdir(parents=True, exist_ok=True)
+        canon.write_text(out + "\n")
+    except Exception:
+        pass
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(out + "\n")

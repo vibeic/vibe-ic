@@ -1,4 +1,4 @@
-# Step 23 — IR Drop (static PDN analysis, GAP-CLOSE)
+# Step 24 — IR Drop (static PDN analysis, GAP-CLOSE)
 
 ## What ran
 OURS had no IR report (GAP). Closed it by building a standard sky130 PDN

@@ -1,4 +1,4 @@
-# Step 29 — Physical Verification: DRC + LVS (GAP CLOSED, honest)
+# Step 30 — Physical Verification: DRC + LVS (GAP CLOSED, honest)
 
 This step required regenerating a real-geometry GDS first, because the OURS phase-3 runner's klayout-streamed GDS (1.4 MB) held only LEF *abstracts* — the prior DRC read **0 polygons (vacuous)** and the prior magic extract threw 472,727 layer errors. The 0-byte `sha256.magic_merged.gds` in foundry_handoff was likewise vacuous. **Neither was reported as clean.**
 

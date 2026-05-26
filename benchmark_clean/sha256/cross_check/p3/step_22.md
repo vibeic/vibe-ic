@@ -1,4 +1,4 @@
-# Step 21 — SPEF: OpenRCX extract on OURS (GAP CLOSED)
+# Step 22 — SPEF: OpenRCX extract on OURS (GAP CLOSED)
 
 **Gap:** OURS phase3 runner reported "SPEF extraction did not produce sha256.spef" — no parasitic netlist existed for OURS. REF had a full OpenROAD SPEF.
 

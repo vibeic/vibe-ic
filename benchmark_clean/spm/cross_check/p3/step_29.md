@@ -1,4 +1,4 @@
-# Step 28 — Post-layout SPICE (critical-path cell, GAP-CLOSE)
+# Step 29 — Post-layout SPICE (critical-path cell, GAP-CLOSE)
 
 ## What ran
 Mirrored the REF Step-28 methodology (single critical-path-cell propagation via

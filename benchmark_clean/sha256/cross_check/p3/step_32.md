@@ -1,6 +1,6 @@
-# Step 31 — Power (report_power, SPEF-annotated)
+# Step 32 — Power (report_power, SPEF-annotated)
 
-**What ran (real tool):** OpenSTA `report_power` on OURS `routed.def` with the freshly-extracted SPEF annotated (Step 21), TT corner. Compared to REF `report_power` and OURS pre-SPEF power.rpt.
+**What ran (real tool):** OpenSTA `report_power` on OURS `routed.def` with the freshly-extracted SPEF annotated (Step 22), TT corner. Compared to REF `report_power` and OURS pre-SPEF power.rpt.
 
 | Group | OURS (SPEF-annotated) | OURS (pre-SPEF) | REF |
 |---|---|---|---|

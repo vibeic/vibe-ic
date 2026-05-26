@@ -1,4 +1,4 @@
-# Step 29 — PV (DRC + LVS + ERC + Density)
+# Step 30 — PV (DRC + LVS + ERC + Density)
 
 ## What ran
 Re-stated OUR DRC (KLayout sky130A.lydrc database) + LVS (netgen device compare),

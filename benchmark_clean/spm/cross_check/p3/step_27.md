@@ -1,4 +1,4 @@
-# Step 26 — Signal Integrity (crosstalk, GAP-CLOSE via SPEF coupling)
+# Step 27 — Signal Integrity (crosstalk, GAP-CLOSE via SPEF coupling)
 
 ## What ran
 There is no dedicated open-source SI/crosstalk signoff engine in the container,

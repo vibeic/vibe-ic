@@ -1,4 +1,4 @@
-# Step 36 — FPGA final sign-off (recompile + on-board test)
+# Step 37 — FPGA final sign-off (recompile + on-board test)
 
 **Verdict: PASS** (real Quartus final compile + multi-corner FPGA STA; on-board = BFM path)
 

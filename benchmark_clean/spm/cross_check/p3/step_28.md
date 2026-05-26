@@ -1,4 +1,4 @@
-# Step 27 — Post-layout gate sim + SDF
+# Step 28 — Post-layout gate sim + SDF
 
 ## What ran
 Built a gate-level testbench `sim/tb_spm_sdf.v` that instantiates OUR routed

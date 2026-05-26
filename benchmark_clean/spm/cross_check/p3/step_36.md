@@ -1,4 +1,4 @@
-# Step 35 — Foundry Handoff (mask layers + scribe / WAT)
+# Step 36 — Foundry Handoff (mask layers + scribe / WAT)
 
 ## What ran
 Compared OUR vs REF `phase3/stage4/foundry_handoff/` package

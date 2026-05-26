@@ -1,4 +1,4 @@
-# Step 31 — Power Analysis (internal + switching + leakage, GAP-CLOSE refinement)
+# Step 32 — Power Analysis (internal + switching + leakage, GAP-CLOSE refinement)
 
 ## What ran
 OURS already had `reports/phase3/power.rpt` (OpenSTA report_power, no-SPEF) =
