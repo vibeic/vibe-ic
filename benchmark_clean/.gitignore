@@ -1,0 +1,10 @@
+# benchmark_clean — version only records + the GENERATED RTL + L-docs + clean input.
+# Heavy regeneratable EDA working data (GDS/DEF/netlists/logs/report-dbs) stays out.
+*
+!*/
+!*.md
+!**/*.md
+!**/input/**
+!**/generated_docs/*.json
+!**/plugin_output/declaration.json
+!**/stage1/rtl/*.v
