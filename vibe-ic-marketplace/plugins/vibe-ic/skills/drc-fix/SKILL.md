@@ -66,6 +66,20 @@ Grounded in DRC-Coder and LLM-assisted layout repair research. Key insight: DRC 
 - Do not waive hard rules without explicit user approval
 - Do not touch cells outside the block boundary without flagging it
 
+## ⛔ ECO spare-cell preservation (mandatory)
+
+> ⛔ **ECO spare-cell preservation:** cells/gates/pads carrying the `dont_touch` /
+> `keep` attribute (or otherwise tagged spare/ECO) are RESERVED for a future
+> metal-only ECO. NEVER delete, resize, re-purpose, or optimize them away while
+> clearing DRC. In particular: a density/metal-fill fix must stay **ECO-aware**
+> — do NOT delete spare cells/pads to clear spacing, and do NOT lock metal fill
+> over the tracks above spares/reserved pads (use slottable/removable fill there
+> so a future metal-only ECO can still route to them). No `opt_clean` /
+> `clean -purge` / `remove_buffers` on keep-marked instances to "clean up"
+> geometry. After your DRC fix, `spare_cell_preservation_check.py` MUST still
+> PASS (spare set + keep attrs intact, 0 removed); a dropped spare is a
+> regression — restore it and re-run the checker. See the `design-for-eco` skill.
+
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
 
 If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,

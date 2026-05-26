@@ -10,12 +10,15 @@ It is chip-AGNOSTIC and DETERMINISTIC: it does not run EDA tools itself, it
 AGGREGATES the evidence the flow + cross-check steps already produced, computes
 the five verification pillars + their hard gates, and emits the report.
 
-Five pillars (== the report sections, == the gates):
+Six pillars (== the report sections, == the gates):
   1. Functional Verification Coverage   gate: == 100%
-  2. 55-step Output Comparison (vs ref)  gate: every applicable step PASS
+  2. 56-step Output Comparison (vs ref)  gate: every applicable step PASS
   3. Code Coverage (line)                gate: >= 90%
   4. FPGA digital verification           gate: PASS (or documented N/A)
   5. Analog verification                 gate: converged (or N/A for pure-digital)
+  6. Design-for-ECO readiness            gate: spare-cell coverage PASS + spare
+                                              preservation intact (or N/A if the
+                                              IC genuinely has no place-and-route)
 
 Inputs it looks for under <project> (all optional; missing -> PENDING, never a
 silent PASS):
@@ -23,8 +26,16 @@ silent PASS):
   reports/code_coverage.json         {"line_pct":.., "branch_pct":.., "toggle_pct":..}
   reports/hw_test.json               {"verdict":"PASS"|"FAIL", "patterns":N, ...}
   analog/analog_block_list.json      (presence => analog applicable)
+  reports/spare_cell_coverage.json   {"status":"PASS"|.., density/distribution/tie-off readiness}
+  reports/spare_preservation.json    {"all_keep_attr_intact":bool, "removed":N}
   cross_check/**/step_<id>.md        per-step OURS-vs-REF verdict (first line w/ verdict token)
   SOURCE_MANIFEST.md                 GENERATED vs REUSED-IP tally
+
+The Design-for-ECO gate (pillar 6) is owned methodologically by the
+`design-for-eco` skill and verified by `spare_cell_coverage_check.py`
+(readiness) + `spare_cell_preservation_check.py` (preservation). It applies to
+any DIGITAL place-and-route IC (a DEF/GDS exists under phase3/); it is N/A only
+for an IC that genuinely never reached place-and-route (e.g. analog-only).
 
 Usage:
   python3 benchmark_verify_report.py <project_dir> [--ref <reference_dir>] \
@@ -66,31 +77,33 @@ STEP_METHOD = {
     "15": ("metric", "floorplan/PDN: die area + utilization in-range"),
     "16": ("metric", "clock planning parity"),
     "17": ("metric", "placement density + legality (check_placement)"),
-    "18": ("metric", "CTS: clock-tree depth/skew/buffer compare"),
-    "19": ("metric", "post-CTS hold slack >= 0 (both)"),
-    "20": ("metric", "routed DEF: DRT-violations ~0 + component/net counts in-range"),
-    "21": ("metric", "SPEF parasitic R/C magnitude compare"),
-    "22": ("metric", "post-route multi-corner STA slack compare (all corners >= 0)"),
-    "23": ("clean", "IR drop within budget"),
-    "24": ("clean", "EM lifetime within budget"),
-    "25": ("clean", "antenna check clean"),
-    "26": ("clean", "signal-integrity / crosstalk within budget"),
-    "27": ("equivalence", "post-layout gate-sim + SDF vs golden"),
-    "28": ("metric", "post-layout SPICE critical-path correlation"),
-    "29": ("clean", "PV: DRC clean + LVS clean (both, non-vacuous)"),
-    "30": ("clean", "ECO repair loop (only if PV failed)"),
-    "31": ("metric", "power analysis compare"),
-    "32": ("metric", "metal-fill density compare"),
-    "33": ("clean", "tapeout checklist parity"),
-    "34": ("layout-endpoint", "GDSII: NOT pixel-comparable across micro-arch -> both DRC/LVS-clean + functional-equiv"),
-    "35": ("doc", "foundry handoff (mask/WAT/scribe) parity"),
-    "36": ("metric", "FPGA final sign-off (recompile + on-board)"),
+    "18": ("metric", "Design-for-ECO: spare-cell coverage (density/distribution/tie-off) + "
+                     "spare preservation vs optimization; OURS-vs-REF readiness"),
+    "19": ("metric", "CTS: clock-tree depth/skew/buffer compare"),
+    "20": ("metric", "post-CTS hold slack >= 0 (both)"),
+    "21": ("metric", "routed DEF: DRT-violations ~0 + component/net counts in-range"),
+    "22": ("metric", "SPEF parasitic R/C magnitude compare"),
+    "23": ("metric", "post-route multi-corner STA slack compare (all corners >= 0)"),
+    "24": ("clean", "IR drop within budget"),
+    "25": ("clean", "EM lifetime within budget"),
+    "26": ("clean", "antenna check clean"),
+    "27": ("clean", "signal-integrity / crosstalk within budget"),
+    "28": ("equivalence", "post-layout gate-sim + SDF vs golden"),
+    "29": ("metric", "post-layout SPICE critical-path correlation"),
+    "30": ("clean", "PV: DRC clean + LVS clean (both, non-vacuous)"),
+    "31": ("clean", "ECO repair loop (only if PV failed)"),
+    "32": ("metric", "power analysis compare"),
+    "33": ("metric", "metal-fill density compare"),
+    "34": ("clean", "tapeout checklist parity"),
+    "35": ("layout-endpoint", "GDSII: NOT pixel-comparable across micro-arch -> both DRC/LVS-clean + functional-equiv"),
+    "36": ("doc", "foundry handoff (mask/WAT/scribe) parity"),
+    "37": ("metric", "FPGA final sign-off (recompile + on-board)"),
 }
 for a in ["A1","A2","A3","A4","A5","A6","A7","A8","A9"]:
     STEP_METHOD[a] = ("analog", "analog step — applicable only for mixed-signal ICs")
 for m in ["M1","M2","M3","M4"]:
     STEP_METHOD[m] = ("analog", "mixed-signal step — applicable only for A+D ICs")
-for s in ["37","38","39","40"]:
+for s in ["38","39","40","41"]:
     STEP_METHOD[s] = ("mfg", "manufacturing step — requires physical silicon")
 
 
@@ -101,13 +114,13 @@ def _load_steps(flow_yaml: Path):
         return [(str(s.get("id")), s.get("name", ""), str(s.get("stage", "")))
                 for s in d.get("steps", []) if isinstance(s, dict)]
     except Exception as e:
-        print(f"[warn] could not parse flow yaml ({e}); using built-in 55-step ids",
+        print(f"[warn] could not parse flow yaml ({e}); using built-in 56-step ids",
               file=sys.stderr)
         ids = (["D1"] + [str(i) for i in range(1, 7)] + ["P0"]
                + [str(i) for i in range(7, 14)]
                + ["A1","A2","A3","A4","A5","A6","A7","A8","A9"]
-               + [str(i) for i in range(14, 37)]
-               + ["M1","M2","M3","M4"] + [str(i) for i in range(37, 41)])
+               + [str(i) for i in range(14, 38)]
+               + ["M1","M2","M3","M4"] + [str(i) for i in range(38, 42)])
         return [(i, "", "") for i in dict.fromkeys(ids)]
 
 
@@ -127,6 +140,19 @@ def _read_step_verdict(project: Path, sid: str):
 def _is_analog_ic(project: Path) -> bool:
     return (project / "analog" / "analog_block_list.json").is_file() or \
            bool(glob.glob(str(project / "phase3" / "analog" / "*" / "*.gds")))
+
+
+def _has_place_and_route(project: Path) -> bool:
+    """True iff the IC reached digital place-and-route (a DEF or a non-analog GDS
+    exists under phase3/). Design-for-ECO (spare cells/pads) only applies to a
+    placed-and-routed digital die; an analog-only IC that never ran PnR is N/A."""
+    if glob.glob(str(project / "phase3" / "**" / "*.def"), recursive=True):
+        return True
+    for g in glob.glob(str(project / "phase3" / "**" / "*.gds"), recursive=True):
+        # a GDS under phase3/analog/ is an analog block, not a digital PnR die
+        if os.sep + "analog" + os.sep not in g:
+            return True
+    return False
 
 
 def _load_json(p: Path):
@@ -153,7 +179,7 @@ def main():
     analog_ic = _is_analog_ic(project)
 
     steps = _load_steps(flow)
-    # ── Pillar 2: 55-step output comparison ──
+    # ── Pillar 2: 56-step output comparison ──
     step_rows, n_pass, n_applicable, n_unresolved = [], 0, 0, 0
     for sid, name, stage in steps:
         kind, method = STEP_METHOD.get(sid, ("metric", "(uncategorized)"))
@@ -207,6 +233,43 @@ def main():
         analog_state = "PRESENT"
         analog_detail = f"analog blocks: {abl if abl else '(see analog/ reports)'}"
 
+    # ── Pillar 6: Design-for-ECO readiness (spare-cell coverage + preservation) ──
+    # Applicable to any DIGITAL place-and-route IC; N/A only when the IC never
+    # reached PnR (e.g. analog-only). A missing report is PENDING, never a pass.
+    dfe_applicable = _has_place_and_route(project)
+    if not dfe_applicable:
+        dfe_state = "N/A"
+        dfe_detail = "no place-and-route (no DEF/GDS) — spare cells/pads not applicable"
+    else:
+        cov = _load_json(project / "reports" / "spare_cell_coverage.json")
+        pres = _load_json(project / "reports" / "spare_preservation.json")
+        cov_pass = bool(cov) and str(cov.get("status", "")).upper() == "PASS"
+        pres_intact = bool(pres) and bool(pres.get("all_keep_attr_intact")) \
+            and int(pres.get("removed", 1) or 0) == 0
+        if cov is None and pres is None:
+            dfe_state = "PENDING"
+            dfe_detail = ("reports/spare_cell_coverage.json + "
+                          "reports/spare_preservation.json MISSING "
+                          "(run the stage3 Design-for-ECO step + its checkers)")
+        elif cov is None:
+            dfe_state = "PENDING"
+            dfe_detail = "reports/spare_cell_coverage.json MISSING (readiness not verified)"
+        elif pres is None:
+            dfe_state = "PENDING"
+            dfe_detail = ("reports/spare_preservation.json MISSING "
+                          "(spare preservation not verified)")
+        elif cov_pass and pres_intact:
+            dfe_state = "PASS"
+            dfe_detail = (f"coverage status={cov.get('status')}, "
+                          f"keep_attr_intact={pres.get('all_keep_attr_intact')}, "
+                          f"removed={pres.get('removed')}")
+        else:
+            dfe_state = "FAIL"
+            dfe_detail = (f"coverage status={cov.get('status')} "
+                          f"(PASS required), keep_attr_intact="
+                          f"{pres.get('all_keep_attr_intact')}, removed="
+                          f"{pres.get('removed')} (must be 0)")
+
     # ── Source highlighting (GENERATED vs REUSED-IP) ──
     sm = (project / "SOURCE_MANIFEST.md")
     src = "SOURCE_MANIFEST.md MISSING (REQUIRED — tag every module GENERATED/REUSED-IP)"
@@ -222,7 +285,9 @@ def main():
     g_code = (line_pct is not None and float(line_pct) >= a.code_cov_floor)
     g_fpga = (fpga_verdict == "PASS")
     g_analog = (not analog_ic) or (analog_state == "PRESENT")  # presence; deep check via analog skills
-    overall = all([g_func, g_steps, g_code, g_fpga, g_analog])
+    # Design-for-ECO gate: N/A passes; otherwise requires coverage PASS + preservation intact.
+    g_dfe = (not dfe_applicable) or (dfe_state == "PASS")
+    overall = all([g_func, g_steps, g_code, g_fpga, g_analog, g_dfe])
 
     # ── Emit report ──
     L = []
@@ -236,10 +301,15 @@ def main():
     L.append("| Pillar | Gate | Status | Detail |")
     L.append("|---|---|---|---|")
     L.append(f"| 1. Functional Coverage | == 100% | {gate(g_func)} | {func_detail} ({func_pct if func_pct is not None else '—'}%) |")
-    L.append(f"| 2. 55-step Output Comparison | all applicable PASS | {gate(g_steps)} | {n_pass}/{n_applicable} applicable PASS, {n_unresolved} unresolved |")
+    L.append(f"| 2. 56-step Output Comparison | all applicable PASS | {gate(g_steps)} | {n_pass}/{n_applicable} applicable PASS, {n_unresolved} unresolved |")
     L.append(f"| 3. Code Coverage (line) | >= {a.code_cov_floor:.0f}% | {gate(g_code)} | {cc_detail} |")
     L.append(f"| 4. FPGA digital verification | PASS | {gate(g_fpga)} | {fpga_detail} |")
     L.append(f"| 5. Analog verification | converged / N/A | {gate(g_analog)} | {analog_detail} |")
+    # Pillar 6 status cell: show N/A / PENDING explicitly (gate() collapses both to FAIL/PENDING).
+    _dfe_cell = {"PASS": "✅ PASS", "N/A": "➖ N/A",
+                 "PENDING": "⏳ PENDING"}.get(dfe_state, "❌ FAIL")
+    L.append(f"| 6. Design-for-ECO readiness | coverage PASS + spares preserved / N/A | "
+             f"{_dfe_cell} | {dfe_detail} |")
     L.append("")
     L.append(f"**Source provenance:** {src}")
     L.append("")
@@ -247,8 +317,26 @@ def main():
              "must trace to real evidence; a missing input is PENDING, never a silent PASS; "
              "any gate < target requires a closed-loop fix before claiming complete.")
     L.append("")
+    # Pillar 6 detail
+    L.append("## Pillar 6 — Design-for-ECO readiness (spare-cell coverage + preservation)")
+    L.append("")
+    L.append("> Methodology: the `design-for-eco` skill — pre-place a distributed, tied-off pool of "
+             "spare std cells/gates (inverter/nand2/nor2/dff/mux2/aoi/oai) + reserved ECO pads "
+             "(~1-5% area, all `dont_touch`/`keep`) after placement and before CTS, so a late bug "
+             "can be fixed with a cheap metal-only ECO instead of a base-layer respin. This gate "
+             "reads two checker outputs:")
+    L.append("> - `reports/spare_cell_coverage.json` (from `spare_cell_coverage_check.py`, readiness): "
+             "density/distribution/tie-off targets met → `status: PASS`.")
+    L.append("> - `reports/spare_preservation.json` (from `spare_cell_preservation_check.py`): "
+             "no spare/ECO cell/gate/pad was optimized away → `all_keep_attr_intact: true` and "
+             "`removed: 0`.")
+    L.append(f"> Applicability: this IC {'reached place-and-route (gate APPLIES)' if dfe_applicable else 'has no place-and-route (gate N/A)'}. "
+             "A missing spare report is PENDING (not a silent pass).")
+    L.append("")
+    L.append(f"_Design-for-ECO status: **{dfe_state}** — {dfe_detail}_")
+    L.append("")
     # Pillar 2 detail table
-    L.append("## Pillar 2 — 55-step Output Comparison (OURS vs open-source reference)")
+    L.append("## Pillar 2 — 56-step Output Comparison (OURS vs open-source reference)")
     L.append("")
     L.append("> Comparison is step-appropriate, NOT byte-identical: equivalence steps use LEC/co-sim; "
              "metric steps compare magnitude/trend in-range; layout endpoints use "
@@ -266,7 +354,9 @@ def main():
     print(f"wrote {out}")
     print(f"OVERALL={'PRODUCTION-READY' if overall else 'NOT-COMPLETE'} "
           f"func={func_pct} steps={n_pass}/{n_applicable}(unresolved {n_unresolved}) "
-          f"code_line={line_pct} fpga={fpga_verdict} analog={'N/A' if not analog_ic else analog_state}")
+          f"code_line={line_pct} fpga={fpga_verdict} "
+          f"analog={'N/A' if not analog_ic else analog_state} "
+          f"design_for_eco={dfe_state}")
     sys.exit(0 if overall else 1)
 
 

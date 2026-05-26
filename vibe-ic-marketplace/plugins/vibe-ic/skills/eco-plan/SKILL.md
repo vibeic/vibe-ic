@@ -77,6 +77,21 @@ Grounded in agentic EDA ECO research and industrial spare-cell methodologies. Th
 - Do not skip the regression list — ECOs are where silent bugs hide
 - Do not propose changes that violate the sign-off timing margin without flagging it
 
+## ⛔ ECO spare-cell preservation (mandatory)
+
+> ⛔ **ECO spare-cell preservation:** cells/gates/pads carrying the `dont_touch` /
+> `keep` attribute (or otherwise tagged spare/ECO) are RESERVED for metal-only
+> ECO — they are the very resource this skill consumes. An ECO may legitimately
+> WIRE UP spares from the pool, but it must NEVER delete, resize, or re-purpose
+> spares it does not use, and must NEVER run `opt_clean` / `clean -purge` /
+> `remove_buffers` / area-recovery that strips remaining keep-marked spares or
+> reserved pads (those are reserved for the NEXT ECO). The spare pool is a
+> renewable reserve, not scratch area to clean up. After the ECO,
+> `spare_cell_preservation_check.py` MUST still PASS for all spares not
+> intentionally consumed by this ECO (keep attrs intact, 0 unexpectedly
+> removed); an unintended drop is a regression — restore it and re-run the
+> checker. See the `design-for-eco` skill.
+
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
 
 If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,

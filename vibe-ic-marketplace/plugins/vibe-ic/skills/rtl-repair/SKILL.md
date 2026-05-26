@@ -68,6 +68,19 @@ Implements the iterative repair loop from AutoChip, RTLFixer, and VerilogCoder. 
 - Do not delete code to make errors go away; fix the root cause
 - Do not repair if the root cause is ambiguous; ask the user instead
 
+## ⛔ ECO spare-cell preservation (mandatory)
+
+> ⛔ **ECO spare-cell preservation:** cells/gates/pads carrying the `dont_touch` /
+> `keep` attribute (or otherwise tagged spare/ECO) are RESERVED for a future
+> metal-only ECO. NEVER delete, resize, re-purpose, or optimize them away. RTL
+> repair edits source HDL, but if a fix touches the gate netlist or adds
+> `(* keep *)` removal / dead-code elimination, it must NOT strip the spare-cell
+> instantiations or their keep attributes (no `opt_clean` / `clean -purge` /
+> `remove_buffers` on keep-marked instances). After any repair,
+> `spare_cell_preservation_check.py` MUST still PASS (spare set + keep attrs
+> intact, 0 removed); if your repair drops a spare it is a regression — restore
+> it and re-run the checker. See the `design-for-eco` skill.
+
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
 
 If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,

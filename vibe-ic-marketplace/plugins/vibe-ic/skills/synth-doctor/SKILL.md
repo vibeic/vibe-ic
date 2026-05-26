@@ -55,6 +55,18 @@ When flow-orchestrate detects a tool failure:
 3. If manual: present diagnosis to user with suggested fix
 4. Log all diagnoses to phase2_eda.log
 
+## ⛔ ECO spare-cell preservation (mandatory)
+
+> ⛔ **ECO spare-cell preservation:** cells/gates/pads carrying the `dont_touch` /
+> `keep` attribute (or otherwise tagged spare/ECO) are RESERVED for a future
+> metal-only ECO. NEVER delete, resize, re-purpose, or optimize them away. When
+> fixing a synthesis/PnR failure, do **not** emit `opt_clean` / `clean -purge` /
+> `remove_buffers` / area-recovery passes that act on keep-marked instances — a
+> "remove unused logic" fix must explicitly exclude the spare pool. After any
+> fix you apply, `spare_cell_preservation_check.py` MUST still PASS (spare set +
+> keep attrs intact, 0 removed); if your fix drops a spare it is a regression —
+> restore it and re-run the checker. See the `design-for-eco` skill.
+
 ## Compliance gate (mandatory — not optional)
 
 After producing your output, save it to a file and run:

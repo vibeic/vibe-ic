@@ -13,9 +13,13 @@
 # the legacy `Step -1` (structural-RTL umbrella) is renamed `P0` to align
 # with A*/M* stage-class markers, and the synthetic `Step 0` (pre-PnR
 # Yosys gate) is promoted into the canonical integer track as Step 14
-# (sits between stage2 Equivalence Check and stage3 Floorplan). Stage 3,
-# 4 and 5 cascade +1 — main flow integer track is now 1..40 (Foundry
-# Handoff is 35, FPGA final sign-off is 36, manufacturing 37-40).
+# (sits between stage2 Equivalence Check and stage3 Floorplan).
+#
+# Design-for-ECO (this revision) inserts a PROACTIVE Step 18
+# (Spare-cell + ECO-prep insertion) between Placement (17) and CTS
+# (now 19), and renumbers every numeric step id >= 18 by +1 — the main
+# flow integer track is now 1..41 (Foundry Handoff is 36, FPGA final
+# sign-off is 37, manufacturing 38-41).
 # Analog A1..A9 and mixed-signal M1..M4 are unchanged.
 #
 # This file is the single source of truth. Any agent given a phase 2+3
@@ -31,7 +35,11 @@
 
 version: 2
 flow_name: phase1_phase2_phase3
-total_steps: 40
+# total_steps counts the canonical integer main-track steps (1..41).
+# Design-for-ECO added Step 18 (Spare-cell + ECO-prep insertion) as a
+# proper integer step between Placement (17) and CTS (19); every numeric
+# step id >= 18 was renumbered +1, growing the track from 40 to 41.
+total_steps: 41
 analog_steps: 9
 
 # When a step maps to a plugin skill, use the `skill:` field with the
@@ -80,9 +88,10 @@ stages:
   - id: stage3
     name: "Physical Design + Sign-off"
     # Wave 91 / v1.6.15 — Step 14 is the pre-PnR Yosys gate (promoted
-    # from synthetic Step 0); steps 15..30 are the +1 cascade of the
-    # legacy 14..29 PnR/sign-off track.
-    steps: [14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+    # from synthetic Step 0); steps 15..31 are the PnR/sign-off track.
+    # Design-for-ECO inserted Step 18 (Spare-cell + ECO-prep insertion)
+    # between Placement (17) and CTS (19); all later ids were +1.
+    steps: [14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
     gate_at_end: stage3_compliance
 
   # v1.6.13 Wave 88 — Mixed-Signal Integration (M1-M4) inserted
@@ -100,9 +109,9 @@ stages:
 
   - id: stage4
     name: "Output + Validation"
-    # Wave 91 / v1.6.15 — stage 3 cascade pushed steps +1; Foundry Handoff
-    # is now step 35 and FPGA final sign-off is step 36.
-    steps: [31, 32, 33, 34, 35, 36]
+    # Design-for-ECO +1 renumber (Step 18 insert): stage4 ids shifted +1.
+    # Foundry Handoff is now step 36 and FPGA final sign-off is step 37.
+    steps: [32, 33, 34, 35, 36, 37]
     gate_at_end: stage4_compliance
 
   # v1.6.13 Wave 88 — Manufacturing & Test (post-fab silicon stage).
@@ -111,8 +120,8 @@ stages:
   # SKIP this stage entirely.
   - id: stage5_manufacturing
     name: "Manufacturing & Test (fab → wafer-sort → packaging → ATE final)"
-    # Wave 91 / v1.6.15 — manufacturing shifted 36-39 → 37-40.
-    steps: [37, 38, 39, 40]
+    # Design-for-ECO +1 renumber (Step 18 insert): manufacturing 38-41.
+    steps: [38, 39, 40, 41]
     condition:
       files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
     gate_at_end: manufacturing_compliance
@@ -739,7 +748,59 @@ steps:
       files_exist: ["phase3/stage3/pnr/placed.def"]
     blocks_on: [16]
 
+  # ── Step 18: Spare-cell + ECO-prep insertion (Design-for-ECO) ──
+  # PROACTIVE Design-for-ECO. After detailed placement (Step 17) and
+  # BEFORE CTS (Step 19), insert a DISTRIBUTED pool of spare standard
+  # cells (inverter / nand2 / nor2 / dff / mux2 / aoi-oai mix) tied to
+  # a known state via the PDK's tie-hi / tie-lo cells, plus reserve
+  # spare/ECO IO pads when a pad ring exists. Every spare instance is
+  # marked with a preserve attribute (yosys `keep` / OpenROAD
+  # `set_dont_touch`) so NO optimization pass — opt_clean, remove_buffers,
+  # repair_design, detailed-placement legalization, or metal fill —
+  # removes or overlaps it. Spares are the late-stage ECO budget: a
+  # metal-only fix can re-wire them without a full re-spin. Inserting
+  # them here (post-place, pre-CTS) keeps them out of reach of logical
+  # synth optimization while still letting CTS + route stitch around
+  # them. Chip-AGNOSTIC: spare cell types + tie cells are discovered
+  # from the PDK liberty, no chip-class literal.
   - id: 18
+    name: "Spare-cell + ECO-prep insertion (Design-for-ECO)"
+    stage: stage3
+    mcp_tools: [eda_pnr]
+    programs:
+      - spare_cell_coverage_check
+      - spare_cell_preservation_check
+    required_outputs:
+      - "phase3/stage3/pnr/spare_cells.json"
+      - "reports/spare_cell_coverage.json"
+    gate:
+      all_of:
+        - files_exist: ["phase3/stage3/pnr/spare_cells.json"]
+        # Readiness: actual_density >= target, spares distributed across
+        # core regions (not clustered), and all tied off.
+        - optional_program_exit_zero:
+            command: "spare_cell_coverage_check . --json reports/phase2/gates/spare_cell_coverage.json"
+            condition_files_exist: ["phase3/stage3/pnr/spare_cells.json"]
+        # Preservation: every inserted spare/ECO cell/gate/pad must
+        # still be present with its dont_touch/keep attribute intact in
+        # the FINAL netlist/DEF/GDS — fires only when a final artefact
+        # exists so the gate is a no-op mid-flow.
+        - optional_program_exit_zero:
+            command: "spare_cell_preservation_check . --json reports/phase2/gates/spare_cell_preservation.json"
+            condition_files_exist: ["phase3/stage3/pnr/spare_cells.json"]
+    blocks_on: [17]
+    notes: |
+      Spare-cell-array insertion is the cornerstone of Design-for-ECO:
+      it pre-budgets unused, distributed, tied-off standard cells so a
+      late-stage functional bug can be fixed with a metal-only ECO
+      (re-wiring existing spares) instead of a full base-layer re-spin.
+      The cells look like dead logic and WILL be stripped by any
+      optimizer unless protected — the runner marks every spare with a
+      keep / dont_touch attribute and excludes them from opt_clean /
+      clean -purge / remove_buffers / repair_design, and Step 33 metal
+      fill is constrained not to overlap or delete them.
+
+  - id: 19
     name: "CTS (Clock Tree Synthesis)"
     stage: stage3
     mcp_tools: [eda_pnr]
@@ -748,22 +809,22 @@ steps:
       - "phase3/stage3/cts/clock_tree.rpt"
     gate:
       files_exist: ["phase3/stage3/pnr/post_cts.def", "phase3/stage3/cts/clock_tree.rpt"]
-    blocks_on: [17]
+    blocks_on: [18]
 
-  - id: 19
+  - id: 20
     name: "🔁 Post-CTS hold fixing"
     stage: stage3
     closed_loop:
-      fallback_to: 18
+      fallback_to: 19
       trigger: "Hold violation; insert delay cell or re-CTS"
     skills: [hold-fix]
     required_outputs:
       - "phase3/stage3/pnr/post_hold.def"
     gate:
       files_exist: ["phase3/stage3/pnr/post_hold.def"]
-    blocks_on: [18]
+    blocks_on: [19]
 
-  - id: 20
+  - id: 21
     name: "Routing (global + detailed)"
     stage: stage3
     mcp_tools: [eda_pnr]
@@ -782,13 +843,13 @@ steps:
         # Provenance required: routed.def must appear as a logged
         # openroad output (wrap OpenROAD invocation with provenance_logger).
         - program_exit_zero: "provenance_check . --output phase3/stage3/pnr/routed.def --tool openroad"
-    blocks_on: [19]
+    blocks_on: [20]
 
-  # ── NEW Step 20: Parasitic Extraction ──────────────────────────
+  # ── Step 22: Parasitic Extraction ──────────────────────────
   # Industry standard ⑪: RC extraction produces SPEF for accurate
   # post-layout STA, power, and SI analysis. Without SPEF, post-route
   # STA uses wire-load estimates — not real parasitics.
-  - id: 21
+  - id: 22
     name: "Parasitic Extraction (RC → SPEF)"
     stage: stage3
     mcp_tools: [eda_extraction]
@@ -802,13 +863,13 @@ steps:
           any_of: true
         - program_exit_zero: "spef_extraction_check . --json reports/phase2/gates/spef_extraction.json"
         - program_exit_zero: "provenance_check . --output phase3/stage3/extracted/*.spef --tool magic,openroad"
-    blocks_on: [20]
+    blocks_on: [21]
 
-  - id: 22
+  - id: 23
     name: "🔁 Post-route STA (multi-corner multi-mode sign-off)"
     stage: stage3
     closed_loop:
-      fallback_to: 30
+      fallback_to: 31
       trigger: "Setup/Hold violation; ECO loop required"
     skills: [sta-review]
     mcp_tools: [eda_sta]
@@ -819,9 +880,9 @@ steps:
       all_of:
         - files_exist: ["phase3/stage3/sta/post_route_timing.rpt"]
         - program_exit_zero: "sta_report_check . --mode phase3/stage3/sta --json reports/phase3/sta/post_route_summary.json"
-    blocks_on: [21]
+    blocks_on: [22]
 
-  - id: 23
+  - id: 24
     name: "🔁 IR Drop (static + dynamic)"
     stage: stage3
     closed_loop:
@@ -833,43 +894,43 @@ steps:
       - "reports/phase3/ir_drop.json"
     gate:
       program_exit_zero: "ir_drop_report_check . --mode ir_drop --json reports/phase3/ir_drop.json"
-    blocks_on: [21]
+    blocks_on: [22]
 
-  - id: 24
+  - id: 25
     name: "🔁 EM check (electromigration lifetime)"
     stage: stage3
     closed_loop:
-      fallback_to: 20
+      fallback_to: 21
       trigger: "EM violation; widen wire or re-route"
     skills: [em-check]
     required_outputs:
       - "reports/phase3/em.rpt"
     gate:
       program_exit_zero: "em_report_check . --mode em --json reports/phase3/em.json"
-    blocks_on: [21]
+    blocks_on: [22]
 
-  - id: 25
+  - id: 26
     name: "🔁 Antenna check (gate-oxide protection)"
     stage: stage3
     closed_loop:
-      fallback_to: 20
+      fallback_to: 21
       trigger: "Antenna violation; insert diode or re-route"
     required_outputs:
       - "reports/phase3/antenna.rpt"
     gate:
       files_exist: ["reports/phase3/antenna.rpt"]
-    blocks_on: [20]
+    blocks_on: [21]
 
-  # ── NEW Step 25: Signal Integrity ────────────────────────────
+  # ── Step 27: Signal Integrity ────────────────────────────
   # Industry standard ⑭/⑮: Crosstalk, noise, and glitch analysis
   # on extracted parasitics. Critical for high-speed designs where
   # coupling capacitance between adjacent nets causes functional
   # failures or timing degradation.
-  - id: 26
+  - id: 27
     name: "🔁 Signal Integrity (Crosstalk / Noise / Glitch)"
     stage: stage3
     closed_loop:
-      fallback_to: 20
+      fallback_to: 21
       trigger: "Crosstalk/noise above limit; shielding/spacing"
     required_outputs:
       - "reports/phase3/si_crosstalk.rpt OR reports/phase3/si_crosstalk.json"
@@ -880,16 +941,16 @@ steps:
         - optional_program_exit_zero:
             command: "si_crosstalk_check . --json reports/phase2/gates/si_crosstalk.json"
             condition_files_exist: ["reports/phase3/si_crosstalk.rpt"]
-    blocks_on: [21]
+    blocks_on: [22]
 
-  # ── NEW Step 26: Post-Layout Gate-Level Simulation ───────────
+  # ── Step 28: Post-Layout Gate-Level Simulation ───────────
   # Industry standard ⑮: Gate-level netlist + SDF back-annotation
   # simulation. Verifies that the physical implementation preserves
   # RTL functional correctness after synthesis, DFT, CTS, and
   # routing transformations. This is *not* the same as pre-layout
   # RTL sim (Step 4) — it catches timing-induced functional failures
   # that only manifest with real parasitic delays.
-  - id: 27
+  - id: 28
     name: "Post-Layout Gate-Level Simulation (Post-Sim + SDF)"
     stage: stage3
     mcp_tools: [eda_simulate]
@@ -902,16 +963,16 @@ steps:
         - files_exist: ["phase3/stage3/sim_postlayout/results.log", "phase3/stage3/sim_postlayout/pass.flag"]
           any_of: true
         - program_exit_zero: "post_layout_sim_check . --json reports/phase2/gates/post_layout_sim.json"
-    blocks_on: [21]
+    blocks_on: [22]
 
-  # ── Step 27: Post-Layout SPICE Verification ──────────────────
+  # ── Step 29: Post-Layout SPICE Verification ──────────────────
   # Industry standard: transistor-level SPICE simulation is the only
   # way to verify that liberty timing models accurately represent
   # post-layout behavior. STA and gate-level SDF sim both rely on
   # the same liberty abstractions — if the model is wrong, both are
   # wrong together. SPICE catches model inaccuracies, analog block
   # failures, and timing correlation issues that no other step can.
-  - id: 28
+  - id: 29
     name: "Post-Layout SPICE Verification (critical-path correlation + analog)"
     stage: stage3
     skills: [ams-sim]
@@ -926,13 +987,13 @@ steps:
         - files_exist: ["phase3/stage3/spice/*.sp", "phase3/stage3/spice/*.spice", "sim_spice/*.sp"]
           any_of: true
         - program_exit_zero: "spice_correlation_check . --json reports/phase2/gates/spice_correlation.json"
-    blocks_on: [21, 22]
+    blocks_on: [22, 23]
 
-  - id: 29
+  - id: 30
     name: "🔁 Physical Verification (DRC + LVS + ERC + Density)"
     stage: stage3
     closed_loop:
-      fallback_to: 30
+      fallback_to: 31
       trigger: "DRC/LVS/ERC fail; ECO"
     skills: [drc-fix, lvs-triage, perc-check]
     mcp_tools: [eda_drc_klayout, eda_lvs]
@@ -955,19 +1016,19 @@ steps:
         - optional_program_exit_zero:
             command: "density_check . --json reports/phase2/gates/density.json"
             condition_files_exist: ["reports/density.rpt"]
-    blocks_on: [22, 23, 24, 25, 26, 27, 28]
+    blocks_on: [23, 24, 25, 26, 27, 28, 29]
 
-  # ── Step 29: ECO ─────────────────────────────────────────────
+  # ── Step 31: ECO ─────────────────────────────────────────────
   # Industry standard: Engineering Change Order repair loop.
   # If any sign-off step (STA, PV, IR Drop, EM, SI, Post-Sim, SPICE)
   # fails, ECO applies targeted netlist patches and re-runs the
   # failing checks. If all sign-off steps passed on first attempt,
   # the ECO step records "no_eco_needed" and passes through.
-  - id: 30
+  - id: 31
     name: "🔁 ECO (Engineering Change Order — repair loop)"
     stage: stage3
     closed_loop:
-      fallback_to: 30
+      fallback_to: 31
       trigger: "Aggregator: re-run #21-#28 after ECO"
     skills: [eco-plan]
     required_outputs:
@@ -979,9 +1040,9 @@ steps:
         - optional_program_exit_zero:
             command: "eco_loop_audit . --json reports/phase2/gates/eco_audit.json"
             condition_files_exist: ["phase3/stage3/eco/eco_log.json"]
-    blocks_on: [22, 23, 24, 25, 26, 27, 28, 29]
+    blocks_on: [23, 24, 25, 26, 27, 28, 29, 30]
 
-  - id: 31
+  - id: 32
     name: "Power analysis (pre/post-layout)"
     stage: stage4
     skills: [power-analysis]
@@ -990,19 +1051,30 @@ steps:
       - "reports/phase3/power.json"
     gate:
       program_exit_zero: "power_report_check . --mode power --json reports/phase3/power.json"
-    blocks_on: [22]
+    blocks_on: [23]
 
-  # ── Step 31: Metal Fill ──────────────────────────────────────
+  # ── Step 33: Metal Fill (ECO-aware density fill insertion) ───
   # Industry standard (pre-GDS): Insert dummy metal fill to meet
   # foundry density requirements. Without metal fill, CMP
   # (Chemical-Mechanical Polishing) causes uneven planarization and
   # the foundry rejects the tapeout.
-  - id: 32
-    name: "Metal Fill (density fill insertion)"
+  # ECO-AWARE: when Step 18 inserted spare cells, the metal fill MUST
+  # use ECO-swappable (removable / non-merged) filler cells and MUST
+  # NOT overlap or delete the dont_touch-protected spare instances —
+  # otherwise a future metal-only ECO that re-wires a spare would
+  # collide with fixed fill. Fill is placed around the spare halos;
+  # spares stay reserved as the ECO budget through tapeout. After
+  # fill, spare_cell_preservation_check re-confirms every spare from
+  # phase3/stage3/pnr/spare_cells.json survives in filled.def / GDS
+  # with its keep attribute intact.
+  - id: 33
+    name: "Metal Fill (ECO-aware density fill insertion)"
     stage: stage4
     mcp_tools: [eda_pnr]
     programs:
       - metal_fill_density_check
+      # ECO-aware: re-confirm spares survive fill (no overlap / removal).
+      - spare_cell_preservation_check
     required_outputs:
       - "phase3/stage3/pnr/filled.def OR phase3/stage3/pnr/metal_fill.done"
     gate:
@@ -1010,9 +1082,15 @@ steps:
         - files_exist: ["phase3/stage3/pnr/filled.def", "phase3/stage3/pnr/metal_fill.done"]
           any_of: true
         - program_exit_zero: "metal_fill_density_check . --json reports/phase2/gates/metal_fill_density.json"
-    blocks_on: [30]
+        # Spares must survive ECO-aware fill (fillers swappable, no
+        # overlap / removal of dont_touch spares). No-op when Step 18
+        # was skipped (no spare_cells.json).
+        - optional_program_exit_zero:
+            command: "spare_cell_preservation_check . --json reports/phase2/gates/spare_preservation_postfill.json"
+            condition_files_exist: ["phase3/stage3/pnr/spare_cells.json"]
+    blocks_on: [31]
 
-  - id: 33
+  - id: 34
     name: "Tapeout checklist (final sign-off confirmation)"
     stage: stage4
     skills: [tapeout-checklist]
@@ -1022,10 +1100,10 @@ steps:
       - "reports/audit/tapeout_checklist.json"
     gate:
       program_exit_zero: "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
-    blocks_on: [29, 30, 31, 32]
+    blocks_on: [30, 31, 32, 33]
 
-  - id: 34
-    name: "GDSII output (only if Step 28 PV fully clean)"
+  - id: 35
+    name: "GDSII output (only if Step 30 PV fully clean)"
     stage: stage4
     mcp_tools: [eda_gds]
     required_outputs:
@@ -1038,9 +1116,9 @@ steps:
         # (KLayout def2gds, Magic gds write, etc.). This closes the
         # "rename old .def to .gds" loophole.
         - program_exit_zero: "provenance_check . --require-entries 1"
-    blocks_on: [32, 33]
+    blocks_on: [33, 34]
 
-  - id: 36
+  - id: 37
     name: "FPGA final sign-off (recompile + on-board test)"
     stage: stage4
     skills: [fpga-test-harness]
@@ -1067,8 +1145,9 @@ steps:
 
 # ─────────────────────────────────────────────────────────────────
 # Wave 88 closed 4 assessment-report gaps (Mixed-Signal Integration
-# M1-M4, Analog PV [now A6], Foundry Handoff [now 34], Manufacturing
-# [now 36-39]). Wave 90 / v1.6.14 integerised the decimal ids.
+# M1-M4, Analog PV [now A6], Foundry Handoff [now 36], Manufacturing
+# [now 38-41]). Wave 90 / v1.6.14 integerised the decimal ids; the
+# Design-for-ECO Step 18 insert renumbered every id >= 18 by +1.
 # All chip-AGNOSTIC.
 # ─────────────────────────────────────────────────────────────────
 
@@ -1089,7 +1168,7 @@ steps:
     notes: |
       Each analog block must have DRC-clean + LVS-match BEFORE A7
       post-layout resim runs. Catches per-block layout errors that
-      top-level PV (Step 28) would otherwise mask via merge.
+      top-level PV (Step 30) would otherwise mask via merge.
 
   - id: M1
     name: "Mixed-Signal Top-Level Integration (A+D GDS merge + macro placement)"
@@ -1169,7 +1248,7 @@ steps:
       json_field_true: {file: "reports/analog/mixed_signal/signoff.json", field: "ready_for_tapeout", expect: true}
     blocks_on: [M3]
 
-  - id: 35
+  - id: 36
     name: "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)"
     stage: stage4
     skills: [tapeout-checklist]
@@ -1183,15 +1262,15 @@ steps:
       - "reports/phase3/foundry_handoff_audit.json"
     gate:
       program_exit_zero: "foundry_handoff_package_check . --json reports/phase3/foundry_handoff_audit.json"
-    blocks_on: [34]
+    blocks_on: [35]
     notes: |
       Final foundry-deliverable kit: mask reticle spec, WAT
       (Wafer Acceptance Test) probe plan, scribe-line PCM
       structures, corner-test ATE vector kit. Without this kit
       the foundry cannot accept the GDS for fab. Distinct from
-      Step 32 tapeout_checklist which is internal sign-off.
+      Step 34 tapeout_checklist which is internal sign-off.
 
-  - id: 37
+  - id: 38
     name: "Fabrication (foundry mask-set + wafer fab — external)"
     stage: stage5_manufacturing
     condition:
@@ -1203,13 +1282,13 @@ steps:
       - "phase3/stage5_manufacturing/wafer_lot_received.json"
     gate:
       program_exit_zero: "manufacturing_fab_intake_check . --json reports/manufacturing/fab_intake.json"
-    blocks_on: [35]
+    blocks_on: [36]
     notes: |
       External step. Plugin records lot id, mask set version, and
       foundry status; verifies wafer-lot file lands when foundry
       ships. Not waivable for production tape-out.
 
-  - id: 38
+  - id: 39
     name: "Wafer Sort / Probe Test (ATE + probe card)"
     stage: stage5_manufacturing
     condition:
@@ -1221,9 +1300,9 @@ steps:
       - "phase3/stage5_manufacturing/wafer_map.csv"
     gate:
       json_field_true: {file: "phase3/stage5_manufacturing/wafer_sort_yield.json", field: "yield_meets_target", expect: true}
-    blocks_on: [37]
+    blocks_on: [38]
 
-  - id: 39
+  - id: 40
     name: "Packaging (assembly: wirebond / FC-CSP / WLCSP)"
     stage: stage5_manufacturing
     condition:
@@ -1234,9 +1313,9 @@ steps:
       - "phase3/stage5_manufacturing/packaging_log.json"
     gate:
       program_exit_zero: "packaging_intake_check . --json reports/manufacturing/packaging.json"
-    blocks_on: [38]
+    blocks_on: [39]
 
-  - id: 40
+  - id: 41
     name: "Final Test (ATE: functional + parametric + burn-in)"
     stage: stage5_manufacturing
     condition:
@@ -1248,7 +1327,7 @@ steps:
       - "phase3/stage5_manufacturing/burn_in_results.json"
     gate:
       json_field_true: {file: "phase3/stage5_manufacturing/final_test_yield.json", field: "shippable", expect: true}
-    blocks_on: [39]
+    blocks_on: [40]
     notes: |
       Final-test sign-off before product ship. Functional test
       across PVT corners, parametric trim, optional burn-in for
@@ -1271,8 +1350,8 @@ steps:
       `gates:` array. Individual gate names (e.g. `cdc_async_input_check`,
       `bram_pdob_combinational_check`) appear there with PASS/FAIL.
 
-# Final gate — runs after all 40 main-track integer steps + A1-A9
-# + M1-M4 (53 entities total) + P0 structural-RTL umbrella.
+# Final gate — runs after all 41 main-track integer steps + A1-A9
+# + M1-M4 (54 entities total) + P0 structural-RTL umbrella.
 final_gate:
   program: flow_compliance_check
   args: ". --flow phase1_phase2_phase3 --strict"

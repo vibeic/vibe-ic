@@ -46,6 +46,7 @@
       "description": "No deterministic equivalent exists. AI invokes directly when user intent matches.",
       "skills": [
         "phase1",
+        "design-for-eco",
         "spec-validator",
         "checkpoint-gate",
         "community-backlog-submit",

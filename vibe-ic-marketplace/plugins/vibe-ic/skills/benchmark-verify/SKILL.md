@@ -1,6 +1,6 @@
 ---
 name: benchmark-verify
-description: "Normalized, MANDATORY end-to-end verification for any benchmark IC after it has been driven from Design Documents → generated RTL → silicon through the full Vibe-IC flow. Produces ONE BENCHMARK_VERIFICATION_REPORT.md per IC covering all five pillars with hard gates: (1) Functional Verification Coverage == 100% (closed-loop until met), (2) 55-step Output Comparison vs the open-source reference (every applicable step PASS), (3) Code Coverage line >= 90%, (4) FPGA digital verification (test patterns on-board/BFM), (5) Analog closed-loop verification (or N/A for pure-digital). Use when: 'verify the benchmark', 'benchmark verification report', 'is this IC production-ready', 'cross-check vs open source', after /vibe-ic-all on a benchmark IC, or for any IC in benchmark_clean/."
+description: "Normalized, MANDATORY end-to-end verification for any benchmark IC after it has been driven from Design Documents → generated RTL → silicon through the full Vibe-IC flow. Produces ONE BENCHMARK_VERIFICATION_REPORT.md per IC covering all six pillars with hard gates: (1) Functional Verification Coverage == 100% (closed-loop until met), (2) 56-step Output Comparison vs the open-source reference (every applicable step PASS), (3) Code Coverage line >= 90%, (4) FPGA digital verification (test patterns on-board/BFM), (5) Analog closed-loop verification (or N/A for pure-digital), (6) Design-for-ECO readiness — spare-cell coverage PASS + spare preservation intact (or N/A if the IC has no place-and-route). Use when: 'verify the benchmark', 'benchmark verification report', 'is this IC production-ready', 'cross-check vs open source', after /vibe-ic-all on a benchmark IC, or for any IC in benchmark_clean/."
 ---
 
 # Benchmark Verify — normalized doc→production-ready verification
@@ -37,8 +37,9 @@ golden-vector check, or formal property) and confirm it PASSES against the gener
   and re-verify until 100%. Do not waive a requirement; if a doc requirement is genuinely
   untestable, that is a spec defect to record, not a pass.
 
-### Pillar 2 — 55-step Output Comparison vs open-source reference  ▸ gate: **every applicable step PASS**
-For each of the 55 canonical flow steps (`flow/phase1_phase2_phase3.yaml`), compare OUR
+### Pillar 2 — 56-step Output Comparison vs open-source reference  ▸ gate: **every applicable step PASS**
+For each of the 56 canonical flow steps (`flow/phase1_phase2_phase3.yaml`, which now includes
+the Design-for-ECO spare-cell insertion step), compare OUR
 step output against the open-source reference's corresponding output. Comparison is
 **step-appropriate, not byte-identical**:
 - **equivalence steps** (RTL, sim, formal, LEC, post-layout sim): LEC / co-sim / proof → MATCH/EQUIVALENT.
@@ -76,6 +77,25 @@ analog **closed-loop**: `analog-sizing-loop` → corner sweep (`ams-sim` / `eda_
 post-layout resim (`analog-extraction-resim`) → per-block PV (`analog-output-verify`) →
 HIL if a bench is available (`analog-hw-tuning-loop`). Pure-digital ICs mark this N/A.
 
+### Pillar 6 — Design-for-ECO readiness  ▸ gate: **spare-cell coverage PASS + spares preserved** (or N/A)
+A production IC must be ready for a cheap **metal-only ECO** instead of a full base-layer
+respin. That requires a distributed, tied-off pool of spare std cells/gates
+(inverter/nand2/nor2/dff/mux2/aoi/oai) + reserved ECO pads — all `dont_touch`/`keep`, placed
+after placement and before CTS at ~1-5% density. The methodology is the **`design-for-eco`**
+skill. This pillar reads the two deterministic checker outputs:
+- **Coverage / readiness** — `reports/spare_cell_coverage.json` from
+  `spare_cell_coverage_check.py`: density / distribution / tie-off targets met → `status: PASS`.
+- **Preservation** — `reports/spare_preservation.json` from `spare_cell_preservation_check.py`:
+  NO spare/ECO cell/gate/pad was optimized away by any later step → `all_keep_attr_intact: true`
+  and `removed: 0`. (Every optimization skill — synth-doctor, rtl-repair, hold-fix, eco-plan,
+  ppa-predict, drc-fix — carries the hard rule that it must never strip a keep-marked spare.)
+
+**Applicability:** this gate applies to any **digital place-and-route IC** (a DEF/GDS exists
+under `phase3/`). It is **N/A** only for an IC that genuinely never reached place-and-route
+(e.g. analog-only). A **missing spare report is PENDING**, never a silent PASS.
+**Closed-loop:** if PENDING/FAIL, run the stage3 Design-for-ECO step + its two checkers (or
+restore any spare a prior optimization dropped) until coverage PASS + preservation intact.
+
 ## Procedure (run for each benchmark IC)
 1. Confirm the IC reached the flow end (RTL generated + phase3 attempted). Read `SOURCE_MANIFEST.md`.
 2. **Pillar 2:** dispatch the per-step cross-check (split phase1/2 and phase3 to keep tool
@@ -84,30 +104,37 @@ HIL if a bench is available (`analog-hw-tuning-loop`). Pure-digital ICs mark thi
 4. **Pillar 3:** author tests, measure coverage → `reports/code_coverage.json`; close-loop to >= 90%.
 5. **Pillar 4:** test patterns + FPGA/BFM run → `reports/hw_test.json`.
 6. **Pillar 5:** analog closed-loop if applicable.
+6b. **Pillar 6 (digital PnR ICs):** confirm the stage3 Design-for-ECO step ran, then run the two
+    checkers → `reports/spare_cell_coverage.json` (readiness PASS) + `reports/spare_preservation.json`
+    (`all_keep_attr_intact` + `removed:0`). N/A only if the IC never reached place-and-route.
 7. **Aggregate + gate** — generate the single report:
    ```bash
    python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_verify_report.py <project_dir> \
        --ref <open_source_reference_dir>
    ```
-   It emits `<project>/BENCHMARK_VERIFICATION_REPORT.md` with the 5-pillar gate summary +
-   the full 55-step comparison table, and exits non-zero until ALL gates pass.
+   It emits `<project>/BENCHMARK_VERIFICATION_REPORT.md` with the 6-pillar gate summary +
+   the full 56-step comparison table, and exits non-zero until ALL gates pass.
 8. **Close the loop** on any failing/pending gate, then re-aggregate. The benchmark IC is
-   **DONE only when the report's OVERALL is PRODUCTION-READY** (functional 100% · 55/55 applicable
-   PASS · code line >= 90% · FPGA PASS · analog converged-or-N/A) — with honest, evidence-backed
-   results and source provenance tagged.
+   **DONE only when the report's OVERALL is PRODUCTION-READY** (functional 100% · 56/56 applicable
+   PASS · code line >= 90% · FPGA PASS · analog converged-or-N/A · Design-for-ECO ready-or-N/A) —
+   with honest, evidence-backed results and source provenance tagged.
 
 ## Acceptance
 A benchmark IC passes `benchmark-verify` iff its `BENCHMARK_VERIFICATION_REPORT.md` shows:
 - Functional Coverage **100%**, and
-- Every applicable step of the 55 = PASS (no GAP/PENDING/FAIL/unexplained NO-TOOL), and
+- Every applicable step of the 56 = PASS (no GAP/PENDING/FAIL/unexplained NO-TOOL), and
 - Code line coverage **>= 90%**, and
 - FPGA digital verification **PASS** (or justified N/A), and
 - Analog **converged** (or N/A), and
+- **Design-for-ECO ready** — `reports/spare_cell_coverage.json` readiness PASS **and**
+  `reports/spare_preservation.json` `all_keep_attr_intact` + `removed:0` (or N/A if the IC has
+  no place-and-route); verified by `spare_cell_coverage_check.py` + `spare_cell_preservation_check.py`,
+  per the `design-for-eco` skill, and
 - `SOURCE_MANIFEST.md` present with GENERATED/REUSED-IP tagged.
 Anything short of that is **NOT complete** — keep working (closed-loop), do not claim done.
 
 ## Worked example
 `benchmark_clean/spm/` — first IC verified under this skill: RTL 100% GENERATED, functional
-equivalence vs golden + upstream (10,013 vectors), 55-step cross-check under
+equivalence vs golden + upstream (10,013 vectors), 56-step cross-check under
 `benchmark_clean/spm/cross_check/`, signed-off DRC/LVS/STA. Use it as the reference shape for
 a complete report.

@@ -151,6 +151,21 @@ Hold timing: T_hold < T_clk_skew + T_data_delay. When CTS adds clock insertion d
 - New hold after routing -> re-run this skill post-route
 - Signoff -> `/tapeout-checklist` includes hold clean as gate
 
+## ⛔ ECO spare-cell preservation (mandatory)
+
+> ⛔ **ECO spare-cell preservation:** cells/gates/pads carrying the `dont_touch` /
+> `keep` attribute (or otherwise tagged spare/ECO) are RESERVED for a future
+> metal-only ECO. NEVER delete, resize, re-purpose, or optimize them away. Hold
+> fixing INSERTS buffers/delay cells — it is fine to *physically realize* a
+> brand-new buffer ON a spare site, but you must NOT silently CONSUME a spare
+> buffer without replacing it: if a hold fix repurposes a keep-marked spare, you
+> must re-insert an equivalent spare so the ECO pool is not depleted, and the
+> consumed instance's keep attribute must not be stripped from the surviving
+> pool. No `opt_clean` / `remove_buffers` / area-recovery on keep-marked
+> instances. After hold fix, `spare_cell_preservation_check.py` MUST still PASS
+> (spare set + keep attrs intact, 0 removed); a dropped spare is a regression —
+> restore it and re-run the checker. See the `design-for-eco` skill.
+
 ## Compliance gate (mandatory — not optional)
 
 After producing your output, save it to a file and run:

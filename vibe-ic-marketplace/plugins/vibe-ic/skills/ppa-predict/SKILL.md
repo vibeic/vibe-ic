@@ -67,6 +67,18 @@ Grounded in Circuit Foundation Models for pre-synthesis prediction — encoder-b
 - Do not replace real synthesis for sign-off; this is a pre-check only
 - Do not extrapolate far outside the training distribution (e.g., very exotic architectures)
 
+## ⛔ ECO spare-cell preservation (mandatory)
+
+> ⛔ **ECO spare-cell preservation:** cells/gates/pads carrying the `dont_touch` /
+> `keep` attribute (or otherwise tagged spare/ECO) are RESERVED for a future
+> metal-only ECO. When predicting PPA or suggesting area/power optimizations,
+> NEVER RECOMMEND deleting, resizing, re-purposing, or "recovering" spare cells
+> or reserved pads to shrink area — they are a deliberate ~1-5% investment, not
+> waste to reclaim, and any such recommendation would later trip
+> `spare_cell_preservation_check.py`. Report spare-pool area separately (as
+> intentional ECO reserve) rather than flagging it as a removable area
+> overhead. See the `design-for-eco` skill.
+
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
 
 If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
