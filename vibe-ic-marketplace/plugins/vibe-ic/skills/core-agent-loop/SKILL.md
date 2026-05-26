@@ -84,8 +84,14 @@ For each actionable issue:
 #   plugins/vibe-ic/.claude-plugin/plugin.json     ("version": ...)
 #   .claude-plugin/marketplace.json                 (.plugins[0].version)
 
-# Verify locally:
-python3 -m pytest <relevant tests> -q
+# Verify locally — HARD RULE: run the FULL suite (BOTH test trees), not just the
+# "relevant" unit tests. programs/tests/ = unit tests; tests/ = integration/regression
+# GATES (INDEX.md freshness, every-skill-has-compliance, orchestrator branch regressions).
+# A subset run once let a real regression onto main. pytest.ini pins both trees:
+( cd "$PLUGIN_ROOT" && python3 -m pytest -q )   # collects programs/tests/ + tests/
+python3 -m pytest -q mcp-eda-server/test        # if MCP server touched
+# (added a program? -> programs/INDEX.md via tools/gen_programs_index.py;
+#  added a skill? -> compliance.yaml + tests/test_compliance.py. The tests/ gates enforce both.)
 bash tools/sync_opensource.sh --no-test     # mirror to opensource_repo/
 
 # Commit ONLY the files you touched:

@@ -133,6 +133,8 @@ A benchmark IC passes `benchmark-verify` iff its `BENCHMARK_VERIFICATION_REPORT.
 - `SOURCE_MANIFEST.md` present with GENERATED/REUSED-IP tagged.
 Anything short of that is **NOT complete** — keep working (closed-loop), do not claim done.
 
+> **Plugin-test hard rule.** If the verification run modified any plugin code (e.g. a chip-agnostic fix to `benchmark_verify_report.py` or a checker), re-run the FULL suite before claiming done: `cd <plugin> && pytest -q` (pytest.ini collects BOTH `programs/tests/` AND `tests/`). Never validate with only `programs/tests/` — the integration/regression gates (INDEX freshness, every-skill-has-compliance, orchestrator branch tests) live in `tests/`. See `_shared/TESTING_STRATEGY.md`.
+
 ## Worked example
 `benchmark_clean/spm/` — first IC verified under this skill: RTL 100% GENERATED, functional
 equivalence vs golden + upstream (10,013 vectors), 56-step cross-check under

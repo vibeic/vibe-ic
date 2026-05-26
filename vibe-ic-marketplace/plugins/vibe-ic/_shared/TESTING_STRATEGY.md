@@ -99,3 +99,24 @@ sync with the actual skill output, break the downstream flow (RTL
 generation blocked, tapeout refused). For them the extra hand-fixture
 cost is justified as continuous verification that the engine + spec +
 realistic output still agree end-to-end.
+
+## HARD RULE — always run the FULL suite (both test trees)
+
+The plugin has **two** test trees and a valid run includes **both**:
+
+- `programs/tests/` — unit tests for the deterministic programs.
+- `tests/` — integration / regression **gates**: `INDEX.md` freshness
+  (every non-helper program registered), every-skill-has-`compliance.yaml`
+  + `tests/test_compliance.py`, orchestrator input-branch regressions, and the
+  end-to-end skill audit.
+
+`pytest.ini` pins `testpaths = programs/tests tests`, so **bare `pytest` from the
+plugin root runs both**. NEVER validate a change with only `pytest programs/tests/`
+(or only `tests/`): it silently skips the other tree. This is not hypothetical — an
+orchestrator fix once reached `main` green because it was verified against
+`programs/tests/` alone, while the matching regression test in `tests/` was never run.
+
+Corollary for new code: a new **program** must be added to `programs/INDEX.md`
+(`tools/gen_programs_index.py`); a new **skill** must ship `compliance.yaml` +
+`tests/test_compliance.py` (`_shared/bootstrap_compliance.py` +
+`_shared/gen_compliance_tests.py`). The `tests/` gates fail until you do.
