@@ -1,38 +1,27 @@
-# Step 29 — PV (DRC + LVS + ERC + Density)
+# Step 28 — Post-layout SPICE (critical-path cell, GAP-CLOSE)
 
 ## What ran
-Re-stated OUR DRC (KLayout sky130A.lydrc database) + LVS (netgen device compare),
-compared category-by-category against the REF KLayout DRC + netgen LVS.
+Mirrored the REF Step-28 methodology (single critical-path-cell propagation via
+ngspice with foundry sky130 cell subckt + tt-corner FET models + 5 fF load).
+OURS: probed `sky130_fd_sc_hd__xor2_1`, the penultimate cell on OUR carry-save
+worst path (`post_route_timing.rpt`: `_409_/X xor2_1 -> _410_/Y nor2_1 -> FF/D`).
+TB: `phase3/stage3/spice/critical_path_tb_xc.sp`; log `spm_spice_xc.log`.
 
-## DRC side-by-side (KLayout, geometry-evidenced items)
+## Metrics side-by-side
 | metric | OURS | REF |
 |---|---|---|
-| Items with geometry | 1557 | 2432 |
-| li.3 (li spacing) | 1503 | 2341 |
-| li.1 (li width) | 48 | 83 |
-| li.5 | 6 | 6 |
-| ct.2 (contact) | 0 | 1 |
-| m1.2 (met1) | 0 | 1 |
-| **met2+ (user-routing) violations** | **0** | **0** |
-| Verdict | WAIVED (li-internal only) | WAIVED (li-internal only) |
+| Tool | ngspice (tt corner, foundry FET models) | ngspice (tt corner) |
+| Probed cell | xor2_1 (on worst path) | a31oi_1 (on worst path) |
+| Net load | 5 fF | 5 fF |
+| tpd rise | **131.8 ps** (measured) | measure FAILED (out-of-interval) |
+| tpd fall | **128.4 ps** (measured) | measure FAILED (out-of-interval) |
+| ngspice run | exit 0, models loaded | exit 0, models loaded |
 
-## LVS side-by-side (netgen)
-| metric | OURS | REF |
-|---|---|---|
-| Number of devices | 3176 vs 3176 | 3176 vs 3176 |
-| Device classes | "equivalent" | "equivalent" |
-| Top-level pin matching | "failed pin matching" (top-port naming) | "failed pin matching" (top-port naming) |
-
-## Verdict: BOTH-CLEAN (DRC waivable-class, LVS device-exact)
-- **DRC**: ALL residual violations on OURS are on the local-interconnect library
-  layers (li.1/li.3/li.5) — the same class the project waives because li.* is
-  below the router's signal stack (met2+) and cannot be introduced by user
-  routing. CRITICALLY: OURS has 0 met2+ violations (any would have flipped the
-  verdict to FAIL). The REF has the IDENTICAL residual profile (li.3/li.1/li.5,
-  plus 2 stray ct/m1) — same waivable class. Both clean modulo the foundry-cell
-  li-deck disagreement.
-- **LVS**: Both are device-exact (3176/3176, "Device classes equivalent"). Both
-  show the same top-level pin-name residual (a netgen top-port-naming artifact,
-  not a connectivity error) — identical on both sides.
-- **ERC/Density**: ERC folds into LVS connectivity (clean); density per step_32.
-Both PV-clean by the same criteria.
+## Verdict: PASS (OURS exceeds REF; full-chip SPICE remains NO-TOOL)
+A full-chip post-layout SPICE of the whole spm is infeasible in the open-source
+flow (no commercial fast-SPICE; magic ext2spice of the full netlist + ngspice on
+thousands of FETs is impractical) — honest NO-TOOL for the whole chip, same as REF.
+For the critical-path-cell SPICE that IS feasible, OURS produced a real, valid
+propagation delay (tpd ≈ 130 ps for xor2_1 at tt/5 fF), whereas the REF's own
+Step-28 measure FAILED with an "out of interval" trig/targ-polarity bug. So OURS
+closed this GAP with a working SPICE run and is strictly more rigorous than REF here.

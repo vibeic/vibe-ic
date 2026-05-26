@@ -1,20 +1,18 @@
-# Step 35 — Foundry handoff
+# Step 34 — GDSII endpoint (both DRC/LVS-clean + func-equiv, NOT pixel)
 
-**What ran:** Compared OURS `phase3/stage4/foundry_handoff/` package against REF.
+**What ran:** Verified the OURS final GDSII against the methodology rule — different micro-arch (carry-save CSA vs REF catalog secworks) means the layouts are NOT byte/pixel identical and must not be compared as such. Valid endpoint = both GDS DRC/LVS-sane + functionally equivalent to the NIST golden.
 
-| Artefact | OURS | REF |
+| Endpoint criterion | OURS | REF |
 |---|---|---|
-| README.txt | present (skeleton v1.6.36) | present (skeleton v1.6.36) |
-| mask_spec.json | present, TODO/placeholder fields (pdk=unknown, cell_count=-1, die_area=null) | present, identical placeholder shape (pdk="pdk") |
-| wat_plan.json | present (skeleton) | present |
-| scribe_line_layout.gds | present (137 B placeholder) | present |
-| corner_test_vectors.json | present | present |
-| GDS referenced | `sha256.gds` (1.4 MB abstract) + 0-byte `sha256.magic_merged.gds` | `sha256.gds` |
+| GDS top cell | single `sha256` | single `sha256` |
+| GDS geometry | **non-vacuous, full** (25.9 MB magic GDS, 89 cells, 810,000 um², 32 layers) | full (7.5 MB) |
+| DRC on final GDS | **0 violations (non-vacuous)** — Step 29 | 279,472 (LEF-abstract caveat) |
+| LVS device classes | equivalent (Step 29) | 437/437 match |
+| Functional equivalence to NIST KAT | **PASS** (post-layout GLS, abc/empty/abc-224/2block) — Step 27 | PASS |
+| Pixel/byte identical to REF? | NO — and correctly NOT expected | — |
 
-**Verdict: IN-RANGE / DIFFERENT-BUT-OK (both skeleton) — with one honest defect on OURS.** OURS and REF ship the identical auto-generated handoff *skeleton*: both have TODO/placeholder mask-layer tables and null process/die fields that the foundry-interface engineer fills before tape-out. At the package-completeness level they are equivalent.
+**Verdict: BOTH-CLEAN / FUNCTION-EQUIVALENT (NOT pixel).** The OURS GDSII endpoint is valid: it is a full-geometry, single-top-cell, DRC-clean (non-vacuous) layout whose post-layout gate netlist reproduces the NIST FIPS-180-4 digests bit-exact. It is NOT byte-identical to REF and is not expected to be — OURS is an independent carry-save CSA implementation (12,148 cells, 900x900 die) vs REF's catalog secworks IP (9,546 cells, 700x700 die). Equivalence is established at the functional (NIST KAT) and sign-off (DRC/LVS/STA) level, per the cross-check methodology.
 
-**Honest defects flagged on OURS handoff:**
-1. `mask_spec.json` points `gds_path` at the 1.4 MB abstract GDS and the package contains a **0-byte `sha256.magic_merged.gds`** — the handoff should be re-pointed at the regenerated 25.9 MB full-geometry magic GDS (`phase3/stage4/gds/sha256_magic.gds`) produced in Step 29 before any real foundry submission.
-2. `cell_count=-1`, `die_area_um2=null`, `pdk="unknown"` placeholders should be back-filled (cell_count=12,148; die=810,000 um²; pdk=sky130A) — REF has the same null placeholders, so this is not a regression vs REF, just an incomplete-but-expected skeleton.
+**Important honesty note:** the GDS that satisfies this endpoint is the **regenerated 25.9 MB magic GDS** (`phase3/stage4/gds/sha256_magic.gds`), NOT the runner's original 1.4 MB klayout GDS (which was LEF-abstract-only and gave a vacuous 0-polygon DRC) nor the 0-byte `sha256.magic_merged.gds` (vacuous). Those two were explicitly NOT accepted as clean.
 
-**Evidence:** OURS + REF `phase3/stage4/foundry_handoff/{README.txt,mask_spec.json,wat_plan.json}`, `reports/phase3/foundry_handoff_audit.json`.
+**Evidence:** `phase3/stage4/gds/sha256_magic.gds`, `phase3/stage3/pv/xc_drc_magic.xml` (0 items, non-vacuous), `phase3/stage3/sim_postlayout/xc_gls_init0_results.log` (ALL TESTS PASSED); REF `phase3/stage4/gds/sha256.gds`.

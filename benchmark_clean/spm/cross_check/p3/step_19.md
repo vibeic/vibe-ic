@@ -1,22 +1,26 @@
-# Step 19 — Post-CTS Hold
+# Step 18 — CTS (clock-tree depth / skew / buffer count)
 
 ## What ran
-Re-stated OUR post-CTS/post-route hold cleanliness from PnR `openroad.log`
-(resizer hold-repair pass), confirmed by the independent multi-corner STA in
-step_22 (min-path hold slack), and the `eco/no_eco_summary.json` verdict.
-Compared REF hold slack.
+Compared OUR vs REF `cts/clock_tree.rpt` (TritonCTS-extracted report).
 
 ## Metrics side-by-side
 | metric | OURS | REF |
 |---|---|---|
-| OpenROAD resizer hold | `[RSZ-0033] No hold violations found.` | `[RSZ-0033] No hold violations found.` |
-| Hold slack SS (mcorner STA, SPEF) | +0.95 ns (MET) | +0.89 ns (MET) |
-| Hold slack TT | +0.49 ns (MET) | +0.46 ns (MET) |
-| Hold slack FF | +0.30 ns (MET) | +0.30 ns (MET) |
-| ECO needed | no (wns_negative=false, tns_zero=true) | no (same) |
+| Clock net | clk (1 net) | clk (1 net) |
+| Sinks | 33 | 64 |
+| Clock buffers created | 5 | 9 |
+| Clock nets created | 5 | 9 |
+| Root buffer | clkbuf_16 | clkbuf_16 |
+| Sink buffer | clkbuf_4 | clkbuf_4 |
+| H-tree max level | 2 | 3 |
+| Path depth (min-max) | 2 - 2 | 2 - 2 |
+| Avg sink wire length | 118.12 µm | 145.26 µm |
+| Dummy loads inserted | 3 | 7 |
+| Hold after CTS | No hold violations (RSZ-0033) | No hold violations (RSZ-0033) |
 
-## Verdict: BOTH-CLEAN
-OURS is hold-clean (resizer reports no hold violations; min-path slack positive
-at every corner). REF is identically hold-clean. The FF corner (fastest, tightest
-hold) gives +0.30 ns on both — essentially the same hold margin. No ECO needed
-on either side.
+## Verdict: IN-RANGE / BOTH-CLEAN
+Same CTS engine, root/sink buffer cells, and balanced path depth (2-2 → low skew
+by construction). OUR tree is smaller (5 buffers, 33 sinks, H-tree level 2) vs
+REF (9 buffers, 64 sinks, level 3) — directly proportional to the smaller
+flop/sink count of the carry-save micro-arch. Both report no post-CTS hold
+violations. Buffer/level counts scale sensibly with sink count → IN-RANGE.

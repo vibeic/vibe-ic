@@ -1,28 +1,30 @@
-# Step 34 — GDSII
+# Step 33 — Tapeout Checklist
 
 ## What ran
-Inspected OUR vs REF final GDS (size, layers, DRC/LVS state). Per the cross-check
-methodology, the comparison is "both DRC/LVS-clean + functionally equivalent",
-NOT a pixel/byte comparison (the two micro-architectures are intentionally
-different so the layouts cannot and should not be identical).
+Compared OUR `reports/audit/tapeout_checklist.json` (signoff_audit:tapeout) against
+the REF `reports/final_summary.md` signoff summary, and cross-referenced the
+GAP-close signoff artifacts produced in this cross-check.
 
 ## Side-by-side
-| metric | OURS | REF |
+| signoff item | OURS | REF |
 |---|---|---|
-| Streamed `phase3/stage4/gds/spm.gds` | 383,950 B (375 KB) | 292,110 B (285 KB) |
-| gds_size_check | PASS (>100 KB min) | PASS |
-| SHA-256 | 5f2b9ec1…05aa013a | cd287ab0…035142e1 (different, as expected) |
-| Layers in streamed GDS | li1 + met1 (cell-level) | li1 + met1 (cell-level) |
-| magic_merged GDS | 0 bytes (merge step empty — flow limitation) | (n/a; REF used spm_pdn.gds 421 KB) |
-| DRC | clean modulo waivable li-class (step_29) | clean modulo same li-class |
-| LVS | device-exact 3176/3176 (step_29) | device-exact 3176/3176 |
-| Functional equivalence | gate sim PASS 10013 vectors (step_27) | RTL-TB flag |
+| GDS exists | yes (spm.gds) | yes (spm.gds) |
+| Netlist exists | yes (spm_pnr.v) | yes |
+| Timing (STA) | yes, all corners MET (step_22) | yes, all corners MET |
+| DRC | WAIVED (li-internal only, 0 met2+) — step_29 | WAIVED (same li class) |
+| LVS | device-exact 3176/3176 — step_29 | device-exact 3176/3176 |
+| Antenna | 0/0 (step_25, run here) | 0/0 |
+| IR drop | < 0.01% Vdd (step_23, run here) | < 0.01% Vdd |
+| EM | 34.5% J_max (step_24, run here) | 10.7% J_max |
+| SI crosstalk | < 0.1 fF coupling (step_26) | 35 ps bound |
+| Power | 1.79e-4 W (step_31) | 1.57e-4 W |
+| Post-layout sim | gate sim PASS 10013 vec (step_27) | flag approximation |
+| Tapeout verdict | PASS (evidence 4/4) | PASS_WITH_WAIVERS |
 
-## Verdict: BOTH-CLEAN + FUNCTIONALLY-EQUIVALENT (NOT pixel-compare)
-Both GDS pass gds_size_check, are DRC-clean (waivable li-class only) and LVS
-device-exact, and both implement the same spm multiply function (OURS proven by a
-10013-vector gate sim). The SHAs differ — correctly so, because OURS is a
-carry-save micro-arch and REF is shift-add. The note about a "4.26 MB merged GDS"
-does not match this staged copy (streamed spm.gds is 375 KB; the magic_merged
-artifact is 0 bytes on both flows due to the merge-step limitation) — stated
-honestly. The valid cross-check (clean + functionally equivalent) holds.
+## Verdict: BOTH-CLEAN / PASS_WITH_WAIVERS
+OUR tapeout checklist gate is PASS (all required evidence present). After this
+cross-check, OURS now has the full signoff matrix (DRC/LVS/STA/antenna/IR/EM/SI/
+power/post-sim) populated with real tool runs — equal to or beyond the REF's
+coverage. Both carry the same documented waivers (DRC li-deck class deferred to
+foundry Calibre sign-off; full-chip SPICE/SDF-timing deferred). Equivalent
+tapeout readiness.

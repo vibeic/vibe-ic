@@ -1,24 +1,22 @@
-# Step 20 — Routing (DRT violations, component/net counts, layers)
+# Step 19 — Post-CTS Hold
 
 ## What ran
-OpenROAD detailed-route violation count from `openroad.log` (DRT-0199);
-component/net counts and routing layers from OUR vs REF `routed.def`.
+Re-stated OUR post-CTS/post-route hold cleanliness from PnR `openroad.log`
+(resizer hold-repair pass), confirmed by the independent multi-corner STA in
+step_22 (min-path hold slack), and the `eco/no_eco_summary.json` verdict.
+Compared REF hold slack.
 
 ## Metrics side-by-side
 | metric | OURS | REF |
 |---|---|---|
-| DRT violations (final) | 0 (`DRT-0199 Number of violations = 0`) | 0 (`DRT-0199 ... = 0`) |
-| Components | 249 | 302 |
-| Nets | 281 | 330 |
-| Pins | 36 | 36 |
-| li1 segments | 912 | 1157 |
-| met1 segments | 1611 | 2179 |
-| met2 segments | 399 | 621 |
-| met3 segments | 28 | 31 |
-| Top routing layer | met3 | met3 |
+| OpenROAD resizer hold | `[RSZ-0033] No hold violations found.` | `[RSZ-0033] No hold violations found.` |
+| Hold slack SS (mcorner STA, SPEF) | +0.95 ns (MET) | +0.89 ns (MET) |
+| Hold slack TT | +0.49 ns (MET) | +0.46 ns (MET) |
+| Hold slack FF | +0.30 ns (MET) | +0.30 ns (MET) |
+| ECO needed | no (wns_negative=false, tns_zero=true) | no (same) |
 
-## Verdict: BOTH-CLEAN / IN-RANGE
-Both routed to ZERO detailed-route DRC violations. Same routing stack (li1 +
-met1-3, top layer met3). OUR routing has fewer segments on every layer
-(li1/met1/met2 ~0.74-0.79x of REF), proportional to the leaner net count
-(281 vs 330). No layer-usage anomaly. Routing clean on both → BOTH-CLEAN.
+## Verdict: BOTH-CLEAN
+OURS is hold-clean (resizer reports no hold violations; min-path slack positive
+at every corner). REF is identically hold-clean. The FF corner (fastest, tightest
+hold) gives +0.30 ns on both — essentially the same hold margin. No ECO needed
+on either side.

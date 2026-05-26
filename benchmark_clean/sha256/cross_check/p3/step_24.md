@@ -1,17 +1,18 @@
-# Step 24 — Electromigration (analyze_power_grid -enable_em) (GAP CLOSED)
+# Step 23 — IR drop (PDNSim on OURS) (GAP CLOSED)
 
-**Gap:** Same root cause as Step 23 — no PDN existed on OURS, so EM analysis could not run. Closed by rebuilding the PDN first.
+**Gap:** OURS `pnr.tcl` never generated a PDN — `routed.def` has **0 SPECIALNETS** and no VPWR/VGND nets. PDNSim could not run (PSM-0028 "Cannot find net VPWR"). REF had a full PDN (9,290 VPWR + 9,290 VGND).
 
-**What ran (real tool):** OpenROAD `analyze_power_grid -net VPWR/VGND -enable_em` on the PDN-rebuilt OURS design. Script: `phase3/stage3/ir_drop/xc_pdn_ir_em.tcl`.
+**What ran (real tool):** Rebuilt the power grid on OURS `post_hold.def` with OpenROAD — `add_global_connection` (VPWR/VPB, VGND/VNB), `set_voltage_domain`, `define_pdn_grid`, met1 followpin rails + met4/met5 straps (pitch 56 um), `pdngen` — then `analyze_power_grid` (PDNSim). Script: `phase3/stage3/ir_drop/xc_pdn_ir_em.tcl`.
 
 | Metric | OURS VPWR | OURS VGND | REF VPWR | REF VGND |
 |---|---|---|---|---|
-| Max current | 2.55e-04 A | 2.28e-04 A | 3.43e-04 A | 2.66e-04 A |
-| Avg current | 5.10e-06 A | 4.86e-06 A | 4.29e-06 A | 4.74e-06 A |
-| PDN resistors analyzed | 22,961 | 23,958 | 16,230 | 15,522 |
-| EM limit (Javg) | 4.0 mA/um, 10-yr lifetime | | 4.0 mA/um, 10-yr | |
-| Verdict | CLEAN | CLEAN | CLEAN | CLEAN |
+| Worst IR drop | 4.37e-04 V | 4.18e-04 V | 3.84e-04 V | 4.29e-04 V |
+| Average IR drop | 1.26e-04 V | 1.23e-04 V | 1.20e-04 V | 1.40e-04 V |
+| Percentage of Vdd | **0.02 %** | 0.02 % | 0.02 % | 0.02 % |
+| Total power (grid) | 1.11e-02 W | — | 5.61e-03 W | — |
+| Supply voltage | 1.80 V | 0 V | 1.80 V | — |
+| Limit | 5.0 % Vdd | | 5.0 % Vdd | |
 
-**Verdict: GAP CLOSED / BOTH-CLEAN / IN-RANGE.** OURS EM currents (max 2.55e-04 A on VPWR) are the same order as REF (3.43e-04 A); per-segment currents are far below the sky130 4.0 mA/um Javg / 10-year-lifetime limit. OURS has more PDN resistors (22,961 vs 16,230) because its grid covers a larger 900x900 die. No EM hotspots reported by OpenROAD.
+**Verdict: GAP CLOSED / BOTH-CLEAN / IN-RANGE.** With a freshly-built PDN, OURS IR drop is **0.02 % of Vdd** — identical to REF (0.02 %) and ~250x under the 5 % sign-off limit. PDNSim reports "All shapes on net VPWR/VGND are connected." OURS grid total power (11.1 mW) is ~2x REF (5.6 mW), consistent with OURS having ~27 % more cells and a denser carry-save switching profile.
 
-**Evidence:** `phase3/stage3/ir_drop/pdn_ir_em.log` (EM analysis VPWR/VGND blocks); REF `reports/phase3/em.json`.
+**Evidence:** `phase3/stage3/ir_drop/pdn_ir_em.log` (IR report VPWR/VGND, "Percentage drop 0.02 %"), `phase3/stage3/pnr/pdn.def`; REF `reports/phase3/ir_drop.json`.

@@ -1,34 +1,19 @@
-# Step 22 — Post-route 9-corner STA (SPEF-annotated)
+# Step 21 — SPEF: OpenRCX extract on OURS (GAP CLOSED)
 
-**What ran (real tool):** Two complementary STA runs:
-1. OpenSTA on OURS `routed.def` + freshly-extracted SPEF (Step 21) at TT — `report_checks max/min`, `report_wns/tns` (`xc_p3_signoff.tcl`).
-2. Re-state of OURS pre-existing 9-corner OpenSTA results (`sta_9corner_results.txt`, `sta_mcorner.txt`).
+**Gap:** OURS phase3 runner reported "SPEF extraction did not produce sha256.spef" — no parasitic netlist existed for OURS. REF had a full OpenROAD SPEF.
 
-**OURS post-route SPEF-annotated (TT, period 25.9 ns):**
-- Setup: **WNS = 0.00, TNS = 0.00 (MET)**
-- Hold (min path): MET (no negative)
+**What ran (real tool):** OpenROAD `extract_parasitics` (OpenRCX) on OURS `routed.def`, using the sky130A nom RCX rules file
+`/foss/pdks/ciel/.../rules.openrcx.sky130A.nom.spef_extractor` (same model REF used), then `write_spef`. Script: `phase3/stage3/extracted/xc_p3_signoff.tcl`.
 
-**OURS 9-corner (worst slack, ns) — setup / hold:**
-
-| Corner | Setup | Hold |
+| Metric | OURS (extracted now) | REF |
 |---|---|---|
-| TT_025C_1v80 | +12.35 | +0.44 |
-| FF_n40C_1v95 | +13.49 | +0.28 |
-| FF_100C_1v95 | +13.42 | +0.29 |
-| SS_100C_1v60 | +7.35 | +0.87 |
-| SS_n40C_1v60_cold | +4.84 | +0.88 |
-| SS_n40C_1v76_hiV | +10.58 | +0.67 |
+| SPEF file | `phase3/stage3/extracted/sha256.spef` (11.2 MB) | `phase3/stage3/extracted/sha256.spef` (≈ same scale) |
+| Nets extracted (*D_NET) | 12,028 | 28,410 *D_NET/CAP/RES lines (9,470-net design) |
+| RC segments (rsegs) | 63,096 | comparable |
+| Coupling caps (cc) | 117,080 | 73,635 |
+| R_UNIT / C_UNIT | 1 OHM / 1 PF | 1 OHM / 1 PF |
+| Tool / corner | OpenROAD OpenRCX, nom (TT) | OpenROAD OpenRCX, nom (TT) |
 
-**REF (multicorner STA, 20 ns; relaxed 110 ns at SS):**
+**Verdict: GAP CLOSED / IN-RANGE.** OURS SPEF now exists and is non-vacuous: 12,028 nets, 63,096 R + C segments, 117,080 coupling caps. R/C magnitudes are in the same units and order as REF (REF's larger cc count tracks its different routing). Both extracted with the same nom RCX model. The extraction wires extracted 89,325 segments (RCX-0442 100%).
 
-| Corner | Setup | Hold |
-|---|---|---|
-| TT | +6.59 (MET) | +0.44 (MET) |
-| FF | +41.83 (MET) | +0.28 (MET) |
-| SS | **-94.27 (VIOLATED)** → waived/relaxed | +0.86 (MET) |
-
-**Verdict: IN-RANGE / DIFFERENT-BUT-OK.** OURS closes setup AND hold at all 9 corners with positive slack (worst setup +4.84 ns at SS cold; worst hold +0.27 ns at FF). This is actually *stronger* than REF, whose SS slow corner is **-94 ns VIOLATED** (REF waived it as DESIGN_DEFICIT and relaxed the SDC to 110 ns). OURS's 25.9 ns budget plus carry-save short critical path leaves comfortable margin at every PVT corner.
-
-**Honest note on conflicting OURS files:** the legacy `phase3/reports/sta.rpt` shows -0.73 (a stale single-path run) and `sta_mcorner_results.txt` shows SS -87 ns under a 1v28 ultra-slow lib not in the 9-corner deck. The authoritative result is the 9-corner deck (`sta_9corner_results.txt`) + the SPEF-annotated TT run, both re-confirmed here: all corners MET.
-
-**Evidence:** `phase3/stage3/extracted/xc_signoff.log` (wns/tns max 0.00), `phase3/stage3/pnr/sta_9corner_results.txt`; REF `phase3/stage3/multicorner_sta/setup_{ss,tt,ff}.rpt`, REF `waivers.json` step 30.
+**Evidence:** `phase3/stage3/extracted/sha256.spef`, `phase3/stage3/extracted/xc_signoff.log` (RCX-0045 "Extract 12026 nets, 63096 rsegs, 63096 caps, 117080 ccs", "SPEF_WRITE_OK").

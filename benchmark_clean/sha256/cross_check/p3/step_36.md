@@ -1,19 +1,20 @@
-# Step 36 — FPGA final sign-off (recompile + on-board test)
+# Step 35 — Foundry handoff
 
-**Verdict: PASS** (real Quartus final compile + multi-corner FPGA STA; on-board = BFM path)
+**What ran:** Compared OURS `phase3/stage4/foundry_handoff/` package against REF.
 
-## What ran
-The GENERATED sha256 (in a BIST harness) was taken through a real Quartus Prime
-23.1std final compile to a 3.2 MB `.sof` bitstream with multi-corner TimeQuest STA
-all-pass (worst setup +5.359 ns, worst hold +0.306 ns, TNS = 0, Fmax 68.3 MHz).
-101 register-interface BIST patterns assert digest == NIST golden.
+| Artefact | OURS | REF |
+|---|---|---|
+| README.txt | present (skeleton v1.6.36) | present (skeleton v1.6.36) |
+| mask_spec.json | present, TODO/placeholder fields (pdk=unknown, cell_count=-1, die_area=null) | present, identical placeholder shape (pdk="pdk") |
+| wat_plan.json | present (skeleton) | present |
+| scribe_line_layout.gds | present (137 B placeholder) | present |
+| corner_test_vectors.json | present | present |
+| GDS referenced | `sha256.gds` (1.4 MB abstract) + 0-byte `sha256.magic_merged.gds` | `sha256.gds` |
 
-No physical DE10-Lite/USB-Blaster board was attached (`device_fpga_de10lite_detect`
-→ `cables:[]`), so on-board JTAG programming was not executed; the harness was
-verified via RTL simulation (the BFM / pre-silicon-equivalent path the
-benchmark-verify skill permits when no board is available) — stated honestly.
-Evidence: `reports/hw_test.json`, `phase2/stage1/fpga/`.
+**Verdict: IN-RANGE / DIFFERENT-BUT-OK (both skeleton) — with one honest defect on OURS.** OURS and REF ship the identical auto-generated handoff *skeleton*: both have TODO/placeholder mask-layer tables and null process/die fields that the foundry-interface engineer fills before tape-out. At the package-completeness level they are equivalent.
 
-## OURS vs REF
-REF also did compile-to-SOF only (no on-board run); OURS is equivalent-or-better
-(adds the 101-pattern self-checking BIST verification).
+**Honest defects flagged on OURS handoff:**
+1. `mask_spec.json` points `gds_path` at the 1.4 MB abstract GDS and the package contains a **0-byte `sha256.magic_merged.gds`** — the handoff should be re-pointed at the regenerated 25.9 MB full-geometry magic GDS (`phase3/stage4/gds/sha256_magic.gds`) produced in Step 29 before any real foundry submission.
+2. `cell_count=-1`, `die_area_um2=null`, `pdk="unknown"` placeholders should be back-filled (cell_count=12,148; die=810,000 um²; pdk=sky130A) — REF has the same null placeholders, so this is not a regression vs REF, just an incomplete-but-expected skeleton.
+
+**Evidence:** OURS + REF `phase3/stage4/foundry_handoff/{README.txt,mask_spec.json,wat_plan.json}`, `reports/phase3/foundry_handoff_audit.json`.

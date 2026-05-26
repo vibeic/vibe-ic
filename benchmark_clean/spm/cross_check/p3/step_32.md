@@ -1,32 +1,28 @@
-# Step 32 — Metal Fill (density measure, GAP-CLOSE within tool limits)
+# Step 31 — Power Analysis (internal + switching + leakage, GAP-CLOSE refinement)
 
 ## What ran
-KLayout per-layer density measurement on OUR streamed GDS
-(`phase3/stage4/gds/spm.gds`) via `reports/phase3/density_measure_xc.py`, and the
-same measure on the REF GDS for comparison.
+OURS already had `reports/phase3/power.rpt` (OpenSTA report_power, no-SPEF) =
+1.05e-04 W total. Refined it by re-running OpenSTA `report_power` on the routed
+netlist with the OpenRCX SPEF back-annotated (so clock-net switching is captured).
+TCL: `reports/phase3/power_xc.tcl`; log `power_xc.log`. REF baseline:
+`reports/phase3/power.rpt`.
 
-OpenROAD `density_fill -rules <json>` is broken in the iic-osic-tools 26Q1 build
-(JSON-schema snake_case/kebab-case mismatch) — the REF's own `metal_fill.done`
-documents this exact limitation and falls back to "PDN stripes as planarity fill +
-klayout density measure". OURS follows the identical path.
+## Metrics side-by-side (Total power, Watts)
+| group | OURS (SPEF) | OURS (no-SPEF, prior) | REF |
+|---|---|---|---|
+| Internal | 1.375e-04 | 8.99e-05 | 1.48e-04 |
+| Switching | 4.183e-05 | 1.53e-05 | 8.89e-06 |
+| Leakage | 8.76e-10 | 8.02e-10 | 1.09e-09 |
+| **Total** | **1.793e-04** | 1.05e-04 | **1.57e-04** |
+| Sequential share | 43.2% | 73.3% | 88.9% |
+| Combinational share | 16.9% | 26.7% | 11.1% |
+| Clock share | 39.9% | 0% | 0% |
 
-## Metrics side-by-side (per-layer density, % of 40000 µm² die)
-| layer | OURS | REF |
-|---|---|---|
-| li1  | 2.50 % (999 µm²) | 3.48 % (1392 µm²) |
-| met1 | 1.53 % (610 µm²) | 2.20 % (878 µm²) |
-| met2-met5 | absent in streamed GDS | absent in streamed GDS |
-
-(Both streamed GDS files contain only cell-level li1/met1 geometry; the
-upper-metal routing is in the DEF but the magic_merged GDS step emitted 0 bytes on
-both flows — same flow limitation, not an OURS-specific defect.)
-
-## Verdict: IN-RANGE / NO-FILL-TOOL (honest)
-- `density_fill` GAP cannot be closed with a real fill insertion because the
-  OpenROAD tool is broken in this container build (documented, REF hit the same).
-- The cross-check that CAN be done — per-layer density measurement — was run on
-  both. OUR li1/met1 densities (2.50% / 1.53%) are the same order as REF
-  (3.48% / 2.20%); OURS lower because the carry-save design has fewer cells. Both
-  are well below sky130 max-density rules and above the planarity floor with the
-  PDN stripes. Density measure done; automated fill insertion is a genuine
-  NO-TOOL in this build (matches REF).
+## Verdict: IN-RANGE (GAP refined)
+OUR total dynamic+leakage power 1.79e-04 W is the same order as REF 1.57e-04 W
+(ratio 1.14x). The SPEF-annotated run now resolves clock-network power (39.9%),
+which the no-SPEF runs (both OURS-prior and the REF report) leave at 0 because
+the clock net RC is zero without extraction — so the SPEF run is the more
+complete number. Leakage is essentially identical (~9e-10 W). OUR slightly higher
+total is consistent with the longer carry-save combinational fabric switching.
+Both small (~0.18 mW) designs → IN-RANGE.

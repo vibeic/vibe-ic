@@ -1,28 +1,38 @@
-# Step 30 — ECO (Engineering Change Order — repair loop)
+# Step 29 — PV (DRC + LVS + ERC + Density)
 
 ## What ran
-Step 30 is conditional: ECO repair runs ONLY if Physical Verification (Step 29) or
-post-route STA (Step 22) reported violations that need a late-stage fix. We checked
-both gates on OUR design:
+Re-stated OUR DRC (KLayout sky130A.lydrc database) + LVS (netgen device compare),
+compared category-by-category against the REF KLayout DRC + netgen LVS.
 
-- Post-route multi-corner STA (Step 22): setup + hold **MET at SS/TT/FF**, TNS=0
-  (worst setup +6.61 ns, worst hold +0.30 ns). No timing violation to repair.
-- Physical Verification (Step 29): DRC has 0 real routing/BEOL violations, LVS is
-  device-exact (3176/3176 transistors). No physical violation to repair.
-
-With no violation open, there is nothing for an ECO to fix — the same situation the
-reference flow recorded: `phase3/stage3/eco/no_eco_needed.flag` ("post-route STA
-reports TNS=0 and no WNS violations", no-ECO-needed).
-
-## Metrics side-by-side
+## DRC side-by-side (KLayout, geometry-evidenced items)
 | metric | OURS | REF |
 |---|---|---|
-| Post-route STA | MET all corners, TNS=0 | MET, TNS=0 |
-| PV (DRC/LVS) | clean (0 real DRC, LVS device-exact) | clean |
-| ECO needed? | **no** | **no** (`no_eco_needed.flag`) |
+| Items with geometry | 1557 | 2432 |
+| li.3 (li spacing) | 1503 | 2341 |
+| li.1 (li width) | 48 | 83 |
+| li.5 | 6 | 6 |
+| ct.2 (contact) | 0 | 1 |
+| m1.2 (met1) | 0 | 1 |
+| **met2+ (user-routing) violations** | **0** | **0** |
+| Verdict | WAIVED (li-internal only) | WAIVED (li-internal only) |
 
-## Verdict: N/A (no ECO needed; reference shares the same outcome)
-ECO is a repair step gated on a prior failure. OUR design passes STA and PV with no
-open violation, so an ECO is correctly NOT triggered — exactly as the reference flow
-emitted `no_eco_needed.flag`. This is an honest N/A (the step is inapplicable because
-the precondition — an open violation — does not exist), not a skipped/pending item.
+## LVS side-by-side (netgen)
+| metric | OURS | REF |
+|---|---|---|
+| Number of devices | 3176 vs 3176 | 3176 vs 3176 |
+| Device classes | "equivalent" | "equivalent" |
+| Top-level pin matching | "failed pin matching" (top-port naming) | "failed pin matching" (top-port naming) |
+
+## Verdict: BOTH-CLEAN (DRC waivable-class, LVS device-exact)
+- **DRC**: ALL residual violations on OURS are on the local-interconnect library
+  layers (li.1/li.3/li.5) — the same class the project waives because li.* is
+  below the router's signal stack (met2+) and cannot be introduced by user
+  routing. CRITICALLY: OURS has 0 met2+ violations (any would have flipped the
+  verdict to FAIL). The REF has the IDENTICAL residual profile (li.3/li.1/li.5,
+  plus 2 stray ct/m1) — same waivable class. Both clean modulo the foundry-cell
+  li-deck disagreement.
+- **LVS**: Both are device-exact (3176/3176, "Device classes equivalent"). Both
+  show the same top-level pin-name residual (a netgen top-port-naming artifact,
+  not a connectivity error) — identical on both sides.
+- **ERC/Density**: ERC folds into LVS connectivity (clean); density per step_32.
+Both PV-clean by the same criteria.

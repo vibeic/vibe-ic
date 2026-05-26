@@ -1,28 +1,28 @@
-# Step 31 — Power Analysis (internal + switching + leakage, GAP-CLOSE refinement)
+# Step 30 — ECO (Engineering Change Order — repair loop)
 
 ## What ran
-OURS already had `reports/phase3/power.rpt` (OpenSTA report_power, no-SPEF) =
-1.05e-04 W total. Refined it by re-running OpenSTA `report_power` on the routed
-netlist with the OpenRCX SPEF back-annotated (so clock-net switching is captured).
-TCL: `reports/phase3/power_xc.tcl`; log `power_xc.log`. REF baseline:
-`reports/phase3/power.rpt`.
+Step 30 is conditional: ECO repair runs ONLY if Physical Verification (Step 29) or
+post-route STA (Step 22) reported violations that need a late-stage fix. We checked
+both gates on OUR design:
 
-## Metrics side-by-side (Total power, Watts)
-| group | OURS (SPEF) | OURS (no-SPEF, prior) | REF |
-|---|---|---|---|
-| Internal | 1.375e-04 | 8.99e-05 | 1.48e-04 |
-| Switching | 4.183e-05 | 1.53e-05 | 8.89e-06 |
-| Leakage | 8.76e-10 | 8.02e-10 | 1.09e-09 |
-| **Total** | **1.793e-04** | 1.05e-04 | **1.57e-04** |
-| Sequential share | 43.2% | 73.3% | 88.9% |
-| Combinational share | 16.9% | 26.7% | 11.1% |
-| Clock share | 39.9% | 0% | 0% |
+- Post-route multi-corner STA (Step 22): setup + hold **MET at SS/TT/FF**, TNS=0
+  (worst setup +6.61 ns, worst hold +0.30 ns). No timing violation to repair.
+- Physical Verification (Step 29): DRC has 0 real routing/BEOL violations, LVS is
+  device-exact (3176/3176 transistors). No physical violation to repair.
 
-## Verdict: IN-RANGE (GAP refined)
-OUR total dynamic+leakage power 1.79e-04 W is the same order as REF 1.57e-04 W
-(ratio 1.14x). The SPEF-annotated run now resolves clock-network power (39.9%),
-which the no-SPEF runs (both OURS-prior and the REF report) leave at 0 because
-the clock net RC is zero without extraction — so the SPEF run is the more
-complete number. Leakage is essentially identical (~9e-10 W). OUR slightly higher
-total is consistent with the longer carry-save combinational fabric switching.
-Both small (~0.18 mW) designs → IN-RANGE.
+With no violation open, there is nothing for an ECO to fix — the same situation the
+reference flow recorded: `phase3/stage3/eco/no_eco_needed.flag` ("post-route STA
+reports TNS=0 and no WNS violations", no-ECO-needed).
+
+## Metrics side-by-side
+| metric | OURS | REF |
+|---|---|---|
+| Post-route STA | MET all corners, TNS=0 | MET, TNS=0 |
+| PV (DRC/LVS) | clean (0 real DRC, LVS device-exact) | clean |
+| ECO needed? | **no** | **no** (`no_eco_needed.flag`) |
+
+## Verdict: N/A (no ECO needed; reference shares the same outcome)
+ECO is a repair step gated on a prior failure. OUR design passes STA and PV with no
+open violation, so an ECO is correctly NOT triggered — exactly as the reference flow
+emitted `no_eco_needed.flag`. This is an honest N/A (the step is inapplicable because
+the precondition — an open violation — does not exist), not a skipped/pending item.

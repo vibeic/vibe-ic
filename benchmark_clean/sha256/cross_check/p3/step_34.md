@@ -1,18 +1,27 @@
-# Step 34 — GDSII endpoint (both DRC/LVS-clean + func-equiv, NOT pixel)
+# Step 33 — Tapeout checklist
 
-**What ran:** Verified the OURS final GDSII against the methodology rule — different micro-arch (carry-save CSA vs REF catalog secworks) means the layouts are NOT byte/pixel identical and must not be compared as such. Valid endpoint = both GDS DRC/LVS-sane + functionally equivalent to the NIST golden.
+**What ran:** Compared OURS `reports/audit/tapeout_checklist.json` against REF, then cross-checked each gate against the real-tool evidence gathered in this cross-check.
 
-| Endpoint criterion | OURS | REF |
+| Checklist item | OURS | REF |
 |---|---|---|
-| GDS top cell | single `sha256` | single `sha256` |
-| GDS geometry | **non-vacuous, full** (25.9 MB magic GDS, 89 cells, 810,000 um², 32 layers) | full (7.5 MB) |
-| DRC on final GDS | **0 violations (non-vacuous)** — Step 29 | 279,472 (LEF-abstract caveat) |
-| LVS device classes | equivalent (Step 29) | 437/437 match |
-| Functional equivalence to NIST KAT | **PASS** (post-layout GLS, abc/empty/abc-224/2block) — Step 27 | PASS |
-| Pixel/byte identical to REF? | NO — and correctly NOT expected | — |
+| GDS exists | PASS | PASS |
+| Netlist exists | PASS | PASS |
+| Timing report exists | PASS | PASS |
+| DRC report exists | PASS | PASS |
+| Verdict tier | PASS (4/4 evidence) | PASS (4/4 evidence) |
 
-**Verdict: BOTH-CLEAN / FUNCTION-EQUIVALENT (NOT pixel).** The OURS GDSII endpoint is valid: it is a full-geometry, single-top-cell, DRC-clean (non-vacuous) layout whose post-layout gate netlist reproduces the NIST FIPS-180-4 digests bit-exact. It is NOT byte-identical to REF and is not expected to be — OURS is an independent carry-save CSA implementation (12,148 cells, 900x900 die) vs REF's catalog secworks IP (9,546 cells, 700x700 die). Equivalence is established at the functional (NIST KAT) and sign-off (DRC/LVS/STA) level, per the cross-check methodology.
+**Real-tool sign-off status gathered this cross-check (OURS):**
+| Gate | Status |
+|---|---|
+| DRC (magic GDS, non-vacuous) | CLEAN (0 violations) — Step 29 |
+| LVS | cell-classes equivalent; top-pin well-tap artifact (= REF category) — Step 29 |
+| STA setup/hold (9 corners) | MET all corners — Step 22 |
+| IR drop | 0.02 % Vdd CLEAN — Step 23 |
+| EM | CLEAN — Step 24 |
+| Antenna | 313 minor/diode-fixable findings — Step 25 |
+| Post-layout GLS vs NIST KAT | PASS — Step 27 |
+| Power | 6.21 mW (SPEF-annotated) — Step 31 |
 
-**Important honesty note:** the GDS that satisfies this endpoint is the **regenerated 25.9 MB magic GDS** (`phase3/stage4/gds/sha256_magic.gds`), NOT the runner's original 1.4 MB klayout GDS (which was LEF-abstract-only and gave a vacuous 0-polygon DRC) nor the 0-byte `sha256.magic_merged.gds` (vacuous). Those two were explicitly NOT accepted as clean.
+**Verdict: BOTH-CLEAN (with same residual items as REF).** OURS passes the same 4-evidence tapeout-checklist gate as REF. With the gaps closed in this cross-check, OURS's real sign-off picture is at least as strong as REF: DRC is genuinely 0 on the magic GDS (REF's DRC was 279k with a layer caveat), STA is MET at all 9 corners (REF SS setup -94 ns waived). The shared residual items (LVS well-tap top-pin, antenna diodes) are the standard pre-foundry ECO list, identical in category to REF.
 
-**Evidence:** `phase3/stage4/gds/sha256_magic.gds`, `phase3/stage3/pv/xc_drc_magic.xml` (0 items, non-vacuous), `phase3/stage3/sim_postlayout/xc_gls_init0_results.log` (ALL TESTS PASSED); REF `phase3/stage4/gds/sha256.gds`.
+**Evidence:** `reports/audit/tapeout_checklist.json` (OURS + REF), plus the per-step evidence cited above.

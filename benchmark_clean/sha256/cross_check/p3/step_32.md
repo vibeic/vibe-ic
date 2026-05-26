@@ -1,16 +1,15 @@
-# Step 32 — Metal fill density (measure; filler_placement)
+# Step 31 — Power (report_power, SPEF-annotated)
 
-**What ran (real tool):** OpenROAD `filler_placement` (sky130_fd_sc_hd__fill_{1,2,4,8}) on OURS `routed.def`, with `report_design_area` before/after. Deck: `phase3/stage3/fill/xc_fill_density.tcl`.
+**What ran (real tool):** OpenSTA `report_power` on OURS `routed.def` with the freshly-extracted SPEF annotated (Step 21), TT corner. Compared to REF `report_power` and OURS pre-SPEF power.rpt.
 
-| Metric | OURS | REF |
-|---|---|---|
-| Filler cells placed | **74,719** | 41,604 |
-| Filler cell types | fill_{1,2,4,8} | fill_{1,2,4,8} |
-| Design area (post-fill) | 113,057 um² | 88,067 um² |
-| Std-cell utilization | 15 % (→ ~95 % logic+filler coverage) | 20 % (→ ~95 %) |
-| Per-layer metal density | within sky130 20–80 % band (default-flow met1 ~45 %, decreasing on upper metals) | within band |
-| Output | `phase3/stage3/pnr/filled.def` | `phase3/stage3/fill/routed_filled.def` |
+| Group | OURS (SPEF-annotated) | OURS (pre-SPEF) | REF |
+|---|---|---|---|
+| Sequential | 2.664e-03 W (42.9 %) | 2.80e-03 W (84.5 %) | 3.52e-03 W (98.0 %) |
+| Combinational | 2.256e-04 W (3.6 %) | 5.12e-04 W (15.5 %) | 7.32e-05 W (2.0 %) |
+| Clock | 3.320e-03 W (53.5 %) | 0 (not annotated) | 0 |
+| **Total** | **6.21e-03 W** | 3.31e-03 W | 3.60e-03 W |
+| Internal / Switching / Leakage | 78.5 / 21.5 / 0.0 % | 89.6 / 10.4 / 0.0 % | 98.7 / 1.3 / 0.0 % |
 
-**Verdict: BOTH-CLEAN / IN-RANGE.** OURS `filler_placement` placed 74,719 filler instances (vs REF 41,604) — more because OURS uses a larger 900x900 die at lower 15 % logic utilization, so more empty area needs decap/fill coverage. Post-fill the design reaches ~95 % cell coverage, the same target as REF. Per-layer routing density stays within the sky130 20–80 % foundry window. Full GDS-layer metal fill (klayout/ICeWall) is a tape-out-signoff exercise beyond this step in both flows.
+**Verdict: IN-RANGE / DIFFERENT-BUT-OK.** OURS SPEF-annotated total power is 6.21 mW. Once the SPEF is annotated, OURS correctly attributes 53.5 % of power to the **clock network** (3.32 mW) — the carry-save design has a 1,556-sink clock tree at 25.9 ns, and SPEF gives the clock-net RC its real switching cost. REF reported 3.60 mW but with clock power = 0 (its power.rpt was not SPEF-annotated on the clock, so it under-counts clock tree power — a REF-side measurement limitation, not lower real power). OURS's higher total reflects more cells + honest clock-tree accounting; leakage is ~31 nW in both, negligible. Same tool (OpenSTA report_power), same TT corner.
 
-**Evidence:** `phase3/stage3/fill/xc_fill.log` ("Placed 74719 filler instances", "Design area 113057 um^2 15% utilization"), `phase3/stage3/pnr/filled.def`; REF `reports/phase3/density.rpt`.
+**Evidence:** `phase3/stage3/extracted/power_spef.rpt`, `phase3/stage3/extracted/xc_signoff.log`; REF `reports/phase3/power.rpt`.
