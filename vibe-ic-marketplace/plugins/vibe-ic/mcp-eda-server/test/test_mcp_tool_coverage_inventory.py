@@ -84,10 +84,23 @@ DEFERRED_TOOLS = {
     "eda_fpga_adc_read": "requires DE10-Lite hardware + ADC test pattern",
     "device_camera_capture": "requires connected webcam",
     "device_camera_led_diff": "requires LED + camera setup",
+    # Wrapped pure-Python programs — fully covered by the plugin test tree
+    # (plugins/vibe-ic/programs/tests/test_<name>.py); the MCP layer is a thin
+    # spawn wrapper, so the deferral rationale points at the program test.
+    "eda_spec_conformance": "wrapped Python program; covered by plugin tests test_spec_conformance_check.py",
+    "eda_spec_lint": "wrapped Python program; covered by plugin tests test_spec_self_consistency_check.py",
+    "eda_fsm_table_gen": "wrapped Python program; covered by plugin tests test_fsm_table_rtl_gen.py",
+    "eda_truth_table_gen": "wrapped Python program; covered by plugin tests test_truth_table_rtl_gen.py",
+    "eda_gate_netlist_gen": "wrapped Python program; covered by plugin tests test_gate_netlist_rtl_gen.py",
+    "eda_vector_op_gen": "wrapped Python program; covered by plugin tests test_vector_op_rtl_gen.py",
+    "eda_rtl_dispatch": "wrapped Python program; covered by plugin tests test_deterministic_rtl_dispatcher.py",
+    "eda_rtl_name_semantic_check": "wrapped Python program; covered by plugin tests test_rtl_name_semantic_check.py",
+    "eda_chip_top_gate_wrapper_gen": "wrapped Python program (chip_top_gate_wrapper_gen); covered by plugin tests",
+    "eda_fpga_gate_attestation_check": "requires Quartus gate-level compile artifacts (FPGA lab)",
+    "eda_fpga_gds_reverify": "requires the FPGA gate-level reverify chain (Quartus + scope/UDP shim)",
 }
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_inventory_completeness() -> None:
     """Every registered tool MUST be either tested or deferred."""
     registered = set(_registered_tools())
