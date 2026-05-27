@@ -473,7 +473,7 @@ function cellgdsPath(cfg) {
 // field-agents to tell at runtime whether a given handler patch
 // was actually loaded. Resolution: keep them in lockstep; if you
 // bump package.json, also bump this constant.
-const SERVER_VERSION = "0.1.11";
+const SERVER_VERSION = "0.1.13";
 function wrapResult({ success, t0, toolVersion, error, output, headLines = 40, tailLines = 80, ...rest }) {
   const dur = t0 ? (Date.now() - t0) : 0;
   const text = (output || "").toString();
@@ -3239,11 +3239,19 @@ MODULE = $(basename $(notdir ${testbench_py}))
 include $(shell cocotb-config --makefiles)/Makefile.sim
 `;
 
+    // Stage the testbench AND every sibling Python helper from its directory
+    // (e.g. `import harness_library`) into work_dir, and put work_dir on
+    // PYTHONPATH, so a cocotb test that imports a local module runs out-of-the-box
+    // instead of dying with ModuleNotFoundError. The `|| true` tolerates the
+    // self-copy case when work_dir == the testbench's own directory.
     const script = `
+TBDIR="$(dirname ${testbench_py})" && \\
 mkdir -p ${work_dir} && \\
 echo '${makefileContent.replace(/'/g, "'\\''")}' > ${work_dir}/Makefile && \\
 cp ${testbench_py} ${work_dir}/ && \\
+{ cp "$TBDIR"/*.py ${work_dir}/ 2>/dev/null || true; } && \\
 cd ${work_dir} && \\
+export PYTHONPATH="$(pwd):$PYTHONPATH" && \\
 export PATH=${TOOLS}/verilator/bin:${TOOLS}/iverilog/bin:${TOOLS}/bin:$PATH && \\
 export LD_LIBRARY_PATH=${TOOLS}/iverilog/lib:$LD_LIBRARY_PATH && \\
 make SIM=${sim} 2>&1

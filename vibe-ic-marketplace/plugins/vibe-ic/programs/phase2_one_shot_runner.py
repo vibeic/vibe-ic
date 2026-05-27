@@ -710,6 +710,34 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
                 "program_first": True})
 
 
+def _enforce_power_up_determinism(rtl_dir: Path) -> int:
+    """Run ``rtl_hygiene_lint --fix`` on every emitted RTL file so a reset-less
+    registered output gets a deterministic ``initial <reg>=0;`` power-up (not X
+    at t=0).
+
+    Sediments the lesson into the REAL emit flow: power-up determinism is now
+    ENFORCED wherever phase2 writes RTL, instead of living only in a benchmark
+    harness gate or a free-text prompt that a caller can forget or be told to
+    ignore (the v0.1.23 self-inflicted dip). chip-AGNOSTIC and conservative —
+    the fixer fires only on the reset-less / no-power-up-value case (it skips
+    any module with a reset port), and a redundant ``initial 0`` on a never-reset
+    DFF is harmless for sim/FPGA and ignored on ASIC. Returns the repair count.
+    """
+    fixer = PROGRAMS_DIR / "rtl_hygiene_lint.py"
+    rtl_files = sorted(str(p) for p in rtl_dir.rglob("*")
+                       if p.suffix in (".v", ".sv"))
+    if not fixer.is_file() or not rtl_files:
+        return 0
+    rc, out, err = _run(["python3", str(fixer), "--fix", *rtl_files])
+    for line in (out + err).splitlines():
+        if "--fix: repaired" in line:
+            try:
+                return int(line.split("repaired", 1)[1].split()[0])
+            except (IndexError, ValueError):
+                return 0
+    return 0
+
+
 def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
     t0 = time.time()
     # v0.1.10: program-FIRST. If a structured RTL spec is present and is
@@ -817,13 +845,19 @@ def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
         p.is_file() for p in rtl_dir.iterdir())
     if rc == 0 and emitted_any:
         files = sorted(p.name for p in rtl_dir.iterdir() if p.is_file())
+        # ENFORCE power-up determinism on the freshly emitted RTL (before any
+        # downstream lint/synth/sim). Plugin-level sediment of the rtl_hygiene
+        # --fix lesson — see _enforce_power_up_determinism().
+        n_fixed = _enforce_power_up_determinism(rtl_dir)
+        fix_note = (f", power-up --fix repaired {n_fixed} reset-less reg"
+                    if n_fixed else "")
         # Generation succeeded — keep backup_dir as a safety mirror.
         # (Not deleted: lets a fresh agent diff prior-vs-new on demand.)
         return StepResult("rtl_gen", "PASS",
                           time.time() - t0,
                           f"{len(files)} RTL files emitted via "
                           f"{gen_name} (class={config.get('name')}, "
-                          f"stale → {backup_dir.name}/)",
+                          f"stale → {backup_dir.name}/{fix_note})",
                           [str(rtl_dir / f) for f in files])
     # Generation crashed or produced nothing. Restore prior rtl/ so
     # the project is not left in an unrecoverable empty-rtl state.

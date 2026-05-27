@@ -157,7 +157,38 @@ out_any[i] = in[i] | in[i-1] with out_any[0]=0: the correct form is `{(in[98:0] 
 **not** `in | {in[98:0], 1'b0}` — the latter OR-folds `in[0]` back in, so out_any[0]=in[0]≠0. Same
 for AND/`&`-with-shift at the top bit. Always verify the two edge bits explicitly against the spec's
 stated edge value. *Worked miss (VerilogEval-v2 Prob092 gatesv100): the `in | {…,1'b0}` form leaked
-`in[0]` into out_any[0].*
+`in[0]` into out_any[0].* Now also caught deterministically by `rtl_hygiene_lint` rule
+`vector-self-shift-fold`.
+
+### Skill: K-map axis ↔ bit-index mapping (esp. non-zero-based `[N:1]` ports)
+When implementing a K-map, the FAIL mode is mapping the wrong physical bits to the row/column axes —
+NOT the boolean reduction. Pin the mapping before writing logic: read the K-map header to learn which
+variables are the COLUMN pair and which are the ROW pair, and read the Gray-code order of the labels
+(`00 01 11 10`, not `00 01 10 11`). Then map each axis variable to its exact bit, honoring the port's
+declared index direction — a `[3:0]` port and a `[4:1]` port shift every index by one (x[0]↔x[1], …).
+Enumerate all 2^n minterms from the grid into a `case`, then sanity-check a few corner cells by hand.
+*Worked miss (VerilogEval-Human Prob113 vs the identical v2 problem): the `[4:1]` 1-indexed variant
+was solved with the column/row axes swapped, even though the same grid passed on the `[3:0]` variant —
+the grid values were identical; only the bit-to-axis mapping differed.*
+
+### Skill: FSM output assertion-cycle timing — match the spec's named cycle, no spurious extra stage
+When a spec says an output (`done`/`valid`/…) asserts "in the cycle immediately after <event>", model
+the event as a STATE the FSM is in that cycle and drive the output COMBINATIONALLY from that state
+(`assign done = (state == DONE);`). Do NOT register the already-state-derived output a second time —
+a `done_r <= (state==DONE)` adds an extra pipeline stage and asserts one cycle too late. Likewise emit
+the captured data so it is valid in the SAME cycle the output asserts (read the pre-edge capture
+registers combinationally; a same-cycle next-message byte landing in a capture reg via nonblocking
+does not corrupt the current read). Cross-check the first asserted cycle against the spec waveform.
+*Worked miss (VerilogEval-v2 Prob154 fsm_ps2data — passed on Human): `done`/`out_bytes` were
+double-registered, asserting one cycle late; combinational `done=(state==DONE)` is correct.*
+
+### Skill: one-hot next-state = exactly the incoming transition edges (no invented self-loop)
+For a one-hot FSM where the spec gives the transition table, each `*_next` bit is the OR over EVERY
+edge that ENTERS that state: `Sx_next = (Sa & cond_a) | (Sb & cond_b) | …`. Include a self-loop term
+`(Sx & hold_cond)` ONLY if the table actually has Sx→Sx; never add a self-loop the table does not
+list, and never drop a real incoming edge. Derive each term directly from the table row-by-row.
+*Worked miss (VerilogEval Prob150 fsmonehot): a phantom `S1_next |= S1 & d` self-loop was added where
+the table sends S1→S11 on d=1.*
 
 ### Skill: rigorous behavioral / waveform / FSM-spec comprehension
 For "read the waveform / state diagram and implement it" specs, do not pattern-match — trace the

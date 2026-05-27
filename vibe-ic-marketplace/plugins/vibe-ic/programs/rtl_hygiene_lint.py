@@ -2,9 +2,10 @@
 """
 rtl_hygiene_lint.py — General-purpose RTL hygiene checker.
 
-Deterministic Python-based lint that catches 5 general bug classes found
+Deterministic Python-based lint that catches 7 general bug classes found
 across IC designs (learned from <half-duplex-tester> debug 2026-04-16; rule 5
-added from the VerilogEval-v2 v0.1.10 tuning loop 2026-05-27):
+added from the VerilogEval-v2 v0.1.10 tuning loop 2026-05-27; rules 6-7 from the
+v0.1.24/v0.1.25 fail-case loops 2026-05-27/28):
 
   1. Declared-but-undriven wire
      (e.g., `wire ch_wake_event;` but never on LHS of `assign` or instance output)
@@ -23,6 +24,11 @@ added from the VerilogEval-v2 v0.1.10 tuning loop 2026-05-27):
      `initial <reg>=0;`), and now also covers an internal reg that drives an
      output via a continuous assign (Prob053-class). The lesson is enforced by
      the tool, not by a caller/prompt that can forget or be told to ignore it.
+  6. Incomplete sensitivity list
+     (e.g., `always @(a) if (clock) p<=a;` misses clock-edge updates → use `@(*)`)
+  7. Vector self-shift fold
+     (e.g., `in | {in[98:0],1'b0}` — the unshifted operand re-folds the boundary
+      bit so the padded edge bit is NOT 0; shift BOTH operands inside the concat)
 
 Usage:
     python3 rtl_hygiene_lint.py <files.v|.sv ...>
@@ -450,6 +456,47 @@ def rule_incomplete_sensitivity(src: str, path: str) -> List[Finding]:
 
 
 # ---------------------------------------------------------------------------
+# Rule 7: vector self-shift fold (boundary bit re-introduced by an unshifted op)
+# ---------------------------------------------------------------------------
+# `v` is the based-zero literal regex for the boundary pad (1'b0 / 2'b00 / 'h0 …),
+# deliberately NOT plain `0` so it never matches an index like `v[0]`.
+_BASED_ZERO_RE = re.compile(r"\d*'[bdh]0+\b")
+
+
+def rule_vector_self_shift_fold(src: str, path: str) -> List[Finding]:
+    """Flag `v OP {… v[..] …, 1'b0}` (OP in | & ^): a vector OR/AND/XOR-ed with a
+    SHIFTED CONCAT of ITSELF that pads a boundary `1'b0`.
+
+    The *unshifted* whole-vector operand re-folds the original boundary bit, so the
+    padded edge bit is NOT the intended 0 (e.g. `in | {in[98:0],1'b0}` gives
+    out[0]=in[0] instead of 0). The correct form shifts BOTH operands inside the
+    concat: `{(in[98:0] OP in[99:1]), 1'b0}`. WARN only — the right slices depend on
+    the intended neighbour relation, so it is not auto-repaired. chip-AGNOSTIC.
+    Learned from VerilogEval-v2 Prob092 (gatesv100) — the recurring "boundary bit by
+    placement, not by an op" miss.
+    """
+    findings: List[Finding] = []
+    # top-level `<ident> <|&^> { ...concat... }` (concat has no nested braces)
+    for m in re.finditer(r'\b([A-Za-z_]\w*)\s*([|&^])\s*\{([^{}]*)\}', src):
+        lhs, op, concat = m.group(1), m.group(2), m.group(3)
+        if lhs in VERILOG_KEYWORDS:
+            continue
+        has_self_slice = re.search(r'\b' + re.escape(lhs) + r'\s*\[[^\]]*\]', concat)
+        has_zero_pad = _BASED_ZERO_RE.search(concat)
+        if has_self_slice and has_zero_pad:
+            lineno = src[:m.start()].count('\n') + 1
+            findings.append(Finding(
+                path, lineno, 'WARN', 'vector-self-shift-fold', lhs,
+                f"`{lhs} {op} {{… {lhs}[..], 1'b0}}` combines the whole vector '{lhs}' "
+                f"with a shifted concat of itself padded with a boundary 0 — the "
+                f"UNSHIFTED operand re-folds '{lhs}'s edge bit, so the padded edge bit "
+                f"is not 0. Shift BOTH operands inside the concat "
+                f"(e.g. `{{({lhs}[hi:lo] {op} {lhs}[hi2:lo2]), 1'b0}}`) and verify the "
+                f"edge bit against the spec's stated boundary value."))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def lint_file(path: Path) -> List[Finding]:
@@ -461,6 +508,7 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_pulse_swallow(src, str(path))
     results += rule_uninit_registered_output(src, str(path))
     results += rule_incomplete_sensitivity(src, str(path))
+    results += rule_vector_self_shift_fold(src, str(path))
     return results
 
 
