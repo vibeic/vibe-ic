@@ -47,6 +47,32 @@ subtler masking patterns, across both trees:
 | commented-out asserts / `if False:` / empty-iterable dead guards | 0 |
 | `pytest.skip()` / `skipif` that skip on *failure* (vs resource-absent) | 0 — all 20 are resource/env conditionals (`iverilog`, `node`, `yosys`, generator/tool/deny-list-token presence) |
 
+### 4. Source/program GATE vacuous-pass audit (the most important class)
+Beyond the test trees, the checker/gate PROGRAMS themselves (364 emit a PASS/FAIL
+verdict) were audited for **vacuous-pass**: returning a clean PASS when the gate
+could not actually run (input/path/doc absent), thereby shipping a false "OK".
+
+Method: AST scan for `if <input absent> → PASS-verdict` branches, progressively
+refined to exclude the legitimate "no findings → PASS" pattern, helper functions
+that return a 0 count/score, and N/A branches that carry a documented reason.
+
+- Start 231 → (drop "no findings/failures/offenders → PASS") 36 → (gate-verdict
+  path only, drop helper `return 0`/`0.0`, drop reasoned N/A) **3** → all 3 are
+  string-literal false positives (`"pass --list-structural-gates"` usage text;
+  `"…PASS…"` inside a `failures.append(...)` message; `"PASS"` near power-report
+  generation). **0 genuine vacuous-pass gate bugs remain.**
+- The two real vacuous-pass bugs that DID exist were found + fixed earlier this
+  session: `tools/phase1_engine/gap_detect.py` (dead `vibe-ic-core` KB path made
+  the phase1 required-fields hard-gate vacuous-pass) and
+  `self_audit_doc_claim_consistency_check.py` (hard-coded `_BENCH_ROOT` never
+  matched → scan vacuous-passed). Both now repointed/discovery-based.
+- Remaining "absent → PASS" branches are legitimate: gate N/A passes WITH
+  documented reasoning (e.g. hw_acceptance "gate not yet applicable" backstopped
+  by flow_compliance; single_bus_driver "not half-duplex / no rtl yet";
+  no_protocol "applies: False"; optional L10–L12 layers) or helper count/score
+  returns on malformed input. The framework also has an explicit VACUOUS_PASS
+  verdict tier (flow_compliance_check rc=2) for genuinely-vacuous runs.
+
 ## Final state (full-suite, no masking)
 | Tree | Result |
 |---|---|
