@@ -192,3 +192,30 @@ endmodule
     res, f = run(tmp_path, spec, rtl, '.json')
     assert res.returncode == 0
     assert rules(f) == set()
+
+
+# ---- function/task argument declarations are NOT module ports -------------
+# Regression for the VerilogEval-v2 v0.1.10 false-positive (Prob141/149/153):
+# `input`/`output` inside a function/task body were parsed as phantom module
+# ports, raising spurious port-extra ERRORs and forcing needless RTL rewrites.
+def test_function_task_args_not_counted_as_ports(tmp_path):
+    spec = (
+        "Implement a module named TopModule with the following interface.\n"
+        " - input  a (8 bits)\n"
+        " - output q (8 bits)\n"
+    )
+    rtl = """
+module TopModule(input [7:0] a, output [7:0] q);
+  function [7:0] inc;
+    input [7:0] v;
+    input       c;
+    begin inc = v + (c ? 8'd1 : 8'd0); end
+  endfunction
+  task drive; input x; begin end endtask
+  assign q = inc(a, 1'b1);
+endmodule
+"""
+    res, f = run(tmp_path, spec, rtl)
+    # No phantom v/c/x ports → no port-extra; spec a/q match RTL a/q.
+    assert 'port-extra' not in rules(f)
+    assert res.returncode == 0

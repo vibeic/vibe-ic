@@ -67,6 +67,18 @@ _PORT_DECL = re.compile(
     r'([A-Za-z_]\w*(?:\s*,\s*(?!(?:input|output|inout)\b)[A-Za-z_]\w*)*)')
 
 
+# function/task argument declarations use the same input/output keywords as module
+# ports but are lexically scoped to the subprogram — blank their bodies (preserving
+# newlines) before port extraction so they are not mistaken for module ports.
+_SUBPROGRAM = re.compile(
+    r'\bfunction\b.*?\bendfunction\b|\btask\b.*?\bendtask\b', re.S | re.I)
+
+
+def _strip_subprograms(text: str) -> str:
+    return _SUBPROGRAM.sub(
+        lambda m: ''.join('\n' if c == '\n' else ' ' for c in m.group(0)), text)
+
+
 def parse_verilog_ports(text: str) -> List[Port]:
     """Parse Verilog `input/output/inout [msb:lsb] a, b` declarations."""
     ports: List[Port] = []
@@ -98,6 +110,8 @@ def parse_rtl_ports(src: str, top: Optional[str]) -> Tuple[str, List[Port]]:
     name = chosen.group(1)
     nxt = re.search(r'\bendmodule\b', src[chosen.end():])
     region = src[chosen.end():chosen.end() + (nxt.start() if nxt else len(src))]
+    # Ignore input/output declarations inside function/task bodies (not module ports).
+    region = _strip_subprograms(region)
     return name, parse_verilog_ports(region)
 
 

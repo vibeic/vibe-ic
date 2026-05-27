@@ -2,6 +2,13 @@ type: bug
 severity: P2
 component: program:spec_conformance_check
 plugin_version: "0.1.10"
+status: resolved
+resolved_in: "0.1.12"
+resolution: >-
+  Fixed in _specrtl_common.parse_rtl_ports via _strip_subprograms(): function/task
+  bodies are blanked (newlines preserved) before port extraction, so input/output
+  argument declarations no longer leak as phantom module ports. Regression test
+  added: test_spec_conformance_check.test_function_task_args_not_counted_as_ports.
 
 title: >-
   spec_conformance_check RTL-side port extractor parses Verilog `function`
