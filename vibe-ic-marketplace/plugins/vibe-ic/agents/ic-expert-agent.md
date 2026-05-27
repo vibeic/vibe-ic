@@ -109,6 +109,17 @@ feasibility. See `programs/llm_semantic_confirm.py` and `spec_conformance_check`
   prompt's wording (e.g. don't read a reset off an *enable*/*load* signal); a registered output
   with no reset still needs a deterministic power-up value (init `= 0`), per `rtl_hygiene_lint`
   rule `uninit-registered-output`.
+- **Reset structure beats the adjective.** When a spec gives BOTH a label ("asynchronous reset")
+  AND a structural description, the structure wins: a reset *checked inside an `@(posedge clk)`-only
+  block* (not named in the sensitivity list) is **synchronous**, regardless of the word
+  "asynchronous"; only a reset in the sensitivity list (`@(posedge clk or posedge rst)`) is
+  asynchronous. Machine-generated prose often says "asynchronous" while describing a clocked block
+  that "first checks reset" — implement what the structure describes (VerilogEval-Machine Prob067).
+- **Level-sensitive logic must be `always @(*)`.** A combinational block or a transparent latch
+  (`if (en) q = d;`) must react to EVERY signal it reads — write `always @(*)`, never
+  `always @(<partial list>)`. An incomplete list (e.g. `always @(a)` that also reads `clock`)
+  silently behaves like a latch that misses updates. Caught deterministically by `rtl_hygiene_lint`
+  rule `incomplete-sensitivity-list` (VerilogEval-Machine Prob145).
 
 These are LLM-judgment skills, not deterministic gates — where a program cannot decide, apply
 them with the strongest model available and prefer rigor over a quick guess.

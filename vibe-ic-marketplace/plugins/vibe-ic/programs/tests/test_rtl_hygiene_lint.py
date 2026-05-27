@@ -275,3 +275,37 @@ endmodule
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+
+class TestIncompleteSensitivity:
+    """Rule 6: level-sensitive always with a signal read but not in the sensitivity list."""
+
+    def test_flags_missing_signal(self, tmp_path):
+        sv = ("module m(input clock,input a,output reg p,output reg q);\n"
+              "  always @(negedge clock) q<=a;\n"
+              "  always @(a) if(clock) p<=a;\n"      # clock read but not listed
+              "endmodule\n")
+        _, findings = run_cli(tmp_path, sv, severity='WARN')
+        hits = [f for f in findings if f['rule'] == 'incomplete-sensitivity-list']
+        assert hits and 'clock' in hits[0]['symbol']
+
+    def test_star_is_exempt(self, tmp_path):
+        sv = ("module m(input clock,input a,output reg p);\n"
+              "  always @(*) if(clock) p=a;\n"
+              "endmodule\n")
+        _, findings = run_cli(tmp_path, sv, severity='WARN')
+        assert 'incomplete-sensitivity-list' not in {f['rule'] for f in findings}
+
+    def test_clocked_block_exempt(self, tmp_path):
+        sv = ("module m(input clk,input rst,input d,output reg q);\n"
+              "  always @(posedge clk) if(rst) q<=0; else q<=d;\n"
+              "endmodule\n")
+        _, findings = run_cli(tmp_path, sv, severity='WARN')
+        assert 'incomplete-sensitivity-list' not in {f['rule'] for f in findings}
+
+    def test_complete_list_ok(self, tmp_path):
+        sv = ("module m(input a,input b,output reg y);\n"
+              "  always @(a or b) y = a & b;\n"
+              "endmodule\n")
+        _, findings = run_cli(tmp_path, sv, severity='WARN')
+        assert 'incomplete-sensitivity-list' not in {f['rule'] for f in findings}

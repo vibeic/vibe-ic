@@ -382,6 +382,67 @@ def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
 
 
 # ---------------------------------------------------------------------------
+# Rule 6: Incomplete sensitivity list (latch / wrong-update hazard)
+# ---------------------------------------------------------------------------
+def rule_incomplete_sensitivity(src: str, path: str) -> List[Finding]:
+    """Flag a LEVEL-sensitive `always @(<explicit list>)` whose body reads a signal that is
+    NOT in the sensitivity list — the classic incomplete-sensitivity-list bug.
+
+    A combinational / level-sensitive block must react to every signal it reads; if it
+    lists only some, it behaves like a latch that misses updates on the omitted signals.
+    The fix is `always @(*)`. Edge blocks (`@(posedge/negedge ...)`) and `@(*)` / `always_comb`
+    are exempt. Learned from VerilogEval-Machine Prob145: `always @(a) if (clock) p<=a;`
+    misses clock-edge updates — the reference uses `always @(*) if (clock) p=a;`. chip-AGNOSTIC.
+    """
+    findings: List[Finding] = []
+    for m in re.finditer(r'\balways\b\s*@\s*\(([^)]*)\)', src):
+        sens = m.group(1)
+        if '*' in sens or re.search(r'\b(pos|neg)edge\b', sens):
+            continue                                   # @(*) or clocked — exempt
+        listed = set(re.findall(r'[A-Za-z_]\w*', sens))
+        if not listed:
+            continue
+        # Extract the block body: begin..end (depth-matched) or a single statement.
+        rest = src[m.end():]
+        bm = re.match(r'\s*begin\b', rest)
+        if bm:
+            depth, i, n = 0, 0, len(rest)
+            tok = re.compile(r'\b(begin|end)\b')
+            start = None
+            for t in tok.finditer(rest):
+                if t.group(1) == 'begin':
+                    if depth == 0:
+                        start = t.end()
+                    depth += 1
+                else:
+                    depth -= 1
+                    if depth == 0:
+                        body = rest[start:t.start()]
+                        break
+            else:
+                continue
+        else:
+            semi = rest.find(';')
+            if semi == -1:
+                continue
+            body = rest[:semi + 1]
+        # LHS targets (assigned) are not "reads"; everything else read must be in the list.
+        lhs = set(re.findall(r'(\w+)(?:\s*\[[^\]]*\])?\s*(?:<=|=)(?!=)', body))
+        reads = {t for t in re.findall(r'[A-Za-z_]\w*', body)
+                 if t not in VERILOG_KEYWORDS and t not in lhs
+                 and not re.match(r"^\d", t)}
+        missing = sorted(reads - listed)
+        if missing:
+            lineno = src[:m.start()].count('\n') + 1
+            findings.append(Finding(
+                path, lineno, 'WARN', 'incomplete-sensitivity-list', ','.join(missing),
+                f"level-sensitive `always @({sens.strip()})` reads {missing} not in its "
+                f"sensitivity list — it behaves like a latch that misses updates on those "
+                f"signals. Use `always @(*)` (or add them)."))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def lint_file(path: Path) -> List[Finding]:
@@ -392,6 +453,7 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_case_coverage(src, str(path))
     results += rule_pulse_swallow(src, str(path))
     results += rule_uninit_registered_output(src, str(path))
+    results += rule_incomplete_sensitivity(src, str(path))
     return results
 
 
