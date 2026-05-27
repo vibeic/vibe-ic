@@ -2,8 +2,9 @@
 """
 rtl_hygiene_lint.py — General-purpose RTL hygiene checker.
 
-Deterministic Python-based lint that catches 4 general bug classes found
-across IC designs (learned from <half-duplex-tester> debug 2026-04-16):
+Deterministic Python-based lint that catches 5 general bug classes found
+across IC designs (learned from <half-duplex-tester> debug 2026-04-16; rule 5
+added from the VerilogEval-v2 v0.1.10 tuning loop 2026-05-27):
 
   1. Declared-but-undriven wire
      (e.g., `wire ch_wake_event;` but never on LHS of `assign` or instance output)
@@ -15,6 +16,9 @@ across IC designs (learned from <half-duplex-tester> debug 2026-04-16):
   4. Pulse-to-state without latch
      (e.g., `start <= 1'b1;` in one always block, consumed by another FSM that
       only looks at `start` during a specific state → pulse may be swallowed)
+  5. Reset-less registered output with no power-up initializer
+     (e.g., `output reg q;` clocked by `<= d` with no reset and no `= 0` →
+      powers up as X; deterministic references expect 0 at t=0)
 
 Usage:
     python3 rtl_hygiene_lint.py <files.v|.sv ...>
@@ -315,6 +319,69 @@ def rule_pulse_swallow(src: str, path: str) -> List[Finding]:
 
 
 # ---------------------------------------------------------------------------
+# Rule 5: Reset-less registered output with no power-up initializer
+# ---------------------------------------------------------------------------
+_RESET_NAME_RE = re.compile(r'\b(a?reset[a-z_]*|a?rst[a-z_]*|resetn|nreset|por|sclr|aclr)\b', re.I)
+
+
+def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
+    """
+    Detect a REGISTERED output port (assigned via `<=` in a clocked block) in a
+    module that has NO reset-like input AND gives the output NO power-up value
+    (no declaration-time initializer, no `initial` block).
+
+    Such an output powers up as X. Deterministic reference models (and the
+    VerilogEval-v2 testbenches) sample the output at t=0 before the first clock
+    edge and expect a deterministic 0 there, so the design mismatches on exactly
+    that one pre-clock sample. Learned from VerilogEval-v2 Prob034/053/104, where
+    each lost a single vector purely to an uninitialised `output reg`.
+
+    Conservative — only fires when the module has NO reset port at all (so the
+    output genuinely cannot be reset), which is precisely the reset-less DFF
+    case. Reports WARN with the exact fix. chip-AGNOSTIC.
+    """
+    findings: List[Finding] = []
+
+    # Output ports (ANSI or non-ANSI), capturing optional reg/logic/wire kind.
+    out_ports: Dict[str, int] = {}
+    for m in re.finditer(
+            r'\boutput\b\s+(?:(?:reg|logic|wire)\s+)?(?:signed\s+)?'
+            r'(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)\s*(?=[,;)=])', src):
+        name = m.group(1)
+        if name and name not in VERILOG_KEYWORDS:
+            out_ports.setdefault(name, src[:m.start()].count('\n') + 1)
+    if not out_ports:
+        return findings
+
+    # Only consider reset-less modules (no reset-ish input port anywhere).
+    input_decls = ' '.join(re.findall(r'\binput\b[^;)\n]*', src))
+    if _RESET_NAME_RE.search(input_decls):
+        return findings
+
+    # Registered = appears on LHS of a non-blocking assignment.
+    registered = {mm.group(1)
+                  for mm in re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src)}
+    has_initial = bool(re.search(r'\binitial\b', src))
+
+    for name, lineno in out_ports.items():
+        if name not in registered:
+            continue
+        # Declaration-time initializer: a decl line for `name` containing `=`.
+        decl_init = re.search(
+            r'\b(?:output|reg|logic)\b[^;\n]*\b' + re.escape(name) + r'\s*=', src)
+        if decl_init or (has_initial and re.search(
+                r'\binitial\b[\s\S]{0,200}?\b' + re.escape(name) + r'\s*(<=|=)', src)):
+            continue
+        findings.append(Finding(
+            path, lineno, 'WARN', 'uninit-registered-output', name,
+            f"registered output '{name}' has no reset and no power-up initializer "
+            f"-> powers up as X. A deterministic reference (and VerilogEval-style "
+            f"testbenches that sample at t=0) expects 0 there. Fix: declare "
+            f"`output reg ... {name} = 0;` (or add an `initial` value)."))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def lint_file(path: Path) -> List[Finding]:
@@ -324,6 +391,7 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_undriven_and_unread(src, str(path))
     results += rule_case_coverage(src, str(path))
     results += rule_pulse_swallow(src, str(path))
+    results += rule_uninit_registered_output(src, str(path))
     return results
 
 

@@ -229,5 +229,49 @@ endmodule
         assert 'internal' in names
 
 
+class TestUninitRegisteredOutput:
+    """Rule 5: reset-less registered output with no power-up initializer."""
+
+    def test_flags_resetless_uninit_output(self, tmp_path):
+        sv = """
+module TopModule(input clk, input [7:0] d, output reg [7:0] q);
+    always @(posedge clk) q <= d;
+endmodule
+"""
+        _, findings = run_cli(tmp_path, sv, severity='WARN')
+        rules = {f['rule'] for f in findings}
+        assert 'uninit-registered-output' in rules
+        hit = next(f for f in findings if f['rule'] == 'uninit-registered-output')
+        assert hit['symbol'] == 'q'
+        assert hit['severity'] == 'WARN'
+
+    def test_clears_when_initialized_at_decl(self, tmp_path):
+        sv = """
+module TopModule(input clk, input [7:0] d, output reg [7:0] q = 8'b0);
+    always @(posedge clk) q <= d;
+endmodule
+"""
+        _, findings = run_cli(tmp_path, sv, severity='WARN')
+        assert 'uninit-registered-output' not in {f['rule'] for f in findings}
+
+    def test_no_false_positive_with_reset(self, tmp_path):
+        sv = """
+module TopModule(input clk, input reset, input [7:0] d, output reg [7:0] q);
+    always @(posedge clk) if (reset) q <= 8'h34; else q <= d;
+endmodule
+"""
+        _, findings = run_cli(tmp_path, sv, severity='WARN')
+        assert 'uninit-registered-output' not in {f['rule'] for f in findings}
+
+    def test_ignores_purely_combinational_output(self, tmp_path):
+        sv = """
+module TopModule(input a, input b, output z);
+    assign z = a & b;
+endmodule
+"""
+        _, findings = run_cli(tmp_path, sv, severity='WARN')
+        assert 'uninit-registered-output' not in {f['rule'] for f in findings}
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
