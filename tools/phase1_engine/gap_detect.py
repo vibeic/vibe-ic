@@ -17,12 +17,12 @@ from .schema import FactGraph
 
 # Default class_kb root — can be overridden.
 DEFAULT_CLASS_KB = Path(
-    "vibe-ic-marketplace/plugins/vibe-ic-core/agents/class_kb"
+    "vibe-ic-marketplace/plugins/vibe-ic/agents/class_kb"
 )
 
 # Default defaults/ directory (K3 library) — for suggested_default lookup.
 DEFAULT_DEFAULTS_DIR = Path(
-    "vibe-ic-marketplace/plugins/vibe-ic-core/agents/defaults"
+    "vibe-ic-marketplace/plugins/vibe-ic/agents/defaults"
 )
 
 

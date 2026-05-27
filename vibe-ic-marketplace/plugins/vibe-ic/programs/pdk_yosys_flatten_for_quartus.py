@@ -68,8 +68,12 @@ def main():
     def _docker_path(host: Path) -> str:
         h = host.resolve()
         if "AI_IC_design" in str(h):
-            return str(h).replace("~/AI_IC_design",
-                                    "/foss/designs")
+            # host.resolve() yields an absolute path (e.g.
+            # /home/<user>/AI_IC_design/...), so the host→container mount root
+            # must be matched as an absolute path — the literal "~/AI_IC_design"
+            # never appears post-resolve, which made the old replace a no-op.
+            aid_root = str((Path.home() / "AI_IC_design").resolve())
+            return str(h).replace(aid_root, "/foss/designs")
         return str(h)
 
     # Place tmp dir alongside the output so it lives inside the docker
