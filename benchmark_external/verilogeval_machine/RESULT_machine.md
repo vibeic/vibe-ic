@@ -47,3 +47,18 @@ git clone --depth 1 --branch v1.0.0 https://github.com/NVlabs/verilog-eval /tmp/
 python3 score_verilogeval.py --run run_v0121 --dataset dataset_machine
 ```
 (`dataset_machine/` and `run_v0121/work/` are git-ignored — regenerable from upstream + iccad2023.)
+
+## v0.1.22 targeted re-verify (Prob067, Prob145) — blind, official testbench
+Both fixed by the v0.1.22 general enhancements, verified blind:
+- **Prob067_countslow → PASS (0/499).** reset STRUCTURE-beats-adjective skill: the agent read the
+  prose's "always block on the rising clock edge that first checks reset" as a SYNCHRONOUS reset
+  (despite the "asynchronous" label) and implemented `always @(posedge clk) if(reset)...`. (The
+  deterministic `spec_conformance._detect_reset` still soft-FAILs on the bare "asynchronous"
+  keyword — correctly surfaced as a NOT-LLM-confirmed candidate that the agent overrode; hard gates
+  pass. This is the intended program-proposes / LLM-confirms split.)
+- **Prob145_circuit8 → PASS (0/240).** Level-sensitive-`@(*)` skill: the agent authored the
+  transparent latch as `always @(*) if(clock) p=a;` from the start (the broken `always @(a)` form
+  the rtl_hygiene_lint rule 6 `incomplete-sensitivity-list` gate would have flagged).
+
+**Net Machine with v0.1.22 = 136/143.** Residual 7 are description defects (072/105/085 prose vs
+ref, 131/133/122 omit info, 099 garbled) — not honestly fixable from the machine prompt.
