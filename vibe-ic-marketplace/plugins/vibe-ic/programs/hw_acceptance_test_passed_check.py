@@ -62,11 +62,12 @@ def find_pass_artifact(evidence_dir: Path):
         return path, None
 
 
-def _check_md905_byte6_F2_template(data: dict) -> tuple[bool, str]:
-    """Named template `md905_byte6_F2` — kept for back-compat with
-    projects that ship <half-duplex-tester>-class host testers. Projects opt in
-    explicitly via acceptance_signature.json: {"template":
-    "md905_byte6_F2"}. Not used as a silent default in v0.119.15+.
+def _check_example_tester_byte6_F2_template(data: dict) -> tuple[bool, str]:
+    """Named template `example_tester_byte6_F2` — generic half-duplex
+    tester acceptance signature. Projects that ship a half-duplex-tester-
+    class host tester opt in explicitly via acceptance_signature.json:
+    {"template": "example_tester_byte6_F2"}. Not used as a silent default
+    in v0.119.15+.
     """
     if data.get("verdict") != "PASS":
         return False, f"verdict is {data.get('verdict')!r}, not 'PASS'"
@@ -81,8 +82,12 @@ def _check_md905_byte6_F2_template(data: dict) -> tuple[bool, str]:
 
 
 # Registry of named acceptance templates. Add new chip families here.
+# The canonical key is the chip-AGNOSTIC `example_tester_byte6_F2`; the
+# legacy benchmark-specific key is kept as a back-compat alias so older
+# acceptance_signature.json files still resolve.
 _NAMED_TEMPLATES = {
-    "md905_byte6_F2": _check_md905_byte6_F2_template,
+    "example_tester_byte6_F2": _check_example_tester_byte6_F2_template,
+    "md905_byte6_F2": _check_example_tester_byte6_F2_template,
 }
 
 

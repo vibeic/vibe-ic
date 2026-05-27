@@ -123,15 +123,9 @@ def test_token_inside_comment_is_ignored(tmp_path):
     assert "hilomap" in err
 
 
-# ---- regression guard: v068 synth.ys passes with --allow-no-sv ------------
-_V068_YS = Path(
-    "~/AI_IC_design/1st_benchmark_sn2025/phase2+3_v068/scripts/synth.ys"
-)
-
-
-def test_v068_synth_ys_passes_with_allow_no_sv():
-    import pytest
-    if not _V068_YS.exists():
-        pytest.skip("v068 synth.ys not present")
-    code, _, _ = _run(["--ys-file", str(_V068_YS), "--allow-no-sv"])
-    assert code == 0
+# NOTE: the former `test_v068_synth_ys_passes_with_allow_no_sv` integration
+# test was removed — it pointed at a hard-coded external path
+# (~/AI_IC_design/1st_benchmark_sn2025/.../synth.ys) absent from the repo (so
+# it permanently skipped), and the --allow-no-sv / hilomap contract it checked
+# is already covered by the inline-fixture tests above
+# (test_allow_no_sv_*, test_good_template_passes, test_missing_*).

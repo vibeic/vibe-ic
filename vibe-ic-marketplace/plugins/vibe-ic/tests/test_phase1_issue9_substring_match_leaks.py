@@ -246,21 +246,30 @@ def test_aliases_index_does_not_leak_aid_via_paid_said_afraid(
     assert "EXAMPLE_PROTOCOL" not in canons
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_aliases_index_real_aid_class_extracted_with_provenance(
         tmp_path: Path) -> None:
-    """When the EXAMPLE_PROTOCOL alias really IS in source (canonical AND alias
+    """When the AID alias really IS in source (canonical AND alias
     both present on word boundaries), v1.6.68 short-alias-strict
     rule still permits the entry — and it now carries a
-    `source_doc` provenance pointer."""
+    `source_doc` provenance pointer.
+
+    AID is a class-gated alias (v1.6.359 half-duplex gate), so the
+    project's L2 must declare the half-duplex single-wire class
+    before the entry may surface — exactly the real AID scenario."""
     project = _seed_l1_for_aliases(tmp_path, {
         "schema_version": 2,
         "ic_name": "EXAMPLE_CHIP",
     })
+    # AID is half-duplex-class-gated; seed L2 with the half-duplex
+    # single-wire class_path so the v1.6.359 gate opens for the
+    # genuine-AID scenario this test exercises.
+    (project / _GEN_DIR / "L2_FRS.json").write_text(
+        json.dumps({"class_path": "protocol/half_duplex_bus/aid"})
+    )
     extracted = {
         "EXAMPLE_CHIP_Datasheet.txt": (
-            "EXAMPLE_CHIP implements the EXAMPLE_PROTOCOL protocol "
-            "(Apple ID Bus / EXAMPLE_PROTOCOL-class authentication).\n"
+            "EXAMPLE_CHIP implements the AID protocol "
+            "(Apple ID Bus / AID-class authentication).\n"
             "Apple Identification class single-wire protocol.\n"
         ),
     }
@@ -269,12 +278,12 @@ def test_aliases_index_real_aid_class_extracted_with_provenance(
         (project / _GEN_DIR / "L1_DATASHEET.json").read_text()
     )
     aid_entries = [a for a in l1.get("aliases_index", [])
-                   if a["canonical"] == "EXAMPLE_PROTOCOL"]
+                   if a["canonical"] == "AID"]
     assert len(aid_entries) == 1
-    example_protocol = aid_entries[0]
+    aid = aid_entries[0]
     # v1.6.68 — every entry now has source_doc provenance.
-    assert "source_doc" in example_protocol
-    assert "EXAMPLE_CHIP_Datasheet" in example_protocol["source_doc"]
+    assert "source_doc" in aid
+    assert "EXAMPLE_CHIP_Datasheet" in aid["source_doc"]
 
 
 def test_aliases_index_short_aliases_require_both_sides(

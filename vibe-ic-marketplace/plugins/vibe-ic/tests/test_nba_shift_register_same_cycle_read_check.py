@@ -164,21 +164,9 @@ def test_help_works():
     assert r.returncode == 0
 
 
-def test_v0119_43_real_rtl_caught():
-    """Demo: real v0.119.43 id_bus_phy.v has the bug."""
-    proj = (Path(__file__).resolve().parent.parent.parent.parent.parent
-            / "1st_benchmark_benchmark_a" / "phase2_v0119.43-vendor")
-    if not proj.exists():
-        import pytest
-        pytest.skip(f"benchmark dir {proj} not present in this checkout")
-    if not (proj / "phase2" / "stage1" / "rtl").is_dir():
-        # v1.6.21+ gates read only the canonical Phase/Stage/Step layout.
-        # Pre-b597d550 benchmarks (legacy flat-top rtl/) need migration
-        # before this real-RTL regression test applies.
-        import pytest
-        pytest.skip(f"benchmark dir {proj} predates b597d550 canonical "
-                    f"layout; not migrated to phase2/stage1/rtl/")
-    r = _run(proj)
-    assert r.returncode == 1, r.stdout
-    assert "tx_sr" in r.stdout
-    assert "id_bus_phy.v" in r.stdout
+# NOTE: the former `test_v0119_43_real_rtl_caught` demo test was removed — it
+# was pinned to an external benchmark dir (1st_benchmark_benchmark_a/
+# phase2_v0119.43-vendor) absent from the repo (so it permanently skipped), and
+# the same-cycle-read detection it demonstrated is already covered by the inline
+# pattern tests above (test_pattern_a_fail/_b_fail catch the bug; _c_pass/_d_warn
+# / _with_waiver / _no_shift_register cover the clean and waiver paths).

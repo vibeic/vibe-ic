@@ -136,14 +136,8 @@ def test_commented_hilomap_is_not_counted(tmp_path):
     assert "hilomap" in err.lower()
 
 
-# ---- regression: v068 real synth.ys passes --------------------------------
-_V068 = (Path(os.environ.get("VIBE_IC_BENCHMARK_ROOT", "/nonexistent"))
-         / "phase2+3_v068/scripts/synth.ys")
-
-
-def test_v068_synth_ys_ordering_is_correct():
-    import pytest
-    if not _V068.exists():
-        pytest.skip("v068 synth.ys not present")
-    code, _, _ = _run(["--ys-file", str(_V068)])
-    assert code == 0
+# NOTE: the former `test_v068_synth_ys_ordering_is_correct` integration test
+# was removed — it was pinned to an external `$VIBE_IC_BENCHMARK_ROOT` build
+# artifact absent from the repo (so it permanently skipped), and the synth.ys
+# ordering contract it checked is already covered by the inline-fixture tests
+# above (clean ordering, missing/mis-ordered/commented hilomap, abc placement).

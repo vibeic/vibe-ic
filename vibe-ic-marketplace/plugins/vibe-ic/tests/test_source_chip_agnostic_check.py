@@ -32,8 +32,11 @@ def test_clean_plugin_passes(tmp_path: Path) -> None:
     assert findings == []
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_chip_sku_in_program_caught(tmp_path: Path) -> None:
+    # EXAMPLE_CHIP is a stand-in SKU token (real private SKUs are kept
+    # out of the public test tree); supply it via extra_tokens so the
+    # gate exercises its default forbidden-token matching path on a
+    # program-file comment.
     root = _mk_plugin(tmp_path, {
         "programs/widget.py": """
             def make_widget():
@@ -41,17 +44,19 @@ def test_chip_sku_in_program_caught(tmp_path: Path) -> None:
                 return 1.62
         """,
     })
-    v, findings = audit(root)
+    v, findings = audit(root, extra_tokens=["EXAMPLE_CHIP"])
     assert v == "FAIL"
     assert any(f.token.upper() == "EXAMPLE_CHIP" for f in findings)
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_foundry_pdk_in_skill_caught(tmp_path: Path) -> None:
+    # HP18E80 is a stand-in foundry-PDK token; supply it via
+    # extra_tokens so the gate exercises forbidden-token detection on a
+    # skill-doc file.
     root = _mk_plugin(tmp_path, {
         "skills/place/SKILL.md": "Use HP18E80 metal stack only.",
     })
-    v, findings = audit(root)
+    v, findings = audit(root, extra_tokens=["HP18E80"])
     assert v == "FAIL"
     assert any("HP18E80" in f.token.upper() for f in findings)
 
@@ -82,13 +87,14 @@ def test_extra_tokens_extend_panel(tmp_path: Path) -> None:
     assert any(f.token == "ABC123" for f in findings)
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_md_905_word_boundary(tmp_path: Path) -> None:
-    """Hyphen in EXAMPLE_TESTER must match as a unit."""
+    """A multi-part SKU token (EXAMPLE_TESTER stand-in) must match as a
+    unit on word boundaries. Supplied via extra_tokens since the real
+    private SKU is kept out of the public test tree."""
     root = _mk_plugin(tmp_path, {
         "programs/widget.py": "x = 'EXAMPLE_TESTER tester'",
     })
-    v, findings = audit(root)
+    v, findings = audit(root, extra_tokens=["EXAMPLE_TESTER"])
     assert v == "FAIL"
     assert any(f.token == "EXAMPLE_TESTER" for f in findings)
 

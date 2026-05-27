@@ -65,13 +65,16 @@ class TestResidualProperty:
     (General residual-on-wire tests are complicated by endianness conventions
     that vary per preset; we constrain to xorout=0 presets here.)"""
 
-    @pytest.mark.parametrize("preset_name", sorted(cvg.PRESETS.keys()))
+    @pytest.mark.parametrize(
+        "preset_name",
+        sorted(p for p in cvg.PRESETS if cvg.PRESETS[p].xorout == 0))
     def test_residual_zero_for_xorout_zero_presets(self, preset_name):
+        # Scoped (by the parametrize above) to xorout==0 presets, for which the
+        # residual of [data || CRC(data)] is exactly 0. Nonzero-xorout presets
+        # have a preset-specific residual constant whose on-wire byte order is
+        # endianness-dependent and is verified elsewhere — they are not part of
+        # THIS property, so they are excluded from the parametrize (no skip).
         spec = cvg.PRESETS[preset_name]
-        if spec.xorout != 0:
-            pytest.skip(
-                f"{preset_name} has nonzero xorout=0x{spec.xorout:x}; "
-                "residual convention is preset-specific and out of scope here")
         data = b"\xde\xad\xbe\xef"
         crc = cvg.crc_byte_mode(data, spec)
         hexw = (spec.width + 7) // 8

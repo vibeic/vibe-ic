@@ -86,7 +86,6 @@ def test_benchmark_path_pass_when_dir_exists(tmp_path):
     assert "PASS" in r.stdout
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_benchmark_path_fail_when_dir_missing(tmp_path):
     """The exact v1.6.45 escape: CHANGELOG references phase2+3_v10634
     but only phase2+3_v10634-vendor exists."""
@@ -147,7 +146,6 @@ def test_benchmark_placeholder_ignored(tmp_path):
     assert "PASS" in r.stdout
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_repo_doc_scan_picks_up_readme(tmp_path):
     """v1.6.48: README.md and docs/**/*.md are also scanned, not just
     CHANGELOG.md."""

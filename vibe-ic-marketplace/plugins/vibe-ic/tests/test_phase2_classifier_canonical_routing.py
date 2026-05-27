@@ -142,12 +142,21 @@ def test_mixed_signal_otp_class_reachable(tmp_path: Path) -> None:
     assert cls == "mixed_signal_otp"
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_bare_fpga_class_reachable(tmp_path: Path) -> None:
-    """L1 + L2 present but no analog, no commands, no FSM → bare_fpga."""
+    """Path-A skeleton: no L1/L2/L3 generated docs but a `facts.yaml`
+    on disk → bare_fpga.
+
+    v1.6.523 reassigned the L1+L2-only-no-protocol case to
+    `digital_arithmetic_primitive` (ASIC datapath primitives must not
+    be mislabelled FPGA-only). The genuine, canonical way to reach
+    `bare_fpga` is now the Path-A skeleton: no L-docs + facts.yaml
+    present, which the classifier treats as a bare FPGA scaffold."""
     p = tmp_path / "proj"
-    _w(p, "L1_DATASHEET.json", {"ic_name": "fpga_skeleton"})
-    _w(p, "L2_FRS.json", {"protocol_overview": {"half_duplex": False}})
+    # generated_docs/ must exist (the phase2 adapter requires it) but
+    # carry NO L1/L2/L3 docs — that's the Path-A skeleton shape.
+    (p / "phase1" / "generated_docs").mkdir(parents=True, exist_ok=True)
+    # A facts.yaml marks the bare FPGA scaffold path.
+    (p / "facts.yaml").write_text("board: de10lite\n")
     cls, _ = detect_ic_class(p)
     assert cls == "bare_fpga"
 

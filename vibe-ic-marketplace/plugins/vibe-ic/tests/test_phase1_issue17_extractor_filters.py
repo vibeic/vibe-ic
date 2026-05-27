@@ -63,7 +63,6 @@ def test_l1_drops_power_rails_from_pin_table(tmp_path):
     assert "VIN" not in names
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_l1_drops_chip_name_and_version_codes(tmp_path):
     """The chip's own name (EXAMPLE_CHIP) and version codes (A1101, E4)
     must not promote to pins even when they appear in a pin-table
@@ -134,7 +133,6 @@ def test_l1_keeps_real_pin_table_entries(tmp_path):
     assert "OVP" in names
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_is_real_port_token_unit():
     """Direct unit test of the chip-AGNOSTIC reject filter."""
     fn = p2a._is_real_port_token

@@ -282,7 +282,6 @@ def test_aes_still_works_after_v1661() -> None:
     assert "AES" in name
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_example_chip_still_works_after_v1661() -> None:
     extracted = {
         "EXAMPLE_CHIP_Datasheet.txt": (

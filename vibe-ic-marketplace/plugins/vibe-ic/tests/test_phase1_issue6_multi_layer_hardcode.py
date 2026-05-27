@@ -307,7 +307,6 @@ def test_l4_addr_h_form_skips_when_no_header_present(
 # Bug E — L9.top_module_pins promoted from L1
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_l9_promotes_l1_pin_table_when_present(tmp_path: Path) -> None:
     """When L1.pin_table carries real extracted pins, L9 must emit
     those — not the EXAMPLE_PROTOCOL-class clk / reset_n / id_bus scaffold."""

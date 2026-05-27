@@ -25,7 +25,6 @@ if str(_PLUGIN_ROOT / "programs") not in sys.path:
 import source_chip_agnostic_check as guard  # noqa: E402
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_chip_agnostic_guard_passes_on_public_tree():
     violations = guard.scan(_PLUGIN_ROOT)
     if violations:
@@ -37,7 +36,6 @@ def test_chip_agnostic_guard_passes_on_public_tree():
         pytest.fail("\n".join(msg_lines))
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_chip_deny_list_is_non_empty():
     tokens = guard._load_deny_list(_PLUGIN_ROOT / "tests" / "chip_deny_list.txt")
     assert tokens, "deny-list is empty — guard would never catch anything"

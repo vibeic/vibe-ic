@@ -50,7 +50,6 @@ def _gen_all(project, extracted):
     gen_l13_lab_calibration(project, extracted)
 
 
-@pytest.mark.xfail(strict=False, reason="regression-from-v2-rename — extraction/walker behaviour drift exposed by public CI when full pytest replaced root's curated regression_suite.py; tracked in MAINTAINER_GITHUB_SETTINGS")
 def test_no_identical_non_empty_sibling_fields_between_aes_and_dram(tmp_path_factory):
     """Two thin-input projects (AES block cipher vs LiteDRAM memory
     controller) must not have IDENTICAL content for ANY non-empty
@@ -123,6 +122,16 @@ def test_no_identical_non_empty_sibling_fields_between_aes_and_dram(tmp_path_fac
                 # structural property of the input, not a chip-class
                 # scaffold leak.
                 "opcode_synthesis_skipped_reason",
+                # Structural skip-counters — emitted as 0 whenever the
+                # corresponding emit-gate was never tripped on a given
+                # project. Both AES and LiteDRAM are thin-input projects
+                # that legitimately skip the per-keyword vsuite cap (L7)
+                # and the peripheral-only emit path (L8), so both report
+                # 0. The counter is non-zero only on rich-input projects
+                # where the gate actually fired; a shared 0 is a property
+                # of the input, not a chip-class scaffold leak.
+                "vsuite_per_kw_cap_skipped_v1_6_373",
+                "peripheral_only_emit_skipped_v1_6_376",
                 # Empty/null sentinel structurally-shared values are fine.
                 # They're not "identical hardcodes" — they're "neither
                 # had evidence, both null".
@@ -169,7 +178,20 @@ def test_no_identical_non_empty_sibling_fields_between_aes_and_dram(tmp_path_fac
                            # `input/docs/README.md`, line 1, anchor
                            # `markdown_h1_chip_name`). Per-chip content
                            # differs in the description string itself.
-                           "description_evidence"):
+                           "description_evidence",
+                           # L9 top-module-pins fallback evidence dict.
+                           # When NEITHER project's input docs carry a
+                           # module declaration, both fall back to
+                           # L1.ic_name via the same canonical
+                           # `fallback_explicit_v1_6_581` strategy
+                           # marker, so the evidence dict is structurally
+                           # identical (same reason / fallback_source /
+                           # strategy marker). Same family as
+                           # top_module_extraction_strategy and
+                           # description_evidence above — a shared
+                           # extraction-path marker, not a chip-class
+                           # scaffold leak.
+                           "top_module_pins_evidence"):
                     continue
                 suspect_fields.append(f"{layer}.{key} = {aes_val!r}")
 
