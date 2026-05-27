@@ -1,0 +1,11 @@
+// Prob024_hadd — half adder. {cout,sum} = a + b.
+module TopModule (
+  input a,
+  input b,
+  output sum,
+  output cout
+);
+
+  assign {cout, sum} = a + b;
+
+endmodule
