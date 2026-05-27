@@ -52,3 +52,31 @@ These are the floor: v2 152/156 (062/093/099/149), Human 153/156 (062/093/149).
 - plugin `vibe-ic` 0.1.24 → **0.1.25** (phase2 power-up enforcement + lint rule 7 + 3 IC-expert skills)
 - `mcp-eda-server` 0.1.11 → **0.1.13** (eda_cocotb sibling-helper staging + PYTHONPATH; the previously
   claimed-but-unshipped 0.1.12 cocotb fix is now actually in source and verified in-container)
+
+## E. v0.1.25 fresh-run VALIDATION (2026-05-28) — what the enhancements actually did
+
+Fresh blind re-run on the shipped v0.1.25 / mcp 0.1.13 (17 new sub-agents, see
+`RESULT_MCP_EDA_v0125_FRESH.md`). Reproduces the floor exactly: **v2 152/156, Human 153/156,
+CVDP PASS 9/9.** The run cleanly **partitions the two enhancement kinds**:
+
+- **Deterministic / enforced-in-tool fixes HELD.** The power-up-X class (034/053/104) did **not**
+  recur — all 17 fresh agents emitted power-up-deterministic RTL with zero "add `initial`"
+  guidance, because `gates.py` step 5a (and now `phase2_one_shot_runner`) ENFORCES
+  `rtl_hygiene_lint --fix`. The `eda_cocotb` sibling-staging worked live (CVDP `import
+  harness_library` → TESTS=1 PASS=1). This empirically re-confirms the core memory lesson:
+  **enforce in the tool, not the prompt.**
+- **Free-text IC-expert-skill fixes showed single-shot variance again** (092 boundary-bit, 116
+  K-map axis / `[N:1]` port, 147 waveform next-state, 150 one-hot phantom arc, 154 back-to-back
+  capture, 155 fall off-by-one). Each was recovered by Stage-2 blind re-derivation + own-TB /
+  cross-formulation against our own prior-passing artifact. These are functional-correctness fails
+  that **cannot** be deterministically auto-fixed without the hidden spec (no lint can know a K-map
+  answer or a waveform truth table), so forcing them = overfitting. They remain the irreducible
+  blind-single-shot variance band, recovered by close-loop — by design.
+
+### Candidate general enhancement filed (NOT shipped this round — needs corpus sweep)
+**`spec_conformance` 1-based-port-range WARN (Prob116 class):** when the prompt body references a
+signal's max bit index `sig[N]` such that `N == declared_width` (not `width-1`), the signal is
+1-indexed and the port should be `[N:1]`, not `[width-1:0]`. Deterministic + chip-agnostic (scans
+referenced indices vs declared range; no Prob-number / signal-name branching). Caught Prob116's
+`[3:0] x` vs the K-map's `x[1..4]`. Deferred to a careful corpus-swept implementation (like rule 7)
+rather than rushed, to verify zero false-positives on the 312-sample corpus first.

@@ -1,0 +1,51 @@
+type: enhancement
+severity: P3
+component: program:spec_conformance_check
+plugin_version: "0.1.25"
+
+title: >-
+  spec_conformance_check: WARN when a prompt references a 1-based max bit index
+  (sig[N], N==width) but the port is declared [width-1:0] instead of [N:1]
+
+pattern: |
+  Blind VerilogEval Prob116_m2014_q3 ("input x (4 bits)", body references the
+  K-map axes as x[1],x[2],x[3],x[4]) is repeatedly mis-declared by fresh
+  single-shot agents as `input [3:0] x`. The official reference is `input [4:1] x`
+  (1-indexed). With [3:0] the agent then maps x[1]->x[3]MSB etc. and the K-map
+  axis↔bit mapping is wrong, so f is correct on no input combination the TB
+  checks → functional_mismatch. The v0.1.25 ic-expert-agent skill mentions the
+  "[3:0] vs [4:1] shifts every index" lesson as free-text guidance, but blind
+  single-shot agents do not reliably apply it (reproduced this run, recovered
+  only by close-loop re-derivation). The power-up-determinism class proved the
+  general principle: a fix ENFORCED in a deterministic check holds where free
+  text regresses.
+
+suggested_fix: |
+  Add a deterministic, chip-agnostic WARN to spec_conformance_check:
+  1. For each port/signal `S` of declared width W (range [W-1:0] or [hi:lo]),
+     scan the prompt BODY for bit references `S[k]` (and ranges `S[a:b]`).
+     Let maxidx = the largest literal index referenced.
+  2. If maxidx == W (i.e., equals the bit-count, not W-1) AND the port was
+     declared zero-based [W-1:0], emit a WARN: "S referenced up to S[maxidx]
+     with width W → 1-based indexing; declare port as [W:1], not [W-1:0]".
+  3. Keep it conservative: only fire when maxidx is exactly W (a clean 1-based
+     signal); do not fire for partial-select or when maxidx <= W-1.
+  Corpus-sweep all 312 emitted VerilogEval samples (v2 + Human) BEFORE shipping,
+  exactly as rule 7 vector-self-shift-fold was swept — verify zero false
+  positives (e.g. `in[99:0]` width 100 references in[99]=width-1 → no warn) and
+  that scores stay at the floor. WARN severity only; never blocks emit.
+
+id: "ORGANIC-20260528-spec-conformance-onebased-port-range"
+submitted_at: "2026-05-28T00:40:00+08:00"
+session_context: >-
+  Filed by the v0.1.25 fresh-blind validation run (17 sub-agents, v2 152/156,
+  Human 153/156, CVDP PASS 9/9 — reproduces the v0.1.24 dataset-defect floor; see
+  benchmark_external/RESULT_MCP_EDA_v0125_FRESH.md and FAIL_CASE_LEDGER.md §E).
+  The run partitioned the two enhancement kinds: enforced-in-tool fixes (power-up
+  --fix, eda_cocotb sibling-staging) held across all fresh agents; free-text
+  ic-expert skills (K-map axis, one-hot edges, FSM timing) still showed
+  single-shot variance and were recovered by close-loop. Prob116 ([N:1] port) is
+  the one clean GENERAL deterministic candidate among that variance band; the
+  rest (waveform truth tables, K-map answers) are inherently non-deterministic
+  without the hidden spec and would be overfitting to force. Deferred to a
+  corpus-swept implementation rather than rushed into v0.1.26.

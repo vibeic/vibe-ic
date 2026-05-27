@@ -60,14 +60,14 @@ def main():
     npass = sum(1 for r in results if r["verdict"] == "PASS")
     n = len(results)
     summary = {
-        "benchmark": "VerilogEval-v2 spec-to-rtl",
+        "benchmark": "VerilogEval-Human code-complete (iccad2023)",
         "tool": "iverilog 12 (host), official testbench scoring",
         "total": n, "passed": npass,
         "pass_at_1_pct": round(100.0 * npass / n, 2) if n else 0.0,
         "results": results,
     }
     (run / "pass_at_1.json").write_text(json.dumps(summary, indent=2) + "\n")
-    print(f"VerilogEval-v2 spec-to-rtl  pass@1 = {npass}/{n} = {summary['pass_at_1_pct']}%")
+    print(f"VerilogEval-Human code-complete  pass@1 = {npass}/{n} = {summary['pass_at_1_pct']}%")
     fails = [r for r in results if r["verdict"] != "PASS"]
     if fails:
         print(f"  fails ({len(fails)}): " +
