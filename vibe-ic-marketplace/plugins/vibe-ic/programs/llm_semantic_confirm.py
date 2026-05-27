@@ -36,6 +36,17 @@ _ALLOWED = {
     "fsm_output_style": ["moore", "mealy", None],
 }
 
+# Per-field domain facts that keep the confirmer from a known reasoning error. These are
+# general truths, not problem-specific hints. (The fsm one is the lesson from a confirm that
+# wrongly overrode a correct Moore candidate to Mealy, reasoning "Moore is impossible here".)
+_FIELD_NOTE = {
+    "fsm_output_style": (
+        "Decide ONLY what the spec REQUIRES — do not judge feasibility. A Moore machine is "
+        "realizable for ANY sequential function (register the output: z_reg <= f(state)), so "
+        "'Moore is impossible for this behavior' is never a valid reason to override a Moore "
+        "declaration. If the spec says Moore, keep 'moore'."),
+}
+
 
 @dataclass
 class Confirmation:
@@ -70,7 +81,8 @@ def _build_prompt(field: str, candidate: Any, evidence: str) -> str:
         f"Allowed values: {allowed_str}\n"
         f"Parser's candidate: {json.dumps(candidate)}\n\n"
         f"Spec evidence:\n\"\"\"\n{evidence.strip()}\n\"\"\"\n\n"
-        "Reply with ONLY a JSON object: "
+        + (_FIELD_NOTE[field] + "\n\n" if field in _FIELD_NOTE else "")
+        + "Reply with ONLY a JSON object: "
         '{\"value\": <one allowed value>, \"agree\": <true|false>, \"reason\": \"<short>\"}. '
         "If the spec does not clearly declare this field, value must be null."
     )
