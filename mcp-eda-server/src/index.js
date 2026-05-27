@@ -441,7 +441,7 @@ function cellgdsPath(cfg) {
 // field-agents to tell at runtime whether a given handler patch
 // was actually loaded. Resolution: keep them in lockstep; if you
 // bump package.json, also bump this constant.
-const SERVER_VERSION = "0.1.6";
+const SERVER_VERSION = "0.1.7";
 function wrapResult({ success, t0, toolVersion, error, output, headLines = 40, tailLines = 80, ...rest }) {
   const dur = t0 ? (Date.now() - t0) : 0;
   const text = (output || "").toString();
@@ -2952,6 +2952,62 @@ server.tool(
     } catch (e) { return guardError(e); }
 
     const scriptPath = `${programs_dir}fsm_table_rtl_gen.py`;
+    const argv = [scriptPath, spec];
+    if (out) argv.push("-o", out);
+
+    let output = "", status = "ERROR";
+    try {
+      const _r = _spawnSync("python3", argv, {
+        timeout: 60000, maxBuffer: 5 * 1024 * 1024, encoding: "utf-8",
+      });
+      if (_r.error) throw _r.error;
+      output = (_r.stdout || "") + (_r.stderr || "");
+      status = (_r.status === 0) ? "PASS" : "FAIL";
+    } catch (err) {
+      output = (err.stdout || err.stderr || err.message || "").slice(-4000);
+      status = "ERROR";
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          success: status === "PASS",
+          status,
+          rtl: out ? undefined : output,
+          out: out || undefined,
+          log: output.slice(-2000),
+        }),
+      }],
+    };
+  }
+);
+
+// ─── Tool: eda_truth_table_gen ───
+// since v0.1.7. Phase-2 deterministic combinational-logic generator, companion
+// to eda_fsm_table_gen. Given a structured truth-table contract (inputs, outputs,
+// rows, default) it emits a correct synthesizable case-based module — no LLM,
+// byte-identical per spec. Motivated by the VerilogEval-v2 run: fully-specified
+// truth-table / K-map problems (e.g. Prob069 truthtable1) are mechanically
+// derivable. The generated Prob069 module passes the official VerilogEval
+// testbench (Mismatches: 0/58). For a complete table the result is exactly
+// correct; partial tables use an explicit `default` (canonical don't-care).
+server.tool(
+  "eda_truth_table_gen",
+  "Deterministically generate combinational RTL from a structured truth table (inputs/outputs/rows + default). Program-first: same spec → byte-identical RTL, no LLM, no don't-care guessing. Spec is a JSON/YAML file; `in`/`out` are MSB-first binary strings over the declared ports.",
+  {
+    spec: z.string().describe("Truth-table spec file (.json or .yaml): module, inputs, outputs, rows[{in,out}], optional default"),
+    out: z.string().optional().describe("Output .sv path (default: returned in the response)"),
+    programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing truth_table_rtl_gen.py (auto-detected; overridable via $VIBE_IC_PROGRAMS_DIR)"),
+  },
+  async ({ spec, out, programs_dir }) => {
+    try {
+      assertSafePath(spec, "spec");
+      if (out) assertSafePath(out, "out");
+      optPath(programs_dir, "programs_dir");
+    } catch (e) { return guardError(e); }
+
+    const scriptPath = `${programs_dir}truth_table_rtl_gen.py`;
     const argv = [scriptPath, spec];
     if (out) argv.push("-o", out);
 

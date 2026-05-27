@@ -1,3 +1,25 @@
+## [0.1.7] - 2026-05-27
+
+### `+eda_truth_table_gen` — deterministic truth-table → combinational RTL (Phase-2)
+
+Companion to `eda_fsm_table_gen`. New MCP tool (backed by
+`programs/truth_table_rtl_gen.py`) that emits a correct, synthesizable,
+`case`-based combinational module DETERMINISTICALLY from a structured truth-table
+contract (inputs, outputs, rows, default) — no LLM, byte-identical per spec.
+
+- **Why** (VerilogEval-v2 driven): fully-specified truth-table / K-map problems
+  (e.g. Prob069 `truthtable1`) are mechanically derivable; Phase 2 previously fell
+  back to a blind LLM shot. Widens the deterministic Phase-2 coverage (FSM tables +
+  now combinational tables).
+- **Proven**: the generated Prob069 module passes the official VerilogEval
+  testbench (`Mismatches: 0 in 58 samples`). 7 unit tests (single/multi-output,
+  multi-bit inputs, partial-table default, determinism, validation).
+- For a complete table the result is exactly correct; partial tables take an
+  explicit `default` (canonical don't-care assignment). `in`/`out` are MSB-first
+  binary strings over the declared ports.
+
+Tool count: 52 MCP tools (44 eda + 7 device + 1 health) in `src/index.js`.
+
 ## [0.1.6] - 2026-05-27
 
 ### `+eda_fsm_table_gen` — deterministic FSM-table → RTL generator (Phase-2)

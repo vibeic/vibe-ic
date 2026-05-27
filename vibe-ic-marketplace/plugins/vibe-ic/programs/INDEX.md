@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 415
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 415)
+- **Total programs (excluding helpers / shims):** 416
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 416)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 406 |
+| `any` | 407 |
 
 ## Alphabetical listing
 
@@ -415,6 +415,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tristate_bus_check` | any | — | Generate general tristate / open-drain bus assertions. |
 | `tristate_pullup_assertion_check` | any | v0.116 | BACKLOG-v11 P1.1. |
 | `tristate_self_rx_mask_check` | any | — | Self-RX masking audit for tristate/open-drain |
+| `truth_table_rtl_gen` | any | v0.1.7 | deterministic truth-table → combinational RTL generator. |
 | `tx_abort_during_transmission_check` | any | v0.108 | Verify TX modules do not abort/reset |
 | `tx_bit_timing_units_check` | any | v0.119.29 | verify TX bit-cell constants in |
 | `tx_bit_width_min_resolution_check` | any | v0.119.20 | advisory gate that flags when the |
@@ -487,7 +488,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (406 programs)
+### `any` (407 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -871,6 +872,7 @@ _(no programs in this group)_
 - `tristate_bus_check` — Generate general tristate / open-drain bus assertions.
 - `tristate_pullup_assertion_check` — BACKLOG-v11 P1.1.  _[v0.116]_
 - `tristate_self_rx_mask_check` — Self-RX masking audit for tristate/open-drain
+- `truth_table_rtl_gen` — deterministic truth-table → combinational RTL generator.  _[v0.1.7]_
 - `tx_abort_during_transmission_check` — Verify TX modules do not abort/reset  _[v0.108]_
 - `tx_bit_timing_units_check` — verify TX bit-cell constants in  _[v0.119.29]_
 - `tx_bit_width_min_resolution_check` — advisory gate that flags when the  _[v0.119.20]_

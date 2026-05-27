@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "_comment": "AUTHORITATIVE MCP tool inventory \u2014 generated from code by tools/gen_mcp_tool_inventory.py. Do NOT hand-edit; the website tool count must read `total` from here.",
-  "total": 51,
+  "total": 52,
   "by_category": {
-    "eda": 43,
+    "eda": 44,
     "device": 7,
     "other": 1
   },
@@ -49,6 +49,7 @@
     "eda_sta",
     "eda_sta_mcorner",
     "eda_synth",
+    "eda_truth_table_gen",
     "eda_workflow_run",
     "eda_xschem_netlist"
   ],
@@ -113,6 +114,7 @@
     "eda_sta",
     "eda_sta_mcorner",
     "eda_synth",
+    "eda_truth_table_gen",
     "eda_workflow_run",
     "eda_xschem_netlist",
     "mcp_server_health_check"
