@@ -134,6 +134,28 @@ threshold), and re-derive the output column cycle-by-cycle. Cross-check the firs
 sample against your registered-latency. *Miss class:* Prob149 (reservoir valve direction), Prob150
 (one-hot FSM) — both turn on a single carefully-read transition or boundary.
 
+**Hysteresis / history-dependent FSMs.** When an output depends on *how* a state was reached (the
+direction of travel), the machine needs PAIRED states, not one state per level — e.g. a tank
+controller with levels splits each interior level into "arrived-from-below" / "arrived-from-above"
+states (B1/B2, C1/C2) so a supplemental-flow output can differ on the way up vs down. If a spec
+reads as "contradictory" (e.g. "open dfr when the previous level was lower" vs a reset that asserts
+it at the bottom), the resolution is usually a hysteresis FSM with a defined reset-arrival state,
+not an actual contradiction — model the history explicitly before declaring a defect. (Prob149.)
+
+### Skill: dual-edge flip-flop (both clock edges)
+A flop that must capture `d` on BOTH clock edges cannot use `always @(posedge clk or negedge clk)`
+(illegal for synthesis/iverilog). The canonical, correct realization is two independent edge flops
+muxed by the clock LEVEL — NOT an XOR-feedback trick:
+```verilog
+reg qp, qn;
+always @(posedge clk) qp <= d;     // capture on rising
+always @(negedge clk) qn <= d;     // capture on falling
+always @(*) q = clk ? qp : qn;     // present the most-recent capture
+```
+The tempting `p<=d^n; n<=d^p; q=p^n` XOR-feedback form does **not** settle (each FF depends on the
+other edge's register) and mismatches on nearly every vector — verified miss on Prob078 (223/224
+wrong) vs the clk-mux form (0 mismatches). Always use the independent-capture + clock-level-mux form.
+
 ### Skill: spec-defect detection (flag, don't silently guess)
 Some specs are internally inconsistent or contradict their own reference. When you detect one,
 **flag it** (route to the PM Agent for user clarification) instead of quietly picking a side:
