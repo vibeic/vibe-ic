@@ -1,3 +1,18 @@
+## [0.1.10] - 2026-05-27
+
+### Phase-2 program-first wiring — deterministic RTL dispatcher in `step_rtl_gen`
+
+`phase2_one_shot_runner.step_rtl_gen` now tries the deterministic RTL dispatcher
+FIRST: if the project ships a structured RTL spec (`phase2/stage1/rtl_spec.json`,
+`phase2/rtl_spec.json`, or `input/rtl_spec.{json,yaml}`), it routes through
+`deterministic_rtl_dispatcher` (FSM-table / truth-table / gate-netlist / vector-op)
+and emits `rtl/<module>.sv` with NO LLM — before any class-registry / AI-fallback
+path. A non-mechanically-derivable spec (dispatcher exit 3) or no spec falls
+through to the existing behaviour unchanged. This realises "programs first, Claude
+as backup" at the actual Phase-2 entry point. 5 wiring tests
+(test_phase2_program_first_dispatch.py); smoke-verified end-to-end (FSM + vector
+specs → deterministic rtl/chip_top.sv). No new MCP tool; version co-bumped.
+
 ## [0.1.9] - 2026-05-27
 
 ### `+eda_rtl_dispatch` — Phase-2 program-first RTL router

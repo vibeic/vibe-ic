@@ -650,8 +650,74 @@ def _lookup_class(ic_class: str) -> Optional[dict]:
     return None
 
 
+def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepResult]:
+    """since v0.1.10 — program-first RTL. If the project ships a structured RTL
+    spec, route it through deterministic_rtl_dispatcher (FSM-table / truth-table /
+    gate-netlist / vector-op) and emit RTL with NO LLM. Returns a StepResult
+    (PASS/FAIL) when a spec is present and dispatched; returns None when there is
+    no spec, or the spec is not mechanically derivable (dispatcher exit 3) — in
+    which case the caller falls through to the class-registry / AI-fallback path.
+
+    Spec is looked for at the conventional locations below; its ``module`` field
+    names the emitted ``rtl/<module>.sv``."""
+    spec = None
+    for cand in ("phase2/stage1/rtl_spec.json", "phase2/rtl_spec.json",
+                 "input/rtl_spec.json", "phase2/stage1/rtl_spec.yaml",
+                 "phase2/rtl_spec.yaml", "input/rtl_spec.yaml"):
+        p = project / cand
+        if p.is_file():
+            spec = p
+            break
+    if spec is None:
+        return None
+    dispatcher = PROGRAMS_DIR / "deterministic_rtl_dispatcher.py"
+    if not dispatcher.is_file():
+        return None
+    module = "chip_top"
+    try:
+        if spec.suffix.lower() in (".yaml", ".yml"):
+            import yaml
+            module = (yaml.safe_load(spec.read_text()) or {}).get("module", module)
+        else:
+            module = (json.loads(spec.read_text()) or {}).get("module", module)
+    except Exception:
+        pass
+    rtl_dir = _pl.rtl_dir(project)
+    rtl_dir.mkdir(parents=True, exist_ok=True)
+    out = rtl_dir / f"{module}.sv"
+    try:
+        r = subprocess.run([sys.executable, str(dispatcher), str(spec), "-o", str(out)],
+                           capture_output=True, text=True, timeout=120)
+    except Exception as e:
+        return StepResult("rtl_gen", "FAIL", time.time() - t0,
+                          f"deterministic_rtl_dispatcher crashed on {spec.name}: {e}")
+    if r.returncode == 3:
+        return None  # not mechanically derivable → fall through to class/AI path
+    if r.returncode != 0:
+        return StepResult("rtl_gen", "FAIL", time.time() - t0,
+                          f"deterministic_rtl_dispatcher rejected {spec.name}: "
+                          f"{(r.stderr or r.stdout)[-300:]}")
+    blob = (r.stdout or "") + (r.stderr or "")
+    m = re.search(r"route . (\w+)", blob) or re.search(r":\s*([\w-]+)\s*. wrote", blob)
+    gen = m.group(1) if m else "deterministic"
+    return StepResult(
+        "rtl_gen", "PASS", time.time() - t0,
+        f"deterministic RTL via {gen} (program-first; no LLM) → "
+        f"{out.relative_to(project)}",
+        output_files=[str(out)],
+        extras={"deterministic_generator": gen,
+                "rtl_spec": str(spec.relative_to(project)),
+                "program_first": True})
+
+
 def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
     t0 = time.time()
+    # v0.1.10: program-FIRST. If a structured RTL spec is present and is
+    # mechanically derivable (FSM table / truth table / gate netlist / vector op),
+    # emit RTL deterministically with NO LLM before any class-registry / AI path.
+    _det = _try_deterministic_rtl_dispatch(project, t0)
+    if _det is not None:
+        return _det
     # Registry lookup → deterministic generator OR fallback skill.
     config = _lookup_class(ic_class)
     if config is None:
