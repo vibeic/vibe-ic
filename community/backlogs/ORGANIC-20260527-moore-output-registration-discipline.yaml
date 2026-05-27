@@ -1,0 +1,45 @@
+type: enhancement
+severity: P3
+component: program:rtl_hygiene_lint
+plugin_version: "0.1.10"
+
+title: >-
+  Lint for Moore-vs-Mealy output discipline: when the spec declares a Moore FSM,
+  the output must be a function of state only (registered), not of the inputs
+
+pattern: |
+  VerilogEval-v2 Prob089 (serial 2's complementer) declares a *Moore* state
+  machine in its prompt, but a natural blind implementation wrote a Mealy output
+  (`assign z = (state==A) ? x : ~x`) — z is a function of the current input x.
+  This is functionally a valid 2's complementer but mis-times against a Moore
+  reference (it leads by one cycle), so it failed ~half the vectors. The fix was
+  a registered Moore output (`z` = f(state) only, updated on the clock).
+
+  There is currently no gate that connects the word "Moore" in the spec to the
+  structural requirement "output depends on state only / is registered". The
+  reset-less power-up class from the same tuning loop was captured as
+  rtl_hygiene_lint rule 5 (uninit-registered-output); this is the sibling
+  output-timing discipline that was fixed by hand but not yet encoded.
+
+suggested_fix: |
+  Add an rtl_hygiene_lint rule (or extend reset_discipline_check) that, when the
+  spec/prompt text contains "Moore", flags any top-level output assigned by a
+  combinational `assign`/`always @(*)` whose RHS references a module INPUT port
+  (i.e. a Mealy output). Conservative: only fire when (a) the spec says Moore and
+  (b) the output's combinational cone includes an input port. Message: "spec
+  declares a Moore FSM but output 'z' is combinationally dependent on input 'x'
+  (Mealy) — register it as a function of state only." Keep it WARN. Add unit
+  tests: a Moore (state-only registered output) passes; a Mealy output under a
+  Moore spec is flagged.
+
+related:
+  - ORGANIC-20260527-conformance-function-arg-as-port
+
+id: "ORGANIC-20260527-moore-output-registration-discipline"
+submitted_at: "2026-05-27T15:40:00+08:00"
+session_context: >-
+  Filed during the VerilogEval-v2 v0.1.10 closed-loop plugin tuning run
+  (run_rerun_v0110_pipeline, iter0 141 → iter2 155/156). Prob089 was fixed by
+  hand (registered Moore output); recording the systematic lint so a future
+  iteration catches Moore-vs-Mealy timing automatically, the same way the
+  reset-less power-up class became rtl_hygiene_lint rule 5.

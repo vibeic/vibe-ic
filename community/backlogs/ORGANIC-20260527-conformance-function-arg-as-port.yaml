@@ -1,0 +1,69 @@
+type: bug
+severity: P2
+component: program:spec_conformance_check
+plugin_version: "0.1.10"
+
+title: >-
+  spec_conformance_check RTL-side port extractor parses Verilog `function`
+  argument declarations as module ports → spurious port-extra ERRORs
+
+pattern: |
+  The RTL-side port extractor in spec_conformance_check (the half that scans the
+  generated .v/.sv to build the actual port list) treats `input`/`output`
+  declarations that appear INSIDE a `function ... endfunction` body as if they
+  were top-level module ports. A function argument list such as
+
+      function [7:0] inc;
+          input [7:0] v;
+          input       c;
+          ...
+      endfunction
+
+  yields two phantom RTL ports `v` and `c`, which the gate then reports as
+  `[ERROR] port-extra: RTL port 'v'/'c' is not declared in the spec.` even though
+  the module's real port list matches the spec exactly.
+
+  Minimal repro (confirmed v0.1.10):
+    module TopModule(input [7:0] a, output [7:0] q);
+      function [7:0] inc; input [7:0] v; input c; begin inc = v + (c?1:0); end endfunction
+      assign q = inc(a, 1'b1);
+    endmodule
+    spec: "- input [7:0] a / - output [7:0] q"
+    => FAIL, 2 errors: port-extra 'v', port-extra 'c'   (should be PASS)
+
+  Same for `task` argument declarations and for `function` automatic args.
+  `function`/`task` I/O args use the same `input`/`output` keywords as module
+  ports but are lexically scoped to the subprogram — they must not contribute to
+  the module's external port list.
+
+impact: |
+  False-positive that forces needless ECO/fix iterations on any RTL using the
+  common `function`/`task` idiom. Surfaced during the VerilogEval-v2 v0.1.10
+  full-pipeline re-run on Prob141_count_clock (BCD-increment function) and
+  Prob153_gshare (saturating-counter function). Agents worked around it by
+  inlining the function logic as wires (behaviour-equivalent), so the benchmark
+  score was unaffected — but the gate is wrong, and a stricter flow that trusts
+  the ERROR verdict would reject correct RTL.
+
+suggested_fix: |
+  In the RTL port extractor, skip any `input`/`output`/`inout` declaration whose
+  lexical scope is inside a `function`/`task` ... `endfunction`/`endtask` block.
+  Simplest robust approach: track function/task nesting depth while scanning and
+  only collect port declarations at module scope (depth 0). If using a regex
+  pass, strip `function...endfunction` and `task...endtask` spans before port
+  extraction. Add a unit test with the minimal repro above (expect PASS) plus a
+  task-arg variant, alongside the existing port-extra ERROR tests so the
+  genuine port-extra detection is preserved.
+
+related:
+  - ORGANIC-20260527-spec-conformance-extractor-coverage   # spec-SIDE extractor; this is the RTL-SIDE extractor
+
+id: "ORGANIC-20260527-conformance-function-arg-as-port"
+submitted_at: "2026-05-27T15:05:00+08:00"
+session_context: >-
+  Filed during a fresh blind VerilogEval-v2 re-benchmark through the full
+  Phase1→Phase2 plugin pipeline on v0.1.10 (run_rerun_v0110_pipeline, pass@1 =
+  141/156). Two of eight parallel agents independently hit the false-positive on
+  function-using RTL (Prob141, Prob153) and both reported it; reproduced
+  standalone afterward to confirm it is a genuine chip-agnostic extractor bug,
+  not a spec/prompt artifact.
