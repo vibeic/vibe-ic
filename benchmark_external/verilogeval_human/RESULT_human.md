@@ -57,12 +57,16 @@ python3 score_verilogeval.py --run run_v0119 \
   the blind agent used the canonical two-edge-capture + clk-level-mux form (`q=clk?qp:qn`) instead
   of the non-settling XOR-feedback form. Clean skill win → with v0.1.21 the Human solvable score
   is effectively **153/156**.
-- **Prob149_ece241_2013_q4 → still FAIL (1171/2040).** The hysteresis-FSM skill gave the right
-  STRUCTURE (paired arrived-from-below/-above states + reset→bottom), but the blind agent's specific
-  per-state dfr semantics still diverge from the reference's particular 6-state machine
-  (A2/B1/B2/C1/C2/D1, with non-obvious values like B1.dfr=0 vs B2.dfr=1). The prose underspecifies
-  exactly when supplemental flow toggles — this is closer to an underspecified/ambiguous spec than a
-  cleanly skill-fixable one. Not resolved by this pass.
+- **Prob149_ece241_2013_q4 → DATASET DEFECT (proven by deeper analysis).** The hysteresis-FSM
+  skill fully resolves the STRUCTURE — the 6-state machine (A2/B1/B2/C1/C2/D1) is understood
+  completely. Isolating the only remaining variable (dfr polarity) on the IDENTICAL FSM:
+  the prompt's literal rule ("previous level lower than current [rising] → open Supplemental dfr"
+  ⇒ rising→dfr=1) scores 1171/2040; the reference's opposite polarity (rising→dfr=0, falling→dfr=1)
+  scores 0/2040. So the reference implements the OPPOSITE dfr direction from what the prompt's text
+  states. A faithful reading of the prompt CANNOT pass — this is a prompt-vs-reference contradiction
+  (same class as Prob062 polarity / Prob093 K-map), not a comprehension gap and not honestly fixable
+  blind. (Undetectable from the prompt alone: the prompt is self-consistent; it only contradicts the
+  hidden reference.)
 
 **Net with v0.1.21:** Human 153/156 solvable (078 fixed); residual = 062 (polarity defect),
-093 (K-map-vs-reference defect), 149 (underspecified hysteresis semantics).
+093 (K-map-vs-reference defect), 149 (prompt-vs-reference dfr-polarity contradiction, proven).
