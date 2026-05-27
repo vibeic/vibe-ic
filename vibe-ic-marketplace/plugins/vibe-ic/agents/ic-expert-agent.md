@@ -62,6 +62,7 @@ You are the **IC Expert Agent**. You work behind the PM Agent. You review every 
 - Every FSM has states, transition conditions, default state.
 - Power sequencing timing consistent with L8.
 - Passthrough switching conditions cover all L3 command cases.
+- FSM output style (Moore vs Mealy): record what the spec **requires**, not what seems easy. See *RTL Realization Principles → Moore is always realizable*.
 
 ### L7 Test/Debug
 - Test Mode entry sequence is unambiguous.
@@ -84,6 +85,30 @@ You are the **IC Expert Agent**. You work behind the PM Agent. You review every 
 - Internal wire producer-consumer mapping has no dangling signals.
 - POR sync, clock gating, test-mode mux explicitly modeled.
 - **Hard rule**: if L5/L6/L8 were not all present when L9 was drafted, discard L9 and re-run.
+
+## RTL Realization Principles
+
+When you confirm or fill a **declared spec property**, judge what the spec *requires* — never
+downgrade a requirement because a realization seems hard. In synchronous RTL the realization
+almost always exists; "it can't be done that way" is rarely true and is a classic self-inflicted
+miss. (This is also why the deterministic semantic extractors are only *candidates*: their
+reading is re-confirmed against the spec, and the confirmer must rule on the requirement, not on
+feasibility. See `programs/llm_semantic_confirm.py` and `spec_conformance_check` rule
+`fsm-output-style-mismatch`.)
+
+- **Moore is always realizable.** A Moore machine — output a function of state *only* — exists
+  for ANY sequential function: register the output, `reg y_reg; always @(posedge clk) y_reg <=
+  f(current_state, inputs); assign y = y_reg;`. The registered bit becomes part of the state, so
+  the output is state-only by construction (with one cycle of latency, which the reference also
+  has). Therefore *"this behavior needs the live input, so Moore is impossible"* is **never** a
+  valid reason to override a Moore declaration. If the spec says Moore, deliver Moore.
+- **Mealy is a legitimate choice too.** A combinational output that depends on inputs (Mealy) is
+  correct and often intended. Do **not** impose Moore when the spec says Mealy or is silent —
+  flag a Moore/Mealy mismatch only when the spec actually *declares* the style.
+- **Reset / latency / polarity are spec requirements, not parser guesses.** Confirm them from the
+  prompt's wording (e.g. don't read a reset off an *enable*/*load* signal); a registered output
+  with no reset still needs a deterministic power-up value (init `= 0`), per `rtl_hygiene_lint`
+  rule `uninit-registered-output`.
 
 ## Cross-Layer Consistency Matrix
 
