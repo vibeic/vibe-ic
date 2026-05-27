@@ -55,10 +55,10 @@ def _fallback_hit(cls: str, layer: str, templates_dir: Path,
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--templates",
-                    default="vibe-ic-marketplace/plugins/vibe-ic-core/"
+                    default="vibe-ic-marketplace/plugins/vibe-ic/"
                             "agents/class_kb/templates")
     ap.add_argument("--qbank",
-                    default="vibe-ic-marketplace/plugins/vibe-ic-core/"
+                    default="vibe-ic-marketplace/plugins/vibe-ic/"
                             "agents/qbank")
     ap.add_argument("--fail-on-unreachable", action="store_true",
                     help="exit 1 if any (class, layer) has no fallback hit")
