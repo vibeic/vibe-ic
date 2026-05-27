@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 414
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 414)
+- **Total programs (excluding helpers / shims):** 415
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 415)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 405 |
+| `any` | 406 |
 
 ## Alphabetical listing
 
@@ -175,6 +175,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `frs_timing_range_check` | any | — | gate that catches L2 timing fields stored as |
 | `fsm_error_invariant` | any | — | Detect FSMs where an error signal can break upper-layer |
 | `fsm_state_coverage_check` | any | Wave 13 | v0.119.45 (Wave 13) gate. |
+| `fsm_table_rtl_gen` | any | v0.1.6 | deterministic FSM-table → synthesizable RTL generator. |
 | `function_void_with_output_check` | any | Wave 29 | Wave 29 (v0.119.61) gate. |
 | `functional_state_transition_coverage_check` | any | — | Verify TBs exercise the |
 | `gap_reset_granularity_check` | any | — | deterministic compliance check derived from |
@@ -486,7 +487,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (405 programs)
+### `any` (406 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -633,6 +634,7 @@ _(no programs in this group)_
 - `frs_timing_range_check` — gate that catches L2 timing fields stored as
 - `fsm_error_invariant` — Detect FSMs where an error signal can break upper-layer
 - `fsm_state_coverage_check` — v0.119.45 (Wave 13) gate.  _[Wave 13]_
+- `fsm_table_rtl_gen` — deterministic FSM-table → synthesizable RTL generator.  _[v0.1.6]_
 - `function_void_with_output_check` — Wave 29 (v0.119.61) gate.  _[Wave 29]_
 - `functional_state_transition_coverage_check` — Verify TBs exercise the
 - `gap_reset_granularity_check` — deterministic compliance check derived from

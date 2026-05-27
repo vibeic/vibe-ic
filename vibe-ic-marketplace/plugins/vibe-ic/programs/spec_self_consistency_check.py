@@ -120,6 +120,23 @@ def check_spec(text: str, is_json: bool = False) -> List[Finding]:
                 f"interface declares port '{n}' more than once"))
         seen.add(n)
 
+    # ── no-output-port (the Prob031 garbled-spec signature, pre-RTL) ──────────
+    # An interface that declares inputs but ZERO output/inout ports is almost
+    # always garbled — typically an output mis-declared as input (Prob031: a D
+    # flip-flop whose `q` output was listed as `- input q`). A module that
+    # produces nothing is meaningless, so this is a high-precision signal.
+    if contract.ports:
+        dirs = [(p.direction or "").lower() for p in contract.ports]
+        n_in = sum(1 for d in dirs if d == "input")
+        n_out = sum(1 for d in dirs if d in ("output", "inout"))
+        if n_in >= 1 and n_out == 0:
+            findings.append(Finding(
+                "no-output-port", "WARN",
+                f"interface declares {n_in} input(s) but ZERO output/inout ports — "
+                "a module that produces no output is almost always a garbled spec "
+                "(e.g. an output mis-declared as input; VerilogEval Prob031 signature). "
+                "Confirm which port should be the output before generating RTL."))
+
     # ── body-port-gap (the Prob099 garbled-spec signature, pre-RTL) ───────────
     # For each declared numbered family (e.g. Y:{1,3}), scan the spec BODY for a
     # whole-word sibling token (Y2, Y4, …) that is NOT in the declared interface.

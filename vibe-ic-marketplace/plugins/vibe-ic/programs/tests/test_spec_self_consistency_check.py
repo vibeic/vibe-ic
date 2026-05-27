@@ -123,6 +123,31 @@ def test_duplicate_port(tmp_path):
     assert 'duplicate-port' in codes(f)
 
 
+# ---- no-output-port : the Prob031 garbled-spec signature -------------------
+def test_no_output_port_fires(tmp_path):
+    # Prob031: a D flip-flop whose output `q` was mis-declared as `- input q`,
+    # leaving the interface with three inputs and ZERO outputs.
+    spec = """\
+ - input clk
+ - input d
+ - input q
+The module should implement a single D flip-flop.
+"""
+    res, f = run(tmp_path, spec)
+    assert 'no-output-port' in codes(f)
+
+
+def test_no_output_port_quiet_when_output_present(tmp_path):
+    spec = """\
+ - input clk
+ - input d
+ - output q
+A D flip-flop.
+"""
+    res, f = run(tmp_path, spec)
+    assert 'no-output-port' not in codes(f)
+
+
 # ---- clean spec passes -----------------------------------------------------
 def test_clean_spec_passes(tmp_path):
     spec = """\

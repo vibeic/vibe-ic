@@ -1,3 +1,34 @@
+## [0.1.6] - 2026-05-27
+
+### `+eda_fsm_table_gen` — deterministic FSM-table → RTL generator (Phase-2)
+
+New MCP tool (backed by `programs/fsm_table_rtl_gen.py`) that emits correct,
+synthesizable Verilog DETERMINISTICALLY from a structured FSM contract (states,
+encoding, transition table, per-state/Mealy outputs) — no LLM, no don't-care
+guessing; same spec → byte-identical RTL.
+
+- **Why** (driven by the VerilogEval-v2 run): many problems hand the design an
+  EXPLICIT state-transition table (e.g. Prob100 `fsm3comb`) for which the RTL is
+  mechanically derivable, yet Phase 2 had no deterministic generator and fell back
+  to a blind LLM shot. This makes the table-driven FSM class program-generated —
+  the "program-first, Claude-as-backup" architecture for the part that CAN be
+  deterministic.
+- **Proven**: the generated Prob100 module passes the official VerilogEval
+  testbench (`Mismatches: 0 in 100 samples`). 7 unit tests cover moore_comb /
+  moore_seq (sync + async-low reset) / mealy_seq + validation + determinism.
+- Kinds: `moore_comb` (next-state + Moore output logic only), `moore_seq`
+  (registered state + clk/reset), `mealy_seq`. Params: `spec` (JSON/YAML), `out`.
+
+### Phase-1 `spec_self_consistency_check` — `+no-output-port` rule
+
+New deterministic pre-RTL lint rule: an interface that declares inputs but ZERO
+output/inout ports is almost always garbled (an output mis-declared as input —
+VerilogEval **Prob031**: a D flip-flop whose `q` output was listed as `- input q`).
+Verified high-precision: across all 156 VerilogEval-v2 prompts it fires on exactly
+Prob031 and nothing else (alongside `body-port-gap` on Prob099).
+
+Tool count: 51 MCP tools (43 eda + 7 device + 1 health) in `src/index.js`.
+
 ## [0.1.5] - 2026-05-27
 
 > Versions from here on use the unified `0.1.x` scheme (SERVER_VERSION = package.json

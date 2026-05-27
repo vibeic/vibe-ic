@@ -441,7 +441,7 @@ function cellgdsPath(cfg) {
 // field-agents to tell at runtime whether a given handler patch
 // was actually loaded. Resolution: keep them in lockstep; if you
 // bump package.json, also bump this constant.
-const SERVER_VERSION = "0.1.5";
+const SERVER_VERSION = "0.1.6";
 function wrapResult({ success, t0, toolVersion, error, output, headLines = 40, tailLines = 80, ...rest }) {
   const dur = t0 ? (Date.now() - t0) : 0;
   const text = (output || "").toString();
@@ -2920,6 +2920,63 @@ server.tool(
           findings,
           errors,
           output: output.slice(-2000),
+        }),
+      }],
+    };
+  }
+);
+
+// ─── Tool: eda_fsm_table_gen ───
+// since v0.1.6. Phase-2 "program writes the RTL" generator: given a structured
+// FSM contract (states, encoding, transition table, per-state/Mealy outputs) it
+// emits correct synthesizable Verilog DETERMINISTICALLY — no LLM, no don't-care
+// guessing. Motivated by the VerilogEval-v2 run: many problems hand an explicit
+// state-transition table (e.g. Prob100 fsm3comb) for which the RTL is mechanically
+// derivable, yet Phase 2 previously fell back to a blind LLM shot. The generated
+// Prob100 module passes the official VerilogEval testbench (Mismatches: 0/100).
+// Kinds: moore_comb (next-state + Moore output logic only), moore_seq (registered
+// state + clk/reset), mealy_seq.
+server.tool(
+  "eda_fsm_table_gen",
+  "Deterministically generate synthesizable FSM RTL from a structured state-transition table (Moore comb/seq or Mealy). Program-first: same spec → byte-identical RTL, no LLM. Spec is a JSON/YAML file with module, kind, encoding, transitions, outputs (+ clk/reset for sequential).",
+  {
+    spec: z.string().describe("FSM spec file (.json or .yaml): module, kind (moore_comb|moore_seq|mealy_seq), encoding, transitions, outputs, [clk, reset]"),
+    out: z.string().optional().describe("Output .sv path (default: returned in the response)"),
+    programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing fsm_table_rtl_gen.py (auto-detected; overridable via $VIBE_IC_PROGRAMS_DIR)"),
+  },
+  async ({ spec, out, programs_dir }) => {
+    try {
+      assertSafePath(spec, "spec");
+      if (out) assertSafePath(out, "out");
+      optPath(programs_dir, "programs_dir");
+    } catch (e) { return guardError(e); }
+
+    const scriptPath = `${programs_dir}fsm_table_rtl_gen.py`;
+    const argv = [scriptPath, spec];
+    if (out) argv.push("-o", out);
+
+    let output = "", status = "ERROR";
+    try {
+      const _r = _spawnSync("python3", argv, {
+        timeout: 60000, maxBuffer: 5 * 1024 * 1024, encoding: "utf-8",
+      });
+      if (_r.error) throw _r.error;
+      output = (_r.stdout || "") + (_r.stderr || "");
+      status = (_r.status === 0) ? "PASS" : "FAIL";
+    } catch (err) {
+      output = (err.stdout || err.stderr || err.message || "").slice(-4000);
+      status = "ERROR";
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          success: status === "PASS",
+          status,
+          rtl: out ? undefined : output,
+          out: out || undefined,
+          log: output.slice(-2000),
         }),
       }],
     };
