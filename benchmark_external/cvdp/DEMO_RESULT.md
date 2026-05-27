@@ -1,5 +1,12 @@
 # CVDP — local end-to-end demonstration (N=1, substitute sim image)
 
+> **v0.1.5 re-run (2026-05-27).** Re-executed on v0.1.5 with the substitute image:
+> golden → **PASS (1/1, 100%)**, no-patch (`-d`) → **FAIL (0%)** (harness discriminates), and the
+> recorded Claude-as-agent TB-in-context RTL (`claude_agent_dataset_v2.jsonl`) → **PASS (1/1, 8/8
+> tests, 100%)**. All three reproduced (matches the v0.1.4 re-run). **Scope unchanged: N=1 on the
+> only open problem with a substitute sim image — still NOT a citable pass-rate** (blockers 1 & 3
+> in `STATUS.md` remain).
+
 > **v0.1.4 re-run (2026-05-27).** Re-executed on the v0.1.4 setup with the substitute image:
 > golden → **PASS (1/1, 100%)**, no-patch (`-d`) → **FAIL (0%)** (harness discriminates), and the
 > recorded Claude-as-agent TB-in-context RTL (`claude_agent_dataset_v2.jsonl`) → **PASS (1/1, 8/8

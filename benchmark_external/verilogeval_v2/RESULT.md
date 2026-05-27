@@ -21,6 +21,14 @@ spec-to-RTL task.
 > the reference. The v0.1.4 `spec_rtl_port_fidelity_check` flagged exactly that garbled-spec
 > signature (and nothing else among the 11 fails). See
 > [`run_rerun_v014/RESULT_rerun.md`](run_rerun_v014/RESULT_rerun.md).
+>
+> **Note (v0.1.5 re-run).** A third fresh blind re-run, regenerated from scratch on v0.1.5 by
+> 8 parallel prompt-only Claude agents, scored **143/156 = 91.67%** (143/155 = 92.26% on the
+> scoreable set) — ordinary blind single-shot variance (the 12 functional misses are the K-map
+> don't-care / reset-timing tail). The defective **Prob099** was again the only non-functional
+> failure, and the v0.1.5 `spec_self_consistency_check` (MCP `eda_spec_lint`) flagged it from the
+> prompt ALONE, before any RTL — `body-port-gap` — and nothing else among the 13 fails. See
+> [`run_rerun_v015/RESULT_rerun.md`](run_rerun_v015/RESULT_rerun.md).
 
 ## What was measured
 - **Benchmark:** NVlabs `verilog-eval`, `dataset_spec-to-rtl` (the 2024 v2 spec-to-RTL task,
