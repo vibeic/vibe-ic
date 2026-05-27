@@ -117,9 +117,48 @@ def _rtl_output_is_registered(body: str, ports: List[Port]) -> Optional[bool]:
     return None
 
 
+_CLKRST_NAME = __import__('re').compile(
+    r'^(clk|clock|rst|reset|areset|nreset|rst_n|resetn|por|en|enable)$', __import__('re').I)
+
+
+def _mealy_outputs(body: str, ports: List[Port]) -> List[tuple]:
+    """Output ports driven COMBINATIONALLY by an expression that references a data
+    input port → a Mealy output. (Clock/reset/enable refs ignored; registered
+    outputs never appear since they are `<=`-driven in a clocked block.)
+
+    Pure structural analysis — general for any RTL. It is only consulted when the
+    spec itself declares a Moore requirement (see SpecContract.fsm_output_style);
+    on its own a Mealy output is a valid design choice, not a defect."""
+    import re
+    outs = {p.name for p in ports if p.direction == 'output'}
+    ins = {p.name for p in ports if p.direction == 'input' and not _CLKRST_NAME.match(p.name)}
+    if not outs or not ins:
+        return []
+    bad: List[tuple] = []
+
+    def scan(seg: str, assign_op: str):
+        for m in re.finditer(r'\b(\w+)(?:\s*\[[^\]]*\])?\s*' + assign_op + r'\s*([^;]+);', seg):
+            nm, rhs = m.group(1), m.group(2)
+            if nm in outs:
+                refd = sorted({t for t in re.findall(r'\b([A-Za-z_]\w*)\b', rhs)} & ins)
+                if refd:
+                    bad.append((nm, refd))
+
+    for m in re.finditer(r'\bassign\s+([^;]+);', body):
+        scan('assign ' + m.group(1) + ';', '=')
+    for am in re.finditer(r'\balways\b\s*@\s*\(\s*\*\s*\)', body):
+        scan(body[am.end():am.end() + 4000], r'=(?!=)')
+    seen, out = set(), []
+    for nm, refd in bad:
+        if (nm, tuple(refd)) not in seen:
+            seen.add((nm, tuple(refd)))
+            out.append((nm, refd))
+    return out
+
+
 def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
           rtl_resets: dict, rtl_registered: Optional[bool],
-          path: str) -> List[Finding]:
+          path: str, rtl_body: str = '') -> List[Finding]:
     f: List[Finding] = []
 
     # ---- port conformance --------------------------------------------------
@@ -182,6 +221,17 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
         f.append(Finding(path, 'INFO', 'latency-mismatch', rtl_name,
             f"spec implies a {want} output but the RTL output looks {got} — "
             f"confirm the intended valid-cycle (off-by-one is a classic spec miss)."))
+
+    # ---- FSM output-style conformance (only when the spec DECLARES Moore) ----
+    # Sibling of the reset-mode check: the spec picked an output style, so verify
+    # the RTL honors it. Mealy-vs-Moore is otherwise a free design choice, so this
+    # fires ONLY when spec.fsm_output_style == 'moore' (semantically extracted).
+    if spec.fsm_output_style == 'moore' and rtl_body:
+        for nm, refd in _mealy_outputs(rtl_body, rtl_ports):
+            f.append(Finding(path, 'WARN', 'fsm-output-style-mismatch', nm,
+                f"spec declares a Moore FSM but output '{nm}' is combinationally "
+                f"dependent on input(s) {', '.join(refd)} (Mealy). A Moore output "
+                f"must be a function of state only — register it as f(state)."))
     return f
 
 
@@ -226,7 +276,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     rtl_resets = classify_rtl_resets(rtl_body)
     rtl_registered = _rtl_output_is_registered(rtl_body, rtl_ports)
-    findings = check(spec, rtl_name, rtl_ports, rtl_resets, rtl_registered, chosen)
+    findings = check(spec, rtl_name, rtl_ports, rtl_resets, rtl_registered, chosen, rtl_body)
 
     errs = [x for x in findings if x.severity == 'ERROR']
     warns = [x for x in findings if x.severity == 'WARN']

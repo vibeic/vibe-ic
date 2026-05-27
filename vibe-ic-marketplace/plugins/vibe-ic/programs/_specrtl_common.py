@@ -221,6 +221,7 @@ class SpecContract:
     reset_polarity: Optional[str] = None    # active-high / active-low
     reset_signal: Optional[str] = None      # if the spec names it
     latency_registered: Optional[bool] = None
+    fsm_output_style: Optional[str] = None  # 'moore'/'mealy' if the spec declares one
     source: str = ''                        # how ports were parsed: nl/verilog/json
 
 
@@ -287,6 +288,40 @@ def _detect_reset(text: str) -> Tuple[Optional[str], Optional[str], Optional[str
     return mode, polarity, signal
 
 
+def _detect_fsm_output_style(text: str) -> Optional[str]:
+    """Return 'moore'/'mealy' iff the spec clearly DECLARES that FSM output style
+    as a requirement, else None.
+
+    This is a declared spec property — the sibling of reset-mode — NOT a bare
+    keyword grep. To avoid the false triggers that make a naive substring match
+    invalid (e.g. "Moore's law", "not a Moore machine"), it requires the term to
+    be used as an FSM descriptor (machine/FSM/state-machine in the local window),
+    is possessive-aware ("Moore's"), is negation-aware ("not a Moore ..."), and
+    bails to None when both styles appear (ambiguous). Mealy-vs-Moore is a valid
+    design choice, so this only fires when the spec itself picks one."""
+    low = text.lower()
+
+    def declares(word: str) -> bool:
+        for m in re.finditer(r'\b' + word + r'\b', low):
+            pre = low[max(0, m.start() - 18):m.start()]
+            post = low[m.end():m.end() + 3]
+            if word == 'moore' and post.startswith("'s"):            # "Moore's law"
+                continue
+            if re.search(r"\b(not|non|isn'?t|aren'?t|rather than|instead of)\s*(a|an)?\s*$", pre):
+                continue
+            window = low[max(0, m.start() - 24):m.end() + 32]
+            if re.search(r'\b(machine|fsm|finite[\s-]*state|automat|state[\s-]*machine)\b', window):
+                return True
+        return False
+
+    moore, mealy = declares('moore'), declares('mealy')
+    if moore and not mealy:
+        return 'moore'
+    if mealy and not moore:
+        return 'mealy'
+    return None
+
+
 def _detect_latency(text: str) -> Optional[bool]:
     low = text.lower()
     if re.search(r'registered\s+output', low) or \
@@ -324,7 +359,10 @@ def extract_spec_contract(text: str, is_json: bool = False) -> SpecContract:
                             reset_mode=rst.get('mode'),
                             reset_polarity=rst.get('polarity'),
                             reset_signal=rst.get('signal'),
-                            latency_registered=lat, source='json')
+                            latency_registered=lat,
+                            fsm_output_style=(data.get('fsm_output_style')
+                                              if isinstance(data, dict) else None),
+                            source='json')
 
     clean = strip_comments(text)
     ports = _parse_nl_ports(clean)
@@ -348,4 +386,5 @@ def extract_spec_contract(text: str, is_json: bool = False) -> SpecContract:
     mode, polarity, signal = _detect_reset(text)
     return SpecContract(module=mod, ports=ports, reset_mode=mode,
                         reset_polarity=polarity, reset_signal=signal,
-                        latency_registered=_detect_latency(text), source=source)
+                        latency_registered=_detect_latency(text),
+                        fsm_output_style=_detect_fsm_output_style(text), source=source)

@@ -2,19 +2,23 @@ type: enhancement
 severity: P3
 component: program:rtl_hygiene_lint
 plugin_version: "0.1.10"
-status: rejected
-rejected_in: "0.1.14"
+status: resolved
+resolved_in: "0.1.15"
+history: >-
+  v0.1.13 first implemented it keyed on the bare substring "Moore" → rejected/reverted
+  in v0.1.14 as overfit (fragile to "Moore's law" / "not a Moore machine", and Mealy is
+  a valid design choice so a lint must not flag it unconditionally).
 resolution: >-
-  REJECTED as not generalizable. It was briefly implemented in v0.1.13 keyed on the
-  literal word "Moore" in the spec text, then reverted in v0.1.14. Two reasons it is
-  not a valid general gate: (1) Mealy-vs-Moore is a legitimate design CHOICE — a
-  combinational (Mealy) output is not a bug in general, so a chip-agnostic lint must
-  not flag it; the only thing that made it "wrong" for Prob089 was a spec-specific
-  requirement. (2) Detecting that requirement by string-matching the keyword "Moore"
-  is benchmark-overfitting (fragile to phrasing like "not a Moore machine", "Moore's
-  law", or a Moore machine described without the word). A plugin enhancement must be
-  general and never key on a specific term. The Prob089 miss is therefore left to the
-  underlying model's blind shot, not a deterministic gate.
+  Re-implemented PROPERLY in v0.1.15 as a spec-CONFORMANCE check — the exact sibling of
+  the existing reset-mode-spec-mismatch gate. The FSM output style is now a declared
+  spec property: SpecContract.fsm_output_style, populated by _detect_fsm_output_style(),
+  a SEMANTIC extractor that (a) requires "Moore"/"Mealy" to be used as an FSM descriptor
+  (machine/FSM/state-machine in the local window), (b) is possessive-aware ("Moore's law"),
+  (c) is negation-aware ("not a Moore machine" → reads the declared style, here Mealy),
+  (d) returns None on ambiguity ("Moore or Mealy"). The gate (rule fsm-output-style-mismatch,
+  WARN) fires ONLY when the spec genuinely declares Moore AND an output is combinationally
+  input-dependent (Mealy). General for any chip whose spec declares an FSM output style;
+  silent otherwise (Mealy stays a free choice). +4 tests incl. the possessive/negation cases.
 
 title: >-
   Lint for Moore-vs-Mealy output discipline: when the spec declares a Moore FSM,

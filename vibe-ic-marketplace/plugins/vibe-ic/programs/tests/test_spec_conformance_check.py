@@ -219,3 +219,51 @@ endmodule
     # No phantom v/c/x ports → no port-extra; spec a/q match RTL a/q.
     assert 'port-extra' not in rules(f)
     assert res.returncode == 0
+
+
+# ---- FSM output-style conformance (sibling of reset-mode; semantic detection) ----
+# Mealy-vs-Moore is a valid design choice, so this fires ONLY when the spec
+# semantically DECLARES a Moore requirement (negation/possessive-aware), never on
+# a bare keyword. Anchored to VerilogEval-v2 Prob089.
+_RTL_MEALY = """
+module TopModule(input clk, input areset, input x, output z);
+  reg state;
+  always @(posedge clk or posedge areset) if(areset) state<=0; else state<=x?1:state;
+  assign z = (state==0) ? x : ~x;
+endmodule
+"""
+_RTL_MOORE = """
+module TopModule(input clk, input areset, input x, output z);
+  reg c, z_reg;
+  always @(posedge clk or posedge areset) if(areset) begin c<=0; z_reg<=0; end
+    else begin z_reg <= x ^ c; c <= c | x; end
+  assign z = z_reg;
+endmodule
+"""
+
+
+def test_moore_spec_flags_mealy_output(tmp_path):
+    spec = "Implement a Moore state machine.\n - input clk\n - input areset\n - input x\n - output z\n"
+    res, f = run(tmp_path, spec, _RTL_MEALY)
+    assert 'fsm-output-style-mismatch' in rules(f)
+
+
+def test_moore_spec_clears_registered_moore(tmp_path):
+    spec = "Implement a Moore state machine.\n - input clk\n - input areset\n - input x\n - output z\n"
+    res, f = run(tmp_path, spec, _RTL_MOORE)
+    assert 'fsm-output-style-mismatch' not in rules(f)
+
+
+def test_no_fsm_declaration_does_not_flag_mealy(tmp_path):
+    # No Moore/Mealy declaration → Mealy is a valid choice → no finding.
+    spec = "Implement a serial 2's complementer.\n - input clk\n - input areset\n - input x\n - output z\n"
+    res, f = run(tmp_path, spec, _RTL_MEALY)
+    assert 'fsm-output-style-mismatch' not in rules(f)
+
+
+def test_moore_possessive_and_negation_not_misread(tmp_path):
+    # "Moore's law" + "not a Moore machine" must NOT be read as a Moore requirement.
+    spec = ("Recall Moore's law. This is not a Moore machine.\n"
+            " - input clk\n - input areset\n - input x\n - output z\n")
+    res, f = run(tmp_path, spec, _RTL_MEALY)
+    assert 'fsm-output-style-mismatch' not in rules(f)
