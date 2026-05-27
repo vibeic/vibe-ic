@@ -19,6 +19,10 @@ added from the VerilogEval-v2 v0.1.10 tuning loop 2026-05-27):
   5. Reset-less registered output with no power-up initializer
      (e.g., `output reg q;` clocked by `<= d` with no reset and no `= 0` →
       powers up as X; deterministic references expect 0 at t=0)
+     v0.1.24: `--fix` REPAIRS this deterministically in-place (inserts
+     `initial <reg>=0;`), and now also covers an internal reg that drives an
+     output via a continuous assign (Prob053-class). The lesson is enforced by
+     the tool, not by a caller/prompt that can forget or be told to ignore it.
 
 Usage:
     python3 rtl_hygiene_lint.py <files.v|.sv ...>
@@ -460,13 +464,91 @@ def lint_file(path: Path) -> List[Finding]:
     return results
 
 
+def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
+    """Deterministically REPAIR the `uninit-registered-output` finding in-place.
+
+    For every reset-less registered output with no power-up value, insert a
+    separate `initial <name> = 0;` block just before the module's `endmodule`
+    (Verilator-PROCASSINIT-clean, unlike a decl initializer). This makes the
+    power-up-determinism lesson ENFORCED by the tool rather than dependent on a
+    caller / prompt remembering to apply it (the v0.1.24 lesson: a fix that lives
+    only in a free-text instruction is a fix you can typo). chip-AGNOSTIC, safe:
+    only fires on the conservative reset-less / no-init case, and a redundant
+    `initial 0` on a never-reset DFF is harmless for sim/FPGA and ignored on ASIC.
+
+    Returns (count_fixed, [names]). No-op (0, []) if nothing to fix.
+    """
+    raw = path.read_text(errors='replace')
+    src = strip_comments(raw)
+    names: List[str] = []
+    seen: Set[str] = set()
+    # (a) registered OUTPUT ports with no power-up (the WARN-rule set).
+    for f in rule_uninit_registered_output(src, str(path)):
+        if f.rule == 'uninit-registered-output' and f.symbol not in seen:
+            names.append(f.symbol); seen.add(f.symbol)
+    # (b) INTERNAL registered regs that drive a module output via a continuous
+    #     assign (e.g. `reg q; ... q<=...; assign out=q;`). Same power-up-X bug,
+    #     just one hop removed — Prob053-class. Reset-less modules only.
+    input_decls = ' '.join(re.findall(r'\binput\b[^;)\n]*', src))
+    if not _RESET_NAME_RE.search(input_decls):
+        out_ports = set(re.findall(
+            r'\boutput\b\s+(?:(?:reg|logic|wire)\s+)?(?:signed\s+)?(?:\[[^\]]+\]\s*)?'
+            r'([A-Za-z_]\w*)\s*(?=[,;)=])', src))
+        registered = {mm.group(1) for mm in
+                      re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src)}
+        has_initial = bool(re.search(r'\binitial\b', src))
+        for om in re.finditer(r'\bassign\s+([A-Za-z_]\w*)\s*=\s*([^;]+);', src):
+            if om.group(1) not in out_ports:
+                continue
+            for rhs_id in re.findall(r'\b([A-Za-z_]\w*)\b', om.group(2)):
+                if rhs_id in registered and rhs_id not in seen \
+                        and rhs_id not in VERILOG_KEYWORDS:
+                    decl_init = re.search(
+                        r'\b(?:reg|logic)\b[^;\n]*\b' + re.escape(rhs_id) + r'\s*=', src)
+                    in_initial = has_initial and re.search(
+                        r'\binitial\b[\s\S]{0,200}?\b' + re.escape(rhs_id) + r'\s*(<=|=)', src)
+                    if not decl_init and not in_initial:
+                        names.append(rhs_id); seen.add(rhs_id)
+    if not names:
+        return 0, []
+    # Insert before the LAST endmodule (single-module samples: the top module).
+    idx = raw.rstrip().rfind('endmodule')
+    if idx < 0:
+        return 0, []
+    block = "\n  // power-up determinism (rtl_hygiene_lint --fix): reset-less registered\n"
+    block += "  // outputs default to 0 so they are not X at t=0.\n  initial begin\n"
+    block += "".join(f"    {n} = 0;\n" for n in names)
+    block += "  end\n\n"
+    patched = raw[:idx] + block + raw[idx:]
+    path.write_text(patched)
+    return len(names), names
+
+
 def main():
     ap = argparse.ArgumentParser(description='General RTL hygiene lint.')
     ap.add_argument('files', nargs='+', help='Verilog/SystemVerilog files')
     ap.add_argument('--json', help='Write findings as JSON to this path')
     ap.add_argument('--severity', choices=['ERROR', 'WARN', 'INFO'], default='INFO',
                     help='Minimum severity to report (default: INFO)')
+    ap.add_argument('--fix', action='store_true',
+                    help='Deterministically repair the uninit-registered-output finding '
+                         'in-place (insert `initial <reg>=0;`). Enforces the power-up '
+                         'determinism lesson regardless of caller/prompt.')
     args = ap.parse_args()
+
+    if args.fix:
+        total = 0
+        for f in args.files:
+            p = Path(f)
+            if not p.exists():
+                print(f"WARNING: file not found: {f}", file=sys.stderr)
+                continue
+            n, names = autofix_uninit_registered_output(p)
+            total += n
+            if n:
+                print(f"{f}: inserted `initial` power-up 0 for {names}")
+        print(f"rtl_hygiene_lint --fix: repaired {total} reset-less registered output(s)")
+        return 0
 
     sev_order = {'ERROR': 2, 'WARN': 1, 'INFO': 0}
     min_sev = sev_order[args.severity]

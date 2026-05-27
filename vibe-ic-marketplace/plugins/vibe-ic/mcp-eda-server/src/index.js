@@ -473,7 +473,7 @@ function cellgdsPath(cfg) {
 // field-agents to tell at runtime whether a given handler patch
 // was actually loaded. Resolution: keep them in lockstep; if you
 // bump package.json, also bump this constant.
-const SERVER_VERSION = "0.1.11";
+const SERVER_VERSION = "0.1.12";
 function wrapResult({ success, t0, toolVersion, error, output, headLines = 40, tailLines = 80, ...rest }) {
   const dur = t0 ? (Date.now() - t0) : 0;
   const text = (output || "").toString();
@@ -3242,8 +3242,9 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
     const script = `
 mkdir -p ${work_dir} && \\
 echo '${makefileContent.replace(/'/g, "'\\''")}' > ${work_dir}/Makefile && \\
-cp ${testbench_py} ${work_dir}/ && \\
+cp "$(dirname ${testbench_py})"/*.py ${work_dir}/ 2>/dev/null; cp ${testbench_py} ${work_dir}/ && \\
 cd ${work_dir} && \\
+export PYTHONPATH=${work_dir}:$PYTHONPATH && \\
 export PATH=${TOOLS}/verilator/bin:${TOOLS}/iverilog/bin:${TOOLS}/bin:$PATH && \\
 export LD_LIBRARY_PATH=${TOOLS}/iverilog/lib:$LD_LIBRARY_PATH && \\
 make SIM=${sim} 2>&1

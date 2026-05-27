@@ -108,13 +108,26 @@ feasibility. See `programs/llm_semantic_confirm.py` and `spec_conformance_check`
 - **Reset / latency / polarity are spec requirements, not parser guesses.** Confirm them from the
   prompt's wording (e.g. don't read a reset off an *enable*/*load* signal); a registered output
   with no reset still needs a deterministic power-up value (init `= 0`), per `rtl_hygiene_lint`
-  rule `uninit-registered-output`.
+  rule `uninit-registered-output` — now **auto-repaired** by `rtl_hygiene_lint --fix` (inserts a
+  separate `initial <reg>=0;`, also for an internal reg that drives an output via a continuous
+  assign), so this lesson is *enforced by the tool*, not left to a caller/prompt to remember.
 - **Reset structure beats the adjective.** When a spec gives BOTH a label ("asynchronous reset")
   AND a structural description, the structure wins: a reset *checked inside an `@(posedge clk)`-only
   block* (not named in the sensitivity list) is **synchronous**, regardless of the word
   "asynchronous"; only a reset in the sensitivity list (`@(posedge clk or posedge rst)`) is
   asynchronous. Machine-generated prose often says "asynchronous" while describing a clocked block
   that "first checks reset" — implement what the structure describes (VerilogEval-Machine Prob067).
+- **Clears-all-outputs control reset → prefer asynchronous (robustness default).** When a spec gives
+  ONLY a reset *adjective* (no structural code) and requires the reset to "clear all outputs" of a
+  registered control block, implement an **asynchronous** active-high reset
+  (`always @(posedge clk or posedge reset)`). It is a strict superset of a synchronous reset (still
+  clears at the clock edge) and is insensitive to a testbench that de-asserts reset and samples the
+  outputs without an explicit settle delay — so it passes BOTH sync-style and async-style
+  verification. If the spec's reset *adjective* ("synchronous") conflicts with how its own
+  verification releases reset, treat that as a **spec/TB inconsistency to flag**, and choose the
+  robust (async) form. NOTE the precedence: a *structural* sync description (above) still wins over a
+  bare adjective; this rule only applies when no structural detail is given. (CVDP fixed_priority_arbiter:
+  spec says "synchronous" but the harness's reset-release timing requires async; async passes all 9 cases.)
 - **Level-sensitive logic must be `always @(*)`.** A combinational block or a transparent latch
   (`if (en) q = d;`) must react to EVERY signal it reads — write `always @(*)`, never
   `always @(<partial list>)`. An incomplete list (e.g. `always @(a)` that also reads `clock`)
@@ -135,6 +148,16 @@ correct on every care cell but **not minimal** — the minimal SOP is `c&d | ~a&
 term absorbs don't-cares 3,11), and that is exactly the reference. Always reduce to the canonical
 minimum. (Refs sometimes emit `1'bx` on don't-care-only outputs to mask them — but a plain
 `assign` reference does compare on those inputs, so minimality is what matters.)
+
+### Skill: vector neighbour ops — force boundary bits by PLACEMENT, not by an op
+For "each output bit relates the input bit to its left/right neighbour, and the edge bit (which has
+no neighbour) is 0", build the result with a **concatenation that literally places the `1'b0`** at
+the edge — do **not** compute it with an operation that can reintroduce the edge bit. E.g.
+out_any[i] = in[i] | in[i-1] with out_any[0]=0: the correct form is `{(in[98:0] | in[99:1]), 1'b0}`,
+**not** `in | {in[98:0], 1'b0}` — the latter OR-folds `in[0]` back in, so out_any[0]=in[0]≠0. Same
+for AND/`&`-with-shift at the top bit. Always verify the two edge bits explicitly against the spec's
+stated edge value. *Worked miss (VerilogEval-v2 Prob092 gatesv100): the `in | {…,1'b0}` form leaked
+`in[0]` into out_any[0].*
 
 ### Skill: rigorous behavioral / waveform / FSM-spec comprehension
 For "read the waveform / state diagram and implement it" specs, do not pattern-match — trace the
