@@ -4,8 +4,8 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Awesome](https://awesome.re/badge.svg)](https://github.com/vibeic/awesome-open-ic)
-[![Plugin v0.1.0](https://img.shields.io/badge/plugin-v0.1.0-brightgreen.svg)](vibe-ic-marketplace/plugins/vibe-ic/CHANGELOG.md)
-[![MCP Server v0.1.0](https://img.shields.io/badge/mcp--eda--server-v0.1.0-brightgreen.svg)](mcp-eda-server/CHANGELOG.md)
+[![Plugin v0.1.25](https://img.shields.io/badge/plugin-v0.1.25-brightgreen.svg)](vibe-ic-marketplace/plugins/vibe-ic/CHANGELOG.md)
+[![MCP Server v0.1.13](https://img.shields.io/badge/mcp--eda--server-v0.1.13-brightgreen.svg)](mcp-eda-server/CHANGELOG.md)
 
 > **Status: v0.1 initial public release.** Expect rough edges. API and
 > skill catalogues will stabilise across the 0.x line.
@@ -26,7 +26,7 @@ checkers (no fabrication, no hallucinated PASS).
 ├── mcp-eda-server/          MCP server (Node.js) — 24 EDA tool wrappers
 │                             + a manifest-driven device framework.
 ├── vibe-ic-marketplace/     Claude Code plugin marketplace.
-│   └── plugins/vibe-ic/      ~85 skills + ~220 deterministic programs.
+│   └── plugins/vibe-ic/      57 skills + 429 deterministic programs.
 ├── tools/                   CLI utilities (phase1 engine, regression).
 ├── docs/                    Architecture, design, and tutorial notes.
 ├── LICENSE                  Apache-2.0
