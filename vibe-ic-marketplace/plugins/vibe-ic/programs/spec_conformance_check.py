@@ -117,48 +117,6 @@ def _rtl_output_is_registered(body: str, ports: List[Port]) -> Optional[bool]:
     return None
 
 
-_CLKRST_NAME = __import__('re').compile(r'^(clk|clock|rst|reset|areset|nreset|rst_n|resetn|por|en|enable)$', __import__('re').I)
-
-
-def _mealy_outputs(body: str, ports: List[Port]) -> List[tuple]:
-    """Output ports driven COMBINATIONALLY by an expression that references a
-    data input port → a Mealy output. (Clock/reset/enable refs are ignored.)
-
-    Used only to enforce a *Moore* spec: a Moore machine's outputs must be a
-    function of state alone, so a combinational output cone reaching a data
-    input is a Moore-vs-Mealy violation (the classic VerilogEval Prob089 miss).
-    Registered outputs never appear here (they are `<=`-driven in a clocked
-    block), so this never flags a correct Moore design."""
-    import re
-    outs = {p.name for p in ports if p.direction == 'output'}
-    ins = {p.name for p in ports if p.direction == 'input' and not _CLKRST_NAME.match(p.name)}
-    if not outs or not ins:
-        return []
-    bad: List[tuple] = []
-
-    def scan(seg: str, assign_op: str):
-        pat = r'\b(\w+)(?:\s*\[[^\]]*\])?\s*' + assign_op + r'\s*([^;]+);'
-        for m in re.finditer(pat, seg):
-            nm, rhs = m.group(1), m.group(2)
-            if nm in outs:
-                refd = sorted({t for t in re.findall(r'\b([A-Za-z_]\w*)\b', rhs)} & ins)
-                if refd:
-                    bad.append((nm, refd))
-
-    for m in re.finditer(r'\bassign\s+([^;]+);', body):
-        scan('assign ' + m.group(1) + ';', '=')
-    for am in re.finditer(r'\balways\b\s*@\s*\(\s*\*\s*\)', body):
-        scan(body[am.end():am.end() + 4000], r'=(?!=)')
-    # de-dup
-    seen, out = set(), []
-    for nm, refd in bad:
-        key = (nm, tuple(refd))
-        if key not in seen:
-            seen.add(key)
-            out.append((nm, refd))
-    return out
-
-
 def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
           rtl_resets: dict, rtl_registered: Optional[bool],
           path: str) -> List[Finding]:
@@ -244,10 +202,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f'spec_conformance_check: FAIL — spec not found: {args.spec}',
               file=sys.stderr)
         return 2
-    spec_raw = spec_path.read_text(errors='replace')
-    spec = extract_spec_contract(spec_raw, is_json=spec_path.suffix == '.json')
-    import re as _re
-    spec_is_moore = spec_path.suffix != '.json' and bool(_re.search(r'\bmoore\b', spec_raw, _re.I))
+    spec = extract_spec_contract(spec_path.read_text(errors='replace'),
+                                 is_json=spec_path.suffix == '.json')
 
     top = args.top or spec.module
     files = collect_rtl_files(args.paths, args.rtl_dir)
@@ -271,16 +227,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     rtl_resets = classify_rtl_resets(rtl_body)
     rtl_registered = _rtl_output_is_registered(rtl_body, rtl_ports)
     findings = check(spec, rtl_name, rtl_ports, rtl_resets, rtl_registered, chosen)
-
-    # ---- Moore output discipline (only when the spec declares a Moore FSM) ----
-    if spec_is_moore:
-        for nm, refd in _mealy_outputs(rtl_body, rtl_ports):
-            findings.append(Finding(chosen, 'WARN', 'moore-output-mealy', nm,
-                f"spec declares a Moore FSM but output '{nm}' is combinationally "
-                f"dependent on input(s) {', '.join(refd)} (Mealy). A Moore output "
-                f"must be a function of state only — register it (e.g. z_reg <= "
-                f"f(state); assign {nm} = z_reg). Mealy-vs-Moore timing is the "
-                f"classic VerilogEval Prob089 miss."))
 
     errs = [x for x in findings if x.severity == 'ERROR']
     warns = [x for x in findings if x.severity == 'WARN']

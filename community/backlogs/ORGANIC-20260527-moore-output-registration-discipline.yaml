@@ -2,15 +2,19 @@ type: enhancement
 severity: P3
 component: program:rtl_hygiene_lint
 plugin_version: "0.1.10"
-status: resolved
-resolved_in: "0.1.13"
+status: rejected
+rejected_in: "0.1.14"
 resolution: >-
-  Implemented in spec_conformance_check (not rtl_hygiene_lint, since it needs the
-  spec text to know the design is "Moore"): when the spec mentions "Moore", any
-  output driven combinationally by a data input (clk/reset/enable excluded) is
-  flagged WARN moore-output-mealy. Registered Moore outputs never trip it. +3
-  tests (test_moore_spec_flags_mealy_output / _clears_registered_moore_output /
-  test_no_moore_keyword_does_not_flag_mealy).
+  REJECTED as not generalizable. It was briefly implemented in v0.1.13 keyed on the
+  literal word "Moore" in the spec text, then reverted in v0.1.14. Two reasons it is
+  not a valid general gate: (1) Mealy-vs-Moore is a legitimate design CHOICE — a
+  combinational (Mealy) output is not a bug in general, so a chip-agnostic lint must
+  not flag it; the only thing that made it "wrong" for Prob089 was a spec-specific
+  requirement. (2) Detecting that requirement by string-matching the keyword "Moore"
+  is benchmark-overfitting (fragile to phrasing like "not a Moore machine", "Moore's
+  law", or a Moore machine described without the word). A plugin enhancement must be
+  general and never key on a specific term. The Prob089 miss is therefore left to the
+  underlying model's blind shot, not a deterministic gate.
 
 title: >-
   Lint for Moore-vs-Mealy output discipline: when the spec declares a Moore FSM,
