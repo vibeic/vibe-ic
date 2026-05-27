@@ -376,8 +376,11 @@ def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
             path, lineno, 'WARN', 'uninit-registered-output', name,
             f"registered output '{name}' has no reset and no power-up initializer "
             f"-> powers up as X. A deterministic reference (and VerilogEval-style "
-            f"testbenches that sample at t=0) expects 0 there. Fix: declare "
-            f"`output reg ... {name} = 0;` (or add an `initial` value)."))
+            f"testbenches that sample at t=0) expects 0 there. Fix (preferred, "
+            f"Verilator-clean): add a separate `initial {name} = 0;` block. A "
+            f"declaration initializer `output reg ... {name} = 0;` also clears the "
+            f"power-up X but trips Verilator PROCASSINIT when '{name}' is ALSO "
+            f"procedurally assigned (`{name} <= ...`), so prefer the `initial` block."))
     return findings
 
 

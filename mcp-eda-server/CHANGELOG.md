@@ -1,3 +1,18 @@
+## [0.1.11] - 2026-05-27
+
+### Container-visibility pre-flight for `eda_lint` / `eda_synth`
+
+Files staged onto the host bind mount via a restricted/sandboxed shell do not
+always propagate into the `iic-eda` container; the raw EDA tool then emits an
+opaque "cannot find file" and the caller cannot tell a staging miss from a real
+RTL error (every blind MCP benchmark batch hit this and had to re-stage with the
+sandbox disabled). New `missingInContainer()` checks input existence INSIDE the
+container (one `docker exec` `[ -e ]`, mount-mapping-agnostic) and `eda_lint` /
+`eda_synth` now fail fast with an actionable `stagingHint()` that names the
+`/foss/designs` mount and the sandboxed-copy caveat — before invoking the tool.
+Short-circuits to no-op when docker is unreachable (that case is reported by
+`dockerExec`). 6 static wiring tests (test_container_visibility_preflight.py).
+
 ## [0.1.10] - 2026-05-27
 
 ### Phase-2 program-first wiring — deterministic RTL dispatcher in `step_rtl_gen`

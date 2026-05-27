@@ -177,6 +177,49 @@ Some specs are internally inconsistent or contradict their own reference. When y
 These are unsolvable-as-stated; the honest move is to surface the contradiction, not to guess.
 (`spec_self_consistency_check` / `eda_spec_lint` catch some of these from the prompt alone.)
 
+### Skill: width-consistency arithmetic to disambiguate concat / replication
+Prose that describes a concatenation/replication (`{N{x}}`, `{a,b}`, replicate/repeat/extend) is
+often loosely worded, but the **bit-width equation is exact and disambiguates it**. Before coding a
+`{...}`, write the width identity `out_width == Σ(parts)` and solve for the unknown — the reading
+that balances the widths is intended; a reading that does not balance is wrong no matter how the
+prose phrases it.
+
+**Do NOT silently re-derive a replication count the prose already states.** When the prose gives a
+count `N` ("replicate … N times"), hold `N` FIXED and solve for the *width of the replicated
+operand*: `operand_width = (out_width − other_parts_width) / N`. If that comes out **smaller than
+the named source vector** (typically 1), the operand is a single bit — the **sign/MSB**, i.e. this
+is **sign-extension**, not whole-vector replication. Substituting your own count to force a
+whole-vector reading is the classic miss.
+
+*Worked miss (Prob042_vector4):* prose says "replicate the 8-bit input 24 times, then concatenate
+the original 8-bit input"; output is **32** bits. Holding the stated `N=24`: `operand_width =
+(32 − 8) / 24 = 1` → a **1-bit** operand → the sign bit → **sign-extension**
+`out = {{24{in[7]}}, in}`. The tempting whole-vector reading `{4{in}}` only "balances" by
+*discarding the stated 24 and inventing `k=3`* (`32 = k·8 + 8`) — which contradicts the prose's own
+number, so it is wrong. General rule: *sign-extend* replicates the sign/MSB `(out_width − in_width)`
+times; *whole-vector replicate* needs `out_width == k·in_width` with `k` the operand COUNT — never
+overwrite a stated count to make a reading fit.
+
+### Skill: canonical / textbook circuit recognition
+When a spec **names a standard circuit by its textbook name** — serial 2's-complementer, serial
+adder, LFSR (Galois/Fibonacci), Gray-code counter, one-hot/Johnson counter, parity
+generator/checker, priority encoder, barrel shifter, edge detector — implement its **canonical
+form** from domain knowledge rather than re-deriving from scratch; the reference is the standard
+implementation. This is general IC knowledge applied to a spec that explicitly invokes a known
+circuit (NOT reading any hidden reference). **Moore/Mealy tension when realising a named circuit:**
+some named functions have an output that is inherently a function of the CURRENT input (e.g. a
+serial 2's-complementer outputs `z = x ^ (a 1 has already been seen)`). A spec's "Moore" label
+describes the **state register**, not a prohibition on an input-dependent output expression — so the
+realisation is 2 states A="no 1 seen" / B="a 1 seen" (registered, async reset→A) with a
+combinational `z = x ^ (state==B)` (state A → `z=x` copy incl. the first 1; state B → `z=~x`
+invert). Recognise the named algorithm; then anchor it to the stated reset/boundary.
+*Cautionary residual (Prob089_ece241_2014_q5a — three independent blind forms all mismatch the
+bench despite computing the correct function — hand-verified 4→4, 6→2 LSB-first):* when the canonical
+function is provably right yet the testbench still mismatches every vector, the bench is enforcing an
+**output-latency / reset convention the prompt does not state** (registered-vs-combinational output
+phase, value during reset). That is an underspecification — **flag it** (see the spec-defect skill);
+do NOT keep mutating the output phase against the hidden bench, which is overfitting.
+
 ## Cross-Layer Consistency Matrix
 
 Run this check after every layer completes:

@@ -14,6 +14,7 @@ reading the hidden reference (cheating) or hard-coding per-problem canonical-cir
 | Prob093_ece241_2014_q3 | Reference `mux_in[2] = ~d`, which is wrong at cd=11 vs the prompt's OWN printed K-map (which requires `c\|~d`). Our `c\|~d` is more correct than the reference; matching the bug is not blind-derivable. |
 | Prob099_m2014_q6c (spec-to-rtl) | Testbench wires `.Y2/.Y4` to a `RefModule` that declares only `Y1/Y3` → uncompilable for ANY TopModule (the official reference fails its own bench). |
 | Prob149_ece241_2013_q4 | PROVEN by isolating dfr polarity on the identical 6-state FSM: prompt's literal rule (rising→dfr=1) = 1171/2040; reference's opposite (rising→dfr=0) = 0/2040. The reference inverts the prompt's stated dfr direction. |
+| Prob089_ece241_2014_q5a | Serial 2's-complementer "Moore" FSM. The canonical function `z = x ^ (a 1 already seen)` is provably correct (hand-verified 4→4, 6→2 LSB-first) yet **three** independent blind forms (strict-Moore registered-z, copy-then-invert state machine, combinational `z=x^(state==B)`) all mismatch every post-first-1 vector. The bench enforces an **output-latency / reset-phase convention the prompt does not state** (registered-vs-combinational output phase / value during reset). Underspecified-as-stated; mutating the output phase against the hidden bench would be overfitting. |
 
 ## Machine (134→136/143) — description defects
 (Prob067 reset-structure and Prob145 sensitivity-list were genuine and FIXED in v0.1.22.)
@@ -36,6 +37,21 @@ lesson the fails offered has been shipped and verified blind:
   behavioral/FSM comprehension, hysteresis FSMs, dual-edge FF, reset-structure-beats-adjective,
   spec-defect detection, ambiguity escalation;
 - the LLM semantic double-confirm for all prose-inferred fields.
+
+### v0.1.23 (this round — fail-case-driven, blind-validated)
+- **IC-Expert skill: width-consistency arithmetic for concat/replication** — hold a prose-stated
+  replication count FIXED and solve for the operand width; operand width < source vector ⇒ it is a
+  sign/MSB extension, not whole-vector replication. **VALIDATED blind: Prob042_vector4 miss → PASS**
+  (`{4{in}}` ✗ → `{{24{in[7]}}, in}` ✓; the agent never read the ref). General — applies to any
+  garbled "replicate N times" prose.
+- **IC-Expert skill: canonical/textbook circuit recognition + Moore/Mealy tension** — implement a
+  named circuit's standard function; a "Moore" label describes the state register, not a ban on an
+  input-dependent output. (Prob089 stayed a residual — see its row — but the principle is general.)
+- **gate `uninit-registered-output` message** now recommends a separate `initial` block over a decl
+  initializer (Verilator-PROCASSINIT-clean when the output is also procedurally assigned).
+- **MCP `eda_lint` / `eda_synth` container-visibility pre-flight** (server v0.1.11) — fail fast with
+  an actionable staging hint when an input is not visible inside the `iic-eda` mount, instead of an
+  opaque tool-level "cannot find file."
 
 The residual is irreducible benchmark-data defects. Further "enhancement" to move these would be
 overfitting to hidden references — which violates the generality/honesty bar. Recommended next

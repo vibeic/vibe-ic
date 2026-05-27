@@ -317,6 +317,38 @@ function _invalidateDockerProbe() {
   _dockerProbeAt = 0;
   _dockerReachable = null;
 }
+// v0.1.11: container-visibility pre-flight. Files staged onto the host bind
+// mount via a restricted/sandboxed shell do not always propagate into the
+// container; the raw EDA tool then emits an opaque "cannot find file" and the
+// caller cannot tell a staging miss from a real RTL error. Check existence
+// INSIDE the container (one `docker exec test -e`) and let tool wrappers return
+// an actionable staging hint instead. Mount-mapping-agnostic — it tests the
+// exact in-container path the tool will use (same cwd, no `cd`). Returns the
+// list of missing paths; [] when all present OR when docker is unreachable
+// (that case is reported by dockerExec itself, so we must not block on it).
+function missingInContainer(files) {
+  const probe = _probeDocker();
+  if (!probe.ok) return [];
+  const list = files.map(f => `'${String(f).replace(/'/g, "'\\''")}'`).join(" ");
+  if (!list) return [];
+  const r = _spawnSync(
+    "docker",
+    ["exec", CONTAINER, "bash", "-c",
+     `for f in ${list}; do [ -e "$f" ] || printf '%s\\n' "$f"; done`],
+    { timeout: 8000, maxBuffer: 1024 * 1024, encoding: "utf-8" },
+  );
+  // Probe itself failed (spawn error / non-zero with no stdout): don't block.
+  if (r.error || (r.status !== 0 && !(r.stdout || "").trim())) return [];
+  return (r.stdout || "").split("\n").map(s => s.trim()).filter(Boolean);
+}
+function stagingHint(missing) {
+  return `[files not visible in container '${CONTAINER}'] ${missing.join(", ")}. `
+    + `The EDA tools run inside the '${CONTAINER}' Docker container, which bind-mounts only `
+    + `the designs root (host AI_IC_design -> /foss/designs). Stage your RTL UNDER that mount `
+    + `and pass the in-container path (e.g. /foss/designs/<proj>/top.sv). NOTE: a host file copy `
+    + `made under a restricted/sandboxed shell may not propagate into the mount — re-copy with `
+    + `the sandbox disabled, then retry.`;
+}
 function dockerExec(cmd, timeoutMs = 300000) {
   const probe = _probeDocker();
   if (!probe.ok) {
@@ -441,7 +473,7 @@ function cellgdsPath(cfg) {
 // field-agents to tell at runtime whether a given handler patch
 // was actually loaded. Resolution: keep them in lockstep; if you
 // bump package.json, also bump this constant.
-const SERVER_VERSION = "0.1.10";
+const SERVER_VERSION = "0.1.11";
 function wrapResult({ success, t0, toolVersion, error, output, headLines = 40, tailLines = 80, ...rest }) {
   const dur = t0 ? (Date.now() - t0) : 0;
   const text = (output || "").toString();
@@ -586,6 +618,12 @@ server.tool(
       optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
       optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
     } catch (e) { return guardError(e); }
+    // v0.1.11: fail fast with a staging hint when inputs are not in-container.
+    const _missSynth = missingInContainer(verilog_files);
+    if (_missSynth.length) {
+      const h = stagingHint(_missSynth);
+      return { content: [{ type: "text", text: JSON.stringify({ success: false, area_um2: null, cell_count: null, output: h, error: h, log_tail: h }) }] };
+    }
     const cfg = pdkConfig(pdk, { custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix });
     const lib = libPath(cfg);
     const readFlag = sv_mode ? "-sv" : "";
@@ -709,6 +747,12 @@ server.tool(
       assertSafePaths(verilog_files, "verilog_files");
       assertSafeIdent(top_module, "top_module");
     } catch (e) { return guardError(e); }
+    // v0.1.11: fail fast with a staging hint when inputs are not in-container.
+    const _miss = missingInContainer(verilog_files);
+    if (_miss.length) {
+      const h = stagingHint(_miss);
+      return { content: [{ type: "text", text: JSON.stringify({ success: false, errors: 0, warnings: 0, output: h, error: h }) }] };
+    }
     const files = verilog_files.join(" ");
     const wnoFlags = strictness === "error_only"
       ? _LINT_DEMOTED_WARNINGS.map(w => `-Wno-${w}`).join(" ")
