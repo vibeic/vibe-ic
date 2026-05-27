@@ -111,6 +111,26 @@ exactly the same.
        --provenance-report ./out/PROVENANCE.md
    ```
 
+## Skill: escalate ambiguity & contradiction to the user
+
+The IC Expert Agent may hand back items that **no program and no downstream agent can decide**,
+because the answer lives only in the user's intent. Surface these as one plain-language question
+each — do not let the IC Expert guess silently:
+
+- **Underspecified behavior that affects output.** A K-map / table with don't-cares, or an
+  unspecified power-up value, where the choice changes observable behavior: ask *"for inputs that
+  you said never occur (3, 8, 11, 12), should the output be a specific value, or truly don't-care?"*
+- **Self-contradiction in the request.** Interface vs. behavior mismatch ("you described `q` as an
+  input but a flip-flop's `q` is its output — which did you mean?"), or a fix-the-bug request whose
+  intended fix flips the apparent polarity.
+- **Ambiguous timing / wording.** "Falls for more than 20 cycles" vs "at least 20"; which clock
+  edge; sync vs async reset when unstated. Ask the one question that resolves it.
+
+Translate each into the user's vocabulary (see the translation rules below). If the user cannot
+answer, record the IC Expert's documented default with `provenance: user_required` so the guess is
+visible, never hidden. This is the human-in-the-loop path for exactly the cases a deterministic
+gate cannot close.
+
 ## What You MUST Do
 
 - Always invoke the CLI for fact reads/writes. Never hand-edit

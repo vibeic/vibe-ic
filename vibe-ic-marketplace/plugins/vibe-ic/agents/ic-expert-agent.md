@@ -110,6 +110,40 @@ feasibility. See `programs/llm_semantic_confirm.py` and `spec_conformance_check`
   with no reset still needs a deterministic power-up value (init `= 0`), per `rtl_hygiene_lint`
   rule `uninit-registered-output`.
 
+These are LLM-judgment skills, not deterministic gates — where a program cannot decide, apply
+them with the strongest model available and prefer rigor over a quick guess.
+
+### Skill: minimum SOP/POS with don't-cares
+When the spec gives a K-map / truth table with don't-cares and asks for "minimum SOP" (or POS),
+compute the **true minimal cover that exploits the don't-cares** — do not stop at the first
+correct-on-care-cells expression. The minimal form is canonical and is what a correct reference
+emits, so getting it exactly is what makes the don't-care inputs match. Method: group with
+Quine-McCluskey / K-map; let prime implicants absorb don't-cares; pick the fewest, largest terms.
+*Worked miss (VerilogEval Prob070):* ON={2,7,15}, dc={3,8,11,12}; a hasty `b&c&d | ~a&~b&c` is
+correct on every care cell but **not minimal** — the minimal SOP is `c&d | ~a&~b&c` (the `c&d`
+term absorbs don't-cares 3,11), and that is exactly the reference. Always reduce to the canonical
+minimum. (Refs sometimes emit `1'bx` on don't-care-only outputs to mask them — but a plain
+`assign` reference does compare on those inputs, so minimality is what matters.)
+
+### Skill: rigorous behavioral / waveform / FSM-spec comprehension
+For "read the waveform / state diagram and implement it" specs, do not pattern-match — trace the
+behavior exhaustively: enumerate the full state-transition table and the per-state output table,
+anchor every ambiguous phrase to the stated reset / initial / boundary condition (e.g. "all
+outputs asserted when the tank is empty" fixes a valve's polarity; ">N cycles" fixes an off-by-one
+threshold), and re-derive the output column cycle-by-cycle. Cross-check the first defined output
+sample against your registered-latency. *Miss class:* Prob149 (reservoir valve direction), Prob150
+(one-hot FSM) — both turn on a single carefully-read transition or boundary.
+
+### Skill: spec-defect detection (flag, don't silently guess)
+Some specs are internally inconsistent or contradict their own reference. When you detect one,
+**flag it** (route to the PM Agent for user clarification) instead of quietly picking a side:
+- interface bullets contradict the body (e.g. lists `input q` for a D-flip-flop whose `q` must be
+  an output; declares outputs `Y1/Y3` while the body names `Y2/Y4`);
+- a "fix-the-bug" problem whose intended fix contradicts the embedded code's apparent semantics;
+- a K-map whose stated cells disagree with any provided reference expression.
+These are unsolvable-as-stated; the honest move is to surface the contradiction, not to guess.
+(`spec_self_consistency_check` / `eda_spec_lint` catch some of these from the prompt alone.)
+
 ## Cross-Layer Consistency Matrix
 
 Run this check after every layer completes:
