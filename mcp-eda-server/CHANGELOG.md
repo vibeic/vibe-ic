@@ -1,3 +1,26 @@
+## [0.1.8] - 2026-05-27
+
+### `+eda_gate_netlist_gen` + `+eda_vector_op_gen` — two more deterministic Phase-2 generators
+
+Completes the VerilogEval-driven deterministic Phase-2 generator family (FSM
+tables + truth tables + now gate netlists + vector ops). Both program-first:
+structured spec → correct synthesizable RTL, no LLM, byte-identical per spec.
+
+- **`eda_gate_netlist_gen`** (`programs/gate_netlist_rtl_gen.py`): a plain list of
+  logic gates + wire connections → one `assign` per gate. Ops: and/or/nand/nor/
+  xor/xnor/not/buf; internal `wires`; rejects undriven/double-driven nets.
+  Proven on **Prob065 7420** (two 4-input NAND) — official testbench Mismatches
+  0/239. 7 unit tests.
+- **`eda_vector_op_gen`** (`programs/vector_op_rtl_gen.py`): pure bit-plumbing →
+  a single `assign`. Ops: `reverse` (bit/byte/chunk), `split`, `concat`,
+  `sign_extend`, `zero_extend`. Proven on **Prob004 vector2** (32-bit byte
+  reverse) — official testbench Mismatches 0/110. 9 unit tests.
+
+Deterministic Phase-2 generator coverage now spans the mechanically-derivable
+VerilogEval classes: FSM-table, truth-table/K-map, gate-netlist, vector-op.
+
+Tool count: 54 MCP tools (46 eda + 7 device + 1 health) in `src/index.js`.
+
 ## [0.1.7] - 2026-05-27
 
 ### `+eda_truth_table_gen` — deterministic truth-table → combinational RTL (Phase-2)

@@ -441,7 +441,7 @@ function cellgdsPath(cfg) {
 // field-agents to tell at runtime whether a given handler patch
 // was actually loaded. Resolution: keep them in lockstep; if you
 // bump package.json, also bump this constant.
-const SERVER_VERSION = "0.1.7";
+const SERVER_VERSION = "0.1.8";
 function wrapResult({ success, t0, toolVersion, error, output, headLines = 40, tailLines = 80, ...rest }) {
   const dur = t0 ? (Date.now() - t0) : 0;
   const text = (output || "").toString();
@@ -3036,6 +3036,78 @@ server.tool(
         }),
       }],
     };
+  }
+);
+
+// ─── Tool: eda_gate_netlist_gen ───
+// since v0.1.8. Phase-2 deterministic generator (with eda_fsm_table_gen /
+// eda_truth_table_gen): a plain list of logic gates + wire connections → RTL,
+// one `assign` per gate, no LLM. Motivated by VerilogEval-v2 gate-list problems
+// (Prob065 7420 dual 4-input NAND, etc.); the generated Prob065 module passes the
+// official testbench (Mismatches 0/239). Gate ops: and/or/nand/nor/xor/xnor/not/buf.
+server.tool(
+  "eda_gate_netlist_gen",
+  "Deterministically generate combinational RTL from a gate netlist (inputs/outputs/wires/gates). Program-first: one assign per gate, byte-identical per spec, no LLM. Ops: and/or/nand/nor/xor/xnor/not/buf.",
+  {
+    spec: z.string().describe("Gate-netlist spec file (.json or .yaml): module, inputs, outputs, optional wires, gates[{op,out,in[]}]"),
+    out: z.string().optional().describe("Output .sv path (default: returned in the response)"),
+    programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing gate_netlist_rtl_gen.py (auto-detected)"),
+  },
+  async ({ spec, out, programs_dir }) => {
+    try {
+      assertSafePath(spec, "spec");
+      if (out) assertSafePath(out, "out");
+      optPath(programs_dir, "programs_dir");
+    } catch (e) { return guardError(e); }
+    const scriptPath = `${programs_dir}gate_netlist_rtl_gen.py`;
+    const argv = [scriptPath, spec];
+    if (out) argv.push("-o", out);
+    let output = "", status = "ERROR";
+    try {
+      const _r = _spawnSync("python3", argv, { timeout: 60000, maxBuffer: 5 * 1024 * 1024, encoding: "utf-8" });
+      if (_r.error) throw _r.error;
+      output = (_r.stdout || "") + (_r.stderr || "");
+      status = (_r.status === 0) ? "PASS" : "FAIL";
+    } catch (err) {
+      output = (err.stdout || err.stderr || err.message || "").slice(-4000); status = "ERROR";
+    }
+    return { content: [{ type: "text", text: JSON.stringify({ success: status === "PASS", status, rtl: out ? undefined : output, out: out || undefined, log: output.slice(-2000) }) }] };
+  }
+);
+
+// ─── Tool: eda_vector_op_gen ───
+// since v0.1.8. Phase-2 deterministic generator: pure bit-plumbing vector ops →
+// a single mechanical `assign`, no LLM. Motivated by VerilogEval-v2 (Prob004
+// byte-reverse, Prob006 bit-reverse, Prob015 split, Prob064 concat, Prob042
+// sign-extend). The generated Prob004 module passes the official testbench
+// (Mismatches 0/110). Ops: reverse(chunk) / split / concat / sign_extend / zero_extend.
+server.tool(
+  "eda_vector_op_gen",
+  "Deterministically generate combinational RTL for a vector op: reverse (bit/byte/chunk), split, concat, sign_extend, zero_extend. Program-first: one assign, byte-identical per spec, no LLM.",
+  {
+    spec: z.string().describe("Vector-op spec file (.json or .yaml): module, op, inputs, outputs (+ chunk for reverse, parts for concat)"),
+    out: z.string().optional().describe("Output .sv path (default: returned in the response)"),
+    programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing vector_op_rtl_gen.py (auto-detected)"),
+  },
+  async ({ spec, out, programs_dir }) => {
+    try {
+      assertSafePath(spec, "spec");
+      if (out) assertSafePath(out, "out");
+      optPath(programs_dir, "programs_dir");
+    } catch (e) { return guardError(e); }
+    const scriptPath = `${programs_dir}vector_op_rtl_gen.py`;
+    const argv = [scriptPath, spec];
+    if (out) argv.push("-o", out);
+    let output = "", status = "ERROR";
+    try {
+      const _r = _spawnSync("python3", argv, { timeout: 60000, maxBuffer: 5 * 1024 * 1024, encoding: "utf-8" });
+      if (_r.error) throw _r.error;
+      output = (_r.stdout || "") + (_r.stderr || "");
+      status = (_r.status === 0) ? "PASS" : "FAIL";
+    } catch (err) {
+      output = (err.stdout || err.stderr || err.message || "").slice(-4000); status = "ERROR";
+    }
+    return { content: [{ type: "text", text: JSON.stringify({ success: status === "PASS", status, rtl: out ? undefined : output, out: out || undefined, log: output.slice(-2000) }) }] };
   }
 );
 

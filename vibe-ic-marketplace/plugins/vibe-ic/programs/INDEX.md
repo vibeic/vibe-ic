@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 416
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 416)
+- **Total programs (excluding helpers / shims):** 418
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 418)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 407 |
+| `any` | 409 |
 
 ## Alphabetical listing
 
@@ -180,6 +180,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `functional_state_transition_coverage_check` | any | — | Verify TBs exercise the |
 | `gap_reset_granularity_check` | any | — | deterministic compliance check derived from |
 | `gate_evidence_completeness_check` | any | v0.100 | v0.100 L1 |
+| `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
 | `gate_utils` | any | v0.117 | Shared helpers for v0.117+ structural-RTL gates. |
 | `gds_ip_attribution` | any | — | Embed IP attribution metadata into the foundry |
 | `gds_size_check` | any | — | Deterministic GDS file existence and size checker. |
@@ -423,6 +424,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tx_timing_use_max_of_range_check` | any | — | structural-RTL gate that catches |
 | `upf_syntax_check` | any | — | upf_syntax_check.py -- Deterministic UPF file syntax checker. |
 | `url_oracle_guard` | any | — | RTL-as-oracle prohibition for cited-URL handling. |
+| `vector_op_rtl_gen` | any | v0.1.8 | deterministic vector-operation → RTL generator. |
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that |
 | `verilator_coverage_measure` | any | v0.53 | v0.53 plugin gate |
 | `vibe_ic_one_shot_runner` | any | — | full Vibe-IC flow orchestrator. |
@@ -488,7 +490,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (407 programs)
+### `any` (409 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -640,6 +642,7 @@ _(no programs in this group)_
 - `functional_state_transition_coverage_check` — Verify TBs exercise the
 - `gap_reset_granularity_check` — deterministic compliance check derived from
 - `gate_evidence_completeness_check` — v0.100 L1  _[v0.100]_
+- `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
 - `gate_utils` — Shared helpers for v0.117+ structural-RTL gates.  _[v0.117]_
 - `gds_ip_attribution` — Embed IP attribution metadata into the foundry
 - `gds_size_check` — Deterministic GDS file existence and size checker.
@@ -880,6 +883,7 @@ _(no programs in this group)_
 - `tx_timing_use_max_of_range_check` — structural-RTL gate that catches
 - `upf_syntax_check` — upf_syntax_check.py -- Deterministic UPF file syntax checker.
 - `url_oracle_guard` — RTL-as-oracle prohibition for cited-URL handling.
+- `vector_op_rtl_gen` — deterministic vector-operation → RTL generator.  _[v0.1.8]_
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that  _[v0.119.30]_
 - `verilator_coverage_measure` — v0.53 plugin gate  _[v0.53]_
 - `vibe_ic_one_shot_runner` — full Vibe-IC flow orchestrator.
