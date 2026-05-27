@@ -441,7 +441,7 @@ function cellgdsPath(cfg) {
 // field-agents to tell at runtime whether a given handler patch
 // was actually loaded. Resolution: keep them in lockstep; if you
 // bump package.json, also bump this constant.
-const SERVER_VERSION = "0.1.8";
+const SERVER_VERSION = "0.1.9";
 function wrapResult({ success, t0, toolVersion, error, output, headLines = 40, tailLines = 80, ...rest }) {
   const dur = t0 ? (Date.now() - t0) : 0;
   const text = (output || "").toString();
@@ -3108,6 +3108,59 @@ server.tool(
       output = (err.stdout || err.stderr || err.message || "").slice(-4000); status = "ERROR";
     }
     return { content: [{ type: "text", text: JSON.stringify({ success: status === "PASS", status, rtl: out ? undefined : output, out: out || undefined, log: output.slice(-2000) }) }] };
+  }
+);
+
+// ─── Tool: eda_rtl_dispatch ───
+// since v0.1.9. The Phase-2 "program-first, Claude-as-backup" entry point: given
+// ONE structured design spec it auto-detects whether the design is mechanically
+// derivable and routes to the matching deterministic generator (gate-netlist /
+// FSM-table / truth-table / vector-op) — emitting correct RTL with NO LLM. If no
+// deterministic generator applies it returns success:false with fallback:"llm",
+// so the caller knows the body-synthesis genuinely needs the reasoning engine.
+server.tool(
+  "eda_rtl_dispatch",
+  "Phase-2 program-first router: auto-classify a structured spec and route to the matching DETERMINISTIC RTL generator (gate-netlist via `gates`, FSM-table via `transitions`, truth-table via `rows`, vector-op via `op`). Returns RTL when deterministic, or fallback:'llm' when no generator applies.",
+  {
+    spec: z.string().describe("Structured design spec (.json/.yaml). Shape selects the route; `generator` may force one."),
+    out: z.string().optional().describe("Output .sv path (default: returned in the response)"),
+    programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing deterministic_rtl_dispatcher.py (auto-detected)"),
+  },
+  async ({ spec, out, programs_dir }) => {
+    try {
+      assertSafePath(spec, "spec");
+      if (out) assertSafePath(out, "out");
+      optPath(programs_dir, "programs_dir");
+    } catch (e) { return guardError(e); }
+    const scriptPath = `${programs_dir}deterministic_rtl_dispatcher.py`;
+    const argv = [scriptPath, spec];
+    if (out) argv.push("-o", out);
+    let output = "", code = -1;
+    try {
+      const _r = _spawnSync("python3", argv, { timeout: 60000, maxBuffer: 5 * 1024 * 1024, encoding: "utf-8" });
+      if (_r.error) throw _r.error;
+      output = (_r.stdout || "") + (_r.stderr || "");
+      code = _r.status;
+    } catch (err) {
+      output = (err.stdout || err.stderr || err.message || "").slice(-4000); code = -1;
+    }
+    // exit 0 = deterministic RTL; 3 = no deterministic generator (LLM fallback); 1/2 = error
+    const deterministic = code === 0;
+    const llmFallback = code === 3;
+    const routeMatch = output.match(/route . (\w+)/);
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          success: deterministic,
+          deterministic,
+          fallback: llmFallback ? "llm" : undefined,
+          generator: routeMatch ? routeMatch[1] : undefined,
+          out: (deterministic && out) ? out : undefined,
+          log: output.slice(-2000),
+        }),
+      }],
+    };
   }
 );
 

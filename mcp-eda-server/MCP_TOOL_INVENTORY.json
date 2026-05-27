@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "_comment": "AUTHORITATIVE MCP tool inventory \u2014 generated from code by tools/gen_mcp_tool_inventory.py. Do NOT hand-edit; the website tool count must read `total` from here.",
-  "total": 54,
+  "total": 55,
   "by_category": {
-    "eda": 46,
+    "eda": 47,
     "device": 7,
     "other": 1
   },
@@ -37,6 +37,7 @@
     "eda_phase23_completion_audit",
     "eda_pnr",
     "eda_rtl_audit",
+    "eda_rtl_dispatch",
     "eda_rtl_name_semantic_check",
     "eda_rtl_signaltap_autogen",
     "eda_run_tcl",
@@ -104,6 +105,7 @@
     "eda_phase23_completion_audit",
     "eda_pnr",
     "eda_rtl_audit",
+    "eda_rtl_dispatch",
     "eda_rtl_name_semantic_check",
     "eda_rtl_signaltap_autogen",
     "eda_run_tcl",

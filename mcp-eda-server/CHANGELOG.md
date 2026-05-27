@@ -1,3 +1,25 @@
+## [0.1.9] - 2026-05-27
+
+### `+eda_rtl_dispatch` — Phase-2 program-first RTL router
+
+The "program-first, Claude-as-backup" entry point that ties the v0.1.6–0.1.8
+deterministic generator family into ONE automatic path. New MCP tool (backed by
+`programs/deterministic_rtl_dispatcher.py`): given one structured design spec it
+auto-classifies by spec shape and routes to the matching DETERMINISTIC generator —
+emitting correct RTL with NO LLM. If none applies it returns `fallback:"llm"` so
+the caller knows the body-synthesis genuinely needs the reasoning engine.
+
+- Routing (fixed precedence, never ambiguous): `gates` → gate-netlist;
+  `transitions` → FSM-table; `rows` → truth-table; `op` ∈ {reverse,split,concat,
+  sign_extend,zero_extend} → vector-op; else → LLM fallback. `generator` forces a route.
+- Proven end-to-end: each route's RTL passes its official VerilogEval testbench
+  (Prob100 0/100, Prob069 0/58, Prob065 0/239, Prob004 0/110); a non-derivable
+  spec correctly returns the LLM-fallback verdict (exit 3). 9 unit tests.
+- This realises the intended architecture: **programs run first; Claude is the
+  documented fallback only where the design is not mechanically derivable.**
+
+Tool count: 55 MCP tools (47 eda + 7 device + 1 health) in `src/index.js`.
+
 ## [0.1.8] - 2026-05-27
 
 ### `+eda_gate_netlist_gen` + `+eda_vector_op_gen` — two more deterministic Phase-2 generators
