@@ -51,3 +51,18 @@ the `TopModule` header when a spec embeds multiple module declarations.
 python3 score_verilogeval.py --run run_v0119 \
     --dataset /home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_code-complete-iccad2023
 ```
+
+## v0.1.21 targeted re-verify (Prob078, Prob149) — blind, official iccad2023 testbench
+- **Prob078_dualedge → PASS (0/224).** The v0.1.21 dual-edge-FF skill deterministically fixed it:
+  the blind agent used the canonical two-edge-capture + clk-level-mux form (`q=clk?qp:qn`) instead
+  of the non-settling XOR-feedback form. Clean skill win → with v0.1.21 the Human solvable score
+  is effectively **153/156**.
+- **Prob149_ece241_2013_q4 → still FAIL (1171/2040).** The hysteresis-FSM skill gave the right
+  STRUCTURE (paired arrived-from-below/-above states + reset→bottom), but the blind agent's specific
+  per-state dfr semantics still diverge from the reference's particular 6-state machine
+  (A2/B1/B2/C1/C2/D1, with non-obvious values like B1.dfr=0 vs B2.dfr=1). The prose underspecifies
+  exactly when supplemental flow toggles — this is closer to an underspecified/ambiguous spec than a
+  cleanly skill-fixable one. Not resolved by this pass.
+
+**Net with v0.1.21:** Human 153/156 solvable (078 fixed); residual = 062 (polarity defect),
+093 (K-map-vs-reference defect), 149 (underspecified hysteresis semantics).
