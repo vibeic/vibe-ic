@@ -2,6 +2,15 @@ type: enhancement
 severity: P3
 component: program:rtl_hygiene_lint
 plugin_version: "0.1.10"
+status: resolved
+resolved_in: "0.1.13"
+resolution: >-
+  Implemented in spec_conformance_check (not rtl_hygiene_lint, since it needs the
+  spec text to know the design is "Moore"): when the spec mentions "Moore", any
+  output driven combinationally by a data input (clk/reset/enable excluded) is
+  flagged WARN moore-output-mealy. Registered Moore outputs never trip it. +3
+  tests (test_moore_spec_flags_mealy_output / _clears_registered_moore_output /
+  test_no_moore_keyword_does_not_flag_mealy).
 
 title: >-
   Lint for Moore-vs-Mealy output discipline: when the spec declares a Moore FSM,
