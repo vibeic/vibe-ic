@@ -33,6 +33,20 @@ load-bearing again. vibe-ic `6b30f7b`; AID `aed4d5fe0`.
 | `pytest.skip()` calls | 7 — env/deny-list conditional; do not trigger here | — |
 | Vacuous bodies (no-op / `assert True` / no-assert) | none real — the one early-return is *after* a real `assert`; `pass` lines are inside embedded fixture code-strings; the one no-assert test (`test_preset_self_check_on_empty_and_known_inputs`) delegates its assertion to `cvg.self_check()` which raises on divergence | none |
 
+### 3. Deeper recheck — expanded masking-pattern sweep (also clean)
+A second pass widened the search beyond xfail-marker / skip / early-return to the
+subtler masking patterns, across both trees:
+
+| Pattern | Result |
+|---|---|
+| runtime `pytest.xfail(...)` (not a marker) | 0 |
+| unconditional `@pytest.mark.skip(...)` | 0 |
+| `assert` swallowed by a `try/except: pass|continue|return` (AST-checked) | 0 |
+| tautological asserts (`assert True` / `assert 1` / `... or True`) | 0 |
+| test functions with no effective assertion (AST-checked, both trees) | 0 |
+| commented-out asserts / `if False:` / empty-iterable dead guards | 0 |
+| `pytest.skip()` / `skipif` that skip on *failure* (vs resource-absent) | 0 — all 20 are resource/env conditionals (`iverilog`, `node`, `yosys`, generator/tool/deny-list-token presence) |
+
 ## Final state (full-suite, no masking)
 | Tree | Result |
 |---|---|
