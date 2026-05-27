@@ -420,11 +420,30 @@ def _gather_cell_count(project: Path) -> Dict[str, Any]:
 
 def _gather_hardware_test(project: Path) -> Dict[str, Any]:
     """Generic hw-test schema: {tester, board, verdict, criterion, iterations,
-    passed_iterations, evidence}. Reads reports/hw_test.json (canonical)."""
+    passed_iterations, evidence}. Reads reports/hw_test.json (canonical);
+    falls back to the legacy generic tester file (example_tester_test.json,
+    renamed from the old benchmark-specific name) when no canonical file
+    exists. Chip-specific keys in the legacy file (e.g. a hard-coded
+    verdict byte) are NOT propagated — only the generic verdict / run-count
+    fields are coerced into the generic schema, so the canonical summary
+    stays chip-AGNOSTIC."""
     p = _find_report(project, "hw_test.json")
     d = _safe_json(p) if p else None
     if isinstance(d, dict):
         return {**d, "_source": str(p.relative_to(project))}
+    # Legacy fallback — generic tester verdict file. Coerce only the
+    # generic fields; never echo chip-specific byte payloads.
+    lp = _find_report(project, "example_tester_test.json")
+    ld = _safe_json(lp) if lp else None
+    if isinstance(ld, dict):
+        out: Dict[str, Any] = {}
+        if ld.get("verdict") is not None:
+            out["verdict"] = ld["verdict"]
+        runs = ld.get("runs")
+        if runs is not None:
+            out["iterations"] = runs
+        out["_source"] = f"(legacy {lp.relative_to(project)})"
+        return out
     return {}
 
 

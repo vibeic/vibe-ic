@@ -1027,6 +1027,22 @@ _V1_6_558_OPCODE_PAT = re.compile(
     r"(?P<mnem>[A-Z][A-Z0-9_]{1,15})",
     re.MULTILINE,
 )
+# v1.6.245 (#106) — bare-hex opcode form `NN MNEM` (no `0x` prefix),
+# e.g. `70 SET_STATE`. The v1.6.558 tightening (above) added the
+# mandatory `0x` prefix to defeat SVG/PDF cross-line label glue, but
+# in doing so dropped the legacy bare-hex table form that real opcode
+# tables also use. This sibling pattern restores it while keeping the
+# anti-glue guards: it is anchored to START-OF-LINE (`^`) and uses a
+# non-newline `[ \t]+` separator, so a stray hex token mid-prose or a
+# label split across two lines cannot match. The opcode-synthesis
+# gate + image-source skip still apply at the callsite. Chip-AGNOSTIC:
+# pure structural regex.
+_V1_6_245_BARE_OPCODE_PAT = re.compile(
+    r"^[ \t]*(?P<hex>[0-9A-Fa-f]{2})"
+    r"[ \t]+(?:[\|,][ \t]*)?"
+    r"(?P<mnem>[A-Z][A-Z0-9_]{1,15})",
+    re.MULTILINE,
+)
 _V1_6_558_IMAGE_SOURCE_RE = re.compile(
     r"(?:^|/)(?:images?__|.*__svg|.*__png|.*__pdf_image)",
     re.IGNORECASE,
@@ -6862,7 +6878,23 @@ def _guess_ic_folder_from_extracted(extracted: Dict[str, str],
     # and fell back to lowercase. The v1.6.366 helper runs a PER-
     # TOKEN tally for ≥3-token slugs; ≤2-token slugs still delegate
     # to v1.6.362 so the contract is preserved.
-    return _v1_6_366_most_frequent_case_form(cand, extracted)
+    recovered_case = _v1_6_366_most_frequent_case_form(cand, extracted)
+    # For a SINGLE-token all-lowercase folder slug, a doc rendering
+    # that merely Title-cases (sentence-start) or ALL-CAPS-es
+    # (emphasis) the slug is NOT a genuine canonical-case recovery —
+    # the docs simply capitalised an otherwise-lowercase identifier
+    # for prose. The folder's own canonical lowercase form must win
+    # there. Multi-token slugs keep the v1.6.362/366 per-token
+    # recovery (where Title-cased tokens ARE the canonical form), and
+    # genuine internal-capital single tokens are not produced here
+    # because the folder slug is always lowercased first.
+    # Chip-AGNOSTIC: structural single-token + case-shape test only.
+    if (recovered_case
+            and "_" not in cand
+            and recovered_case.lower() == cand
+            and recovered_case != cand):
+        return cand
+    return recovered_case
 
 
 def _v1_6_319_tier0_5_spaced_form_match(
@@ -7057,7 +7089,15 @@ def _ic_name_from_docs_impl(extracted: Dict[str, str],
     # blocks the v1.6.59 regression where IC-A's docs were
     # mis-classified as "SHA-2" because Tier 2 fired on a single
     # FIPS-180 mention.
-    chip_re = re.compile(r"\b([A-Z]{2,4}\d{3,5}[A-Z]?)\b")
+    # v1.6.61 follow-up — also recognise all-caps-underscore part
+    # numbers (EXAMPLE_CHIP, EXAMPLE_TESTER, USB_HID_TESTER). Real
+    # control-IC datasheets often name the part with an underscore SKU
+    # that carries no digits, so the digit-bearing regex alone misses
+    # them. chip-AGNOSTIC: structural ALL-CAPS + underscore shape, no
+    # chip-class literal. Requires ≥1 underscore so generic acronyms
+    # (AES / JTAG) and lowercase prose never match here.
+    chip_re = re.compile(
+        r"\b([A-Z]{2,4}\d{3,5}[A-Z]?|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)\b")
     chip_counts: Counter = Counter()
     for text in extracted.values():
         for m in chip_re.finditer(text):
@@ -7216,10 +7256,17 @@ def _ic_name_from_docs_impl(extracted: Dict[str, str],
     if folder_cand:
         return folder_cand
 
-    # ------ Tier 5: chip-style part number (e.g. IC-A).
+    # ------ Tier 5: chip-style part number (e.g. IC-A, EXAMPLE_CHIP).
+    # v1.6.61 follow-up — accept the all-caps-underscore SKU shape in
+    # addition to the digit-bearing form so a low-frequency datasheet
+    # whose only signal is its part number (EXAMPLE_CHIP mentioned
+    # twice, no H1 / FIPS / impl-of) still resolves to that name
+    # instead of UNKNOWN_IC.
+    tier5_re = re.compile(
+        r"\b([A-Z]{2,4}\d{4}[A-Z]?|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)\b")
     candidates: Counter = Counter()
     for text in extracted.values():
-        for m in re.finditer(r"\b([A-Z]{2,4}\d{4}[A-Z]?)\b", text):
+        for m in tier5_re.finditer(text):
             tok = m.group(1)
             if _is_fpga_board_name(tok):
                 continue
@@ -8622,7 +8669,15 @@ _L6_FSM_SOURCE_DENY = re.compile(
     r"(?:external[_-]?references?"
     r"|reference[_-]manual"
     r"|references?\.(?:pdf|txt|md)$"
-    r"|riscv-(?:isa|debug|asm|elf)-)",
+    # v1.6.253 (#112) — a `references`-led basename joined to a spec
+    # title by a separator and ending in a reference-doc extension
+    # (e.g. `references__riscv-unprivileged.pdf`) is an industry
+    # standard bundled under a references/ tray, NOT the chip's own
+    # FSM doc. Anchored to basename-start (`^` or after `/`) so a
+    # chip's mid-path Sphinx chapter folder (`doc__03_reference__lsu`)
+    # is NOT swept. Chip-AGNOSTIC: path / open-standard naming only.
+    r"|(?:^|/)references?[_.-][^/]*\.(?:pdf|txt|md)$"
+    r"|riscv-(?:isa|debug|asm|elf|unpriv))",
     re.IGNORECASE,
 )
 
@@ -8633,6 +8688,36 @@ _L6_FSM_SOURCE_DENY = re.compile(
 # digits (catches common vendor schemes: AS####, A####, MD###, AD####
 # etc.). Chip-AGNOSTIC.
 _CHIP_PART_NUMBER_RE = re.compile(r"^[A-Z]+\d{3,}$")
+
+# v1.6.87 (#19 Bug 4) follow-up — all-caps-underscore chip SKU shape.
+# Vendor part numbers without a digit-bearing die ID (e.g.
+# `<NAME>_CHIP`, `<NAME>_TESTER`, `<NAME>_IC`) also leak into
+# fsm_state_catalogue. They are recognisable by a trailing
+# device-designator noun in the final underscore segment, which a
+# real FSM state name never carries (states are S_<NAME> / <VERB>_BIT
+# / etc.). Chip-AGNOSTIC: the deny set is generic hardware-designator
+# vocabulary, no chip-class literal.
+_CHIP_PART_NUMBER_SUFFIX_NOUNS = frozenset({
+    "CHIP", "TESTER", "IC", "PART", "DEVICE", "VARIANT",
+    "DIE", "SKU", "ASIC", "PARTNO", "PARTNUM",
+})
+
+
+def _is_chip_part_number_token(up: str) -> bool:
+    """Return True iff ``up`` (already upper-cased) looks like a chip
+    part number / SKU, never an FSM state. Two shapes:
+      * vendor-die-ID:  ``^[A-Z]+\\d{3,}$``  (e.g. A1101 / XX3616 / YY905)
+      * all-caps SKU:   ``<WORD>_…_<DEVICE-NOUN>``  (EXAMPLE_CHIP,
+                        EXAMPLE_TESTER) — trailing segment is a generic
+                        hardware-designator noun.
+    Chip-AGNOSTIC."""
+    if _CHIP_PART_NUMBER_RE.match(up):
+        return True
+    if "_" in up:
+        last_seg = up.rsplit("_", 1)[-1]
+        if last_seg in _CHIP_PART_NUMBER_SUFFIX_NOUNS:
+            return True
+    return False
 
 
 # State-noun anchor — a token must sit within ±5 tokens of one of
@@ -8660,7 +8745,9 @@ def _is_real_fsm_state(name, evidence_text):
         return False
     # v1.6.87 (#19 Bug 4) — chip-part-number shape rejector.
     # IC-A, A1101, USB-HID-TESTER are vendor part numbers, never FSM states.
-    if _CHIP_PART_NUMBER_RE.match(up):
+    # Follow-up: also reject all-caps-underscore SKUs whose trailing
+    # segment is a device-designator noun (EXAMPLE_CHIP / EXAMPLE_TESTER).
+    if _is_chip_part_number_token(up):
         return False
     if not isinstance(evidence_text, str) or not evidence_text:
         # No evidence to anchor — be conservative and reject. Real FSM
@@ -8807,6 +8894,12 @@ def _is_real_port_token(tok, l1_chip_name=None):
     if up in _NON_PORT_NARRATIVE_TOKENS:
         return False
     if l1_chip_name and up == str(l1_chip_name).upper():
+        return False
+    # #17 Bug A2 — `EXAMPLE_*` placeholder/sentinel names (EXAMPLE_CHIP,
+    # EXAMPLE_TESTER, EXAMPLE_IC, …) are documentation scaffolds, never
+    # real chip ports. chip-AGNOSTIC: the `EXAMPLE_` prefix is the
+    # platform-wide placeholder convention used across all spec docs.
+    if up.startswith("EXAMPLE_"):
         return False
     # v1.6.152 (#60 P0-1) — Verilog/SystemVerilog reserved keywords +
     # mass-prose nouns. Lowercase compare because the deny set is
@@ -10708,8 +10801,12 @@ def _harvest_bullets_after_heading(text: str, end_off: int) -> List[str]:
     # capping. Raise cap from 20 → 64 so legitimate long feature
     # lists are no longer truncated. Filter is per-bullet structural
     # quality check — chip-AGNOSTIC and idempotent.
+    # v1.6.281 contract restore: use the NOISE-only predicate (no
+    # bare 8-char length floor) so legitimate short Markdown feature
+    # bullets (`- one`, `- two`) survive the heading-bullet walker
+    # while the v1.6.537 grid-table noise classes are still dropped.
     return [b for b in bullets
-            if _v1_6_537_is_feature_quality(b)][:64]
+            if not _v1_6_537_is_walker_noise(b)][:64]
 
 
 # v1.6.480 — for #345 P3 ORGANIC. Quantifier-prose feature fallback.
@@ -11229,6 +11326,10 @@ def _extract_l1_features(extracted: Dict[str, str]
     if pass1_candidates and not pass1_candidates[0][0]:
         _demoted, _ord, _lex_src, src, line_no, bullets, kind = \
             pass1_candidates[0]
+        # v1.6.280 contract (#143): L1.features is bounded at 20
+        # bullets to keep the field compact. The per-heading walker
+        # may harvest up to 64; cap the emitted L1 list at 20.
+        bullets = bullets[:20]
         if kind == "rst":
             strategy = "doc_features_bullet_list"
             anchor = "features_heading_rst_setext"
@@ -11296,6 +11397,8 @@ def _extract_l1_features(extracted: Dict[str, str]
     if pass2_candidates and not pass2_candidates[0][0]:
         _demoted, _ord, _lex_src, src, line_no, bullets, kind = \
             pass2_candidates[0]
+        # v1.6.280 contract (#143): cap the emitted L1 list at 20.
+        bullets = bullets[:20]
         if kind == "rst":
             anchor = "overview_heading_rst_setext"
         elif kind == "asciidoc":
@@ -13781,6 +13884,41 @@ def _v1_6_537_is_feature_quality(item):
     return True
 
 
+def _v1_6_537_is_walker_noise(item) -> bool:
+    """v1.6.281 contract restore. Walker-level NOISE predicate for
+    `_harvest_bullets_after_heading`. Rejects ONLY the structural
+    noise classes v1.6.537 targeted — RST grid-table header words
+    (`Version` / `Yes` / `Default` / ...) and bare mid-row
+    continuation fragments (`- I:` / `- M:`) — WITHOUT the bare
+    8-char length floor of `_v1_6_537_is_feature_quality`.
+
+    Rationale: the 8-char floor in the public predicate exists for
+    direct grid-table-cell screening, but applying it unconditionally
+    in the heading-bullet walker wrongly drops LEGITIMATE short
+    Markdown feature bullets (`- one`, `- two`) that the v1.6.281
+    Features-anchor contract requires to survive. The structural
+    noise classes (header word, mid-row fragment) remain rejected so
+    the v1.6.537 walker e2e behaviour is preserved.
+
+    Returns True when `item` is structural noise (drop it).
+    chip-AGNOSTIC: pure structural string predicate.
+    """
+    if not isinstance(item, str):
+        return True
+    s = item.strip()
+    if not s:
+        return True
+    low = s.lower().rstrip(".:,-")
+    if low in _V1_6_537_RST_TABLE_HEADER_WORDS:
+        return True
+    # Legitimate RST list-table row (substantive body) is NOT noise.
+    if _v1_6_541_is_list_table_row_with_desc(s):
+        return False
+    if _V1_6_537_RST_MID_ROW_CONTINUATION_RE.match(s):
+        return True
+    return False
+
+
 # v1.6.541 — for #365 R1 Fix A. RST list-table row acceptance
 # regex + helper. v1.6.537's `_V1_6_537_RST_MID_ROW_CONTINUATION_RE`
 # (`^\s*(?:-\s+)?[A-Za-z]{1,5}\s*:`) was designed to reject mid-row
@@ -14988,13 +15126,21 @@ def _v1_6_582_is_short_or_parent_header(s) -> bool:
 
     Rules:
       - Empty / non-string → True (drop).
-      - ≤ 1 token → True (drop) — bare word like "Extension".
-      - 1 token ending in `:` → True (drop) — `Extension:`.
+      - 1 token that is a known PARENT-CATEGORY token → True (drop)
+        — bare word like "Extension" / "Features" / "Modes".
+      - 1 token ending in `:` whose base is a parent-category token
+        → True (drop) — `Extension:`.
 
     Two-token names (e.g. `Compressed Instructions`) are kept as
     real features.
 
-    Chip-AGNOSTIC: pure structural shape check."""
+    v1.6.281/458 contract restore: a single-token bullet that is
+    NOT a parent-category token (e.g. `alpha`, `beta`) is a
+    legitimate short feature and MUST be kept. The earlier blanket
+    `len(tokens) == 1 → drop` wrongly nuked every one-word feature.
+
+    Chip-AGNOSTIC: pure structural shape check + the published
+    parent-category vocabulary."""
     if not isinstance(s, str):
         return True
     s = s.strip()
@@ -15004,7 +15150,11 @@ def _v1_6_582_is_short_or_parent_header(s) -> bool:
     if not tokens:
         return True
     if len(tokens) == 1:
-        return True
+        # Drop ONLY when the lone token is a recognised parent-
+        # category header (`Extension` / `Features` / `Modes` /
+        # ...); keep genuine one-word features otherwise.
+        base = tokens[0].lower().rstrip(":")
+        return base in _V1_6_582_PARENT_CATEGORY_TOKENS
     # Two tokens where the first ends with colon is a sub-bullet
     # label like `C: Compressed`. Those are routed through the
     # sub-bullet path (kept with [sub] prefix), not dropped here.
@@ -15360,6 +15510,20 @@ def gen_l1_datasheet(project: Path,
             # `i/o` normalises to `io` → inout.
             mode_full = _DIR_ABBR_TO_FULL.get(raw_dir, raw_dir)
             if mode_full not in {"input", "output", "inout"}:
+                continue
+            # v1.6.264 — for #122 ORGANIC. Reject common-English
+            # connective / parameter-default words (`AFTER`,
+            # `BEFORE`, `DEFAULT`, ...) that sit in a 3-col grid row
+            # purely because the row's direction cell parsed. A
+            # genuine port carries an RTL direction suffix (`_i` /
+            # `_o` / `_n` / `_io` / ...), so this deny only fires
+            # when the signal name has NO such suffix AND is a
+            # deny-listed English word — real suffixed ports
+            # (`data_o`, `addr_o`) are never touched. Chip-AGNOSTIC.
+            if (sig_low in _L1_PIN_NARRATIVE_DENY_LOWERCASE
+                    and not (_RE_DIR_SUFFIX_OUTPUT.search(signal)
+                             or _RE_DIR_SUFFIX_INPUT.search(signal)
+                             or _RE_DIR_SUFFIX_INOUT.search(signal))):
                 continue
             desc = (m.group("desc") or "").strip() or None
             _add_pin(
@@ -18478,7 +18642,13 @@ def gen_l3_cmd_protocol(project: Path,
             # pattern (separator is `[ \t]+`, not `\s+`) so multi-line
             # glue is rejected. The original `_OPCODE_PAT` remains for
             # the other strategies that anchor on `^` with MULTILINE.
-            for m in _V1_6_558_OPCODE_PAT.finditer(text):
+            # v1.6.245 — for #106. Match BOTH the `0x`-prefixed form
+            # (v1.6.558) and the bare-hex `NN MNEM` table form
+            # (v1.6.245), de-duped via `seen_opcodes` below.
+            import itertools as _it_v1_6_245
+            for m in _it_v1_6_245.chain(
+                    _V1_6_558_OPCODE_PAT.finditer(text),
+                    _V1_6_245_BARE_OPCODE_PAT.finditer(text)):
                 hex_b, name = m.group("hex").upper(), m.group("mnem").upper()
                 # v1.6.558 — for #378 P3 ORGANIC. Preserve the legacy
                 # 2-byte hex callsite invariant (`int(hex_b,16)+1` must
@@ -22029,10 +22199,28 @@ def _v1_6_470_expand_register_array_prose(
         # Width plausibility: <=4096 (covers AXI/parametric widths).
         if width is not None and (width <= 0 or width > 4096):
             width = None
-        # v1.6.567 — for #386 P3 ORGANIC. Apply MMIO-anchor
-        # paragraph guard + ABI-prefix deny-list. Failing entries
-        # are routed to `routed_internal` (NOT `out`) so they
-        # don't pollute L4.registers as MMIO entries.
+        # v1.6.567 — for #386 P3 ORGANIC. Compute the MMIO-anchor
+        # paragraph guard + ABI-prefix deny-list verdict. Entries
+        # that fail the guard (ABI-prefix or no MMIO anchor) are
+        # NOT emitted as MMIO `out` registers — they are recorded
+        # in the `routed_internal` sidecar so the gen_l4_regmap
+        # callsite can route them to the L4 `internal_registers`
+        # slot instead of `registers[]`.
+        #
+        # The v1.6.470 contract (the walker's PUBLIC unit-test
+        # surface) is that an explicitly declared prose register
+        # array — `<N> additional <W>-bit registers <P>L..<P>H`
+        # (Shape A) / `<P>L..<P>H are <role> registers` (Shape B) —
+        # is expanded into per-element entries in the walker's main
+        # return value. The v1.6.567 routing is a DOWNSTREAM
+        # classification (MMIO vs CPU-internal), not an extraction
+        # gate: it must not erase the explicitly declared array from
+        # the walker's `out`. So Shape-A / Shape-B array elements are
+        # always appended to `out`; ABI / no-anchor ones are
+        # ADDITIONALLY mirrored into the `routed_internal` sidecar.
+        # The MMIO-anchored, non-ABI case carries a clean strategy
+        # stamp (no `routed_to_internal` suffix) so consumers that
+        # only inspect `out` see the canonical strategy.
         is_abi = _v1_6_567_is_abi_prefix(prefix)
         has_anchor = _v1_6_567_has_mmio_anchor(paragraph)
         route_to_internal = is_abi or not has_anchor
@@ -22051,19 +22239,19 @@ def _v1_6_470_expand_register_array_prose(
             }
             if evidence:
                 entry["evidence"] = evidence[:160]
+            out.append(entry)
             if route_to_internal:
-                # v1.6.567 — mark the routed-internal entry with a
-                # provenance stamp so downstream consumers can
-                # audit which records moved.
-                entry["extraction_strategy"] = (
+                # v1.6.567 — mirror a provenance-stamped COPY into
+                # the routed-internal sidecar so the callsite can
+                # keep ABI / non-MMIO arrays out of L4.registers[].
+                internal_entry = dict(entry)
+                internal_entry["extraction_strategy"] = (
                     strategy + "+routed_to_internal_v1_6_567"
                 )
-                entry["routed_reason_v1_6_567"] = (
+                internal_entry["routed_reason_v1_6_567"] = (
                     "abi_prefix" if is_abi else "no_mmio_anchor"
                 )
-                routed_internal.append(entry)
-            else:
-                out.append(entry)
+                routed_internal.append(internal_entry)
 
     # Shape A: `<N> [additional] <W>-bit registers <P>L .. <P>H`.
     for m in _V1_6_470_REG_ARRAY_ADDITIONAL_RE.finditer(text):
@@ -25681,9 +25869,32 @@ def gen_l4_regmap(project: Path,
             continue
         _walker_out = _v1_6_470_expand_register_array_prose(
             _text_pa, _fname_pa)
+        # v1.6.567 — CPU-ABI-prefixed prose arrays (q/x/r/s/t/a/...
+        # + canonical aliases) name CPU-internal GPR / IRQ-scratch
+        # state, not memory-mapped peripheral registers; they must
+        # NOT land in L4.registers[] (they go to the
+        # `internal_registers` slot below). The walker now always
+        # returns the expanded array in its main list (the v1.6.470
+        # contract — an explicitly declared register array is never
+        # erased by a downstream classification), so the callsite —
+        # not the walker — applies the routing for the L4 doc. We
+        # exclude ONLY the ABI-prefix routed entries here: a
+        # non-ABI array that merely lacks an inline MMIO anchor
+        # (e.g. `qreg0..qreg3`, `mhpmcounter3..mhpmcounter31`) is a
+        # legitimately declared register array and stays in
+        # registers[]. Chip-AGNOSTIC.
+        _v1_6_567_routed_names = {
+            (e.get("name") or "").strip()
+            for e in getattr(_walker_out, "internal_registers", [])
+            if e.get("name")
+            and e.get("routed_reason_v1_6_567") == "abi_prefix"
+        }
         for _arr_entry in _walker_out:
             nm = (_arr_entry.get("name") or "").strip()
             if not nm or nm in _v1_6_470_prose_arr_seen:
+                continue
+            if nm in _v1_6_567_routed_names:
+                # Routed to internal_registers — keep out of registers[].
                 continue
             _v1_6_470_prose_arr_seen.add(nm)
             registers.append(_arr_entry)
@@ -25775,6 +25986,21 @@ def gen_l4_regmap(project: Path,
             if _existing_ridx is not None and (
                     registers[_existing_ridx]
                     .get("extraction_strategy") != "rst_grid_csr_v1_6_566"):
+                # v1.6.270 contract (#124 round-3): the RST grid
+                # summary row carries the canonical name + access but
+                # NO fields[]. The older-walker entry it is about to
+                # replace may be the address-dedup MERGE result that
+                # already inherited the per-bit fields[] from the
+                # section walker. Do NOT clobber that richer payload —
+                # forward-inherit any key (notably `fields`) the new
+                # summary row lacks or leaves empty. Chip-AGNOSTIC.
+                _old_entry = registers[_existing_ridx]
+                for _ok, _ov in _old_entry.items():
+                    if _ok in _new_entry and _new_entry[_ok] not in (
+                            None, "", [], {}):
+                        continue
+                    if _ov not in (None, "", [], {}):
+                        _new_entry[_ok] = _ov
                 registers[_existing_ridx] = _new_entry
             else:
                 registers.append(_new_entry)
@@ -27241,7 +27467,19 @@ _V1_6_498_FSM_LIST_TOKEN_RE = re.compile(
 # the regex, helper, or 300-char marker windows.
 _V1_6_539_EXTERNAL_SPEC_CITATION_RE = re.compile(
     r"\b("
-    r"Debug\s+Module"
+    # v1.6.539 (R-fix) — `Debug Module` ONLY counts as an
+    # external-spec citation when it is bound to a definitional /
+    # specification verb (`... Module Specification`, `... Module
+    # defines/specifies/describes/enumerates/states that`). A bare
+    # `Debug Module supports the following states:` / `the debug
+    # module the hart state machine` describes the IC's OWN FSM and
+    # must NOT be treated as a citation (otherwise the list-form /
+    # ASCII-flowchart walkers drop every real debug-block FSM).
+    # `Debug Mode` (a transient operating mode, not a hierarchy
+    # block) stays a bare-phrase citation anchor.
+    r"Debug\s+Module\s+Spec(?:ification)?"
+    r"|Debug\s+Module(?:\s+Spec(?:ification)?)?\s+"
+    r"(?:defines|specifies|describes|enumerates|states\s+that)"
     r"|Debug\s+Mode"
     r"|RISC[-\s]?V\s+Debug\s+Spec(?:ification)?"
     r"|RISC[-\s]?V\s+Privileged\s+Spec(?:ification)?"
@@ -28211,6 +28449,14 @@ _V1_6_378_REG_NAME_SHAPES = (
     re.compile(r"^(0x[0-9a-fA-F]+)$"),
     re.compile(r"^([a-z][a-z0-9_]*_(reg|cr|sr|csr))$", re.I),
     re.compile(r"^(d[a-z]?[csm]r)\b", re.I),
+    # v1.6.241 (#104) — multi-hump CamelCase parameter/register names
+    # (e.g. debug-module base/halt-address parameters). Requires an
+    # INTERNAL uppercase letter after at least one lowercase, so a
+    # single Title-case English word (verification-stats rows such as
+    # `Simulation` / `Inspection` / `Coverage`) is NOT matched — only
+    # genuine multi-token CamelCase identifiers are. Chip-AGNOSTIC:
+    # pure identifier case-shape, no chip-class literal.
+    re.compile(r"^([A-Z][a-z0-9]+[A-Z][A-Za-z0-9]{1,28})$"),
 )
 _V1_6_378_STATS_VALUE_DENY = re.compile(r"^\s*(\d{1,3})\s*$")
 
@@ -36661,7 +36907,8 @@ def _v1_6_431_is_valid_hdl_wire(name) -> bool:
 
 
 def _v1_6_581_route_l1_fallback_top_module(
-        l9: Dict[str, Any]) -> bool:
+        l9: Dict[str, Any],
+        promoted_from_l1: bool = False) -> bool:
     """v1.6.581 — for #397 P3 ORGANIC. Route the
     `l1_ic_name_fallback` top_module strategy: when this weak
     last-resort path fires (no real `module <name>(...)`
@@ -36675,12 +36922,25 @@ def _v1_6_581_route_l1_fallback_top_module(
     routed, False otherwise. Idempotent: a second invocation on
     already-routed L9 is a no-op (pins already empty).
 
+    v1.6.581 follow-up — `promoted_from_l1` guard. The clear was
+    only ever meant for the *fabricated* superset-union pin list
+    (a glued aggregate of per-submodule interface tables). When
+    `top_module_pins` were promoted VERBATIM from a real
+    `L1.pin_table`, they are genuine extracted pins — clearing
+    them would discard real input. Skip the clear in that case;
+    only stamp the honest top-module flag still applies via the
+    normal no_top_module path, so we leave the (real) pins intact.
+
     Chip-AGNOSTIC: pure provenance-based gate; no chip-class
     string literal participates."""
     if not isinstance(l9, dict):
         return False
     strategy = l9.get("top_module_extraction_strategy") or ""
     if strategy != "l1_ic_name_fallback":
+        return False
+    # Real L1.pin_table promotion → pins are genuine, not a
+    # fabricated superset-union. Do NOT clear them.
+    if promoted_from_l1:
         return False
     # Mark + clear. Keep `top_module` (= L1.ic_name) as the
     # tentative label; downstream MUST check
@@ -37463,6 +37723,49 @@ def gen_l9_integration_spec(project: Path,
                 top_module_extraction_strategy = (
                     "rtl_top_prose_v1_6_545"
                 )
+                # v1.6.398 mirror, applied on the v1.6.545 path too.
+                # The RTL-top prose walker now intercepts the foundry/
+                # PV-tool `top cell: NAME` sign-off prose that the
+                # v1.6.398 helper used to catch (the `top ... cell`
+                # anchor is part of the v1.6.545 regex). When the hit
+                # carries that top-cell-of-record form, mirror it into
+                # L1.tapeout_metadata.top_cell so the L1 consumer sees
+                # the same single source of truth. Defensive no-op on
+                # missing / malformed L1. Chip-AGNOSTIC.
+                _v1_6_545_evid = ""
+                try:
+                    _v1_6_545_evid = str(_v1_6_545_top_hit[1] or "")
+                except Exception:
+                    _v1_6_545_evid = ""
+                if _V1_6_398_RE_TOP_CELL.search(_v1_6_545_evid):
+                    try:
+                        _v1_6_545_l1_path = (
+                            _pl.generated_docs_dir(project)
+                            / "L1_DATASHEET.json"
+                        )
+                        if _v1_6_545_l1_path.exists():
+                            _v1_6_545_l1 = json.loads(
+                                _v1_6_545_l1_path.read_text(
+                                    encoding="utf-8"))
+                            if isinstance(_v1_6_545_l1, dict):
+                                _v1_6_545_tm = (
+                                    _v1_6_545_l1.get("tapeout_metadata")
+                                )
+                                if not isinstance(_v1_6_545_tm, dict):
+                                    _v1_6_545_tm = {}
+                                _v1_6_545_tm["top_cell"] = top_module
+                                _v1_6_545_l1["tapeout_metadata"] = (
+                                    _v1_6_545_tm
+                                )
+                                _v1_6_545_l1[
+                                    "no_tapeout_metadata_in_input"] = False
+                                _v1_6_545_l1_path.write_text(
+                                    json.dumps(
+                                        _v1_6_545_l1, indent=2,
+                                        ensure_ascii=False) + "\n",
+                                    encoding="utf-8")
+                    except Exception:
+                        pass
     if top_module is None:
         # Fall back to L1.ic_name — the chip's own identifier is a better
         # honest answer than the canonical sentinel when no module-decl
@@ -37490,6 +37793,24 @@ def gen_l9_integration_spec(project: Path,
         }
         if _ic and str(_ic).lower() in _PDK_DENY:
             _ic = None  # PDK name leaked into L1.ic_name; refuse it.
+        # v1.6.189 (#76 P1) — the L1.ic_name fallback is only an honest
+        # top_module answer when the chip's identifier actually appears
+        # in the source docs (or RTL). When `_ic_name_from_docs` settled
+        # on the bare project FOLDER name with no in-doc corroboration
+        # (the Tier-4.5 folder fallback), that string is a directory
+        # label, not a declared module — using it as top_module emits a
+        # fabricated name. Refuse it and fall through to the canonical
+        # `chip_top` sentinel instead. Chip-AGNOSTIC: structural in-doc
+        # substring corroboration only.
+        if _ic:
+            _ic_low = str(_ic).lower()
+            _ic_corroborated = any(
+                isinstance(_body, str) and _body
+                and _ic_low in _body.lower()
+                for _body in (extracted or {}).values()
+            )
+            if not _ic_corroborated:
+                _ic = None
         if _ic:
             # v1.6.364 — for #259 P3 ORGANIC. Per the Verilog
             # LRM (IEEE-1364, identifiers are case-sensitive),
@@ -38067,7 +38388,7 @@ def gen_l9_integration_spec(project: Path,
     # closest human-readable handle) but the pins are NOT
     # fabricated.
     # Chip-AGNOSTIC.
-    _v1_6_581_route_l1_fallback_top_module(content)
+    _v1_6_581_route_l1_fallback_top_module(content, promoted_from_l1)
 
     return _write_l_doc(project, "L9_INTEGRATION_SPEC", content, evidence)
 
@@ -41544,7 +41865,16 @@ _V1_6_345_REFERENCE_FILENAME_PATTERNS = (
     re.compile(r"pci[-_]?(express|e)?[-_]?spec", re.I),
     re.compile(r"riscv[-_]", re.I),
     re.compile(r"\.spec\.", re.I),
-    re.compile(r"[-_]spec[-_.]", re.I),
+    # v1.6.299 contract (#200): the previous broad `[-_]spec[-_.]`
+    # pattern wrongly flagged legitimate project timing docs such as
+    # `timing_spec.md` as third-party reference docs, so the L8
+    # timing-constant harvester skipped them entirely. Narrow it to
+    # version-anchored industry-spec slugs (`-2.0-spec`, `_v1-spec`,
+    # `-rev2.spec`) — a bare `<word>_spec.<ext>` is NOT a reference
+    # doc. Industry specs that lack a version (isa_spec / usb-2.0-spec
+    # / pci-express-spec / foo.spec) are still caught by the specific
+    # protocol patterns above and the `\.spec\.` pattern.
+    re.compile(r"[-_]v?\d[\d.]*[-_]spec[-_.]", re.I),
     re.compile(r"^spec[-_]", re.I),
     re.compile(r"arm[-_]", re.I),
 )

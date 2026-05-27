@@ -111,6 +111,54 @@ HARD_RULES: list[tuple[str, str, str]] = [
      "Chip-specific pin name (ACC_ID is <chip-class>'s ID-bus pin)"),
 ]
 
+
+# ---------------------------------------------------------------------------
+# Deny-list-derived project-codename rules.
+#
+# The hand-curated HARD_RULES above only spell out the codenames known at
+# authoring time. chip_deny_list.txt is the canonical, growing
+# registry of benchmark project/chip codenames; rather than re-typing each new
+# token into HARD_RULES, derive a `project_codename_<token>` rule for every
+# codename-shaped token in the deny list. chip-AGNOSTIC: this is a registry
+# scan, not a hardcode — adding a token to the deny list automatically gates
+# its leakage into general docs.
+# ---------------------------------------------------------------------------
+_DENY_LIST_PATH = PLUGIN_ROOT / "tests" / "chip_deny_list.txt"
+# Codename shape: a few leading letters then a 3+ digit run (optional trailing
+# letters). Mirrors the test's _CODENAME_TOKEN_RE so the two stay in lock-step.
+_CODENAME_TOKEN_RE = re.compile(r"^[a-z]{2,5}\d{3,}[a-z]*$")
+
+
+def _deny_list_codename_rules() -> list[tuple[str, str, str]]:
+    rules: list[tuple[str, str, str]] = []
+    try:
+        raw = _DENY_LIST_PATH.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return rules
+    seen: set[str] = set()
+    for ln in raw:
+        s = ln.strip()
+        if not s or s.startswith("#") or s in seen:
+            continue
+        seen.add(s)
+        if "-" in s:
+            continue
+        if _CODENAME_TOKEN_RE.match(s):
+            rid = f"project_codename_{s}"
+            # Skip if the hand-curated catalogue already covers this exact id.
+            if any(existing_rid == rid for existing_rid, _, _ in HARD_RULES):
+                continue
+            rules.append((
+                rid,
+                rf"\b{re.escape(s)}\b",
+                f"Project/chip codename {s.upper()!r} (deny list) leaks "
+                f"into general-purpose docs",
+            ))
+    return rules
+
+
+HARD_RULES.extend(_deny_list_codename_rules())
+
 SOFT_RULES: list[tuple[str, str, str]] = [
     ("provenance_chip_in_prose",
      r"(real bug|known incident|observed in|debug session|session log)\s+(from|of|on)\s+(<chip-class>|<benchmark>|v0[5-9]\d|MD-?905)",

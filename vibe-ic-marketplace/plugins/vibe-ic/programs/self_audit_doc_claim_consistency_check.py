@@ -40,15 +40,18 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 
-# Benchmark path tokens like `1st_benchmark_sn2025/phase2+3_v10634-vendor`
-# or `1st_benchmark_sn2025/phase2+3_v10634-vendor/`. The leading
-# `1st_benchmark_sn2025/` is the only known root, so we anchor on it.
-# Tokens containing wildcards / asterisks / `<...>` placeholders are
-# excluded (they're not literal paths).
-_BENCH_ROOT = "1st_benchmark_sn2025"
+# Benchmark path tokens like `1st_benchmark_<name>/phase2+3_v10634-vendor`
+# or `1st_benchmark_<name>/phase2+3_v10634-vendor/`. The benchmark root
+# is the `1st_benchmark_<name>/` family — chip-AGNOSTIC: we match any
+# `1st_benchmark_<slug>` root rather than hard-coding one benchmark's
+# name, so the gate works across private benchmark drops regardless of
+# their suffix. Tokens containing wildcards / asterisks / `<...>`
+# placeholders are excluded (they're not literal paths).
+_BENCH_ROOT_PREFIX = "1st_benchmark_"
+_BENCH_ROOT_RE = re.compile(r"^1st_benchmark_[A-Za-z0-9_]+$")
 _BENCH_PATH_RE = re.compile(
-    r"\b" + re.escape(_BENCH_ROOT)
-    + r"/(?P<sub>[A-Za-z0-9_.+\-*?<>]+)/?"
+    r"\b(?P<root>1st_benchmark_[A-Za-z0-9_]+)"
+    r"/(?P<sub>[A-Za-z0-9_.+\-*?<>]+)/?"
 )
 
 
@@ -103,8 +106,15 @@ def _audit_benchmark_paths(plugin_root: Path,
     caller should treat the rule as VACUOUS.
     """
     repo_root = plugin_root.parent.parent.parent
-    bench_root = repo_root / _BENCH_ROOT
-    if not bench_root.is_dir():
+    # chip-AGNOSTIC: discover any `1st_benchmark_<name>/` root present
+    # on disk. The gate is applicable when at least one such root
+    # exists; a fresh checkout / CI host without private benchmarks
+    # has none, so the rule VACUOUS-PASSes.
+    bench_roots = {
+        p.name: p for p in repo_root.iterdir()
+        if p.is_dir() and _BENCH_ROOT_RE.match(p.name)
+    } if repo_root.is_dir() else {}
+    if not bench_roots:
         return False, []
 
     findings: List[Finding] = []
@@ -120,7 +130,14 @@ def _audit_benchmark_paths(plugin_root: Path,
             continue
         for ln_no, line in _iter_fenced_lines(text):
             for m in _BENCH_PATH_RE.finditer(line):
+                root_name = m.group("root")
                 sub = m.group("sub")
+                # Only enforce against benchmark roots that actually
+                # exist on this host — a quoted path under a root that
+                # isn't present is inapplicable, not a drift.
+                bench_root = bench_roots.get(root_name)
+                if bench_root is None:
+                    continue
                 # Skip placeholders / globs
                 if any(ch in sub for ch in "<>*?") or \
                         sub.endswith("..."):
@@ -137,7 +154,7 @@ def _audit_benchmark_paths(plugin_root: Path,
                     rule="UNREPRODUCIBLE_BENCHMARK_PATH",
                     detail=(
                         f"fenced code block references "
-                        f"`{_BENCH_ROOT}/{sub}` but that path does "
+                        f"`{root_name}/{sub}` but that path does "
                         f"not exist under {bench_root}. Either "
                         f"correct the path to the real benchmark "
                         f"directory or remove the example."
@@ -161,9 +178,9 @@ def audit(plugin_root: Path) -> Tuple[str, List[Finding]]:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Anti-fabrication: enforce that any "
-                    "`1st_benchmark_sn2025/<dir>/` path quoted in a "
-                    "fenced markdown code block actually exists on "
-                    "disk relative to the repo root.")
+                    "`1st_benchmark_<name>/<dir>/` benchmark path "
+                    "quoted in a fenced markdown code block actually "
+                    "exists on disk relative to the repo root.")
     ap.add_argument("plugin_root")
     ap.add_argument("--json", help="write JSON report to this path")
     args = ap.parse_args(argv)
@@ -187,7 +204,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         out.write_text(json.dumps(report, indent=2) + "\n")
 
     if verdict == "VACUOUS_PASS":
-        print("VACUOUS_PASS: 1st_benchmark_sn2025/ tree absent on this "
+        print("VACUOUS_PASS: no 1st_benchmark_*/ tree on this "
               "host (gate is dev-host-only)")
         return 0
     if verdict == "PASS":

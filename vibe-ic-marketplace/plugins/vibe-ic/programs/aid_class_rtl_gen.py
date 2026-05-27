@@ -2479,11 +2479,11 @@ if __name__ == "__main__":
     accepted = legacy_aid or (in_allow_list and has_aid_markers)
 
     if not accepted:
-        print(f"REFUSE: aid_class_rtl_gen.py is AID-class only; "
+        print(f"REFUSE: aid_class_rtl_gen.py is EXAMPLE_PROTOCOL-class only; "
               f"detected ic_class={ic_class} "
               f"(aid_protocol_markers={has_aid_markers}). "
               f"Use plugin orchestrator (phase23_one_shot_runner.py) for "
-              f"non-AID classes.", file=sys.stderr)
+              f"non-EXAMPLE_PROTOCOL classes.", file=sys.stderr)
         sys.exit(2)
 
     gen(args.project_dir, args.spec_compliance, args.top)

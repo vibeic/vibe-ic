@@ -185,6 +185,28 @@ def audit(plugin_root: Path,
     return ("FAIL" if findings else "PASS"), findings
 
 
+# ---------------------------------------------------------------------------
+# Lightweight public API used by tests/test_chip_agnostic_guard.py.
+#
+# `scan` returns a flat list of (rel_path, line_no, token) triples — the
+# minimal shape the CI guard test consumes — by delegating to `audit`.
+# `_load_deny_list` is a thin alias for `_load_deny_tokens` (the test
+# imports it under the externalized-deny-list name).
+# ---------------------------------------------------------------------------
+def _load_deny_list(path: Path) -> Tuple[str, ...]:
+    """Alias for `_load_deny_tokens` — externalized deny-list loader."""
+    return _load_deny_tokens(path)
+
+
+def scan(plugin_root: Path,
+         extra_tokens: Optional[List[str]] = None
+         ) -> List[Tuple[str, int, str]]:
+    """Scan plugin source and return (rel_path, line_no, token) triples
+    for every forbidden-token occurrence. Empty list == clean tree."""
+    _verdict, findings = audit(Path(plugin_root), extra_tokens=extra_tokens)
+    return [(f.file, f.line, f.token) for f in findings]
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Anti-fabrication: detect chip / vendor / SKU "
