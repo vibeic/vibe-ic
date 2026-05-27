@@ -267,3 +267,27 @@ def test_moore_possessive_and_negation_not_misread(tmp_path):
             " - input clk\n - input areset\n - input x\n - output z\n")
     res, f = run(tmp_path, spec, _RTL_MEALY)
     assert 'fsm-output-style-mismatch' not in rules(f)
+
+
+# ---- multi-module-header spec: contract must come from the TopModule target ----
+# Code-completion / bug-fix prompts embed a reference or buggy module before the real
+# `module TopModule(...)` header. The contract extractor must take ports from TopModule,
+# not the embedded example. Regression for VerilogEval-Human Prob062/104.
+def test_multi_module_header_prefers_topmodule(tmp_path):
+    spec = (
+        "Find the bug and fix this 8-bit wide 2-to-1 mux.\n\n"
+        "  module top_module ( input sel, input [7:0] a, input [7:0] b, output out );\n"
+        "      assign out = (~sel & a) | (sel & b);\n"
+        "  endmodule\n\n"
+        "module TopModule (\n  input sel,\n  input [7:0] a,\n  input [7:0] b,\n"
+        "  output reg [7:0] out\n);\n"
+    )
+    rtl = """
+module TopModule(input sel, input [7:0] a, input [7:0] b, output reg [7:0] out);
+  always @(*) out = sel ? a : b;
+endmodule
+"""
+    res, f = run(tmp_path, spec, rtl)
+    # out is 8-bit per the TopModule header — NOT 1-bit from the embedded buggy module.
+    assert 'port-width-mismatch' not in rules(f)
+    assert 'port-extra' not in rules(f)

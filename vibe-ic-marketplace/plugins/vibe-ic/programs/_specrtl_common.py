@@ -248,14 +248,20 @@ def _parse_nl_ports(text: str) -> List[Port]:
     return ports
 
 
-def _module_port_region(text: str) -> Optional[str]:
+def _module_port_region(text: str, prefer: str = "TopModule") -> Optional[str]:
     """Return the ANSI port-list inside `module name ( ... )`, or None.
 
     Lets a markdown spec carry a fenced ```verilog module(...)``` header without
-    prose ("...provides valid outputs...") leaking false ports."""
-    m = re.search(r'\bmodule\s+\w+\s*(?:#\s*\([^)]*\)\s*)?\(', text)
-    if not m:
+    prose ("...provides valid outputs...") leaking false ports.
+
+    When the spec embeds MULTIPLE module declarations (e.g. a reference or buggy
+    module shown before the real target header — common in code-completion and
+    bug-fix prompts), prefer the one named `prefer` (default TopModule, the target)
+    so the contract is taken from the target header, not the embedded example."""
+    headers = list(re.finditer(r'\bmodule\s+(\w+)\s*(?:#\s*\([^)]*\)\s*)?\(', text))
+    if not headers:
         return None
+    m = next((h for h in headers if h.group(1) == prefer), headers[0])
     i = text.index('(', m.start())
     depth, n = 0, len(text)
     while i < n:
@@ -385,16 +391,24 @@ def extract_spec_contract(text: str, is_json: bool = False,
             ports = parse_verilog_ports(region)
             source = 'verilog'
         elif re.search(r'\bmodule\b', clean):       # non-ANSI module declaration
-            _, ports = parse_rtl_ports(clean, None)
+            # Prefer the TopModule target if the spec embeds several module decls.
+            _, ports = parse_rtl_ports(clean, "TopModule")
             source = 'verilog'
         else:                                       # pure prose: no interface
             ports = []                               # declared — never scan raw
             source = 'none'                          # prose for "input/output" words
+    # Module name: prefer the target `TopModule` when a spec embeds several module
+    # headers (a reference/buggy example before the real target), else the first.
     mod = None
-    mm = re.search(r'\bmodule\s+(\w+)', clean) or \
-        re.search(r'module\s+named\s+`?(\w+)`?', text, re.I)
-    if mm:
-        mod = mm.group(1)
+    names = re.findall(r'\bmodule\s+(\w+)', clean)
+    if "TopModule" in names:
+        mod = "TopModule"
+    elif names:
+        mod = names[0]
+    else:
+        mm = re.search(r'module\s+named\s+`?(\w+)`?', text, re.I)
+        if mm:
+            mod = mm.group(1)
     mode, polarity, signal = _detect_reset(text)
     contract = SpecContract(module=mod, ports=ports, reset_mode=mode,
                             reset_polarity=polarity, reset_signal=signal,
