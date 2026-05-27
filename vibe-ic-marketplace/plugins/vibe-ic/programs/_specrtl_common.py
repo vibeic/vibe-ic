@@ -223,6 +223,10 @@ class SpecContract:
     latency_registered: Optional[bool] = None
     fsm_output_style: Optional[str] = None  # 'moore'/'mealy' if the spec declares one
     source: str = ''                        # how ports were parsed: nl/verilog/json
+    # LLM double-confirm records for the prose-inferred SEMANTIC fields above
+    # (asdict of llm_semantic_confirm.Confirmation). Empty when no semantic field
+    # was declared or no LLM backend was reachable to confirm.
+    semantic_confirmations: List[dict] = field(default_factory=list)
 
 
 # Natural-language interface bullet:  " - input  d   (8 bits)"  /  " - output q"
@@ -335,8 +339,16 @@ def _detect_latency(text: str) -> Optional[bool]:
     return None
 
 
-def extract_spec_contract(text: str, is_json: bool = False) -> SpecContract:
+def extract_spec_contract(text: str, is_json: bool = False,
+                          confirm: bool = True, client_factory=None) -> SpecContract:
     """Extract a declared contract from spec text.
+
+    SEMANTIC double-confirm: prose-inferred fields (reset mode/polarity, output latency,
+    FSM output style) are only deterministic CANDIDATES. When `confirm` is set (default)
+    each is re-judged by an LLM via llm_semantic_confirm before it is trusted — the
+    program's parse of meaning is inferior to the model's. On a host with no LLM backend
+    this is a no-op that records the candidate as `unconfirmed-no-backend` (for agent-layer
+    confirmation). JSON contracts are authoritative and skip confirmation.
 
     JSON form: {"module":..,"ports":[{"name","direction","width"}],
                 "reset":{"mode","polarity","signal"},"latency_registered":bool}
@@ -384,7 +396,16 @@ def extract_spec_contract(text: str, is_json: bool = False) -> SpecContract:
     if mm:
         mod = mm.group(1)
     mode, polarity, signal = _detect_reset(text)
-    return SpecContract(module=mod, ports=ports, reset_mode=mode,
-                        reset_polarity=polarity, reset_signal=signal,
-                        latency_registered=_detect_latency(text),
-                        fsm_output_style=_detect_fsm_output_style(text), source=source)
+    contract = SpecContract(module=mod, ports=ports, reset_mode=mode,
+                            reset_polarity=polarity, reset_signal=signal,
+                            latency_registered=_detect_latency(text),
+                            fsm_output_style=_detect_fsm_output_style(text), source=source)
+    if confirm:
+        # program PROPOSES (above) -> LLM CONFIRMS/CORRECTS the semantic candidates.
+        try:
+            from llm_semantic_confirm import confirm_contract, manifest
+        except ImportError:
+            from .llm_semantic_confirm import confirm_contract, manifest  # packaged
+        contract.semantic_confirmations = manifest(
+            confirm_contract(contract, text, client_factory=client_factory))
+    return contract

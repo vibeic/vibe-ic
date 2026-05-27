@@ -245,6 +245,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument('--strict', action='store_true',
                     help='Exit 1 on WARN findings too')
     ap.add_argument('--json', help='Write findings as JSON')
+    ap.add_argument('--semantic-manifest',
+                    help='Write the LLM double-confirm records for prose-inferred '
+                         'semantic fields (reset/latency/fsm-style) as JSON')
     args = ap.parse_args(argv)
 
     spec_path = Path(args.spec)
@@ -277,6 +280,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     rtl_resets = classify_rtl_resets(rtl_body)
     rtl_registered = _rtl_output_is_registered(rtl_body, rtl_ports)
     findings = check(spec, rtl_name, rtl_ports, rtl_resets, rtl_registered, chosen, rtl_body)
+
+    # Per the semantic-confirm rule: a finding resting on a prose-inferred field that an
+    # LLM has NOT confirmed is a CANDIDATE, not truth — annotate it so the agent confirms.
+    _rule_field = {'reset-mode-spec-mismatch': 'reset_mode',
+                   'reset-polarity-spec-mismatch': 'reset_polarity',
+                   'latency-mismatch': 'latency_registered',
+                   'fsm-output-style-mismatch': 'fsm_output_style'}
+    unconfirmed = {d['field'] for d in spec.semantic_confirmations if d.get('source') != 'llm'}
+    for fd in findings:
+        if _rule_field.get(fd.rule) in unconfirmed:
+            fd.message += (" [semantic candidate — NOT LLM-confirmed (no backend); "
+                           "AI must double-confirm this spec reading before acting]")
+    if args.semantic_manifest:
+        Path(args.semantic_manifest).write_text(json.dumps(spec.semantic_confirmations, indent=2))
 
     errs = [x for x in findings if x.severity == 'ERROR']
     warns = [x for x in findings if x.severity == 'WARN']
