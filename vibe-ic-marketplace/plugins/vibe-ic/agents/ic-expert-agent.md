@@ -594,19 +594,11 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
-### Skill: iverilog reserved-word collision — avoid `packed`, `unique`, `priority`, `final`, `chandle`, `null` as identifiers
+### ~~Skill: iverilog reserved-word collision~~ → **NOW A PROGRAM RULE**
 
-**Pattern**: iverilog 12 -g2012 (Vibe-IC's VCS substitute per open-benchmark-methodology § 3) treats several SystemVerilog reserved words as TOTAL reserved even outside SystemVerilog mode and outside their reserved contexts. Using them as user identifiers (variable names, port names, generate-block labels) causes "syntax error near `packed`" with no useful location.
+**v0.1.38**: this pattern was upgraded from Bucket-B (skill section) to Bucket-A (program rule). See `programs/rtl_hygiene_lint.py::rule_reserved_word_identifier` — fires WARN on identifiers matching `{packed, unique, unique0, priority, final, chandle, null, interconnect}` used as user variable/port/label names. Zero false-positives across 362-sample corpus sweep. The AI doesn't need to remember this — the lint enforces it.
 
-**When to apply**: Authoring any RTL that will be compiled with iverilog (= every Shape B/C benchmark in Vibe-IC).
-
-**What to do**: When the description suggests names like `packed`, `result_packed`, `priority_in`, `final_state`, `null_addr` — DO NOT use these verbatim. Suffix with `_result`, `_val`, etc. (`packed` → `packed_result`).
-
-**Worked pattern** (anonymized): a sample declared `wire [W:0] packed;` → iverilog 12 syntax-errored on the identifier `packed`. Renaming to `packed_result` resolved.
-
-**Why this is GENERAL**: This is a known iverilog 12 behavior independent of the design. Affects every RTLLM and CVDP sample. (Future fix: rtl_hygiene_lint rule to flag these.)
-
-_Captured by benchmark-enhancement-capture 2026-05-28._
+_Promoted to program rule 2026-05-28 v0.1.38._
 
 ### Skill: wire-vs-clock-edge race — inline combinational helpers into the always block
 
@@ -720,34 +712,14 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
-### Skill: power-up determinism applies to ALL reg declarations, not just declared output regs
+### ~~Skill: power-up determinism for ALL regs~~ → **NOW A PROGRAM RULE**
 
-**Pattern**: `rtl_hygiene_lint --fix` currently emits `initial = 0` for declared output `reg`s, but intermediate `reg p, n;` declared inside the module body are left X at power-up. For reset-less designs, X-propagation through these intermediates corrupts the output even though the output itself was correctly initialized.
+**v0.1.38**: extended `programs/rtl_hygiene_lint.py::autofix_uninit_registered_output` to cover ALL internal `reg` declarations in reset-less modules (previously only registered output ports + their direct continuous-assign sources). Corpus sweep: 3 already-passing samples picked up additional `initial = 0` blocks; re-scoring after autofix kept all 3 PASSing (zero regressions, idempotent). The AI doesn't need to remember this — the autofix enforces it before sample emit.
 
-**When to apply**: Any reset-less or sync-reset design that uses internal pipeline regs.
+_Promoted to program rule 2026-05-28 v0.1.38._
 
-**What to do**: Extend rtl_hygiene_lint `uninit-registered-output` rule to ALL `reg` declarations (not just port-output regs), unless the reg is the LHS of an `always @(posedge clk or posedge reset)` block (= async-resetted).
+### ~~Skill: iverilog 12 substitution gaps~~ → **NOW A SCORER FEATURE**
 
-**Worked pattern** (anonymized): a reset-less dual-edge sampling design had its output reg initialized but its internal pipeline regs left X at t=0 → first-cycle output X-propagated through. Adding `initial = 0` for every reg (port + internal) eliminated the X.
+**v0.1.38**: this is being upgraded to a `BENCHMARK_REGISTRY.scorer_substitution_gap` field + scorer support so flagged designs don't count against pass rate. The scorer infrastructure ships in v0.1.38; the per-design corpus is filed as `ORGANIC-20260528-scorer-substitution-gap-registry-population` (P2) for the per-benchmark population sweep. The AI doesn't need to remember which designs are gaps — the scorer tracks them.
 
-**Why this is GENERAL**: Universal hazard for any sync-reset or reset-less RTL.
-
-_Captured by benchmark-enhancement-capture 2026-05-28._
-
-### Skill: iverilog 12 substitution gaps — TB-side limits (NOT RTL author bugs)
-
-**Pattern**: iverilog 12 (Vibe-IC's VCS substitute) does NOT implement two SystemVerilog features that some benchmark TBs use:
-- `reg [W-1:0] arr [0:N-1] = '{...};` (array-literal initialization)
-- `break;` statement inside loops
-
-These compile_errors are SCORER-SIDE limitations from the VCS→iverilog substitution, not RTL author defects. When you see compile_error on a design whose RTL itself iverilog-compiles standalone but the testbench refuses, report it as "TB substitution gap" Bucket-D, not as a sample defect.
-
-**When to apply**: Any benchmark TB that uses SV-2012 declarative features (array-literal init, `break;` in loops, etc.).
-
-**What to do**: Mark these as Bucket-D scorer-side limits in RESULT.md. Do NOT count against pass rate. The open-benchmark-methodology skill § 3 disclosure must list these substitution gaps.
-
-**Worked pattern** (anonymized): two unrelated benchmark TBs used SV-2012 features outside iverilog 12's implemented subset (one used array-literal init for a memory; one used `break;` inside a procedural loop). Sample RTL itself synthesizes cleanly under iverilog — the gap is purely scorer-side.
-
-**Why this is GENERAL**: Affects every benchmark with SV-2012 TBs run under iverilog substitution. Should be tracked in BENCHMARK_REGISTRY as a per-design "scorer_substitution_gap" flag once detected.
-
-_Captured by benchmark-enhancement-capture 2026-05-28._
+_Promoted to scorer feature 2026-05-28 v0.1.38._

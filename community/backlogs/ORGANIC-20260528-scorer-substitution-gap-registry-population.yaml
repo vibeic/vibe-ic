@@ -1,0 +1,41 @@
+type: enhancement
+severity: P2
+component: benchmark-harness/BENCHMARK_REGISTRY.json
+plugin_version: "0.1.38"
+
+title: >-
+  Per-benchmark corpus sweep to populate scorer_substitution_gap[] for
+  VerilogEval-v2 / VerilogEval-Human / RTLLM / others
+
+pattern: |
+  v0.1.38 added the scorer_substitution_gap[] field in BENCHMARK_REGISTRY.json
+  and wired score_iverilog_tb.py to report SKIP / pass@1 = passed / (total - skipped)
+  for designs flagged with the field.
+
+  RTLLM has 2 known entries (ring_counter, asyn_fifo) populated this commit.
+
+  Other benchmarks (VerilogEval-v2, VerilogEval-Human, CVDP, RTL-Repo, etc.)
+  have NOT been swept. They may contain TBs that use SV-2012 features iverilog
+  12 doesn't implement; until those are discovered and populated, those
+  designs count as ordinary fails against pass-rate.
+
+suggested_fix: |
+  For each registered benchmark, sweep:
+    1. Take each benchmark's TB file
+    2. Run iverilog -g2012 -o /dev/null <tb_file> standalone
+    3. If iverilog errors AND the error matches the substitution-gap
+       categories (array-literal init / `break;` / `chandle` / etc.), file
+       the design id in scorer_substitution_gap[]
+    4. For TBs that error on RTL-author-fixable issues (port name mismatch
+       etc.), do NOT add — those are RTL-side, not scorer-side
+
+  Then re-run scoring; new SKIPs surface.
+
+  Verify by hand for a sample of flagged designs that the RTL itself compiles
+  standalone (proves the gap is on the TB side, not the candidate RTL).
+
+id: "ORGANIC-20260528-scorer-substitution-gap-registry-population"
+submitted_at: "2026-05-28T00:00:00+08:00"
+session_context: >-
+  Filed alongside v0.1.38's scorer_substitution_gap infrastructure ship.
+  Population is per-benchmark sweep work — not blocking the infrastructure ship.

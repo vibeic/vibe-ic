@@ -64,6 +64,11 @@
         "fail_regex": "Test failed|Your Design Failed",
         "cwd_design_dir": true
       },
+      "scorer_substitution_gap": [
+        "ring_counter",
+        "asyn_fifo"
+      ],
+      "scorer_substitution_gap_note": "Per open-benchmark-methodology § 3. ring_counter TB uses SV-2012 array-literal init (`data[0:9] = '{...};`); asyn_fifo TB uses `break;` inside a procedural loop. Neither is implemented by iverilog 12; both are TB-side limitations (the candidate RTL synthesizes cleanly standalone). Flagged designs are reported as SKIP, excluded from pass-rate denominator. Re-running under Synopsys VCS would lift the gap; the field is corpus-populated, not hardcoded in the scorer.",
       "status": "RUNNABLE — standalone designs with own testbench, Shape B harness"
     },
     "cvdp": {

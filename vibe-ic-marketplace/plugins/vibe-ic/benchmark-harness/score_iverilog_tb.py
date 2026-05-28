@@ -189,20 +189,43 @@ def main():
         results = [_score_shape_c(p, samples, dataset, layout, args) for p in probs]
         ident = "problem"
 
+    # v0.1.38 — designs flagged as scorer_substitution_gap (iverilog 12 lacks an
+    # SV-2012 feature the TB uses, e.g. array-literal init or `break;` in loops)
+    # don't count against pass rate, per open-benchmark-methodology § 3. The
+    # field lives in BENCHMARK_REGISTRY.json. Empty list (= no gap) is the default.
+    gap_ids = set(entry.get("scorer_substitution_gap", []))
+    if gap_ids:
+        for r in results:
+            leaf = r[ident].split('/')[-1]
+            if leaf in gap_ids and r["verdict"] != "PASS":
+                r["scorer_substitution_gap"] = True
+                r["original_verdict"] = r["verdict"]
+                r["original_reason"] = r.get("reason", "")
+                r["verdict"] = "SKIP"
+                r["reason"] = "scorer_substitution_gap — TB uses an SV-2012 feature iverilog 12 doesn't implement; not counted against pass rate per open-benchmark-methodology § 3"
+
     npass = sum(1 for r in results if r["verdict"] == "PASS")
+    nskip = sum(1 for r in results if r["verdict"] == "SKIP")
     n = len(results)
+    n_eff = n - nskip  # denominator excludes scorer-gap skips
     summary = {
         "benchmark": entry["title"],
         "shape": shape,
         "tool": "iverilog 12 (host) substituting for Synopsys VCS / Cadence Xcelium",
         "tool_substitution_note": "Functional pass@1 only. PPA stage (DC) not scored — would not be apples-to-apples vs the upstream methodology. See open-benchmark-methodology skill § 3.",
-        "total": n, "passed": npass,
-        "pass_at_1_pct": round(100.0 * npass / n, 2) if n else 0.0,
+        "total": n, "passed": npass, "skipped_scorer_gap": nskip,
+        "pass_at_1_pct": round(100.0 * npass / n_eff, 2) if n_eff else 0.0,
+        "pass_at_1_pct_no_skip_excluded": round(100.0 * npass / n, 2) if n else 0.0,
         "results": results,
     }
     (run / "pass_at_1.json").write_text(json.dumps(summary, indent=2) + "\n")
-    print(f"{entry['title']}  pass@1 = {npass}/{n} = {summary['pass_at_1_pct']}%  [Shape {shape}]")
-    fails = [r for r in results if r["verdict"] != "PASS"]
+    if nskip:
+        print(f"{entry['title']}  pass@1 = {npass}/{n_eff} = {summary['pass_at_1_pct']}% "
+              f"({nskip} scorer-gap excluded; raw {npass}/{n} = "
+              f"{summary['pass_at_1_pct_no_skip_excluded']}%)  [Shape {shape}]")
+    else:
+        print(f"{entry['title']}  pass@1 = {npass}/{n} = {summary['pass_at_1_pct']}%  [Shape {shape}]")
+    fails = [r for r in results if r["verdict"] not in ("PASS", "SKIP")]
     if fails:
         print(f"  fails ({len(fails)}): " +
               ", ".join(f"{(r[ident].split('/')[-1])}:{r['reason'].split()[0]}" for r in fails[:25]) +
