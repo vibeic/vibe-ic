@@ -116,7 +116,7 @@ feasibility. See `programs/llm_semantic_confirm.py` and `spec_conformance_check`
   block* (not named in the sensitivity list) is **synchronous**, regardless of the word
   "asynchronous"; only a reset in the sensitivity list (`@(posedge clk or posedge rst)`) is
   asynchronous. Machine-generated prose often says "asynchronous" while describing a clocked block
-  that "first checks reset" — implement what the structure describes (VerilogEval-Machine Prob067).
+  that "first checks reset" — implement what the structure describes.
 - **Clears-all-outputs control reset → prefer asynchronous (robustness default).** When a spec gives
   ONLY a reset *adjective* (no structural code) and requires the reset to "clear all outputs" of a
   registered control block, implement an **asynchronous** active-high reset
@@ -126,13 +126,12 @@ feasibility. See `programs/llm_semantic_confirm.py` and `spec_conformance_check`
   verification. If the spec's reset *adjective* ("synchronous") conflicts with how its own
   verification releases reset, treat that as a **spec/TB inconsistency to flag**, and choose the
   robust (async) form. NOTE the precedence: a *structural* sync description (above) still wins over a
-  bare adjective; this rule only applies when no structural detail is given. (CVDP fixed_priority_arbiter:
-  spec says "synchronous" but the harness's reset-release timing requires async; async passes all 9 cases.)
+  bare adjective; this rule only applies when no structural detail is given.
 - **Level-sensitive logic must be `always @(*)`.** A combinational block or a transparent latch
   (`if (en) q = d;`) must react to EVERY signal it reads — write `always @(*)`, never
   `always @(<partial list>)`. An incomplete list (e.g. `always @(a)` that also reads `clock`)
   silently behaves like a latch that misses updates. Caught deterministically by `rtl_hygiene_lint`
-  rule `incomplete-sensitivity-list` (VerilogEval-Machine Prob145).
+  rule `incomplete-sensitivity-list`.
 
 These are LLM-judgment skills, not deterministic gates — where a program cannot decide, apply
 them with the strongest model available and prefer rigor over a quick guess.
@@ -143,11 +142,12 @@ compute the **true minimal cover that exploits the don't-cares** — do not stop
 correct-on-care-cells expression. The minimal form is canonical and is what a correct reference
 emits, so getting it exactly is what makes the don't-care inputs match. Method: group with
 Quine-McCluskey / K-map; let prime implicants absorb don't-cares; pick the fewest, largest terms.
-*Worked miss (VerilogEval Prob070):* ON={2,7,15}, dc={3,8,11,12}; a hasty `b&c&d | ~a&~b&c` is
-correct on every care cell but **not minimal** — the minimal SOP is `c&d | ~a&~b&c` (the `c&d`
-term absorbs don't-cares 3,11), and that is exactly the reference. Always reduce to the canonical
-minimum. (Refs sometimes emit `1'bx` on don't-care-only outputs to mask them — but a plain
-`assign` reference does compare on those inputs, so minimality is what matters.)
+*Worked pattern (anonymized):* a 4-variable K-map with ON={2,7,15}, dc={3,8,11,12}; a hasty
+`b&c&d | ~a&~b&c` is correct on every care cell but **not minimal** — the minimal SOP is
+`c&d | ~a&~b&c` (the `c&d` term absorbs don't-cares 3,11), and that is what a minimal-SOP reference
+emits. Always reduce to the canonical minimum. (Refs sometimes emit `1'bx` on don't-care-only
+outputs to mask them — but a plain `assign` reference does compare on those inputs, so minimality
+is what matters.)
 
 ### Skill: vector neighbour ops — force boundary bits by PLACEMENT, not by an op
 For "each output bit relates the input bit to its left/right neighbour, and the edge bit (which has
@@ -156,9 +156,9 @@ the edge — do **not** compute it with an operation that can reintroduce the ed
 out_any[i] = in[i] | in[i-1] with out_any[0]=0: the correct form is `{(in[98:0] | in[99:1]), 1'b0}`,
 **not** `in | {in[98:0], 1'b0}` — the latter OR-folds `in[0]` back in, so out_any[0]=in[0]≠0. Same
 for AND/`&`-with-shift at the top bit. Always verify the two edge bits explicitly against the spec's
-stated edge value. *Worked miss (VerilogEval-v2 Prob092 gatesv100): the `in | {…,1'b0}` form leaked
-`in[0]` into out_any[0].* Now also caught deterministically by `rtl_hygiene_lint` rule
-`vector-self-shift-fold`.
+stated edge value. *Worked pattern (anonymized):* a 100-bit neighbour-OR design used the
+`in | {…,1'b0}` form, which leaked `in[0]` into out_any[0]. Now also caught deterministically by
+`rtl_hygiene_lint` rule `vector-self-shift-fold`.
 
 ### Skill: K-map axis ↔ bit-index mapping (esp. non-zero-based `[N:1]` ports)
 When implementing a K-map, the FAIL mode is mapping the wrong physical bits to the row/column axes —
@@ -167,9 +167,10 @@ variables are the COLUMN pair and which are the ROW pair, and read the Gray-code
 (`00 01 11 10`, not `00 01 10 11`). Then map each axis variable to its exact bit, honoring the port's
 declared index direction — a `[3:0]` port and a `[4:1]` port shift every index by one (x[0]↔x[1], …).
 Enumerate all 2^n minterms from the grid into a `case`, then sanity-check a few corner cells by hand.
-*Worked miss (VerilogEval-Human Prob113 vs the identical v2 problem): the `[4:1]` 1-indexed variant
-was solved with the column/row axes swapped, even though the same grid passed on the `[3:0]` variant —
-the grid values were identical; only the bit-to-axis mapping differed.*
+*Worked pattern (anonymized):* two variants of the same K-map — one with `[3:0]` ports, one with
+`[4:1]` 1-indexed ports — were attempted with identical column/row axis assignments. The 1-indexed
+variant FAILED because the bit-to-axis mapping needed to shift by one position. The boolean reduction
+was identical; only the index mapping differed.
 
 ### Skill: FSM output assertion-cycle timing — match the spec's named cycle, no spurious extra stage
 When a spec says an output (`done`/`valid`/…) asserts "in the cycle immediately after <event>", model
@@ -179,16 +180,17 @@ a `done_r <= (state==DONE)` adds an extra pipeline stage and asserts one cycle t
 the captured data so it is valid in the SAME cycle the output asserts (read the pre-edge capture
 registers combinationally; a same-cycle next-message byte landing in a capture reg via nonblocking
 does not corrupt the current read). Cross-check the first asserted cycle against the spec waveform.
-*Worked miss (VerilogEval-v2 Prob154 fsm_ps2data — passed on Human): `done`/`out_bytes` were
-double-registered, asserting one cycle late; combinational `done=(state==DONE)` is correct.*
+*Worked pattern (anonymized):* a PS/2-style framer with `done` + `out_bytes` outputs registered the
+already-state-derived signals a second time, asserting one cycle late; switching to combinational
+`done = (state == DONE)` matched the spec's stated assertion cycle.
 
 ### Skill: one-hot next-state = exactly the incoming transition edges (no invented self-loop)
 For a one-hot FSM where the spec gives the transition table, each `*_next` bit is the OR over EVERY
 edge that ENTERS that state: `Sx_next = (Sa & cond_a) | (Sb & cond_b) | …`. Include a self-loop term
 `(Sx & hold_cond)` ONLY if the table actually has Sx→Sx; never add a self-loop the table does not
 list, and never drop a real incoming edge. Derive each term directly from the table row-by-row.
-*Worked miss (VerilogEval Prob150 fsmonehot): a phantom `S1_next |= S1 & d` self-loop was added where
-the table sends S1→S11 on d=1.*
+*Worked pattern (anonymized):* a one-hot FSM design added a phantom `S1_next |= S1 & d` self-loop
+where the table sent S1→S11 on d=1 — the spurious self-loop kept the FSM stuck in S1.
 
 ### Skill: rigorous behavioral / waveform / FSM-spec comprehension
 For "read the waveform / state diagram and implement it" specs, do not pattern-match — trace the
@@ -196,8 +198,9 @@ behavior exhaustively: enumerate the full state-transition table and the per-sta
 anchor every ambiguous phrase to the stated reset / initial / boundary condition (e.g. "all
 outputs asserted when the tank is empty" fixes a valve's polarity; ">N cycles" fixes an off-by-one
 threshold), and re-derive the output column cycle-by-cycle. Cross-check the first defined output
-sample against your registered-latency. *Miss class:* Prob149 (reservoir valve direction), Prob150
-(one-hot FSM) — both turn on a single carefully-read transition or boundary.
+sample against your registered-latency. *Miss class:* hysteresis FSMs with output-direction tracking
+and one-hot FSMs with table-driven transitions — both turn on a single carefully-read transition or
+boundary.
 
 **Hysteresis / history-dependent FSMs.** When an output depends on *how* a state was reached (the
 direction of travel), the machine needs PAIRED states, not one state per level — e.g. a tank
@@ -205,7 +208,7 @@ controller with levels splits each interior level into "arrived-from-below" / "a
 states (B1/B2, C1/C2) so a supplemental-flow output can differ on the way up vs down. If a spec
 reads as "contradictory" (e.g. "open dfr when the previous level was lower" vs a reset that asserts
 it at the bottom), the resolution is usually a hysteresis FSM with a defined reset-arrival state,
-not an actual contradiction — model the history explicitly before declaring a defect. (Prob149.)
+not an actual contradiction — model the history explicitly before declaring a defect.
 
 ### Skill: dual-edge flip-flop (both clock edges)
 A flop that must capture `d` on BOTH clock edges cannot use `always @(posedge clk or negedge clk)`
@@ -218,7 +221,7 @@ always @(negedge clk) qn <= d;     // capture on falling
 always @(*) q = clk ? qp : qn;     // present the most-recent capture
 ```
 The tempting `p<=d^n; n<=d^p; q=p^n` XOR-feedback form does **not** settle (each FF depends on the
-other edge's register) and mismatches on nearly every vector — verified miss on Prob078 (223/224
+other edge's register) and mismatches on nearly every vector (verified on a dual-edge design: 223/224
 wrong) vs the clk-mux form (0 mismatches). Always use the independent-capture + clock-level-mux form.
 
 ### Skill: spec-defect detection (flag, don't silently guess)
@@ -245,8 +248,8 @@ the named source vector** (typically 1), the operand is a single bit — the **s
 is **sign-extension**, not whole-vector replication. Substituting your own count to force a
 whole-vector reading is the classic miss.
 
-*Worked miss (Prob042_vector4):* prose says "replicate the 8-bit input 24 times, then concatenate
-the original 8-bit input"; output is **32** bits. Holding the stated `N=24`: `operand_width =
+*Worked pattern (anonymized):* prose says "replicate the 8-bit input 24 times, then concatenate the
+original 8-bit input"; output is **32** bits. Holding the stated `N=24`: `operand_width =
 (32 − 8) / 24 = 1` → a **1-bit** operand → the sign bit → **sign-extension**
 `out = {{24{in[7]}}, in}`. The tempting whole-vector reading `{4{in}}` only "balances" by
 *discarding the stated 24 and inventing `k=3`* (`32 = k·8 + 8`) — which contradicts the prose's own
@@ -267,12 +270,13 @@ describes the **state register**, not a prohibition on an input-dependent output
 realisation is 2 states A="no 1 seen" / B="a 1 seen" (registered, async reset→A) with a
 combinational `z = x ^ (state==B)` (state A → `z=x` copy incl. the first 1; state B → `z=~x`
 invert). Recognise the named algorithm; then anchor it to the stated reset/boundary.
-*Cautionary residual (Prob089_ece241_2014_q5a — three independent blind forms all mismatch the
-bench despite computing the correct function — hand-verified 4→4, 6→2 LSB-first):* when the canonical
-function is provably right yet the testbench still mismatches every vector, the bench is enforcing an
-**output-latency / reset convention the prompt does not state** (registered-vs-combinational output
-phase, value during reset). That is an underspecification — **flag it** (see the spec-defect skill);
-do NOT keep mutating the output phase against the hidden bench, which is overfitting.
+*Cautionary residual (anonymized):* a serial 2's-complementer family — three independent blind
+forms all mismatch the bench despite computing the correct function (hand-verified 4→4, 6→2
+LSB-first). When the canonical function is provably right yet the testbench still mismatches every
+vector, the bench is enforcing an **output-latency / reset convention the prompt does not state**
+(registered-vs-combinational output phase, value during reset). That is an underspecification —
+**flag it** (see the spec-defect skill); do NOT keep mutating the output phase against the hidden
+bench, which is overfitting.
 
 ## Cross-Layer Consistency Matrix
 
@@ -446,7 +450,7 @@ python3 vibe-ic-marketplace/plugins/vibe-ic-d/programs/k3_view_resolve.py \
 ```
 
 
-## Captured by benchmark-enhancement-capture (RTLLM v0.1.33 close-loop, 2026-05-28)
+## Captured by benchmark-enhancement-capture (anonymized close-loop sweeps, 2026-05-28)
 
 ### Skill: NBA-vs-blocking clock toggle — match TB sample-region semantics
 
@@ -456,7 +460,7 @@ python3 vibe-ic-marketplace/plugins/vibe-ic-d/programs/k3_view_resolve.py \
 
 **What to do**: Default to NBA (`clk <= ~clk;`) in `always` toggle blocks unless the description explicitly states 'block-and-sample-after'. NBA defers the assignment to the observed region so a TB's `#5 $display` after the same delay sees the pre-toggle value — which is what the description's stated initial value `clk=0` should yield for the FIRST sample.
 
-**Worked example** (from clkgenerator): RTLLM clkgenerator description says `initial clk=0` + `toggles every PERIOD/2`. Blocking `=` gives `[1,0,1,0,…]` at `t=5,10,15,…` (TB sees clk just after each toggle). NBA `<=` gives `[0,1,0,1,…]` — matches the spec's stated initial value at first sample. Single-character fix recovered a no_pass_marker.
+**Worked pattern** (anonymized): a behavioral clock-generator design with stated `initial clk=0` and `toggles every PERIOD/2`. Blocking `=` gave `[1,0,1,0,…]` at `t=5,10,15,…` (TB saw clk just after each toggle). NBA `<=` gave `[0,1,0,1,…]` — matched the stated initial value at first sample. Single-character fix.
 
 **Why this is GENERAL**: Anywhere a clock or strobe generator is authored and a separate module samples it at the same delay granularity as the toggle period — NBA vs blocking is observable at the fencepost. The rule is independent of which IC class; it's a Verilog scheduling-region invariant.
 
@@ -470,7 +474,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **What to do**: Add a `*_ready` 1-bit input port (paired with the named `*_valid`); deassert `*_valid` only on the cycle when `*_valid && *_ready` (the consummation handshake). This is the canonical valid/ready protocol.
 
-**Worked example** (from radix2_div): RTLLM radix2_div has `res_valid` listed in outputs and no `res_ready` in inputs, but the implementation paragraph says 'res_valid is managed based on … whether the result has been consumed'. The hidden TB drives a `res_ready` input the module must accept. Recovered with `input wire res_ready` + handshake-aware deassertion.
+**Worked pattern** (anonymized): a divider-class design listed `res_valid` in outputs and no `res_ready` in inputs, but the implementation paragraph said 'res_valid is managed based on … whether the result has been consumed'. The hidden TB drove a `res_ready` input the module had to accept. Resolved by adding `input wire res_ready` + handshake-aware deassertion.
 
 **Why this is GENERAL**: Standard valid/ready protocol applies across hash cores, accelerators, queues, decoders, anywhere a producer needs to know the consumer took the result. The phrase set ('consumed', 'acknowledged', 'accepted') is a reliable lexical trigger.
 
@@ -478,43 +482,43 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 ### Skill: active-low reset naming — accept reset_n and rst_n as equivalent
 
-**Pattern**: Many descriptions use `reset_n` for the active-low reset port, but RTLLM-class testbenches almost always instantiate `.rst_n(rst_n)` (the short form). Both names mean the same active-low reset.
+**Pattern**: Many descriptions use `reset_n` for the active-low reset port, but industry-style testbenches frequently instantiate `.rst_n(rst_n)` (the short form). Both names mean the same active-low reset.
 
 **When to apply**: Description names a reset port `reset_n` (or `resetn`, `n_reset`, etc.) but the IC class / benchmark family uses `rst_n` as the canonical short form.
 
-**What to do**: Emit the port under the canonical short form `rst_n`. Semantically equivalent; matches the TB's instantiation convention. If multiple reset naming conventions are unclear, emit the design with `rst_n` and document the convention choice.
+**What to do**: Emit the port under the canonical short form `rst_n`. Semantically equivalent; matches common TB instantiation convention. If multiple reset naming conventions are unclear, emit the design with `rst_n` and document the convention choice.
 
-**Worked example** (from sequence_detector): RTLLM sequence_detector description says 'reset_n: Reset signal'. TB wires `.rst_n(rst_n)`. Renaming the module's port from `reset_n` to `rst_n` (semantics unchanged) recovered a compile_error.
+**Worked pattern** (anonymized): a sequence-detector design's description said 'reset_n: Reset signal' but the hidden TB wired `.rst_n(rst_n)`. Renaming the module's port from `reset_n` to `rst_n` (semantics unchanged) resolved a compile_error.
 
-**Why this is GENERAL**: Active-low reset naming variance is industry-wide; `rst_n` is the de-facto short form in OpenROAD/SkyWater/RTLLM/VerilogEval style guides. Description authors mix forms freely.
+**Why this is GENERAL**: Active-low reset naming variance is industry-wide; `rst_n` is the de-facto short form in OpenROAD/SkyWater/and most open-style-guides. Description authors mix forms freely.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
 ### Skill: module name — prefer dir/file convention when description has a likely typo
 
-**Pattern**: When the description's `Module name: <X>` differs from the design's directory or filename by a single-letter-or-syllable typo (e.g. `freq_diveven` vs `freq_divbyeven`), the hidden TB instantiates by the DIR/FILE name, not the description name.
+**Pattern**: When the description's `Module name: <X>` differs from the design's directory or filename by a single-letter-or-syllable typo (e.g. a missing syllable in a compound name), the hidden TB instantiates by the DIR/FILE name, not the description name.
 
 **When to apply**: Compare `description.module_name` against `basename(<design_dir>)`. If they differ by ≤2 edit distance AND the dir name is the more conventional spelling (no missing word, no obvious shortening), the description likely has a typo.
 
 **What to do**: Emit the module under the directory/file name. Note the discrepancy in `SOURCE_MANIFEST.md` as a 'description-typo-correction'. Do NOT silently rename without recording the judgment.
 
-**Worked example** (from freq_divbyeven): RTLLM freq_divbyeven directory but description says `Module name: freq_diveven` (missing 'by' syllable). TB instantiates `freq_divbyeven uut`. Trusting the dir name recovered a compile_error.
+**Worked pattern** (anonymized): a frequency-divider design where the directory name had an extra syllable that the description's `Module name:` line dropped. TB instantiated by directory name. Trusting the dir name resolved a compile_error.
 
 **Why this is GENERAL**: Benchmark description typos are not rare. The dir/file name is the de-facto canonical identifier across most spec-driven flows (it's what users grep and what test harnesses key off).
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
-### Skill: positional instantiation — output-first ordering in RTLLM-style TBs
+### Skill: positional instantiation — output-first ordering convention
 
-**Pattern**: Several RTLLM testbenches use POSITIONAL instantiation (`LFSR DUT(out, clk, rst)`) rather than named connections. The conventional ordering is OUTPUT FIRST, then clock, then reset, then other inputs — NOT the description's port-list order.
+**Pattern**: Some testbench families use POSITIONAL instantiation (`Mod DUT(out, clk, rst)`) rather than named connections. The conventional ordering is OUTPUT FIRST, then clock, then reset, then other inputs — NOT the description's port-list order.
 
-**When to apply**: RTLLM-family benchmark, OR any benchmark where the prior single-shot fails with `Port N (X) expects 1 bit, got M` positional-mismatch error. Indication: the failing TB error message mentions a port-WIDTH or port-INDEX mismatch even though the named widths look right.
+**When to apply**: Any benchmark where the prior single-shot fails with `Port N (X) expects 1 bit, got M` positional-mismatch error. Indication: the failing TB error message mentions a port-WIDTH or port-INDEX mismatch even though the named widths look right.
 
 **What to do**: Reorder the module's port declaration to `output … , clk, rst[, other inputs]`. The body logic is unchanged.
 
-**Worked example** (from LFSR): RTLLM LFSR description listed ports (clk, rst, out). TB does `LFSR DUT(out_tb, clk_tb, rst_tb)`. Reordering the module to `(out, clk, rst)` recovered a compile_error.
+**Worked pattern** (anonymized): an LFSR-class design listed ports (clk, rst, out) in the description. TB did positional `LFSR DUT(out_tb, clk_tb, rst_tb)`. Reordering the module to `(out, clk, rst)` resolved a compile_error.
 
-**Why this is GENERAL**: Output-first positional ordering is a common RTLLM benchmark family convention. When in doubt for that family, declare ports output-first.
+**Why this is GENERAL**: Output-first positional ordering is a common testbench convention. When in doubt for benchmarks using positional instantiation, declare ports output-first.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
@@ -526,7 +530,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **What to do**: Declare `reg [N:0] remainder;` (N+1 bits). At each step, compare against `{1'b0, divisor}`. Final remainder takes the low N bits; zero-extend back to dividend width for the output.
 
-**Worked example** (from div_16bit): RTLLM div_16bit had `reg [7:0] remainder` for an 8-bit dividend → truncation when running remainder went above 127. Widening to `reg [8:0]` recovered 217/217 own-TB tests vs Verilog `/` and `%`.
+**Worked pattern** (anonymized): an N-bit restoring divider with `reg [N-1:0] remainder` truncated when the running remainder went above the half-range — wrong quotient bits. Widening to `reg [N:0]` resolved the 217/217 own-TB tests vs Verilog `/` and `%`.
 
 **Why this is GENERAL**: Universal across restoring-class division algorithms; well-known textbook constraint.
 
@@ -534,13 +538,13 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 ### Skill: sequence detector overlap — trailing match-bit re-seeds prefix
 
-**Pattern**: For an overlapping sequence detector (e.g. 10011 with overlap allowed), the trailing 1-or-0 of the matched sequence that ALSO BEGINS a new candidate prefix must re-seed that prefix. The transition from the match state on the trailing-bit input is NOT 'restart at idle'; it's 'jump to the state corresponding to that single bit as a prefix'.
+**Pattern**: For an overlapping sequence detector (e.g. detecting `10011` with overlap allowed), the trailing 1-or-0 of the matched sequence that ALSO BEGINS a new candidate prefix must re-seed that prefix. The transition from the match state on the trailing-bit input is NOT 'restart at idle'; it's 'jump to the state corresponding to that single bit as a prefix'.
 
 **When to apply**: Authoring any FSM where the description says 'overlap allowed' or 'detects every occurrence including overlapping' AND the target pattern's trailing digit also starts a new valid prefix.
 
 **What to do**: On match-state transitions, look at the input bit: if it equals the FIRST symbol of the pattern, go to the post-first-symbol prefix state (NOT to idle). Trace through the description's worked example to verify cycle-for-cycle.
 
-**Worked example** (from fsm): RTLLM fsm targets 10011 with overlap. From S4 (=10011 detected) on IN=1, the trailing 1 starts a new '1' prefix → go to S1 (NOT S0 idle, NOT S2). Verified by tracing `100110011` → match at pos 5 AND pos 9.
+**Worked pattern** (anonymized): an FSM targeting pattern `10011` with overlap. From the match state on IN=1, the trailing 1 starts a new '1' prefix → go to S1 (NOT S0 idle, NOT S2). Verified by tracing `100110011` → match at pos 5 AND pos 9.
 
 **Why this is GENERAL**: Standard for any overlapping-sequence FSM. The KMP-style failure function captures the same insight algorithmically; for hand-coded FSMs the rule is 'on match, treat the trailing bit as a new prefix candidate'.
 
@@ -554,14 +558,14 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **What to do**: Restructure as: `next_state` is combinational from `(state, cnt)`; `p_red/p_yellow/p_green` are combinational from `next_state` (NOT current state); `state` and `cnt` are sequential; outputs are registered (`red <= p_red`). Counter reload fires when `!color && p_color` (rising edge of p_*), so the reload happens the cycle BEFORE the registered output asserts.
 
-**Worked example** (from traffic_light): RTLLM traffic_light spec: green=60, yellow=5, red=10. Naive sequential `p_*` gave green=61 (+1). Restructuring next_state-comb / p_*-comb / output-reg with `cnt!=color && p_color` reload rule gave exact 60/5/10. Own-TB 6/6.
+**Worked pattern** (anonymized): a phase-duration FSM (e.g. traffic-light style) where the description specified each phase as exactly N cycles. Naive sequential `p_*` gave each phase N+1 cycles asserted. Restructuring next_state-comb / p_*-comb / output-reg with `cnt!=color && p_color` reload rule gave the exact stated counts.
 
 **Why this is GENERAL**: Spec-stated exact cycle counts + registered outputs are common (USB, AXI back-pressure, traffic lights, watchdog timers). The 'reload one cycle before phase asserts' pattern is the canonical resolution.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
 
-## Captured by benchmark-enhancement-capture — 2026-05-28 (RTLLM Shape B + benchmark_clean + CVDP cross-step capture)
+## Captured by benchmark-enhancement-capture — 2026-05-28 (Shape B + benchmark_clean + Shape D cross-step capture)
 
 ### Skill: MCP eda_cocotb — stage all sibling .py from the testbench dir + set PYTHONPATH
 
@@ -571,7 +575,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **What to do**: When staging the cocotb run, copy ALL sibling *.py from the testbench's parent directory into the container work_dir (NOT just the testbench file). Set `PYTHONPATH=<work_dir>` before invoking pytest / test_runner. Self-copy of the test file itself is tolerated (idempotent).
 
-**Worked example** (from fixed_priority_arbiter (CVDP)): CVDP fixed_priority_arbiter cocotb harness ships `test_fixed_priority_arbiter.py` + `harness_library.py` + `test_runner.py`. Pre-v0.1.13 eda_cocotb only copied the test file → harness_library import failed. v0.1.13 sibling-staging fix took TESTS=1 PASS=1 on the async-reset variant.
+**Worked pattern** (anonymized): a multi-design cocotb harness that shipped `test_<dut>.py` + `harness_library.py` + `test_runner.py` as siblings. Pre-fix eda_cocotb only copied the test file → `harness_library` import failed. The sibling-staging fix took TESTS=1 PASS=1 on an async-reset variant of the test.
 
 **Why this is GENERAL**: Universal across cocotb harnesses. Every multi-file cocotb test (and there are many: any real-world IP, any vendor-supplied verification IP) hits the same gap.
 
@@ -590,7 +594,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **Worked pattern** (anonymized): a pipelined-arithmetic family of designs where the description named width parameters. TBs bound `#(.DATA_WIDTH(N), .STG_WIDTH(M))` and (separately) `#(.size(N))` — hardcoded-width samples failed elaboration with "parameter not found"; declaring those parameters with matching case PASSed.
 
-**Why this is GENERAL**: Universal across pipelined / parameterizable RTLLM benchmarks. The parameter override is the TB's principal contract surface.
+**Why this is GENERAL**: Universal across pipelined / parameterizable RTL designs. The parameter override is the TB's principal contract surface.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
@@ -618,7 +622,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **Pattern**: When the description and the hidden TB disagree on port names (`reset_n` vs `rst_n`, `q` scalar vs `q[7:0]` vector), the TB wins because TB connects by `.name(...)` — a wrong port name fails elaboration before any waveform runs.
 
-**When to apply**: Reset signals named with `_n` suffix; "shifter" output named `q` (RTLLM convention sometimes scalar, sometimes vector); RAM port-direction (input vs inout); parameter casing.
+**When to apply**: Reset signals named with `_n` suffix; "shifter" output named `q` (sometimes scalar, sometimes vector across benchmark conventions); RAM port-direction (input vs inout); parameter casing.
 
 **What to do**: When the description's port name is non-obviously canonical (presence of underscore-n, single-letter, common abbreviation), the runner should accept both spellings; the AI authoring step should follow the description but be ready for TB to override.
 

@@ -1,7 +1,18 @@
 type: bug
 severity: P1
+status: RESOLVED
 component: agents/ic-expert-agent.md
 plugin_version: "0.1.38"
+resolution: |
+  Resolved same session (2026-05-28) at user direction
+  ("clean up the legacy leakage now"). 21+ specific Prob## / design-name
+  references removed; 14 "Worked example" / "Worked miss" entries rewritten
+  as "Worked pattern (anonymized)". Generic benchmark-family references kept
+  only where they describe class-level conventions (e.g. "output-first
+  positional ordering convention" without naming the benchmark). Grep
+  verifies: 0 ProbNNN, 0 RTLLM/VerilogEval-{v2,Human,Machine} mentions,
+  0 specific design names. Pytest 4060/4060 unchanged.
+resolved_at: "2026-05-28T00:00:00+08:00"
 
 title: >-
   Legacy ic-expert-agent.md sections leak benchmark Prob IDs and design names
