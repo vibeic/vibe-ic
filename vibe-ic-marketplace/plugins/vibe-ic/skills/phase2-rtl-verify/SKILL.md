@@ -7,6 +7,22 @@ paired_program: phase2_one_shot_runner.py
 
 # Phase 2b RTL Verification
 
+> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
+> Programs first; AI is the backstop on residual narrative.
+
+## Mandatory Deterministic Preflight
+
+```bash
+python3 plugins/vibe-ic/programs/phase2_verify_aggregate.py \
+    <project_dir> \
+    --out-md /tmp/phase2_verify.md \
+    --out-json /tmp/phase2_verify.json --strict
+```
+
+The aggregator runs `rtl_precheck_gate`, `spec_conformance_check`, and
+`rtl_hygiene_lint`, AND checks RTL/SOF/TB artifact presence. **Refuse
+to claim Phase 2b PASS without the aggregator's `verdict: PASS`.**
+
 <!-- WAVE_76_CHIP_AGNOSTIC_BANNER -->
 
 > **Case-study notation.** This skill cites the <chip-class> / <half-duplex-tester> /

@@ -5,7 +5,32 @@ description: Run Logic Equivalence Checking (LEC) between two representations of
 
 # Equivalence Check (LEC)
 
-After every transformation that touches the netlist — synthesis, DFT insertion, clock gating, ECO — someone has to prove the result is functionally identical to the golden RTL. This skill drives that check.
+> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
+> Programs first; AI is the backstop. Never claim PASS without the tool's verdict.
+
+After every transformation that touches the netlist — synthesis, DFT
+insertion, clock gating, ECO — someone has to prove the result is
+functionally identical to the golden RTL. This skill drives that check
+through MCP-EDA's `eda_lvs` `yosys_equiv` mode.
+
+## Mandatory Deterministic Preflight
+
+```bash
+# MCP tool call (handles SAT-engine corner cases since v0.1.12):
+eda_lvs({
+  mode: "yosys_equiv",
+  layout_netlist: "<post-transformation-netlist>.v",
+  schematic_netlist: "<golden-netlist>.v",
+  top_module: "<top>",
+  pdk: "sky130",  // or "gf180" or "custom" with custom_lib
+})
+```
+
+The tool returns `equiv_cells_total / proven / unproven` plus
+`sat_model_unsupported_cells[]` (for custom-PDK Liberty primitives
+without built-in SAT models). **The verdict is `matched: true` only
+when proven == total AND unproven == 0.** Refuse to claim PASS based
+on log inspection alone.
 
 ## When to use
 

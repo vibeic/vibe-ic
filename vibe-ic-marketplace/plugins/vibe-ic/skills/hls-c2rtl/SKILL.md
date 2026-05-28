@@ -5,7 +5,31 @@ description: Translate C / C++ / SystemC algorithmic descriptions into synthesiz
 
 # HLS (C/C++ → RTL)
 
-High-Level Synthesis is the entry point for DSP / AI accelerator / image-processing blocks where the algorithm is already written in C/C++. This skill guides the lowering from algorithm to RTL with pragmas / directives and hands off to `/rtl-review`.
+> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
+> The HLS tool is the source of RTL; AI is the backstop on pragma narrative.
+
+High-Level Synthesis is the entry point for DSP / AI accelerator /
+image-processing blocks where the algorithm is already written in
+C/C++. This skill guides the lowering from algorithm to RTL with
+pragmas / directives and hands off to `/rtl-review`.
+
+## Mandatory Deterministic Preflight
+
+```bash
+# 1. After HLS emits RTL, the standard plugin gates apply IMMEDIATELY:
+python3 plugins/vibe-ic/programs/rtl_review_aggregate.py \
+    --rtl-dir <hls-output-dir>     # see skills/rtl-review for backing
+python3 plugins/vibe-ic/programs/rtl_hygiene_lint.py \
+    <hls-output-dir>/*.v
+python3 plugins/vibe-ic/programs/reset_discipline_check.py \
+    --rtl-dir <hls-output-dir>
+```
+
+HLS-emitted RTL is NOT exempt from plugin gates — many HLS tools emit
+RTL with subtle latch / reset-discipline issues that downstream
+synthesis catches only after wasted hours. **Refuse to claim "HLS RTL
+is correct" without running the same gates a hand-authored RTL would
+face.**
 
 ## When to use
 

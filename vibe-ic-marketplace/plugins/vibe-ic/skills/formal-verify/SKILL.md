@@ -5,7 +5,30 @@ description: Run formal property verification (FPV) on RTL by driving model-chec
 
 # Formal Verify
 
-`assertion-gen` writes the properties; this skill is the **runner** that dispatches them to a model-checker and interprets the results. Without a runner, SVA files are just documentation.
+> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
+> Programs first; AI is the backstop on cex narrative.
+
+`assertion-gen` writes the properties; this skill is the **runner**
+that dispatches them to a model-checker and interprets the results.
+Without a runner, SVA files are just documentation.
+
+## Mandatory Deterministic Preflight
+
+```bash
+# MCP tool call — drives SymbiYosys / Jasper / VC Formal:
+eda_formal({
+  rtl_files: ["<dut>.v"],
+  sva_files: ["<assertions>.sva"],
+  top_module: "<top>",
+  mode: "prove",       // or "bmc" with --bmc-depth N
+})
+```
+
+The tool returns `property_count`, `proven`, `failed`, plus
+`counterexample_paths[]` when failures appear. **Treat the JSON output
+as ground truth.** When a property is FAILED, narrate the CEX trace;
+when UNDETERMINED at the bound, recommend deeper BMC. Never claim a
+property "obviously holds" without the tool's PROVEN verdict.
 
 ## When to use
 

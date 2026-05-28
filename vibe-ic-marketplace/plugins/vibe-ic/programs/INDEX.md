@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 435
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 435)
+- **Total programs (excluding helpers / shims):** 439
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 439)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 426 |
+| `any` | 430 |
 
 ## Alphabetical listing
 
@@ -308,11 +308,14 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_provenance_presence_check` | any | — | Phase 1 D6-traceability gate. |
 | `phase1_quality_parity_check` | any | v0.50 | v0.50 gate |
 | `phase1_structured_field_substance_check` | any | — | Tier-2 sibling of the |
+| `phase1_verify_aggregate` | any | v0.1.50 | Phase 1 output verification aggregator (Pattern-C → program). |
 | `phase23_completion_self_audit_check` | any | v0.109 | v0.109 mandatory self-audit gate. |
 | `phase23_one_shot_runner` | any | — | Phase 2 + Phase 3 chain. |
 | `phase2_one_shot_runner` | any | Wave 45 | Phase 2 main impl (L1-L13 → RTL → SOF → <half-duplex-tester>). |
+| `phase2_verify_aggregate` | any | v0.1.50 | Phase 2 output verification aggregator (Pattern-C → program). |
 | `phase3_backend_step` | any | — | single dispatcher for Phase 3 backend per-step entries. |
 | `phase3_one_shot_runner` | any | — | single-call orchestrator for Phase 3 (synth → GDS). |
+| `phase3_verify_aggregate` | any | v0.1.50 | Phase 3 backend verification aggregator (Pattern-C → program). |
 | `phy_counter_audit` | any | — | Detect bus-state-sampling anti-pattern in TX PHY counters. |
 | `picker_fixture_thrash_guard` | any | — | v1.6.63 |
 | `png_ocr_extractor` | any | — | for #36 Bug 3: PNG OCR Tier-2 fallback. |
@@ -321,6 +324,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `power_domain_crossing_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
 | `power_report_check` | any | — | wrapper for eda_report_audit --mode power. |
 | `power_report_gen` | any | — | emit Step 31 reports/phase3/power.rpt skeleton. |
+| `ppa_predict_aggregate` | any | v0.1.50 | PPA predict aggregator (Pattern-B → program). |
 | `practical_notes_specificity_check` | any | — | meta-gate for plugin docs. |
 | `pre_awake_silence_check` | any | — | M1: Verify that any protocol with a wake/sleep |
 | `project_outputs_in_tree_check` | any | — | project_outputs_in_tree_check.py |
@@ -507,7 +511,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (426 programs)
+### `any` (430 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -786,11 +790,14 @@ _(no programs in this group)_
 - `phase1_provenance_presence_check` — Phase 1 D6-traceability gate.
 - `phase1_quality_parity_check` — v0.50 gate  _[v0.50]_
 - `phase1_structured_field_substance_check` — Tier-2 sibling of the
+- `phase1_verify_aggregate` — Phase 1 output verification aggregator (Pattern-C → program).  _[v0.1.50]_
 - `phase23_completion_self_audit_check` — v0.109 mandatory self-audit gate.  _[v0.109]_
 - `phase23_one_shot_runner` — Phase 2 + Phase 3 chain.
 - `phase2_one_shot_runner` — Phase 2 main impl (L1-L13 → RTL → SOF → <half-duplex-tester>).  _[Wave 45]_
+- `phase2_verify_aggregate` — Phase 2 output verification aggregator (Pattern-C → program).  _[v0.1.50]_
 - `phase3_backend_step` — single dispatcher for Phase 3 backend per-step entries.
 - `phase3_one_shot_runner` — single-call orchestrator for Phase 3 (synth → GDS).
+- `phase3_verify_aggregate` — Phase 3 backend verification aggregator (Pattern-C → program).  _[v0.1.50]_
 - `phy_counter_audit` — Detect bus-state-sampling anti-pattern in TX PHY counters.
 - `picker_fixture_thrash_guard` — v1.6.63
 - `png_ocr_extractor` — for #36 Bug 3: PNG OCR Tier-2 fallback.
@@ -799,6 +806,7 @@ _(no programs in this group)_
 - `power_domain_crossing_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
 - `power_report_check` — wrapper for eda_report_audit --mode power.
 - `power_report_gen` — emit Step 31 reports/phase3/power.rpt skeleton.
+- `ppa_predict_aggregate` — PPA predict aggregator (Pattern-B → program).  _[v0.1.50]_
 - `practical_notes_specificity_check` — meta-gate for plugin docs.
 - `pre_awake_silence_check` — M1: Verify that any protocol with a wake/sleep
 - `project_outputs_in_tree_check` — project_outputs_in_tree_check.py

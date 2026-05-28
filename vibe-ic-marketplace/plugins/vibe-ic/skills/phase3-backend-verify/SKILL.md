@@ -7,6 +7,23 @@ paired_program: phase3_one_shot_runner.py
 
 # Phase 3 Backend Verification
 
+> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
+> Programs first; AI is the backstop on residual narrative.
+
+## Mandatory Deterministic Preflight
+
+```bash
+python3 plugins/vibe-ic/programs/phase3_verify_aggregate.py \
+    <project_dir> \
+    --out-md /tmp/phase3_verify.md \
+    --out-json /tmp/phase3_verify.json --strict
+```
+
+The aggregator runs `phase23_completion_audit`, `drc_zero_violations_check`,
+`lvs_pass_check`, and `sta_report_check`; parses DRC count + WNS/TNS;
+and checks 6 required-file presence. **Refuse to claim tape-out-ready
+without DRC=0 AND WNS≥0 AND all backing checks PASS.**
+
 **Purpose**: phase3 runner is a thin orchestrator over yosys / OpenROAD / KLayout / Netgen. PASS just means the tools didn't error. Whether the resulting silicon is FAB-ready is a separate question.
 
 ## Verification checklist

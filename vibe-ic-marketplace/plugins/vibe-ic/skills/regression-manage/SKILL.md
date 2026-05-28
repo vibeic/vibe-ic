@@ -5,7 +5,26 @@ description: Manage CI/nightly regression — job orchestration, flaky test tria
 
 # Regression Manage
 
-Once verification, synthesis, P&R, and signoff are scripted, the next bottleneck is keeping the regression green. This skill triages nightly / CI results and routes failures to the right skill / owner.
+> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
+> Programs first; AI is the backstop for owner-assignment narrative.
+
+Once verification, synthesis, P&R, and signoff are scripted, the next
+bottleneck is keeping the regression green. This skill triages nightly
+/ CI results and routes failures to the right skill / owner.
+
+## Mandatory Deterministic Preflight
+
+```bash
+# Validate every incoming regression-failure issue has fixture data:
+python3 plugins/vibe-ic/programs/regression_issue_intake_check.py \
+    --issue <issue.json> --strict
+```
+
+The intake gate rejects issues without a verbatim repro snippet,
+expected output, or drop-in fixture — exactly the pattern that
+preceded the historical #5 thrashing loop. **Do not start triage on
+an issue that fails intake.** Refuse to "diagnose by reading the log"
+without the program's PASS.
 
 ## When to use
 

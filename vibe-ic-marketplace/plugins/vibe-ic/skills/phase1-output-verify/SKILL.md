@@ -7,6 +7,22 @@ paired_program: phase1_one_shot_runner.py
 
 # Phase 2a Output Verification
 
+> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
+> Programs first; AI is the backstop on residual narrative.
+
+## Mandatory Deterministic Preflight
+
+```bash
+python3 plugins/vibe-ic/programs/phase1_verify_aggregate.py \
+    <project_dir> \
+    --out-md /tmp/phase1_verify.md \
+    --out-json /tmp/phase1_verify.json --strict
+```
+
+The aggregator runs 7 backing programs (`phase1_all_l_docs_present_check`
+through `phase1_gate_contract_check`) AND checks 13 L-doc file presence.
+**Refuse to claim verification PASS without the aggregator's `verdict: PASS`.**
+
 **Purpose**: deterministic phase1 runner emits typed L docs from input/docs, but its mechanical regex extraction can:
 - miss vendor docs that use unusual formatting
 - emit `__TODO__` stubs for fields it couldn't parse

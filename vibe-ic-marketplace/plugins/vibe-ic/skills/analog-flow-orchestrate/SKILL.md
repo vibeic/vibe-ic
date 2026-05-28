@@ -5,6 +5,30 @@ description: Canonical reference doc for the Analog A1-A9 track — spec extract
 
 # Analog Flow Orchestrate — **9-STEP ANALOG TRACK**
 
+> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
+> Programs first (runner + 8 A-step check gates); AI is the backstop.
+
+## Mandatory Deterministic Preflight
+
+```bash
+# 1. Drive the deterministic runner first:
+python3 plugins/vibe-ic/programs/analog_one_shot_runner.py <project>
+
+# 2. After each A-step, the corresponding check gate runs deterministically:
+python3 plugins/vibe-ic/programs/analog_a1_spec_extract_check.py
+python3 plugins/vibe-ic/programs/analog_a2_topology_select_check.py
+python3 plugins/vibe-ic/programs/analog_a3_netlist_gen_check.py
+python3 plugins/vibe-ic/programs/analog_a4_corner_sweep_check.py
+python3 plugins/vibe-ic/programs/analog_a5_layout_check.py
+python3 plugins/vibe-ic/programs/analog_a6_post_layout_resim_check.py
+python3 plugins/vibe-ic/programs/analog_a7_hardmacro_gen_check.py
+python3 plugins/vibe-ic/programs/analog_a8_hw_verify_check.py
+```
+
+The skill is the CANONICAL REFERENCE for A1-A9 semantics. **The runner
++ 8 step-check programs are the source of truth for PASS / FAIL.**
+Refuse to override their verdicts.
+
 > **Merged into `/vibe-ic-analog` slash command (v1.6.13+).** This skill
 > remains as the canonical reference for the A1-A9 step semantics, the
 > per-step skill mapping, and the gate-predicate definitions. The slash

@@ -5,6 +5,32 @@ description: Layer-3 hardware attestation — talk to an oscilloscope via SCPI t
 
 # scope-pattern-attestation — Layer-3 hardware attestation
 
+> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
+> Programs run the pattern-match; AI is the backstop on waveform interpretation.
+
+## Mandatory Deterministic Preflight
+
+```bash
+# 1. Capture the scope trace via MCP-EDA:
+device_scope_capture({ channel: 1, duration_ms: 100 })
+
+# 2. Then run the pattern-specific check:
+python3 plugins/vibe-ic/programs/scope_periodic_pulse_check.py \
+    --trace <trace.csv> --strict        # forbidden-pattern absence
+python3 plugins/vibe-ic/programs/scope_reply_preamble_check.py \
+    --trace <trace.csv> --strict        # required-pattern presence
+python3 plugins/vibe-ic/programs/scope_response_byte_decode_check.py \
+    --trace <trace.csv>
+python3 plugins/vibe-ic/programs/scope_long_decode.py \
+    --trace <trace.csv>                 # long-frame decode
+```
+
+The MCP captures the trace; the 4 programs decide pattern PASS / FAIL
+deterministically. **Refuse to attest a pattern by visual inspection
+of the scope screenshot** when the program can decide it.
+
+---
+
 This skill closes the third layer of the v0.65 three-layer defense. Sim
 PASS and static-RTL PASS together are still not proof; the only proof
 that an IC exhibits (or does not exhibit) a behavioral pattern in
