@@ -73,9 +73,24 @@ VERILOG_KEYWORDS = {
 # same key.
 # chip-AGNOSTIC: structural identifier shape, not chip class.
 CELL_INST_RE = re.compile(
-    r'^\s*(\\?\$?[A-Za-z_$][\w$]*)\s+(\w+)\s*\(',
+    # group 1 = cell type (with optional $ or \), group 2 = instance name.
+    # v0.1.32 — instance name MUST allow yosys-escaped identifiers
+    # `\<chars-until-whitespace>` (e.g. `\u.q_reg[0]`, `\$auto$_NN_`) since
+    # those are EVERYWHERE in yosys -noexpr -nostr -noattr output.
+    # Without this, DFF-heavy designs (JC_counter / right_shifter) emit
+    # `$_DFF_PN0_ \u.q_reg[0] (` and the base `\w+` rejects everything
+    # after the `\` because of the `.[]` chars.
+    r'^\s*(\\?\$?[A-Za-z_$][\w$]*)\s+(\\\S+|\w+)\s*\(',
     re.MULTILINE,
 )
+# v0.1.32 — yosys `write_verilog -noexpr -nostr -noattr` emits cell-instance
+# lines with /* _NNN_ */ block comments between the type and the instance
+# name (e.g. `$_DFF_PN0_ /* _04_ */ s4_reg (`) AND between the instance name
+# and the port-list paren (e.g. `\$_NOT_  _03_ /* _05_ */ (`). The base regex
+# above rejects both forms. We strip the block comments before matching so
+# DFF-heavy designs (JC_counter, right_shifter) are counted correctly.
+# chip-AGNOSTIC.
+_YOSYS_BLOCK_COMMENT_RE = re.compile(r"/\*[^*]*?\*/")
 MODULE_RE = re.compile(r'^\s*module\s+(\w+)', re.MULTILINE)
 
 
@@ -113,7 +128,12 @@ def count_cell_instances(netlist_text: str) -> Tuple[int, Dict[str, int]]:
                                 'endmodule', '//')):
             continue
 
-        m = CELL_INST_RE.match(stripped)
+        # v0.1.32 — strip yosys `/* _NNN_ */` block comments embedded in
+        # cell-instance lines so the regex can match. Without this, DFF-heavy
+        # designs emit lines like `$_DFF_PN0_ /* _04_ */ s4_reg (` that the
+        # CELL_INST_RE never matches → false TOO_FEW_CELLS / total_cells=0.
+        stripped_nc = _YOSYS_BLOCK_COMMENT_RE.sub(" ", stripped).strip()
+        m = CELL_INST_RE.match(stripped_nc) or CELL_INST_RE.match(stripped)
         if m:
             cell_type = m.group(1)
             # v1.6.195 (#82 P0) — yosys escaped-identifier `\$_*_`

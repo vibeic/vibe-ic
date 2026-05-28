@@ -148,12 +148,26 @@ def step_ingest_render(project: Path, ic_name: str) -> StepResult:
     elif docs_dir.is_dir():
         src = docs_dir
     else:
-        return StepResult("phase1_ingest_render", "SKIP",
-                          time.time() - t0,
-                          "neither input/phase1_structured.yaml nor "
-                          "input/docs/ present — Phase 1 needs at least "
-                          "one input. Caller (PM agent) must populate "
-                          "input/phase1_structured.yaml from dialogue.")
+        # v0.1.32 fix (ORGANIC-20260528-phase1-prompt-md-not-ingested):
+        # auto-bridge input/phase1_prompt.md into a synthesized input/docs/
+        # so the doc-ingest path can consume it. Previously this path SKIPped
+        # silently with PASS_WITH_WAIVERS, leaving phase2 to FAIL at
+        # phase1_precheck with 0/13 L docs. The bridge makes the runner
+        # turnkey for callers who staged only the prompt.md (the convention
+        # the mode detector at line ~110 already recognises).
+        prompt_md = project / "input" / "phase1_prompt.md"
+        if prompt_md.is_file():
+            docs_dir.mkdir(parents=True, exist_ok=True)
+            (docs_dir / "design_description.md").write_text(prompt_md.read_text())
+            src = docs_dir
+        else:
+            return StepResult("phase1_ingest_render", "SKIP",
+                              time.time() - t0,
+                              "neither input/phase1_structured.yaml nor "
+                              "input/docs/ nor input/phase1_prompt.md "
+                              "present — Phase 1 needs at least one input. "
+                              "Caller (PM agent) must populate "
+                              "input/phase1_structured.yaml from dialogue.")
     # cli.py uses package-relative imports (``from .ingest import ...``),
     # so it must be run as a module (``python -m phase1_engine.cli``) with
     # the package parent dir on sys.path — NOT as a standalone script, which

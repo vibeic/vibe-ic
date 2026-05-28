@@ -1597,6 +1597,99 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         if asic_candidate.is_file():
             asic_top_name = f"{top_name}_asic"
     synth_top = asic_top_name or top_name
+
+    # v0.1.32 fix — chip_top auto-emit when L9.top_module ('chip_top') ≠ the
+    # actual authored top in rtl/. Previously the runner hard-coded
+    # `synth -top chip_top` but for IC classes with rtl_gen=null (e.g.
+    # digital_arithmetic_primitive — all RTLLM) the AI playing spec-to-rtl
+    # role authors the module under its natural name (e.g. multi_8bit) with
+    # no chip_top wrapper. yosys then failed elaboration. This auto-emit
+    # scans rtl/ for a module whose name matches L9.top_module (or top_name);
+    # if absent BUT exactly one non-helper module is present, auto-generate a
+    # thin pass-through chip_top.v that instantiates it. Chip-AGNOSTIC: only
+    # fires when no chip_top exists; respects manually-authored chip_top.v.
+    def _autoemit_chip_top_if_needed():
+        chip_top_v = rtl_dir / f"{synth_top}.v"
+        chip_top_sv = rtl_dir / f"{synth_top}.sv"
+        if chip_top_v.is_file() or chip_top_sv.is_file():
+            return  # caller already provided one
+        # Find candidate authored top modules in rtl/. A "candidate" is any
+        # .v / .sv whose first `module <name>(...)` declaration has at least
+        # one port. Skip files whose top-module declaration matches synth_top
+        # (we already checked above). Skip obvious helper / sub-module files
+        # (no _asic, _wrapper, _tb, _test names — those are not the L9 top).
+        import re as _re
+        mod_re = _re.compile(r"^\s*module\s+([A-Za-z_]\w*)\s*[(#]", _re.M)
+        candidates = []
+        for f in sorted(rtl_dir.glob("*.v")) + sorted(rtl_dir.glob("*.sv")):
+            name = f.stem
+            if any(name.endswith(s) for s in ("_asic", "_wrapper", "_tb",
+                                              "_test", "_synth")):
+                continue
+            try:
+                text = f.read_text(errors="ignore")
+            except Exception:
+                continue
+            m = mod_re.search(text)
+            if not m:
+                continue
+            mod_name = m.group(1)
+            if mod_name == synth_top:
+                return  # already in some file
+            # extract port list from module decl up to matching ');' so the
+            # wrapper has identical ports
+            decl_start = m.end() - 1  # position at the '(' or '#'
+            # find the matching closing ')' of the port list (skip params)
+            i = decl_start
+            depth = 0
+            in_params = False
+            while i < len(text):
+                c = text[i]
+                if c == '#' and not in_params:
+                    in_params = True
+                if c == '(':
+                    depth += 1
+                elif c == ')':
+                    depth -= 1
+                    if depth == 0:
+                        if in_params:
+                            in_params = False
+                            # continue to find module port list
+                            j = text.find('(', i + 1)
+                            if j < 0:
+                                break
+                            i = j
+                            depth = 1
+                            continue
+                        port_block = text[decl_start:i + 1]
+                        candidates.append((mod_name, port_block, f))
+                        break
+                i += 1
+        if len(candidates) != 1:
+            return  # ambiguous or none — let yosys produce a clear error
+        mod_name, port_block, src_file = candidates[0]
+        # Extract simple port names from the declaration for the instance.
+        # Strip everything except identifiers in input/output/inout context;
+        # for the instance we do positional: <synth_top> u_dut <port_block>
+        # which works because the port_block already has the parens.
+        wrapper = (
+            f"// SPDX-License-Identifier: Apache-2.0\n"
+            f"// v0.1.32 auto-emitted chip_top wrapper (phase2_one_shot_runner).\n"
+            f"// L9.top_module = '{synth_top}' but rtl/ only defined '{mod_name}'\n"
+            f"// (in {src_file.name}). This thin pass-through lets yosys synth\n"
+            f"// against L9's expected top without modifying the authored RTL.\n"
+            f"`default_nettype none\n"
+            f"module {synth_top} {port_block};\n"
+            f"  {mod_name} u_dut {port_block.strip().rstrip(';')};\n"
+            f"endmodule\n"
+            f"`default_nettype wire\n"
+        )
+        chip_top_v.write_text(wrapper)
+        rtl_files.append(str(chip_top_v))
+    try:
+        _autoemit_chip_top_if_needed()
+    except Exception:
+        pass  # non-fatal: yosys will still try and may succeed
     # Stage stub OTP hex inside synth_dir so $readmemh resolves at synth.
     for stem in ("apple.hex", "otp_image.hex"):
         stub = synth_dir / stem
