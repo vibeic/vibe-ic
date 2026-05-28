@@ -223,14 +223,62 @@ def test_scrub_design_leak_removes_prob_ids():
 
 def test_scrub_design_leak_removes_from_parentheticals():
     """Audit Finding 1: design leaf names like `radix2_div` aren't in any
-    enumeration, so the only defensible rule is "kill the (from X) bracket
-    structurally regardless of contents"."""
+    enumeration. v0.1.40 (re-audit NEW-4) narrowed the bracket-strip to
+    require the bracket interior to look like an identifier list — so
+    `(from <snake_case_id>)` is killed but legitimate technical brackets
+    are preserved (verified in the next test)."""
     s = _emit_mod._scrub_design_leak("A divider design (from radix2_div): fix.")
-    assert "radix2_div" not in s
-    assert "from" not in s.lower() or "from" in s.replace("from", "F").lower()  # only the bracket-`from` was killed
-    # The bracket structure itself is gone
-    assert "(" not in s
-    assert ")" not in s
+    assert "radix2_div" not in s, f"radix2_div should be scrubbed, got: {s!r}"
+    assert "(from radix2_div)" not in s
+    assert "[identifiers anonymized" in s
+
+
+def test_scrub_design_leak_preserves_legitimate_technical_brackets():
+    """v0.1.40 (re-audit NEW-4 fix) — the v0.1.39 broad-strip damaged
+    legitimate technical parentheticals like `(per IEEE 1364)` and
+    `(e.g. mod-256)` that contain no design identifier. Confirm these are
+    preserved AND no spurious anonymization marker is appended."""
+    cases = [
+        "A counter (e.g. mod-256) wraps at zero.",
+        "Refer to (refs 1, 2) for the math.",
+        "Pattern: timing-violation (per IEEE 1364).",
+    ]
+    for c in cases:
+        s = _emit_mod._scrub_design_leak(c)
+        assert s == c, f"legitimate bracket damaged: input={c!r} got={s!r}"
+        assert "anonymized" not in s, f"spurious marker on clean text: {s!r}"
+
+
+def test_emit_skill_section_refuses_leaky_title():
+    """v0.1.40 (re-audit F1 真補洞) — a sloppy caller passing a leaky
+    skill_title is exactly the failure mode the prior audit warned about.
+    Refuse such input rather than silently scrub the header."""
+    rec = {"skill_title": "Moore latency in Prob089 sequence_detector",
+           "pattern": "p", "when": "w", "what": "x", "example": "e",
+           "generality": "g"}
+    with pytest.raises(ValueError, match="skill_title contains a benchmark-design identifier"):
+        _emit_mod.emit_skill_section(rec)
+
+
+def test_emit_backlog_refuses_leaky_slug():
+    """v0.1.40 (re-audit F1 真補洞) — backlog filename + YAML id are
+    permanent record; refuse on leaky slug."""
+    rec = {"title": "t", "pattern": "p", "suggested_fix": "f",
+           "backlog_slug": "prob042-radix2-div-remainder"}
+    with pytest.raises(ValueError, match="backlog_slug contains a benchmark-design identifier"):
+        _emit_mod.emit_backlog(rec, "2026-05-28")
+
+
+def test_emit_skill_section_accepts_clean_title():
+    """A skill_title that's already general should pass through unchanged."""
+    rec = {"skill_title": "Hidden-TB parameter override forces parameter declarations",
+           "pattern": "p", "when": "w", "what": "x", "example": "e",
+           "generality": "g"}
+    out = _emit_mod.emit_skill_section(rec)
+    assert "Hidden-TB parameter override" in out
+    # No spurious anonymization marker on a clean title (header line only)
+    header = out.split("**Pattern**:")[0]
+    assert "anonymized" not in header
 
 
 def test_scrub_design_leak_idempotent_on_clean_text():

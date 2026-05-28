@@ -733,69 +733,99 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
     """
     raw = path.read_text(errors='replace')
     src = strip_comments(raw)
+    # v0.1.40 (re-audit NEW-1 fix) — restrict analysis to the TOP MODULE only.
+    # The autofix inserts the `initial` block before the file's LAST
+    # `endmodule`, which is the top module's. For single-module files this is a
+    # no-op refinement. For multi-module files (e.g. RTLLM asyn_fifo, which
+    # contains a `dual_port_RAM` submodule above the top), scanning the whole
+    # file flatly would:
+    #   • pull a name that's a `reg` in the submodule but a `wire` in the top
+    #     module → `initial wire_name = 0;` → iverilog "not a valid l-value"
+    #   • pull a memory array `reg [W-1:0] MEM [0:D-1]` from the submodule and
+    #     emit it as a scalar `MEM = 0;` → iverilog "Could not find variable"
+    # Scope the search to the top module's body to eliminate both classes.
+    top_body, top_start = _extract_top_module_body(src)
+    src_scope = top_body if top_body is not None else src
     names: List[str] = []
     seen: Set[str] = set()
     # (a) registered OUTPUT ports with no power-up (the WARN-rule set).
-    for f in rule_uninit_registered_output(src, str(path)):
+    for f in rule_uninit_registered_output(src_scope, str(path)):
         if f.rule == 'uninit-registered-output' and f.symbol not in seen:
             names.append(f.symbol); seen.add(f.symbol)
     # (b) INTERNAL registered regs that drive a module output via a continuous
     #     assign (e.g. `reg q; ... q<=...; assign out=q;`). Same power-up-X bug,
     #     just one hop removed. Reset-less modules only.
-    input_decls = ' '.join(re.findall(r'\binput\b[^;)\n]*', src))
+    input_decls = ' '.join(re.findall(r'\binput\b[^;)\n]*', src_scope))
     is_resetless = not _RESET_NAME_RE.search(input_decls)
+    # v0.1.40 — also collect TOP-SCOPE wire names so case (c) can skip names
+    # that are wires in this module (even if the same name is a reg in a
+    # sibling submodule that lives in the same file).
+    top_wires = set(re.findall(
+        r'\b(?:wire|output\s+wire|input\s+wire|inout\s+wire)\b(?:\s+signed)?\s*'
+        r'(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)\s*(?=[,;)=])', src_scope))
     if is_resetless:
         out_ports = set(re.findall(
             r'\boutput\b\s+(?:(?:reg|logic|wire)\s+)?(?:signed\s+)?(?:\[[^\]]+\]\s*)?'
-            r'([A-Za-z_]\w*)\s*(?=[,;)=])', src))
+            r'([A-Za-z_]\w*)\s*(?=[,;)=])', src_scope))
         registered = {mm.group(1) for mm in
-                      re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src)}
-        has_initial = bool(re.search(r'\binitial\b', src))
-        for om in re.finditer(r'\bassign\s+([A-Za-z_]\w*)\s*=\s*([^;]+);', src):
+                      re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src_scope)}
+        has_initial = bool(re.search(r'\binitial\b', src_scope))
+        for om in re.finditer(r'\bassign\s+([A-Za-z_]\w*)\s*=\s*([^;]+);', src_scope):
             if om.group(1) not in out_ports:
                 continue
             for rhs_id in re.findall(r'\b([A-Za-z_]\w*)\b', om.group(2)):
                 if rhs_id in registered and rhs_id not in seen \
-                        and rhs_id not in VERILOG_KEYWORDS:
+                        and rhs_id not in VERILOG_KEYWORDS \
+                        and rhs_id not in top_wires:
                     decl_init = re.search(
-                        r'\b(?:reg|logic)\b[^;\n]*\b' + re.escape(rhs_id) + r'\s*=', src)
+                        r'\b(?:reg|logic)\b[^;\n]*\b' + re.escape(rhs_id) + r'\s*=', src_scope)
                     in_initial = has_initial and re.search(
-                        r'\binitial\b[\s\S]{0,200}?\b' + re.escape(rhs_id) + r'\s*(<=|=)', src)
+                        r'\binitial\b[\s\S]{0,200}?\b' + re.escape(rhs_id) + r'\s*(<=|=)', src_scope)
                     if not decl_init and not in_initial:
                         names.append(rhs_id); seen.add(rhs_id)
     # (c) v0.1.38 — ALL internal `reg` declarations in reset-less modules.
-    # X-propagation through internal pipeline regs at t=0 corrupts the output
-    # even when (a)+(b) already initialized the visible regs. Same conservative
-    # gate (reset-less only). Skip regs that are NEVER written (would be a
-    # different rule's WARN) and regs already covered by (a)/(b).
+    # v0.1.40 — top-module-scoped; skip memory arrays; skip names that are
+    # wires in this module's scope.
     if is_resetless:
         all_regs: Dict[str, int] = {}
-        # multi-name decls like `reg [W-1:0] a, b, c;` are handled by scanning
-        # the type prefix once and walking the comma list.
+        # v0.1.40 — match `reg [...] name1, name2;` OR `reg name [0:D-1];`
+        # (memory) — the memory form is REJECTED at the per-name walk by the
+        # trailing-`[…]` test.
         for m in re.finditer(
-                r'\breg\b(?:\s+signed)?\s*(?:\[[^\]]+\]\s*)?([^;]+);', src):
-            lineno_d = src[:m.start()].count('\n') + 1
+                r'\breg\b(?:\s+signed)?\s*(?:\[[^\]]+\]\s*)?([^;]+);', src_scope):
+            lineno_d = src_scope[:m.start()].count('\n') + 1
+            decl_body = m.group(1)
+            # Walk the comma-separated names; reject any name whose decl has
+            # a trailing `[...]` (memory array) — those need element-wise init
+            # via an integer loop, which the scalar `name = 0;` autofix would
+            # mis-emit as `MEM = 0;` (iverilog: 'Could not find variable').
             for nm_match in re.finditer(
-                    r'([A-Za-z_]\w*)\s*(?:\[[^\]]+\])?\s*(?:=[^,;]+)?', m.group(1)):
+                    r'([A-Za-z_]\w*)\s*(\[[^\]]+\])?\s*(?:=[^,;]+)?', decl_body):
                 nm = nm_match.group(1)
-                if nm and nm not in VERILOG_KEYWORDS and nm not in all_regs:
-                    all_regs[nm] = lineno_d
+                trailing_bracket = nm_match.group(2)
+                if not nm or nm in VERILOG_KEYWORDS or nm in all_regs:
+                    continue
+                if trailing_bracket:
+                    # memory array — skip; element-wise init is out of scope
+                    # for this autofix (would need an integer loop).
+                    continue
+                all_regs[nm] = lineno_d
         registered = {mm.group(1) for mm in
-                      re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src)}
-        has_initial = bool(re.search(r'\binitial\b', src))
+                      re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src_scope)}
+        has_initial = bool(re.search(r'\binitial\b', src_scope))
         for nm in all_regs:
-            if nm in seen or nm not in registered:
+            if nm in seen or nm not in registered or nm in top_wires:
                 continue
             decl_init = re.search(
-                r'\breg\b[^;\n]*\b' + re.escape(nm) + r'\s*=', src)
+                r'\breg\b[^;\n]*\b' + re.escape(nm) + r'\s*=', src_scope)
             in_initial = has_initial and re.search(
-                r'\binitial\b[\s\S]{0,200}?\b' + re.escape(nm) + r'\s*(<=|=)', src)
+                r'\binitial\b[\s\S]{0,200}?\b' + re.escape(nm) + r'\s*(<=|=)', src_scope)
             if decl_init or in_initial:
                 continue
             names.append(nm); seen.add(nm)
     if not names:
         return 0, []
-    # Insert before the LAST endmodule (single-module samples: the top module).
+    # Insert before the LAST endmodule (the top module's).
     idx = raw.rstrip().rfind('endmodule')
     if idx < 0:
         return 0, []
@@ -806,6 +836,27 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
     patched = raw[:idx] + block + raw[idx:]
     path.write_text(patched)
     return len(names), names
+
+
+def _extract_top_module_body(src: str):
+    """v0.1.40 (re-audit NEW-1 fix) — return the (text, start_offset) for the
+    TOP module (its `endmodule` is the file's LAST `endmodule`). Returns
+    (None, None) on parse failure — caller falls back to the whole-file source.
+
+    Includes the module HEADER (declaration + port list) so the reset detector
+    sees ANSI-style `input rst_n` inside the port list. Verilog disallows
+    nested modules, so 'last `module …` declaration before the last `endmodule`'
+    is the correct top-module opener.
+    """
+    last_endmod = src.rstrip().rfind('endmodule')
+    if last_endmod < 0:
+        return None, None
+    last_mod_decl = -1
+    for m in re.finditer(r'\bmodule\b\s+[A-Za-z_]\w*', src[:last_endmod]):
+        last_mod_decl = m.start()
+    if last_mod_decl < 0:
+        return None, None
+    return src[last_mod_decl:last_endmod], last_mod_decl
 
 
 def main():
