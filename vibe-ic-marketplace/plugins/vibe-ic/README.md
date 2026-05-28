@@ -2,6 +2,41 @@
 
 **Content-deterministic skill execution for vibe-ic-core.**
 
+## ► Running open benchmarks (v0.1.29+)
+
+Need to score Vibe-IC against an open benchmark (VerilogEval-v2 / VerilogEval-Human /
+RTLLM / CVDP / etc.)? Use the **`/vibe-ic-benchmark`** front door:
+
+```bash
+# Discover
+/vibe-ic-benchmark --list                                # all known benchmarks + shape + status
+/vibe-ic-benchmark rtllm                                 # show plan + env check
+
+# Run (per the recommended commands the plan prints)
+git clone https://github.com/hkust-zhiyao/RTLLM ~/datasets/RTLLM
+/vibe-ic-benchmark rtllm --setup --dataset ~/datasets/RTLLM --run ~/runs/r1
+# … drive batches per benchmark-harness/blind_instructions_shape_*.md
+/vibe-ic-benchmark rtllm --score --run ~/runs/r1
+```
+
+**MUST READ FIRST** — the [`open-benchmark-methodology`](skills/open-benchmark-methodology/SKILL.md)
+skill is the source of truth for run-shape choice (A/B/C/D/E), tool-substitution
+disclosure (iverilog↔VCS, etc.), and the triage rubric (FLOOR vs agent-fixable).
+A `UserPromptSubmit` hook auto-injects a reminder when any benchmark keyword
+appears in your message. **Don't bypass it.**
+
+Per-shape entry points:
+- **Shape A** (full IC, doc→GDS): `/vibe-ic-all <project>` + `benchmark-verify` skill
+- **Shape B** (standalone designs): `vibe_ic_one_shot_runner.py --skip-phase3 --skip-analog --skip-hardware`
+- **Shape C** (atomic micro-problems): `benchmark-harness/gates_atomic.py` per problem
+- **Shape D** (agentic SoC + cocotb): `vibe_ic_one_shot_runner.py` + `score_cocotb_mcp.py`
+- **Shape E** (blocked / out-of-scope): document only, do NOT publish a number
+
+See `benchmark-harness/README.md` for the full harness orientation and per-benchmark quickstarts.
+
+---
+
+
 Release: v0.40 (2026-04-20) — 3-layer verification, 41 programs, 412 tests, 0 WEAK skills.
 
 ## What it does

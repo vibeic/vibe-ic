@@ -103,8 +103,9 @@
         "huggingface": "ahmedallam/RTL-Repo",
         "license": "Apache-2.0"
       },
-      "blocker": "Metric is Edit-Similarity + Exact-Match string similarity to upstream verbatim — not functional spec-to-RTL generation. Anti-correlated with correct-by-construction generation: a clean module that differs textually from the upstream line scores low even when functionally correct. Out of scope for Vibe-IC; document and skip.",
-      "status": "OUT-OF-SCOPE — wrong metric shape"
+      "scorer": "score_rtlrepo.py",
+      "blocker": "Metric is Edit-Similarity + Exact-Match string similarity to upstream verbatim — NOT functional spec-to-RTL generation. Anti-correlated with correct-by-construction generation: a clean module that differs textually from the upstream line scores low even when functionally correct. We ship score_rtlrepo.py so users who must publish an RTL-Repo number CAN do so honestly, but the score does NOT measure what Vibe-IC optimizes for. Do NOT use this as a Vibe-IC capability number.",
+      "status": "OUT-OF-SCOPE-METRIC — scorer shipped for completeness, but the metric does not measure Vibe-IC's value"
     },
     "metrex": {
       "shape": "E",
