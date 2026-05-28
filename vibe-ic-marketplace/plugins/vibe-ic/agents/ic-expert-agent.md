@@ -141,7 +141,7 @@ When the spec gives a K-map / truth table with don't-cares and asks for "minimum
 compute the **true minimal cover that exploits the don't-cares** — do not stop at the first
 correct-on-care-cells expression. The minimal form is canonical and is what a correct reference
 emits, so getting it exactly is what makes the don't-care inputs match. Method: group with
-Quine-McCluskey / K-map; let prime implicants absorb don't-cares; pick the fewest, largest terms.
+Quine-`McCluskey` / K-map; let prime implicants absorb don't-cares; pick the fewest, largest terms.
 *Worked pattern (anonymized):* a 4-variable K-map with ON={2,7,15}, dc={3,8,11,12}; a hasty
 `b&c&d | ~a&~b&c` is correct on every care cell but **not minimal** — the minimal SOP is
 `c&d | ~a&~b&c` (the `c&d` term absorbs don't-cares 3,11), and that is what a minimal-SOP reference
@@ -153,11 +153,11 @@ is what matters.)
 For "each output bit relates the input bit to its left/right neighbour, and the edge bit (which has
 no neighbour) is 0", build the result with a **concatenation that literally places the `1'b0`** at
 the edge — do **not** compute it with an operation that can reintroduce the edge bit. E.g.
-out_any[i] = in[i] | in[i-1] with out_any[0]=0: the correct form is `{(in[98:0] | in[99:1]), 1'b0}`,
-**not** `in | {in[98:0], 1'b0}` — the latter OR-folds `in[0]` back in, so out_any[0]=in[0]≠0. Same
+`out_any`[i] = in[i] | in[i-1] with `out_any`[0]=0: the correct form is `{(in[98:0] | in[99:1]), 1'b0}`,
+**not** `in | {in[98:0], 1'b0}` — the latter OR-folds `in[0]` back in, so `out_any`[0]=in[0]≠0. Same
 for AND/`&`-with-shift at the top bit. Always verify the two edge bits explicitly against the spec's
 stated edge value. *Worked pattern (anonymized):* a 100-bit neighbour-OR design used the
-`in | {…,1'b0}` form, which leaked `in[0]` into out_any[0]. Now also caught deterministically by
+`in | {…,1'b0}` form, which leaked `in[0]` into `out_any`[0]. Now also caught deterministically by
 `rtl_hygiene_lint` rule `vector-self-shift-fold`.
 
 ### Skill: K-map axis ↔ bit-index mapping (esp. non-zero-based `[N:1]` ports)
@@ -384,9 +384,9 @@ vendor's numbers.
    instantiate every listed submodule by name with the stated purpose.
 2. When you generate defaults for `L8R.*`, enumerate every constant
    family listed under `typical_structure.L8R_rtl_constants`. Mirror
-   values (crc8_polynomial etc.) must reference their L3 source.
+   values (`crc8_polynomial` etc.) must reference their L3 source.
 3. When you generate `L3.phy` or `L3.frame_format`, follow the
-   `typical_phy` shape (encoding / byte_order / wake_prefix_required
+   `typical_phy` shape (encoding / `byte_order` / `wake_prefix_required`
    flags) — pick a specific value from the allowed enum for each.
 4. When you generate `L10_test_cases` / `L11_calibration` /
    `L12_sequences` / `L13_lab_calibration`, follow the
@@ -410,7 +410,7 @@ K3 entries can be installed from third-party plugins under
 When resolving a class, **always** use the unified view from
 `vibe-ic-marketplace/plugins/vibe-ic-d/programs/k3_view_resolve.py`
 (or call the same logic in-process). It walks core + every installed
-L_exp plugin and returns the merged view with full provenance.
+`L_exp` plugin and returns the merged view with full provenance.
 
 **Conflict policy** (per roadmap § 6.3):
 
@@ -419,7 +419,7 @@ L_exp plugin and returns the merged view with full provenance.
   available.
 - When NO core entry exists, multiple community entries on the same key
   are returned as a ranked list under `_ranked_alternatives:` (sorted
-  by trust_tier weight). Default to the highest-weight entry.
+  by `trust_tier` weight). Default to the highest-weight entry.
 - Trust-tier weights:
     `core` = 1.0
     `vendor-verified` = 1.0
@@ -565,17 +565,17 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
 
-## Captured by benchmark-enhancement-capture — 2026-05-28 (Shape B + benchmark_clean + Shape D cross-step capture)
+## Captured by benchmark-enhancement-capture — 2026-05-28 (Shape B + `benchmark_clean` + Shape D cross-step capture)
 
-### Skill: MCP eda_cocotb — stage all sibling .py from the testbench dir + set PYTHONPATH
+### Skill: MCP `eda_cocotb` — stage all sibling .py from the testbench dir + set PYTHONPATH
 
-**Pattern**: cocotb test harnesses commonly split helpers across multiple .py files in the same directory as the main test (e.g. `test_<dut>.py` + `harness_library.py` + `test_runner.py`). The MCP eda_cocotb tool's `work_dir` is a temp dir inside the container — if only the testbench file is copied, `import harness_library` raises ModuleNotFoundError inside the container.
+**Pattern**: cocotb test harnesses commonly split helpers across multiple .py files in the same directory as the main test (e.g. `test_<dut>.py` + `harness_library.py` + `test_runner.py`). The MCP `eda_cocotb` tool's `work_dir` is a temp dir inside the container — if only the testbench file is copied, `import harness_library` raises `ModuleNotFoundError` inside the container.
 
 **When to apply**: Implementing or extending any MCP cocotb runner. Reviewing a Shape-D benchmark setup where the test harness ships >1 .py file in the score/src/ tree.
 
-**What to do**: When staging the cocotb run, copy ALL sibling *.py from the testbench's parent directory into the container work_dir (NOT just the testbench file). Set `PYTHONPATH=<work_dir>` before invoking pytest / test_runner. Self-copy of the test file itself is tolerated (idempotent).
+**What to do**: When staging the cocotb run, copy ALL sibling *.py from the testbench's parent directory into the container work_dir (NOT just the testbench file). Set `PYTHONPATH=<work_dir>` before invoking pytest / `test_runner`. Self-copy of the test file itself is tolerated (idempotent).
 
-**Worked pattern** (anonymized): a multi-design cocotb harness that shipped `test_<dut>.py` + `harness_library.py` + `test_runner.py` as siblings. Pre-fix eda_cocotb only copied the test file → `harness_library` import failed. The sibling-staging fix took TESTS=1 PASS=1 on an async-reset variant of the test.
+**Worked pattern** (anonymized): a multi-design cocotb harness that shipped `test_<dut>.py` + `harness_library.py` + `test_runner.py` as siblings. Pre-fix `eda_cocotb` only copied the test file → `harness_library` import failed. The sibling-staging fix took TESTS=1 PASS=1 on an async-reset variant of the test.
 
 **Why this is GENERAL**: Universal across cocotb harnesses. Every multi-file cocotb test (and there are many: any real-world IP, any vendor-supplied verification IP) hits the same gap.
 
@@ -586,7 +586,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 ### Skill: hidden-TB parameter override forces explicit `parameter` declarations (case-sensitive)
 
-**Pattern**: When the module name contains 'pipe' / 'pipeline' or the description names widths (DATA_WIDTH, STG_WIDTH, SIZE), the hidden TB instantiates the DUT via `module #(.PARAM(N)) u_dut (...)`. Hardcoding the value fails iverilog elaboration with "parameter X not found in u_dut". Also: parameter names are CASE-SENSITIVE — `SIZE` and `size` are different identifiers.
+**Pattern**: When the module name contains 'pipe' / 'pipeline' or the description names widths (DATA_WIDTH, `STG_WIDTH`, SIZE), the hidden TB instantiates the DUT via `module #(.PARAM(N)) u_dut (...)`. Hardcoding the value fails iverilog elaboration with "parameter X not found in `u_dut`". Also: parameter names are CASE-SENSITIVE — `SIZE` and `size` are different identifiers.
 
 **When to apply**: Any spec-to-RTL on a description that names a width/size parameter (even just once in prose). Always declare it as `parameter`.
 
@@ -628,7 +628,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **Worked pattern** (anonymized): two unrelated benchmarks where the description named a port one way (`reset_n` / scalar `q`) but the hidden TB bound a different spelling (`rst_n` / `wire [7:0] q`). Sample matching the TB's binding PASSed.
 
-**Why this is GENERAL**: Universal precedence rule for any benchmark with TB-side binding. The runner's spec_conformance_check should be aware that TB binding > description text.
+**Why this is GENERAL**: Universal precedence rule for any benchmark with TB-side binding. The runner's `spec_conformance_check` should be aware that TB binding > description text.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
@@ -666,7 +666,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **When to apply**: Serial protocols (UART RX, SPI deserializers, shift-register-with-valid).
 
-**What to do**: Counter terminal value = N (collect_width), not N-1. Output dout_valid as a single-cycle pulse at terminal. Restart counter at 0 the cycle after the valid pulse.
+**What to do**: Counter terminal value = N (`collect_width`), not N-1. Output dout_valid as a single-cycle pulse at terminal. Restart counter at 0 the cycle after the valid pulse.
 
 **Worked pattern** (anonymized): a serial-to-parallel converter with `cnt==N-1` terminal made dout_valid race the next collection's bit 0; switching to `cnt==N` terminal placed the valid pulse one cycle before the next bit shifts in.
 
@@ -690,11 +690,11 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 ### Skill: "bumped on X" in Lemming-style specs is the OBSTACLE direction, not current walking direction
 
-**Pattern**: When the spec says "bumped on left side, walk right; bumped on right side, walk left", the transition is keyed on the bump SIGNAL direction (obstacle on that side), NOT on the lemming's current walking state. Reading the rule as "in LEFT state, bump_right makes us go RIGHT" inverts the behavior.
+**Pattern**: When the spec says "bumped on left side, walk right; bumped on right side, walk left", the transition is keyed on the bump SIGNAL direction (obstacle on that side), NOT on the lemming's current walking state. Reading the rule as "in LEFT state, `bump_right` makes us go RIGHT" inverts the behavior.
 
 **When to apply**: Any "stimulus = obstacle direction" FSM where the spec phrasing puts the obstacle-side noun next to the verb (English ambiguity).
 
-**What to do**: `bump_left = 1` → transition to walk_right (regardless of current state). `bump_right = 1` → walk_left. Other higher-priority transitions (falling, splatting, digging) take precedence per spec.
+**What to do**: `bump_left = 1` → transition to `walk_right` (regardless of current state). `bump_right = 1` → `walk_left`. Other higher-priority transitions (falling, splatting, digging) take precedence per spec.
 
 **Worked pattern** (anonymized): multiple unrelated Lemming-family FSM designs initially inverted the direction by parsing "bumped on X → walk X" instead of "bumped on X (obstacle there) → walk away from X". Re-reading per the rule above passed.
 
@@ -704,13 +704,13 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 ### Skill: Moore declared but output depends on input → split states until output is state-deterministic
 
-**Pattern**: Spec explicitly says "Moore" but a naive minimal-state encoding can't express the required output distinctions (e.g. 2 states need 4 different outputs). Solution: increase state count to encode the dependency. If output depends on (phase, last_input), use 4 states A0/A1/B0/B1 encoded as (phase, last_x), then z is a pure function of state.
+**Pattern**: Spec explicitly says "Moore" but a naive minimal-state encoding can't express the required output distinctions (e.g. 2 states need 4 different outputs). Solution: increase state count to encode the dependency. If output depends on (phase, `last_input`), use 4 states A0/A1/B0/B1 encoded as (phase, `last_x`), then z is a pure function of state.
 
 **When to apply**: Any Moore FSM where a naive encoding makes z depend on x.
 
 **What to do**: Count distinct output values needed per logical-state; split states until output is purely from state.
 
-**Worked pattern** (anonymized): a 2-state Moore-declared FSM couldn't express both x-dependent outputs per phase. Splitting into 4 states encoded as (phase, last_x) made the output a pure function of state → matched the spec.
+**Worked pattern** (anonymized): a 2-state Moore-declared FSM couldn't express both x-dependent outputs per phase. Splitting into 4 states encoded as (phase, `last_x`) made the output a pure function of state → matched the spec.
 
 **Why this is GENERAL**: Standard FSM-design correctness rule.
 
