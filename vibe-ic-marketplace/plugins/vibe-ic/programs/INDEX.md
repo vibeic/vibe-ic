@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 419
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 419)
+- **Total programs (excluding helpers / shims):** 423
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 423)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 410 |
+| `any` | 414 |
 
 ## Alphabetical listing
 
@@ -61,6 +61,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `auto_diagnostic_led_synth` | any | v0.114 | v0.114 (BACKLOG-v6 D1). |
 | `backlog_sanitize_check` | any | — | Organic Plugin gate: verify that a community |
 | `behavioral_evidence_per_spec_item_check` | any | v0.100 | v0.100 J1 |
+| `benchmark_dispatch` | any | — | entry point for /vibe-ic-benchmark. |
+| `benchmark_setup` | any | — | environment check + dataset-clone helper for open benchmarks. |
 | `benchmark_verify_report` | any | — | normalized per-benchmark-IC verification report. |
 | `binary_doc_low_extraction_warn` | any | — | gate (LL-36). |
 | `bist_window_calculator` | any | — | Size BIST response-capture windows for worst-case. |
@@ -139,6 +141,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `eda_report_audit` | any | — | eda_report_audit.py -- Multi-mode EDA report checker for backend skills. |
 | `em_report_check` | any | — | wrapper for eda_report_audit --mode em. |
 | `emitter_failure_mode_check` | any | — | anti-fabrication gate (v1.6.38). |
+| `enhancement_emit` | any | v0.1.35 | driver for the benchmark-enhancement-capture skill. |
 | `extraction_coverage_check` | any | Wave 23 | gate (LL-38) verifies input/docs/ |
 | `extraction_coverage_denominator_audit` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `extraction_evidence_schema_check` | any | Wave 23 | gate (LL-40, v0.119.39). |
@@ -237,6 +240,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `layer_extension_presence_check` | any | v0.50 | v0.50 plugin gate |
 | `level_shifter_required_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
 | `literal_verdict_keyword_check` | any | — | anti-fabrication gate (v1.6.38). |
+| `llm_semantic_confirm` | any | — | LLM double-confirm for program-extracted SEMANTIC fields. |
 | `lvs_report_check` | any | — | wrapper for eda_report_audit --mode lvs. |
 | `manifest_leak_check` | any | v0.47.6 | Detect benchmark-value leaks in fact manifests. |
 | `manufacturing_fab_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
@@ -348,7 +352,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rom_init_lint` | any | — | Detect Quartus-unsafe ROM initialization patterns. |
 | `rsp_example_otp_consistency_check` | any | — | L3 response examples must match L11 OTP content. |
 | `rtl_bug_report_schema_check` | any | v0.54 | v0.54 plugin gate |
-| `rtl_hygiene_lint` | any | — | General-purpose RTL hygiene checker. |
+| `rtl_hygiene_lint` | any | v0.1.10 | General-purpose RTL hygiene checker. |
 | `rtl_precheck_gate` | any | v0.66 | aggregate every RTL static auditor into a |
 | `rtl_response_byte_oracle_check` | any | — | P0.2 deterministic gate |
 | `rtl_signal_name_semantic_check` | any | — | v1.6.232 (merged v229+v231). |
@@ -491,7 +495,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (410 programs)
+### `any` (414 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -528,6 +532,8 @@ _(no programs in this group)_
 - `auto_diagnostic_led_synth` — v0.114 (BACKLOG-v6 D1).  _[v0.114]_
 - `backlog_sanitize_check` — Organic Plugin gate: verify that a community
 - `behavioral_evidence_per_spec_item_check` — v0.100 J1  _[v0.100]_
+- `benchmark_dispatch` — entry point for /vibe-ic-benchmark.
+- `benchmark_setup` — environment check + dataset-clone helper for open benchmarks.
 - `benchmark_verify_report` — normalized per-benchmark-IC verification report.
 - `binary_doc_low_extraction_warn` — gate (LL-36).
 - `bist_window_calculator` — Size BIST response-capture windows for worst-case.
@@ -602,6 +608,7 @@ _(no programs in this group)_
 - `eda_report_audit` — eda_report_audit.py -- Multi-mode EDA report checker for backend skills.
 - `em_report_check` — wrapper for eda_report_audit --mode em.
 - `emitter_failure_mode_check` — anti-fabrication gate (v1.6.38).
+- `enhancement_emit` — driver for the benchmark-enhancement-capture skill.  _[v0.1.35]_
 - `extraction_coverage_check` — gate (LL-38) verifies input/docs/  _[Wave 23]_
 - `extraction_coverage_denominator_audit` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `extraction_evidence_schema_check` — gate (LL-40, v0.119.39).  _[Wave 23]_
@@ -699,6 +706,7 @@ _(no programs in this group)_
 - `layer_extension_presence_check` — v0.50 plugin gate  _[v0.50]_
 - `level_shifter_required_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
 - `literal_verdict_keyword_check` — anti-fabrication gate (v1.6.38).
+- `llm_semantic_confirm` — LLM double-confirm for program-extracted SEMANTIC fields.
 - `lvs_report_check` — wrapper for eda_report_audit --mode lvs.
 - `manifest_leak_check` — Detect benchmark-value leaks in fact manifests.  _[v0.47.6]_
 - `manufacturing_fab_intake_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
@@ -809,7 +817,7 @@ _(no programs in this group)_
 - `rom_init_lint` — Detect Quartus-unsafe ROM initialization patterns.
 - `rsp_example_otp_consistency_check` — L3 response examples must match L11 OTP content.
 - `rtl_bug_report_schema_check` — v0.54 plugin gate  _[v0.54]_
-- `rtl_hygiene_lint` — General-purpose RTL hygiene checker.
+- `rtl_hygiene_lint` — General-purpose RTL hygiene checker.  _[v0.1.10]_
 - `rtl_precheck_gate` — aggregate every RTL static auditor into a  _[v0.66]_
 - `rtl_response_byte_oracle_check` — P0.2 deterministic gate
 - `rtl_signal_name_semantic_check` — v1.6.232 (merged v229+v231).

@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "_comment": "AUTHORITATIVE AI-skill inventory \u2014 generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
-  "total": 57,
+  "total": 60,
   "by_tier": {
     "debug": 12,
     "judgment": 6,
     "nl_primary": 27,
-    "unclassified": 6,
+    "unclassified": 9,
     "verification": 6
   },
   "skills": [
@@ -26,6 +26,7 @@
     "analog-topology-select",
     "architecture-explore",
     "atpg-name-harmonize",
+    "benchmark-enhancement-capture",
     "benchmark-verify",
     "catalog-glue-author",
     "checkpoint-gate",
@@ -47,6 +48,7 @@
     "ir-drop-triage",
     "lvs-triage",
     "mixed-signal-cosim",
+    "open-benchmark-methodology",
     "phase1",
     "phase1-completeness-deep-review",
     "phase1-coverage-loop",
@@ -62,6 +64,7 @@
     "rtl-review",
     "scope-pattern-attestation",
     "spec-review",
+    "spec-to-rtl",
     "spec-validator",
     "sta-review",
     "synth-doctor",
@@ -148,6 +151,11 @@
       "name": "atpg-name-harmonize",
       "frontmatter_name": "atpg-name-harmonize",
       "tier": "nl_primary"
+    },
+    {
+      "name": "benchmark-enhancement-capture",
+      "frontmatter_name": "benchmark-enhancement-capture",
+      "tier": "unclassified"
     },
     {
       "name": "benchmark-verify",
@@ -255,6 +263,11 @@
       "tier": "nl_primary"
     },
     {
+      "name": "open-benchmark-methodology",
+      "frontmatter_name": "open-benchmark-methodology",
+      "tier": "unclassified"
+    },
+    {
       "name": "phase1",
       "frontmatter_name": "phase1",
       "tier": "nl_primary"
@@ -328,6 +341,11 @@
       "name": "spec-review",
       "frontmatter_name": "spec-review",
       "tier": "judgment"
+    },
+    {
+      "name": "spec-to-rtl",
+      "frontmatter_name": "spec-to-rtl",
+      "tier": "unclassified"
     },
     {
       "name": "spec-validator",

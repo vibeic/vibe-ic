@@ -110,3 +110,23 @@ runner's WAIVE message referenced `spec-to-rtl` skill but no skill file
 existed — leading 5 disciplined RTLLM Shape B agents to interpret the
 absence as "no path forward" and emit 0/50 in the first attempt. v0.1.32
 ships this skill so the WAIVE → handoff is unambiguous + reproducible.
+
+
+## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+
+If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
+after producing your output, save it to a file and run:
+
+```bash
+python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic-d/skills/SKILL_NAME/compliance.yaml \
+    <your_output_file>
+```
+
+Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
+`compliance.yaml` in this skill directory enumerates every required
+element of your output: section headers, handoff lines, summary blocks.
+
+**Your task is not complete until the audit returns PASS.** Missing
+elements are the single largest source of skill-execution non-determinism
+across different agents.

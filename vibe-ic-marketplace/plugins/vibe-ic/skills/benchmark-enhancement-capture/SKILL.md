@@ -154,3 +154,23 @@ skill, they become plugin code + agent skills + filed backlogs — and the next
 new user who installs Vibe-IC gets all of them automatically.
 
 That is the closed loop.
+
+
+## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+
+If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
+after producing your output, save it to a file and run:
+
+```bash
+python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic-d/skills/SKILL_NAME/compliance.yaml \
+    <your_output_file>
+```
+
+Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
+`compliance.yaml` in this skill directory enumerates every required
+element of your output: section headers, handoff lines, summary blocks.
+
+**Your task is not complete until the audit returns PASS.** Missing
+elements are the single largest source of skill-execution non-determinism
+across different agents.
