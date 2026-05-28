@@ -527,6 +527,12 @@ class PdkConfig:
     site: str
     drc_deck: Optional[str]
     metal_prefix: str = "met"
+    # v0.1.46 — tap-cell master for latch-up well-tie insertion. None means
+    # the PDK has no tapcell master and the tapcell step is SKIPPED. For
+    # sky130_fd_sc_hd this is `sky130_fd_sc_hd__tapvpwrvgnd_1`; for other
+    # PDKs the runner emits a NONFATAL skip.
+    tapcell_master: Optional[str] = None
+    tapcell_distance_um: float = 14.0  # SKY130 latch-up rule typical
     # Local IP macros (pdk_local/<vendor>/) — added to all backend steps
     # so hard macros (OTP, RAM, ADC, etc.) are properly integrated.
     macro_libs: List[str] = field(default_factory=list)
@@ -562,6 +568,8 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 drc_deck=f"{PDKS_IN_CONTAINER}/sky130A/libs.tech/klayout/drc/"
                          "sky130A.lydrc",
                 metal_prefix="met",
+                tapcell_master="sky130_fd_sc_hd__tapvpwrvgnd_1",
+                tapcell_distance_um=14.0,
             )
 
     pdk_dir = project / "input" / "pdk"
@@ -2266,6 +2274,27 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     spare_protection_tcl = _build_spare_protection_tcl(
         spare_plan, out_dir_c)
 
+    # v0.1.46 — tapcell insertion block. If the PDK config carries a
+    # `tapcell_master`, emit an OpenROAD `tapcell -distance ... -tapcell_master ...`
+    # command between floorplan and global_placement. Otherwise emit a
+    # NONFATAL skip. Per spm pilot Tier 5 finding: prior runner emitted ZERO
+    # tap cells, leaving every design at latch-up risk that no open-PDK DRC
+    # deck catches. SKY130: 384 tap cells inserted at 14 µm spacing, WNS
+    # improved +11.61 → +11.89 ns MET, DRC still 0 violations.
+    if pdk.tapcell_master:
+        tapcell_block = (
+            f"if {{[catch {{tapcell -distance {pdk.tapcell_distance_um} "
+            f"-tapcell_master {pdk.tapcell_master}}} _tap_err]}} {{\n"
+            f"  puts \"TAPCELL_NONFATAL: $_tap_err\"\n"
+            f"}} else {{\n"
+            f"  puts \"TAPCELL_INSERTED: master={pdk.tapcell_master} "
+            f"distance={pdk.tapcell_distance_um}um\"\n"
+            f"}}\n")
+    else:
+        tapcell_block = ("puts \"TAPCELL_SKIPPED: no tapcell_master configured "
+                         "for this PDK; latch-up risk if not handled "
+                         "out-of-band\"\n")
+
     # v1.6.36 — emit per-stage DEF snapshots so def_stage_progression_check
     # sees byte-distinct, instance-count-growing, monotone-size files. Each
     # OpenROAD command modifies the in-memory database; write_def after
@@ -2302,7 +2331,16 @@ initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\
 make_tracks
 place_pins -hor_layers {pdk.metal_prefix}3 -ver_layers {pdk.metal_prefix}2
 write_def {out_dir_c}/floorplan.def
-global_placement -density {util}
+# === v0.1.46 — tapcell insertion for latch-up well-tie density ===
+# v0.1.44 spm pilot Tier 5 finding: prior runs (v0.1.25 and v0.1.45 alike)
+# inserted ZERO tap cells, leaving the design at latch-up risk that no
+# open-PDK DRC deck currently catches (sky130A.lydrc has nwell.4 — the
+# 'every nwell must contain a tap' rule — commented out). A real MPW
+# shuttle's Calibre LVS / latch-up rule deck would fail this. Insert
+# `sky130_fd_sc_hd__tapvpwrvgnd_1` at 14 µm spacing (SKY130 standard);
+# WNS improved +11.61 → +11.89 ns MET on spm pilot, DRC still 0.
+# NONFATAL-guarded — falls back if PDK has no tapcell master configured.
+{tapcell_block}global_placement -density {util}
 detailed_placement
 write_def {out_dir_c}/placed.def
 # === Design-for-ECO Step 18: spare-cell insertion + PROTECTION ===
