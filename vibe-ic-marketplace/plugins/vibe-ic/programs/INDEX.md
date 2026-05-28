@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 443
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 443)
+- **Total programs (excluding helpers / shims):** 447
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 447)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 434 |
+| `any` | 438 |
 
 ## Alphabetical listing
 
@@ -80,6 +80,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `bus_turnaround_consumes_spec_constant_check` | any | v0.106 | R1 deterministic gate |
 | `byte_assembler_explicit_9bit_reject_check` | aid_class_half_duplex | Wave 37 | Wave 37 (v0.119.69). |
 | `canonical_path_symlink_forbid_check` | any | — | generalised symlink ban for |
+| `caravel_integration_runner` | any | v0.1.51 | Caravel chipignite integration runner (B2 from spm pilot). |
+| `caravel_wrapper_emit` | any | v0.1.51 | Caravel user_project_wrapper emitter (B3 from spm pilot). |
 | `cdc_async_input_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
 | `cdc_crossing_check` | any | — | cdc_crossing_check.py -- Deterministic CDC report checker. |
 | `changelog_command_reproducibility_check` | any | — | anti-fabrication gate |
@@ -265,6 +267,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `mixed_signal_merge_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
 | `mixed_signal_signoff_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
 | `module_port_audit` | any | v0.36 | Deterministic port-name mismatch detector for multi-module |
+| `mpw_precheck_cleanup` | any | v0.1.51 | mpw_precheck cleanup automator (B4 from spm pilot). |
 | `nba_addr_read_race_check` | any | — | FSM consuming addressed data without pipelining. |
 | `nba_shift_register_same_cycle_read_check` | any | Wave 12 | v0.119.44 (Wave 12) plugin gate. |
 | `no_protocol_consistency_check` | any | v0.56 | v0.56 plugin gate |
@@ -399,6 +402,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `send_test_active_drive_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `si_crosstalk_check` | any | — | Verify signal integrity / crosstalk analysis was performed. |
 | `signoff_audit` | any | v0.52 | signoff_audit.py -- Multi-mode signoff evidence checker (LEGACY gate). |
+| `signoff_ladder_run` | any | v0.1.51 | Chip-level 5-tier sign-off ladder runner (B1 from spm pilot). |
 | `signoff_waiver_emit` | any | v0.1.49 | Chipignite/foundry signoff-waiver scaffold emitter. |
 | `signoff_waiver_md_emit` | any | v0.1.49 | Submitter-facing waiver Markdown emitter. |
 | `single_bus_driver_check` | any | Wave 10 | structural-RTL gate that catches the |
@@ -515,7 +519,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (434 programs)
+### `any` (438 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -570,6 +574,8 @@ _(no programs in this group)_
 - `bringup_plan_gen` — emit bring-up plan from L13_LAB_CALIBRATION.
 - `bus_turnaround_consumes_spec_constant_check` — R1 deterministic gate  _[v0.106]_
 - `canonical_path_symlink_forbid_check` — generalised symlink ban for
+- `caravel_integration_runner` — Caravel chipignite integration runner (B2 from spm pilot).  _[v0.1.51]_
+- `caravel_wrapper_emit` — Caravel user_project_wrapper emitter (B3 from spm pilot).  _[v0.1.51]_
 - `cdc_async_input_check` — deterministic compliance check derived from <chip-class> v040 debug.
 - `cdc_crossing_check` — cdc_crossing_check.py -- Deterministic CDC report checker.
 - `changelog_command_reproducibility_check` — anti-fabrication gate
@@ -751,6 +757,7 @@ _(no programs in this group)_
 - `mixed_signal_merge_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
 - `mixed_signal_signoff_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
 - `module_port_audit` — Deterministic port-name mismatch detector for multi-module  _[v0.36]_
+- `mpw_precheck_cleanup` — mpw_precheck cleanup automator (B4 from spm pilot).  _[v0.1.51]_
 - `nba_addr_read_race_check` — FSM consuming addressed data without pipelining.
 - `nba_shift_register_same_cycle_read_check` — v0.119.44 (Wave 12) plugin gate.  _[Wave 12]_
 - `no_protocol_consistency_check` — v0.56 plugin gate  _[v0.56]_
@@ -883,6 +890,7 @@ _(no programs in this group)_
 - `send_test_active_drive_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `si_crosstalk_check` — Verify signal integrity / crosstalk analysis was performed.
 - `signoff_audit` — signoff_audit.py -- Multi-mode signoff evidence checker (LEGACY gate).  _[v0.52]_
+- `signoff_ladder_run` — Chip-level 5-tier sign-off ladder runner (B1 from spm pilot).  _[v0.1.51]_
 - `signoff_waiver_emit` — Chipignite/foundry signoff-waiver scaffold emitter.  _[v0.1.49]_
 - `signoff_waiver_md_emit` — Submitter-facing waiver Markdown emitter.  _[v0.1.49]_
 - `single_bus_driver_check` — structural-RTL gate that catches the  _[Wave 10]_

@@ -130,19 +130,22 @@ class TestL18Interconnect:
 
     # v0.1.51 iter6 enhancements
     def test_table_style_default_captured(self):
-        # AXI A9-1..A9-4 style row
+        # AXI A9-1..A9-4 style: SIGNAL DIRECTION REQUIRED? DEFAULT
         text = (
-            "    AWADDR     Master    Required (no default)\n"
-            "    AWREGION   Master    All zeros (0x0)\n"
-            "    AWBURST    Master    0b01 (INCR)\n"
-            "    WSTRB      Master    All ones (entire data bus valid)\n"
+            "    AWID      Output    Optional    All zeros\n"
+            "    AWADDR    Output    Required    -\n"
+            "    AWREGION  Output    Optional    All zeros\n"
+            "    AWLEN     Output    Optional    All zeros, Length 1\n"
+            "    WSTRB     Output    Optional    All ones\n"
         )
         out = mod.extract_l18_interconnect(text)
         defaults = out["fields"]["default_signal_values"]
+        assert "AWID" in defaults
         assert "AWADDR" in defaults
         assert "AWREGION" in defaults
-        assert "AWBURST" in defaults
         assert "WSTRB" in defaults
+        # "-" should be normalized to "Required (no default)"
+        assert "Required" in defaults["AWADDR"]
 
     def test_typical_topologies_captured(self):
         text = (
