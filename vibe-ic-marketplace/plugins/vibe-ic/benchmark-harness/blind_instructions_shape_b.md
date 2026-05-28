@@ -46,17 +46,45 @@ scorer (`benchmark-harness/score_iverilog_tb.py`), at scoring time, not generati
    module that matches the description's stated name and copy it to
    `<RUNDIR>/samples/<leaf>.v`.
 
-5. **Only if the runner FAILS at a phase2 step**, do a CLOSE-LOOP fix (agent's
-   only authoring touch):
-   - Read the failing step's log from `<project>/reports/orchestrator/phase2_one_shot.json`.
-   - Apply a GENERAL, chip-agnostic fix (e.g. chip_top wrapper if missing, port
-     name typo in phase1 extraction). Do NOT peek at the hidden testbench.
-   - Re-run the runner from the failing step.
-   - If close-loop succeeds, emit the sample as in step 4.
+5. **Handling phase2 outcomes** — there are TWO classes to distinguish carefully:
 
-6. **NEVER author RTL directly to avoid runner failure**. The benchmark NUMBER
-   measures what the runner produces. Direct-agent authoring would measure
-   "LLM + MCP", not "Vibe-IC runner" (the 2026-05-28 RTLLM 37/50 worked example).
+   **5a. Runner step_rtl_gen WAIVES with `fallback_skill='spec-to-rtl'`** (very
+   common; happens for every IC class whose `rtl_gen=null`):
+   - This is **the runner's INTENDED PATH**, not a failure. The runner has
+     already done phase1 → emitted `<project>/phase1/generated_docs/L*.json`
+     → detected ic_class → set the expected output path. It is now handing off
+     to you (the AI playing the spec-to-rtl ROLE) to author RTL.
+   - **Author RTL at `<project>/phase2/stage1/rtl/<top>.<v|sv>`** using the L
+     docs (L1-L9 esp.) PLUS the original `design_description.txt`. The blind
+     rule still applies — never read the hidden testbench. Module name must
+     match what L9 / the description states (NOT "TopModule" for RTLLM).
+   - This is NOT "bypassing the runner" — bypass means authoring with MCP
+     OUTSIDE the runner's pipeline. Authoring INSIDE the runner's pipeline,
+     at the path it set, after the WAIVE message, IS the runner's design.
+   - **Then re-invoke the runner** so its downstream gates run on your RTL:
+     `python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py <project> \
+         --skip-phase3 --skip-analog --skip-hardware --pdk sky130A`
+     The runner detects RTL is present, skips step_rtl_gen, and continues
+     with: `chip_top_gate_wrapper_gen` (auto-emits the chip_top wrapper if
+     L9.top_module != your authored top), `rtl_hygiene_lint --fix` (enforces
+     power-up determinism on reset-less registered outputs — v0.1.24 lesson),
+     `eda_lint`, `eda_synth`, `spec_conformance_check`, `eco_loop` (up to 3
+     retries on `reference_tb` FAIL), `full_stack_tb_gen`, `final_audit`.
+     These gates are what make Shape B more valuable than direct-agent
+     authoring (Shape C with MCP only).
+
+   **5b. Runner step FAILS** (not WAIVES) — e.g. yosys synth ERROR, port
+   conformance FAIL, missing chip_top wrapper:
+   - Read the failing step's log from `<project>/reports/orchestrator/phase2_one_shot.json`.
+   - Apply a GENERAL, chip-agnostic fix (e.g. chip_top wrapper if missing,
+     port name typo). Do NOT peek at the hidden testbench.
+   - Re-run the runner. ONE retry max.
+
+6. The benchmark NUMBER measures what the runner pipeline (incl. you in the
+   spec-to-rtl role per 5a) produces. The 2026-05-28 wrong-shape RTLLM 37/50
+   was direct-agent authoring with MCP only — phase1 / chip_top / hygiene fix /
+   eco_loop / conformance ALL skipped. Shape B done correctly invokes the AI
+   for authoring AS PART OF the runner pipeline, with all those gates firing.
 
 ## Final report (compact table)
 Per `<leaf>`: module name | runner verdict | sample emitted (y/n) | any close-loop

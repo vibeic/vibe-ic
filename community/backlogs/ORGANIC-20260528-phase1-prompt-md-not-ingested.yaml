@@ -1,0 +1,49 @@
+type: bug
+severity: P2
+component: program:phase1_one_shot_runner
+plugin_version: "0.1.30"
+
+title: >-
+  phase1_one_shot_runner detects mode=prompt for input/phase1_prompt.md but
+  step_ingest_render only consumes input/phase1_structured.yaml or input/docs/
+
+pattern: |
+  phase1_one_shot_runner.py:
+    line ~110:  mode detector recognises `input/phase1_prompt.md` → mode=prompt
+    line ~146:  step_ingest_render requires `input/phase1_structured.yaml`
+                OR `input/docs/` to call `tools.phase1_engine.cli run-all`
+
+  Result: when only `input/phase1_prompt.md` is staged, the runner SKIPs
+  ingest with verdict PASS_WITH_WAIVERS but emits ZERO L docs. Phase 2
+  then FAILs at phase1_precheck ("only 0/13 L docs in phase1/generated_docs").
+
+  The mode-detector and the ingest step disagree on what 'prompt mode' means.
+
+  Reproduces 2026-05-28 RTLLM Shape B batch00 (all 10 designs FAILed before
+  any agent action because the project shipped only input/phase1_prompt.md).
+  Batches 01–04 worked around it by ALSO staging the prompt as
+  input/docs/design_description.md.
+
+suggested_fix: |
+  When mode=prompt and only input/phase1_prompt.md is present, the runner
+  should either:
+    (A) auto-wrap the prompt into a synthesized docs dir (mkdir
+        input/docs/ ; cp input/phase1_prompt.md input/docs/) and proceed
+        through the doc-ingest path; OR
+    (B) when ANTHROPIC_API_KEY is set in env, auto-invoke
+        `phase1_engine nl-ingest --text-file phase1_prompt.md` to produce
+        input/phase1_structured.yaml first, then continue; OR
+    (C) at minimum, emit a CLEAR error pointing the caller at the doc-dir
+        layout (instead of silently SKIPping with PASS_WITH_WAIVERS).
+
+  Recommend (A) — same shape transformation that worked around the gap in
+  benchmark-harness/blind_instructions_shape_b.md batches 01-04.
+
+id: "ORGANIC-20260528-phase1-prompt-md-not-ingested"
+submitted_at: "2026-05-28T12:30:00+08:00"
+session_context: >-
+  Filed alongside ORGANIC-20260528-null-rtl-gen-classes-need-bridge by the
+  v0.1.30 RTLLM Shape B re-run. Secondary gap (the primary is null rtl_gen),
+  but real: it's the reason batch00 emitted 0/10 even before the rtl_gen
+  WAIVE — the runner never got past phase1 because input/phase1_prompt.md
+  alone isn't consumed.

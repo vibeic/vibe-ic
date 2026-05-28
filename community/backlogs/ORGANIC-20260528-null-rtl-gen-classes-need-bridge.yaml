@@ -1,0 +1,75 @@
+type: bug
+severity: P1
+component: program:phase2_one_shot_runner + program:ic_class_registry
+plugin_version: "0.1.30"
+
+title: >-
+  5 IC classes have rtl_gen=null + fallback_skill='spec-to-rtl' but the skill
+  doesn't exist — the runner WAIVES and Shape B benchmarks hit a hard wall
+
+pattern: |
+  programs/ic_class_registry.json registers 8 IC classes; 5 of them have
+  rtl_gen=null:
+    - digital_arithmetic_primitive
+    - digital_cmd_driven
+    - bare_fpga
+    - processor_cpu
+    - unknown_protocol_class
+  …plus pure_analog (rtl_gen=null, fallback=None — separate analog track).
+
+  Each null-rtl_gen class registers fallback_skill='spec-to-rtl'. But:
+    $ find vibe-ic-marketplace/plugins/vibe-ic/skills -iname 'spec-to-rtl*'
+    # (no match — only _shared/integration_fixtures/spec-to-rtl.md exists)
+
+  So when phase2_one_shot_runner.step_rtl_gen WAIVES with that fallback, the
+  AI has no actual SKILL to invoke — it must heuristically infer "I should
+  play the spec-to-rtl role, author RTL at phase2/stage1/rtl/<top>.v from the
+  L docs I just got, then re-invoke the runner so chip_top_wrapper_gen +
+  hygiene --fix + lint + synth + eco_loop + conformance fire."
+
+  This is undocumented in:
+    - the runner's WAIVE message (just says "AI invokes skill spec-to-rtl")
+    - the open-benchmark-methodology skill's Shape B description
+    - benchmark-harness/blind_instructions_shape_b.md
+
+  Consequence (2026-05-28 RTLLM Shape B re-run): 5 fresh sub-agents on 50
+  RTLLM designs all read "do not author RTL directly" too strictly, declared
+  the runner "not emittable", and emitted 0/50 samples. This is NOT what the
+  skill intends — it intends "AI authoring INSIDE the runner pipeline is the
+  runner's design, not bypass; bypass = author with MCP outside the runner."
+
+suggested_fix: |
+  Pick ONE of:
+
+  (A) Make `spec-to-rtl` an ACTUAL plugin skill at
+      skills/spec-to-rtl/SKILL.md, so when the runner WAIVES the AI invokes
+      a real skill with explicit context (path to L docs, path to write to,
+      blind-rule reminder). This is the cleanest.
+
+  (B) Add deterministic rtl_gen generators for the most-common null classes
+      (digital_arithmetic_primitive at minimum — covers nearly all of RTLLM).
+      The generator would take L7 (truth-table / FSM-table) + L9 (port
+      contract) and emit synthesizable Verilog. Hard problem but matches
+      the half-duplex-single-wire and OTP-driven precedents.
+
+  (C) Update the runner's WAIVE message + open-benchmark-methodology skill §
+      2 Shape B + blind_instructions_shape_b.md to explicitly document the
+      "AI plays spec-to-rtl role; author RTL at <path>; re-invoke runner"
+      pattern. Lowest-effort fix; matches what benchmark_clean Shape A
+      already does in practice (sha256 / spm / subservient close-loops did
+      exactly this — AI authored chip_top.v when the runner halted, then
+      re-invoked).
+
+  Recommend (C) immediately (documentation fix) + (B) in v0.2 (deterministic
+  arithmetic generator). (A) is the medium-term right thing.
+
+id: "ORGANIC-20260528-null-rtl-gen-classes-need-bridge"
+submitted_at: "2026-05-28T12:30:00+08:00"
+session_context: >-
+  Filed by the v0.1.30 RTLLM Shape B re-run attempt. 5 agents × 10 designs =
+  50/50 hit identical runner halt at rtl_gen WAIVED. The agents correctly
+  diagnosed the gap. This is the same class of issue as
+  ORGANIC-20260528-spec-to-rtl-missing-chip-top-wrapper — the spec-to-rtl
+  invocation path is under-specified at the plugin/skill/instructions
+  boundary, so disciplined agents (correctly) refuse to bypass and end up
+  emitting nothing.

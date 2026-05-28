@@ -81,21 +81,36 @@ Use agents ONLY when a step inside the runner FAILs (close-loop ECO, never as th
 **When**: each problem is a real design with a testbench but you don't need PnR (e.g. RTLLM,
 PyHDL-Eval-if-it-becomes-ungated). The `design_description.txt` (NL prose) is the spec.
 
-Per-design setup:
+Per-design setup — stage the prompt in **both** locations to work around the
+`ORGANIC-20260528-phase1-prompt-md-not-ingested` gap (v0.1.30 doesn't auto-bridge):
 ```
-<problem-project>/input/phase1_prompt.md   ← exactly the design_description.txt content
+<problem-project>/input/phase1_prompt.md          ← exactly the design_description.txt content
+<problem-project>/input/docs/design_description.md ← copy of the same (what the ingester actually consumes)
 ```
 
 Run the runner with phase3 skipped:
 ```bash
 python3 ${PLUGIN_PROGRAMS}/vibe_ic_one_shot_runner.py <problem-project> \
     --skip-phase3 --skip-analog --skip-hardware
-# Path A auto-detected via input/phase1_prompt.md
 # Outputs RTL at <problem-project>/phase2/stage1/rtl/<top>.v
 ```
 
-Then run the benchmark's host scorer (its testbench.v + iverilog/etc.) against the emitted RTL.
-**The runner is the primary author**; agents only triage failures.
+**Important** — the runner WAIVES `step_rtl_gen` for IC classes with `rtl_gen=null` in
+`ic_class_registry.json` (currently: digital_arithmetic_primitive, digital_cmd_driven,
+bare_fpga, processor_cpu, unknown_protocol_class — see
+`ORGANIC-20260528-null-rtl-gen-classes-need-bridge`). When WAIVED, the runner explicitly
+directs: *"AI invokes skill spec-to-rtl"*. There is no actual `spec-to-rtl` skill file —
+the AI plays the spec-to-rtl ROLE: author RTL at `phase2/stage1/rtl/<top>.<v|sv>` using
+the L docs the runner just emitted, then RE-INVOKE the runner so its downstream gates
+(`chip_top_gate_wrapper_gen` / `rtl_hygiene_lint --fix` / lint / synth /
+`spec_conformance_check` / `eco_loop` / `full_stack_tb_gen` / `final_audit`) fire on your
+RTL. **This is NOT bypassing the runner — it IS the runner's design.** Bypass means
+authoring with MCP only, outside the runner's pipeline (what the 2026-05-28 wrong-shape
+RTLLM 37/50 did).
+
+Then run the benchmark's host scorer (its testbench.v + iverilog/etc.) against the emitted
+RTL. **The runner orchestrates; the AI fills the spec-to-rtl role inside the pipeline; the
+runner's gates fire around it.**
 
 #### Shape C — Lightweight gates-based harness (atomic micro-problems)
 **When**: 156-500 atomic micro-problems per dataset, each a 5-30 line prompt yielding a single
