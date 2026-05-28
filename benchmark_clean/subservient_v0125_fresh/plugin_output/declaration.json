@@ -1,0 +1,251 @@
+{
+  "rtl_strategy": "catalog_lookup_plus_ai_glue",
+  "n_ips_pulled": 2,
+  "n_ips_rejected": 0,
+  "n_ips_failed": 0,
+  "ip_catalog_used": [
+    {
+      "ip_name": "serv",
+      "category": "cpu",
+      "version": "1.4.0",
+      "license": "ISC",
+      "license_file_first_200_chars": "ISC License\n\nCopyright 2019, Olof Kindgren\n\nPermission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright no",
+      "canonical_url": "https://github.com/olofk/serv",
+      "canonical_commit": "1.4.0",
+      "pull_method": "git_clone",
+      "source_dir": "/tmp/vibe_ic_catalog_cache/serv",
+      "spec_match_pattern": "L2.cpu_isa starts with 'rv32i' AND L2.cpu_arch contains 'bit-serial' or 'bit_serial'",
+      "spec_match_confidence": 0.45,
+      "files_copied": [
+        {
+          "rtl_rel": "rtl/serv_aligner.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_aligner.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_aligner.v",
+          "sha256": "adeff8f442db6c93f48e551721146b40c398ab14dcb5b22339746329e7a24f3b",
+          "size_bytes": 2470
+        },
+        {
+          "rtl_rel": "rtl/serv_alu.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_alu.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_alu.v",
+          "sha256": "2e0c31b5b992618e514083aacf10cb38c2229b68b3b1e93d6663104f32143332",
+          "size_bytes": 2063
+        },
+        {
+          "rtl_rel": "rtl/serv_bufreg.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_bufreg.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_bufreg.v",
+          "sha256": "76404174ec92c6cf68e0042798dede84d77c5e454c7f428afc7b9f612a3c52d4",
+          "size_bytes": 2692
+        },
+        {
+          "rtl_rel": "rtl/serv_bufreg2.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_bufreg2.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_bufreg2.v",
+          "sha256": "6586c95a64a064ff6f4d001996d33f15e0f6d452e01ebb4da6120db06ddd0a51",
+          "size_bytes": 3491
+        },
+        {
+          "rtl_rel": "rtl/serv_compdec.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_compdec.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_compdec.v",
+          "sha256": "b1799ad9c5f10756fc336788d4bf871c5a6d4181c2f62568fad1b3bbe86504ae",
+          "size_bytes": 8547
+        },
+        {
+          "rtl_rel": "rtl/serv_csr.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_csr.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_csr.v",
+          "sha256": "2dd7167ed44817d921318a5d463281b43820c25e476039a604e95948be567e62",
+          "size_bytes": 4789
+        },
+        {
+          "rtl_rel": "rtl/serv_ctrl.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_ctrl.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_ctrl.v",
+          "sha256": "eb198ba7594f918da2784f9b6f8c82de1b95e3ffdd3383f2f533872999e9dab5",
+          "size_bytes": 3446
+        },
+        {
+          "rtl_rel": "rtl/serv_debug.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_debug.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_debug.v",
+          "sha256": "815a6b0da1a49d41faa72edd8f397f89ec79334b292b94991f60002b0776082f",
+          "size_bytes": 12293
+        },
+        {
+          "rtl_rel": "rtl/serv_decode.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_decode.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_decode.v",
+          "sha256": "eac5b2097ebd1f4587d2aa27aba130897d057dd8a28ba678edce0f2a3c9f640a",
+          "size_bytes": 12954
+        },
+        {
+          "rtl_rel": "rtl/serv_immdec.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_immdec.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_immdec.v",
+          "sha256": "80ec5a265194eb40f3413742fc9da0a23ed78f8bdf5add3e58b45fa1850b2bd5",
+          "size_bytes": 5990
+        },
+        {
+          "rtl_rel": "rtl/serv_mem_if.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_mem_if.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_mem_if.v",
+          "sha256": "a4fbd74579447710ed43e81dd80b4ea9415da0a3425a447f29446f9bd7a9aa6f",
+          "size_bytes": 1498
+        },
+        {
+          "rtl_rel": "rtl/serv_rf_if.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_rf_if.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_rf_if.v",
+          "sha256": "63fd0d2ec2f89201b20690c467ebbcae964a85b4570254a95154f832cf0dcb2e",
+          "size_bytes": 4258
+        },
+        {
+          "rtl_rel": "rtl/serv_rf_ram.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_rf_ram.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_rf_ram.v",
+          "sha256": "779ad3243dfa648f276240d260ff4ac1a1e83cc1364afb93d40c586905ce4338",
+          "size_bytes": 1365
+        },
+        {
+          "rtl_rel": "rtl/serv_rf_ram_if.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_rf_ram_if.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_rf_ram_if.v",
+          "sha256": "abb39b6bdf4d335bd2f90f75ddb1a410500a1a51a3e9f170453cb491d98d8697",
+          "size_bytes": 4568
+        },
+        {
+          "rtl_rel": "rtl/serv_rf_top.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_rf_top.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_rf_top.v",
+          "sha256": "89faedf7530c34305bfbffd261732d95016bf5627f10b7bbafaa8e1fd6cd49c9",
+          "size_bytes": 6820
+        },
+        {
+          "rtl_rel": "rtl/serv_state.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_state.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_state.v",
+          "sha256": "f7f981a28ed92243d812b3e6d723a77ec9278c7690eb4a530edc136aed5319b3",
+          "size_bytes": 8699
+        },
+        {
+          "rtl_rel": "rtl/serv_synth_wrapper.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_synth_wrapper.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_synth_wrapper.v",
+          "sha256": "ca429e8f6867acb12d702c9c7d1b592dbb81982c7915b75b6eed2962833ccdff",
+          "size_bytes": 3892
+        },
+        {
+          "rtl_rel": "rtl/serv_top.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/rtl/serv_top.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/serv_top.v",
+          "sha256": "c35b88bed5732309069203b2d04421622eaae108d5bf5daef3de273daf43388e",
+          "size_bytes": 18387
+        },
+        {
+          "rtl_rel": "servile/servile.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/servile/servile.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/servile.v",
+          "sha256": "3ae38ac0da93e45980dc01ba41c40ac3ebf84f4ad505889971cb9ae00b0fef02",
+          "size_bytes": 7435
+        },
+        {
+          "rtl_rel": "servile/servile_arbiter.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/servile/servile_arbiter.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/servile_arbiter.v",
+          "sha256": "69d57d934956fdfa83cb02a24642ecd8b7a28bfa7786c3f515d68d4d07dd5507",
+          "size_bytes": 1528
+        },
+        {
+          "rtl_rel": "servile/servile_mux.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/servile/servile_mux.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/servile_mux.v",
+          "sha256": "38ca38dade5805eb5f4ea9d20c9d2003ddb44926a4e17b2708067c152385fa17",
+          "size_bytes": 2861
+        },
+        {
+          "rtl_rel": "servile/servile_rf_mem_if.v",
+          "src": "/tmp/vibe_ic_catalog_cache/serv/servile/servile_rf_mem_if.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/servile_rf_mem_if.v",
+          "sha256": "599cabd2bbdee988ead8531f317e0bd6c7a16e5a48562746e49e352b4aa446d2",
+          "size_bytes": 2405
+        }
+      ],
+      "files_missing": [],
+      "n_files_copied": 22,
+      "n_files_missing": 0,
+      "status": "PASS",
+      "ran_at_epoch": 1779900787.6033134
+    },
+    {
+      "ip_name": "fpu_single",
+      "category": "arithmetic",
+      "version": "1.0.0",
+      "license": "Usselmann-Permissive",
+      "license_file_first_200_chars": "",
+      "canonical_url": "https://github.com/freecores/fpu",
+      "canonical_commit": "master",
+      "pull_method": "git_clone",
+      "source_dir": "/tmp/vibe_ic_catalog_cache/fpu_single",
+      "spec_match_pattern": "L2.cpu_extensions contains 'F' AND L2.cpu_isa starts with 'rv32'",
+      "spec_match_confidence": 0.45,
+      "files_copied": [
+        {
+          "rtl_rel": "verilog/fpu.v",
+          "src": "/tmp/vibe_ic_catalog_cache/fpu_single/verilog/fpu.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/fpu.v",
+          "sha256": "33e8fcde9c5519ae2d9e3eb272413cf4eda595955659c213d51310e5bfe71672",
+          "size_bytes": 17825
+        },
+        {
+          "rtl_rel": "verilog/pre_norm.v",
+          "src": "/tmp/vibe_ic_catalog_cache/fpu_single/verilog/pre_norm.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/pre_norm.v",
+          "sha256": "2b040f4681e2ed988d80de88f2017efc645ff03b5960961bdf33f2ca68069017",
+          "size_bytes": 9411
+        },
+        {
+          "rtl_rel": "verilog/pre_norm_fmul.v",
+          "src": "/tmp/vibe_ic_catalog_cache/fpu_single/verilog/pre_norm_fmul.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/pre_norm_fmul.v",
+          "sha256": "bcac642a5359481aecb0ba085f14d947164145be52ae23f4a1007bbe0d6f23c1",
+          "size_bytes": 5530
+        },
+        {
+          "rtl_rel": "verilog/post_norm.v",
+          "src": "/tmp/vibe_ic_catalog_cache/fpu_single/verilog/post_norm.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/post_norm.v",
+          "sha256": "5244aa71d667c20995560d5ca4d1ffc615fd62b198ab402d32c4cbeb30fe6795",
+          "size_bytes": 24168
+        },
+        {
+          "rtl_rel": "verilog/except.v",
+          "src": "/tmp/vibe_ic_catalog_cache/fpu_single/verilog/except.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/except.v",
+          "sha256": "fd07402cd824954f7ce9d2de0137af71a53269c31a19ebcf3432708f5c27285a",
+          "size_bytes": 4895
+        },
+        {
+          "rtl_rel": "verilog/primitives.v",
+          "src": "/tmp/vibe_ic_catalog_cache/fpu_single/verilog/primitives.v",
+          "dest": "/home/reyerchu/vibe-ic/benchmark_clean/subservient_v0125_fresh/phase2/stage1/rtl/primitives.v",
+          "sha256": "97077e344b0b2007128d4feb87329ab922a91fca29bfce78f013ede4dfa60471",
+          "size_bytes": 3348
+        }
+      ],
+      "files_missing": [],
+      "n_files_copied": 6,
+      "n_files_missing": 0,
+      "status": "PASS",
+      "ran_at_epoch": 1779900787.6064827
+    }
+  ],
+  "license_compliance_audit": {
+    "all_permissive": true,
+    "spdx_set": [
+      "ISC",
+      "Usselmann-Permissive"
+    ]
+  }
+}

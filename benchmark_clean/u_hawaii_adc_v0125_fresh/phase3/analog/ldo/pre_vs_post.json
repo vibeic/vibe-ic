@@ -1,0 +1,14 @@
+{
+  "block": "ldo",
+  "specs": [
+    {
+      "name": "vout_v",
+      "pre_value": 1.0,
+      "post_value": 0.99
+    }
+  ],
+  "max_delta_pct": 1.0,
+  "verdict": "consistent",
+  "extraction_strategy": "deterministic_stub",
+  "low_confidence": true
+}

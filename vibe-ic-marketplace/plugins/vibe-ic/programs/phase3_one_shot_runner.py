@@ -484,9 +484,15 @@ def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
     # --- Period from L9 / L1 docs (highest priority) ---
     docs_dir = project / "input" / "docs"
     if docs_dir.is_dir():
+        # v0.1.26 — `ns` made OPTIONAL. Real SDC `create_clock ... -period 25.9`
+        # lines (and SDCs that put `set_units -time ns` on a separate line) do
+        # NOT append a trailing `ns` token to the period value. The prior regex
+        # required `... <num> ns`, so a docs-authoritative `-period 25.9` fell
+        # through to the 20.0 fallback. Accept `-period <num>` with or without
+        # a following `ns`. The `-period` token is the strongest SDC signal.
         period_re = re.compile(
-            r"(?:CLOCK_PERIOD|period|`<PERIOD>`|clock period|時脈週期)\s*"
-            r"[=:]?\s*\*?\*?(\d+(?:\.\d+)?)\*?\*?\s*ns",
+            r"(?:CLOCK_PERIOD|-period|period|`<PERIOD>`|clock period|時脈週期)\s*"
+            r"[=:]?\s*\*?\*?(\d+(?:\.\d+)?)\*?\*?\s*(?:ns\b)?",
             re.IGNORECASE,
         )
         for md in sorted(docs_dir.glob("L9_*.md")) + sorted(docs_dir.glob("L1_*.md")):
@@ -2274,6 +2280,22 @@ read_liberty {liberty_c}
 read_verilog {netlist_c}
 link_design {top}
 read_sdc {sdc_c}
+# === v0.1.26 wire-RC model ===
+# Without set_wire_rc, OpenROAD has no per-layer R/C, so (a) STA ignores
+# interconnect delay (optimistic) and (b) repair_timing -setup aborts with
+# RSZ-0089 "Could not find a resistance value for any corner" because it
+# cannot evaluate max wire length for buffering. Set signal nets to a mid
+# metal layer and clock nets to an upper layer (sky130 convention). The
+# layer names are resolved against the loaded tech LEF; a NONFATAL note
+# keeps the flow moving on PDKs whose layer names differ.
+if {{[catch {{set_wire_rc -signal -layer {pdk.metal_prefix}1}} _swr_sig]}} {{
+  if {{[catch {{set_wire_rc -layer {pdk.metal_prefix}1}} _swr_sig2]}} {{
+    puts "SET_WIRE_RC_SIGNAL_NONFATAL: $_swr_sig2"
+  }}
+}}
+if {{[catch {{set_wire_rc -clock -layer {pdk.metal_prefix}5}} _swr_clk]}} {{
+  puts "SET_WIRE_RC_CLOCK_NONFATAL: $_swr_clk"
+}}
 initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\
                       -core_area "{core_pad} {core_pad} {core_w} {core_h}" \\
                       -site {pdk.site}
@@ -2292,6 +2314,28 @@ write_def {out_dir_c}/placed.def
 {spare_protection_tcl}if {{[catch {{detailed_placement}} _sp_dp_err]}} {{
   puts "SPARE_LEGALIZE_NONFATAL: $_sp_dp_err"
 }}
+# === v0.1.26 SETUP / DRV repair (pre-CTS) ===
+# The prior template only ran `repair_timing -hold` post-CTS — it NEVER
+# buffered high-fanout nets nor fixed setup. That left control/enable nets
+# (e.g. FSM init/next/state decode driving hundreds of next-state flops, and
+# reset_n with 1000+ sinks) on zero-strength gates with no buffer tree,
+# producing single-gate delays of tens-to-hundreds of ns and a deeply
+# negative setup WNS. Estimate placement-RC, then repair max-fanout /
+# max-cap / max-slew (repair_design) and setup paths (repair_timing).
+# Spares are set_dont_touch above so they are preserved. All best-effort:
+# a NONFATAL note keeps the flow moving if a PDK lacks RC characterization.
+if {{[catch {{estimate_parasitics -placement}} _pe_pl]}} {{
+  puts "EST_PARASITICS_PLACEMENT_NONFATAL: $_pe_pl"
+}}
+if {{[catch {{repair_design}} _rd_err]}} {{
+  puts "REPAIR_DESIGN_NONFATAL: $_rd_err"
+}}
+if {{[catch {{repair_timing -setup}} _rts_err]}} {{
+  puts "REPAIR_TIMING_SETUP_NONFATAL: $_rts_err"
+}}
+if {{[catch {{detailed_placement}} _rt_dp_err]}} {{
+  puts "REPAIR_LEGALIZE_NONFATAL: $_rt_dp_err"
+}}
 if {{[catch {{clock_tree_synthesis -buf_list {{{clk_buf}}} -root_buf {clk_buf_root}}} cts_err]}} {{
   puts "CTS_NONFATAL: $cts_err -- continuing without explicit CTS"
 }}
@@ -2307,6 +2351,24 @@ if {{[catch {{repair_timing -hold}} hold_err]}} {{
 detailed_placement
 write_def {out_dir_c}/post_hold.def
 {routing_constraint_tcl}global_route
+# === v0.1.26 post-global-route SETUP / DRV repair ===
+# Re-estimate RC from global routing and repair again so the final routed
+# netlist reflects setup-closed, fanout-buffered nets (best-effort).
+if {{[catch {{estimate_parasitics -global_routing}} _pe_gr]}} {{
+  puts "EST_PARASITICS_GR_NONFATAL: $_pe_gr"
+}}
+if {{[catch {{repair_design}} _rd2_err]}} {{
+  puts "REPAIR_DESIGN_GR_NONFATAL: $_rd2_err"
+}}
+if {{[catch {{repair_timing -setup}} _rts2_err]}} {{
+  puts "REPAIR_TIMING_SETUP_GR_NONFATAL: $_rts2_err"
+}}
+if {{[catch {{repair_timing -hold}} _rth2_err]}} {{
+  puts "REPAIR_TIMING_HOLD_GR_NONFATAL: $_rth2_err"
+}}
+if {{[catch {{detailed_placement}} _gr_dp_err]}} {{
+  puts "GR_REPAIR_LEGALIZE_NONFATAL: $_gr_dp_err"
+}}
 # Detailed route emits the actual `+ ROUTED ...` wire geometry that
 # def_stage_progression_check requires. Without it, routed.def carries
 # only NETS without geometry. Best-effort: surface a NONFATAL note if

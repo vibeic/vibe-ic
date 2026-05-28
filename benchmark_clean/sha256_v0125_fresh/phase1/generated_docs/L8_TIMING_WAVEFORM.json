@@ -1,0 +1,149 @@
+{
+  "schema_version": "1",
+  "doc_class": "timing_waveform",
+  "ic_name": "sha256",
+  "timing_windows": [],
+  "timing_constants": [],
+  "waveforms": [],
+  "extraction_evidence": {},
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 38.6,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 38.6,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/L1_product_metadata.md",
+        "line": 35,
+        "matched_substring": "38.6 MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 38600000,
+      "period_ns": 25.906736,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    }
+  ],
+  "clocks": [
+    {
+      "name": "clk",
+      "type": "input",
+      "freq_mhz": 38.6,
+      "extraction_strategy": "seeded_from_l1_clock_port_v1_6_571",
+      "freq_hz": 38600000,
+      "period_ns": 25.906736,
+      "role": "primary",
+      "source": "external"
+    }
+  ],
+  "class_path": "digital_arithmetic_primitive",
+  "clock_mhz": 38.6,
+  "timing_parameters": {},
+  "constants": [
+    {
+      "name": "clock_period_ns",
+      "value": 25.9,
+      "unit": "ns",
+      "evidence": "L1.md tapeout target"
+    },
+    {
+      "name": "clock_freq_mhz",
+      "value": 38.6,
+      "unit": "MHz",
+      "evidence": "L1.md tapeout target"
+    },
+    {
+      "name": "cycles_per_block",
+      "value": 66,
+      "unit": "cycles",
+      "evidence": "L1.md README perf table"
+    },
+    {
+      "name": "rounds_per_block",
+      "value": 64,
+      "unit": "rounds",
+      "evidence": "NIST FIPS-180-4 §6.2 (64 round iterations)"
+    },
+    {
+      "name": "block_size_bits",
+      "value": 512,
+      "unit": "bits",
+      "evidence": "L2.md message block size"
+    },
+    {
+      "name": "digest_size_sha256",
+      "value": 256,
+      "unit": "bits",
+      "evidence": "L2.md SHA-256 output"
+    },
+    {
+      "name": "digest_size_sha224",
+      "value": 224,
+      "unit": "bits",
+      "evidence": "L2.md SHA-224 output"
+    },
+    {
+      "name": "register_addr_bits",
+      "value": 8,
+      "unit": "bits",
+      "evidence": "L3.md address[7:0]"
+    },
+    {
+      "name": "register_data_bits",
+      "value": 32,
+      "unit": "bits",
+      "evidence": "L3.md write_data/read_data[31:0]"
+    },
+    {
+      "name": "io_delay_pct",
+      "value": 20,
+      "unit": "%",
+      "evidence": "L9.md set_input/output_delay = 20% of period"
+    },
+    {
+      "name": "input_delay_ns",
+      "value": 5.18,
+      "unit": "ns",
+      "evidence": "L9.md 20% of 25.9ns"
+    },
+    {
+      "name": "output_delay_ns",
+      "value": 5.18,
+      "unit": "ns",
+      "evidence": "L9.md 20% of 25.9ns"
+    },
+    {
+      "name": "reset_polarity",
+      "value": "active_low",
+      "unit": "",
+      "evidence": "L3.md reset_n active-LOW"
+    },
+    {
+      "name": "reset_synchronicity",
+      "value": "synchronous",
+      "unit": "",
+      "evidence": "L2.md synchronous reset"
+    }
+  ],
+  "clock": {
+    "name": "clk",
+    "freq_mhz": 38.6,
+    "freq_hz": 38600000,
+    "period_ns": 25.906736,
+    "role": "primary",
+    "source": "external",
+    "edge": "posedge",
+    "evidence": "L1.md target clock period"
+  },
+  "reset": {
+    "name": "reset_n",
+    "polarity": "active_low",
+    "synchronicity": "synchronous",
+    "evidence": "L2.md + L3.md sync active-LOW reset"
+  },
+  "extraction_notes": [
+    "v0125_postrun: typed timing constants[] + clock/reset sidecar sections populated from L1/L2/L3/L9.md (chip-AGNOSTIC numeric facts)."
+  ]
+}

@@ -1,0 +1,53 @@
+type: bug
+severity: P1
+component: program:ic_class_profile + program:phase2_one_shot_runner
+plugin_version: "0.1.25"
+
+title: >-
+  Analog/mixed-signal IC misclassified `digital_arithmetic_primitive` because
+  `_l5_has_analog` drops every `low_confidence` block; phase2 then runs the
+  digital spec-to-rtl track on an analog datasheet
+
+pattern: |
+  Fresh blind benchmark_clean v0.1.25 run, u_hawaii_adc (University of Hawaii
+  incremental delta-sigma ADC, L1 `class: mixed_signal_adc`, L5 declares 3 analog
+  blocks: adc, ldo, delta_sigma). The orchestrator classified it
+  `digital_arithmetic_primitive`, waived rtl_gen, looped ECO 3× looking for
+  non-existent digital RTL, emitted a digital full-stack TB against analog top
+  pins, and halted phase2 FAIL — the analog A1..A9 runner was never invoked.
+
+  Root cause (file:line): `ic_class_profile.py` `_l5_has_analog` (~line 300)
+  filters out every block flagged `low_confidence:true`. The Phase-1 L5 ingester
+  tags EVERY block low_confidence when the analog datasheet publishes its numeric
+  specs as figures (the canonical ΔΣ/SAR teaching-chip pattern → spec fields null).
+  So has_analog=False → is_pure_analog=False → cascade falls to the
+  `digital_arithmetic_primitive` catch-all (v1.6.523). Then
+  phase2_one_shot_runner enters the digital spec-to-rtl fallback because nothing
+  upstream set has_analog.
+
+suggested_fix: |
+  1. `ic_class_profile.py`: treat as analog/mixed-signal when ANY of:
+       - L1 `class` ∈ {mixed_signal_adc, mixed_signal_dac, pure_analog, sar_adc,
+         delta_sigma_adc, ldo, pll, bandgap, ...}, OR
+       - L5 `analog_blocks_detected: true` REGARDLESS of per-block low_confidence
+         (low_confidence means "specs are figure-only", not "maybe not analog"), OR
+       - input/docs/ contains L5_ANALOG_SPEC.md AND no L2 digital functional doc.
+     Do NOT let per-block low_confidence zero out has_analog.
+  2. `phase2_one_shot_runner.py`: when ic_class_profile.has_analog (or L1.class in
+     the analog set), DISPATCH to analog_one_shot_runner.py instead of the digital
+     spec-to-rtl fallback. Never enter the digital track with has_analog=True.
+  3. Regression: u_hawaii_adc must route to the analog track and reach A1..A8
+     (this run confirmed analog_one_shot_runner accepts L1+L5+L9 alone and gets
+     LDO fully clean with real 9-corner ngspice; ADC/ΔΣ then fail on the separate
+     A2-panel + A4-template gaps, filed separately).
+
+id: "ORGANIC-20260528-analog-ic-misclassified-digital-low-confidence"
+submitted_at: "2026-05-28T01:21:00+08:00"
+session_context: >-
+  Filed by the v0.1.25 benchmark_clean fresh four-IC real-case run (see
+  benchmark_clean/RESULT_v0125_fresh.md). u_hawaii_adc is the analog IC of the four;
+  the misclassification is the upstream cause of its FAIL. Two further analog-track
+  gaps (A2 topology panel missing ΔΣ/SC-integrator primitives; analog_real_corner_sweep
+  missing real-ngspice templates for adc/delta_sigma block types) are downstream and
+  worth separate entries; this P1 is the routing gate that prevents an analog IC from
+  ever reaching the analog track.

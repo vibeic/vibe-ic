@@ -1,0 +1,161 @@
+{
+  "block": "adc",
+  "block_type": "adc",
+  "_provenance": "real_ngspice",
+  "simulator": "ngspice-45.2 (iic-osic-tools / iic-eda container)",
+  "pdk_used_for_sim": "sky130A",
+  "spec_label": "OTA UGBW (Hz) \u2014 SC-integrator settling proxy",
+  "fclk_hz": 1000000.0,
+  "total_corners": 9,
+  "results_found": 9,
+  "corners": [
+    {
+      "name": "ss_m40c",
+      "process": "ss",
+      "temp_c": -40,
+      "simulator_run": true,
+      "ota_dc_gain_db": 23.49201,
+      "ota_ugbw_hz": 1811753.0,
+      "ota_op_vout_v": 0.0198359,
+      "ugbw_gt_fclk": true,
+      "derived_from": "real ngspice op + ac on the transistor-level two-stage Miller OTA"
+    },
+    {
+      "name": "ss_27c",
+      "process": "ss",
+      "temp_c": 27,
+      "simulator_run": true,
+      "ota_dc_gain_db": 64.72512,
+      "ota_ugbw_hz": 11718790.0,
+      "ota_op_vout_v": 0.211301,
+      "ugbw_gt_fclk": true,
+      "derived_from": "real ngspice op + ac on the transistor-level two-stage Miller OTA"
+    },
+    {
+      "name": "ss_125c",
+      "process": "ss",
+      "temp_c": 125,
+      "simulator_run": true,
+      "ota_dc_gain_db": 35.99621,
+      "ota_ugbw_hz": 8269516.0,
+      "ota_op_vout_v": 1.13372,
+      "ugbw_gt_fclk": true,
+      "derived_from": "real ngspice op + ac on the transistor-level two-stage Miller OTA"
+    },
+    {
+      "name": "tt_m40c",
+      "process": "tt",
+      "temp_c": -40,
+      "simulator_run": true,
+      "ota_dc_gain_db": 29.27576,
+      "ota_ugbw_hz": 3881303.0,
+      "ota_op_vout_v": 0.0322158,
+      "ugbw_gt_fclk": true,
+      "derived_from": "real ngspice op + ac on the transistor-level two-stage Miller OTA"
+    },
+    {
+      "name": "tt_27c",
+      "process": "tt",
+      "temp_c": 27,
+      "simulator_run": true,
+      "ota_dc_gain_db": 66.56727,
+      "ota_ugbw_hz": 14932950.0,
+      "ota_op_vout_v": 0.923732,
+      "ugbw_gt_fclk": true,
+      "derived_from": "real ngspice op + ac on the transistor-level two-stage Miller OTA"
+    },
+    {
+      "name": "tt_125c",
+      "process": "tt",
+      "temp_c": 125,
+      "simulator_run": true,
+      "ota_dc_gain_db": 33.52368,
+      "ota_ugbw_hz": 8051697.0,
+      "ota_op_vout_v": 1.14108,
+      "ugbw_gt_fclk": true,
+      "derived_from": "real ngspice op + ac on the transistor-level two-stage Miller OTA"
+    },
+    {
+      "name": "ff_m40c",
+      "process": "ff",
+      "temp_c": -40,
+      "simulator_run": true,
+      "ota_dc_gain_db": 37.72041,
+      "ota_ugbw_hz": 8356848.0,
+      "ota_op_vout_v": 0.0549371,
+      "ugbw_gt_fclk": true,
+      "derived_from": "real ngspice op + ac on the transistor-level two-stage Miller OTA"
+    },
+    {
+      "name": "ff_27c",
+      "process": "ff",
+      "temp_c": 27,
+      "simulator_run": true,
+      "ota_dc_gain_db": 45.97056,
+      "ota_ugbw_hz": 14741470.0,
+      "ota_op_vout_v": 1.11737,
+      "ugbw_gt_fclk": true,
+      "derived_from": "real ngspice op + ac on the transistor-level two-stage Miller OTA"
+    },
+    {
+      "name": "ff_125c",
+      "process": "ff",
+      "temp_c": 125,
+      "simulator_run": true,
+      "ota_dc_gain_db": 32.07647,
+      "ota_ugbw_hz": 8151794.0,
+      "ota_op_vout_v": 1.14497,
+      "ugbw_gt_fclk": true,
+      "derived_from": "real ngspice op + ac on the transistor-level two-stage Miller OTA"
+    }
+  ],
+  "spec_results": [
+    {
+      "name": "integrator_ugbw_gt_fclk",
+      "status": "PASS",
+      "value": 1811753.0,
+      "target": 1000000.0,
+      "comparison": "worst-corner UGBW >= fclk (so OTA settles within T/2 @ 1 MHz)",
+      "note": "worst-corner UGBW=1.81 MHz across all 9 PVT corners; all 9 corners have real ngspice UGBW > 1 MHz"
+    },
+    {
+      "name": "ota_dc_gain_informational",
+      "status": "PASS_INFORMATIONAL",
+      "value": 66.56727,
+      "note": "nominal (tt/27C) OTA open-loop gain=66.56727 dB. Open-loop test harness has no CMFB -> DC bias (and thus gain at bias) varies by corner (range 23.5..66.6 dB). Informational: a closed-loop SC integrator self-biases via the feedback cap; settling is governed by UGBW (the PASS spec above)."
+    }
+  ],
+  "functional_evidence_real_ngspice": {
+    "sc_integrator_step_settling": {
+      "deck": "integrator_settle.sp",
+      "result": "vout 0.960 V -> 0.874 V after a +100 mV input step, monotonic, no ringing -> stable, settles well within T/2=500 ns @ 1 MHz",
+      "simulator_run": true
+    },
+    "comparator_1bit_decision": {
+      "deck": "comparator.sp",
+      "result": "clocked latch resolves input sign in BOTH polarities (win1 vinp>vinn -> oa-ob<0; win2 inputs flipped -> oa-ob>0)",
+      "simulator_run": true
+    },
+    "ota_open_loop": {
+      "deck": "adc.sp",
+      "result": "nominal DC gain 66.6 dB, UGBW 14.9 MHz (tt/27C)",
+      "simulator_run": true
+    }
+  },
+  "unverified_metrics": [
+    {
+      "name": "ENOB",
+      "target": ">= 14 bit",
+      "status": "UNVERIFIED",
+      "reason": "End-to-end ENOB/SNDR requires a full OSR-256 incremental conversion window (>= 256 clocks) of the closed \u0394\u03a3 loop + the digital decimation filter + an output FFT. That is a mixed-signal (analog modulator + digital decimator) cosim, not a single analog SPICE transient. The analog primitives it depends on (OTA gain/BW, integrator settling, 1-bit quantizer) ARE verified above; the system-level ENOB is deferred to mixed-signal cosim (track M1-M4 / A9, WAIVED per L9 \u2014 no silicon)."
+    },
+    {
+      "name": "SNDR",
+      "target": "(implied by ENOB>=14)",
+      "status": "UNVERIFIED",
+      "reason": "Same as ENOB \u2014 needs the full conversion-window FFT."
+    }
+  ],
+  "note": "Real ngspice-45.2 on sky130A transistor-level decks. PVT = ss/tt/ff x -40/27/125 C. Per L9: IHP SG13G2 has no public ngspice corner lib, so sky130 device models are the documented standin (modeled, NOT silicon sign-off). ENOB/SNDR are system-level and remain unverified here (see unverified_metrics).",
+  "timestamp": "2026-05-27T19:06:46Z"
+}

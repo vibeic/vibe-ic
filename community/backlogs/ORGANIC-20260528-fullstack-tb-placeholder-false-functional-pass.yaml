@@ -1,0 +1,57 @@
+type: bug
+severity: P1
+component: program:full_stack_tb_gen + gate:bit_level_full_stack
+plugin_version: "0.1.25"
+
+title: >-
+  Generic full-stack TB reports functional PASS with expected_bytes="XX" — it
+  never checks the DUT's actual output, so a real RTL functional bug ships as
+  "8/8 PASS"
+
+pattern: |
+  Fresh blind benchmark_clean v0.1.25 sha256 run: phase2 reported full-stack TB
+  "8/8 vectors PASS" and the bit_level_full_stack gate PASSed. But
+  phase2/stage1/sim_full_stack/results.json shows `expected_bytes: "XX"` for ALL
+  8 vectors — the generated testbench drives stimulus and decodes a response byte
+  but compares it against the placeholder "XX", so EVERY vector "passes"
+  regardless of the DUT output. It is a connectivity/smoke test, not a functional
+  check.
+
+  Consequence: the GENERATED sha256 RTL carried a real SHA-256 message-schedule
+  indexing bug (`new_w = sigma1(w_mem[1]) + w_mem[6] + sigma0(w_mem[14]) + w_mem[15]`
+  instead of the correct forward-window
+  `sigma1(w_mem[14]) + w_mem[9] + sigma0(w_mem[1]) + w_mem[0]`). The full-stack TB
+  did not catch it; only an independent FIPS-180-4 KAT ("abc"→ba7816bf…,
+  ""→e3b0c442…) exposed it. A benchmark that exists to measure doc→correct-silicon
+  must not emit a green functional verdict from a TB with no golden reference.
+
+suggested_fix: |
+  1. The bit_level_full_stack gate must FAIL (or at minimum DOWNGRADE to
+     "connectivity-only, functional UNVERIFIED") when results.json contains any
+     `expected_bytes == "XX"` / placeholder / null golden. A PASS may only be
+     claimed when every scored vector has a concrete expected value.
+  2. full_stack_tb_gen should populate expected_bytes from a real golden source
+     when the class/spec provides one:
+       - L7 verification-plan reference vectors / KAT table, OR
+       - for standard algorithms (hash/cipher/codec), the public standard's KAT
+         (FIPS-180-4 for SHA-256), OR
+       - a spec-derived behavioral golden model co-simulated alongside the DUT.
+     For digital_arithmetic_primitive specifically, L7 almost always names a KAT
+     or a reference function — wire it in.
+  3. Emit an explicit `functional_coverage: {scored_with_golden: N, placeholder: M}`
+     field so a downstream auditor can see at a glance whether the PASS is real.
+  4. Regression: re-run sha256 — with golden KAT vectors the pre-fix RTL must
+     FAIL (catching the W-schedule bug), and the corrected RTL must PASS bit-exact.
+
+id: "ORGANIC-20260528-fullstack-tb-placeholder-false-functional-pass"
+submitted_at: "2026-05-28T01:55:00+08:00"
+session_context: >-
+  Filed by the v0.1.25 benchmark_clean fresh four-IC real-case run + sha256 timing
+  re-run (see benchmark_clean/RESULT_v0125_fresh.md). This is the most consequential
+  finding of the run: the functional gate gave a false-positive PASS on
+  functionally-WRONG RTL. The timing re-run agent caught it only because it ran an
+  independent FIPS KAT. Until the gate refuses placeholder goldens, any "doc→silicon
+  PASS" for this IC class is functionally unverified. Related: the same sha256 re-run
+  also fixed real general phase3 gaps (L9 -period regex ignored 25.9ns→fell back to
+  20.0; PnR ran no set_wire_rc / no repair_design / no repair_timing -setup, only
+  hold) — those are validated in phase3_one_shot_runner.py (WNS -102.76→+10.95 MET).

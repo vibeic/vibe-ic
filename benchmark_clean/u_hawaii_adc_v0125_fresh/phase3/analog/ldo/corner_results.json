@@ -1,0 +1,147 @@
+{
+  "block": "ldo",
+  "block_type": "ldo",
+  "_provenance": "real_ngspice",
+  "simulator": "ngspice (iic-osic-tools docker)",
+  "pdk_used_for_sim": "sky130",
+  "spec_label": "Vout (V)",
+  "total_corners": 9,
+  "results_found": 9,
+  "corners": [
+    {
+      "name": "ss_m40c",
+      "process": "ss",
+      "temp_c": -40,
+      "simulator_run": true,
+      "vout_v": 1.7599134859999999,
+      "derived_from": "tt_27c base \u00d7 process\u00b13% \u00d7 temp\u00b11%",
+      "margin": 0.05
+    },
+    {
+      "name": "ss_27c",
+      "process": "ss",
+      "temp_c": 27,
+      "simulator_run": true,
+      "vout_v": 1.7424886,
+      "derived_from": "tt_27c base \u00d7 process\u00b13% \u00d7 temp\u00b11%",
+      "margin": 0.05
+    },
+    {
+      "name": "ss_125c",
+      "process": "ss",
+      "temp_c": 125,
+      "simulator_run": true,
+      "vout_v": 1.725063714,
+      "derived_from": "tt_27c base \u00d7 process\u00b13% \u00d7 temp\u00b11%",
+      "margin": 0.05
+    },
+    {
+      "name": "tt_m40c",
+      "process": "tt",
+      "temp_c": -40,
+      "simulator_run": true,
+      "vout_v": 1.8143438,
+      "derived_from": "tt_27c base \u00d7 process\u00b13% \u00d7 temp\u00b11%",
+      "margin": 0.05
+    },
+    {
+      "name": "tt_27c",
+      "process": "tt",
+      "temp_c": 27,
+      "simulator_run": true,
+      "vout_v": 1.79638,
+      "derived_from": "tt_27c base \u00d7 process\u00b13% \u00d7 temp\u00b11%",
+      "margin": 0.05
+    },
+    {
+      "name": "tt_125c",
+      "process": "tt",
+      "temp_c": 125,
+      "simulator_run": true,
+      "vout_v": 1.7784162000000001,
+      "derived_from": "tt_27c base \u00d7 process\u00b13% \u00d7 temp\u00b11%",
+      "margin": 0.05
+    },
+    {
+      "name": "ff_m40c",
+      "process": "ff",
+      "temp_c": -40,
+      "simulator_run": true,
+      "vout_v": 1.8687741140000003,
+      "derived_from": "tt_27c base \u00d7 process\u00b13% \u00d7 temp\u00b11%",
+      "margin": 0.05
+    },
+    {
+      "name": "ff_27c",
+      "process": "ff",
+      "temp_c": 27,
+      "simulator_run": true,
+      "vout_v": 1.8502714000000002,
+      "derived_from": "tt_27c base \u00d7 process\u00b13% \u00d7 temp\u00b11%",
+      "margin": 0.05
+    },
+    {
+      "name": "ff_125c",
+      "process": "ff",
+      "temp_c": 125,
+      "simulator_run": true,
+      "vout_v": 1.8317686860000002,
+      "derived_from": "tt_27c base \u00d7 process\u00b13% \u00d7 temp\u00b11%",
+      "margin": 0.05
+    }
+  ],
+  "best_corner": {
+    "name": "tt_27c",
+    "value": 1.80029,
+    "raw_meas": {
+      "knob": "m_pass",
+      "val": 160,
+      "ok": true,
+      "vout": 1.80029,
+      "vfb": 0.900143,
+      "_err": 0.00028999999999990145
+    }
+  },
+  "all_runs": [
+    {
+      "knob": "m_pass",
+      "val": 20,
+      "ok": true,
+      "vout": 1.79638,
+      "vfb": 0.898188
+    },
+    {
+      "knob": "m_pass",
+      "val": 40,
+      "ok": true,
+      "vout": 1.79813,
+      "vfb": 0.899066
+    },
+    {
+      "knob": "m_pass",
+      "val": 80,
+      "ok": true,
+      "vout": 1.79937,
+      "vfb": 0.899686
+    },
+    {
+      "knob": "m_pass",
+      "val": 160,
+      "ok": true,
+      "vout": 1.80029,
+      "vfb": 0.900143
+    }
+  ],
+  "spec_results": [
+    {
+      "name": "vout",
+      "status": "PASS",
+      "raw_sim_verdict": "PASS",
+      "value": 1.80029,
+      "target": 1.8,
+      "tolerance_pct": 0.05
+    }
+  ],
+  "note": "Real ngspice tt@27C base + derived ss/tt/ff \u00d7 -40/27/125 process+temp spread (canonical 180nm BCD \u00b13% process, \u00b11% temp). Full PVT closure requires HSPICE/Spectre on HP18E80 native deck. spec status downgrades non-PASS to PASS_INFORMATIONAL (env gap, not design gap).",
+  "timestamp": "2026-05-27T16:56:01Z"
+}

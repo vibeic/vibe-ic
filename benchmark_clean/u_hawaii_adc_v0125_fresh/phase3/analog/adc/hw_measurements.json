@@ -1,0 +1,12 @@
+{
+  "block": "adc",
+  "measurements": {
+    "vout_v": 1.0,
+    "iout_ma": 100.0
+  },
+  "measurement_count": 2,
+  "verdict": "within_tolerance",
+  "note": "deterministic stub — replace with bench-tool output when analog-hw-measure skill runs",
+  "extraction_strategy": "deterministic_stub",
+  "low_confidence": true
+}

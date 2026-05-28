@@ -1,0 +1,55 @@
+type: bug
+severity: P1
+component: skill:spec-to-rtl + program:phase2_one_shot_runner
+plugin_version: "0.1.25"
+
+title: >-
+  spec-to-rtl emits the inner data-transform module but NOT the L9-contract
+  chip_top wrapper → yosys `-top chip_top` HALTs the whole downstream chain
+
+pattern: |
+  Fresh blind benchmark_clean v0.1.25 run, 3 of 4 digital ICs (spm, sha256,
+  subservient) ALL halted phase2 at yosys_synth with the identical error:
+
+      ERROR: Module `chip_top' not found!
+
+  Root cause: when ic_class=digital_arithmetic_primitive (or any class whose
+  rtl_gen=null → fallback_skill=spec-to-rtl), the spec-to-rtl skill authors
+  the inner module under the IC's natural name (spm.v→`spm`, sha256.v→`sha256`,
+  subservient.v→`subservient` via catalog-glue) but does NOT author the
+  L9-contract top-level wrapper. The phase2 runner's yosys_synth step is
+  hardwired to `-top chip_top` (per L9.top_module="chip_top", the canonical
+  sentinel). With no chip_top, HIERARCHY pass aborts and synth/PnR/GDS never run.
+
+  This is ONE general gap reproduced 3×, not three separate bugs. It blocks the
+  entire doc→silicon path for the most common small-IP class.
+
+suggested_fix: |
+  1. In the spec-to-rtl skill emit contract: whenever L9.top_module ("chip_top")
+     differs from the authored inner module name, ALSO author
+     rtl/chip_top.v — a thin wrapper that:
+       - declares EXACTLY the L3/L9 port list (names + widths + directions),
+       - instantiates the inner top once with explicit .name(name) connections,
+       - pins module parameters to their L9 values (e.g. size=32, MEMSIZE=1024).
+     Append it to SOURCE_MANIFEST.md tagged GENERATED (from L3/L9).
+  2. Add a phase2 post-rtl_gen deterministic check `l9_top_wrapper_present`:
+     FAIL (with a clear remediation hint) if L9.top_module is not a module in
+     rtl/ — before yosys is invoked, so the failure is actionable instead of a
+     raw yosys HIERARCHY abort.
+  3. Alternatively/additionally: have yosys_synth read the real top name from
+     the emitted RTL when chip_top is absent, but the wrapper is preferred (it
+     is the L9 contract boundary the rest of the flow + pad ring assume).
+  4. Verify on spm/sha256/subservient: after the wrapper, all three reach
+     yosys PASS → PnR → GDS (confirmed manually this run: spm WNS +12.47 MET,
+     subservient WNS +6.28 MET, both real klayout GDS).
+
+id: "ORGANIC-20260528-spec-to-rtl-missing-chip-top-wrapper"
+submitted_at: "2026-05-28T01:20:00+08:00"
+session_context: >-
+  Filed by the v0.1.25 benchmark_clean fresh four-IC real-case run (see
+  benchmark_clean/RESULT_v0125_fresh.md). Each IC was driven from input/docs/L*.md
+  only (R1/R2/R3-clean, upstream RTL oracle-only). The chip_top-wrapper gap was the
+  single dominant blocker — fixing it (thin L3/L9-port wrapper authored in close-loop)
+  took spm + subservient to PASS_WITH_WAIVERS with real routed GDS + timing MET. The
+  fix must live in the spec-to-rtl emit + a phase2 pre-yosys post-check, not in a
+  per-run manual wrapper.

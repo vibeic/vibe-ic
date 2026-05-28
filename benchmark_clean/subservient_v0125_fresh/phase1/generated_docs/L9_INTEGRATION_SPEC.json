@@ -1,0 +1,481 @@
+{
+  "schema_version": 2,
+  "doc_class": "integration_spec",
+  "ic_name": "subservient",
+  "top_module": "subservient",
+  "top_module_extraction_strategy": "spec_l1_product_name_plus_l8_top_option",
+  "no_top_module_in_input": false,
+  "ports": [
+    {
+      "name": "i_clk",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "i_rst",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_sram_addr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 10,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_sram_wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 8,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "i_sram_rdata",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "width": 8,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_sram_we",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_sram_cyc",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_gpio",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    }
+  ],
+  "top_ports": [
+    {
+      "name": "i_clk",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "i_rst",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_sram_addr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 10,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_sram_wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 8,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "i_sram_rdata",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "width": 8,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_sram_we",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_sram_cyc",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_gpio",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    }
+  ],
+  "top_module_pins": [
+    {
+      "name": "i_clk",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "i_rst",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_sram_addr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 10,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_sram_wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 8,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "i_sram_rdata",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "width": 8,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_sram_we",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_sram_cyc",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    },
+    {
+      "name": "o_gpio",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "width": 1,
+      "evidence": "input/docs/L3_external_interface.md"
+    }
+  ],
+  "no_integration_in_input": false,
+  "submodules": [],
+  "no_submodules_in_input": true,
+  "sim_only_modules": [],
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "internal_wires": [],
+  "no_internal_wires_in_input": true,
+  "expected_verdict_byte_hex": null,
+  "expected_verdict_byte_offset": null,
+  "expected_verdict_byte_extraction_strategy": null,
+  "expected_verdict_byte_offset_low_confidence": false,
+  "expected_verdict_byte_hex_low_confidence": false,
+  "cpu_interrupts": [],
+  "no_cpu_interrupts_in_input": true,
+  "memories": [
+    {
+      "name": "sky130_fd_sc_hd",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L1_product_metadata.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "Cyclone10LP",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L1_product_metadata.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "pipe_cell_left_context"
+    },
+    {
+      "name": "i_rst",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L2_architecture.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "RESET_PC",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L2_architecture.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "i_gpio",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L3_external_interface.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "WITH_CSR",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L3_external_interface.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "subservient_core",
+      "kind": "ram",
+      "type": "RAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L8_submodule_integration.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "o_gpio",
+      "kind": "ram",
+      "type": "RAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L8_submodule_integration.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "o_gpio",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L8_submodule_integration.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "PL_TARGET_DENSITY",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L9_constraints_floorplan.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "GF180MCU",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L9_constraints_floorplan.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "pipe_cell_left_context"
+    },
+    {
+      "name": "FP_CORE_UTIL",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L9_constraints_floorplan.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    },
+    {
+      "name": "FP_PDN_HOFFSET",
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L9_constraints_floorplan.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "backtick_left_context"
+    }
+  ],
+  "memory_candidates": [
+    {
+      "name": null,
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L1_product_metadata.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "regfile",
+      "type": "register file",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "L2_architecture.md",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    }
+  ],
+  "no_memory_candidates_in_input": false,
+  "no_memories_in_input": false,
+  "memory_map": [],
+  "no_memory_map_in_input": true,
+  "no_instantiation_template_in_input": true,
+  "extraction_evidence": {
+    "derived_from_L3": []
+  },
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 100.0,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 100.0,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/L1_product_metadata.md",
+        "line": 36,
+        "matched_substring": "100 MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 100000000,
+      "period_ns": 10.0,
+      "domain_kind": "primary",
+      "source_pin": "clk",
+      "low_mhz": 50.0,
+      "high_mhz": 50.0,
+      "merged_extractor_count_v1_6_397": 2
+    }
+  ],
+  "parameters": [
+    {
+      "name": "memsize",
+      "default": "1024",
+      "type": "256 / 512 / 1024 / 2048(\u4ee5 byte \u70ba\u55ae\u4f4d)",
+      "description": "",
+      "source": "L3_external_interface.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "RESET_PC",
+      "default": "`0x00000000`",
+      "type": "`0x00000000` ~ `0xFFFFFFFC`(SERV \u898f\u683c)",
+      "description": "",
+      "source": "L3_external_interface.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    },
+    {
+      "name": "WITH_CSR",
+      "default": "1(\u9810\u8a2d,enable timer + IRQ)",
+      "type": "0 / 1",
+      "description": "",
+      "source": "L3_external_interface.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    }
+  ],
+  "interface_type": "gpio",
+  "no_interface_type_in_input": false,
+  "interface_types": [
+    {
+      "name": "gpio",
+      "matched_token": "GPIO",
+      "occurrences": 32,
+      "extraction_strategy": "readme_interface_vocab_extended_v1_6_457"
+    }
+  ],
+  "no_interface_types_in_input": false,
+  "chip_top_interfaces": [
+    {
+      "name": "gpio",
+      "matched_token": "GPIO"
+    }
+  ],
+  "ports_extraction_strategy": "spec_l3_port_table_canonical",
+  "synth_top": "subservient"
+}

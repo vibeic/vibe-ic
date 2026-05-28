@@ -1,0 +1,23 @@
+{
+  "block": "delta_sigma",
+  "block_type": "delta_sigma",
+  "extraction_strategy": "ai_authored_from_L5",
+  "low_confidence": false,
+  "source": "input/docs/L5_ANALOG_SPEC.md Block A",
+  "specs": [
+    {"name": "converter_type", "target": "incremental delta-sigma", "units": "-", "note": "resets/accumulates per conversion window"},
+    {"name": "order", "target": 2, "units": "-", "note": "loop-filter order (est)"},
+    {"name": "osr", "target": 256, "units": "-", "note": "oversampling ratio (est)"},
+    {"name": "enob", "target": 14, "units": "bit", "note": "target effective resolution (est) — system-level, NOT verifiable in container transient"},
+    {"name": "vin_diff", "target": 1.0, "units": "V", "note": "input range vs VHI/VLO"},
+    {"name": "vref", "target": 1.0, "units": "V", "note": "reference (VHI-VLO)"},
+    {"name": "vdd_core", "target": 1.2, "units": "V", "note": "core supply (LDO output)"},
+    {"name": "fclk", "target": 1.0e6, "units": "Hz", "note": "modulator clock (est)"},
+    {"name": "output", "target": "1-bit serial", "units": "-", "note": "digital bitstream per channel"}
+  ],
+  "verifiable_in_container": [
+    {"name": "integrator_settling", "note": "SC integrator OTA settles within half clock period @ 1MHz"},
+    {"name": "comparator_resolves", "note": "1-bit quantizer produces a valid rail-to-rail decision for +/- input"},
+    {"name": "modulator_bitstream_toggles", "note": "first-integrator output ramps; comparator output toggles -> loop is alive"}
+  ]
+}

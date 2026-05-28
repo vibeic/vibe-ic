@@ -1,0 +1,44 @@
+{
+  "block": "ldo",
+  "block_type": "ldo",
+  "sized_point": {
+    "knob": "m_pass",
+    "val": 160,
+    "ok": true,
+    "vout": 1.80029,
+    "vfb": 0.900143,
+    "_err": 0.00028999999999990145
+  },
+  "runs": [
+    {
+      "knob": "m_pass",
+      "val": 20,
+      "ok": true,
+      "vout": 1.79638,
+      "vfb": 0.898188
+    },
+    {
+      "knob": "m_pass",
+      "val": 40,
+      "ok": true,
+      "vout": 1.79813,
+      "vfb": 0.899066
+    },
+    {
+      "knob": "m_pass",
+      "val": 80,
+      "ok": true,
+      "vout": 1.79937,
+      "vfb": 0.899686
+    },
+    {
+      "knob": "m_pass",
+      "val": 160,
+      "ok": true,
+      "vout": 1.80029,
+      "vfb": 0.900143
+    }
+  ],
+  "verdict": "PASS",
+  "_provenance": "real_ngspice"
+}

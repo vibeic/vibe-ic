@@ -1,0 +1,32 @@
+{
+  "ic_name": "spm",
+  "ic_class": "digital_arithmetic_primitive",
+  "rtl_strategy": "ai_authored_from_spec",
+  "top_module": "spm",
+  "size_param": 32,
+  "bit_order": "LSB_first",
+  "reset_polarity": "active_high",
+  "latency_cycles": 1,
+  "integer_encoding": "unsigned",
+  "_integer_encoding_note": "Per L2: bit pattern of (x*y) mod 2^N is identical for unsigned and signed_2c; software-side interpretation only. Default golden model = unsigned.",
+  "multiplier_algorithm": "bit_serial_shift_add_modulo_2n",
+  "ai_authored_files": [
+    "phase2/stage1/rtl/spm.v"
+  ],
+  "pulled_ip_files": [],
+  "ip_catalog_used": [],
+  "license_compliance_audit": {
+    "all_permissive": true,
+    "spdx_set": ["Apache-2.0"]
+  },
+  "spec_sources_read": [
+    "input/docs/L1_product_metadata.md",
+    "input/docs/L2_architecture.md",
+    "input/docs/L3_external_interface.md",
+    "input/docs/L7_verification_plan.md",
+    "input/docs/L8_submodule_integration.md",
+    "input/docs/L9_constraints_floorplan.md"
+  ],
+  "upstream_rtl_read": false,
+  "_blindness_attestation": "No reference RTL was consulted during Phase 1 or Phase 2. RTL was authored solely from L*.md spec docs per benchmark_clean BLINDNESS RULE."
+}

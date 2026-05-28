@@ -1,0 +1,162 @@
+{
+  "schema_version": 2,
+  "doc_class": "cmd_protocol",
+  "ic_name": "sha256",
+  "opcodes": [
+    {
+      "hex": "0x00",
+      "name": "READ_NAME0",
+      "payload_bytes": 4,
+      "direction": "read",
+      "description": "Read chip identifier word 0",
+      "evidence": "input/docs/L4_command_protocol.md (ADDR_NAME0)",
+      "argument_constraints": {
+        "addr_max": "0x27",
+        "addr_min": "0x00",
+        "len_max": 4,
+        "len_min": 4,
+        "alignment_bytes": 4,
+        "evidence": "L3.md address range + L5 32-bit word"
+      }
+    },
+    {
+      "hex": "0x01",
+      "name": "READ_NAME1",
+      "payload_bytes": 4,
+      "direction": "read",
+      "description": "Read chip identifier word 1",
+      "evidence": "input/docs/L4_command_protocol.md (ADDR_NAME1)",
+      "argument_constraints": {
+        "addr_max": "0x27",
+        "addr_min": "0x00",
+        "len_max": 4,
+        "len_min": 4,
+        "alignment_bytes": 4,
+        "evidence": "L3.md address range + L5 32-bit word"
+      }
+    },
+    {
+      "hex": "0x02",
+      "name": "READ_VERSION",
+      "payload_bytes": 4,
+      "direction": "read",
+      "description": "Read version string",
+      "evidence": "input/docs/L4_command_protocol.md (ADDR_VERSION)",
+      "argument_constraints": {
+        "addr_max": "0x27",
+        "addr_min": "0x00",
+        "len_max": 4,
+        "len_min": 4,
+        "alignment_bytes": 4,
+        "evidence": "L3.md address range + L5 32-bit word"
+      }
+    },
+    {
+      "hex": "0x08",
+      "name": "WRITE_CTRL",
+      "payload_bytes": 4,
+      "direction": "write",
+      "description": "Write CTRL: bit0=INIT bit1=NEXT bit2=MODE",
+      "evidence": "input/docs/L4_command_protocol.md (ADDR_CTRL)",
+      "argument_constraints": {
+        "addr_max": "0x27",
+        "addr_min": "0x00",
+        "len_max": 4,
+        "len_min": 4,
+        "alignment_bytes": 4,
+        "evidence": "L3.md address range + L5 32-bit word"
+      }
+    },
+    {
+      "hex": "0x09",
+      "name": "READ_STATUS",
+      "payload_bytes": 4,
+      "direction": "read",
+      "description": "Read STATUS: bit0=READY bit1=VALID",
+      "evidence": "input/docs/L4_command_protocol.md (ADDR_STATUS)",
+      "argument_constraints": {
+        "addr_max": "0x27",
+        "addr_min": "0x00",
+        "len_max": 4,
+        "len_min": 4,
+        "alignment_bytes": 4,
+        "evidence": "L3.md address range + L5 32-bit word"
+      }
+    },
+    {
+      "hex": "0x10",
+      "name": "WRITE_BLOCK0",
+      "payload_bytes": 4,
+      "direction": "write",
+      "description": "Write message block word 0 (of 16)",
+      "evidence": "input/docs/L4_command_protocol.md (ADDR_BLOCK0)",
+      "argument_constraints": {
+        "addr_max": "0x27",
+        "addr_min": "0x00",
+        "len_max": 4,
+        "len_min": 4,
+        "alignment_bytes": 4,
+        "evidence": "L3.md address range + L5 32-bit word"
+      }
+    },
+    {
+      "hex": "0x20",
+      "name": "READ_DIGEST0",
+      "payload_bytes": 4,
+      "direction": "read",
+      "description": "Read digest word 0 (of 8)",
+      "evidence": "input/docs/L4_command_protocol.md (ADDR_DIGEST0)",
+      "argument_constraints": {
+        "addr_max": "0x27",
+        "addr_min": "0x00",
+        "len_max": 4,
+        "len_min": 4,
+        "alignment_bytes": 4,
+        "evidence": "L3.md address range + L5 32-bit word"
+      }
+    }
+  ],
+  "no_opcodes_in_input": true,
+  "placeholder_opcode_count": 0,
+  "no_opcode_names_in_input": false,
+  "crc_parameters": {
+    "polynomial_hex": null,
+    "init_hex": null,
+    "bit_order": "n/a",
+    "applicable": false,
+    "rationale": "sha256 register-mapped command protocol has no CRC; integrity is provided by the hash digest itself (not a frame-CRC). Per L3/L4, command bus uses cs/we/address synchronous access (no serial framing).",
+    "evidence": "input/docs/L3_external_interface.md + L4_command_protocol.md (register-mapped, no framing)"
+  },
+  "no_crc_parameters_in_input": true,
+  "verdict_byte_offset": null,
+  "verdict_byte_hex": null,
+  "no_verdict_byte_in_input": true,
+  "addr_max": null,
+  "len_max": null,
+  "payload_semantics": null,
+  "no_payload_semantics_in_input": true,
+  "opcode_synthesis_skipped_reason": "L2.protocol_overview.half_duplex is not True and no explicit opcode/command-table heading was found in input/docs/. Free-form hex bytes in prose, SVG labels, or PDF text do not constitute opcode evidence.",
+  "extraction_evidence": {
+    "input/docs/L4_command_protocol.md": [],
+    "input/docs/L1_product_metadata.md": [],
+    "input/docs/L2_architecture.md": [],
+    "input/docs/L3_external_interface.md": [],
+    "input/docs/L5_register_map.md": [],
+    "input/docs/L6_calibration.md": [],
+    "input/docs/L7_verification_plan.md": [],
+    "input/docs/L8_submodule_integration.md": [],
+    "input/docs/L9_constraints_floorplan.md": []
+  },
+  "class_path": "digital_arithmetic_primitive",
+  "extraction_notes": [
+    "v0125_postrun: typed opcodes hand-populated from L4_command_protocol.md (register-mapped command list)."
+  ],
+  "argument_constraints": {
+    "addr_max": "0x27",
+    "addr_min": "0x00",
+    "len_max": 4,
+    "len_min": 4,
+    "alignment_bytes": 4,
+    "evidence": "L3.md address[7:0] range 0x00-0x27 + L5 word access"
+  }
+}

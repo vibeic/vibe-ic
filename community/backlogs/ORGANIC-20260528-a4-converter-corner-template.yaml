@@ -1,0 +1,40 @@
+type: enhancement
+severity: P1
+component: program:analog_real_corner_sweep
+plugin_version: "0.1.25"
+
+title: >-
+  Real-corner-sweep program has no SPICE deck template for converter /
+  modulator block types, so A4 falls back to a deterministic stub
+
+pattern: |
+  The analog_real_corner_sweep program emits a real, parameterised ngspice
+  deck (op + measurement) only for the regulator block type. For other
+  analog block types — notably switched-capacitor converter and modulator
+  cores — it has no deck template, so A4 falls through to a deterministic
+  stub. The v1.6.214 anti-stub gate then correctly FAILs A4 (no SPICE
+  ran), and the dependent post-layout-resim gate A6 also FAILs (no
+  pre-layout SPICE baseline). The net effect: a converter block can pass
+  A1/A3/A5/A7/A8 but is permanently stuck at A4 until an agent authors a
+  deck by hand. Any IC whose analog block type lacks a deck template hits
+  this.
+
+suggested_fix: |
+  Add a converter/modulator deck template to analog_real_corner_sweep,
+  parameterised the same way the regulator template is: a transistor-level
+  OTA (the SC-integrator amplifier) instantiated from PDK device models,
+  swept across the standard ss/tt/ff x -40/27/125 corners, with the
+  per-corner verifiable metric being OTA unity-gain bandwidth vs the
+  modulator clock (UGBW must exceed fclk so the integrator settles within
+  half a clock period). Mark the deck _provenance: real_ngspice and
+  simulator_run: true per corner, and emit an explicit unverified_metrics
+  list for system-level ENOB/SNDR (deferred to mixed-signal cosim). The
+  manual authoring done in this session (real OTA/comparator/SC-integrator
+  sky130 decks + a 9-corner UGBW sweep) is the right shape for this
+  template.
+
+id: "ORGANIC-20260528-a4-converter-corner-template"
+submitted_at: "2026-05-28T03:17:00+08:00"
+session_context: >-
+  Manual analog close-loop; ran a real 9-corner ngspice UGBW sweep on the
+  hand-authored converter OTA decks to replace the A4 deterministic stub.

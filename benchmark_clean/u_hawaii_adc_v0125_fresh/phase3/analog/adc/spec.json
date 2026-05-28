@@ -1,0 +1,20 @@
+{
+  "block": "adc",
+  "block_type": "adc",
+  "extraction_strategy": "ai_authored_from_L5",
+  "low_confidence": false,
+  "source": "input/docs/L1_DATASHEET.md + L5_ANALOG_SPEC.md",
+  "note": "adc = incremental-ADC analog front-end wrapper. Analog content = one delta_sigma modulator instance (SC integrators + comparator quantizer + 1-bit feedback DAC). The decimation counter / serial read-out is DIGITAL and out of analog scope per L5.",
+  "specs": [
+    {"name": "converter_type", "target": "incremental delta-sigma ADC", "units": "-"},
+    {"name": "enob", "target": 14, "units": "bit", "note": "system-level target; NOT verifiable in container transient"},
+    {"name": "vin_diff", "target": 1.0, "units": "V"},
+    {"name": "vref", "target": 1.0, "units": "V"},
+    {"name": "vdd_core", "target": 1.2, "units": "V"},
+    {"name": "output", "target": "1-bit serial dout", "units": "-"}
+  ],
+  "verifiable_in_container": [
+    {"name": "frontend_comparator_resolves", "note": "front-end 1-bit quantizer resolves a valid decision"},
+    {"name": "integrator_settling", "note": "front-end SC integrator OTA settles within half clock period"}
+  ]
+}

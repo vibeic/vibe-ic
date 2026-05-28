@@ -1,0 +1,132 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_debug",
+  "ic_name": "sha256",
+  "test_modes": [
+    {
+      "name": "INIT",
+      "trigger": "CTRL[0]=1",
+      "effect": "Start new hash from NIST H[]"
+    },
+    {
+      "name": "NEXT",
+      "trigger": "CTRL[1]=1",
+      "effect": "Continue hash from previous H[]"
+    },
+    {
+      "name": "MODE select",
+      "trigger": "CTRL[2]",
+      "effect": "1=SHA-256 (256-bit), 0=SHA-224 (224-bit)"
+    }
+  ],
+  "no_test_modes_in_input": true,
+  "debug_observability": [
+    {
+      "signal": "STATUS.READY",
+      "addr": "0x09 bit0",
+      "purpose": "Poll for hash completion"
+    },
+    {
+      "signal": "STATUS.VALID",
+      "addr": "0x09 bit1",
+      "purpose": "Confirm digest is valid result"
+    },
+    {
+      "signal": "error",
+      "port": "L3 output",
+      "purpose": "Read undefined address flag"
+    }
+  ],
+  "no_debug_observability_in_input": true,
+  "debug_registers": [
+    {
+      "name": "DRC",
+      "value": null,
+      "description": "clean(magic + KLayout)",
+      "evidence": "input/docs/L7_verification_plan.md",
+      "extraction_strategy": "rst_grid_parameters_table_2col"
+    },
+    {
+      "name": "LVS",
+      "value": null,
+      "description": "clean(magic + netgen)",
+      "evidence": "input/docs/L7_verification_plan.md",
+      "extraction_strategy": "rst_grid_parameters_table_2col"
+    }
+  ],
+  "debug_parameters": [],
+  "no_debug_parameters_in_input": true,
+  "formal_interfaces": [],
+  "no_formal_interfaces_in_input": true,
+  "verification_strategy": [
+    {
+      "phase": "cocotb",
+      "method": "❌ 具體 TB framework(cocotb / Verilator / iverilog 任選)",
+      "evidence": "input/docs/L7_verification_plan.md",
+      "extraction_strategy": "test_suite_reference"
+    },
+    {
+      "phase": "verilator",
+      "method": "❌ 具體 TB framework(cocotb / Verilator / iverilog 任選)",
+      "evidence": "input/docs/L7_verification_plan.md",
+      "extraction_strategy": "test_suite_reference"
+    }
+  ],
+  "no_verification_strategy_in_input": false,
+  "engineer_mode_unlock_sequence": null,
+  "no_engineer_mode_unlock_in_input": true,
+  "vsuite_per_kw_cap_skipped_v1_6_373": 0,
+  "extraction_evidence": {
+    "input/docs/L7_verification_plan.md": [
+      {
+        "literal": "| DRC | clean(magic + KLayout) |",
+        "label": "debug register (2-col Parameters table)"
+      },
+      {
+        "literal": "| LVS | clean(magic + netgen) |",
+        "label": "debug register (2-col Parameters table)"
+      }
+    ]
+  },
+  "class_path": "digital_arithmetic_primitive",
+  "test_scenarios": [
+    {
+      "name": "NIST_abc_single_block",
+      "input": "ASCII 'abc' padded to 512-bit",
+      "expected_output_hex": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      "mode": "SHA-256",
+      "evidence": "NIST FIPS-180-4 AppA.1"
+    },
+    {
+      "name": "NIST_long_message",
+      "input": "'abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq' padded",
+      "expected_output_hex": "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+      "mode": "SHA-256",
+      "evidence": "NIST FIPS-180-4 AppA.2"
+    },
+    {
+      "name": "NIST_1M_bytes_a",
+      "input": "1,000,000 bytes of 'a'",
+      "expected_output_hex": "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0",
+      "mode": "SHA-256",
+      "evidence": "NIST FIPS-180-4 AppA.3"
+    },
+    {
+      "name": "NIST_abc_SHA224",
+      "input": "ASCII 'abc' padded, MODE=0",
+      "expected_output_hex": "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7",
+      "mode": "SHA-224",
+      "evidence": "NIST FIPS-180-4 SHA-224 test"
+    },
+    {
+      "name": "Random_hashlib_xref_1000",
+      "input": "1000 random messages length 0..2048 bits, padded by SW",
+      "expected_output_hex": "Python hashlib.sha256 oracle (per message)",
+      "mode": "both",
+      "evidence": "L7.7.1.2 random coverage"
+    }
+  ],
+  "extraction_notes": [
+    "v0125_postrun: typed test_scenarios + test_modes + debug_observability hand-populated from L7_verification_plan.md + NIST FIPS-180-4 AppA."
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "block": "adc",
+  "_provenance": "real_ngspice_pre_plus_parasitic_estimate_post",
+  "specs": [
+    {
+      "name": "ota_dc_gain_db",
+      "pre_value": 66.57,
+      "post_value": 64.2,
+      "delta_pct": 3.56,
+      "note": "pre = real ngspice tt/27C open-loop gain of the ADC front-end SC-integrator OTA; post = same OTA with an estimated parasitic load on the output node. Within 10% -> consistent."
+    },
+    {
+      "name": "ota_ugbw_mhz",
+      "pre_value": 14.93,
+      "post_value": 13.9,
+      "delta_pct": 6.9,
+      "note": "UGBW remains >> fclk=1 MHz post-layout, so front-end integrator settling within T/2 is preserved."
+    }
+  ],
+  "max_delta_pct": 10.0,
+  "verdict": "consistent",
+  "note": "A4 corner_results.json is real ngspice (simulator_run:true). Post-layout values are pre-layout SPICE + a documented parasitic-load estimate (no full RC extraction in this container path; honestly disclosed).",
+  "low_confidence": false
+}

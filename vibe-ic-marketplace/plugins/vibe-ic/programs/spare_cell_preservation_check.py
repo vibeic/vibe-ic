@@ -150,7 +150,10 @@ def evaluate_preservation(plan: dict,
         "all_keep_attr_intact": all_keep_attr_intact,
         "keep_check_applied": any_keep_capable,
         "verdict": verdict,
-        "artefacts": sorted(final_texts.keys()),
+        # v0.1.25+1: renamed `artefacts` (label list: ["def","gds",...]) to
+        # `artefact_labels` so provenance_hash_audit does not misinterpret
+        # these as project-root file paths. chip-AGNOSTIC.
+        "artefact_labels": sorted(final_texts.keys()),
     }
 
 
@@ -234,6 +237,15 @@ def audit(project: Path) -> dict:
     result.update(base)
     result["artefact_paths"] = {k: str(v)
                                 for k, v in artefact_paths.items()}
+    # v0.1.25+1: emit output_files[] so provenance_hash_audit can verify
+    # the PASS verdict is backed by real artefacts on disk. chip-AGNOSTIC.
+    try:
+        result["output_files"] = [
+            {"path": str(v.relative_to(project)) if v.is_relative_to(project) else str(v)}
+            for v in artefact_paths.values()
+        ]
+    except Exception:
+        result["output_files"] = [{"path": str(v)} for v in artefact_paths.values()]
     return result
 
 

@@ -1,0 +1,37 @@
+type: enhancement
+severity: P2
+component: skill:analog-topology-select
+plugin_version: "0.1.25"
+
+title: >-
+  Topology-select skill has no proven template for switched-capacitor
+  data-converter sub-blocks (SC integrator, 1-bit quantizer, feedback DAC)
+
+pattern: |
+  The analog-topology-select skill ships proven, SPICE-verified
+  templates for LDO, oscillator, power-on-reset, bandgap, and comparator,
+  but none for the building blocks of a switched-capacitor data converter:
+  the SC integrator (OTA + sampling/integrating caps + two-phase switches),
+  the 1-bit clocked quantizer (preamp + regenerative latch), and the
+  1-bit feedback DAC (reference-select switches). For a converter block,
+  A2 therefore had only a placeholder topology with no transistor/primitive
+  keyword, so the A2 gate (which requires at least one named primitive)
+  FAILed. Any IC containing a switched-capacitor converter core hits this
+  same gap.
+
+suggested_fix: |
+  Add a proven SC-converter topology family to the skill's template
+  library: (a) two-stage Miller NMOS-input OTA as the SC-integrator
+  amplifier, (b) StrongARM-style preamp+latch as the 1-bit quantizer,
+  (c) reference-select switch pair as the 1-bit feedback DAC, each with
+  named device roles and the cap-ratio = loop-coefficient mapping. The
+  verifiable per-corner metric is the OTA unity-gain bandwidth (must
+  exceed the modulator clock so the integrator settles within half a
+  clock period); end-to-end ENOB/SNDR is a system-level metric and
+  should be explicitly deferred to mixed-signal cosim.
+
+id: "ORGANIC-20260528-a2-converter-topology-template"
+submitted_at: "2026-05-28T03:16:00+08:00"
+session_context: >-
+  Manual analog close-loop on a switched-capacitor converter front-end;
+  authored the OTA/quantizer/feedback-DAC topology by hand to clear A2.

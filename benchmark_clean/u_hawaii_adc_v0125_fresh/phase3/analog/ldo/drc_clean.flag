@@ -1,0 +1,3 @@
+# deterministic_stub extraction_strategy=deterministic_stub low_confidence=true
+# ldo — DRC clean (deterministic stub)
+deterministic_stub

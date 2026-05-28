@@ -1,0 +1,87 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_cases",
+  "ic_name": "sha256",
+  "test_cases": [
+    {
+      "id": "TC_001",
+      "name": "NIST_abc_single_block_sha256",
+      "category": "FIPS_oracle",
+      "input": "ASCII 'abc' padded",
+      "expected": "0xba7816bf...f20015ad",
+      "mode": "SHA-256",
+      "evidence": "FIPS-180-4 AppA.1"
+    },
+    {
+      "id": "TC_002",
+      "name": "NIST_long_message_sha256",
+      "category": "FIPS_oracle",
+      "input": "56-char NIST AppA.2 message",
+      "expected": "0x248d6a61...19db06c1",
+      "mode": "SHA-256",
+      "evidence": "FIPS-180-4 AppA.2"
+    },
+    {
+      "id": "TC_003",
+      "name": "NIST_1M_bytes_a_sha256",
+      "category": "FIPS_oracle",
+      "input": "1M × 'a'",
+      "expected": "0xcdc76e5c...c7112cd0",
+      "mode": "SHA-256",
+      "evidence": "FIPS-180-4 AppA.3"
+    },
+    {
+      "id": "TC_004",
+      "name": "NIST_abc_sha224",
+      "category": "FIPS_oracle",
+      "input": "ASCII 'abc'",
+      "expected": "0x23097d22...e36c9da7",
+      "mode": "SHA-224",
+      "evidence": "FIPS-180-4 SHA-224"
+    },
+    {
+      "id": "TC_005",
+      "name": "Random_messages_vs_hashlib",
+      "category": "random_xref",
+      "input": "1000 random msgs 0..2KB",
+      "expected": "Python hashlib oracle",
+      "mode": "both",
+      "evidence": "L7.7.1.2"
+    },
+    {
+      "id": "TC_006",
+      "name": "Register_NAME_VERSION_read",
+      "category": "register_map",
+      "input": "Read 0x00/0x01/0x02",
+      "expected": "ID strings non-zero",
+      "mode": "N/A",
+      "evidence": "L5"
+    },
+    {
+      "id": "TC_007",
+      "name": "STATUS_READY_post_init",
+      "category": "protocol",
+      "input": "Write CTRL.INIT then poll STATUS",
+      "expected": "READY=1 after 66 cycles",
+      "mode": "either",
+      "evidence": "L4 + L7"
+    },
+    {
+      "id": "TC_008",
+      "name": "Mode_switch_256_224_256",
+      "category": "protocol",
+      "input": "INIT SHA-256 → SHA-224 → SHA-256",
+      "expected": "All 3 digests match oracle",
+      "mode": "both",
+      "evidence": "L7.7.1.2"
+    }
+  ],
+  "no_test_cases_in_input": true,
+  "bring_up_sequence": [],
+  "no_bring_up_sequence_in_input": true,
+  "extraction_evidence": {},
+  "class_path": "digital_arithmetic_primitive",
+  "extraction_notes": [
+    "v0125_postrun: typed test_cases hand-populated from L7_verification_plan.md (NIST + protocol + register-map coverage)."
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "schema_version": 2,
+  "doc_class": "behavioral_sequences",
+  "ic_name": "sha256",
+  "behavioral_sequences": [
+    {
+      "name": "usage_sequence_1",
+      "trigger": "host_initiates",
+      "steps": [
+        {
+          "step": 1,
+          "action": "(optional) read ADDR_NAME0/1/VERSION to confirm chip identity",
+          "expected_signal": "read_data = {'sha2','56  ','0.10'} non-zero",
+          "latency_us": 0.026,
+          "next_state": "S_IDLE",
+          "evidence_line": 37
+        },
+        {
+          "step": 2,
+          "action": "write ADDR_BLOCK0..15 = 512-bit padded message block",
+          "expected_signal": "internal block_mem[0..15] updated",
+          "latency_us": 0.415,
+          "next_state": "S_IDLE",
+          "evidence_line": 38
+        },
+        {
+          "step": 3,
+          "action": "write ADDR_CTRL bit2 = MODE (1=SHA-256, 0=SHA-224)",
+          "expected_signal": "mode_q latched",
+          "latency_us": 0.026,
+          "next_state": "S_IDLE",
+          "evidence_line": 39
+        },
+        {
+          "step": 4,
+          "action": "write ADDR_CTRL bit0 = 1 (INIT)",
+          "expected_signal": "STATUS.READY → 0; FSM enters S_LOAD_INIT",
+          "latency_us": 0.026,
+          "next_state": "S_LOAD_INIT",
+          "evidence_line": 40
+        }
+      ],
+      "source": "readme_usage_sequence",
+      "evidence": "input/docs/L4_command_protocol.md:line 37"
+    },
+    {
+      "name": "usage_sequence_2",
+      "trigger": "host_initiates",
+      "steps": [
+        {
+          "step": 1,
+          "action": "poll ADDR_STATUS until bit0 (READY) = 1  // ~66 clk cycles",
+          "expected_signal": "STATUS.READY = 1 after ~66 clk",
+          "latency_us": 1.71,
+          "next_state": "S_IDLE",
+          "evidence_line": 41
+        },
+        {
+          "step": 2,
+          "action": "(optional) check bit1 (VALID) = 1",
+          "expected_signal": "STATUS.VALID = 1",
+          "latency_us": 0.026,
+          "next_state": "S_IDLE",
+          "evidence_line": 42
+        },
+        {
+          "step": 3,
+          "action": "read ADDR_DIGEST0..7 = 256-bit digest (SHA-256) or first 224 bits (SHA-224)",
+          "expected_signal": "digest matches NIST oracle bit-exact",
+          "latency_us": 0.207,
+          "next_state": "S_IDLE",
+          "evidence_line": 43
+        },
+        {
+          "step": 4,
+          "action": "for multi-block: repeat 2-6 with NEXT instead of INIT",
+          "expected_signal": "FSM re-enters S_LOAD_NEXT preserving H[]",
+          "latency_us": 0.026,
+          "next_state": "S_LOAD_NEXT",
+          "evidence_line": 44
+        }
+      ],
+      "source": "readme_usage_sequence",
+      "evidence": "input/docs/L4_command_protocol.md:line 41"
+    }
+  ],
+  "no_behavioral_sequences_in_input": false,
+  "extraction_evidence": {
+    "input/docs/L4_command_protocol.md": [
+      {
+        "literal": "numbered usage sequence",
+        "label": "README usage-sequence (Bug 2 picker)"
+      }
+    ]
+  },
+  "class_path": "digital_arithmetic_primitive",
+  "extraction_notes": [
+    "v0125_postrun: each step enriched with expected_signal/latency_us/next_state typed details; latencies derived from 25.9 ns clock × cycle count."
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "schema_version": 2,
+  "doc_class": "control_logic",
+  "ic_name": "sha256",
+  "reject_rules": [],
+  "fsm_states": [
+    {
+      "name": "S_IDLE",
+      "transitions": [
+        "init→S_LOAD_INIT",
+        "next→S_LOAD_NEXT"
+      ],
+      "actions": [
+        "ready=1",
+        "valid=0/1"
+      ],
+      "evidence": "sha256_core.v FSM"
+    },
+    {
+      "name": "S_LOAD_INIT",
+      "transitions": [
+        "unconditional→S_ROUND"
+      ],
+      "actions": [
+        "H[]←NIST initial vector (per MODE)",
+        "a..h←H[]",
+        "t←0"
+      ],
+      "evidence": "FIPS-180-4 §5.3.3"
+    },
+    {
+      "name": "S_LOAD_NEXT",
+      "transitions": [
+        "unconditional→S_ROUND"
+      ],
+      "actions": [
+        "a..h←H[]",
+        "t←0"
+      ],
+      "evidence": "FIPS-180-4 §6.2.2 step 2 (multi-block)"
+    },
+    {
+      "name": "S_ROUND",
+      "transitions": [
+        "t<63→S_ROUND",
+        "t==63→S_DONE"
+      ],
+      "actions": [
+        "update a..h via T1,T2",
+        "t←t+1",
+        "ready=0"
+      ],
+      "evidence": "FIPS-180-4 §6.2.2 step 3"
+    },
+    {
+      "name": "S_DONE",
+      "transitions": [
+        "unconditional→S_IDLE"
+      ],
+      "actions": [
+        "H[]←H[]+a..h",
+        "ready=1",
+        "valid=1"
+      ],
+      "evidence": "FIPS-180-4 §6.2.2 step 4"
+    },
+    {
+      "name": "S_REG_READ",
+      "transitions": [
+        "cs=1,we=0→read mux output",
+        "→S_IDLE"
+      ],
+      "actions": [
+        "combinational read_data mux",
+        "error=1 if undefined addr"
+      ],
+      "evidence": "L5 register map"
+    }
+  ],
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "no_fsm_states_in_input": false,
+  "no_fsm_in_input": false,
+  "fsm_tokens": [
+    {
+      "name": "FSM",
+      "type": "structure",
+      "source": "L4_command_protocol.md"
+    },
+    {
+      "name": "Buffer",
+      "type": "structure",
+      "source": "L9_constraints_floorplan.md"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/L4_command_protocol.md": [
+      {
+        "literal": "FSM",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/L1_product_metadata.md": [],
+    "input/docs/L2_architecture.md": [],
+    "input/docs/L3_external_interface.md": [],
+    "input/docs/L5_register_map.md": [],
+    "input/docs/L6_calibration.md": [],
+    "input/docs/L7_verification_plan.md": [],
+    "input/docs/L8_submodule_integration.md": [],
+    "input/docs/L9_constraints_floorplan.md": [
+      {
+        "literal": "Buffer",
+        "label": "FSM structure token"
+      }
+    ]
+  },
+  "class_path": "digital_arithmetic_primitive",
+  "extraction_notes": [
+    "v0125_postrun: typed FSM states hand-populated from FIPS-180-4 §6.2 + RTL sha256_core.v authored FSM."
+  ]
+}
