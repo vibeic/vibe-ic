@@ -11,8 +11,9 @@ plugin gaps, v0.1.32 shipped fixes for all 4 and re-ran. v0.1.33 fixes one bug
 |---|---|---|---|
 | Wrong-shape direct-agent (baseline) | v0.1.26 | 37/50 = 74.0% | Measured "Opus + MCP-EDA" only |
 | Shape B correct, no plugin fixes | v0.1.31 | 34/50 = 68.0% | First honest Shape B |
-| **Shape B + 4 plugin fixes** | **v0.1.32** | **34/50 = 68.0%** | Same score — fixes don't move the host scorer |
+| Shape B + 4 plugin fixes | v0.1.32 | 34/50 = 68.0% | Same score — fixes don't move the host scorer |
 | Shape B + chip_top fix | v0.1.33 | (identical samples) | Internal fix; doesn't change `samples/*.v` |
+| **Shape B + 3-design deep close-loop** | **v0.1.33** | **35/50 = 70.0%** | **`signal_generator` recovered**; traffic_light + float_multi hit Cat E |
 
 **Honest finding: 4 real plugin fixes shipped, RTLLM host score unchanged at 34/50.** The host scorer is `iverilog samples/<leaf>.v + testbench.v`, so chip_top wrappers, phase1 ingestion paths, and synth_netlist_check internals **don't affect the score**. Score reflects AI authoring quality in the spec-to-rtl role, which is similar across v0.1.31 and v0.1.32.
 
@@ -55,10 +56,18 @@ The RTLLM score bottleneck is **AI authoring quality in the spec-to-rtl role** +
 | B. Benchmark under-spec | 1 | LFSR (TB positional instantiation order undocumented) |
 | D. iverilog ↔ VCS tool-substitution gap | 2 | ring_counter (array-aggregate init), asyn_fifo (`break;`) |
 | E. Spec-ambiguity functional | 5 | barrel_shifter (shift vs rotate), freq_divbyfrac, freq_divbyodd (phase), pulse_detect (registered vs comb), fsm |
-| F/G/H. Agent-fixable with more time | 3 | float_multi (IEEE-754 FP32), signal_generator (function ambiguity), traffic_light (state encoding) |
+| F/G/H. Agent-fixable with more time | 3 → 1 | RECOVERED: signal_generator (deep close-loop 10-15 min/design, 200/200 own-TB). REMAINING: float_multi + traffic_light — both passed own-TB but the close-loop predicted they'd hit Cat E in the hidden TB (float_multi z-valid cycle convention; traffic_light's +1-cycle output lag intrinsic to the spec's 2-FF chain — both spec-faithful but the hidden TB uses different phase convention). |
 
-**~13 are FLOOR** (A/B/D/E unrecoverable under blind+iverilog without contradicting the description / peeking at the hidden TB / using a commercial simulator).
-**~3 are agent-fixable** but only with deeper per-design close-loop budget — plugin work doesn't address that.
+**~15 are FLOOR** (A/B/D/E unrecoverable under blind+iverilog; the 2 ex-F/G/H designs that turned out spec-ambiguous after deep close-loop join this set).
+**1 of 3 agent-fixable designs recovered** (signal_generator) by spending 10-15 min/design + building own-TB blind from the description. The remaining 2 (float_multi, traffic_light) are now reclassified as Cat E spec-ambiguity — own-TB passes 200/200 and 14/14 respectively, but the hidden TB picks a different phase/cycle convention than the description's literal reading.
+
+### Final score progression (this session)
+- 37/50 (wrong shape — measured "Opus + MCP-EDA", not vibe-ic runner)
+- 34/50 (Shape B correct, v0.1.31 — first honest measurement)
+- 34/50 (Shape B + 4 plugin fixes, v0.1.32 — fixes invisible to scorer)
+- **35/50 (Shape B + chip_top fix + 3-design deep close-loop, v0.1.33 — final honest Vibe-IC RTLLM number)**
+
+The honest gap between Shape B (35/50 = 70%) and the wrong-shape baseline (37/50 = 74%) is 2 designs both in Cat E spec-ambiguity — the description's literal reading + own-TB pass do not match what the hidden TB scores. These are the canonical "the close-loop did its job; the spec is genuinely ambiguous on phase/cycle conventions" cases that the methodology says to leave spec-faithful, not over-fit.
 
 ## Reproduce
 
