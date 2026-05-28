@@ -44,14 +44,20 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 
-# Canonical L doc list (matches phase1_one_shot_runner emit order).
-L_DOCS = (
-    "L1_DATASHEET", "L2_FRS", "L3_CMD_PROTOCOL", "L4_REGMAP",
-    "L5_ADI_SPEC", "L6_CONTROL_LOGIC", "L7_TEST_DEBUG",
-    "L8_RTL_CONSTANTS", "L8_TIMING_WAVEFORM",
-    "L9_INTEGRATION_SPEC", "L10_TEST_CASES", "L11_OTP_CONTENT",
-    "L12_BEHAVIORAL_SEQUENCES", "L13_LAB_CALIBRATION",
-)
+# Canonical L doc list — since v0.1.51, sourced from l_doc_taxonomy
+# (L1..L23 + SoC-aware). Older snapshots can still pass agent-dirs
+# that only have L1..L13; the diff handles missing files gracefully.
+try:
+    import l_doc_taxonomy as _tx
+    L_DOCS = tuple(_tx.all_l_doc_full_names())
+except ImportError:  # pragma: no cover
+    L_DOCS = (
+        "L1_DATASHEET", "L2_FRS", "L3_CMD_PROTOCOL", "L4_REGMAP",
+        "L5_ADI_SPEC", "L6_CONTROL_LOGIC", "L7_TEST_DEBUG",
+        "L8_RTL_CONSTANTS", "L8_TIMING_WAVEFORM",
+        "L9_INTEGRATION_SPEC", "L10_TEST_CASES", "L11_OTP_CONTENT",
+        "L12_BEHAVIORAL_SEQUENCES", "L13_LAB_CALIBRATION",
+    )
 
 
 # Hallucination heuristics for known-false patterns the program is observed to

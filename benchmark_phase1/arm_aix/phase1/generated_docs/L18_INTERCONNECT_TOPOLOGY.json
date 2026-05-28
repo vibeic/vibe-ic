@@ -4,16 +4,175 @@
   "applicability": "APPLICABLE",
   "ic_class": "bus_interconnect_protocol",
   "fields": {
-    "interconnect_rules": [],
-    "default_signal_values": {},
-    "id_routing": {}
+    "interconnect_rules": [
+      {
+        "rule": "from the same master completes. An arbiter within the interconnect must enforce this restriction.",
+        "line": 4751
+      },
+      {
+        "rule": "address map, the interconnect must use the default AxREGION values. See Chapter A9 Default Signaling and",
+        "line": 4946
+      },
+      {
+        "rule": "4.    If a master has provided data, the interconnect can respond to the initiating master on the read data channel.",
+        "line": 7188
+      },
+      {
+        "rule": "\u2022     An interconnect must drive ACVALID LOW.",
+        "line": 8114
+      },
+      {
+        "rule": "signal. In this case, the input to the interconnect must be tied low. This is protocol-compliant as all transactions are",
+        "line": 8525
+      },
+      {
+        "rule": "The RACK signal must be asserted for a single cycle and the interconnect must accept it in a single cycle.",
+        "line": 8980
+      },
+      {
+        "rule": "interconnect must take to complete the snoop process.",
+        "line": 9076
+      },
+      {
+        "rule": "\u2022     The interconnect must not wait for the master to assert ACREADY before asserting ACVALID.",
+        "line": 9613
+      },
+      {
+        "rule": "\u2022     The interconnect can wait for CRVALID to be asserted before asserting CRREADY or CDREADY.",
+        "line": 9627
+      },
+      {
+        "rule": "The interconnect can use other mappings that force the same cache line state changes in a snooped master. See",
+        "line": 11188
+      },
+      {
+        "rule": "that the interconnect can determine when a transaction has completed at the master.",
+        "line": 12183
+      },
+      {
+        "rule": "The interconnect must not issue a snoop transaction to the initiating master.",
+        "line": 12301
+      },
+      {
+        "rule": "The interconnect must provide a response for all transactions from an initiating master.",
+        "line": 12416
+      },
+      {
+        "rule": "interconnect can be returned directly to the initiating master. The write transactions are:",
+        "line": 12523
+      },
+      {
+        "rule": "An interconnect can provide a response to a barrier transaction in certain circumstances. The following rules apply:",
+        "line": 14150
+      },
+      {
+        "rule": "\u2022      An interconnect must not permit a barrier transaction to overtake any transaction that respects barriers.",
+        "line": 14389
+      },
+      {
+        "rule": "The interconnect can pass or fail an Exclusive Store transaction. A pass indicates that the transaction has been",
+        "line": 14677
+      },
+      {
+        "rule": "interconnect can pass the atomic operation to the slave.",
+        "line": 17238
+      },
+      {
+        "rule": "\u2022     An interconnect can only change SYSCOACK when SYSCOREQ is at the opposite level.",
+        "line": 18100
+      },
+      {
+        "rule": "An interconnect must not issue any new DVM messages on the AC channel after it has deasserted SYSCOACK. It",
+        "line": 18234
+      }
+    ],
+    "default_signal_values": {
+      "AxDOMAIN": "Non-shareable or System Shareable",
+      "ARDOMAIN": "Inner Shareable or Outer",
+      "ACSNOOP": "0b1111",
+      "bits": "zero",
+      "CRRESP": "0b00000",
+      "the": "0",
+      "data": "zero. For example while"
+    },
+    "id_routing": {
+      "note": "Interconnect may append bits to ID to identify the master port; slave-side ID_WIDTH > master-side ID_WIDTH"
+    }
   },
-  "evidence": [],
+  "evidence": [
+    {
+      "line": 14876,
+      "quote": "The existing AXI rules apply for all transactions with AxDOMAIN set to Non-shareable or System Shareable.",
+      "signal": "AxDOMAIN",
+      "default": "Non-shareable or System Shareable"
+    },
+    {
+      "line": 14878,
+      "quote": "For transactions with ARDOMAIN set to Inner Shareable or Outer Shareable:",
+      "signal": "ARDOMAIN",
+      "default": "Inner Shareable or Outer"
+    },
+    {
+      "line": 15716,
+      "quote": "DVM messages are signaled using ARSNOOP or ACSNOOP set to 0b1111.",
+      "signal": "ACSNOOP",
+      "default": "0b1111"
+    },
+    {
+      "line": 15922,
+      "quote": "the upper 8 bits set to zero.",
+      "signal": "bits",
+      "default": "zero"
+    },
+    {
+      "line": 15944,
+      "quote": "with the upper 8 bits set to zero.",
+      "signal": "bits",
+      "default": "zero"
+    },
+    {
+      "line": 16549,
+      "quote": "Hint messages must have a response with CRRESP set to 0b00000.",
+      "signal": "CRRESP",
+      "default": "0b00000"
+    },
+    {
+      "line": 18332,
+      "quote": "This is an optional signal, the default value is 0.",
+      "signal": "the",
+      "default": "0"
+    },
+    {
+      "line": 18337,
+      "quote": "This is an optional signal, the default value is 0.",
+      "signal": "the",
+      "default": "0"
+    },
+    {
+      "line": 18345,
+      "quote": "This is an optional signal, the default value is 0.",
+      "signal": "the",
+      "default": "0"
+    },
+    {
+      "line": 18350,
+      "quote": "This is an optional signal, the default value is 0.",
+      "signal": "the",
+      "default": "0"
+    },
+    {
+      "line": 19899,
+      "quote": "Many writes in a system, particularly from a CPU have data set to zero. For example while initializing or allocating",
+      "signal": "data",
+      "default": "zero. For example while"
+    }
+  ],
   "extraction_hints": [
     "Look for interconnect / fabric / topology sections.",
     "Capture default-signal-value table.",
     "Capture ID-routing rules (ID width changes at fabric)."
   ],
-  "extraction_status": "NOT_YET_EXTRACTED",
-  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51"
+  "extraction_status": "EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+  "extracted_by": "phase1_protocol_spec_extract.extract_l18_* v0.1.51"
 }
