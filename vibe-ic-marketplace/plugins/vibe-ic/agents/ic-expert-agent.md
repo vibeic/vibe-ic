@@ -727,3 +727,34 @@ _Promoted to program rule 2026-05-28 v0.1.38._
 **v0.1.38**: this is being upgraded to a `BENCHMARK_REGISTRY.scorer_substitution_gap` field + scorer support so flagged designs don't count against pass rate. The scorer infrastructure ships in v0.1.38; the per-design corpus is filed as `ORGANIC-20260528-scorer-substitution-gap-registry-population` (P2) for the per-benchmark population sweep. The AI doesn't need to remember which designs are gaps — the scorer tracks them.
 
 _Promoted to scorer feature 2026-05-28 v0.1.38._
+
+
+## Captured by benchmark-enhancement-capture — 2026-05-28 (v0.1.44 asyn-FIFO close-loop)
+
+### Skill: async-FIFO readback — zero-cycle RAM read aligns with TB sample timing
+
+**Pattern**: Classic async-FIFO templates default to a REGISTERED RAM read on the read-clock, plus REGISTERED full/empty flags. The TB samples `rdata` on the SAME read-clock edge that drives `rinc`, so any registered-read FIFO loses byte 0 of its readback sequence — a data-mismatch FAIL even when Gray-code CDC and pointer logic are correct.
+
+**When to apply**: Authoring any dual-clock asynchronous FIFO where the TB samples the read output on the same clock edge as the read-enable strobe.
+
+**What to do**: Make the RAM read COMBINATIONAL (`always @(*) rdata = mem[raddr]` or `assign rdata = mem[raddr]`). Keep flags combinational too: `assign rempty = (rgray == wq2_rptr)`, `assign wfull = (wgray == {~rq2[MSB], ~rq2[MSB-1], rq2[rest]})`.
+
+**Worked pattern** (anonymized): a 16-deep 8-bit dual-clock async-FIFO design with registered RAM read produced `rdata = 0x00` on the first read cycle even after correctly receiving `0x01, 0xab, 0xac, ...` writes. Switching to combinational RAM read recovered the byte-perfect readback sequence.
+
+**Why this is GENERAL**: Standard for any dual-clock FIFO whose downstream consumer samples on the read-clock edge. Cummings async-FIFO papers describe this; the registered-read variant is only correct when the consumer adds a deskew flop.
+
+_Captured by benchmark-enhancement-capture 2026-05-28._
+
+### Skill: async-FIFO TB sample-timing limits blind close-loop
+
+**Pattern**: An async-FIFO TB whose oracle data lives in opaque `.txt` files (e.g. `wfull.txt`, `rempty.txt`, `tdata.txt`) cannot be bisected blindly past the data-path fix. After correcting the data path (combinational RAM read), residual mismatches are typically full/empty flag sample-timing alignment that requires either oracle inspection or testbench inspection to resolve. Honest verdict: report the residual as a real design fail, not a tooling artifact.
+
+**When to apply**: Any benchmark close-loop on an async-FIFO-style design that reaches data-correct but flag-failing state.
+
+**What to do**: Stop after a documented bounded number of retries. File the residual as a real fail in the score. Capture the data-path fix (zero-cycle RAM read) as a separate skill — it generalizes even when the specific TB still rejects.
+
+**Worked pattern** (anonymized): a dual-clock 16-deep async-FIFO design reached byte-perfect 16/16 readback with combinational RAM read + combinational flags, but the TB still emitted Error. With the TB and oracle .txt files refused under the blind contract, further bisection was impossible without benchmark fraud. Reported honestly as a real fail; data-path skill captured separately.
+
+**Why this is GENERAL**: Applies to any benchmark where the oracle is opaque-file-based and the blind contract holds. Honest scoring beats peeking even when the residual class is small.
+
+_Captured by benchmark-enhancement-capture 2026-05-28._
