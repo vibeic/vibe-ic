@@ -522,7 +522,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
-### Skill: restoring division — remainder register needs dividend_width + 1 bits
+### Skill: restoring division — remainder register needs `dividend_width` + 1 bits
 
 **Pattern**: In restoring or non-restoring division, the running remainder register must be 1 bit WIDER than the dividend, because at each step the comparison `remainder ≥ divisor` may need to see the high bit of `{remainder, dividend[i]}` (shifted-in bit) to decide subtract.
 

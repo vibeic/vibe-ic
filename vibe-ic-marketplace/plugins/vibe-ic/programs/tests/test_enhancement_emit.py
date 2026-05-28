@@ -47,7 +47,7 @@ def test_bucket_A_routes_per_step(tmp_path):
         "step": "phase2.rtl_gen",
         "design": "div_16bit", "bucket": "A",
         "rule_name": "restoring-div-remainder-width",
-        "docstring": "Restoring division remainder needs dividend_width + 1 bits.",
+        "docstring": "Restoring division remainder needs `dividend_width` + 1 bits.",
         "expected_signal": "WARN", "fix_action": "Widen remainder reg",
     }]
     res = run(tmp_path, rec)
@@ -63,9 +63,9 @@ def test_bucket_B_routes_per_step(tmp_path):
         "step": "phase3.pnr_setup_repair",
         "design": "sha256", "bucket": "B",
         "skill_title": "PnR setup repair pattern",
-        "pattern": "PnR must run repair_design + repair_timing -setup, not just hold-fix.",
+        "pattern": "PnR must run `repair_design` + `repair_timing` -setup, not just hold-fix.",
         "when": "any OpenROAD PnR template",
-        "what": "add the repair chain", "example": "sha256 -102 → +10 ns",
+        "what": "add the repair chain", "example": "the hash-core design reached -102 then +10 ns",
         "generality": "universal across OpenROAD-driven PnR",
     }]
     res = run(tmp_path, rec)
@@ -83,12 +83,12 @@ def test_bucket_C_emits_backlog_yaml(tmp_path):
         "step": "analog.A4_corner_sweep",
         "design": "u_hawaii_adc", "bucket": "C",
         "title": "Add converter-family templates",
-        "pattern": "no ngspice template for adc / delta_sigma",
+        "pattern": "no ngspice template for adc / `delta_sigma`",
         "suggested_fix": "ship templates",
         "backlog_slug": "a4-converter-template",
         "backlog_type": "enhancement", "severity": "P1",
         "component": "program:analog_real_corner_sweep",
-        "session_context": "captured from u_hawaii_adc rerun",
+        "session_context": "captured from an analog-converter rerun",
     }]
     res = run(tmp_path, rec)
     files = res["summary"].get("bucket_C_files", [])
@@ -250,17 +250,21 @@ def test_scrub_design_leak_preserves_legitimate_technical_brackets():
 
 
 def test_emit_skill_section_refuses_leaky_title():
-    """v0.1.41 (re-re-audit Issue 3 — structural allowlist).
-    The v0.1.40 fix caught only the explicit Prob## form; the auditor
-    demonstrated 4 bypasses. This test now uses the structural rule: any
-    underscore-separated identifier (snake_case) → refused regardless of
-    context (with-from, with-the, bare prose, etc.)."""
+    """v0.1.42 (Round-4 audit fix) — combined structural rule on title.
+    Refuses ALL of: snake_case, ProbNNN (case-insensitive), kebab-with-digit,
+    camelCase/PascalCase, digit-embedded-in-lowercase."""
     leaky_titles = [
-        "Moore latency in Prob089 sequence_detector",        # both: Prob + snake
-        "Reset polarity (the radix2_div case)",              # auditor bypass 1
-        "Width overflow in the freq_divbyeven design",       # auditor bypass 2
-        "see asyn_fifo for example",                         # auditor bypass 3
-        "Moore latency in Prob089",                          # bare Prob##
+        "Moore latency in Prob089 sequence_detector",        # snake + Prob
+        "Reset polarity (the radix2_div case)",              # snake
+        "Width overflow in the freq_divbyeven design",       # snake
+        "see asyn_fifo for example",                         # snake
+        "Moore latency in Prob089",                          # Prob##
+        # Round-4 NEW-2 bypasses now structurally caught:
+        "Reset polarity (the radix2-div case)",              # kebab+digit
+        "Width overflow in freqDivByEven design",            # camelCase
+        "Issue in SequenceDetector module",                  # PascalCase
+        "Issue in mux256to1 module",                         # digit-embedded
+        "Issue in prob089 fsm",                              # lowercase prob
     ]
     for title in leaky_titles:
         rec = {"skill_title": title,
@@ -268,6 +272,65 @@ def test_emit_skill_section_refuses_leaky_title():
                "generality": "g"}
         with pytest.raises(ValueError, match="skill_title"):
             _emit_mod.emit_skill_section(rec)
+
+
+def test_emit_skill_section_refuses_leaky_body_fields():
+    """v0.1.42 (Round-4 NEW-4 fix — P0) — the structural rule applies to
+    ALL 5 body fields (pattern, when, what, example, generality), not just
+    title. A Round-4 reproducer (clean title + leaky pattern) would
+    otherwise emit a fully-leaked artifact."""
+    clean = {"skill_title": "Clean general pattern title",
+             "pattern": "g", "when": "g", "what": "g", "example": "g",
+             "generality": "g"}
+    for field in ("pattern", "when", "what", "example", "generality"):
+        rec = dict(clean)
+        rec[field] = "A divider design (the radix2_div case): widening helps"
+        with pytest.raises(ValueError, match=field):
+            _emit_mod.emit_skill_section(rec)
+
+
+def test_emit_skill_section_accepts_backticked_industry_identifiers():
+    """v0.1.42 — the legitimate escape hatch: backtick-wrap a known
+    industry identifier in markdown style and it passes through."""
+    rec = {"skill_title": "active-low reset naming — accept `reset_n` and `rst_n` as equivalent",
+           "pattern": "Wrap `always_ff` in backticks too.",
+           "when": "Authoring any sequential design.",
+           "what": "Use `posedge clk` form.",
+           "example": "g",
+           "generality": "g"}
+    out = _emit_mod.emit_skill_section(rec)
+    assert "`reset_n`" in out
+    assert "`always_ff`" in out
+
+
+def test_round_trip_existing_skill_titles():
+    """v0.1.42 (Round-4 NEW-1 fix — P0 regression) — the structural rule
+    must accept EVERY existing skill title already in ic-expert-agent.md.
+    If any in-tree title is refused, the closed-loop emit path would
+    break on amendment."""
+    import re as _re
+    agent_md = Path(__file__).parent.parent.parent / "agents" / "ic-expert-agent.md"
+    titles = []
+    for line in agent_md.read_text().splitlines():
+        m = _re.match(r"^### Skill: (.+)$", line)
+        if not m:
+            continue
+        t = m.group(1).strip()
+        # skip promoted-to-program pointers and strikethrough markers
+        if t.startswith("~~") or "→" in t:
+            continue
+        titles.append(t)
+    assert len(titles) >= 20, f"sanity check: should find many titles, got {len(titles)}"
+    refused = []
+    for t in titles:
+        try:
+            _emit_mod._validate_general_text("skill_title", t)
+        except ValueError as e:
+            refused.append((t, str(e)[:200]))
+    assert not refused, (
+        f"v0.1.42 structural rule refuses {len(refused)} existing in-tree "
+        f"skill titles (NEW-1 regression):\n" +
+        "\n".join(f"  - {t!r}\n    → {w}" for t, w in refused))
 
 
 def test_emit_backlog_refuses_leaky_slug():

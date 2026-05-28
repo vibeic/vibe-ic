@@ -149,7 +149,181 @@ def _scrub_design_leak(text: str) -> str:
     return text
 
 
+def _strip_backticks(text: str) -> str:
+    """v0.1.42 — replace `code` spans with same-length whitespace.
+
+    Backticks are the legitimate escape hatch for IC technical identifiers
+    (e.g. `rst_n`, `always_ff`, `eda_cocotb`) that have meaning across
+    designs, not just in one benchmark. After this strip, any underscore
+    or Prob## that remains is, by definition, NOT bracketed by the caller
+    as a known technical identifier — so it's either a legitimate phrase
+    or a benchmark leak. The leak-detector runs on the stripped text.
+
+    Offsets are preserved so a future caller computing line numbers from
+    the stripped text gets correct results.
+    """
+    return _leak_re.sub(r"`[^`]*`", lambda m: " " * len(m.group()), text)
+
+
+_INDUSTRY_TECH_ALLOWLIST = frozenset({
+    # v0.1.42 — a tiny seed set of GENERAL Verilog/MCP identifiers that
+    # legitimately appear in skill text without backticks. Keep this SHORT
+    # and add to it only when a real round-trip test demands it. Each
+    # entry must be a general-convention term (industry vocabulary) NOT a
+    # benchmark design leaf-name. The structural rule (require backticks)
+    # is the default; this allowlist is the exception, not the policy.
+    "rst_n", "reset_n", "rst", "clk", "clk_n", "clk_p",
+    "always_ff", "always_comb", "always_latch",
+    "rtl_hygiene_lint", "spec_conformance_check", "chip_top",
+    "eda_cocotb", "eda_lint", "eda_synth",
+    "phase1_engine", "phase2_one_shot_runner", "phase3_one_shot_runner",
+    "ic_class_registry", "benchmark_enhancement_capture",
+    "test_runner", "harness_library",
+})
+
+
+def _validate_general_text(field_name: str, value: str,
+                            *, allow_underscores: bool = False) -> str:
+    """v0.1.42 (Round-4 audit fix) — universal structural check applied to
+    EVERY field that becomes plugin content (title, slug, body fields).
+
+    Round-4 auditor's verdict: the v0.1.41 inversion only protected
+    title+slug; the 5 free-text body fields (pattern, when, what, example,
+    generality) still leaked. v0.1.42 applies the same structural rule to
+    all 7 fields, with a meaningful escape hatch:
+
+      Backtick-wrapped identifiers ARE allowed.
+      Bare underscore identifiers (snake_case) NOT in the industry-tech
+        allowlist ARE refused.
+      Case-insensitive `prob\\d+` ANYWHERE — refused.
+      Enumerated benchmark family names (RTLLM / VerilogEval-* / CVDP /
+        MetRex / etc.) — refused.
+      Any single token > 25 chars without a space — refused.
+
+    The escape hatch means a skill author who wants to discuss `rst_n` as
+    an industry convention can write `` `rst_n` `` in markdown style;
+    the bare snake_case `radix2_div` (a benchmark leaf name) is refused
+    structurally. The rule applies symmetrically across the 7 fields so
+    a Round-5 auditor cannot produce a clean-title + dirty-body leak.
+
+    Raises ValueError citing the structural violation; caller MUST fix
+    the input (either by wrapping a legitimate identifier in backticks
+    OR by rewriting in general-pattern language).
+    """
+    if not value:
+        return value
+    # Backtick-wrapped identifiers are exempt (the caller's positive
+    # declaration that this is a known technical term, not a benchmark
+    # leaf-name).
+    text = _strip_backticks(value)
+    # 1. Snake-case identifiers OUTSIDE the industry allowlist.
+    for m in _leak_re.finditer(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b", text):
+        tok = m.group()
+        if tok.lower() in _INDUSTRY_TECH_ALLOWLIST:
+            continue
+        raise ValueError(
+            f"{field_name} contains a bare underscore-bearing identifier "
+            f"({tok!r}); refusing. Per benchmark-enhancement-capture "
+            f"honesty rule (v0.1.42 structural rule): if {tok!r} is a "
+            f"legitimate industry-convention term (rst_n, always_ff), "
+            f"wrap it in markdown backticks: `{tok}`. If {tok!r} is a "
+            f"benchmark design leaf-name (radix2_div, freq_divbyeven), "
+            f"rewrite the {field_name} to describe the GENERAL pattern "
+            f"without naming the specific design.")
+    # 1b. v0.1.42 (Round-4 NEW-2 bypass) — digit-embedded-in-lowercase
+    #     token: matches `radix2div`, `mux256to1`, `freqdivbyeven`. Require
+    #     2+ letters BEFORE digit so legit short forms like `1st` /
+    #     `2nd` (ordinal English) and `a4converter` (one-letter prefix) are
+    #     not refused.
+    for m in _leak_re.finditer(r"\b[a-z]{2,}\d+[a-z][A-Za-z0-9]*\b", text):
+        tok = m.group()
+        if tok in _INDUSTRY_TECH_ALLOWLIST:
+            continue
+        raise ValueError(
+            f"{field_name} contains a digit-embedded-in-lowercase "
+            f"identifier ({tok!r}); refusing. This shape matches benchmark "
+            f"design leaf-names (mux256to1, radix2div). Wrap in backticks "
+            f"if legitimate: `{tok}` — or rewrite as general pattern.")
+    # 1c. v0.1.42 (Round-4 NEW-2 bypass) — camelCase / PascalCase compound
+    #     identifier: `[a-z][A-Z][a-z]` boundary inside a single token, like
+    #     `freqDivByEven`, `SequenceDetector`. Even legitimate Verilog
+    #     identifiers like `TopModule` should be wrapped in backticks in
+    #     skill text (markdown best practice).
+    for m in _leak_re.finditer(r"\b[A-Za-z]*[a-z][A-Z][a-z]+[A-Za-z0-9]*\b", text):
+        tok = m.group()
+        if tok in _INDUSTRY_TECH_ALLOWLIST:
+            continue
+        raise ValueError(
+            f"{field_name} contains a camelCase/PascalCase compound "
+            f"identifier ({tok!r}); refusing. Wrap in backticks if "
+            f"legitimate: `{tok}` — or rewrite as space-separated words.")
+    # 1d. v0.1.42 (Round-4 NEW-2 bypass) — kebab-case identifier where the
+    #     LEADING token is letters+digit shape: `radix2-div`, `mux256-to-1`,
+    #     `m2014-q4`. Require 2+ leading letters so single-letter `a4-`
+    #     prefixes (`a4-converter-template`) pass — those are conventional
+    #     analog-class slugs (A4 = analog phase-4). The reverse form
+    #     `2nd-order` (ordinal English) is not matched because it starts
+    #     with digit.
+    for m in _leak_re.finditer(
+            r"\b[a-z]{2,}\d+(?:-[a-z0-9]+){1,}\b", text):
+        tok = m.group()
+        if tok in _INDUSTRY_TECH_ALLOWLIST:
+            continue
+        raise ValueError(
+            f"{field_name} contains a kebab-case identifier with a "
+            f"digit-bearing token ({tok!r}); refusing. This shape matches "
+            f"benchmark design leaf-names. Wrap in backticks if legitimate: "
+            f"`{tok}`, or rewrite without the digit-bearing token.")
+    # 2. Prob## case-insensitive.
+    pm = _leak_re.search(r"\bprob\d+\b", text, _leak_re.IGNORECASE)
+    if pm:
+        raise ValueError(
+            f"{field_name} contains a benchmark Prob ID ({pm.group()!r}); "
+            f"refusing. Skill content must describe general patterns, not "
+            f"specific benchmark problems.")
+    # 3. Enumerated benchmark-family tokens (RTLLM / VerilogEval-* / CVDP /
+    #    MetRex / ResBench / RTL-Repo / PyHDL-Eval).
+    em = _leak_re.search(_DESIGN_LEAK_PATTERN, text, _leak_re.IGNORECASE)
+    if em:
+        raise ValueError(
+            f"{field_name} contains a benchmark family name "
+            f"({em.group()!r}); refusing. Describe the general convention "
+            f"without naming the source benchmark.")
+    # 4. Over-long contiguous alphanumeric token (likely a concatenated
+    #    identifier like 'radix2divbyeven' or 'freqdivbyeven').
+    for tok in _leak_re.findall(r"[A-Za-z][A-Za-z0-9]+", text):
+        if len(tok) > 25:
+            raise ValueError(
+                f"{field_name} contains an over-long contiguous token "
+                f"({tok!r}, {len(tok)} chars) — likely a concatenated "
+                f"identifier. Insert spaces or wrap in backticks.")
+    # 5. Field-specific shape — slug must be kebab-case AFTER all leak
+    #    checks pass.
+    if field_name == "backlog_slug":
+        if not _leak_re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", value):
+            raise ValueError(
+                f"backlog_slug must be kebab-case "
+                f"([a-z0-9-], no uppercase, no underscore): {value!r}")
+        for tok in value.split("-"):
+            # Note: prob\d+ check at step 2 already catches `prob089`. The
+            # NEW-3 Round-4 case `prob-089-issue` has separate `prob` and
+            # `089` tokens; the `\bprob\d+\b` check at step 2 won't match
+            # split tokens. Catch the dispersed Prob## here:
+            if tok == "prob" or _leak_re.fullmatch(r"prob\d+", tok):
+                raise ValueError(
+                    f"backlog_slug token {tok!r} suggests a benchmark "
+                    f"Prob ID (possibly separated by dashes): {value!r}.")
+    return value
+
+
 def _refuse_if_leaks(field_name: str, value: str) -> str:
+    """v0.1.42 — thin wrapper preserving v0.1.41 callsites. The structural
+    work moved to `_validate_general_text` which is applied to all 7 fields.
+    """
+    return _validate_general_text(field_name, value)
+
+
+def _refuse_if_leaks_v0141_DEPRECATED(field_name: str, value: str) -> str:
     """v0.1.41 (re-re-audit Issue 3 fix — STRUCTURAL ALLOWLIST INVERSION).
 
     Auditor's verdict on v0.1.40's denylist approach: 'every round of audit
@@ -265,12 +439,15 @@ def emit_skill_section(rec: dict) -> str:
     # v0.1.40 (re-audit F1 補洞) — title must itself be leak-free; refuse on
     # leaky title (a sloppy caller is the failure mode the prior audit
     # warned about).
-    name = _refuse_if_leaks("skill_title", name)
-    pattern = _scrub_design_leak(rec.get("pattern", ""))
-    when = _scrub_design_leak(rec.get("when", ""))
-    what = _scrub_design_leak(rec.get("what", ""))
-    example = _scrub_design_leak(rec.get("example", ""))
-    generality = _scrub_design_leak(rec.get("generality", ""))
+    name = _validate_general_text("skill_title", name)
+    # v0.1.42 (Round-4 audit fix) — the structural rule applies to ALL 5
+    # body fields, not just title. A Round-4 reproducer (clean title +
+    # `radix2_div` in pattern) would otherwise emit a leaked artifact.
+    pattern = _validate_general_text("pattern", rec.get("pattern", ""))
+    when = _validate_general_text("when", rec.get("when", ""))
+    what = _validate_general_text("what", rec.get("what", ""))
+    example = _validate_general_text("example", rec.get("example", ""))
+    generality = _validate_general_text("generality", rec.get("generality", ""))
     return (
         f"### Skill: {name}\n\n"
         f"**Pattern**: {pattern}\n\n"
@@ -287,9 +464,9 @@ def emit_program_rule_sketch(rec: dict) -> str:
     # in-tree program sketch is chip-AGNOSTIC. Pattern + docstring still capture
     # the lesson without naming the originating benchmark design.
     rname = _slug(rec.get("rule_name", "todo")).replace("-", "_")
-    pattern = _scrub_design_leak(rec.get("pattern", ""))
-    docstring = _scrub_design_leak(rec.get("docstring", ""))
-    fix_action = _scrub_design_leak(rec.get("fix_action", ""))
+    pattern = _validate_general_text("pattern", rec.get("pattern", ""))
+    docstring = _validate_general_text("docstring", rec.get("docstring", ""))
+    fix_action = _validate_general_text("fix_action", rec.get("fix_action", ""))
     return (
         f"# v0.1.34+ — auto-captured by benchmark-enhancement-capture\n"
         f"# Pattern: {pattern}\n"
@@ -318,19 +495,20 @@ def emit_backlog(rec: dict, today: str):
             "init'), not the originating benchmark design name.")
     # v0.1.40 (re-audit F1 補洞) — slug becomes part of the permanent
     # filename and YAML id. Refuse on leaky slug.
-    slug = _refuse_if_leaks("backlog_slug", slug)
+    slug = _validate_general_text("backlog_slug", slug)
     slug = _slug(slug)
     fname = f"ORGANIC-{today.replace('-','')}-{slug}.yaml"
     indent = "  "
-    pat = _scrub_design_leak(rec.get("pattern", "")).replace("\n", "\n" + indent)
-    fix = _scrub_design_leak(rec.get("suggested_fix", "")).replace("\n", "\n" + indent)
-    ctx = _scrub_design_leak(rec.get("session_context", ""))
+    # v0.1.42 — structural validation across body fields (Round-4 NEW-4 fix).
+    pat = _validate_general_text("pattern", rec.get("pattern", "")).replace("\n", "\n" + indent)
+    fix = _validate_general_text("suggested_fix", rec.get("suggested_fix", "")).replace("\n", "\n" + indent)
+    ctx = _validate_general_text("session_context", rec.get("session_context", ""))
     body = (
         f"type: {rec.get('backlog_type', 'enhancement')}\n"
         f"severity: {rec.get('severity', 'P2')}\n"
         f"component: {rec.get('component', '')}\n"
         f"plugin_version: \"{rec.get('plugin_version', '0.1.33')}\"\n\n"
-        f"title: >-\n  {_scrub_design_leak(rec.get('title', ''))}\n\n"
+        f"title: >-\n  {_validate_general_text('title', rec.get('title', ''))}\n\n"
         f"pattern: |\n  {pat}\n\n"
         f"suggested_fix: |\n  {fix}\n\n"
         f"id: \"ORGANIC-{today.replace('-','')}-{slug}\"\n"
