@@ -128,6 +128,151 @@ class TestL18Interconnect:
         out = mod.extract_l18_interconnect(text)
         assert out["fields"]["interconnect_rules"]
 
+    # v0.1.51 iter6 enhancements
+    def test_table_style_default_captured(self):
+        # AXI A9-1..A9-4 style row
+        text = (
+            "    AWADDR     Master    Required (no default)\n"
+            "    AWREGION   Master    All zeros (0x0)\n"
+            "    AWBURST    Master    0b01 (INCR)\n"
+            "    WSTRB      Master    All ones (entire data bus valid)\n"
+        )
+        out = mod.extract_l18_interconnect(text)
+        defaults = out["fields"]["default_signal_values"]
+        assert "AWADDR" in defaults
+        assert "AWREGION" in defaults
+        assert "AWBURST" in defaults
+        assert "WSTRB" in defaults
+
+    def test_typical_topologies_captured(self):
+        text = (
+            "Shared address and data buses are used for the simplest "
+            "AXI fabric topology.\n"
+            "Multilayer interconnect uses a crossbar to permit parallel "
+            "transactions.\n"
+        )
+        out = mod.extract_l18_interconnect(text)
+        assert out["fields"]["typical_topologies"]
+        # both lines should be captured
+        assert len(out["fields"]["typical_topologies"]) >= 2
+
+    def test_multi_copy_atomicity_captured(self):
+        text = (
+            "Multi_Copy_Atomicity is mandatory from Issue G of the "
+            "specification. All observers must see writes in a "
+            "consistent order.\n"
+        )
+        out = mod.extract_l18_interconnect(text)
+        mca = out["fields"]["multi_copy_atomicity"]
+        assert mca
+        assert "Issue G" in mca["required_from"]
+
+    def test_axprot_polarity_captured(self):
+        text = (
+            "AxPROT[1] = 0 indicates Secure access; AxPROT[1] = 1 "
+            "indicates Non-secure access.\n"
+        )
+        out = mod.extract_l18_interconnect(text)
+        pol = out["fields"]["axprot_polarity"]
+        assert pol is not None
+        assert "Non-secure" in pol["polarity"] or "Secure" in pol["polarity"]
+
+
+class TestL15TighterFilter:
+    """v0.1.51 iter6: L15 must drop non-encoding tables."""
+
+    def test_table_without_encoding_rows_dropped(self):
+        text = (
+            "Table A1-1 Document conventions\n"
+            "This section uses italic font for hyperlinks.\n"
+            "Bold font is used for emphasis.\n"
+            "\n"
+        )
+        out = mod.extract_l15_encoding_tables(text)
+        # Title has no encoding keyword AND body has no binary row
+        # → table should be dropped
+        assert all(t["name"] != "Document conventions"
+                   for t in out["fields"]["tables"])
+
+    def test_table_with_encoding_row_kept(self):
+        text = (
+            "Table A3-3 Burst type encoding\n"
+            "2'b00     FIXED     fixed-address burst\n"
+            "2'b01     INCR      incrementing burst\n"
+        )
+        out = mod.extract_l15_encoding_tables(text)
+        names = [t["name"] for t in out["fields"]["tables"]]
+        assert "Burst type encoding" in names
+
+    def test_title_keyword_keeps_table(self):
+        # Even if rows don't contain binary, if the title has "encoding"
+        # / "signals" / "value" we keep the table.
+        text = (
+            "Table A2-2 Write address channel signals\n"
+            "AWID    Master   Tag\n"
+            "AWADDR  Master   Address\n"
+        )
+        out = mod.extract_l15_encoding_tables(text)
+        names = [t["name"] for t in out["fields"]["tables"]]
+        assert "Write address channel signals" in names
+
+
+class TestL17ChannelEnhancements:
+    """v0.1.51 iter6: L17 must surface global_signals + channel_counts
+    + handshake_pairs + AXI3/AXI4 dependency_graph."""
+
+    def test_global_signals_captured(self):
+        text = (
+            "ACLK      Global    Clock source.\n"
+            "ARESETn   Global    Asynchronous reset, active low.\n"
+            "AWADDR    Master    Address of the first transfer.\n"
+        )
+        out = mod.extract_l17_channels(text)
+        gs = out["fields"]["global_signals"]
+        names = [g["name"] for g in gs]
+        assert "ACLK" in names
+        assert "ARESETn" in names
+
+    def test_channel_counts_summary(self):
+        text = (
+            "AWADDR     Master    Write address.\n"
+            "AWLEN      Master    Burst length field.\n"
+            "WVALID     Master    Write data is valid.\n"
+            "BVALID     Slave     Write response is valid.\n"
+        )
+        out = mod.extract_l17_channels(text)
+        cc = out["fields"]["channel_counts"]
+        assert cc["channels"] == 3
+        assert cc["total_signals_excluding_global"] == 4
+
+    def test_handshake_pairs_inferred(self):
+        text = (
+            "AWVALID    Master    Address valid.\n"
+            "AWREADY    Slave     Address ready.\n"
+            "WVALID     Master    Data valid.\n"
+            "WREADY     Slave     Data ready.\n"
+        )
+        out = mod.extract_l17_channels(text)
+        pairs = out["fields"]["handshake_pairs"]
+        assert "AW" in pairs
+        assert pairs["AW"]["valid"] == "AWVALID"
+        assert pairs["AW"]["ready"] == "AWREADY"
+
+    def test_dependency_graph_mentions_axi3_and_axi4(self):
+        # Text contains both markers → both deps captured
+        text = (
+            "ARVALID    Master    Read address valid.\n"
+            "ARREADY    Slave     Read address ready.\n"
+            "The AXI3 protocol allows BVALID independent of AW handshake.\n"
+            "The AXI4 protocol tightens BVALID to wait for AW.\n"
+        )
+        out = mod.extract_l17_channels(text)
+        dep = out["fields"]["dependency_graph"]
+        assert "common_rule" in dep
+        assert "AXI3_write" in dep
+        assert "AXI4_write" in dep
+        assert "AXI_read" in dep
+
 
 class TestDriver:
     def test_skips_na_stub(self, tmp_path):

@@ -261,8 +261,57 @@
         ]
       }
     ],
+    "global_signals": [
+      {
+        "name": "ACLK",
+        "direction": "Global",
+        "semantics": "source     Global clock signal. Synchronous signals are sampled on the rising edge of the"
+      },
+      {
+        "name": "ARESETn",
+        "direction": "Global",
+        "semantics": "source     Global reset signal. This signal is active-LOW."
+      }
+    ],
+    "channel_counts": {
+      "channels": 5,
+      "signals_per_channel": {
+        "AW": 13,
+        "W": 7,
+        "B": 5,
+        "AR": 13,
+        "R": 6
+      },
+      "total_signals_excluding_global": 44,
+      "total_signals_including_ACLK_ARESETn": 46
+    },
+    "handshake_pairs": {
+      "AR": {
+        "valid": "ARVALID",
+        "ready": "ARREADY"
+      },
+      "AW": {
+        "valid": "AWVALID",
+        "ready": "AWREADY"
+      },
+      "R": {
+        "valid": "RVALID",
+        "ready": "RREADY"
+      },
+      "W": {
+        "valid": "WVALID",
+        "ready": "WREADY"
+      },
+      "B": {
+        "valid": "BVALID",
+        "ready": "BREADY"
+      }
+    },
     "dependency_graph": {
-      "note": "AXI4+: BVALID waits for AW + W handshake; RVALID waits for AR handshake"
+      "common_rule": "VALID once asserted MUST remain asserted until READY also asserted on the same cycle",
+      "AXI3_write": "AWVALID and WVALID independent; BVALID does NOT wait for AW handshake",
+      "AXI4_write": "BVALID waits for both AW (AWVALID && AWREADY) and W (WVALID && WREADY && WLAST) handshakes",
+      "AXI_read": "ARVALID precedes RVALID; RVALID stays asserted until ARREADY accepted and final RLAST transferred"
     }
   },
   "evidence": [

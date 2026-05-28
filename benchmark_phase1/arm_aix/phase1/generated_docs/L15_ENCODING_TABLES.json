@@ -151,28 +151,6 @@
         ]
       },
       {
-        "table_id": "Table A3-1",
-        "name": "Transaction channel handshake pairs",
-        "line": 1789,
-        "rows": [
-          "Transaction channel          Handshake pair",
-          "Write address channel        AWVALID, AWREADY",
-          "Write data channel           WVALID, WREADY",
-          "Write response channel       BVALID, BREADY",
-          "Read address channel         ARVALID, ARREADY",
-          "Read data channel            RVALID, RREADY",
-          "Write address channel",
-          "The master can assert the AWVALID signal only when it drives valid address and control information. When",
-          "asserted, AWVALID must remain asserted until the rising clock edge after the slave asserts AWREADY.",
-          "The default state of AWREADY can be either HIGH or LOW. This specification recommends a default state of",
-          "HIGH. When AWREADY is HIGH, the slave must be able to accept any valid address that is presented to it.",
-          "Note",
-          "This specification does not recommend a default AWREADY state of LOW, because it forces the transfer to take",
-          "at least two cycles, one to assert AWVALID and another to assert AWREADY.",
-          "A3-42                            Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                   ARM IHI 0022H"
-        ]
-      },
-      {
         "table_id": "Table A3-2",
         "name": "Burst size encoding",
         "line": 2208,
@@ -212,31 +190,6 @@
           "Aligned_Address            The aligned version of the start address.",
           "Burst_Length               The total number of data transfers within a burst.",
           "Address_N                  The address of transfer N in a burst. N is 1 for the first transfer in a burst."
-        ]
-      },
-      {
-        "table_id": "Table A3-4",
-        "name": "Regular_Transactions_Only Interoperability",
-        "line": 2536,
-        "rows": [
-          "Slave: False                                     Slave: True",
-          "Compatible.                                      Not compatible.",
-          "If the master issues a transaction that is not",
-          "Master: False",
-          "Regular, then data corruption or deadlock",
-          "might occur.",
-          "Master: True       Compatible.                                      Compatible.",
-          "ARM IHI 0022H                   Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                              A3-53",
-          "ID040120                                                Non-Confidential",
-          "A3 Single Interface Requirements",
-          "A3.4 Transaction structure",
-          "A3.4.4         Data read and write structure",
-          "This section describes the transfers of varying sizes on the AXI read and write data buses and how the interface",
-          "performs mixed-endian and unaligned transfers. It contains the following sections:",
-          "\u2022      Write strobes",
-          "\u2022      Narrow transfers",
-          "\u2022      Byte invariance on page A3-55",
-          "\u2022      Unaligned transfers on page A3-56"
         ]
       },
       {
@@ -286,30 +239,6 @@
           "Normally, the Bufferable attribute is only relevant to writes.",
           "AxCACHE[1], Cacheable (C) bit",
           "When this bit is deasserted, allocation of the transaction is forbidden."
-        ]
-      },
-      {
-        "table_id": "Table A4-2",
-        "name": "Parameters fixed as Non-modifiable",
-        "line": 3170,
-        "rows": [
-          "Parameter             Signals",
-          "Transfer address      AxADDR, and therefore AxREGION",
-          "Burst size            AxSIZE",
-          "Burst length          AxLEN",
-          "Burst type            AxBURST",
-          "Lock type             AxLOCK",
-          "Protection type       AxPROT",
-          "The AxCACHE attribute can only be modified to convert a transaction from being Bufferable to Non-bufferable.",
-          "No other change to AxCACHE is permitted.",
-          "The transaction ID and the QoS values can be modified.",
-          "A Non-modifiable transaction with burst length greater than 16 can be split into multiple transactions. Each",
-          "resulting transaction must meet the requirements that are given in this subsection, except that:",
-          "\u2022      The burst length is reduced.",
-          "\u2022      The address of the generated bursts is adapted appropriately.",
-          "A Non-modifiable transaction that is an Exclusive access, as indicated by AxLOCK asserted, is permitted to have",
-          "the transaction size, AxSIZE, and the transaction length, AxLEN, modified if the total number of bytes accessed",
-          "remains the same."
         ]
       },
       {
@@ -417,28 +346,6 @@
           "is between privileged and unprivileged access.",
           "Secure or Non-secure",
           "An AXI master might support Secure and Non-secure operating states, and extend this concept of"
-        ]
-      },
-      {
-        "table_id": "Table A5-1",
-        "name": "Channel transaction ID",
-        "line": 3944,
-        "rows": [
-          "Transaction channel                    Transaction ID",
-          "Write address channel                  AWID",
-          "Write data channel, AXI3 only          WIDa",
-          "Write response channel                 BID",
-          "Read address channel                   ARID",
-          "Read data channel                      RID",
-          "a. The WID signal is implemented only in AXI3.",
-          "Note",
-          "The AXI4 protocol supports an extended ordering model based on the use of the AXI ID transaction identifier. See",
-          "Chapter A6 AXI Ordering Model.",
-          "A5.2.1          Read data ordering",
-          "The slave must ensure that the RID value of any returned data matches the ARID value of the address that it is",
-          "responding to.",
-          "The interconnect must ensure that the read data from a sequence of transactions with the same ARID value targeting",
-          "different slaves is received by the master in the order that it issued the addresses."
         ]
       },
       {
@@ -653,81 +560,6 @@
         ]
       },
       {
-        "table_id": "Table B1-2",
-        "name": "Full AXI and AXI4-Lite interoperability",
-        "line": 5726,
-        "rows": [
-          "Master         Slave         Interoperability",
-          "AXI            AXI           Fully operational.",
-          "AXI            AXI4-Lite     AXI ID reflection is required. Conversion might be required.",
-          "AXI4-Lite      AXI           Fully operational.",
-          "AXI4-Lite      AXI4-Lite     Fully operational.",
-          "B1.2.1          Bridge requirements of AXI4-Lite slaves",
-          "As Table B1-2 shows, the only interoperability case that requires special consideration is the connection of an",
-          "AXI4-Lite slave interface to a full AXI master interface.",
-          "This connection requires AXI ID reflection. The AXI4-Lite slave must return the AXI ID associated with the",
-          "address of a transaction with the read data or write response for that transaction. This is required because the master",
-          "requires the returning ID to correctly identify the transaction response.",
-          "If an implementation cannot ensure that the AXI master interface only generates transactions in the AXI4-Lite",
-          "subset, then some form of adaptation is required. See Conversion, protection, and detection on page B1-125.",
-          "B1.2.2          Direct connection requirements of AXI4-Lite slaves",
-          "An AXI4-Lite slave can be designed to include ID reflection logic. This means that the slave can be used directly",
-          "on a full AXI connection, without a bridge function, in a system that guarantees that the slave is accessed only by",
-          "transactions that comply with the AXI4-Lite subset."
-        ]
-      },
-      {
-        "table_id": "Table C1-1",
-        "name": "Properties that can be set on an AXI5 interface",
-        "line": 5968,
-        "rows": [
-          "Property                          Description",
-          "Atomic_Transactions               Adds Atomic transactions that perform more than just a single access, and",
-          "have some form of operation that is associated with them. See Atomic",
-          "transactions on page E1-342.",
-          "Check_Type                        Adds data checking signaling that is used to detect, and potentially correct,",
-          "data bytes that might have been corrupted. See Chapter E2 Interface and data",
-          "protection.",
-          "Poison                            Adds Poison signaling that is used to indicate that a set of data bytes have been",
-          "previously corrupted. See Chapter E2 Interface and data protection.",
-          "QoS_Accept                        Adds two additional QoS interface signals that enable a slave to indicate the",
-          "QoS value of transactions that it will accept. See QoS Accept signaling on",
-          "page E1-360.",
-          "Trace_Signals                     Adds a Trace signal, which is associated with each channel, to support the",
-          "debugging, tracing, and performance measurement of systems. See Trace",
-          "signals on page E1-357.",
-          "Loopback_Signals                  Adds loopback signaling that permits an agent that is issuing transactions to",
-          "store information relating to the transaction in an indexed table. See User",
-          "Loopback signaling on page E1-359.",
-          "Wakeup_Signals                    Adds wakeup signaling that is used to indicate that there is activity that is",
-          "associated with the interface. See Wake-up Signaling on page E1-362."
-        ]
-      },
-      {
-        "table_id": "Table C1-1",
-        "name": "Properties that can be set on an AXI5 interface (continued)",
-        "line": 6035,
-        "rows": [
-          "Property                        Description",
-          "Exclusive_Accesses              Used to define whether a master issues exclusive accesses or whether a slave",
-          "supports them. See Exclusive accesses on page E1-399.",
-          "Max_Transaction_Bytes           Defines the maximum size of a transaction in bytes. See Maximum transaction",
-          "size and boundary on page E1-400.",
-          "Consistent_DECERR               Used to define whether a slave signals DECERR consistently across all beats",
-          "of read and write response. See Consistent DECERR response on",
-          "page E1-401.",
-          "ARM IHI 0022H          Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                       C1-131",
-          "ID040120                                       Non-Confidential",
-          "C1 AMBA AXI5",
-          "C1.2 Signal Descriptions",
-          "C1.2         Signal Descriptions",
-          "This section introduces the additional AXI5 interface signals that support the new capabilities. It contains the",
-          "following subsections:",
-          "\u2022      Additions to existing AXI channels",
-          "\u2022      Additional signaling on page C1-137"
-        ]
-      },
-      {
         "table_id": "Table C1-2",
         "name": "Write address channel signals",
         "line": 6082,
@@ -933,52 +765,6 @@
           "Chapter C2",
           "AMBA AXI5-Lite",
           "This chapter specifies the new capabilities in the AXI5-Lite protocol specification. It contains the following"
-        ]
-      },
-      {
-        "table_id": "Table C2-1",
-        "name": "AXI5-Lite interface comparison",
-        "line": 6472,
-        "rows": [
-          "AXI5                AXI5-Lite         AXI4-Lite",
-          "Number of interface wires (32-bit address and data)         224                 175               160",
-          "Data width (bits)                                           Up to 1024          Up to 1024        32 or 64",
-          "Transaction length                                          Up to 256           1                 1",
-          "Transaction size                                            Up to bus width     Up to bus width   Full bus width",
-          "Address buses                                               Read and write      Read and write    Read and write",
-          "Memory types                                                Any                 Device            Device",
-          "Non-bufferable    Non-bufferable",
-          "Write strobes                                               Mandatory           Mandatory         optional",
-          "Response Ordering                                           In-order or         In-order or       In-order",
-          "out-of-order        out-of-order",
-          "IDs                                                         Mandatory           Mandatory         optional",
-          "Exclusive accesses                                          Supported           No                No",
-          "Check_Type                                                  optional            optional          No",
-          "Poison                                                      optional            optional          No"
-        ]
-      },
-      {
-        "table_id": "Table C2-2",
-        "name": "Interoperability of AXI5-Lite with AXI5 and AXI4-Lite",
-        "line": 6525,
-        "rows": [
-          "Master               Slave                Interoperability",
-          "AXI5                 AXI5-Lite            Can connect directly if master uses",
-          "AXI5-Lite subset of transactions. Otherwise",
-          "needs conversion, protection, or detection.",
-          "See Conversion, protection, and detection",
-          "on page B1-125",
-          "AXI5-Lite            AXI5                 Fully operational.",
-          "AXI4-Lite            AXI5-Lite            Fully operational.",
-          "AXI5-Lite            AXI4-Lite            AXI ID reflection is required on slave. Can",
-          "connect directly if master uses bus-width",
-          "transactions. Otherwise needs conversion,",
-          "protection, or detection. See Conversion,",
-          "protection, and detection on page B1-125",
-          "C2-142                            Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                ARM IHI 0022H",
-          "Non-Confidential                                                      ID040120",
-          "C2 AMBA AXI5-Lite",
-          "C2.4 Conversion from AXI5 to AXI5-Lite"
         ]
       },
       {
@@ -1497,98 +1283,6 @@
           "CleanUnique.",
           "AxPROT            -                   No constraint, can take any value.",
           "AxQOS             -                   No constraint, can take any value."
-        ]
-      },
-      {
-        "table_id": "Table D3-11",
-        "name": "ReadOnce and WriteUnique transaction constraints",
-        "line": 8666,
-        "rows": [
-          "Attribute         Constraint",
-          "AxDOMAIN          Must be Inner Shareable or Outer Shareable",
-          "AxBURST           Must be INCR or WRAP",
-          "AxCACHE           Must be Modifiable",
-          "AxLOCK            Must be normal access",
-          "AxPROT            No constraint, can take any value",
-          "AxQOS             No constraint, can take any value",
-          "WriteUnique transactions are not required to have every write data strobe asserted, that is, sparse write data strobes",
-          "are permitted.",
-          "Note",
-          "The FIXED burst type is not supported for ReadOnce and WriteUnique transactions. Any conversion from AXI to",
-          "ACE-Lite must provide a translation for a FIXED burst.",
-          "WriteBack and WriteClean transactions",
-          "The WriteBack and WriteClean transactions are not constrained to cache line size. A partial update of a cache line",
-          "is permitted. However, WriteBack and WriteClean transactions are constrained to updates within a single cache line."
-        ]
-      },
-      {
-        "table_id": "Table D3-12",
-        "name": "WriteBack and WriteClean transaction constraints",
-        "line": 8698,
-        "rows": [
-          "Attribute         Condition       Constraint",
-          "AWLEN             -               Normal restrictions apply. See Address structure on page A3-48.",
-          "AWSIZE            -               Normal restrictions apply. See Address structure on page A3-48.",
-          "AWBURST           WRAP            The address must be aligned to AxSIZE, which is equal to the data bus",
-          "width.",
-          "The burst length must be 2, 4, 8 or 16.",
-          "AWSIZE x AWLEN must not exceed the cache line size in bytes.",
-          "INCR            The burst length must be 16 or less.",
-          "The transaction must not cross a cache line boundary. The location of the last",
-          "byte in the burst is determined by (AWSIZE \u00d7 AWLEN) added to the",
-          "AWSIZE aligned start address. The location of this last byte must fall within",
-          "the same cache line as the first byte in the burst.",
-          "FIXED           Not supported.",
-          "AWDOMAIN          -               Must not be domain type System.",
-          "AWBAR             -               Must be normal access.",
-          "D3-184                          Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                  ARM IHI 0022H",
-          "Non-Confidential                                                        ID040120"
-        ]
-      },
-      {
-        "table_id": "Table D3-12",
-        "name": "WriteBack and WriteClean transaction constraints (continued)",
-        "line": 8733,
-        "rows": [
-          "Attribute         Condition       Constraint",
-          "AWCACHE           -               Must be Modifiable.",
-          "AWLOCK            -               Must be normal access.",
-          "AWPROT            -               No constraint, can take any value.",
-          "AWQOS             -               No constraint, can take any value.",
-          "The WriteBack and WriteClean transactions are permitted to use sparse write data strobes.",
-          "Components that support a snoop filter must correctly indicate the shareability domain for all WriteBack,",
-          "WriteClean, and Evict transactions. This enables a snoop filter to track the allocation of Inner Shareable and Outer",
-          "Shareable transactions.",
-          "A snoop filter must not track the allocation of Non-shareable transactions because notification of the eviction of the",
-          "associated cache line is not required.",
-          "Components that do not support a snoop filter can use any of the following domains for WriteBack or WriteClean",
-          "transactions:",
-          "\u2022      Non-shareable",
-          "\u2022      Inner Shareable",
-          "\u2022      Outer Shareable",
-          "Barrier transactions",
-          "For a barrier transaction, as indicated by AxBAR[0] equal to 1, constraints apply to the read address and write"
-        ]
-      },
-      {
-        "table_id": "Table D3-13",
-        "name": "Barrier transaction constraints",
-        "line": 8765,
-        "rows": [
-          "Attribute       Constraint",
-          "AxADDR          Must be all zeros",
-          "AxBURST         Must be burst type INCR",
-          "AxLEN           Must be all zeros",
-          "AxSIZE          Must be equal to the data bus width",
-          "AxCACHE         Must be Normal, Non-cacheable",
-          "AxPROT          No constraint, can take any value",
-          "AxLOCK           Must be normal access",
-          "AxSNOOP          Must be all zeros",
-          "Note",
-          "A barrier transaction can have any shareability domain. The choice of domain is used to determine the precise",
-          "behavior of the barrier with respect to other masters in the system. See Chapter D8 Barrier Transactions.",
-          "ARM IHI 0022H              Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                          D3-185",
-          "ID040120                                           Non-Confidential"
         ]
       },
       {
@@ -2487,121 +2181,6 @@
         ]
       },
       {
-        "table_id": "Table D5-1",
-        "name": "Recommended transaction mappings",
-        "line": 11146,
-        "rows": [
-          "Transaction from initiating master            Transaction to snooped master",
-          "ReadNoSnoop                                   Not snooped",
-          "ReadOnce                                      ReadOnce",
-          "ReadClean                                     ReadClean",
-          "ReadNotSharedDirty                            ReadNotSharedDirty",
-          "ReadShared                                    ReadShared",
-          "ReadUnique                                    ReadUnique",
-          "CleanUnique                                   CleanInvalid",
-          "MakeUnique                                    MakeInvalid",
-          "CleanShared                                   CleanShared",
-          "CleanInvalid                                  CleanInvalid",
-          "MakeInvalid                                   MakeInvalid",
-          "WriteNoSnoop                                  Not snooped",
-          "WriteUnique                                   CleanInvalid"
-        ]
-      },
-      {
-        "table_id": "Table D5-2",
-        "name": "Snoop transaction options on the address snoop channel",
-        "line": 11234,
-        "rows": [
-          "Snoop transaction         Required cache line state change             Snoop transaction option",
-          "ReadOnce                  None                                         ReadOnce",
-          "ReadClean, ReadNotSharedDirty,",
-          "ReadShared",
-          "ReadUnique, CleanInvalid",
-          "CleanShared",
-          "ReadClean                 Shared or Invalid                            ReadClean, ReadNotSharedDirty,",
-          "ReadShared",
-          "ReadUnique, CleanInvalid",
-          "ReadNotSharedDirty        Shared or Invalid                            ReadClean, ReadNotSharedDirty,",
-          "ReadShared",
-          "ReadUnique, CleanInvalid",
-          "ReadShared                Shared or Invalid                            ReadClean, ReadNotSharedDirty,",
-          "ReadShared",
-          "ReadUnique, CleanInvalid",
-          "ReadUnique                Invalid                                      ReadUnique, CleanInvalid",
-          "ARM IHI 0022H                  Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                        D5-233",
-          "ID040120                                               Non-Confidential",
-          "D5 Snoop Transactions",
-          "D5.1 Mapping coherency operations to snoop operations"
-        ]
-      },
-      {
-        "table_id": "Table D5-2",
-        "name": "Snoop transaction options on the address snoop channel (continued)",
-        "line": 11267,
-        "rows": [
-          "Snoop transaction         Required cache line state change             Snoop transaction option",
-          "MakeInvalid               Invalid                                      ReadUnique, CleanInvalid, MakeInvalid",
-          "CleanInvalid              Invalid                                      ReadUnique, CleanInvalid",
-          "CleanShared               Clean or Invalid                             ReadUnique, CleanInvalid",
-          "CleanShared",
-          "Mapping to different snoop transactions can simplify the design of a snooped master. For example, a snooped master",
-          "can handle all snoop transactions in the same way as a ReadUnique transaction. This is permitted because a",
-          "ReadUnique transaction, as Table D5-2 on page D5-233 shows, is an alternative snoop transaction for all other",
-          "snoop transactions.",
-          "D5-234                          Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                ARM IHI 0022H",
-          "Non-Confidential                                                      ID040120",
-          "D5 Snoop Transactions",
-          "D5.2 General requirements for snoop transactions",
-          "D5.2       General requirements for snoop transactions",
-          "For each snoop transaction, the protocol specifies required and recommended behaviors."
-        ]
-      },
-      {
-        "table_id": "Table D5-3",
-        "name": "Required snoop transaction behavior",
-        "line": 11299,
-        "rows": [
-          "Must transfer          End state must be         End state must      End state must be",
-          "Snoop transaction",
-          "data if Dirty          Shared or Invalid         be Invalid          Clean or Invalid",
-          "ReadOnce                   Yes                    -                         -                   -",
-          "ReadClean                  Yes                    Yes                       -                   -",
-          "ReadNotSharedDirty         Yes                    Yes                       -                   -",
-          "ReadShared                 Yes                    Yes                       -                   -",
-          "ReadUnique                 Yes                    -                         Yes                 -",
-          "CleanInvalid               Yes                    -                         Yes                 -",
-          "MakeInvalid                -                      -                         Yes                 -",
-          "CleanShared                Yes                    -                         -                   Yes",
-          "Note",
-          "If a cache line is in the Dirty state and the associated cache does not assert the PassDirty snoop response,",
-          "CRRESP[2], the cache line can remain in the Dirty state. If a cache line is in the Dirty state and the associated cache",
-          "does assert the PassDirty snoop response, then the cache line must move to a Clean or Invalid state.",
-          "The cache line end states in Table D5-3 are classified as follows:"
-        ]
-      },
-      {
-        "table_id": "Table D5-4",
-        "name": "Permitted end states for combinations of initial state and snoop transaction",
-        "line": 11385,
-        "rows": [
-          "Cache line state        Permitted for snoop transaction",
-          "ReadClean                    ReadUnique",
-          "Initial      End        ReadOnce        ReadNotSharedDirty           CleanInvalid       Clean Shared",
-          "ReadShared                   MakeInvalid",
-          "I            I          Yes             Yes                          Yes                Yes",
-          "UC           I          Yes             Yes                          Yes                Yes",
-          "UC         Yes             -                            -                  Yes",
-          "SC         Yes             Yes                          -                  Yes",
-          "UD           I          Yes             Yes                          Yes                Yes",
-          "UD         Yes             -                            -                  -",
-          "SC         Yes             Yes                          -                  Yes",
-          "SD         Yes             Yes                          -                  -",
-          "SC           I          Yes             Yes                          Yes                Yes",
-          "SC         Yes             Yes                          -                  Yes",
-          "SD           I          Yes             Yes                          Yes                Yes"
-        ]
-      },
-      {
         "table_id": "Table D5-5",
         "name": "Associated snoop responses for combinations of initial state and snoop transaction",
         "line": 11445,
@@ -2622,29 +2201,6 @@
           "SD           Yes              Yes                          -                   -                 0              1",
           "SC          I            Yes              Yes                          Yes                 Yes               0              0",
           "SC           Yes              Yes                          -                   Yes               0              1"
-        ]
-      },
-      {
-        "table_id": "Table D5-6",
-        "name": "Recommended data transfer behavior for snoop transactions",
-        "line": 11534,
-        "rows": [
-          "Snoop transaction         Data transfer if cache line is Clean          Data transfer if cache line is Dirty",
-          "ReadOnce                  Yes                                           Yes",
-          "ReadClean                 Yes                                           Yes",
-          "ReadNotSharedDirty        Yes                                           Yes",
-          "ReadShared                Yes                                           Yes",
-          "ReadUnique                Yes                                           Yes",
-          "CleanInvalid              No                                            Yes",
-          "MakeInvalid               No                                            No",
-          "CleanShared               No                                            Yes",
-          "D5.2.3         Memory update in progress",
-          "The protocol ensures that two components cannot update the same area of main memory at the same time.",
-          "If a snooped master receives a snoop transaction when it is updating main memory using either a WriteBack or",
-          "WriteClean transaction, then it is the responsibility of the snooped master to ensure that no other master can update",
-          "the same area of main memory at the same time. The snooped master achieves this by one of the following:",
-          "\u2022       Giving a snoop response with PassDirty deasserted and IsShared asserted, which does not pass permission to",
-          "store to the line and does not pass responsibility for updating memory."
         ]
       },
       {
@@ -2769,33 +2325,6 @@
           "SC             1                              1",
           "For a CleanShared transaction, if the snooped cache holds a copy of the cache line in a Dirty state, then the data",
           "must be transferred."
-        ]
-      },
-      {
-        "table_id": "Table D6-1",
-        "name": "Interconnect snoop requirements",
-        "line": 12323,
-        "rows": [
-          "Transaction from          State change for             Recommended",
-          "Optional Snoop transaction",
-          "Initiating Master         the snooped cache            Snoop transaction",
-          "ReadNoSnoop               None                         -                            -",
-          "ReadOnce                  None                          ReadOnce                    ReadOnce, ReadClean,",
-          "ReadNotSharedDirty, ReadShared,",
-          "ReadUnique, CleanInvalid,",
-          "CleanShared",
-          "ReadClean                 Shared or Invalid            ReadClean                    ReadClean, ReadNotSharedDirty,",
-          "ReadShared, ReadUnique,",
-          "CleanInvalid",
-          "ReadNotSharedDirty        Shared or Invalid            ReadNotSharedDirty           ReadClean, ReadNotSharedDirty,",
-          "ReadShared, ReadUnique,",
-          "CleanInvalid",
-          "ReadShared                Shared or Invalid            ReadShared                   ReadClean, ReadNotSharedDirty,",
-          "ReadShared, ReadUnique,",
-          "CleanInvalid",
-          "ReadUnique                Invalid                      ReadUnique                   ReadUnique, CleanInvalida",
-          "CleanUnique               Invalid                       CleanInvalid                ReadUnique, CleanInvalida",
-          "MakeUnique                Invalid                      MakeInvalid                  ReadUnique, CleanInvalid"
         ]
       },
       {
@@ -2997,57 +2526,6 @@
         ]
       },
       {
-        "table_id": "Table D7-10",
-        "name": "Combinations of write, domain, and CM",
-        "line": 13575,
-        "rows": [
-          "Operation            Primary use-case                             Action",
-          "Outer Shareable      An I/O agent writing less than a cache       All in-line and peer caches must look up the",
-          "WritePtlCMO          line to a Shareable region, where the        line and write back any dirty data. Data from",
-          "with CS              data must be visible to observers            a Dirty cache line can be merged with the",
-          "downstream of a cache.                       partial write to form a WriteFullCMO with CS",
-          "to go downstream.",
-          "Outer Shareable      An I/O agent writing a cache line to a       The coherent interconnect issues a",
-          "WriteFullCMO         Shareable region, where the data must        MakeInvalid snoop to Outer Shareable peer",
-          "with CSP             reach the Point of Persistence.              caches. In-line caches look up the line and",
-          "either update or invalidate any copies.",
-          "The write and CSP must be propagated if",
-          "there is a Point of Persistence downstream.",
-          "Non-shareable        Issued by a cache when a CleanInvalid        All in-line cache entries must be cleaned and",
-          "WriteFullCMO         CMO has hit a Dirty line and caused a        invalidated. The write and CI must be",
-          "with CI              write to memory.                             propagated if there are observers downstream.",
-          "D7.8.3        Attributes for write with CMO",
-          "A write with CMO has the following attribute constraints:",
-          "\u2022     AWDOMAIN is Non-shareable, Inner Shareable, or Outer Shareable.",
-          "\u2022     AWCACHE[1] is asserted, the transaction must be Modifiable.",
-          "\u2022     AWLOCK is deasserted, Normal access.",
-          "A WriteFullCMO must be cache line sized and Regular, see Regular transactions on page A3-53."
-        ]
-      },
-      {
-        "table_id": "Table D7-11",
-        "name": "Permitted accesses from the Coherent domain and Non-coherent agent",
-        "line": 13841,
-        "rows": [
-          "Phase          Description                  Coherent domain           External agent",
-          "Read          Write       Read         Write",
-          "1              Coherent domain access       Permitted     Permitted   -            -",
-          "2              Coherent domain clean        -             -           -            -",
-          "3              External agent access        -             -           Permitted    Permitted",
-          "4              Coherent domain invalidate-                -           -            -",
-          "5              Coherent domain access       Permitted     Permitted   -            -",
-          "D7-282                      Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.               ARM IHI 0022H",
-          "Non-Confidential                                                     ID040120",
-          "Chapter D8",
-          "Barrier Transactions",
-          "This chapter describes ACE barrier transactions. It contains the following sections:",
-          "\u2022     About barrier transactions on page D8-284",
-          "\u2022     Barrier transaction signaling on page D8-285",
-          "\u2022     Barrier responses and domain boundaries on page D8-287",
-          "\u2022     Barrier requirements on page D8-290"
-        ]
-      },
-      {
         "table_id": "Table D8-1",
         "name": "Domain barrier applicability",
         "line": 13966,
@@ -3209,28 +2687,6 @@
         ]
       },
       {
-        "table_id": "Table D13-1",
-        "name": "Capability of master and slave interfaces",
-        "line": 15399,
-        "rows": [
-          "Master                                               Slave",
-          "Bidirectional    \u2022      Initiate DVM requests on AR                   \u2022       Receive DVM requests on AR",
-          "\u2022      Receive DVM Complete requests on AC           \u2022       Issue DVM Complete requests on AC",
-          "\u2022      Receive DVM requests on AC                    \u2022       Issue DVM requests on AC",
-          "\u2022      Issue DVM Complete requests on AR             \u2022       Receive DVM Complete requests on AR",
-          "Receiver         \u2022      Receive DVM requests on AC                    \u2022       Issue DVM requests on AC",
-          "\u2022      Issue DVM Complete requests on AR             \u2022       Receive DVM Complete requests on AR",
-          "False            No DVM requests can be issued or received.           No DVM requests can be issued or received.",
-          "D13-318                         Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.               ARM IHI 0022H",
-          "Non-Confidential                                                     ID040120",
-          "D13 Distributed Virtual Memory Transactions",
-          "D13.2 DVM transactions",
-          "D13.2      DVM transactions",
-          "A DVM transaction can be either a DVM message or DVM Complete.",
-          "D13.2.1         DVM message transactions"
-        ]
-      },
-      {
         "table_id": "Table D13-2",
         "name": "DVM transaction constraints",
         "line": 15592,
@@ -3276,123 +2732,6 @@
           "recipient of the message is not guaranteed.",
           "\u2022      All DVM operations must be correctly ordered with respect to a DVM Sync from the same issuing master",
           "component, even if different AXI IDs are used."
-        ]
-      },
-      {
-        "table_id": "Table D13-3",
-        "name": "DVM message versions",
-        "line": 15745,
-        "rows": [
-          "DVM property                                            Architecture support",
-          "DVM_v8.4           DVM_v8.1         DVM_v8           Armv8.4          Armv8.1           Armv8         Armv7",
-          "True          True or False    True or False          Y                Y              Y                   Y",
-          "False              True         True or False          -                Y              Y                   Y",
-          "False              False            True               -                 -             Y                   Y",
-          "False              False            False              -                 -             -                   Y",
-          "In a system with heterogeneous components, it is the responsibility of the system configuration to determine the",
-          "lowest common DVM specification that is supported in the system. The interconnect must have the knowledge of",
-          "this lowest common denominator value by means of configuration, straps, parameterization, or some other",
-          "IMPLEMENTATION DEFINED method.",
-          "ARM IHI 0022H                    Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                          D13-323",
-          "ID040120                                                 Non-Confidential",
-          "D13 Distributed Virtual Memory Transactions",
-          "D13.3 DVM messages"
-        ]
-      },
-      {
-        "table_id": "Table D13-4",
-        "name": "Supported physical and virtual address spaces",
-        "line": 15785,
-        "rows": [
-          "DVM version      Physical address space        Virtual address space",
-          "All versions     32-bit                        32-bit",
-          "40-bit                        32-bit",
-          "v8 and above     40-bit                        41-bit",
-          "44-bit                        49-bit",
-          "48-bit                        57-bit",
-          "If the physical address space exceeds the virtual address space, then virtual address operations might receive",
-          "additional address information in a DVM message. In this case, any additional address information must be ignored",
-          "and operations that are performed using only the supported address bits.",
-          "If a component supports a larger virtual address space than its physical address space, then a minimum",
-          "ADDR_WIDTH is required to support the virtual address space size. The component must take appropriate action",
-          "regarding the additional physical address bits. See Address space size on page D6-263 for more details.",
-          "Table D13-5 and Table D13-6 on page D13-325 show the allocation of address fields for the first and second parts",
-          "of an invalidation by VA or IPA. The encodings are dependent on the physical and virtual address sizes. The address",
-          "fields apply to the ARADDR and ACADDR signals."
-        ]
-      },
-      {
-        "table_id": "Table D13-5",
-        "name": "Address fields for the first of a two-part invalidation by VA or IPA",
-        "line": 15812,
-        "rows": [
-          "Address size            DVM version                    First transaction address field mapping",
-          "Physical      Virtual                         [47:44]      [43:40]         [39:32]       [31:24]        [23:16]",
-          "32-bit        32-bit       All versions       -            -               -             VMID[7:0]      ASID[7:0]",
-          "40-bit        32-bit       All versions       -            -               SBZ           VMID[7:0]      ASID[7:0]",
-          "41-bit       v8 and above       -            -               ASID[15:8]    VMID[7:0]      ASID[7:0]",
-          "44-bit        49-bit       v8 and above       -            VA[48:45]       ASID[15:8]    VMID[7:0]      ASID[7:0]",
-          "48-bit        57-bit       v8 and above       VA[56:53]    VA[48:45]       ASID[15:8]    VMID[7:0]      ASID[7:0]",
-          "D13-324                         Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.               ARM IHI 0022H",
-          "Non-Confidential                                                     ID040120",
-          "D13 Distributed Virtual Memory Transactions",
-          "D13.3 DVM messages"
-        ]
-      },
-      {
-        "table_id": "Table D13-6",
-        "name": "Address fields for the second of a two-part invalidation by VA or IPA",
-        "line": 15840,
-        "rows": [
-          "Address size                   DVM version        Second transaction address field mapping",
-          "Physical          Virtual                         [47:44]         [43:40]           [39:32]            [31:12]       [11:4]       [3]",
-          "32-bit            32-bit       All versions       -               -                 -                  VA[31:12]     VA[11:4]     SBZ",
-          "40-bit            32-bit       All versions       -               -                 SBZ                VA[31:12]     VA[11:4]     SBZ",
-          "41-bit       v8 and above       -               -                 VA[39:32]          VA[31:12]     VA[11:4]     VA[40]",
-          "44-bit            49-bit       v8 and above       -               VA[44:41]         VA[39:32]          VA[31:12]     VA[11:4]     VA[40]",
-          "48-bit            57-bit       v8 and above       VA[52:49]       VA[44:41]         VA[39:32]          VA[31:12]     VA[11:4]     VA[40]",
-          "Note",
-          "The bit positions for some higher-order address bits are both shifted by a single bit and also split between the first",
-          "and second parts of a two-part DVM transaction. This bit position allocation might appear irregular, but is used to",
-          "ease the translation between implementations with different physical address sizes.",
-          "For a message operating on a physical address, the first part contains the Virtual Address for Virtually Indexed",
-          "Physically Tagged (VIPT) caches. Table D13-7 shows the first transaction, which contains the Virtual Address for",
-          "VIPT caches."
-        ]
-      },
-      {
-        "table_id": "Table D13-7",
-        "name": "First transaction address mapping for any DVM operation, operating on a physical address",
-        "line": 15867,
-        "rows": [
-          "Physical address size             DVM version                First transaction address field mapping",
-          "[47:44]           [43:40]    [39:32]       [31:24]        [23:16]",
-          "32-bit                            All versions               -                 -          -             VA[27:20]      VA[19:12]",
-          "40-bit                            All versions               -                 -          SBZ           VA[27:20]      VA[19:12]",
-          "44-bit                            v8 and above               -                 SBZ        SBZ           VA[27:20]      VA[19:12]",
-          "48-bit                            v8 and above               SBZ               SBZ        SBZ           VA[27:20]      VA[19:12]",
-          "Table D13-8 shows the second transaction, which contains the physical address."
-        ]
-      },
-      {
-        "table_id": "Table D13-8",
-        "name": "Second transaction address mapping for any DVM operation, operating on a physical address",
-        "line": 15883,
-        "rows": [
-          "Physical address size              DVM version             Second transaction address field mapping",
-          "[47:44]        [43:40]            [39:32]         [31:12]       [11:4]",
-          "32-bit                             All versions            -              -                  -               PA[31:12]     PA[11:4]",
-          "40-bit                             All versions            -              -                  PA[39:32]       PA[31:12]     PA[11:4]",
-          "44-bit                             v8 and above            -              PA[43:40]          PA[39:32]       PA[31:12]     PA[11:4]",
-          "48-bit                             v8 and above            PA[47:44]      PA[43:40]          PA[39:32]       PA[31:12]     PA[11:4]",
-          "ARM IHI 0022H                        Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                               D13-325",
-          "ID040120                                                     Non-Confidential",
-          "D13 Distributed Virtual Memory Transactions",
-          "D13.3 DVM messages",
-          "D13.3.3        Support for 16-bit ASID",
-          "DVM_v8 and above support both 8-bit and 16-bit ASID. It cannot be determined from a DVM message whether",
-          "the message uses an 8-bit or 16-bit VMID. All 8-bit ASID messages are required to set the ASID[15:8] field to zero.",
-          "It is expected that most systems will use a single ASID size across the entire system, either 8-bit ASID or 16-bit"
         ]
       },
       {
@@ -3754,30 +3093,6 @@
         ]
       },
       {
-        "table_id": "Table E1-1",
-        "name": "Atomic transaction operators",
-        "line": 16793,
-        "rows": [
-          "Operator          Description",
-          "ADD               The value in memory is added to the sent data and the result stored in memory.",
-          "CLR               Every set bit in the sent data clears the corresponding bit of the data in memory.",
-          "EOR               Bitwise exclusive OR of the sent data and value in memory.",
-          "SET               Every set bit in the sent data sets the corresponding bit of the data in memory.",
-          "SMAX              The value stored in memory is the maximum of the existing value and sent data. This",
-          "operation assumes signed data.",
-          "SMIN              The value stored in memory is the minimum of the existing value and sent data. This",
-          "operation assumes signed data.",
-          "UMAX              The value stored in memory is the maximum of the existing value and sent data. This",
-          "operation assumes unsigned data.",
-          "UMIN              The value stored in memory is the minimum of the existing value and sent data. This",
-          "operation assumes unsigned data.",
-          "E1.1.3          Atomic transactions attributes",
-          "Rules for atomic transactions:",
-          "\u2022      AWLEN and AWSIZE specifies the number of bytes of write data in the transaction. For AtomicCompare,",
-          "the number of bytes must include both the compare and swap values."
-        ]
-      },
-      {
         "table_id": "Table E1-2",
         "name": "AWATOP encodings",
         "line": 16944,
@@ -3890,27 +3205,6 @@
           "occurs, then stash the cache line back to that cache.",
           "\u2014       If the cache line is not held in any cache before the write occurs, then stash the cache line in a shared",
           "system cache."
-        ]
-      },
-      {
-        "table_id": "Table E1-7",
-        "name": "Conversion between Stash and Non-stash transactions",
-        "line": 17474,
-        "rows": [
-          "Stash transaction           Action",
-          "WriteUniquePtlStash         Convert to WriteUnique, optionally named WriteUniquePtl.",
-          "WriteUniqueFullStash        Convert to WriteLineUnique, optionally named WriteUniqueFull.",
-          "StashOnceShared             Do not propagate and give an immediate response.",
-          "StashOnceUnique             Do not propagate and give an immediate response.",
-          "Note",
-          "See Full and partial cache line write transaction naming on page G1-458 for a description of WriteUniqueFull and",
-          "WriteUniquePtl.",
-          "E1-354                             Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.               ARM IHI 0022H",
-          "Non-Confidential                                                     ID040120",
-          "E1 Additional Features in AMBA 5",
-          "E1.3 Deallocating transactions",
-          "E1.3       Deallocating transactions",
-          "The primary use of a deallocating transaction is to deallocate the associated cache lines when it is known that these"
         ]
       },
       {
@@ -4235,27 +3529,6 @@
         ]
       },
       {
-        "table_id": "Table E1-20",
-        "name": "MTE_Support",
-        "line": 19341,
-        "rows": [
-          "Slave: False                           Slave: Basic                    Slave: Standard",
-          "Master: False                 Compatible.                            Compatible.                     Compatible.",
-          "Protocol compliant.                    Compatible.                     Compatible.",
-          "The slave ignores AxTAGOP,",
-          "Master: Basic",
-          "so write tag values are lost and",
-          "read tag values are static.",
-          "Not compatible.                        Not compatible.                 Compatible.",
-          "If the master uses the Match           If the master uses the Match",
-          "Master: Standard",
-          "operation, the response will not       operation, the response will",
-          "be protocol-compliant.                 not be protocol-compliant.",
-          "E1.15.2       MTE signaling",
-          "Table E1-21 shows the signals that are required to support MTE."
-        ]
-      },
-      {
         "table_id": "Table E1-21",
         "name": "MTE Signaling",
         "line": 19363,
@@ -4341,26 +3614,6 @@
         ]
       },
       {
-        "table_id": "Table E1-23",
-        "name": "Legal tag operations for read transactions",
-        "line": 19538,
-        "rows": [
-          "MTE_Support = Basic                        MTE_Support = Standard",
-          "Transaction                                     Invalid       Transfer       Fetch         Invalid          Transfer     Fetch",
-          "ReadNoSnoop                                         Y              Y              -             Y               Y            Y",
-          "ReadOnce                                            Y              Y              -             Y               Y             -",
-          "ReadOnceCleanInvalid                                Y              -              -             Y               -             -",
-          "ReadOnceMakeInvalid                                 Y              -              -             Y               -             -",
-          "CleanInvalid / MakeInvalid                          Y              -              -             Y               -             -",
-          "CleanShared / CleanSharedPersist                    Y              -              -             Y               -             -",
-          "DVM Message / Complete                              Y              -              -             Y               -             -",
-          "ARM IHI 0022H                  Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                            E1-391",
-          "ID040120                                               Non-Confidential",
-          "E1 Additional Features in AMBA 5",
-          "E1.15 Memory tagging"
-        ]
-      },
-      {
         "table_id": "Table E1-24",
         "name": "Writes with tag operations",
         "line": 19572,
@@ -4389,24 +3642,6 @@
           "Match             0b11                 The tags in the write must be checked against the Allocation Tag",
           "values that are obtained from memory. The Match operation must be",
           "performed for all tags where any corresponding write data strobes"
-        ]
-      },
-      {
-        "table_id": "Table E1-25",
-        "name": "Legal tag operations for write transactions",
-        "line": 19613,
-        "rows": [
-          "MTE_Support = Basic                                MTE_Support = Standard",
-          "Transaction               Invalid       Transfer    Update       Match       Invalid      Transfer       Update       Match",
-          "WriteNoSnoop                 Y             -            Y            -           Y             Y             Y           Y",
-          "WriteUnique*                 Y             -            Y            -           Y             -             Y            -",
-          "Atomic transaction           Y             -            -            -           Y             -             -           Y",
-          "CMO                          Y             -            -            -           Y             -             -            -",
-          "Write*CMO                    Y             -            -            -           Y             Y             Y            -",
-          "E1-392                             Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                     ARM IHI 0022H",
-          "Non-Confidential                                                           ID040120",
-          "E1 Additional Features in AMBA 5",
-          "E1.15 Memory tagging"
         ]
       },
       {
@@ -4455,105 +3690,6 @@
           "compare and swap bytes.",
           "AtomicCompare transactions with Match can be 16 bytes or 32 bytes. If the transaction is 32 bytes, the same tag",
           "value must be used for tag bits associated with the compare and swap bytes."
-        ]
-      },
-      {
-        "table_id": "Table E1-27",
-        "name": "Exclusive_Accesses interoperability",
-        "line": 19995,
-        "rows": [
-          "Slave: False                                      Slave: True",
-          "Compatible.                                       Compatible. ARLOCK and AWLOCK are",
-          "Master: False",
-          "tied LOW.",
-          "Not-compatible. Exclusive Accesses will           Compatible.",
-          "Master: True       continually fail, but the interface will not",
-          "deadlock.",
-          "E1.18.2         Shareable transactions",
-          "Inner Shareable and Outer Shareable transactions are used when accessing locations that might be stored in the",
-          "caches of masters which are not downstream of the transaction issuer. Some interfaces are not required to identify",
-          "Shareable transactions, for example if they are downstream of all caches.",
-          "The Shareable_Transactions property is used to define whether a master issues Inner Shareable or Outer Shareable",
-          "transactions and whether a slave supports them:",
-          "True            Shareable and Non-shareable transactions are supported. ARDOMAIN and AWDOMAIN are",
-          "present on the interface.",
-          "False           Inner Shareable and Outer Shareable transactions are not supported. ARDOMAIN and",
-          "AWDOMAIN are not present on the interface."
-        ]
-      },
-      {
-        "table_id": "Table E1-28",
-        "name": "Shareable_Transactions interoperability",
-        "line": 20047,
-        "rows": [
-          "Slave: False                                      Slave: True",
-          "Compatible.                                       Compatible. AxDOMAIN inputs are tied to",
-          "Master: False",
-          "{~AxCACHE[1], ~AxCACHE[1]}.",
-          "Compatible. AxDOMAIN outputs are                  Compatible.",
-          "Master: True",
-          "unconnected.",
-          "E1.18.3         Maximum transaction size and boundary",
-          "The maximum size of a transaction is 4KB and transactions are not permitted to cross a 4KB boundary. However,",
-          "many masters generate transactions which are guaranteed to be smaller than this.",
-          "A slave or interconnect might benefit from this information. For example, a slave might be able to optimize away",
-          "some decode logic. An interconnect striping at a granule smaller than 4KB might be able to avoid burst splitting if",
-          "it knows that transactions will not cross the stripe boundary.",
-          "The property Max_Transaction_Bytes defines the maximum size of a transaction in bytes. It can take the following",
-          "values:",
-          "\u2022     64",
-          "\u2022     128",
-          "\u2022     256",
-          "\u2022     512",
-          "\u2022     1024",
-          "\u2022     2048",
-          "\u2022     4096"
-        ]
-      },
-      {
-        "table_id": "Table E1-29",
-        "name": "Max_Transaction_Bytes interoperability",
-        "line": 20102,
-        "rows": [
-          "Master < Slave             Master = Slave             Master > Slave",
-          "Compatible                 Compatible                 Not compatible",
-          "E1.18.4         Consistent DECERR response",
-          "Read transactions have multiple beats of data. The value of RRESP is not constrained within a transaction, so each",
-          "beat can take any legal value. A response of DECERR is generally used when there is a problem accessing a slave,",
-          "and in this case DECERR is signaled consistently in every beat of read data. There may be a benefit if a master can",
-          "inspect just one beat of read data to determine whether a DECERR has occurred.",
-          "The Consistent_DECERR property is used to define whether a slave signals DECERR consistently within a",
-          "transaction:",
-          "True           DECERR is signaled for every beat of read data, or no beats of read data within each cache line of",
-          "data. For example, a transaction which crosses a cache line boundary can receive a DECERR",
-          "response for every read data beat on one cache line and no data beats on the next cache line.",
-          "False          DECERR may be signaled on any number of read data beats.",
-          "If Consistent_DECERR is not declared, it is considered to be:",
-          "True           For AXI4-Lite and AXI5-Lite interfaces, since they do not support multiple beats of data.",
-          "False          For all other interfaces.",
-          "The Consistent_DECERR property can be True for the following interfaces:",
-          "\u2022    AXI3",
-          "\u2022    AXI4"
-        ]
-      },
-      {
-        "table_id": "Table E1-30",
-        "name": "Consistent_DECERR interoperability",
-        "line": 20162,
-        "rows": [
-          "Slave: False                                     Slave: True",
-          "Master: False         Compatible.                                      Compatible.",
-          "Not compatible.                                  Compatible.",
-          "Master: True          A DECERR response might be missed by",
-          "the master.",
-          "E1-402                            Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.            ARM IHI 0022H",
-          "Non-Confidential                                                  ID040120",
-          "E1 Additional Features in AMBA 5",
-          "E1.19 Signal width properties",
-          "E1.19      Signal width properties",
-          "Properties are added to define the width of signals where the width is not fixed by the specification.",
-          "If a property is zero, then the associated signals are not present on the interface.",
-          "The maximum values are for guidance only, in order to set a reasonable maximum for configurable interfaces."
         ]
       },
       {
@@ -4703,61 +3839,6 @@
           "CRNSAIDCHK                      CRNSAID                   1                                   4             CRVALID",
           "CDVALIDCHK                      CDVALID                   1                                   1             ARESETn",
           "CDREADYCHK                      CDREADY                   1                                   1             ARESETn"
-        ]
-      },
-      {
-        "table_id": "Table F1-1",
-        "name": "Properties that can be set on an ACE5 interface",
-        "line": 20802,
-        "rows": [
-          "Property                             Description",
-          "DVM_v8                               Specifies that a component supports DVMv8 and DVMv7 message",
-          "protocols.",
-          "See DVM message versions on page D13-323.",
-          "DVM_v8.1                             Specifies that a component supports DVMv8.1, DVMv8 and DVMv7",
-          "message protocols.",
-          "See DVM message versions on page D13-323.",
-          "CMO_On_Read                          Indicates whether an interface supports cache maintenance operations on",
-          "the read channels.",
-          "See CMO signaling on page D7-271.",
-          "Persist_CMO                          Adds an additional cache maintenance operation that is used to provide a",
-          "cache clean to the Point of Persistence operation.",
-          "See CMO transactions on page D7-267.",
-          "Check_Type                           Adds data or interface level parity signals for error detection.",
-          "See Chapter E2 Interface and data protection.",
-          "Poison                               Adds Poison signaling that is used to indicate that a set of data bytes have",
-          "been corrupted.",
-          "See Chapter E2 Interface and data protection.",
-          "QoS_Accept                           Adds two additional QoS interface signals that enable a slave to indicate",
-          "the QoS value of transactions that it will accept.",
-          "See QoS Accept signaling on page E1-360."
-        ]
-      },
-      {
-        "table_id": "Table F1-1",
-        "name": "Properties that can be set on an ACE5 interface (continued)",
-        "line": 20868,
-        "rows": [
-          "Property                               Description",
-          "MPAM_Support                           Used to indicate whether an interface supports MPAM.",
-          "See Memory Partitioning and Monitoring (MPAM) on page E1-385",
-          "Unique_ID_Support                      Indicates whether an interface supports the Unique ID Indicator.",
-          "See Unique ID indicator on page E1-383.",
-          "Consistent_DECERR                      Used to define whether a slave signals DECERR consistently across all",
-          "beats of read and write response.",
-          "See Consistent DECERR response on page E1-401.",
-          "DVM_Message_Support                    Used to describe the types of DVM messages that are supported by an",
-          "interface.",
-          "See About DVM transactions on page D13-318",
-          "Exclusive_Accesses                     Used to define whether a master issues exclusive accesses or whether a",
-          "slave supports them.",
-          "See Exclusive accesses on page E1-399.",
-          "Max_Transaction_Bytes                  Defines the maximum size of a transaction in bytes.",
-          "See Maximum transaction size and boundary on page E1-400.",
-          "Regular_Transactions_Only              Used to define whether a master issues only Regular type transactions and",
-          "if a slave only supports Regular transactions.",
-          "See Regular transactions property on page A3-53.",
-          "Shareable_Transactions                 Used to define whether a master issues Inner Shareable or Outer Shareable"
         ]
       },
       {
@@ -4967,61 +4048,6 @@
         ]
       },
       {
-        "table_id": "Table F2-1",
-        "name": "Properties that can be set on an ACE5-Lite interface",
-        "line": 21239,
-        "rows": [
-          "Property                            Description",
-          "Atomic_Transactions                 Adds Atomic transactions that perform more than just a single access, and",
-          "have some form of operation that is associated with the transaction.",
-          "See Atomic transactions on page E1-342.",
-          "Cache_Stash_Transactions            Adds Cache Stashing transactions that enable one component to indicate that",
-          "a particular cache line should be placed in the cache of another component",
-          "in the system.",
-          "See Cache stashing on page E1-351.",
-          "DeAllocation_Transactions           Adds Deallocation transactions that permit an IO coherent master to",
-          "influence the allocation of cache lines in the system.",
-          "See Deallocating transactions on page E1-355.",
-          "Persist_CMO                         Adds an additional cache maintenance operation that is used to provide a",
-          "cache clean to the point of persistence operation.",
-          "See CMO transactions on page D7-267.",
-          "Check_Type                          Adds data or interface level parity signals for error detection.",
-          "See Chapter E2 Interface and data protection.",
-          "Poison                              Adds Poison signaling, which is used to indicate that a set of data bytes have",
-          "been previously corrupted.",
-          "See Chapter E2 Interface and data protection.",
-          "QoS_Accept                          Adds two additional QoS interface signals that enable a slave to indicate the",
-          "QoS value of transactions that it will accept."
-        ]
-      },
-      {
-        "table_id": "Table F2-1",
-        "name": "Properties that can be set on an ACE5-Lite interface (continued)",
-        "line": 21307,
-        "rows": [
-          "Property                         Description",
-          "CMO_On_Write                     Indicates whether a component supports cache maintenance operations on",
-          "write channels.",
-          "See CMO signaling on page D7-271.",
-          "Read_Interleaving_Disabled       Indicates whether an interface supports the interleaving of read data beats",
-          "from different transactions.",
-          "See Read interleaving property on page E1-382.",
-          "Read_Data_Chunking               Indicates whether an interface supports the return of read data in reorderable",
-          "chunks.",
-          "See Read data chunking on page E1-378.",
-          "Unique_ID_Support                Indicates whether an interface supports the Unique ID Indicator.",
-          "See Unique ID indicator on page E1-383.",
-          "Write_Plus_CMO                   Used to indicate whether a component supports combined write and CMOs",
-          "on the write channels.",
-          "See Write with CMO configuration on page D7-277.",
-          "MTE_Support                      Used to indicate that a component supports the Memory Tagging Extension.",
-          "See Memory tagging on page E1-387.",
-          "Prefetch_Transaction             Used to indicate whether a component supports prefetching.",
-          "See Prefetch request and response on page E1-396",
-          "WriteZero_Transaction            Used to indicate whether an interface supports the WriteZero transaction."
-        ]
-      },
-      {
         "table_id": "Table F2-2",
         "name": "Write address channel signals",
         "line": 21392,
@@ -5200,89 +4226,6 @@
           "F2-434                           Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.   ARM IHI 0022H",
           "Non-Confidential                                         ID040120",
           "Chapter F3"
-        ]
-      },
-      {
-        "table_id": "Table F3-1",
-        "name": "Properties that can be set on an ACE5-LiteDVM interface",
-        "line": 21750,
-        "rows": [
-          "Property                                Description",
-          "Atomic_Transactions                     Adds Atomic transactions that perform more than just a single access,",
-          "and have some form of operation that is associated with the transaction.",
-          "See Atomic transactions on page E1-342.",
-          "DVM_v8                                  Specifies that a component supports DVMv8 and DVMv7 message",
-          "protocols.",
-          "See DVM message versions on page D13-323.",
-          "DVM_v8.1                                Specifies that a component supports DVMv8.1, DVMv8, and DVMv7",
-          "message protocols.",
-          "See DVM message versions on page D13-323.",
-          "DVM_v8.4                                Specifies that a component supports DVMv8.4, DVMv8.1, DVMv8,",
-          "and DVMv7 message protocols.",
-          "See DVM message versions on page D13-323.",
-          "Cache_Stash_Transactions                Adds Cache Stashing transactions that enable one component to indicate",
-          "that a particular cache line should be placed in the cache of another",
-          "component in the system.",
-          "See Cache stashing on page E1-351.",
-          "DeAllocation_Transactions               Adds Deallocation transactions that permit an IO coherent master to",
-          "influence the allocation of cache lines in the system.",
-          "See Deallocating transactions on page E1-355.",
-          "Persist_CMO                             Adds an additional cache maintenance operation that is used to provide"
-        ]
-      },
-      {
-        "table_id": "Table F3-1",
-        "name": "Properties that can be set on an ACE5-LiteDVM interface (continued)",
-        "line": 21802,
-        "rows": [
-          "Property                             Description",
-          "QoS_Accept                           Adds two additional QoS interface signals that enable a slave to indicate",
-          "the QoS value of transactions that it will accept.",
-          "See QoS Accept signaling on page E1-360.",
-          "Trace_Signals                        Adds a Trace signal, which is associated with each channel, to support",
-          "the debugging, tracing, and performance measurement of systems.",
-          "See Trace signals on page E1-357.",
-          "Loopback_Signals                     Adds loopback signaling that permits an agent that is issuing",
-          "transactions to store information relating to the transaction in an indexed",
-          "table.",
-          "See User Loopback signaling on page E1-359.",
-          "Wakeup_Signals                       Adds two wakeup signals, which are used to indicate that there is activity",
-          "that is associated with the interface.",
-          "See Wake-up Signaling on page E1-362.",
-          "Coherency_Connection_Signals         Adds signaling to connect or disconnect this interface from the",
-          "coherency system.",
-          "See Coherency Connection signaling on page E1-364.",
-          "NSAccess_Identifiers                 Adds Non-secure access identifiers that support the storage and",
-          "processing of protected data.",
-          "See Non-secure access identifiers on page E1-376.",
-          "MPAM_Support                         Used to indicate whether an interface supports MPAM."
-        ]
-      },
-      {
-        "table_id": "Table F3-1",
-        "name": "Properties that can be set on an ACE5-LiteDVM interface (continued)",
-        "line": 21872,
-        "rows": [
-          "Property                              Description",
-          "MTE_Support                           Used to indicate that a component supports the Memory Tagging",
-          "Extension.",
-          "See Memory tagging on page E1-387",
-          "Prefetch_Transaction                  Used to indicate whether a component supports prefetching.",
-          "See Prefetch request and response on page E1-396",
-          "WriteZero_Transaction                 Used to indicate whether an interface supports the WriteZero",
-          "transaction.",
-          "See Write zero with no data on page E1-398",
-          "Consistent_DECERR                     Used to define whether a slave signals DECERR consistently across all",
-          "beats of read and write response. See Consistent DECERR response on",
-          "page E1-401.",
-          "Exclusive_Accesses                    Used to define whether a master issues exclusive accesses or whether a",
-          "slave supports them.",
-          "See Exclusive accesses on page E1-399.",
-          "Max_Transaction_Bytes                 Defines the maximum size of a transaction in bytes. See Maximum",
-          "transaction size and boundary on page E1-400.",
-          "Regular_Transactions_Only             Used to define whether a master issues only Regular type transactions",
-          "and if a slave only supports Regular transactions. See Regular",
-          "transactions property on page A3-53."
         ]
       },
       {
@@ -5534,44 +4477,6 @@
         ]
       },
       {
-        "table_id": "Table F4-2",
-        "name": "Property options for ACE5-Lite and ACE5-LiteACP",
-        "line": 22349,
-        "rows": [
-          "Property                                          ACE5-Lite         ACE5-LiteACP",
-          "Cache_Stash_Transactions                                    Y                Y",
-          "Wakeup_Signals                                              Y                Y",
-          "Check_Type                                                  Y                Y",
-          "Poison                                                      Y                Y",
-          "Trace_Signals                                               Y                Y",
-          "QoS_Accept                                                  Y                 -",
-          "Loopback_Signals                                            Y                 -",
-          "Untranslated_Transactions                                   Y                 -",
-          "NSAccess_Identifiers                                        Y                 -",
-          "Persist_CMO                                                 Y                 -",
-          "Atomic_Transactions                                         Y                 -",
-          "DeAllocation_Transactions                                   Y                 -",
-          "Unique_ID_Support                                           Y                Y"
-        ]
-      },
-      {
-        "table_id": "Table F4-3",
-        "name": "Interoperability of ACE5-Lite, ACE5-LiteACP, and ACP masters and slaves",
-        "line": 22431,
-        "rows": [
-          "Master               Slave                Interoperability",
-          "ACE5-Lite            ACE5-LiteACP         Can connect directly if master uses ACE5-LiteACP subset of",
-          "transactions and optional features.",
-          "ACE5-LiteACP         ACE5-Lite            Fully operational. Tie off unused inputs according to Table 2.",
-          "ACP                  ACE5-LiteACP         Fully operational. Set optional properties on ACE5-LiteACP to",
-          "False.",
-          "ACE5-LiteACP         ACP                  Fully operational if master does not issue 64-byte write bursts with",
-          "sparse strobes. Set optional properties on ACE5-LiteACP to False.",
-          "When connecting an ACE5-LiteACP master directly to an ACE5-Lite slave interface, undriven inputs on the",
-          "ACE5-Lite slave interface must be tied according to Table F4-4."
-        ]
-      },
-      {
         "table_id": "Table F4-4",
         "name": "Tie-offs for undriven signals in ACE5-LiteACP",
         "line": 22449,
@@ -5656,28 +4561,6 @@
           "F5.3        AWSNOOP signal width",
           "From Issue G onward for ACE5-Lite, ACE5-LiteDVM, and ACE5-LiteACP interfaces, AWSNOOP is extended to",
           "be 4 bits wide, to accommodate additional operations that are permitted on those interfaces."
-        ]
-      },
-      {
-        "table_id": "Table G1-1",
-        "name": "Augmented naming for write transactions",
-        "line": 22705,
-        "rows": [
-          "Generic name         Full cache line variant         Partial cache line variant         Notes",
-          "WriteUnique          WriteUniqueFull                 WriteUniquePtl                     -",
-          "WriteBack            WriteBackFull                   WriteBackPtl                       -",
-          "WriteClean           WriteCleanFull                  WriteCleanPtl                      -",
-          "WriteEvict           WriteEvictFull                  -                                  There is no partial line",
-          "variant for WriteEvict",
-          "Adoption of the new naming scheme is optional and context always permits the naming scheme in use to be",
-          "determined.",
-          "Note",
-          "ACE does not provide an address phase indication that a WriteBack or WriteClean transaction is a full or partial line",
-          "write.",
-          "G1-458                             Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                    ARM IHI 0022H",
-          "Non-Confidential                                                          ID040120",
-          "Appendix G2",
-          "Signal Lists"
         ]
       },
       {
@@ -5841,38 +4724,6 @@
         ]
       },
       {
-        "table_id": "Table G3-1",
-        "name": "Summary of interface properties",
-        "line": 23716,
-        "rows": [
-          "Issue introduced",
-          "ACE5- LiteDVM",
-          "ACE5- LiteACP",
-          "ACE5- Lite",
-          "Property",
-          "AXI5- Lite",
-          "AXI4-Lite",
-          "ACE-Lite",
-          "ACE5"
-        ]
-      },
-      {
-        "table_id": "Table G3-1",
-        "name": "Summary of interface properties (continued)",
-        "line": 23825,
-        "rows": [
-          "Issue introduced",
-          "ACE5- LiteDVM",
-          "ACE5- LiteACP",
-          "ACE5- Lite",
-          "Property",
-          "AXI5- Lite",
-          "AXI4-Lite",
-          "ACE-Lite",
-          "ACE5"
-        ]
-      },
-      {
         "table_id": "Table G4-1",
         "name": "Summary of ARSNOOP encodings",
         "line": 23959,
@@ -5991,237 +4842,6 @@
           "Note",
           "type"
         ]
-      },
-      {
-        "table_id": "Table G7-1",
-        "name": "Issue B",
-        "line": 24412,
-        "rows": [
-          "Change                           Location",
-          "First release of Version 1.0     \u2212"
-        ]
-      },
-      {
-        "table_id": "Table G7-2",
-        "name": "Differences between issue B and issue C",
-        "line": 24421,
-        "rows": [
-          "Change                                                                                    Location",
-          "Additional section describing the chapter layout of Version 2.0 of the document           AXI revisions on page A1-21",
-          "Additional details on the constraints for the VALID and READY handshake                   Handshake process on page 3-2",
-          "Additional equation for wrapping bursts                                                   Burst address on page 4-7",
-          "Additional chapter describing the AXI4 update to the AXI3 protocol                        Chapter 13 AXI4",
-          "Additional chapter describing the AXI4-Lite subset of the AXI4 protocol                   Chapter 14 AXI4-Lite"
-        ]
-      },
-      {
-        "table_id": "Table G7-3",
-        "name": "Differences between issue C and issue D",
-        "line": 24438,
-        "rows": [
-          "Change                                                Location",
-          "Full integration of the AXI3 and AXI4 content         Part A AXI3 and AXI4 Protocol Specification",
-          "Additional Part added describing the ACE update       Part C AXI Coherency Extensions (ACE) Protocol Specification",
-          "to the AXI protocol"
-        ]
-      },
-      {
-        "table_id": "Table G7-4",
-        "name": "Differences between issue D and issue E",
-        "line": 24450,
-        "rows": [
-          "Change                                                                             Location",
-          "Clarification of the byte lane strobes\u2019 requirement for FIXED bursts               Burst type in Address structure on",
-          "page A3-48",
-          "Correction to pseudo code routine: //Increment address if necessary                Pseudocode description of the",
-          "transfers on page A3-52",
-          "Additional section describing the Ordered_Write_Observation property               Ordered write observation on",
-          "page A6-91",
-          "Additional section describing the Multi_Copy_Atomocity property                    Multi-copy write atomicity on",
-          "page A7-95",
-          "Clarification of the peripheral slave transaction subset                           Memory slaves and peripheral slaves",
-          "on page A9-109",
-          "Additional section describing the AWUNIQUE signal                                  AWUNIQUE signal on page D3-181",
-          "Clarification of WriteUnique Propagation to Main Memory                            WriteUnique on page D4-223 and",
-          "WriteLineUnique on page D4-223",
-          "Additional section describing the WriteEvict transaction                           WriteEvict on page D4-225",
-          "G7-486                          Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                     ARM IHI 0022H",
-          "Non-Confidential                                                           ID040120"
-        ]
-      },
-      {
-        "table_id": "Table G7-4",
-        "name": "Differences between issue D and issue E (continued)",
-        "line": 24485,
-        "rows": [
-          "Change                                                                            Location",
-          "Clarification of WriteNoSnoop blocked by WriteUnique and                          Restrictions on WriteUnique and",
-          "WriteLineUnique                                                                   WriteLineUnique usage on",
-          "page D4-226",
-          "Clarification of sequencing Coherent and Cache Maintenance transactions to        Sequencing transactions on",
-          "a cache line                                                                      page D6-249",
-          "Additional section describing the Continuous_Cache_Line_Read_Data                 Continuous read data return on",
-          "property                                                                          page D6-250",
-          "Clarification of Exclusive Accesses and naturally evicted cache lines             Exclusive Store on page D9-298",
-          "Clarification of the Shareable terminology in Exclusive Accesses                  About Exclusive accesses from ACE",
-          "masters on page D9-296 and",
-          "Transaction requirements on",
-          "page D9-304",
-          "Additional section describing optional DVM message support for Armv8              DVM message versions on",
-          "page D13-323",
-          "Additional section describing DVMv7 and DVMv8 address spaces                      Addresses in DVM messages on",
-          "page D13-324",
-          "Additional format definitions for DVMv8 messages                                  Addresses in DVM messages on",
-          "page D13-324"
-        ]
-      },
-      {
-        "table_id": "Table G7-5",
-        "name": "Differences between issue E and issue F",
-        "line": 24533,
-        "rows": [
-          "Change                                                                            Location",
-          "Removed Low Power Interface chapter, this content has been superseded by          Was Chapter A9",
-          "a separate specification (ARM IHI 0068C)",
-          "New interfaces defined: AXI5, AXI5-Lite                                           Part C AMBA AXI5 and AXI5-Lite",
-          "Interface Specification",
-          "Rule that a snoop response must give IsShared asserted while a Write is in        AWUNIQUE signal on page D3-181",
-          "progress with AWUNIQUE asserted is clarified to only apply to WriteBack",
-          "and WriteEvict",
-          "Clarification that a line might become dirty when a CleanShared is in             CleanShared on page D4-218",
-          "progress",
-          "ARM IHI 0022H                  Copyright \u00a9 2003-2020 Arm Limited or its affiliates. All rights reserved.                           G7-487",
-          "ID040120                                               Non-Confidential",
-          "Appendix G7 Revisions"
-        ]
-      },
-      {
-        "table_id": "Table G7-5",
-        "name": "Differences between issue E and issue F (continued)",
-        "line": 24560,
-        "rows": [
-          "Change                                                                            Location",
-          "Change which adds restrictions when using Evict transactions with                 Restrictions on WriteUnique and",
-          "WriteUnique and WriteLineUnique                                                   WriteLineUnique usage on",
-          "page D4-226",
-          "Added a missing row to the table of Alternative Snoop Transactions to cover       Table D5-2 on page D5-233",
-          "MakeInvalid",
-          "Change to allow an Evict and WriteEvict to be issued while a CleanShared is       Cache maintenance propagation on",
-          "in progress                                                                       page D7-270",
-          "Change to the mismatched shareability and cacheability rules to allow for         Chapter D7 Cache Maintenance",
-          "cache maintenance transactions",
-          "Clarification that a component is not permitted to wait for a DVM Complete        DVM Synchronization and DVM",
-          "relating to a DVM Sync it has issued, before it provides DVM Complete for         Complete transactions on",
-          "a DVM Sync it has received                                                        page D13-320",
-          "Clarification that an ACE/ACE-Lite master is permitted to wait for both parts     DVM message transactions on",
-          "of a 2-part DVM message before responding on CR channel                           page D13-319",
-          "New interfaces and features defined: ACE5, ACE5-Lite, ACE5-LiteDVM,               Part E AMBA 5 Protocol Features",
-          "ACE5-LiteACP",
-          "Deprecation of Inner Shareable domain for AMBA5 interfaces                        Shareability domain support on",
-          "page F5-452"
-        ]
-      },
-      {
-        "table_id": "Table G7-6",
-        "name": "Differences between issue F and issue G",
-        "line": 24607,
-        "rows": [
-          "Change                                                                         Location",
-          "Clarified that an EXOKAY response can only be given for exclusive              Read and write response",
-          "accesses.                                                                      structure on page A3-59",
-          "Rewrite of AXI ordering chapter to improve clarity.                            Chapter A6 AXI Ordering",
-          "Model",
-          "Change that Multi_Copy_Atomicity property must be True for                     Multi-copy write atomicity on",
-          "interfaces compliant with Issue G and later.                                   page A7-95",
-          "Clarification of permitted responses to exclusive accesses.                    Responses to exclusive access",
-          "on page A7-98",
-          "Removed table D3-10 as it does not add value to the text.                      Cache line size restrictions on",
-          "page D3-182",
-          "Rewrite of chapter on Cache Maintenance Operations, adding Clean to            Chapter D7 Cache",
-          "Deep Persistence and option for CMOs on write channels.                        Maintenance",
-          "Clarification of rules for Atomic transactions.                                Atomic transactions attributes",
-          "on page E1-343",
-          "Clarification that WriteUniqueStash and StashOnce transactions must            Stash transaction signaling on",
-          "not cross a cache line boundary.                                               page E1-352",
-          "Change that Stash transactions are permitted to be Inner Shareable.            Stash transaction signaling on",
-          "page E1-352"
-        ]
-      },
-      {
-        "table_id": "Table G7-6",
-        "name": "Differences between issue F and issue G (continued)",
-        "line": 24680,
-        "rows": [
-          "Change                                                                         Location",
-          "Added support for interface parity, combined with existing section on          Chapter E2 Interface and data",
-          "data parity and poison.                                                        protection",
-          "Change that AWSNOOP is extended to 4 bits for ACE5-Lite,                       AWSNOOP signal width on",
-          "ACE5-LiteDVM and ACE5-LiteACP interfaces, irrespective of                      page F5-454",
-          "property settings.",
-          "Updated signal matrix with new signals.                                        Signal matrix on page G2-460",
-          "Change that ARVMIDEXT is optional for interfaces with the                      Signal matrix on page G2-460",
-          "DVM_v8.1 property set, where the master can receive but not issue",
-          "DVM messages.",
-          "Updated property table with new properties.                                    Summary of interface",
-          "properties on page G3-472",
-          "Updated tables showing AxSNOOP encodings.                                      Appendix G4 Summary of",
-          "AxSNOOP encodings",
-          "Added summary of ID constraints.                                               Appendix G5 Summary of ID",
-          "constraints",
-          "Added interface property timeline.                                             Summary of interface",
-          "properties on page G3-472"
-        ]
-      },
-      {
-        "table_id": "Table G7-7",
-        "name": "Differences between issue G and issue H",
-        "line": 24712,
-        "rows": [
-          "Change                                                                         Location",
-          "Clarified rules regarding inter-transaction dependencies for a master.         Relationships between the",
-          "channels on page A3-44",
-          "Added recommendation that WDATA and RDATA are zero for inactive                Channel signaling",
-          "byte lanes.                                                                    requirements on page A3-42",
-          "Added section on Regular Transactions                                          Regular transactions on",
-          "page A3-53",
-          "Updated section on User Defined Signaling                                      User-defined signaling on",
-          "page A8-104",
-          "Consolidated all CMO content into a single chapter                             Chapter D7 Cache",
-          "Maintenance",
-          "Added Write with CMO transaction                                               Write with cache maintenance",
-          "on page D7-277",
-          "Rewrite of DVM message chapter                                                 Chapter D13 Distributed",
-          "Virtual Memory Transactions",
-          "Added support for DVM v8.4 messages                                            DVM message versions on",
-          "page D13-323",
-          "Corrected transaction sizes for AtomicStore, AtomicLoad and                    Atomic transactions attributes",
-          "AtomicSwap                                                                     on page E1-343"
-        ]
-      },
-      {
-        "table_id": "Table G7-7",
-        "name": "Differences between issue G and issue H (continued)",
-        "line": 24754,
-        "rows": [
-          "Change                                                                         Location",
-          "Clarified that for an AtomicCompare transaction, a burst length of 1 is        Atomic transactions attributes",
-          "permitted and AWADDR is not required to be aligned.                            on page E1-343",
-          "Clarified that master might ignore the write response to an Atomic             Response signaling on",
-          "Transaction                                                                    page E1-347",
-          "Renamed width parameters for Loopback signaling                                User Loopback signaling on",
-          "page E1-359",
-          "Added v2 functionality to Untranslated Transactions                            SMMU flows on page E1-373",
-          "Moved StashTranslation description from Cache Stashing to                      StashTranslation on",
-          "Untranslated Transactions chapter                                              page E1-374",
-          "Relaxed rule for RCHUNKNUM and RCHUNKSTRB value when                           Read data chunking protocol",
-          "RCHUNKV is deasserted                                                          rules on page E1-378",
-          "Added section on Memory Tagging                                                Memory tagging on",
-          "page E1-387",
-          "Added Prefetch request and response                                            Prefetch request and response",
-          "on page E1-396",
-          "Added Write zero with no data                                                  Write zero with no data on",
-          "page E1-398"
-        ]
       }
     ]
   },
@@ -6257,11 +4877,6 @@
       "table": "Table A2-6"
     },
     {
-      "line": 1789,
-      "quote": "Table A3-1 Transaction channel handshake pairs",
-      "table": "Table A3-1"
-    },
-    {
       "line": 2208,
       "quote": "Table A3-2 Burst size encoding",
       "table": "Table A3-2"
@@ -6272,11 +4887,6 @@
       "table": "Table A3-3"
     },
     {
-      "line": 2536,
-      "quote": "Table A3-4 Regular_Transactions_Only Interoperability",
-      "table": "Table A3-4"
-    },
-    {
       "line": 2931,
       "quote": "Table A3-5 RRESP and BRESP encoding",
       "table": "Table A3-5"
@@ -6285,11 +4895,6 @@
       "line": 3087,
       "quote": "Table A4-1 Transaction attribute encoding",
       "table": "Table A4-1"
-    },
-    {
-      "line": 3170,
-      "quote": "Table A4-2 Parameters fixed as Non-modifiable",
-      "table": "Table A4-2"
     },
     {
       "line": 3314,
@@ -6310,11 +4915,6 @@
       "line": 3767,
       "quote": "Table A4-6 Protection encoding",
       "table": "Table A4-6"
-    },
-    {
-      "line": 3944,
-      "quote": "Table A5-1 Channel transaction ID",
-      "table": "Table A5-1"
     },
     {
       "line": 4791,
@@ -6367,21 +4967,6 @@
       "table": "Table B1-1"
     },
     {
-      "line": 5726,
-      "quote": "Table B1-2 Full AXI and AXI4-Lite interoperability",
-      "table": "Table B1-2"
-    },
-    {
-      "line": 5968,
-      "quote": "Table C1-1 Properties that can be set on an AXI5 interface",
-      "table": "Table C1-1"
-    },
-    {
-      "line": 6035,
-      "quote": "Table C1-1 Properties that can be set on an AXI5 interface (continued)",
-      "table": "Table C1-1"
-    },
-    {
       "line": 6082,
       "quote": "Table C1-2 Write address channel signals",
       "table": "Table C1-2"
@@ -6425,16 +5010,6 @@
       "line": 6351,
       "quote": "Table C1-8 Wakeup low-power signals",
       "table": "Table C1-8"
-    },
-    {
-      "line": 6472,
-      "quote": "Table C2-1 AXI5-Lite interface comparison",
-      "table": "Table C2-1"
-    },
-    {
-      "line": 6525,
-      "quote": "Table C2-2 Interoperability of AXI5-Lite with AXI5 and AXI4-Lite",
-      "table": "Table C2-2"
     },
     {
       "line": 6662,
@@ -6555,26 +5130,6 @@
       "line": 8606,
       "quote": "Table D3-10 Cache line size transaction constraints (continued)",
       "table": "Table D3-10"
-    },
-    {
-      "line": 8666,
-      "quote": "Table D3-11 ReadOnce and WriteUnique transaction constraints",
-      "table": "Table D3-11"
-    },
-    {
-      "line": 8698,
-      "quote": "Table D3-12 WriteBack and WriteClean transaction constraints",
-      "table": "Table D3-12"
-    },
-    {
-      "line": 8733,
-      "quote": "Table D3-12 WriteBack and WriteClean transaction constraints (continued)",
-      "table": "Table D3-12"
-    },
-    {
-      "line": 8765,
-      "quote": "Table D3-13 Barrier transaction constraints",
-      "table": "Table D3-13"
     },
     {
       "line": 8810,
@@ -6787,39 +5342,9 @@
       "table": "Table D4-29"
     },
     {
-      "line": 11146,
-      "quote": "Table D5-1 Recommended transaction mappings",
-      "table": "Table D5-1"
-    },
-    {
-      "line": 11234,
-      "quote": "Table D5-2 Snoop transaction options on the address snoop channel",
-      "table": "Table D5-2"
-    },
-    {
-      "line": 11267,
-      "quote": "Table D5-2 Snoop transaction options on the address snoop channel (continued)",
-      "table": "Table D5-2"
-    },
-    {
-      "line": 11299,
-      "quote": "Table D5-3 Required snoop transaction behavior",
-      "table": "Table D5-3"
-    },
-    {
-      "line": 11385,
-      "quote": "Table D5-4 Permitted end states for combinations of initial state and snoop transaction",
-      "table": "Table D5-4"
-    },
-    {
       "line": 11445,
       "quote": "Table D5-5 Associated snoop responses for combinations of initial state and snoop transaction",
       "table": "Table D5-5"
-    },
-    {
-      "line": 11534,
-      "quote": "Table D5-6 Recommended data transfer behavior for snoop transactions",
-      "table": "Table D5-6"
     },
     {
       "line": 11705,
@@ -6850,11 +5375,6 @@
       "line": 11979,
       "quote": "Table D5-12 CleanShared permitted cache line state changes",
       "table": "Table D5-12"
-    },
-    {
-      "line": 12323,
-      "quote": "Table D6-1 Interconnect snoop requirements",
-      "table": "Table D6-1"
     },
     {
       "line": 12420,
@@ -6907,16 +5427,6 @@
       "table": "Table D7-9"
     },
     {
-      "line": 13575,
-      "quote": "Table D7-10 Combinations of write, domain, and CM",
-      "table": "Table D7-10"
-    },
-    {
-      "line": 13841,
-      "quote": "Table D7-11 Permitted accesses from the Coherent domain and Non-coherent agent",
-      "table": "Table D7-11"
-    },
-    {
       "line": 13966,
       "quote": "Table D8-1 Domain barrier applicability",
       "table": "Table D8-1"
@@ -6952,11 +5462,6 @@
       "table": "Table D12-1"
     },
     {
-      "line": 15399,
-      "quote": "Table D13-1 Capability of master and slave interfaces",
-      "table": "Table D13-1"
-    },
-    {
       "line": 15592,
       "quote": "Table D13-2 DVM transaction constraints",
       "table": "Table D13-2"
@@ -6965,36 +5470,6 @@
       "line": 15635,
       "quote": "Table D13-2 DVM transaction constraints (continued)",
       "table": "Table D13-2"
-    },
-    {
-      "line": 15745,
-      "quote": "Table D13-3 DVM message versions",
-      "table": "Table D13-3"
-    },
-    {
-      "line": 15785,
-      "quote": "Table D13-4 Supported physical and virtual address spaces",
-      "table": "Table D13-4"
-    },
-    {
-      "line": 15812,
-      "quote": "Table D13-5 Address fields for the first of a two-part invalidation by VA or IPA",
-      "table": "Table D13-5"
-    },
-    {
-      "line": 15840,
-      "quote": "Table D13-6 Address fields for the second of a two-part invalidation by VA or IPA",
-      "table": "Table D13-6"
-    },
-    {
-      "line": 15867,
-      "quote": "Table D13-7 First transaction address mapping for any DVM operation, operating on a physical address",
-      "table": "Table D13-7"
-    },
-    {
-      "line": 15883,
-      "quote": "Table D13-8 Second transaction address mapping for any DVM operation, operating on a physical address",
-      "table": "Table D13-8"
     },
     {
       "line": 15953,
@@ -7087,11 +5562,6 @@
       "table": "Table D13-23"
     },
     {
-      "line": 16793,
-      "quote": "Table E1-1 Atomic transaction operators",
-      "table": "Table E1-1"
-    },
-    {
       "line": 16944,
       "quote": "Table E1-2 AWATOP encodings",
       "table": "Table E1-2"
@@ -7115,11 +5585,6 @@
       "line": 17388,
       "quote": "Table E1-6 Permitted combinations of the enable signals",
       "table": "Table E1-6"
-    },
-    {
-      "line": 17474,
-      "quote": "Table E1-7 Conversion between Stash and Non-stash transactions",
-      "table": "Table E1-7"
     },
     {
       "line": 17590,
@@ -7187,11 +5652,6 @@
       "table": "Table E1-19"
     },
     {
-      "line": 19341,
-      "quote": "Table E1-20 MTE_Support",
-      "table": "Table E1-20"
-    },
-    {
       "line": 19363,
       "quote": "Table E1-21 MTE Signaling",
       "table": "Table E1-21"
@@ -7207,19 +5667,9 @@
       "table": "Table E1-22"
     },
     {
-      "line": 19538,
-      "quote": "Table E1-23 Legal tag operations for read transactions",
-      "table": "Table E1-23"
-    },
-    {
       "line": 19572,
       "quote": "Table E1-24 Writes with tag operations",
       "table": "Table E1-24"
-    },
-    {
-      "line": 19613,
-      "quote": "Table E1-25 Legal tag operations for write transactions",
-      "table": "Table E1-25"
     },
     {
       "line": 19639,
@@ -7230,26 +5680,6 @@
       "line": 19712,
       "quote": "Table E1-26 Possible responses to a Match operation",
       "table": "Table E1-26"
-    },
-    {
-      "line": 19995,
-      "quote": "Table E1-27 Exclusive_Accesses interoperability",
-      "table": "Table E1-27"
-    },
-    {
-      "line": 20047,
-      "quote": "Table E1-28 Shareable_Transactions interoperability",
-      "table": "Table E1-28"
-    },
-    {
-      "line": 20102,
-      "quote": "Table E1-29 Max_Transaction_Bytes interoperability",
-      "table": "Table E1-29"
-    },
-    {
-      "line": 20162,
-      "quote": "Table E1-30 Consistent_DECERR interoperability",
-      "table": "Table E1-30"
     },
     {
       "line": 20190,
@@ -7280,16 +5710,6 @@
       "line": 20711,
       "quote": "Table E2-2 Parity check signals (continued)",
       "table": "Table E2-2"
-    },
-    {
-      "line": 20802,
-      "quote": "Table F1-1 Properties that can be set on an ACE5 interface",
-      "table": "Table F1-1"
-    },
-    {
-      "line": 20868,
-      "quote": "Table F1-1 Properties that can be set on an ACE5 interface (continued)",
-      "table": "Table F1-1"
     },
     {
       "line": 20939,
@@ -7342,16 +5762,6 @@
       "table": "Table F1-10"
     },
     {
-      "line": 21239,
-      "quote": "Table F2-1 Properties that can be set on an ACE5-Lite interface",
-      "table": "Table F2-1"
-    },
-    {
-      "line": 21307,
-      "quote": "Table F2-1 Properties that can be set on an ACE5-Lite interface (continued)",
-      "table": "Table F2-1"
-    },
-    {
       "line": 21392,
       "quote": "Table F2-2 Write address channel signals",
       "table": "Table F2-2"
@@ -7385,21 +5795,6 @@
       "line": 21679,
       "quote": "Table F2-7 QoS accept and Wakeup signals",
       "table": "Table F2-7"
-    },
-    {
-      "line": 21750,
-      "quote": "Table F3-1 Properties that can be set on an ACE5-LiteDVM interface",
-      "table": "Table F3-1"
-    },
-    {
-      "line": 21802,
-      "quote": "Table F3-1 Properties that can be set on an ACE5-LiteDVM interface (continued)",
-      "table": "Table F3-1"
-    },
-    {
-      "line": 21872,
-      "quote": "Table F3-1 Properties that can be set on an ACE5-LiteDVM interface (continued)",
-      "table": "Table F3-1"
     },
     {
       "line": 21941,
@@ -7457,16 +5852,6 @@
       "table": "Table F4-1"
     },
     {
-      "line": 22349,
-      "quote": "Table F4-2 Property options for ACE5-Lite and ACE5-LiteACP",
-      "table": "Table F4-2"
-    },
-    {
-      "line": 22431,
-      "quote": "Table F4-3 Interoperability of ACE5-Lite, ACE5-LiteACP, and ACP masters and slaves",
-      "table": "Table F4-3"
-    },
-    {
       "line": 22449,
       "quote": "Table F4-4 Tie-offs for undriven signals in ACE5-LiteACP",
       "table": "Table F4-4"
@@ -7485,11 +5870,6 @@
       "line": 22622,
       "quote": "Table F5-2 Barrier Compatibility",
       "table": "Table F5-2"
-    },
-    {
-      "line": 22705,
-      "quote": "Table G1-1 Augmented naming for write transactions",
-      "table": "Table G1-1"
     },
     {
       "line": 22768,
@@ -7542,16 +5922,6 @@
       "table": "Table G2-3"
     },
     {
-      "line": 23716,
-      "quote": "Table G3-1 Summary of interface properties",
-      "table": "Table G3-1"
-    },
-    {
-      "line": 23825,
-      "quote": "Table G3-1 Summary of interface properties (continued)",
-      "table": "Table G3-1"
-    },
-    {
       "line": 23959,
       "quote": "Table G4-1 Summary of ARSNOOP encodings",
       "table": "Table G4-1"
@@ -7580,61 +5950,6 @@
       "line": 24339,
       "quote": "Table G6-3 Write response combinations",
       "table": "Table G6-3"
-    },
-    {
-      "line": 24412,
-      "quote": "Table G7-1 Issue B",
-      "table": "Table G7-1"
-    },
-    {
-      "line": 24421,
-      "quote": "Table G7-2 Differences between issue B and issue C",
-      "table": "Table G7-2"
-    },
-    {
-      "line": 24438,
-      "quote": "Table G7-3 Differences between issue C and issue D",
-      "table": "Table G7-3"
-    },
-    {
-      "line": 24450,
-      "quote": "Table G7-4 Differences between issue D and issue E",
-      "table": "Table G7-4"
-    },
-    {
-      "line": 24485,
-      "quote": "Table G7-4 Differences between issue D and issue E (continued)",
-      "table": "Table G7-4"
-    },
-    {
-      "line": 24533,
-      "quote": "Table G7-5 Differences between issue E and issue F",
-      "table": "Table G7-5"
-    },
-    {
-      "line": 24560,
-      "quote": "Table G7-5 Differences between issue E and issue F (continued)",
-      "table": "Table G7-5"
-    },
-    {
-      "line": 24607,
-      "quote": "Table G7-6 Differences between issue F and issue G",
-      "table": "Table G7-6"
-    },
-    {
-      "line": 24680,
-      "quote": "Table G7-6 Differences between issue F and issue G (continued)",
-      "table": "Table G7-6"
-    },
-    {
-      "line": 24712,
-      "quote": "Table G7-7 Differences between issue G and issue H",
-      "table": "Table G7-7"
-    },
-    {
-      "line": 24754,
-      "quote": "Table G7-7 Differences between issue G and issue H (continued)",
-      "table": "Table G7-7"
     }
   ],
   "extraction_hints": [

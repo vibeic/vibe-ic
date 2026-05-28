@@ -93,10 +93,70 @@
       "bits": "zero",
       "CRRESP": "0b00000",
       "the": "0",
-      "data": "zero. For example while"
+      "data": "zero. For example while",
+      "ACLK": "Required (no default)",
+      "AWID": "All zeros",
+      "AWADDR": "Required (no default)",
+      "AWREGION": "All zeros",
+      "AWLEN": "All zeros, Length 1",
+      "AWSIZE": "Data bus width",
+      "AWLOCK": "All zeros, Normal access",
+      "AWCACHE": "0b0000",
+      "AWPROT": "Required (no default)",
+      "AWQOS": "0b0000",
+      "AWVALID": "Required (no default)",
+      "AWREADY": "Required (no default)",
+      "WDATA": "Required (no default)",
+      "WSTRB": "All ones",
+      "WLAST": "Required (no default)",
+      "WVALID": "Required (no default)",
+      "WREADY": "Required (no default)",
+      "BID": "Required (no default)",
+      "BRESP": "Required (no default)",
+      "BVALID": "Required (no default)",
+      "BREADY": "Required (no default)",
+      "AWBURST": "Required (no default)",
+      "ARID": "All zeros",
+      "ARADDR": "Required (no default)",
+      "ARLEN": "All zeros, Length 1",
+      "ARSIZE": "Data bus width",
+      "ARLOCK": "All zeros, Normal access",
+      "ARCACHE": "0b0000",
+      "ARPROT": "Required (no default)",
+      "ARQOS": "0b0000",
+      "ARVALID": "Required (no default)",
+      "ARREADY": "Required (no default)",
+      "RID": "Required (no default)",
+      "RDATA": "Required (no default)",
+      "RRESP": "Required (no default)",
+      "RLAST": "Required (no default)",
+      "RVALID": "Required (no default)",
+      "RREADY": "Required (no default)",
+      "ARREGION": "Required (no default)",
+      "ARBURST": "Required (no default)"
+    },
+    "typical_topologies": [
+      "\u2022     Shared address and data buses",
+      "\u2022     Shared address buses and multiple data buses",
+      "\u2022     Multilayer, with multiple address and data buses",
+      "by using a shared address bus with multiple data buses to enable parallel data transfers."
+    ],
+    "multi_copy_atomicity": {
+      "found_at_line": 4220,
+      "quote": "from any master. This observability is a requirement of a system that is multi-copy atomic.",
+      "required_from": "AXI5 Issue G+",
+      "english": "Once a write is observed by one observer, all observers must see it (no write coalescing or store-buffer divergence)"
+    },
+    "axprot_polarity": {
+      "field": "AxPROT[1]",
+      "polarity": "0 = Secure, 1 = Non-secure",
+      "found_at_line": 3797,
+      "quote": "security to memory access. AxPROT[1] identifies an access as Secure or Non-secure. AxPROT[1]",
+      "compliance_note": "Inverted-from-intuition: bit-1 high = Non-secure"
     },
     "id_routing": {
-      "note": "Interconnect may append bits to ID to identify the master port; slave-side ID_WIDTH > master-side ID_WIDTH"
+      "description": "Interconnect may append bits to AxID to identify the originating master; slave-side ID_WIDTH > master-side ID_WIDTH",
+      "compliance_note": "Returning ID is the WIDER value; routing strips appended bits before returning to the master"
     }
   },
   "evidence": [
@@ -165,6 +225,456 @@
       "quote": "Many writes in a system, particularly from a CPU have data set to zero. For example while initializing or allocating",
       "signal": "data",
       "default": "zero. For example while"
+    },
+    {
+      "line": 5248,
+      "quote": "ACLK              Input          Required         -",
+      "signal": "ACLK",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5252,
+      "quote": "AWID              Output         Optional         All zeros",
+      "signal": "AWID",
+      "default": "All zeros"
+    },
+    {
+      "line": 5254,
+      "quote": "AWADDR            Output         Required         -",
+      "signal": "AWADDR",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5256,
+      "quote": "AWREGION          Output         Optional         All zeros",
+      "signal": "AWREGION",
+      "default": "All zeros"
+    },
+    {
+      "line": 5258,
+      "quote": "AWLEN             Output         Optional         All zeros, Length 1",
+      "signal": "AWLEN",
+      "default": "All zeros, Length 1"
+    },
+    {
+      "line": 5260,
+      "quote": "AWSIZE            Output         Optional         Data bus width",
+      "signal": "AWSIZE",
+      "default": "Data bus width"
+    },
+    {
+      "line": 5264,
+      "quote": "AWLOCK            Output         Optional         All zeros, Normal access",
+      "signal": "AWLOCK",
+      "default": "All zeros, Normal access"
+    },
+    {
+      "line": 5266,
+      "quote": "AWCACHE           Output         Optional         0b0000",
+      "signal": "AWCACHE",
+      "default": "0b0000"
+    },
+    {
+      "line": 5268,
+      "quote": "AWPROT            Output         Required         -",
+      "signal": "AWPROT",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5270,
+      "quote": "AWQOS             Output         Optional         0b0000",
+      "signal": "AWQOS",
+      "default": "0b0000"
+    },
+    {
+      "line": 5272,
+      "quote": "AWVALID           Output         Required         -",
+      "signal": "AWVALID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5274,
+      "quote": "AWREADY           Input          Required         -",
+      "signal": "AWREADY",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5276,
+      "quote": "WDATA             Output         Required         -",
+      "signal": "WDATA",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5278,
+      "quote": "WSTRB             Output         Optional         All ones",
+      "signal": "WSTRB",
+      "default": "All ones"
+    },
+    {
+      "line": 5280,
+      "quote": "WLAST             Output         Required         -",
+      "signal": "WLAST",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5282,
+      "quote": "WVALID            Output         Required         -",
+      "signal": "WVALID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5284,
+      "quote": "WREADY            Input          Required         -",
+      "signal": "WREADY",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5300,
+      "quote": "BID               Input          Optional        -",
+      "signal": "BID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5302,
+      "quote": "BRESP             Input          Optional        -",
+      "signal": "BRESP",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5304,
+      "quote": "BVALID            Input          Required        -",
+      "signal": "BVALID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5306,
+      "quote": "BREADY            Output         Required        -",
+      "signal": "BREADY",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5324,
+      "quote": "ACLK                     Input            Required    -",
+      "signal": "ACLK",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5328,
+      "quote": "AWID                     Input            Required    -",
+      "signal": "AWID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5330,
+      "quote": "AWADDR                   Input            Required    -",
+      "signal": "AWADDR",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5332,
+      "quote": "AWREGION                 Input            Optional    -",
+      "signal": "AWREGION",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5334,
+      "quote": "AWLEN                    Input            Required    -",
+      "signal": "AWLEN",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5336,
+      "quote": "AWSIZE                   Input            Required    -",
+      "signal": "AWSIZE",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5338,
+      "quote": "AWBURST                  Input            Required    -",
+      "signal": "AWBURST",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5340,
+      "quote": "AWLOCK                   Input            Optional    -",
+      "signal": "AWLOCK",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5342,
+      "quote": "AWCACHE                  Input            Optional    -",
+      "signal": "AWCACHE",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5344,
+      "quote": "AWPROT                   Input            Optional    -",
+      "signal": "AWPROT",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5346,
+      "quote": "AWQOS                    Input            Optional    -",
+      "signal": "AWQOS",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5348,
+      "quote": "AWVALID                  Input            Required    -",
+      "signal": "AWVALID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5350,
+      "quote": "AWREADY                  Output           Required    -",
+      "signal": "AWREADY",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5352,
+      "quote": "WDATA                    Input            Required    -",
+      "signal": "WDATA",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5354,
+      "quote": "WSTRB                    Input            Required    -",
+      "signal": "WSTRB",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5356,
+      "quote": "WLAST                    Input            Optional    -",
+      "signal": "WLAST",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5358,
+      "quote": "WVALID                   Input            Required    -",
+      "signal": "WVALID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5360,
+      "quote": "WREADY                   Output           Required    -",
+      "signal": "WREADY",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5362,
+      "quote": "BID                      Output           Required    -",
+      "signal": "BID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5366,
+      "quote": "BVALID                   Output           Required    -",
+      "signal": "BVALID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5368,
+      "quote": "BREADY                   Input            Required    -",
+      "signal": "BREADY",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5386,
+      "quote": "ARID                     Output         Optional         All zeros",
+      "signal": "ARID",
+      "default": "All zeros"
+    },
+    {
+      "line": 5388,
+      "quote": "ARADDR                   Output         Required         -",
+      "signal": "ARADDR",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5392,
+      "quote": "ARLEN                    Output         Optional         All zeros, Length 1",
+      "signal": "ARLEN",
+      "default": "All zeros, Length 1"
+    },
+    {
+      "line": 5394,
+      "quote": "ARSIZE                   Output         Optional         Data bus width",
+      "signal": "ARSIZE",
+      "default": "Data bus width"
+    },
+    {
+      "line": 5398,
+      "quote": "ARLOCK                   Output         Optional         All zeros, Normal access",
+      "signal": "ARLOCK",
+      "default": "All zeros, Normal access"
+    },
+    {
+      "line": 5400,
+      "quote": "ARCACHE                  Output         Optional         0b0000",
+      "signal": "ARCACHE",
+      "default": "0b0000"
+    },
+    {
+      "line": 5402,
+      "quote": "ARPROT                   Output         Required         -",
+      "signal": "ARPROT",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5404,
+      "quote": "ARQOS                    Output         Optional         0b0000",
+      "signal": "ARQOS",
+      "default": "0b0000"
+    },
+    {
+      "line": 5406,
+      "quote": "ARVALID                  Output         Required         -",
+      "signal": "ARVALID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5408,
+      "quote": "ARREADY                  Input          Required         -",
+      "signal": "ARREADY",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5410,
+      "quote": "RID                      Input          Optional         -",
+      "signal": "RID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5412,
+      "quote": "RDATA                    Input          Required         -",
+      "signal": "RDATA",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5414,
+      "quote": "RRESP                    Input          Optional         -",
+      "signal": "RRESP",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5416,
+      "quote": "RLAST                    Input          Optional         -",
+      "signal": "RLAST",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5418,
+      "quote": "RVALID                   Input          Required         -",
+      "signal": "RVALID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5420,
+      "quote": "RREADY                   Output         Required         -",
+      "signal": "RREADY",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5438,
+      "quote": "ARID                     Input              Required        -",
+      "signal": "ARID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5440,
+      "quote": "ARADDR                   Input              Required        -",
+      "signal": "ARADDR",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5442,
+      "quote": "ARREGION                 Input              Optional        -",
+      "signal": "ARREGION",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5444,
+      "quote": "ARLEN                    Input              Required        -",
+      "signal": "ARLEN",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5446,
+      "quote": "ARSIZE                   Input              Required        -",
+      "signal": "ARSIZE",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5448,
+      "quote": "ARBURST                  Input              Required        -",
+      "signal": "ARBURST",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5450,
+      "quote": "ARLOCK                   Input              Optional        -",
+      "signal": "ARLOCK",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5452,
+      "quote": "ARCACHE                  Input              Optional        -",
+      "signal": "ARCACHE",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5454,
+      "quote": "ARPROT                   Input              Optional        -",
+      "signal": "ARPROT",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5456,
+      "quote": "ARQOS                    Input              Optional        -",
+      "signal": "ARQOS",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5458,
+      "quote": "ARVALID                  Input              Required        -",
+      "signal": "ARVALID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5460,
+      "quote": "ARREADY                  Output             Required        -",
+      "signal": "ARREADY",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5462,
+      "quote": "RID                      Output             Required        -",
+      "signal": "RID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5464,
+      "quote": "RDATA                    Output             Required        -",
+      "signal": "RDATA",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5468,
+      "quote": "RLAST                    Output             Required        -",
+      "signal": "RLAST",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5470,
+      "quote": "RVALID                   Output             Required        -",
+      "signal": "RVALID",
+      "default": "Required (no default)"
+    },
+    {
+      "line": 5472,
+      "quote": "RREADY                   Input              Required        -",
+      "signal": "RREADY",
+      "default": "Required (no default)"
     }
   ],
   "extraction_hints": [

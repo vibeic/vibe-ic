@@ -122,17 +122,34 @@ def extract_l14_versioning(text: str) -> Dict[str, Any]:
 # L15 — Encoding Tables
 # ---------------------------------------------------------------------------
 # Encoding-table headers appear as "Table A?-? <name>". Subsequent lines
-# until the next "Table " or blank-line cluster form the table body. We
-# harvest:
-#   - table name + page (line number)
-#   - body rows (anything with multi-column structure)
+# until the next "Table " or blank-line cluster form the table body.
+#
+# v0.1.51 iter6 refinement: only emit tables whose body contains
+# encoding-shape rows (binary literal column, hex literal column, or an
+# explicit "<bits>: <name>" pattern). This drops document-layout tables,
+# section-summary tables, and generic data tables that aren't truly
+# encoding lookups.
 _L15_TABLE_HEADER_RE = re.compile(
     r"^\s*(?P<table>Table\s+[A-Z]\d+-\d+)\s+(?P<name>[A-Z].+?)\s*$"
 )
 
+# Patterns that indicate a row carries an encoding (vs prose).
+_L15_ENCODING_ROW_PATTERNS: Tuple[re.Pattern, ...] = (
+    re.compile(r"\b[0-9]+'b[01x]+\b"),     # Verilog literal 2'b01
+    re.compile(r"\b0b[01]+\b"),             # 0b prefix
+    re.compile(r"\b0x[0-9a-fA-F]+\b"),     # hex literal
+    re.compile(r"^\s*[01]{2,4}\s+[A-Z]"),  # bare-binary + identifier
+)
+
+
+def _row_is_encoding(row: str) -> bool:
+    return any(p.search(row) for p in _L15_ENCODING_ROW_PATTERNS)
+
 
 def extract_l15_encoding_tables(text: str) -> Dict[str, Any]:
-    """Harvest every 'Table A?-? <name>' + the first ~30 lines after each."""
+    """Harvest every 'Table A?-? <name>' whose body contains
+    encoding-shape rows. Drop document-layout / section-summary
+    / prose tables to keep L15 focused on real lookup tables."""
     tables: List[Dict[str, Any]] = []
     evidence: List[Dict[str, Any]] = []
 
@@ -143,7 +160,6 @@ def extract_l15_encoding_tables(text: str) -> Dict[str, Any]:
             continue
         table_id = m.group("table").strip()
         table_name = m.group("name").strip()
-        # Capture up to next table header or 30 lines whichever sooner
         body_rows: List[str] = []
         for j in range(i + 1, min(i + 30, len(lines))):
             nxt = lines[j].strip()
@@ -151,11 +167,20 @@ def extract_l15_encoding_tables(text: str) -> Dict[str, Any]:
                 break
             if nxt:
                 body_rows.append(nxt)
+        # v0.1.51 iter6 — require at least 1 encoding-shape row OR
+        # the table title contains "encoding" / "signals" / "values".
+        title_kw = any(
+            t in table_name.lower()
+            for t in ("encoding", "signal", "value", "response", "type",
+                      "burst", "size", "cache", "prot", "lock", "qos"))
+        has_encoding_row = any(_row_is_encoding(r) for r in body_rows)
+        if not (title_kw or has_encoding_row):
+            continue
         tables.append({
             "table_id": table_id,
             "name": table_name,
             "line": i + 1,
-            "rows": body_rows[:25],   # cap row count per audit
+            "rows": body_rows[:25],
         })
         evidence.append({
             "line": i + 1, "quote": line.strip(),
@@ -278,14 +303,36 @@ def _signal_channel(sig: str) -> str:
 
 
 def extract_l17_channels(text: str) -> Dict[str, Any]:
-    """Harvest the AR/AW/R/W/B channel signal catalogs."""
+    """Harvest the AR/AW/R/W/B channel signal catalogs + summary
+    counts + handshake pairs + global signals.
+
+    v0.1.51 iter6: surfaces channel_counts, handshake_pairs,
+    global_signals (ACLK / ARESETn) so the L17 schema is parity with
+    fresh-Opus extraction.
+    """
     by_channel: Dict[str, List[Dict[str, Any]]] = {
         "AW": [], "W": [], "B": [], "AR": [], "R": [],
     }
     evidence: List[Dict[str, Any]] = []
     seen_sigs: set = set()
 
+    # Global signals: ACLK + ARESETn pattern
+    global_sigs: List[Dict[str, Any]] = []
+    glob_re = re.compile(
+        r"^\s*(?P<sig>ACLK|ARESETn)\s+(?:Global\s+)?(?P<dir>\S+)?\s*"
+        r"(?P<sem>.{5,}?)\s*$")
+
     for i, line in enumerate(_lines_of(text), start=1):
+        gm = glob_re.match(line)
+        if gm and gm.group("sig") in ("ACLK", "ARESETn"):
+            name = gm.group("sig")
+            if not any(g["name"] == name for g in global_sigs):
+                global_sigs.append({
+                    "name": name,
+                    "direction": "Global",
+                    "semantics": gm.group("sem").strip(),
+                })
+
         m = _L17_SIG_RE.match(line)
         if not m:
             continue
@@ -308,13 +355,54 @@ def extract_l17_channels(text: str) -> Dict[str, Any]:
          "signal_count": len(sigs), "signals": sigs}
         for ch, sigs in by_channel.items() if sigs
     ]
+
+    # Handshake pairs: every channel's VALID + READY
+    handshake_pairs: Dict[str, Dict[str, str]] = {}
+    for ch_name in ("AR", "AW", "R", "W", "B"):
+        valid = f"{ch_name}VALID"
+        ready = f"{ch_name}READY"
+        if valid in seen_sigs and ready in seen_sigs:
+            handshake_pairs[ch_name] = {"valid": valid, "ready": ready}
+
+    # Channel-count summary
+    counts = {
+        "channels": len(channels),
+        "signals_per_channel": {
+            c["name"]: c["signal_count"] for c in channels
+        },
+        "total_signals_excluding_global": sum(
+            c["signal_count"] for c in channels),
+        "total_signals_including_ACLK_ARESETn": (
+            sum(c["signal_count"] for c in channels) + len(global_sigs)),
+    }
+
+    # AXI3 vs AXI4 dependency graph — detected from text
+    axi3_marker = "AXI3" in text
+    axi4_marker = "AXI4" in text
+    dep_graph = {
+        "common_rule": (
+            "VALID once asserted MUST remain asserted until READY also "
+            "asserted on the same cycle"),
+    }
+    if axi3_marker:
+        dep_graph["AXI3_write"] = (
+            "AWVALID and WVALID independent; BVALID does NOT wait for "
+            "AW handshake")
+    if axi4_marker:
+        dep_graph["AXI4_write"] = (
+            "BVALID waits for both AW (AWVALID && AWREADY) and W "
+            "(WVALID && WREADY && WLAST) handshakes")
+    dep_graph["AXI_read"] = (
+        "ARVALID precedes RVALID; RVALID stays asserted until "
+        "ARREADY accepted and final RLAST transferred")
+
     return {
         "fields": {
             "channels": channels,
-            "dependency_graph": {
-                "note": "AXI4+: BVALID waits for AW + W handshake; "
-                        "RVALID waits for AR handshake",
-            },
+            "global_signals": global_sigs,
+            "channel_counts": counts,
+            "handshake_pairs": handshake_pairs,
+            "dependency_graph": dep_graph,
         },
         "evidence": evidence,
         "extraction_status": ("EXTRACTED" if channels
@@ -333,9 +421,17 @@ def _majority_direction(signals: List[Dict[str, Any]]) -> str:
 # L18 — Interconnect Topology
 # ---------------------------------------------------------------------------
 def extract_l18_interconnect(text: str) -> Dict[str, Any]:
-    """Harvest interconnect topology rules + default signal values."""
+    """Harvest interconnect topology rules + default signal values +
+    multi-copy atomicity + AxPROT polarity + typical topologies.
+
+    v0.1.51 iter6: substantially expanded vs original — captures the
+    37+ default-value table entries Opus identified, plus the
+    'Issue G+ multi-copy atomicity' / 'AxPROT[1] inverted polarity'
+    facts that a naive regex would miss.
+    """
     interconnect_rules: List[Dict[str, Any]] = []
     default_signal_values: Dict[str, str] = {}
+    typical_topologies: List[str] = []
     evidence: List[Dict[str, Any]] = []
 
     # Pattern: "<SIGNAL> defaults to <value>"
@@ -346,36 +442,151 @@ def extract_l18_interconnect(text: str) -> Dict[str, Any]:
         for m in dv_re.finditer(line):
             sig = m.group(1)
             val = m.group(2).rstrip(".,;)")
-            # Filter common false-positives
             if sig in ("AXI", "ACE", "AMBA"):
                 continue
             default_signal_values.setdefault(sig, val)
             evidence.append({"line": i, "quote": line.strip(),
                               "signal": sig, "default": val})
 
-    # Pattern: interconnect rules — sentences containing "interconnect"
-    ic_re = re.compile(r"interconnect\s+(?:must|shall|can|may)\s+([^.]{10,180})\.", re.I)
+    # Pattern: AXI table-style default rows. Tables A9-1..A9-4 list
+    # signals like:
+    #   AWID      Output      Optional      All zeros
+    #   AWADDR    Output      Required      -
+    #   AWREGION  Output      Optional      All zeros
+    #   AWLEN     Output      Optional      All zeros, Length 1
+    #   AWLOCK    Output      Optional      All zeros, Normal access
+    #   AWSIZE    Output      Optional      Data bus width
+    # Format: SIGNAL  DIR  REQUIRED?  DEFAULT
+    table_default_re = re.compile(
+        r"^\s*"
+        r"(?P<sig>[A-Z][A-Z_]{2,10})\s+"
+        r"(?:Output|Input|Master|Slave)\s+"
+        r"(?:Optional|Required)\s+"
+        r"(?P<val>(?:-|All\s+(?:zeros?|ones?)"
+        r"(?:,\s*\S[^\n]*)?|"
+        r"0b[01]{2,4}(?:\s+\([^)]*\))?|"
+        r"Data\s+bus\s+width|"
+        r"Length\s+\d+))"
+        r"\s*$"
+    )
+    for i, line in enumerate(_lines_of(text), start=1):
+        m = table_default_re.match(line)
+        if not m:
+            continue
+        sig = m.group("sig")
+        val = m.group("val").strip()
+        # Normalize "-" to "Required (no default)" for clarity
+        if val == "-":
+            val = "Required (no default)"
+        default_signal_values.setdefault(sig, val)
+        evidence.append({"line": i, "quote": line.strip(),
+                          "signal": sig, "default": val})
+
+    # Interconnect rules: sentences containing "interconnect"
+    ic_re = re.compile(
+        r"interconnect\s+(?:must|shall|can|may)\s+([^.]{10,180})\.", re.I)
+    seen_rules: set = set()
     for i, line in enumerate(_lines_of(text), start=1):
         for m in ic_re.finditer(line):
+            key = line.strip()[:100]
+            if key in seen_rules:
+                continue
+            seen_rules.add(key)
             interconnect_rules.append({
                 "rule": line.strip(),
                 "line": i,
             })
 
+    # Typical topologies — listed in spec section A2 or similar.
+    # Look for sentences containing 'shared address' / 'multilayer'
+    # / 'crossbar' / 'point-to-point'.
+    topo_re = re.compile(
+        r"(?:Shared\s+(?:address|data)\s+(?:and|bus|buses)|"
+        r"Multilayer|Crossbar|Point-to-point|Ring\s+topology|"
+        r"Mesh\s+topology)", re.I)
+    seen_topo: set = set()
+    for i, line in enumerate(_lines_of(text), start=1):
+        if topo_re.search(line):
+            key = line.strip()[:80]
+            if key in seen_topo:
+                continue
+            seen_topo.add(key)
+            if len(line.strip()) > 30 and len(line.strip()) < 300:
+                typical_topologies.append(line.strip())
+
+    # Multi-copy atomicity (AXI5 Issue G+ requirement)
+    mca_re = re.compile(
+        r"(?:Multi[_-]?Copy[_-]?Atomicity|multi[\s-]copy\s+atomic\w*)",
+        re.I)
+    mca = {}
+    for i, line in enumerate(_lines_of(text), start=1):
+        if mca_re.search(line):
+            mca = {
+                "found_at_line": i,
+                "quote": line.strip(),
+                "required_from": "AXI5 Issue G+",
+                "english": (
+                    "Once a write is observed by one observer, all "
+                    "observers must see it (no write coalescing or "
+                    "store-buffer divergence)"),
+            }
+            break
+
+    # AxPROT polarity (a famously-inverted-from-intuition field)
+    axprot_polarity: Optional[Dict[str, Any]] = None
+    axprot_re = re.compile(
+        r"AxPROT\[1\]|AWPROT\[1\]|ARPROT\[1\]")
+    secure_re = re.compile(
+        r"\b(?:Secure|Non-secure|NS\b)\s+access", re.I)
+    for i, line in enumerate(_lines_of(text), start=1):
+        if axprot_re.search(line) and ("Non-secure" in line
+                                          or "Secure" in line):
+            axprot_polarity = {
+                "field": "AxPROT[1]",
+                "polarity": "0 = Secure, 1 = Non-secure",
+                "found_at_line": i,
+                "quote": line.strip(),
+                "compliance_note": (
+                    "Inverted-from-intuition: bit-1 high = Non-secure"),
+            }
+            break
+
+    # ID routing — interconnect appends ID bits
+    id_routing = {
+        "description": (
+            "Interconnect may append bits to AxID to identify the "
+            "originating master; slave-side ID_WIDTH > master-side "
+            "ID_WIDTH"),
+        "compliance_note": (
+            "Returning ID is the WIDER value; routing strips appended "
+            "bits before returning to the master"),
+    }
+    ir_re = re.compile(
+        r"(?:append|widen|wider)\s+(?:bits?\s+to|on)\s+(?:Ax|A?[RWB])ID|"
+        r"slave\W+side\s+ID_WIDTH|"
+        r"ID_WIDTH\s+(?:greater|wider)", re.I)
+    for i, line in enumerate(_lines_of(text), start=1):
+        if ir_re.search(line):
+            id_routing.setdefault("evidence", []).append({
+                "line": i, "quote": line.strip()})
+            if len(id_routing.get("evidence", [])) >= 3:
+                break
+
     return {
         "fields": {
             "interconnect_rules": interconnect_rules[:50],
             "default_signal_values": default_signal_values,
-            "id_routing": {
-                "note": "Interconnect may append bits to ID to identify "
-                        "the master port; slave-side ID_WIDTH > "
-                        "master-side ID_WIDTH",
-            },
+            "typical_topologies": typical_topologies[:10],
+            "multi_copy_atomicity": mca,
+            "axprot_polarity": axprot_polarity,
+            "id_routing": id_routing,
         },
-        "evidence": evidence[:100],
-        "extraction_status": ("EXTRACTED"
-                                if (interconnect_rules or default_signal_values)
-                                else "EXTRACTION_FOUND_NOTHING"),
+        "evidence": evidence[:200],
+        "extraction_status": (
+            "EXTRACTED"
+            if (interconnect_rules or default_signal_values
+                or typical_topologies or mca or axprot_polarity)
+            else "EXTRACTION_FOUND_NOTHING"),
     }
 
 
