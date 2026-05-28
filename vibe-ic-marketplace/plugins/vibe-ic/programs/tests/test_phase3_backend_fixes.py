@@ -56,8 +56,11 @@ class TestUtilNormalization:
         assert warn2
 
     def test_nonnumeric_falls_back(self):
+        # v0.1.44 spm pilot Tier 1.5: default fallback changed 0.45 → 0.30
+        # (0.45 produced 1780 SKY130A DRC violations on spm 200x200 die;
+        # 0.30 produces 0 violations same die).
         u, warn = mod._normalize_util("abc")
-        assert u == 0.45
+        assert u == 0.30
         assert warn
 
     def test_result_always_in_unit_interval(self):
