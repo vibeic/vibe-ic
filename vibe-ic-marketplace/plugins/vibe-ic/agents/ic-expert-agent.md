@@ -718,7 +718,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 ### ~~Skill: power-up determinism for ALL regs~~ → **NOW A PROGRAM RULE**
 
-**v0.1.38**: extended `programs/rtl_hygiene_lint.py::autofix_uninit_registered_output` to cover ALL internal `reg` declarations in reset-less modules (previously only registered output ports + their direct continuous-assign sources). Corpus sweep: 3 already-passing samples picked up additional `initial = 0` blocks; re-scoring after autofix kept all 3 PASSing (zero regressions, idempotent). The AI doesn't need to remember this — the autofix enforces it before sample emit.
+**v0.1.38**: extended `programs/rtl_hygiene_lint.py::autofix_uninit_registered_output` to cover ALL internal `reg` declarations in reset-less modules (previously only registered output ports + their direct continuous-assign sources). v0.1.39 honesty correction (audit Finding 3): broader corpus sweep (362 samples) shows the extension fires on ~42 (~11.6%), not the "3 samples" the v0.1.38 note claimed. Behavior unchanged — `initial X = 0;` insertion only, steady-state semantics preserved, idempotent. Zero functional regressions across the 42. The AI doesn't need to remember this — the autofix enforces it before sample emit.
 
 _Promoted to program rule 2026-05-28 v0.1.38._
 

@@ -239,9 +239,34 @@ def _stub_l_docs_from_prose(docs_dir: Path, out_dir: Path) -> int:
             continue
         seen.add(port)
         ports.append({"name": port, "direction": direction, "width": width or "1"})
+    # v0.1.39 (audit Finding 4) — DO NOT default class_path to
+    # "digital_arithmetic_primitive". That biased every prose-only fallback
+    # to look like an RTLLM arithmetic primitive even for counters / FSMs /
+    # memories / encoders, which then triggered the wrong IC-class registry
+    # rules downstream. Detect a class hint from the prose; otherwise emit
+    # "unknown" so the registry's permissive default rules apply.
+    prose_lc = text.lower()
+    class_keywords = [
+        # order: most specific first
+        ("digital_memory_primitive",      ["fifo", "lifo", "stack ", "ram ", "rom ", "register file", "scratchpad"]),
+        ("digital_arithmetic_primitive",  ["adder", "subtractor", "multiplier", "divider", "alu", "accumulator", "mac unit"]),
+        ("digital_fsm",                   ["fsm", "state machine", "moore", "mealy", "next_state", "state transition"]),
+        ("digital_counter_primitive",     ["counter", "lfsr", "ring counter", "shift register", "johnson counter"]),
+        ("digital_arbiter_primitive",     ["arbiter", "priority encoder", "round robin"]),
+        ("digital_protocol_io",           ["uart", "spi", "i2c", "serial", "parallel", "deserial"]),
+        ("digital_signal_gen",            ["clock divider", "freq", "frequency divider", "clock generator", "waveform"]),
+    ]
+    detected_class = "unknown"
+    for cname, kws in class_keywords:
+        if any(kw in prose_lc for kw in kws):
+            detected_class = cname
+            break
     out_dir.mkdir(parents=True, exist_ok=True)
-    l1 = {"ic_name": mod_name, "class_path": "digital_arithmetic_primitive",
-          "summary": f"Stub L1 for {mod_name} (from prose .md)."}
+    l1 = {"ic_name": mod_name, "class_path": detected_class,
+          "summary": f"Stub L1 for {mod_name} (from prose .md).",
+          "stub_origin": "_stub_l_docs_from_prose",
+          "class_detection_method": ("keyword-match" if detected_class != "unknown"
+                                     else "fallback-unknown (no class keyword in prose)")}
     l3 = {"ports": ports}
     l9 = {"top_module": mod_name,
           "top_ports": [p["name"] for p in ports],

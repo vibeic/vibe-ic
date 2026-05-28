@@ -75,60 +75,148 @@ def _slug(s: str) -> str:
     return "".join(c if c.isalnum() else "-" for c in s.lower()).strip("-")[:80]
 
 
+# v0.1.39 (audit Finding 1 fix) — DESIGN_LEAK_PATTERN matches benchmark-design
+# identifiers that the honesty rule forbids in Bucket-B skill text:
+#   - VerilogEval Prob IDs:  ProbNNN_…  (e.g. Prob089_ece241_2014_q5a)
+#   - benchmark family tags: RTLLM, VerilogEval-{v2,Human,Machine}, CVDP, MetRex, …
+# When matched, emit_skill_section sanitizes them OUT of the worked-pattern field
+# so the captured skill stays general regardless of what the caller passed.
+_DESIGN_LEAK_PATTERN = (
+    r"\bProb\d+[A-Za-z0-9_]*"                                              # ProbNNN_xxx
+    r"|\b(?:RTLLM|VerilogEval(?:-(?:v[12]|Human|Machine))?|CVDP|MetRex|ResBench|RTL-Repo|PyHDL-Eval)\b"
+)
+import re as _leak_re  # local alias to avoid clobbering caller's `re` if any
+
+
+def _scrub_design_leak(text: str) -> str:
+    """Strip benchmark-design-identifier leaks from free-text fields.
+
+    Layered strategy (each layer catches what the prior one missed):
+
+      Layer 1 — known leak phrases. Drop ANY `(from X)` / `(captured by X)` /
+        `Worked example (X)` parenthetical regardless of what X is. Design
+        leaf names like `radix2_div` aren't in any enumeration, so the only
+        defensible rule is "kill the (from …) bracket structurally".
+
+      Layer 2 — enumerated benchmark-identifier tokens. Drop ProbNNN_…,
+        RTLLM, VerilogEval-{v2,Human,Machine,…}, CVDP, MetRex, ResBench,
+        RTL-Repo, PyHDL-Eval — these can also appear OUTSIDE the
+        `(from …)` structure (e.g. "RTLLM-class testbenches use …").
+
+    Honest about scrubbing — appends an `[anonymized]` marker so the reader
+    can see the sanitisation happened. chip-AGNOSTIC.
+    """
+    if not text:
+        return text
+    original = text
+    # Layer 1 — kill any `(from …)`, `(captured by …)`, `(worked miss …)`,
+    # `(refs …)`, `(per …)` bracket regardless of contents. These are the
+    # canonical attribution-leak structures used historically.
+    text = _leak_re.sub(
+        r"\((?:\s*(?:from|captured\s+by|per|refs?|worked\s+(?:miss|example)|"
+        r"e\.g\.,?|ref\.?)\s+)[^)]*\)",
+        "", text, flags=_leak_re.IGNORECASE)
+    # Layer 2 — enumerated tokens that may appear outside `(…)`.
+    text = _leak_re.sub(_DESIGN_LEAK_PATTERN, "", text, flags=_leak_re.IGNORECASE)
+    text = _leak_re.sub(r"\s{2,}", " ", text)
+    text = _leak_re.sub(r"\s+([,.;:])", r"\1", text)
+    text = text.strip()
+    if text != original:
+        text += "  [identifiers anonymized per benchmark-enhancement-capture honesty rule]"
+    return text
+
+
 def emit_skill_section(rec: dict) -> str:
-    name = rec.get("skill_title", _slug(rec.get("design", "unknown")))
+    # v0.1.39 (audit Finding 1) — REQUIRE skill_title; never default to the
+    # design slug (which would inject the benchmark identifier into the section
+    # header).
+    name = rec.get("skill_title")
+    if not name:
+        raise ValueError(
+            "emit_skill_section: rec missing 'skill_title' — refusing to "
+            "default to design slug per benchmark-enhancement-capture honesty "
+            "rule ('NEVER add a Bucket B skill section that names specific "
+            "benchmark design identifiers'). Caller must supply a generic "
+            "skill title describing the general PATTERN.")
+    pattern = _scrub_design_leak(rec.get("pattern", ""))
+    when = _scrub_design_leak(rec.get("when", ""))
+    what = _scrub_design_leak(rec.get("what", ""))
+    example = _scrub_design_leak(rec.get("example", ""))
+    generality = _scrub_design_leak(rec.get("generality", ""))
     return (
         f"### Skill: {name}\n\n"
-        f"**Pattern**: {rec.get('pattern', '')}\n\n"
-        f"**When to apply**: {rec.get('when', '')}\n\n"
-        f"**What to do**: {rec.get('what', '')}\n\n"
-        f"**Worked example** (from {rec.get('design', '?')}): "
-        f"{rec.get('example', '')}\n\n"
-        f"**Why this is GENERAL**: {rec.get('generality', '')}\n\n"
+        f"**Pattern**: {pattern}\n\n"
+        f"**When to apply**: {when}\n\n"
+        f"**What to do**: {what}\n\n"
+        f"**Worked pattern** (anonymized): {example}\n\n"
+        f"**Why this is GENERAL**: {generality}\n\n"
         f"_Captured by benchmark-enhancement-capture {datetime.date.today().isoformat()}._\n"
     )
 
 
 def emit_program_rule_sketch(rec: dict) -> str:
+    # v0.1.39 (audit Finding 1) — drop the "Source: <design>" breadcrumb so the
+    # in-tree program sketch is chip-AGNOSTIC. Pattern + docstring still capture
+    # the lesson without naming the originating benchmark design.
     rname = _slug(rec.get("rule_name", "todo")).replace("-", "_")
+    pattern = _scrub_design_leak(rec.get("pattern", ""))
+    docstring = _scrub_design_leak(rec.get("docstring", ""))
+    fix_action = _scrub_design_leak(rec.get("fix_action", ""))
     return (
         f"# v0.1.34+ — auto-captured by benchmark-enhancement-capture\n"
-        f"# Pattern: {rec.get('pattern', '')}\n"
-        f"# Source: {rec.get('design', '?')} recovery {datetime.date.today()}\n"
+        f"# Pattern: {pattern}\n"
         f"# CORPUS-SWEEP REQUIRED before merging: zero false-positives across\n"
-        f"# the existing VerilogEval + RTLLM + benchmark_clean corpora.\n"
+        f"# the open-benchmark corpora used by `score_iverilog_tb.py`.\n"
         f"\n"
         f"def rule_{rname}(sample_text, ports):\n"
-        f"    \"\"\"{rec.get('docstring', '')}\"\"\"\n"
+        f"    \"\"\"{docstring}\"\"\"\n"
         f"    # Expected signal: {rec.get('expected_signal', 'WARN')}\n"
-        f"    # Suggested fix action: {rec.get('fix_action', '')}\n"
+        f"    # Suggested fix action: {fix_action}\n"
         f"    return []  # list of findings — TODO implement\n"
     )
 
 
 def emit_backlog(rec: dict, today: str):
-    slug = _slug(rec.get("backlog_slug", rec.get("design", "todo")))
+    # v0.1.39 (audit Finding 1) — REQUIRE backlog_slug; never default to the
+    # design slug. Backlog filenames become part of the repo's permanent
+    # record; a Prob ID baked into a filename can never be silently scrubbed
+    # later without breaking links.
+    slug = rec.get("backlog_slug")
+    if not slug:
+        raise ValueError(
+            "emit_backlog: rec missing 'backlog_slug' — refusing to default "
+            "to design slug. Caller must supply a generic kebab-case slug "
+            "describing the issue category (e.g. 'rtl-hygiene-internal-reg-"
+            "init'), not the originating benchmark design name.")
+    slug = _slug(slug)
     fname = f"ORGANIC-{today.replace('-','')}-{slug}.yaml"
     indent = "  "
-    pat = rec.get("pattern", "").replace("\n", "\n" + indent)
-    fix = rec.get("suggested_fix", "").replace("\n", "\n" + indent)
+    pat = _scrub_design_leak(rec.get("pattern", "")).replace("\n", "\n" + indent)
+    fix = _scrub_design_leak(rec.get("suggested_fix", "")).replace("\n", "\n" + indent)
+    ctx = _scrub_design_leak(rec.get("session_context", ""))
     body = (
         f"type: {rec.get('backlog_type', 'enhancement')}\n"
         f"severity: {rec.get('severity', 'P2')}\n"
         f"component: {rec.get('component', '')}\n"
         f"plugin_version: \"{rec.get('plugin_version', '0.1.33')}\"\n\n"
-        f"title: >-\n  {rec.get('title', '')}\n\n"
+        f"title: >-\n  {_scrub_design_leak(rec.get('title', ''))}\n\n"
         f"pattern: |\n  {pat}\n\n"
         f"suggested_fix: |\n  {fix}\n\n"
         f"id: \"ORGANIC-{today.replace('-','')}-{slug}\"\n"
         f"submitted_at: \"{today}T00:00:00+08:00\"\n"
-        f"session_context: >-\n  {rec.get('session_context', '')}\n"
+        f"session_context: >-\n  {ctx}\n"
     )
     return fname, body
 
 
 def emit_discard_note(rec: dict) -> str:
-    return f"- **{rec.get('design', '?')}**: {rec.get('why_discard', 'no reason given')}\n"
+    # v0.1.39 (audit Finding 1) — discard log is an INTERNAL session record
+    # (lives in candidates/, NOT shipped as plugin content), so keeping the
+    # design name here is fine for audit traceability. But scrub the why-discard
+    # prose so a copy-pasted discard reason can't smuggle a Prob ID into a
+    # downstream Bucket-B section.
+    return (f"- **{rec.get('design', '?')}**: "
+            f"{_scrub_design_leak(rec.get('why_discard', 'no reason given'))}\n")
 
 
 def main():

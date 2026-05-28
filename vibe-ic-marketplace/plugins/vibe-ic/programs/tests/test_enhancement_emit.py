@@ -181,3 +181,63 @@ def test_summary_records_routing_used(tmp_path):
     used_B = set(routing_used.get("bucket_B", []))
     assert {"skills/sta-review/SKILL.md", "skills/drc-fix/SKILL.md"} <= used_B, \
         f"summary must list every touched skill file; got {used_B}"
+
+
+# ── v0.1.39 audit Finding 1 tests — honesty enforcement ──────────────────────
+import importlib.util
+_emit_spec = importlib.util.spec_from_file_location("enhancement_emit", str(SCRIPT))
+_emit_mod = importlib.util.module_from_spec(_emit_spec)
+_emit_spec.loader.exec_module(_emit_mod)
+
+
+def test_emit_skill_section_refuses_missing_skill_title():
+    """Audit Finding 1: caller MUST supply a generic skill_title — never default
+    to a benchmark design slug (the honesty-rule violation that polluted
+    ic-expert-agent.md through v0.1.38)."""
+    rec = {"design": "Prob089_ece241_2014_q5a",
+           "pattern": "p", "when": "w", "what": "x", "example": "e",
+           "generality": "g"}
+    with pytest.raises(ValueError, match="skill_title"):
+        _emit_mod.emit_skill_section(rec)
+
+
+def test_emit_backlog_refuses_missing_backlog_slug():
+    """Audit Finding 1: backlog filenames are permanent record; never default
+    to a Prob ID slug."""
+    rec = {"design": "Prob089", "title": "x", "pattern": "y",
+           "suggested_fix": "z"}
+    with pytest.raises(ValueError, match="backlog_slug"):
+        _emit_mod.emit_backlog(rec, "2026-05-28")
+
+
+def test_scrub_design_leak_removes_prob_ids():
+    """Audit Finding 1: enumerated benchmark-identifier tokens are scrubbed
+    from free-text fields no matter where they appear."""
+    s = _emit_mod._scrub_design_leak(
+        "RTLLM benchmarks use rst_n. See VerilogEval Prob089 for example.")
+    assert "Prob089" not in s
+    assert "RTLLM" not in s
+    assert "VerilogEval" not in s
+    assert "[identifiers anonymized" in s
+
+
+def test_scrub_design_leak_removes_from_parentheticals():
+    """Audit Finding 1: design leaf names like `radix2_div` aren't in any
+    enumeration, so the only defensible rule is "kill the (from X) bracket
+    structurally regardless of contents"."""
+    s = _emit_mod._scrub_design_leak("A divider design (from radix2_div): fix.")
+    assert "radix2_div" not in s
+    assert "from" not in s.lower() or "from" in s.replace("from", "F").lower()  # only the bracket-`from` was killed
+    # The bracket structure itself is gone
+    assert "(" not in s
+    assert ")" not in s
+
+
+def test_scrub_design_leak_idempotent_on_clean_text():
+    """A skill section that's already general should pass through unchanged
+    (no spurious anonymization marker)."""
+    clean = ("Pattern: a divider-class design that hardcoded width parameters. "
+             "When to apply: any module the description names a width parameter.")
+    s = _emit_mod._scrub_design_leak(clean)
+    assert s == clean, f"clean text should be unchanged; got: {s}"
+    assert "anonymized" not in s
