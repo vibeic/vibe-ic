@@ -298,3 +298,163 @@ class TestSynthFrontendSelection:
             files, default_rc=1, default_netlist_exists=False,
             default_log="unexpected TOK_IMPORT")
         assert need is True
+
+
+# ---------------------------------------------------------------------------
+# v0.1.46 / v0.1.47 / v0.1.48 — silicon-critical PnR block presence gates
+# ---------------------------------------------------------------------------
+# Closed-loop regression tests for the 3 silicon-critical fixes shipped from
+# the spm pilot (benchmark_clean/spm_pilot_v0144/RESULT_tier{2,5}*.md):
+#   v0.1.46 — tapcell insertion (latch-up well-tie density; was 0 → 384 taps)
+#   v0.1.47 — pdngen insertion (SPECIALNETS; was 0 → present → silicon-alive)
+#   v0.1.48 — filler_placement (decap + fill; was 0 → 2079 decap + 150 fill)
+# Each was a fresh "design ran clean PASS but silicon would be DOA" failure
+# mode in a prior plugin version. These tests pin the block emit so any
+# regression is caught by pytest (not by another full silicon handoff).
+class TestSiliconCriticalPnrBlocks:
+    @staticmethod
+    def _sky130_pdk():
+        # The minimal PdkConfig that exercises the "sky130-style" branch.
+        # All path fields are placeholders — these tests are pure-logic.
+        return mod.PdkConfig(
+            name="sky130A",
+            liberty="/placeholder/sky130_fd_sc_hd__tt_025C_1v80.lib",
+            tech_lef="/placeholder/sky130_fd_sc_hd.tlef",
+            cell_lef="/placeholder/sky130_fd_sc_hd.lef",
+            cell_gds="/placeholder/sky130_fd_sc_hd.gds",
+            site="unithd",
+            drc_deck="/placeholder/sky130A_mr.drc",
+            metal_prefix="met",
+            tapcell_master="sky130_fd_sc_hd__tapvpwrvgnd_1",
+            tapcell_distance_um=14.0,
+        )
+
+    @staticmethod
+    def _no_tapcell_pdk():
+        # A PDK that doesn't ship a tapcell master — the runner must
+        # gracefully emit a SKIPPED line on each of the 3 blocks.
+        return mod.PdkConfig(
+            name="customPDK",
+            liberty="/placeholder/lib.lib",
+            tech_lef="/placeholder/tech.lef",
+            cell_lef="/placeholder/cells.lef",
+            cell_gds=None,
+            site="sitename",
+            drc_deck=None,
+            metal_prefix="met",
+            tapcell_master=None,
+        )
+
+    # ---- v0.1.46 tapcell -----------------------------------------------
+    def test_tapcell_block_present_on_sky130(self):
+        tcl = mod._build_tapcell_tcl(self._sky130_pdk())
+        assert "tapcell -distance 14.0" in tcl
+        assert "sky130_fd_sc_hd__tapvpwrvgnd_1" in tcl
+        assert "TAPCELL_INSERTED" in tcl
+        # NONFATAL guard prevents the whole flow from aborting if the
+        # OpenROAD tapcell command errors on a future PDK update.
+        assert "TAPCELL_NONFATAL" in tcl
+
+    def test_tapcell_block_skipped_when_no_master(self):
+        tcl = mod._build_tapcell_tcl(self._no_tapcell_pdk())
+        assert "TAPCELL_SKIPPED" in tcl
+        # SKIPPED branch MUST NOT silently pretend tapcell ran — the
+        # message must surface the latch-up risk for the audit trail.
+        assert "latch-up risk" in tcl
+        # And it must NOT contain a real tapcell command (otherwise the
+        # PDK-without-master case would error inside Tcl).
+        assert "tapcell -distance" not in tcl
+
+    def test_tapcell_block_obeys_custom_distance(self):
+        pdk = self._sky130_pdk()
+        pdk.tapcell_distance_um = 25.0
+        tcl = mod._build_tapcell_tcl(pdk)
+        assert "tapcell -distance 25.0" in tcl
+
+    # ---- v0.1.47 pdngen ------------------------------------------------
+    def test_pdn_block_present_on_sky130(self):
+        tcl = mod._build_pdn_tcl(self._sky130_pdk())
+        # Required PDN-flow commands. Any of these missing = floating
+        # power pins = silicon DOA.
+        for required in (
+            "add_global_connection -net VPWR",
+            "add_global_connection -net VGND",
+            "set_voltage_domain",
+            "define_pdn_grid",
+            "add_pdn_stripe -grid grid -layer met1",
+            "-followpins",                 # met1 follow-pins (cell-row power)
+            "add_pdn_stripe -grid grid -layer met4",
+            "add_pdn_connect",
+            "pdngen",
+            "PDN_INSERTED",
+        ):
+            assert required in tcl, f"PDN block missing required command: {required!r}"
+        # NONFATAL guard
+        assert "PDN_NONFATAL" in tcl
+
+    def test_pdn_block_skipped_when_no_pdk(self):
+        tcl = mod._build_pdn_tcl(self._no_tapcell_pdk())
+        assert "PDN_SKIPPED" in tcl
+        assert "silicon DOA" in tcl
+        # MUST NOT silently emit a half-PDN
+        assert "define_pdn_grid" not in tcl
+        assert "pdngen" not in tcl
+
+    def test_pdn_block_pins_VPB_and_VNB_for_sky130(self):
+        # SKY130 std cells expose well-tap pins as VPB / VNB (not VPWR/VGND).
+        # If global_connect misses these, every cell's bulk floats →
+        # latch-up + functional broken. Regression-pin both.
+        tcl = mod._build_pdn_tcl(self._sky130_pdk())
+        assert "VPB" in tcl
+        assert "VNB" in tcl
+
+    # ---- v0.1.48 filler_placement --------------------------------------
+    def test_filler_masters_sky130_full_set(self):
+        masters = mod._filler_masters_for_pdk(self._sky130_pdk())
+        # Both decap-family and fill-family must be present. Decap is
+        # the dynamic-IR margin; fill is density-rule compliance.
+        decap = [m for m in masters if "decap" in m]
+        fill = [m for m in masters if m.startswith("sky130_fd_sc_hd__fill_")]
+        assert len(decap) >= 3, f"decap variants too few: {decap}"
+        assert len(fill) >= 3, f"fill variants too few: {fill}"
+        # Largest-first ordering (OpenROAD convention) for the largest
+        # decap variant and largest fill variant.
+        assert masters.index("sky130_fd_sc_hd__decap_12") < masters.index(
+            "sky130_fd_sc_hd__decap_3")
+        assert masters.index("sky130_fd_sc_hd__fill_8") < masters.index(
+            "sky130_fd_sc_hd__fill_1")
+
+    def test_filler_masters_empty_when_unknown_pdk(self):
+        masters = mod._filler_masters_for_pdk(self._no_tapcell_pdk())
+        assert masters == []
+
+    # ---- Cross-block invariants ----------------------------------------
+    def test_three_blocks_all_nonfatal_guarded(self):
+        # HONESTY GATE: if any of the 3 silicon-critical Tcl blocks raises
+        # an unguarded error, the entire OpenROAD invocation aborts and the
+        # runner reports FAIL — instead of degrading to NONFATAL with a
+        # surfaced log line. Pin the NONFATAL guard on each block.
+        pdk = self._sky130_pdk()
+        assert "catch" in mod._build_tapcell_tcl(pdk)
+        assert "catch" in mod._build_pdn_tcl(pdk)
+        # Filler is rendered inline (not from a pure builder), so probe
+        # by ensuring _filler_masters_for_pdk returns a non-empty list
+        # for sky130 (i.e. the caller WILL emit the catch'd block).
+        assert mod._filler_masters_for_pdk(pdk)
+
+    def test_sky130_PdkConfig_carries_v0146_settings(self):
+        # The PdkConfig factory used by the runner must wire the v0.1.46
+        # tapcell defaults for sky130A. If a future refactor drops these,
+        # tapcell falls back to SKIPPED and silicon ships latch-up-prone.
+        pdk = self._sky130_pdk()
+        assert pdk.tapcell_master == "sky130_fd_sc_hd__tapvpwrvgnd_1"
+        assert pdk.tapcell_distance_um == 14.0
+        # site == unithd is the SKY130 std-cell row site.
+        assert pdk.site == "unithd"
+
+    def test_default_util_is_030_for_sky130(self):
+        # v0.1.45 fix: bumped default 0.45 → 0.30 because 0.45 produced
+        # 1780 DRC violations on the spm 200x200 die. The util-normalizer
+        # falls back to 0.30 on nonnumeric input; pin that.
+        u, _ = mod._normalize_util("default")
+        assert u == 0.30

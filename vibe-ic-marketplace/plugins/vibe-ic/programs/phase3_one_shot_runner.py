@@ -517,6 +517,98 @@ def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
 # ---------------------------------------------------------------------------
 # PDK auto-detection (chip-AGNOSTIC)
 # ---------------------------------------------------------------------------
+# v0.1.49 — extracted pure-function builders for the 3 silicon-critical
+# backend blocks. Pure-function shape: takes a PdkConfig, returns the OpenROAD
+# Tcl snippet. Unit-tested in programs/tests/test_phase3_backend_fixes.py
+# (class TestSiliconCriticalPnrBlocks). The v0.1.46/47/48 spm pilot found
+# each of these blocks SILENTLY MISSING in prior plugin versions — a fresh
+# silicon DOA failure mode each time. These tests + the NONFATAL guards
+# below close that loop so any regression on tapcell/PDN/decap-fill insertion
+# is caught by pytest, not by another full silicon-handoff run.
+# ---------------------------------------------------------------------------
+def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
+    """v0.1.46 — emit OpenROAD `tapcell` Tcl, NONFATAL-guarded.
+
+    Returns the inserted block when `pdk.tapcell_master` is set, or a
+    SKIPPED line otherwise (latch-up risk noted out-of-band).
+    """
+    if pdk.tapcell_master:
+        return (
+            f"if {{[catch {{tapcell -distance {pdk.tapcell_distance_um} "
+            f"-tapcell_master {pdk.tapcell_master}}} _tap_err]}} {{\n"
+            f"  puts \"TAPCELL_NONFATAL: $_tap_err\"\n"
+            f"}} else {{\n"
+            f"  puts \"TAPCELL_INSERTED: master={pdk.tapcell_master} "
+            f"distance={pdk.tapcell_distance_um}um\"\n"
+            f"}}\n")
+    return ("puts \"TAPCELL_SKIPPED: no tapcell_master configured "
+            "for this PDK; latch-up risk if not handled "
+            "out-of-band\"\n")
+
+
+def _build_pdn_tcl(pdk: "PdkConfig") -> str:
+    """v0.1.47 — emit OpenROAD PDN (`add_global_connection`/`define_pdn_grid`/
+    `pdngen`) Tcl, NONFATAL-guarded.
+
+    Returns the inserted block when the PDK is sky130-style (probed by
+    `tapcell_master` non-None), or a SKIPPED line otherwise. Without this
+    block routed.def has 0 SPECIALNETS → silicon DOA.
+    """
+    if pdk.tapcell_master:  # sky130-style cell-pin VPWR/VPB → assume PDN supported
+        return (
+            "# === v0.1.47 PDN: global connections + grid + ring ===\n"
+            "if {[catch {\n"
+            "  add_global_connection -net VPWR -pin_pattern \"^VPWR$\" -power\n"
+            "  add_global_connection -net VPWR -pin_pattern \"^VPB$\"  -power\n"
+            "  add_global_connection -net VGND -pin_pattern \"^VGND$\" -ground\n"
+            "  add_global_connection -net VGND -pin_pattern \"^VNB$\"  -ground\n"
+            "  global_connect\n"
+            "  set_voltage_domain -name CORE -power VPWR -ground VGND\n"
+            "  define_pdn_grid -name grid -voltage_domains CORE\n"
+            "  add_pdn_stripe -grid grid -layer met1 -width 0.48 -pitch 5.44 -offset 0 -followpins\n"
+            "  add_pdn_stripe -grid grid -layer met4 -width 1.6 -pitch 40.0 -offset 8.0 -extend_to_core_ring\n"
+            "  add_pdn_stripe -grid grid -layer met5 -width 1.6 -pitch 40.0 -offset 8.0 -extend_to_core_ring\n"
+            "  add_pdn_connect -grid grid -layers {met1 met4}\n"
+            "  add_pdn_connect -grid grid -layers {met4 met5}\n"
+            "  pdngen\n"
+            "} _pdn_err]} {\n"
+            "  puts \"PDN_NONFATAL: $_pdn_err\"\n"
+            "} else {\n"
+            "  puts \"PDN_INSERTED: met1 follow-pins + met4/met5 stripes\"\n"
+            "}\n")
+    return ("puts \"PDN_SKIPPED: no PDK config for this design; "
+            "silicon DOA without external PDN insertion\"\n")
+
+
+# v0.1.48 — decap/fill master sets, per PDK family. Returned as a list of
+# OpenROAD cell-master names; the consumer renders the `filler_placement`
+# Tcl. Empty list → no fillers known for this PDK → caller should skip.
+_SKY130_FILLER_MASTERS = [
+    # decap (dynamic-IR margin) — ordered largest-first by OpenROAD convention
+    "sky130_fd_sc_hd__decap_12",
+    "sky130_fd_sc_hd__decap_8",
+    "sky130_fd_sc_hd__decap_6",
+    "sky130_fd_sc_hd__decap_4",
+    "sky130_fd_sc_hd__decap_3",
+    # fill (density-fill rule compliance)
+    "sky130_fd_sc_hd__fill_8",
+    "sky130_fd_sc_hd__fill_4",
+    "sky130_fd_sc_hd__fill_2",
+    "sky130_fd_sc_hd__fill_1",
+]
+
+
+def _filler_masters_for_pdk(pdk: "PdkConfig") -> List[str]:
+    """v0.1.48 — return the decap+fill cell-master set for this PDK.
+
+    sky130-style cell library (probed by tapcell_master) → SKY130 set.
+    Unknown PDK → empty list (caller emits a SKIPPED line).
+    """
+    if pdk.tapcell_master and "sky130_fd_sc_hd" in pdk.tapcell_master:
+        return list(_SKY130_FILLER_MASTERS)
+    return []
+
+
 @dataclass
 class PdkConfig:
     name: str
@@ -2274,60 +2366,26 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     spare_protection_tcl = _build_spare_protection_tcl(
         spare_plan, out_dir_c)
 
-    # v0.1.46 — tapcell insertion block. If the PDK config carries a
-    # `tapcell_master`, emit an OpenROAD `tapcell -distance ... -tapcell_master ...`
-    # command between floorplan and global_placement. Otherwise emit a
-    # NONFATAL skip. Per spm pilot Tier 5 finding: prior runner emitted ZERO
-    # tap cells, leaving every design at latch-up risk that no open-PDK DRC
-    # deck catches. SKY130: 384 tap cells inserted at 14 µm spacing, WNS
-    # improved +11.61 → +11.89 ns MET, DRC still 0 violations.
-    if pdk.tapcell_master:
-        tapcell_block = (
-            f"if {{[catch {{tapcell -distance {pdk.tapcell_distance_um} "
-            f"-tapcell_master {pdk.tapcell_master}}} _tap_err]}} {{\n"
-            f"  puts \"TAPCELL_NONFATAL: $_tap_err\"\n"
-            f"}} else {{\n"
-            f"  puts \"TAPCELL_INSERTED: master={pdk.tapcell_master} "
-            f"distance={pdk.tapcell_distance_um}um\"\n"
-            f"}}\n")
-    else:
-        tapcell_block = ("puts \"TAPCELL_SKIPPED: no tapcell_master configured "
-                         "for this PDK; latch-up risk if not handled "
-                         "out-of-band\"\n")
-
-    # v0.1.47 (spm pilot Tier 2 finding) — emit a Power Distribution Network
-    # (PDN). Prior runs (v0.1.25 → v0.1.46) emitted ZERO SPECIALNETS in the
-    # routed.def, meaning cells had floating power pins and the silicon
-    # would be DOA on tape-out. This is MORE severe than the v0.1.46
-    # tapcell gap (silicon would FAIL, not just be at-risk-of-failing).
-    # SKY130 spm pilot: PDN added, GDS grew 828 KB → 1.1 MB (PDN straps),
-    # WNS preserved at +11.89 ns MET, IR drop < 15 µV, DRC still 0.
-    # NONFATAL-guarded per step so unsupported PDKs degrade gracefully.
-    if pdk.tapcell_master:  # if we have sky130-style cells, assume PDN works
-        pdn_block = (
-            "# === v0.1.47 PDN: global connections + grid + ring ===\n"
-            "if {[catch {\n"
-            "  add_global_connection -net VPWR -pin_pattern \"^VPWR$\" -power\n"
-            "  add_global_connection -net VPWR -pin_pattern \"^VPB$\"  -power\n"
-            "  add_global_connection -net VGND -pin_pattern \"^VGND$\" -ground\n"
-            "  add_global_connection -net VGND -pin_pattern \"^VNB$\"  -ground\n"
-            "  global_connect\n"
-            "  set_voltage_domain -name CORE -power VPWR -ground VGND\n"
-            "  define_pdn_grid -name grid -voltage_domains CORE\n"
-            "  add_pdn_stripe -grid grid -layer met1 -width 0.48 -pitch 5.44 -offset 0 -followpins\n"
-            "  add_pdn_stripe -grid grid -layer met4 -width 1.6 -pitch 40.0 -offset 8.0 -extend_to_core_ring\n"
-            "  add_pdn_stripe -grid grid -layer met5 -width 1.6 -pitch 40.0 -offset 8.0 -extend_to_core_ring\n"
-            "  add_pdn_connect -grid grid -layers {met1 met4}\n"
-            "  add_pdn_connect -grid grid -layers {met4 met5}\n"
-            "  pdngen\n"
-            "} _pdn_err]} {\n"
-            "  puts \"PDN_NONFATAL: $_pdn_err\"\n"
+    # v0.1.46/47/48 — silicon-critical PnR blocks (extracted to pure
+    # helpers; see TestSiliconCriticalPnrBlocks in
+    # programs/tests/test_phase3_backend_fixes.py).
+    tapcell_block = _build_tapcell_tcl(pdk)
+    pdn_block = _build_pdn_tcl(pdk)
+    _filler_masters = _filler_masters_for_pdk(pdk)
+    if _filler_masters:
+        _filler_masters_tcl = " ".join(_filler_masters)
+        filler_block = (
+            "if {[catch {filler_placement {"
+            f"{_filler_masters_tcl}"
+            "}} _fp_err]} {\n"
+            "  puts \"FILLER_NONFATAL: $_fp_err\"\n"
             "} else {\n"
-            "  puts \"PDN_INSERTED: met1 follow-pins + met4/met5 stripes\"\n"
+            f"  puts \"FILLER_INSERTED: {len(_filler_masters)} masters\"\n"
             "}\n")
     else:
-        pdn_block = ("puts \"PDN_SKIPPED: no PDK config for this design; "
-                     "silicon DOA without external PDN insertion\"\n")
+        filler_block = ("puts \"FILLER_SKIPPED: no decap/fill masters known "
+                        "for this PDK; dynamic-IR margin + density-fill rules "
+                        "must be handled out-of-band\"\n")
 
     # v1.6.36 — emit per-stage DEF snapshots so def_stage_progression_check
     # sees byte-distinct, instance-count-growing, monotone-size files. Each
@@ -2457,12 +2515,7 @@ if {{[catch {{detailed_route}} dr_err]}} {{
 # (no filler in row gaps), and unused silicon area. SKY130 spm pilot added
 # 2079 decap + 150 fill cells; DRC still 0, worst IR 35 µV (2500× margin).
 # NONFATAL-guarded so PDKs without the masters degrade gracefully.
-if {{[catch {{filler_placement {{sky130_fd_sc_hd__decap_3 sky130_fd_sc_hd__decap_4 sky130_fd_sc_hd__decap_6 sky130_fd_sc_hd__decap_8 sky130_fd_sc_hd__decap_12 sky130_fd_sc_hd__fill_1 sky130_fd_sc_hd__fill_2 sky130_fd_sc_hd__fill_4 sky130_fd_sc_hd__fill_8}}}} _fp_err]}} {{
-  puts "FILLER_NONFATAL: $_fp_err"
-}} else {{
-  puts "FILLER_INSERTED: decap_3/4/6/8/12 + fill_1/2/4/8"
-}}
-write_def {out_dir_c}/routed.def
+{filler_block}write_def {out_dir_c}/routed.def
 write_def {out_dir_c}/{top}.def
 write_verilog {out_dir_c}/{top}_pnr.v
 report_checks > {out_dir_c}/sta.rpt
