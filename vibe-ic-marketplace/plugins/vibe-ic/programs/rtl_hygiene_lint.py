@@ -48,6 +48,14 @@ v0.1.24/v0.1.25 fail-case loops 2026-05-27/28):
      modules — the X-propagation through internal pipeline regs at t=0
      corrupts the output even when the output itself is initialized. Same
      conservative gate (no reset port). Chip-AGNOSTIC.
+     v0.1.39 honesty correction (audit Finding 3): the v0.1.38 release
+     note claimed "3 samples picked up additional initial blocks". The
+     actual broader corpus sweep (362 reference samples) shows the case-c
+     extension fires on ~42 samples (~11.6%). The behavior is unchanged:
+     `initial X = 0;` insertion only, which preserves all functional
+     behavior (steady-state semantics are independent of t=0 power-up
+     value); idempotent re-runs add nothing. Zero functional regressions
+     across the 42 — the safety claim holds; only the count was wrong.
 
 Usage:
     python3 rtl_hygiene_lint.py <files.v|.sv ...>
@@ -680,16 +688,32 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_incomplete_sensitivity(src, str(path))
     results += rule_vector_self_shift_fold(src, str(path))
     results += rule_reserved_word_identifier(src, str(path))
-    # rule_wire_input_read_in_clocked_block: NOT enabled. Corpus sweep
-    # (362 samples) showed 5 false-positives (all on PASSING samples that
-    # use combinational `wire = f(input)` helpers correctly). Per
-    # benchmark-enhancement-capture honesty rule, a Bucket-A program rule
-    # must be strictly safer than prior state — this one isn't. The function
-    # is kept here as a corpus-sweep target for a future refinement that
-    # narrows to the actual race condition (e.g. input transitions detected
-    # at the SAME `#0` instant as the posedge); until then, the pattern
-    # lives only as an anonymized Bucket-B worked example in
-    # agents/ic-expert-agent.md.
+    # rule_wire_input_read_in_clocked_block: NOT enabled.
+    #
+    # v0.1.39 honesty correction (audit Finding 2): the v0.1.38 disable
+    # comment claimed "5 false-positives on 362-sample corpus" — that
+    # count was from a transient corpus including IN-FLIGHT (still being
+    # authored) RTLLM Shape-B samples that the agent later rewrote. A
+    # clean re-sweep against the 362 PASSing reference corpus (156 v2 +
+    # 156 Human refs + 50 RTLLM `verified_*.v`) shows ZERO false
+    # positives — the rule never fires on the reference set at all.
+    #
+    # Honest reason to keep this disabled: zero FPs on the reference
+    # corpus could mean the rule is correct AND no reference uses the
+    # pattern, OR it could mean the rule pattern is too narrow to fire
+    # on most real code. The synthetic test (test_rule9.v) demonstrates
+    # the rule CAN fire on the genuine bug, but the corpus is silent. A
+    # rule that's correct but never fires adds noise (false confidence
+    # in lint cleanliness) without catching anything. Keep disabled
+    # until either:
+    #   (a) an extended corpus shows the rule fires on a real-world bug
+    #       (rule is justified at WARN), OR
+    #   (b) the bug class is provably absent from typical RTL (rule is
+    #       removed as unnecessary).
+    #
+    # The pattern lives as an anonymized Bucket-B worked example in
+    # agents/ic-expert-agent.md — AI judgment can still apply it, but the
+    # deterministic rule isn't claiming general safety until verified.
     return results
 
 
