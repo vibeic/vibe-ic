@@ -239,34 +239,90 @@ def _stub_l_docs_from_prose(docs_dir: Path, out_dir: Path) -> int:
             continue
         seen.add(port)
         ports.append({"name": port, "direction": direction, "width": width or "1"})
-    # v0.1.39 (audit Finding 4) — DO NOT default class_path to
-    # "digital_arithmetic_primitive". That biased every prose-only fallback
-    # to look like an RTLLM arithmetic primitive even for counters / FSMs /
-    # memories / encoders, which then triggered the wrong IC-class registry
-    # rules downstream. Detect a class hint from the prose; otherwise emit
-    # "unknown" so the registry's permissive default rules apply.
+    # v0.1.40 (re-audit NEW-2 fix) — REUSE the registered class names from
+    # programs/ic_class_registry.json. The v0.1.39 attempt invented 7 new class
+    # names (digital_memory_primitive, digital_fsm, etc.) that did not exist in
+    # the registry, so every downstream class-aware check (class floor, class
+    # template lookup, ic_class_profile, rtl_gen dispatch) silently degraded
+    # to no-op. The registry has 8 real classes; only those are valid here.
+    #
+    # Mapping policy: classes are deliberately COARSER than the previous attempt.
+    # RTLLM/VerilogEval-style pure-logic designs (datapath, FSM, counter,
+    # memory primitive, waveform generator) ALL map to
+    # `digital_arithmetic_primitive`, which the registry describes as
+    # "Generic pure-datapath / arithmetic-primitive digital IC".
+    # Protocol-bus designs (UART/SPI/I2C/parallel cmd) map to `digital_cmd_driven`.
+    # Processor/CPU/RISC-V map to `processor_cpu`. Half-duplex single-wire
+    # protocol → `aid_class_half_duplex_single_wire`. OTP → `mixed_signal_otp`.
+    # FPGA-only → `bare_fpga`. Analog-only → `pure_analog`.
+    # Everything else → `unknown_protocol_class` (the registry's fallback).
+    #
+    # Keyword matching uses `\b` word boundaries to avoid substring bugs (e.g.
+    # "freq" matching "frequency"). Most-specific keyword phrases are listed
+    # FIRST so a "clock divider" prose lands in pure-datapath, not protocol-bus.
+    import re as _kw_re
     prose_lc = text.lower()
+    # (registered_class, [keyword_regexes_word_bounded])
     class_keywords = [
-        # order: most specific first
-        ("digital_memory_primitive",      ["fifo", "lifo", "stack ", "ram ", "rom ", "register file", "scratchpad"]),
-        ("digital_arithmetic_primitive",  ["adder", "subtractor", "multiplier", "divider", "alu", "accumulator", "mac unit"]),
-        ("digital_fsm",                   ["fsm", "state machine", "moore", "mealy", "next_state", "state transition"]),
-        ("digital_counter_primitive",     ["counter", "lfsr", "ring counter", "shift register", "johnson counter"]),
-        ("digital_arbiter_primitive",     ["arbiter", "priority encoder", "round robin"]),
-        ("digital_protocol_io",           ["uart", "spi", "i2c", "serial", "parallel", "deserial"]),
-        ("digital_signal_gen",            ["clock divider", "freq", "frequency divider", "clock generator", "waveform"]),
+        # Most specific first: aid + otp + cpu + fpga + analog (narrow markers)
+        ("aid_class_half_duplex_single_wire",
+            [r"\bhalf[-\s]?duplex\b", r"\bsingle[-\s]?wire\b", r"\baid[-\s]?class\b"]),
+        ("mixed_signal_otp",
+            [r"\botp\b", r"\botp[-\s]?(?:driven|chip|map|read)\b"]),
+        ("processor_cpu",
+            [r"\bprocessor\b", r"\bcpu\b", r"\briscv?\b", r"\briscv[-\s]?core\b",
+             r"\bcore\s+(?:complex|cluster)\b", r"\bsoc\b"]),
+        ("bare_fpga",
+            [r"\bfpga(?:[-\s]?only)?\b", r"\bcyclone\b", r"\bartix\b",
+             r"\bspartan\b", r"\bzynq\b", r"\bde10[-\s]?lite\b"]),
+        ("pure_analog",
+            [r"\banalog[-\s]?only\b", r"\bbandgap\b", r"\bldo\b",
+             r"\bopamp\b", r"\bcomparator(?:[-\s]?analog)?\b"]),
+        ("digital_cmd_driven",
+            [r"\buart\b", r"\bspi\b", r"\bi2c\b", r"\bi3c\b",
+             r"\bcommand[-\s]?driven\b", r"\bcmd[-\s]?driven\b",
+             r"\bparallel[-\s]?cmd\b"]),
+        # Pure-datapath / pure-logic catch-all: arithmetic, FSM, counter,
+        # memory primitive, waveform generator, edge/pulse detector — all
+        # land here. The registry's `digital_arithmetic_primitive` description
+        # explicitly covers "pure-datapath" designs.
+        ("digital_arithmetic_primitive",
+            [r"\badder\b", r"\bsubtractor\b", r"\bmultiplier\b", r"\bdivider\b",
+             r"\balu\b", r"\baccumulator\b", r"\bmac\b",
+             r"\bfsm\b", r"\bstate[-\s]?machine\b", r"\bmoore\b", r"\bmealy\b",
+             r"\bcounter\b", r"\blfsr\b", r"\bshift[-\s]?register\b",
+             r"\bjohnson\s+counter\b", r"\bring\s+counter\b",
+             r"\bfifo\b", r"\blifo\b", r"\bram\b", r"\brom\b",
+             r"\bregister[-\s]?file\b", r"\bscratchpad\b", r"\bstack\b",
+             r"\barbiter\b", r"\bpriority[-\s]?encoder\b",
+             r"\bclock[-\s]?divider\b", r"\bfrequency[-\s]?divider\b",
+             r"\bclock[-\s]?generator\b", r"\bwaveform[-\s]?generator\b",
+             r"\bedge[-\s]?detector\b", r"\bpulse[-\s]?detector\b",
+             r"\bbarrel[-\s]?shifter\b", r"\bgray[-\s]?counter\b",
+             r"\bparity\b", r"\bmux\b", r"\bdemux\b", r"\bcodec\b",
+             r"\bdecoder\b", r"\bencoder\b"]),
     ]
-    detected_class = "unknown"
-    for cname, kws in class_keywords:
-        if any(kw in prose_lc for kw in kws):
-            detected_class = cname
+    detected_class = None
+    matched_kw = None
+    for cname, patterns in class_keywords:
+        for pat in patterns:
+            if _kw_re.search(pat, prose_lc):
+                detected_class = cname
+                matched_kw = pat
+                break
+        if detected_class is not None:
             break
+    if detected_class is None:
+        # Registered fallback class (not a made-up "unknown" string).
+        detected_class = "unknown_protocol_class"
+        matched_kw = None
     out_dir.mkdir(parents=True, exist_ok=True)
     l1 = {"ic_name": mod_name, "class_path": detected_class,
           "summary": f"Stub L1 for {mod_name} (from prose .md).",
           "stub_origin": "_stub_l_docs_from_prose",
-          "class_detection_method": ("keyword-match" if detected_class != "unknown"
-                                     else "fallback-unknown (no class keyword in prose)")}
+          "class_detection_method": ("keyword-match" if matched_kw
+                                     else "registered-fallback unknown_protocol_class"),
+          "class_detection_keyword": matched_kw}
     l3 = {"ports": ports}
     l9 = {"top_module": mod_name,
           "top_ports": [p["name"] for p in ports],

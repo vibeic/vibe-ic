@@ -93,15 +93,26 @@ def _scrub_design_leak(text: str) -> str:
 
     Layered strategy (each layer catches what the prior one missed):
 
-      Layer 1 — known leak phrases. Drop ANY `(from X)` / `(captured by X)` /
-        `Worked example (X)` parenthetical regardless of what X is. Design
-        leaf names like `radix2_div` aren't in any enumeration, so the only
-        defensible rule is "kill the (from …) bracket structurally".
+      Layer 1 — known-leak parentheticals. Drop ONLY brackets whose lead-in
+        is an attribution keyword AND whose contents look like an
+        identifier (or an enumerated benchmark token). This preserves
+        legitimate spec text like "(e.g. mod-256)" / "(per IEEE 1364)"
+        that doesn't contain identifiers. The narrower rule was added in
+        v0.1.40 after the v0.1.39 broad-strip damaged technical content
+        (re-audit NEW-4 fix).
 
-      Layer 2 — enumerated benchmark-identifier tokens. Drop ProbNNN_…,
-        RTLLM, VerilogEval-{v2,Human,Machine,…}, CVDP, MetRex, ResBench,
-        RTL-Repo, PyHDL-Eval — these can also appear OUTSIDE the
-        `(from …)` structure (e.g. "RTLLM-class testbenches use …").
+      Layer 2 — enumerated benchmark-identifier tokens (ProbNNN_…, RTLLM,
+        VerilogEval-{v2,Human,Machine,…}, CVDP, MetRex, ResBench,
+        RTL-Repo, PyHDL-Eval) anywhere they appear.
+
+      Layer 3 — design-name shapes that aren't in any enumeration. Strict
+        heuristic: an identifier of >=2 underscore-separated lowercase
+        tokens (e.g. radix2_div, sequence_detector, freq_divbyeven,
+        adder_pipe_64bit) appearing in `(from X)` / `(captured by X)` /
+        `(refs X)` / `worked example: X:` contexts. Added in v0.1.40 —
+        catches design leaf names that no enumeration can list. Outside
+        attribution contexts, snake_case identifiers are technical RTL
+        signal/module names that should NOT be touched.
 
     Honest about scrubbing — appends an `[anonymized]` marker so the reader
     can see the sanitisation happened. chip-AGNOSTIC.
@@ -109,21 +120,56 @@ def _scrub_design_leak(text: str) -> str:
     if not text:
         return text
     original = text
-    # Layer 1 — kill any `(from …)`, `(captured by …)`, `(worked miss …)`,
-    # `(refs …)`, `(per …)` bracket regardless of contents. These are the
-    # canonical attribution-leak structures used historically.
+    # Layer 1 — narrow attribution-bracket strip. v0.1.40 (re-audit NEW-4)
+    # requires the bracket interior to look like an identifier list (alphanum
+    # + `_` + commas + whitespace + Prob-or-bench token) so legitimate spec
+    # parentheticals like "(per IEEE 1364)" and "(e.g. mod-256)" survive.
+    # Identifier-shape: contains at least one token matching either an
+    # enumerated bench token OR a 2+-underscore-separated identifier.
+    _ATTR_LEAD = r"(?:from|captured\s+by|worked\s+(?:miss|example))\s+"
+    _IDENT_INSIDE = (r"[A-Za-z0-9_,\s\-]*"
+                     r"(?:" + _DESIGN_LEAK_PATTERN +
+                     r"|[a-z][a-z0-9]*(?:_[a-z0-9]+){1,})"
+                     r"[A-Za-z0-9_,\s\-]*")
     text = _leak_re.sub(
-        r"\((?:\s*(?:from|captured\s+by|per|refs?|worked\s+(?:miss|example)|"
-        r"e\.g\.,?|ref\.?)\s+)[^)]*\)",
+        r"\(\s*" + _ATTR_LEAD + _IDENT_INSIDE + r"\)",
         "", text, flags=_leak_re.IGNORECASE)
-    # Layer 2 — enumerated tokens that may appear outside `(…)`.
+    # Layer 2 — enumerated tokens anywhere outside (…).
     text = _leak_re.sub(_DESIGN_LEAK_PATTERN, "", text, flags=_leak_re.IGNORECASE)
+    # Layer 3 — design leaf names in `Worked example:` / `Refs:` style prose
+    # (no parenthesis). Only fires in explicit attribution contexts.
+    text = _leak_re.sub(
+        r"(?i)(worked\s+(?:miss|example)|refs?)\s*[:\-]\s*[a-z][a-z0-9_]*(?:_[a-z0-9]+){1,}",
+        r"\1: [anonymized]", text)
     text = _leak_re.sub(r"\s{2,}", " ", text)
     text = _leak_re.sub(r"\s+([,.;:])", r"\1", text)
     text = text.strip()
     if text != original:
         text += "  [identifiers anonymized per benchmark-enhancement-capture honesty rule]"
     return text
+
+
+def _refuse_if_leaks(field_name: str, value: str) -> str:
+    """v0.1.40 (re-audit F1 補洞) — for caller-supplied `skill_title` and
+    `backlog_slug`: do NOT silently scrub (those become the section header /
+    filename; silent scrub would corrupt them). Instead RAISE with a clear
+    error so the caller fixes the input.
+
+    A skill_title like "Moore latency in Prob089" is exactly the
+    sloppy-caller failure mode the prior audit called out. We refuse rather
+    than scrub.
+    """
+    if not value:
+        return value
+    scrubbed = _scrub_design_leak(value)
+    if scrubbed != value:
+        raise ValueError(
+            f"{field_name} contains a benchmark-design identifier "
+            f"({value!r}); refusing to write it to a permanent artifact. "
+            f"Per benchmark-enhancement-capture honesty rule, the {field_name} "
+            f"must describe the GENERAL pattern, not the originating "
+            f"benchmark design. Suggested rewrite: {scrubbed!r}")
+    return value
 
 
 def emit_skill_section(rec: dict) -> str:
@@ -138,6 +184,10 @@ def emit_skill_section(rec: dict) -> str:
             "rule ('NEVER add a Bucket B skill section that names specific "
             "benchmark design identifiers'). Caller must supply a generic "
             "skill title describing the general PATTERN.")
+    # v0.1.40 (re-audit F1 補洞) — title must itself be leak-free; refuse on
+    # leaky title (a sloppy caller is the failure mode the prior audit
+    # warned about).
+    name = _refuse_if_leaks("skill_title", name)
     pattern = _scrub_design_leak(rec.get("pattern", ""))
     when = _scrub_design_leak(rec.get("when", ""))
     what = _scrub_design_leak(rec.get("what", ""))
@@ -188,6 +238,9 @@ def emit_backlog(rec: dict, today: str):
             "to design slug. Caller must supply a generic kebab-case slug "
             "describing the issue category (e.g. 'rtl-hygiene-internal-reg-"
             "init'), not the originating benchmark design name.")
+    # v0.1.40 (re-audit F1 補洞) — slug becomes part of the permanent
+    # filename and YAML id. Refuse on leaky slug.
+    slug = _refuse_if_leaks("backlog_slug", slug)
     slug = _slug(slug)
     fname = f"ORGANIC-{today.replace('-','')}-{slug}.yaml"
     indent = "  "
