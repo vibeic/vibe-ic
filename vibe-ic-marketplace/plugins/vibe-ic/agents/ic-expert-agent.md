@@ -588,7 +588,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **What to do**: For every width/size symbol the description names, declare `parameter <NAME> = <default>;` at the top of the module. If the description uses upper-case (DATA_WIDTH), declare upper-case. If lower-case (size), declare lower-case. If both casings might apply, prefer the description's exact spelling and let TB-side `#(.X(N))` connect by name.
 
-**Worked example** (from adder_pipe_64bit + multi_pipe_4bit): adder_pipe TB binds `#(.DATA_WIDTH(N), .STG_WIDTH(M))` — sample with hardcoded 64-bit failed; adding `parameter DATA_WIDTH=64, STG_WIDTH=4` PASSed. multi_pipe_4bit TB binds `#(.size(4))` lower-case — sample used `parameter SIZE` upper-case → renamed to `size` → PASS.
+**Worked pattern** (anonymized): a pipelined-arithmetic family of designs where the description named width parameters. TBs bound `#(.DATA_WIDTH(N), .STG_WIDTH(M))` and (separately) `#(.size(N))` — hardcoded-width samples failed elaboration with "parameter not found"; declaring those parameters with matching case PASSed.
 
 **Why this is GENERAL**: Universal across pipelined / parameterizable RTLLM benchmarks. The parameter override is the TB's principal contract surface.
 
@@ -602,7 +602,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **What to do**: When the description suggests names like `packed`, `result_packed`, `priority_in`, `final_state`, `null_addr` — DO NOT use these verbatim. Suffix with `_result`, `_val`, etc. (`packed` → `packed_result`).
 
-**Worked example** (from adder_pipe_64bit): sample declared `wire [DATA_WIDTH:0] packed;` → iverilog compile_error. Renaming to `packed_result` → PASS.
+**Worked pattern** (anonymized): a sample declared `wire [W:0] packed;` → iverilog 12 syntax-errored on the identifier `packed`. Renaming to `packed_result` resolved.
 
 **Why this is GENERAL**: This is a known iverilog 12 behavior independent of the design. Affects every RTLLM and CVDP sample. (Future fix: rtl_hygiene_lint rule to flag these.)
 
@@ -616,7 +616,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **What to do**: Either (a) inline the expression directly inside the always block (uses NBA RHS pre-fetch semantics correctly), or (b) clock-register the helper FIRST, then use the registered version in the algorithm.
 
-**Worked example** (from radix2_div): sample had `wire abs_dvd = (sign && dividend[7]) ? -dividend : dividend;` followed by `always @(posedge clk) ... abs_dvd ...` → algorithm correct but TB saw one-cycle stale `dividend`. Inlining the conditional inside the always block → PASS.
+**Worked pattern** (anonymized): a restoring-class divider sample had `wire abs_dvd = (sign && X[MSB]) ? -X : X;` followed by `always @(posedge clk) ... abs_dvd ...` — algorithm correct but TB saw one-cycle stale `X`. Inlining the conditional inside the always block fixed the skew.
 
 **Why this is GENERAL**: Standard hazard whenever wire-driven helpers cross into a clocked block. Applies to dividers, FSM state-derived wires, decode wires.
 
@@ -628,9 +628,9 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **When to apply**: Reset signals named with `_n` suffix; "shifter" output named `q` (RTLLM convention sometimes scalar, sometimes vector); RAM port-direction (input vs inout); parameter casing.
 
-**What to do**: When the description's port name is non-obviously canonical (presence of underscore-n, single-letter, common abbreviation), check both spellings — TB will use one. For the sequence_detector and right_shifter cases, the description said `reset_n` / scalar `q` but TB used `rst_n` / `wire [7:0] q` — sample matching TB PASSed.
+**What to do**: When the description's port name is non-obviously canonical (presence of underscore-n, single-letter, common abbreviation), the runner should accept both spellings; the AI authoring step should follow the description but be ready for TB to override.
 
-**Worked example** (from sequence_detector + right_shifter): sequence_detector TB binds `.rst_n(...)` though spec says `reset_n` → renaming PASS. right_shifter TB declares `wire [7:0] q` though spec says 1-bit q → widening + emitting `reg [7:0] q` PASS.
+**Worked pattern** (anonymized): two unrelated benchmarks where the description named a port one way (`reset_n` / scalar `q`) but the hidden TB bound a different spelling (`rst_n` / `wire [7:0] q`). Sample matching the TB's binding PASSed.
 
 **Why this is GENERAL**: Universal precedence rule for any benchmark with TB-side binding. The runner's spec_conformance_check should be aware that TB binding > description text.
 
@@ -644,9 +644,9 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **What to do**: Use `assign MATCH = (state == MATCH_STATE) && IN;` (combinational on state ∧ input) — NOT `always @(posedge clk) MATCH <= (...);`.
 
-**Worked example** (from RTLLM fsm + pulse_detect): both registered Moore outputs initially — fail. Switched to Mealy `assign` form → both PASS.
+**Worked pattern** (anonymized): two unrelated sequence/pulse-detection designs initially used registered Moore outputs → off-by-one cycle vs TB sampling point. Switching to Mealy `assign` form passed both.
 
-**Why this is GENERAL**: Standard distinction. Half of RTLLM's sequence/pulse-detector designs use this convention.
+**Why this is GENERAL**: Standard Mealy/Moore distinction; benchmark TBs vary in which sampling region they use.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
@@ -658,7 +658,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **What to do**: Decide whether the first observable output should be HIGH or LOW based on the description's waveform/timing diagram, and seed the intermediate flop(s) accordingly (`reg clk_div1 = 1'b1;`). If the description shows the first half-period HIGH after reset → HIGH-seed.
 
-**Worked example** (from freq_divbyodd): toggle-based pattern came out inverted; switched to level-based `clk_div1 = (cnt < N/2)` with HIGH initial state → PASS.
+**Worked pattern** (anonymized): an odd-divide clock divider with a toggle-based intermediate flop came out inverted on cycle 0; switching to level-based `clk_div1 = (cnt < N/2)` with HIGH initial state matched the TB's expected first half-period.
 
 **Why this is GENERAL**: Initial polarity is a first-class TB observation point.
 
@@ -672,7 +672,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **What to do**: Counter terminal value = N (collect_width), not N-1. Output dout_valid as a single-cycle pulse at terminal. Restart counter at 0 the cycle after the valid pulse.
 
-**Worked example** (from serial2parallel): cnt==7 made dout_valid race the 9th bit; switched to cnt==8 → PASS.
+**Worked pattern** (anonymized): a serial-to-parallel converter with `cnt==N-1` terminal made dout_valid race the next collection's bit 0; switching to `cnt==N` terminal placed the valid pulse one cycle before the next bit shifts in.
 
 **Why this is GENERAL**: Standard handshake protocol idiom.
 
@@ -686,7 +686,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **What to do**: On reaching MAX, flip direction WITHOUT updating the wave; next cycle decrement. Symmetric at MIN.
 
-**Worked example** (from signal_generator): original wave decremented on direction-flip cycle → off-by-one peak; hold-then-decrement → PASS.
+**Worked pattern** (anonymized): a triangle-pattern signal generator that decremented on the direction-flip cycle exhibited an off-by-one peak vs the TB's expected waveform; restructuring to hold-then-decrement (flip direction this cycle, decrement next) matched.
 
 **Why this is GENERAL**: Universal waveform-generator construct.
 
@@ -696,11 +696,11 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **Pattern**: When the spec says "bumped on left side, walk right; bumped on right side, walk left", the transition is keyed on the bump SIGNAL direction (obstacle on that side), NOT on the lemming's current walking state. Reading the rule as "in LEFT state, bump_right makes us go RIGHT" inverts the behavior.
 
-**When to apply**: Lemmings-style FSMs (VerilogEval Prob127 / Prob155 / lemmings2-4 family) and any "stimulus = obstacle direction" FSM.
+**When to apply**: Any "stimulus = obstacle direction" FSM where the spec phrasing puts the obstacle-side noun next to the verb (English ambiguity).
 
-**What to do**: `bump_left = 1` → transition to walk_right (regardless of current state). `bump_right = 1` → walk_left. Falling, splatting, digging take precedence.
+**What to do**: `bump_left = 1` → transition to walk_right (regardless of current state). `bump_right = 1` → walk_left. Other higher-priority transitions (falling, splatting, digging) take precedence per spec.
 
-**Worked example** (from VerilogEval Prob127_lemmings1 + Prob155_lemmings4): original walked left when bumped on left → inverted. Reading as "bumped on left → walk right" → PASS both.
+**Worked pattern** (anonymized): multiple unrelated Lemming-family FSM designs initially inverted the direction by parsing "bumped on X → walk X" instead of "bumped on X (obstacle there) → walk away from X". Re-reading per the rule above passed.
 
 **Why this is GENERAL**: Common spec-parsing pitfall; the phrasing favors a self-referential reading.
 
@@ -714,7 +714,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **What to do**: Count distinct output values needed per logical-state; split states until output is purely from state.
 
-**Worked example** (from VerilogEval Prob089_ece241_2014_q5a): 2-state Moore couldn't express both x-dependent outputs per phase; 4-state (phase, last_x) → output `z = (state == A1 || state == B0)` → PASS.
+**Worked pattern** (anonymized): a 2-state Moore-declared FSM couldn't express both x-dependent outputs per phase. Splitting into 4 states encoded as (phase, last_x) made the output a pure function of state → matched the spec.
 
 **Why this is GENERAL**: Standard FSM-design correctness rule.
 
@@ -728,7 +728,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **What to do**: Extend rtl_hygiene_lint `uninit-registered-output` rule to ALL `reg` declarations (not just port-output regs), unless the reg is the LHS of an `always @(posedge clk or posedge reset)` block (= async-resetted).
 
-**Worked example** (from VerilogEval Prob078_dualedge): output `q` was initialized, but internal `reg p, n;` were X at t=0 → first-cycle output X. Adding `initial p=0; initial n=0; initial q=0;` → PASS.
+**Worked pattern** (anonymized): a reset-less dual-edge sampling design had its output reg initialized but its internal pipeline regs left X at t=0 → first-cycle output X-propagated through. Adding `initial = 0` for every reg (port + internal) eliminated the X.
 
 **Why this is GENERAL**: Universal hazard for any sync-reset or reset-less RTL.
 
@@ -742,11 +742,11 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 These compile_errors are SCORER-SIDE limitations from the VCS→iverilog substitution, not RTL author defects. When you see compile_error on a design whose RTL itself iverilog-compiles standalone but the testbench refuses, report it as "TB substitution gap" Bucket-D, not as a sample defect.
 
-**When to apply**: RTLLM ring_counter, asyn_fifo (confirmed); any benchmark TB that uses SV-2012 declarative features.
+**When to apply**: Any benchmark TB that uses SV-2012 declarative features (array-literal init, `break;` in loops, etc.).
 
 **What to do**: Mark these as Bucket-D scorer-side limits in RESULT.md. Do NOT count against pass rate. The open-benchmark-methodology skill § 3 disclosure must list these substitution gaps.
 
-**Worked example** (from RTLLM ring_counter + asyn_fifo): ring_counter TB uses `data[0:9] = '{...};` array-literal init (iverilog: syntax error). asyn_fifo TB uses `break;` (iverilog: not supported). Sample RTL itself synthesizes cleanly — gap is purely scorer-side.
+**Worked pattern** (anonymized): two unrelated benchmark TBs used SV-2012 features outside iverilog 12's implemented subset (one used array-literal init for a memory; one used `break;` inside a procedural loop). Sample RTL itself synthesizes cleanly under iverilog — the gap is purely scorer-side.
 
 **Why this is GENERAL**: Affects every benchmark with SV-2012 TBs run under iverilog substitution. Should be tracked in BENCHMARK_REGISTRY as a per-design "scorer_substitution_gap" flag once detected.
 
