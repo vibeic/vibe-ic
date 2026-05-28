@@ -87,6 +87,14 @@ Both failures are the same precheck-side limitation observed across every Carave
 
 All three are post-Phase-C decisions; the pilot's job was to surface what the gates would flag, not to commit to a single remediation strategy.
 
+### Final tape-out signoff narrative (v0.1.49)
+
+For the pilot's chipignite-submission narrative:
+
+> The 2 of 7 mpw_precheck FAILs are the documented open-source-flow floor for blackbox-macro Caravel user-projects. Route (1) flatten was empirically confirmed to conflict with Caravel's design intent (TritonRoute DRT-0302 multi-bterm power-net wall, `PHASE_C_FLATTEN_EXPERIMENT.md`). Route (2) LEF-with-obs does not move the precheck XOR delta in this OpenLane flow (`PHASE_C_FLATTEN_EXPERIMENT.md` epilogue). This submission therefore adopts route (3) waiver entry, supported by **eight orthogonal independent verifications** — device-level LVS 261=261, full SKY130A DRC 0 violations, antenna 0 violations under both Magic and KLayout, 384 well-tap latch-up cells at 14 µm pitch, PDN SPECIALNETS=2, IR-drop worst < 35 µV (≥ 2500× margin), wrapper-level WNS 0.0 ns / 0 routing violations in 1m 52s, and ESD/pad-ring clean — packaged as `signoff/waivers/SPM_CHIPIGNITE_WAIVER.md` per the chipignite reviewer template.
+
+The waiver package is emitted by deterministic plugin programs (`signoff_waiver_emit.py` + `signoff_waiver_md_emit.py`, 33+26 pytest cases), with each entry honesty-gated (mitigation ≥ 40 chars rejecting TODO/FIXME, medium/high risk requiring justification, approver rejecting AI identifiers). The doctrine batting average across the four v0.1.49 captures: 4/4 lands.
+
 ## Pilot status — FINAL with cleanup
 
 | Item | Status |

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 425
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 425)
+- **Total programs (excluding helpers / shims):** 426
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 426)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 416 |
+| `any` | 417 |
 
 ## Alphabetical listing
 
@@ -384,6 +384,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `si_crosstalk_check` | any | — | Verify signal integrity / crosstalk analysis was performed. |
 | `signoff_audit` | any | v0.52 | signoff_audit.py -- Multi-mode signoff evidence checker (LEGACY gate). |
 | `signoff_waiver_emit` | any | v0.1.49 | Chipignite/foundry signoff-waiver scaffold emitter. |
+| `signoff_waiver_md_emit` | any | v0.1.49 | Submitter-facing waiver Markdown emitter. |
 | `single_bus_driver_check` | any | Wave 10 | structural-RTL gate that catches the |
 | `slave_tx_no_device_break_check` | any | Wave 25 | Wave 25/34 silent-bug gate. |
 | `source_chip_agnostic_check` | any | — | anti-fabrication gate (v1.6.38). |
@@ -497,7 +498,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (416 programs)
+### `any` (417 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -850,6 +851,7 @@ _(no programs in this group)_
 - `si_crosstalk_check` — Verify signal integrity / crosstalk analysis was performed.
 - `signoff_audit` — signoff_audit.py -- Multi-mode signoff evidence checker (LEGACY gate).  _[v0.52]_
 - `signoff_waiver_emit` — Chipignite/foundry signoff-waiver scaffold emitter.  _[v0.1.49]_
+- `signoff_waiver_md_emit` — Submitter-facing waiver Markdown emitter.  _[v0.1.49]_
 - `single_bus_driver_check` — structural-RTL gate that catches the  _[Wave 10]_
 - `slave_tx_no_device_break_check` — Wave 25/34 silent-bug gate.  _[Wave 25]_
 - `source_chip_agnostic_check` — anti-fabrication gate (v1.6.38).
