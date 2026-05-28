@@ -250,23 +250,72 @@ def test_scrub_design_leak_preserves_legitimate_technical_brackets():
 
 
 def test_emit_skill_section_refuses_leaky_title():
-    """v0.1.40 (re-audit F1 真補洞) — a sloppy caller passing a leaky
-    skill_title is exactly the failure mode the prior audit warned about.
-    Refuse such input rather than silently scrub the header."""
-    rec = {"skill_title": "Moore latency in Prob089 sequence_detector",
-           "pattern": "p", "when": "w", "what": "x", "example": "e",
-           "generality": "g"}
-    with pytest.raises(ValueError, match="skill_title contains a benchmark-design identifier"):
-        _emit_mod.emit_skill_section(rec)
+    """v0.1.41 (re-re-audit Issue 3 — structural allowlist).
+    The v0.1.40 fix caught only the explicit Prob## form; the auditor
+    demonstrated 4 bypasses. This test now uses the structural rule: any
+    underscore-separated identifier (snake_case) → refused regardless of
+    context (with-from, with-the, bare prose, etc.)."""
+    leaky_titles = [
+        "Moore latency in Prob089 sequence_detector",        # both: Prob + snake
+        "Reset polarity (the radix2_div case)",              # auditor bypass 1
+        "Width overflow in the freq_divbyeven design",       # auditor bypass 2
+        "see asyn_fifo for example",                         # auditor bypass 3
+        "Moore latency in Prob089",                          # bare Prob##
+    ]
+    for title in leaky_titles:
+        rec = {"skill_title": title,
+               "pattern": "p", "when": "w", "what": "x", "example": "e",
+               "generality": "g"}
+        with pytest.raises(ValueError, match="skill_title"):
+            _emit_mod.emit_skill_section(rec)
 
 
 def test_emit_backlog_refuses_leaky_slug():
-    """v0.1.40 (re-audit F1 真補洞) — backlog filename + YAML id are
-    permanent record; refuse on leaky slug."""
-    rec = {"title": "t", "pattern": "p", "suggested_fix": "f",
-           "backlog_slug": "prob042-radix2-div-remainder"}
-    with pytest.raises(ValueError, match="backlog_slug contains a benchmark-design identifier"):
-        _emit_mod.emit_backlog(rec, "2026-05-28")
+    """v0.1.41 (re-re-audit Issue 3 — structural allowlist).
+    Slug allowlist = kebab-case only ([a-z0-9-]+); any of:
+    - prob<digits> token  → Prob ID leak
+    - underscore          → snake_case identifier leak
+    - uppercase           → not a slug
+    is refused structurally."""
+    leaky_slugs = [
+        "prob042-radix2-div-remainder",      # auditor's Prob## case
+        "freq_div-issue",                     # auditor bypass 4 (underscore)
+        "RTLLM-asyn-fifo-bug",                # uppercase + (after lower) — both fail
+        "Prob089-issue",                      # uppercase + Prob##
+    ]
+    for slug in leaky_slugs:
+        rec = {"title": "t", "pattern": "p", "suggested_fix": "f",
+               "backlog_slug": slug}
+        with pytest.raises(ValueError, match="backlog_slug"):
+            _emit_mod.emit_backlog(rec, "2026-05-28")
+
+
+def test_emit_backlog_accepts_kebab_with_digits():
+    """The slug allowlist must still accept legitimate kebab-case with
+    digits (e.g. 'a4-converter-template') — these are real backlog forms
+    used by existing test fixtures."""
+    legitimate_slugs = [
+        "a4-converter-template",
+        "rtl-hygiene-internal-reg-init",
+        "smoke-c",
+        "v2-spec-conformance-bug",
+    ]
+    for slug in legitimate_slugs:
+        rec = {"title": "t", "pattern": "p", "suggested_fix": "f",
+               "backlog_slug": slug}
+        fname, body = _emit_mod.emit_backlog(rec, "2026-05-28")
+        assert slug in fname, f"slug {slug!r} should land in filename"
+
+
+def test_emit_skill_section_accepts_unicode_title():
+    """Auditor pre-flight: ΔΣ topology is a legitimate analog skill title.
+    The structural allowlist must allow Unicode letters (no underscore is
+    the rule, not 'must be ASCII')."""
+    rec = {"skill_title": "ΔΣ modulator topology — 2nd-order SC CIFB",
+           "pattern": "p", "when": "w", "what": "x", "example": "e",
+           "generality": "g"}
+    out = _emit_mod.emit_skill_section(rec)
+    assert "ΔΣ" in out
 
 
 def test_emit_skill_section_accepts_clean_title():

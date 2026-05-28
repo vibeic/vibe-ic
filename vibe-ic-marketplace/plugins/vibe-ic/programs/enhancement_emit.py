@@ -150,17 +150,95 @@ def _scrub_design_leak(text: str) -> str:
 
 
 def _refuse_if_leaks(field_name: str, value: str) -> str:
-    """v0.1.40 (re-audit F1 補洞) — for caller-supplied `skill_title` and
-    `backlog_slug`: do NOT silently scrub (those become the section header /
-    filename; silent scrub would corrupt them). Instead RAISE with a clear
-    error so the caller fixes the input.
+    """v0.1.41 (re-re-audit Issue 3 fix — STRUCTURAL ALLOWLIST INVERSION).
 
-    A skill_title like "Moore latency in Prob089" is exactly the
-    sloppy-caller failure mode the prior audit called out. We refuse rather
-    than scrub.
+    Auditor's verdict on v0.1.40's denylist approach: 'every round of audit
+    will keep finding leaks of the same shape with different prefixes,
+    because the cost of a denylist is unbounded and the cost of an allowlist
+    is bounded by the legitimate-input set, which is small.'
+
+    For caller-supplied `skill_title` and `backlog_slug` (which become the
+    section header and the permanent backlog filename), we now use a
+    STRUCTURAL ALLOWLIST keyed to the legitimate input shape:
+
+      skill_title — a human-readable section header.
+        Allowed: Unicode letters (so ΔΣ topology works), digits, space,
+                 dash, comma, period, semicolon, colon, apostrophe,
+                 forward slash, parens.
+        Forbidden: underscore (rules out snake_case identifiers like
+                   radix2_div / freq_divbyeven / asyn_fifo).
+        Forbidden: ProbNNN sequence (rules out Prob089 / Prob042).
+        Forbidden: any single token > 25 chars without a space (rules
+                   out concatenated identifiers like radix2divbyeven).
+
+      backlog_slug — a kebab-case filename slug.
+        Allowed: lowercase ASCII letters, digits, dashes.
+        Forbidden: underscore, uppercase, prob-as-prefix (kebab-token
+                   matching `^prob\\d+`).
+        Each kebab-token must be <= 25 chars.
+
+    The rule is structural — `radix2_div` fails on 'has underscore'
+    regardless of whether 'radix2_div' is a current or future benchmark
+    design name. No enumeration to maintain.
+
+    Raises ValueError with the structural violation cited; caller fixes
+    the input rather than relying on a regex scrub to remove pieces.
     """
     if not value:
         return value
+    if field_name == "skill_title":
+        # Forbid underscore-separated identifiers (snake_case).
+        if _leak_re.search(r"\w_\w", value):
+            raise ValueError(
+                f"skill_title contains a benchmark-design identifier "
+                f"(underscore-separated identifier — likely an RTL "
+                f"module/signal name): {value!r}. Per benchmark-enhancement-"
+                f"capture honesty rule (structural allowlist v0.1.41), the "
+                f"skill_title must describe the GENERAL pattern in human-"
+                f"readable English (use spaces or dashes, not underscores). "
+                f"Suggested form: 'Moore latency anomaly in benchmark FSM' "
+                f"instead of 'Moore latency in Prob089_ece241_2014_q5a'.")
+        # Forbid ProbNNN sequence.
+        if _leak_re.search(r"\bProb\d+", value):
+            raise ValueError(
+                f"skill_title contains a benchmark Prob ID: {value!r}. "
+                f"Per benchmark-enhancement-capture honesty rule (structural "
+                f"allowlist v0.1.41), skill section headers must not name "
+                f"specific benchmark designs. Rewrite as a general pattern "
+                f"description.")
+        # Forbid over-long token without a space (concatenated identifier).
+        for token in _leak_re.split(r"[\s\-]", value):
+            if len(token) > 25:
+                raise ValueError(
+                    f"skill_title contains a single token of length "
+                    f"{len(token)} ({token!r}) — likely a concatenated "
+                    f"identifier, not a human-readable phrase. Use spaces "
+                    f"or dashes between words.")
+        return value
+    if field_name == "backlog_slug":
+        # Must be kebab-case only.
+        if not _leak_re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", value):
+            raise ValueError(
+                f"backlog_slug must be kebab-case ([a-z0-9-], no uppercase, "
+                f"no underscore): {value!r}. Per benchmark-enhancement-"
+                f"capture honesty rule (structural allowlist v0.1.41), the "
+                f"slug becomes a permanent filename + YAML id. Rewrite as "
+                f"a generic kebab-case category, e.g. 'rtl-hygiene-"
+                f"internal-reg-init'.")
+        for token in value.split("-"):
+            if _leak_re.fullmatch(r"prob\d+", token):
+                raise ValueError(
+                    f"backlog_slug contains a Prob ID token ({token!r}): "
+                    f"{value!r}. Rewrite as a generic category not naming "
+                    f"the originating benchmark.")
+            if len(token) > 25:
+                raise ValueError(
+                    f"backlog_slug token {token!r} is {len(token)} chars — "
+                    f"likely a concatenated identifier. Use shorter dashed "
+                    f"tokens describing the issue category.")
+        return value
+    # Generic field — fall back to the previous (denylist-scrub) behavior.
+    # Used by emit_discard_note for the why_discard prose etc.
     scrubbed = _scrub_design_leak(value)
     if scrubbed != value:
         raise ValueError(

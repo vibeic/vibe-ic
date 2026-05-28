@@ -786,14 +786,22 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
     # (c) v0.1.38 — ALL internal `reg` declarations in reset-less modules.
     # v0.1.40 — top-module-scoped; skip memory arrays; skip names that are
     # wires in this module's scope.
+    # v0.1.41 — also skip regs declared inside `generate ... endgenerate`
+    # blocks; those have generate-block scope (e.g. g[i].local_reg) and
+    # cannot be referenced by an `initial begin local_reg = 0; end` block
+    # at module scope (iverilog: "Could not find variable").
     if is_resetless:
+        # Mask out generate-block bodies so the reg/wire/registered scans
+        # don't see them. Replacement preserves character offsets for any
+        # caller that re-resolves line numbers.
+        src_no_gen = _mask_generate_blocks(src_scope)
         all_regs: Dict[str, int] = {}
         # v0.1.40 — match `reg [...] name1, name2;` OR `reg name [0:D-1];`
         # (memory) — the memory form is REJECTED at the per-name walk by the
         # trailing-`[…]` test.
         for m in re.finditer(
-                r'\breg\b(?:\s+signed)?\s*(?:\[[^\]]+\]\s*)?([^;]+);', src_scope):
-            lineno_d = src_scope[:m.start()].count('\n') + 1
+                r'\breg\b(?:\s+signed)?\s*(?:\[[^\]]+\]\s*)?([^;]+);', src_no_gen):
+            lineno_d = src_no_gen[:m.start()].count('\n') + 1
             decl_body = m.group(1)
             # Walk the comma-separated names; reject any name whose decl has
             # a trailing `[...]` (memory array) — those need element-wise init
@@ -811,22 +819,29 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
                     continue
                 all_regs[nm] = lineno_d
         registered = {mm.group(1) for mm in
-                      re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src_scope)}
-        has_initial = bool(re.search(r'\binitial\b', src_scope))
+                      re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src_no_gen)}
+        has_initial = bool(re.search(r'\binitial\b', src_no_gen))
         for nm in all_regs:
             if nm in seen or nm not in registered or nm in top_wires:
                 continue
             decl_init = re.search(
-                r'\breg\b[^;\n]*\b' + re.escape(nm) + r'\s*=', src_scope)
+                r'\breg\b[^;\n]*\b' + re.escape(nm) + r'\s*=', src_no_gen)
             in_initial = has_initial and re.search(
-                r'\binitial\b[\s\S]{0,200}?\b' + re.escape(nm) + r'\s*(<=|=)', src_scope)
+                r'\binitial\b[\s\S]{0,200}?\b' + re.escape(nm) + r'\s*(<=|=)', src_no_gen)
             if decl_init or in_initial:
                 continue
             names.append(nm); seen.add(nm)
     if not names:
         return 0, []
-    # Insert before the LAST endmodule (the top module's).
-    idx = raw.rstrip().rfind('endmodule')
+    # v0.1.41 (re-re-audit Issue 2 fix) — `rfind('endmodule')` must run on
+    # the COMMENT-STRIPPED source so a trailing `// endmodule in a note`
+    # comment doesn't poison the lookup. Conveniently, `strip_comments`
+    # preserves character offsets (it replaces comment characters with
+    # spaces and keeps newlines), so the offset in stripped IS the offset
+    # in raw — no translation needed. The rstrip() also dissolves the
+    # trailing comment-as-spaces so rfind lands on the real endmodule.
+    src_stripped = strip_comments(raw)
+    idx = src_stripped.rstrip().rfind('endmodule')
     if idx < 0:
         return 0, []
     block = "\n  // power-up determinism (rtl_hygiene_lint --fix): reset-less registered\n"
@@ -836,6 +851,36 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
     patched = raw[:idx] + block + raw[idx:]
     path.write_text(patched)
     return len(names), names
+
+
+def _mask_generate_blocks(src: str) -> str:
+    """v0.1.41 (re-re-audit Issue 1 fix) — replace every `generate ... endgenerate`
+    block body with whitespace of equal length, so the caller's regex scans
+    don't pick up regs declared inside generate-scope. Character offsets are
+    preserved so any caller computing line numbers still gets the right answer.
+
+    A more sophisticated solution would track per-block reg scope, but for
+    the autofix's purpose (emit a module-scope `initial begin … end`), regs
+    inside `generate` are simply not addressable from module scope and must
+    be excluded from the candidate set.
+    """
+    out = list(src)
+    depth = 0
+    block_start = -1
+    for m in re.finditer(r'\b(generate|endgenerate)\b', src):
+        if m.group(1) == 'generate':
+            if depth == 0:
+                block_start = m.end()
+            depth += 1
+        else:  # endgenerate
+            depth -= 1
+            if depth == 0 and block_start >= 0:
+                # Replace block_start..m.start() with spaces (preserve newlines).
+                for i in range(block_start, m.start()):
+                    if out[i] != '\n':
+                        out[i] = ' '
+                block_start = -1
+    return "".join(out)
 
 
 def _extract_top_module_body(src: str):
