@@ -270,38 +270,55 @@ def _strip_backticks(text: str) -> str:
     return _leak_re.sub(r"`[^`]*`", lambda m: " " * len(m.group()), text)
 
 
-_INDUSTRY_TECH_ALLOWLIST = frozenset({
-    # v0.1.43 (Round-5 R5-4 fix) — purged 11 plugin-specific entries (this
-    # plugin's program/runner names) that v0.1.42 had wrongly included.
-    # Per benchmark-enhancement-capture honesty rule + own docstring:
-    # 'Each entry must be a general-convention term (industry vocabulary)
-    # NOT a benchmark or plugin-specific name.'
-    #
-    # If a skill section needs to reference a plugin-internal name like
-    # `phase2_one_shot_runner`, wrap it in backticks. That marks it as a
-    # code-ish identifier (markdown best practice) AND keeps it out of the
-    # honesty-rule's structural scope.
-    #
-    # Core Verilog/SV identifiers (industry-wide):
-    "rst_n", "reset_n", "rst", "clk", "clk_n", "clk_p",
-    "always_ff", "always_comb", "always_latch", "chip_top",
-    # FSM convention vocabulary (industry-wide; appears in any FSM design):
-    "next_state", "current_state",
-    # Standard valid/ready handshake (any AXI-style stream interface):
-    "res_valid", "res_ready", "dout_valid", "din_valid",
-    # Parameter naming conventions (industry-wide RTL):
-    "data_width", "addr_width", "fifo_depth",
-    # Compile / sim verdict categories (scorer-agnostic):
-    "compile_error", "sim_timeout", "functional_mismatch", "work_dir",
-    # PDK / foundry names (industry vocabulary):
-    "skywater", "gf180", "tsmc", "sky130",
-    # Python exception names mentioned in tool-integration skills:
-    "module_not_found_error",
-    # RF / analog unit suffixes the camelCase rule would otherwise refuse:
-    "dbm", "mah", "mhz", "ghz", "khz",
-    # STA timing names (universal):
-    "t_setup", "t_hold", "t_su", "t_h", "t_cyc", "t_recovery", "t_removal",
-})
+def _load_industry_tech_allowlist() -> frozenset:
+    """v0.1.44 — load the allowlist from `industry_tech_allowlist.yaml`
+    so the community can propose additions via PR without touching code.
+
+    YAML schema:
+        categories:
+          <category_name>:
+            description: <one-line>
+            entries: [<lowercase-term>, ...]
+
+    Each `entries` value is normalised to lowercase and added to the
+    returned frozenset. Categories are organisational only; lookup is flat.
+
+    Falls back to the v0.1.43-shipped seed set if YAML is missing or
+    malformed (so a corrupted-yaml PR can't break the validator).
+    """
+    yaml_path = _Path(__file__).parent / "industry_tech_allowlist.yaml"
+    seed = frozenset({
+        # Minimal safe-fallback set; identical to the v0.1.43 inline list.
+        "rst_n", "reset_n", "rst", "clk", "clk_n", "clk_p",
+        "always_ff", "always_comb", "always_latch", "chip_top",
+        "next_state", "current_state",
+        "res_valid", "res_ready", "dout_valid", "din_valid",
+        "data_width", "addr_width", "fifo_depth",
+        "compile_error", "sim_timeout", "functional_mismatch", "work_dir",
+        "skywater", "gf180", "tsmc", "sky130",
+        "module_not_found_error",
+        "dbm", "mah", "mhz", "ghz", "khz",
+        "t_setup", "t_hold", "t_su", "t_h", "t_cyc", "t_recovery", "t_removal",
+    })
+    if not yaml_path.is_file():
+        return seed
+    try:
+        import yaml as _yaml
+        data = _yaml.safe_load(yaml_path.read_text())
+        out = set()
+        for cat in (data.get("categories") or {}).values():
+            for entry in (cat.get("entries") or []):
+                if isinstance(entry, str) and entry:
+                    out.add(entry.lower())
+        return frozenset(out) if out else seed
+    except Exception:
+        # PyYAML missing or YAML malformed → safe fallback.
+        return seed
+
+
+# Lazy + cached: read the YAML once on first use.
+from pathlib import Path as _Path
+_INDUSTRY_TECH_ALLOWLIST = _load_industry_tech_allowlist()
 
 
 def _validate_general_text(field_name: str, value: str,
