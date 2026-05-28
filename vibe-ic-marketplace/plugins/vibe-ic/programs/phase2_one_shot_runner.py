@@ -1668,19 +1668,42 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         if len(candidates) != 1:
             return  # ambiguous or none — let yosys produce a clear error
         mod_name, port_block, src_file = candidates[0]
-        # Extract simple port names from the declaration for the instance.
-        # Strip everything except identifiers in input/output/inout context;
-        # for the instance we do positional: <synth_top> u_dut <port_block>
-        # which works because the port_block already has the parens.
+        # v0.1.33 — extract just the port NAMES from the port_block so the
+        # instance uses named-port connections `.a(a), .b(b), …` instead of
+        # splatting the full DECLARATIONS (input wire …) into the instance
+        # port list (which is invalid Verilog and broke all 10 batch04
+        # designs in the v0.1.32 RTLLM re-run).
+        import re as _re
+        # Strip outer parens from port_block
+        inner = port_block.strip()
+        if inner.startswith('(') and inner.endswith(')'):
+            inner = inner[1:-1]
+        # Each declaration is a comma-separated chunk; per-chunk grab the
+        # last identifier (the port name, after type / direction / width).
+        port_names = []
+        for chunk in inner.split(','):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            # last identifier (allow `[N:0]` interjections; just grab the
+            # final \w+ token, ignoring trailing brackets/whitespace).
+            ids = _re.findall(r'[A-Za-z_]\w*', chunk)
+            # filter out the reserved keywords that appear in declarations
+            kw = {"input", "output", "inout", "wire", "reg", "logic",
+                  "signed", "unsigned", "var"}
+            ids = [i for i in ids if i not in kw]
+            if ids:
+                port_names.append(ids[-1])
+        connects = ",\n    ".join(f".{n}({n})" for n in port_names)
         wrapper = (
             f"// SPDX-License-Identifier: Apache-2.0\n"
-            f"// v0.1.32 auto-emitted chip_top wrapper (phase2_one_shot_runner).\n"
+            f"// v0.1.33 auto-emitted chip_top wrapper (phase2_one_shot_runner).\n"
             f"// L9.top_module = '{synth_top}' but rtl/ only defined '{mod_name}'\n"
             f"// (in {src_file.name}). This thin pass-through lets yosys synth\n"
             f"// against L9's expected top without modifying the authored RTL.\n"
             f"`default_nettype none\n"
             f"module {synth_top} {port_block};\n"
-            f"  {mod_name} u_dut {port_block.strip().rstrip(';')};\n"
+            f"  {mod_name} u_dut (\n    {connects}\n  );\n"
             f"endmodule\n"
             f"`default_nettype wire\n"
         )
