@@ -127,3 +127,20 @@ python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
 Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
 
 **Your task is not complete until the audit returns PASS.**
+
+
+## Captured by benchmark-enhancement-capture — 2026-05-28 (RTLLM Shape B + benchmark_clean + CVDP cross-step capture)
+
+### Skill: ΔΣ modulator topology — 2nd-order SC CIFB with 1-bit quantizer + feedback DAC
+
+**Pattern**: When the analog block class is `delta_sigma_adc` or `delta_sigma_modulator`, the canonical SC topology that Analog A2's primitive panel must recognize is: TWO switched-capacitor integrators (NMOS-input two-stage Miller OTA + Cs/Ci + two-phase non-overlapping switches) + 1-bit clocked comparator (preamp + cross-coupled regenerative latch) + 1-bit feedback DAC (±Vref select switches). This is the CIFB (cascade-of-integrators with distributed feedback) topology, the textbook 2nd-order ΔΣ.
+
+**When to apply**: Analog A2 topology selection for blocks whose L5 spec names `delta_sigma`, `delta-sigma`, `incremental ΔΣ`, or `SC modulator`. Also applicable for sub-blocks of a higher-order ΔΣ ADC chain.
+
+**What to do**: Author topology.md listing: opamp (two-stage Miller, NMOS input pair, PMOS load + class-AB output), comparator (StrongARM-style or preamp+latch), SC integrator (Cs/Ci ratio sized for stability + gain), 1-bit DAC (CMOS analog mux on Vref±). For higher orders, extend to cascaded integrators with distributed/feedforward coefficients.
+
+**Worked example** (from u_hawaii_adc): u_hawaii_adc A2: prior A2 panel rejected `delta_sigma` block-type (no transistor/primitive keyword match). The skill-authored topology.md named opamp/comparator/SC integrator/DAC as transistor-level primitives → A2 PASS. Real ngspice on the resulting netlist showed UGBW 1.81-14.93 MHz across 9 corners (> 1 MHz fclk → integrator settles).
+
+**Why this is GENERAL**: Standard textbook ΔΣ topology (any Schreier / Norsworthy reference). Applies across audio ADCs, sensor readout, incremental high-resolution conversion. Doesn't depend on the specific spec target.
+
+_Captured by benchmark-enhancement-capture 2026-05-28._

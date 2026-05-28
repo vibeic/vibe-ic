@@ -559,3 +559,20 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 **Why this is GENERAL**: Spec-stated exact cycle counts + registered outputs are common (USB, AXI back-pressure, traffic lights, watchdog timers). The 'reload one cycle before phase asserts' pattern is the canonical resolution.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
+
+
+## Captured by benchmark-enhancement-capture — 2026-05-28 (RTLLM Shape B + benchmark_clean + CVDP cross-step capture)
+
+### Skill: MCP eda_cocotb — stage all sibling .py from the testbench dir + set PYTHONPATH
+
+**Pattern**: cocotb test harnesses commonly split helpers across multiple .py files in the same directory as the main test (e.g. `test_<dut>.py` + `harness_library.py` + `test_runner.py`). The MCP eda_cocotb tool's `work_dir` is a temp dir inside the container — if only the testbench file is copied, `import harness_library` raises ModuleNotFoundError inside the container.
+
+**When to apply**: Implementing or extending any MCP cocotb runner. Reviewing a Shape-D benchmark setup where the test harness ships >1 .py file in the score/src/ tree.
+
+**What to do**: When staging the cocotb run, copy ALL sibling *.py from the testbench's parent directory into the container work_dir (NOT just the testbench file). Set `PYTHONPATH=<work_dir>` before invoking pytest / test_runner. Self-copy of the test file itself is tolerated (idempotent).
+
+**Worked example** (from fixed_priority_arbiter (CVDP)): CVDP fixed_priority_arbiter cocotb harness ships `test_fixed_priority_arbiter.py` + `harness_library.py` + `test_runner.py`. Pre-v0.1.13 eda_cocotb only copied the test file → harness_library import failed. v0.1.13 sibling-staging fix took TESTS=1 PASS=1 on the async-reset variant.
+
+**Why this is GENERAL**: Universal across cocotb harnesses. Every multi-file cocotb test (and there are many: any real-world IP, any vendor-supplied verification IP) hits the same gap.
+
+_Captured by benchmark-enhancement-capture 2026-05-28._

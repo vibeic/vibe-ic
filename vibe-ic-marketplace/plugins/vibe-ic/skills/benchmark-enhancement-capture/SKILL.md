@@ -1,15 +1,42 @@
 ---
 name: benchmark-enhancement-capture
-description: "MANDATORY after any benchmark close-loop or real-case run where AI judgment recovered a previously-failing case. Closes the enhancement loop by turning each AI-judgment recovery into structured candidates for permanent absorption into the plugin: (a) deterministic program rules (rtl_hygiene_lint additions, spec_conformance_check predicates, runner auto-emits), (b) ic-expert-agent skill sections (LLM-judgment patterns that don't reduce to a deterministic rule), or (c) community-backlog entries for larger engineering work. Without this skill, the AI-judgment recoveries stay one-off — they don't propagate to the next benchmark run or to the new user installing the plugin. Triggers on: 'capture enhancements', 'absorb recoveries', 'enhance plugin from this run', '把這次救回的東西寫回 plugin', 'closed-loop enhance', after every /vibe-ic-benchmark close-loop, and after every real-case close-loop in benchmark_clean / vibe-ic-all."
+description: "MANDATORY after ANY close-loop or real-case run where AI judgment recovered a previously-failing case — not just RTL authoring. Applies to EVERY step in the Vibe-IC flow: Phase 1 NL ingestion, Phase 2 spec-to-RTL / chip_top / synth / TB / eco_loop / lint / conformance / audit, Phase 3 synth / PnR / CTS / DRC / LVS / STA / IR-drop, Analog A1-A9, Mixed-Signal M1-M4, MCP-EDA tools, and benchmark harness itself. The skill turns each AI-judgment recovery into structured candidates for permanent absorption: (a) deterministic program rules patching the RIGHT program file per step, (b) skill section appended to the RIGHT skill file per step (ic-expert-agent for design judgment / sta-review for timing / drc-fix for DRC / analog-topology-select for analog topology / etc., per CAPTURE_ROUTING.json), (c) community-backlog entries for larger engineering work, or (d) honest discard. Without this loop, every recovery — RTL authoring, PnR closure, DRC waiver classification, analog topology authoring, MCP tool behavior — stays per-session and the plugin never compounds. Triggers on: 'capture enhancements', 'absorb recoveries', 'enhance plugin from this run', '把這次救回的東西寫回 plugin', 'closed-loop enhance', after every /vibe-ic-benchmark close-loop, after every real-case close-loop in benchmark_clean / /vibe-ic-all, after a phase3 timing close-loop, after an analog A2/A4/A6 close-loop, after an MCP tool gap surfaces."
 ---
 
 # benchmark-enhancement-capture — the plugin's complement-and-codify loop
 
-This skill is what makes Vibe-IC's plugin **complement** (compound returns)
-over time. Without it, every AI-judgment recovery is a one-off — the next
-benchmark run, the next real-case run, and the next new-plugin-install user
-all start from the same baseline. With it, every recovery has a path to
-**permanently** improve the plugin so the same fix is automatic next time.
+This skill is what makes Vibe-IC's plugin **compound** over time. Without it,
+every AI-judgment recovery — at ANY step in the flow — is a one-off that
+evaporates with the session. With it, every recovery has a path to permanently
+improve the plugin so the same fix is automatic next time.
+
+## Applies to EVERY step, not just RTL authoring
+
+The first time this skill landed (v0.1.34) it captured 9 RTLLM spec-to-RTL
+recoveries into the `ic-expert-agent` skill. But the SAME mechanism applies
+to every step in the Vibe-IC flow — each step has its own canonical target
+program (Bucket A) and target skill (Bucket B), declared in
+`benchmark-harness/CAPTURE_ROUTING.json`:
+
+| Step domain | Bucket A target (program) | Bucket B target (skill) |
+|---|---|---|
+| Phase 1 NL ingestion | `phase1_one_shot_runner.py`, `phase1_engine/ingest.py` | `agents/ic-expert-agent.md` |
+| Phase 2 spec→RTL | `rtl_hygiene_lint.py`, `chip_top_gate_wrapper_gen.py`, `spec_conformance_check.py` | `agents/ic-expert-agent.md` |
+| Phase 2 yosys / eco_loop | `phase2_one_shot_runner.py` | `synth-doctor`, `rtl-repair`, `phase2-rtl-verify` |
+| Phase 3 synth / PnR | `phase3_one_shot_runner.py` | `synth-doctor`, `sta-review` |
+| Phase 3 CTS / hold | `phase3_one_shot_runner.py` | `hold-fix`, `sta-review` |
+| Phase 3 DRC | `phase3_one_shot_runner.py` | `drc-fix` |
+| Phase 3 LVS | `phase3_one_shot_runner.py` | `lvs-triage` |
+| Phase 3 IR-drop | `phase3_one_shot_runner.py` | `ir-drop-triage` |
+| Analog A2 topology | `analog_a2_topology_select_check.py` | `analog-topology-select` |
+| Analog A4 corner sweep | `analog_real_corner_sweep.py` | `ams-sim` |
+| Analog A6 post-layout resim | `analog_a6_post_layout_resim_check.py` | `analog-extraction-resim` |
+| Mixed-signal M1-M4 | `mixed_signal_m1_top_merge_check.py` | `mixed-signal-cosim` |
+| MCP-EDA tool behavior | `mcp-eda-server/src/tools/*.js` | per-skill (`synth-doctor`, etc.) |
+| Benchmark harness | `benchmark-harness/score_*.py` | `open-benchmark-methodology` |
+
+The routing table is consulted by `programs/enhancement_emit.py` to put each
+recovery in the right place.
 
 ## When to invoke
 

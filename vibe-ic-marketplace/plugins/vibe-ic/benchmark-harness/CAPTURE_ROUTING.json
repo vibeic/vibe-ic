@@ -1,0 +1,160 @@
+{
+  "_comment": "Maps each Vibe-IC flow step to the right Bucket-A program file + Bucket-B skill file. Used by enhancement_emit.py to route a captured recovery to the correct target. Step IDs match the canonical flow naming.",
+  "steps": {
+    "phase1.ingest_render": {
+      "description": "Phase 1: NL prompt / docs → L1-L13 JSON",
+      "bucket_A_program": "programs/phase1_one_shot_runner.py",
+      "bucket_A_related": ["tools/phase1_engine/ingest.py", "tools/phase1_engine/cli.py"],
+      "bucket_B_skill_file": "agents/ic-expert-agent.md",
+      "bucket_B_section_anchor": "L-doc extraction & ingester quality"
+    },
+    "phase1.fact_extract": {
+      "description": "Phase 1 ingester pattern matching on NL prose",
+      "bucket_A_program": "tools/phase1_engine/ingest.py",
+      "bucket_B_skill_file": "agents/ic-expert-agent.md",
+      "bucket_B_section_anchor": "NL spec phrase patterns"
+    },
+    "phase2.detect_ic_class": {
+      "bucket_A_program": "programs/ic_class_profile.py",
+      "bucket_A_related": ["programs/ic_class_registry.json"],
+      "bucket_B_skill_file": "agents/ic-expert-agent.md"
+    },
+    "phase2.rtl_gen": {
+      "description": "Phase 2: spec-to-RTL (the WAIVE → AI-author handoff path)",
+      "bucket_A_program": "programs/rtl_hygiene_lint.py",
+      "bucket_A_related": ["programs/chip_top_gate_wrapper_gen.py", "programs/spec_conformance_check.py"],
+      "bucket_B_skill_file": "agents/ic-expert-agent.md",
+      "bucket_B_section_anchor": "RTL Realization Principles"
+    },
+    "phase2.chip_top_wrapper": {
+      "bucket_A_program": "programs/chip_top_gate_wrapper_gen.py",
+      "bucket_A_related": ["programs/phase2_one_shot_runner.py"],
+      "bucket_B_skill_file": "agents/ic-expert-agent.md"
+    },
+    "phase2.yosys_synth": {
+      "bucket_A_program": "programs/phase2_one_shot_runner.py",
+      "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
+    },
+    "phase2.reference_tb": {
+      "bucket_A_program": "programs/full_stack_tb_gen.py",
+      "bucket_B_skill_file": "skills/phase2-rtl-verify/SKILL.md"
+    },
+    "phase2.eco_loop": {
+      "bucket_A_program": "programs/phase2_one_shot_runner.py",
+      "bucket_B_skill_file": "skills/rtl-repair/SKILL.md"
+    },
+    "phase2.spec_conformance": {
+      "bucket_A_program": "programs/spec_conformance_check.py",
+      "bucket_B_skill_file": "skills/spec-review/SKILL.md"
+    },
+    "phase2.lint": {
+      "bucket_A_program": "programs/rtl_hygiene_lint.py",
+      "bucket_B_skill_file": "skills/rtl-review/SKILL.md"
+    },
+    "phase2.synth_netlist_check": {
+      "bucket_A_program": "programs/synth_netlist_check.py",
+      "bucket_B_skill_file": "agents/ic-expert-agent.md"
+    },
+    "phase2.final_audit": {
+      "bucket_A_program": "programs/flow_compliance_check.py",
+      "bucket_B_skill_file": "skills/checkpoint-gate/SKILL.md"
+    },
+
+    "phase3.synth": {
+      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
+    },
+    "phase3.pnr_setup_repair": {
+      "description": "PnR set_wire_rc + repair_design + repair_timing -setup (added in v0.1.26)",
+      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_B_skill_file": "skills/sta-review/SKILL.md"
+    },
+    "phase3.cts_hold_fix": {
+      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_B_skill_file": "skills/hold-fix/SKILL.md"
+    },
+    "phase3.drc": {
+      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_B_skill_file": "skills/drc-fix/SKILL.md"
+    },
+    "phase3.lvs": {
+      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_B_skill_file": "skills/lvs-triage/SKILL.md"
+    },
+    "phase3.sta": {
+      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_B_skill_file": "skills/sta-review/SKILL.md"
+    },
+    "phase3.ir_drop": {
+      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_B_skill_file": "skills/ir-drop-triage/SKILL.md"
+    },
+
+    "analog.A2_topology": {
+      "description": "Analog A2: per-block topology selection (SC integrator + comparator + DAC, etc.)",
+      "bucket_A_program": "programs/analog_a2_topology_select_check.py",
+      "bucket_B_skill_file": "skills/analog-topology-select/SKILL.md"
+    },
+    "analog.A3_netlist_gen": {
+      "bucket_A_program": "programs/analog_a3_netlist_gen_check.py",
+      "bucket_B_skill_file": "skills/analog-netlist-gen/SKILL.md"
+    },
+    "analog.A4_corner_sweep": {
+      "description": "Analog A4: real-ngspice corner sweep — template families per block-type (LDO, OTA, ADC, ΔΣ)",
+      "bucket_A_program": "programs/analog_real_corner_sweep.py",
+      "bucket_B_skill_file": "skills/ams-sim/SKILL.md"
+    },
+    "analog.A5_layout": {
+      "bucket_A_program": "programs/analog_a5_layout_check.py",
+      "bucket_B_skill_file": "skills/analog-layout/SKILL.md"
+    },
+    "analog.A6_post_layout_resim": {
+      "bucket_A_program": "programs/analog_a6_post_layout_resim_check.py",
+      "bucket_B_skill_file": "skills/analog-extraction-resim/SKILL.md"
+    },
+    "analog.A7_hardmacro": {
+      "bucket_A_program": "programs/analog_a7_hardmacro_check.py",
+      "bucket_B_skill_file": "skills/analog-hardmacro-gen/SKILL.md"
+    },
+    "analog.A8_hw_verify": {
+      "bucket_A_program": "programs/analog_a8_hw_verify_check.py",
+      "bucket_B_skill_file": "skills/analog-hw-measure/SKILL.md"
+    },
+    "analog.sizing_loop": {
+      "bucket_A_program": "programs/analog_sizing_iter_check.py",
+      "bucket_B_skill_file": "skills/analog-sizing-loop/SKILL.md"
+    },
+
+    "mixed_signal.M_top_merge": {
+      "bucket_A_program": "programs/mixed_signal_m1_top_merge_check.py",
+      "bucket_B_skill_file": "skills/mixed-signal-cosim/SKILL.md"
+    },
+
+    "mcp_eda.lint": {
+      "bucket_A_program": "mcp-eda-server/src/tools/lint.js",
+      "bucket_B_skill_file": "agents/ic-expert-agent.md"
+    },
+    "mcp_eda.synth": {
+      "bucket_A_program": "mcp-eda-server/src/tools/synth.js",
+      "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
+    },
+    "mcp_eda.cocotb": {
+      "description": "MCP eda_cocotb — sibling .py staging, PYTHONPATH, etc. (the CVDP harness_library lesson)",
+      "bucket_A_program": "mcp-eda-server/src/tools/cocotb.js",
+      "bucket_B_skill_file": "agents/ic-expert-agent.md"
+    },
+
+    "benchmark.scoring": {
+      "description": "Host scorers (score_iverilog_tb.py / score_cocotb_mcp.py) — cwd=design_dir, substitution disclosures, etc.",
+      "bucket_A_program": "benchmark-harness/score_iverilog_tb.py",
+      "bucket_A_related": ["benchmark-harness/score_cocotb_mcp.py"],
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    }
+  },
+
+  "default_routing": {
+    "_comment": "Fallback when a step has no entry above — used by enhancement_emit.py only as last resort. Bucket B catch-all is ic-expert-agent.md (general design judgment).",
+    "bucket_A_program": null,
+    "bucket_B_skill_file": "agents/ic-expert-agent.md"
+  }
+}
