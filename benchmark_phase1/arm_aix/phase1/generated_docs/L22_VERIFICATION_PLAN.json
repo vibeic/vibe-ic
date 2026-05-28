@@ -1,0 +1,18 @@
+{
+  "doc_id": "L22",
+  "doc_name": "L22_VERIFICATION_PLAN",
+  "applicability": "APPLICABLE",
+  "ic_class": "bus_interconnect_protocol",
+  "fields": {
+    "coverage_goals": [],
+    "formal_properties": [],
+    "regression_matrix": {}
+  },
+  "evidence": [],
+  "extraction_hints": [
+    "Look for coverage targets, vplan, regression policy.",
+    "Capture per-feature coverage goals."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51"
+}

@@ -1,0 +1,8 @@
+{
+  "doc_id": "L11",
+  "doc_name": "L11_OTP_CONTENT",
+  "applicability": "N/A",
+  "ic_class": "bus_interconnect_protocol",
+  "rationale": "No OTP fuses",
+  "emitted_by": "l_doc_taxonomy.na_stub v0.1.51"
+}

@@ -1,0 +1,19 @@
+{
+  "doc_id": "L18",
+  "doc_name": "L18_INTERCONNECT_TOPOLOGY",
+  "applicability": "APPLICABLE",
+  "ic_class": "bus_interconnect_protocol",
+  "fields": {
+    "interconnect_rules": [],
+    "default_signal_values": {},
+    "id_routing": {}
+  },
+  "evidence": [],
+  "extraction_hints": [
+    "Look for interconnect / fabric / topology sections.",
+    "Capture default-signal-value table.",
+    "Capture ID-routing rules (ID width changes at fabric)."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51"
+}

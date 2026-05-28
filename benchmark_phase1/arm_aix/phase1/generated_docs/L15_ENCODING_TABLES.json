@@ -1,0 +1,17 @@
+{
+  "doc_id": "L15",
+  "doc_name": "L15_ENCODING_TABLES",
+  "applicability": "APPLICABLE",
+  "ic_class": "bus_interconnect_protocol",
+  "fields": {
+    "tables": []
+  },
+  "evidence": [],
+  "extraction_hints": [
+    "Look for tables labelled 'encoding' / 'opcodes' / '<field> encoding'.",
+    "Capture the bits, mnemonic, semantic per row.",
+    "REQUIRED: each table must cite source page + table number."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51"
+}

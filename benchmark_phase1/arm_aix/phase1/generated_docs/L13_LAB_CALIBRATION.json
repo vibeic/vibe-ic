@@ -1,0 +1,8 @@
+{
+  "doc_id": "L13",
+  "doc_name": "L13_LAB_CALIBRATION",
+  "applicability": "N/A",
+  "ic_class": "bus_interconnect_protocol",
+  "rationale": "No lab calibration",
+  "emitted_by": "l_doc_taxonomy.na_stub v0.1.51"
+}

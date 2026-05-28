@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "doc_class": "rtl_constants",
+  "ic_name": "UNKNOWN_IC",
+  "rx_classifier_ticks": null,
+  "no_rx_classifier_ticks_in_input": true,
+  "timing_constants": [],
+  "no_timing_constants_in_input": true,
+  "timing_parameters": [
+    {
+      "name": "tag",
+      "width_bits": 4,
+      "role": "tag",
+      "unit": "bits",
+      "source": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf",
+      "literal": "4",
+      "evidence": {
+        "source": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf",
+        "line": 18987,
+        "extraction_strategy": "width_role_bigram_match"
+      },
+      "low_confidence": true
+    }
+  ],
+  "clock_mhz": null,
+  "no_clock_mhz_in_input": true,
+  "clock_domains": [],
+  "no_clock_domains_in_input": true,
+  "synthesis_targets": [],
+  "no_synthesis_targets_in_input": true,
+  "parameters": [],
+  "peripheral_only_emit_skipped_v1_6_376": 0,
+  "extraction_strategy": {
+    "l8_evidence_population_v1_6_395": 0
+  },
+  "extraction_evidence": {
+    "input/docs/IHI0022H_amba_axi_protocol_spec.pdf": []
+  },
+  "class_path": "digital_cmd_driven"
+}

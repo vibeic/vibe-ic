@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 440
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 440)
+- **Total programs (excluding helpers / shims):** 442
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 442)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 431 |
+| `any` | 433 |
 
 ## Alphabetical listing
 
@@ -241,6 +241,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_aggregated_blob_size_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `l_doc_parity_diff` | any | v0.1.51 | L-doc parity diff (program-extracted vs fresh-agent-extracted). |
 | `l_doc_structured_field_count_check` | any | Wave 31 | gate (Wave 31/32, v0.119.64). |
+| `l_doc_taxonomy` | any | v0.1.51 | L-doc taxonomy single source of truth. |
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `layer_extension_presence_check` | any | v0.50 | v0.50 plugin gate |
 | `level_shifter_required_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
@@ -306,6 +307,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_k5_quality_check` | any | — | catch the 6 K5 issues found by real Phase-2 synth. |
 | `phase1_no_waivers_used_check` | any | Wave 23 | gate (Wave 23, v0.119.55). |
 | `phase1_one_shot_runner` | any | — | Phase 1 unified dispatcher. |
+| `phase1_post_process` | any | v0.1.51 | phase1 output post-processor. |
 | `phase1_provenance_presence_check` | any | — | Phase 1 D6-traceability gate. |
 | `phase1_quality_parity_check` | any | v0.50 | v0.50 gate |
 | `phase1_structured_field_substance_check` | any | — | Tier-2 sibling of the |
@@ -512,7 +514,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (431 programs)
+### `any` (433 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -724,6 +726,7 @@ _(no programs in this group)_
 - `l_doc_aggregated_blob_size_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `l_doc_parity_diff` — L-doc parity diff (program-extracted vs fresh-agent-extracted).  _[v0.1.51]_
 - `l_doc_structured_field_count_check` — gate (Wave 31/32, v0.119.64).  _[Wave 31]_
+- `l_doc_taxonomy` — L-doc taxonomy single source of truth.  _[v0.1.51]_
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `layer_extension_presence_check` — v0.50 plugin gate  _[v0.50]_
 - `level_shifter_required_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
@@ -789,6 +792,7 @@ _(no programs in this group)_
 - `phase1_k5_quality_check` — catch the 6 K5 issues found by real Phase-2 synth.
 - `phase1_no_waivers_used_check` — gate (Wave 23, v0.119.55).  _[Wave 23]_
 - `phase1_one_shot_runner` — Phase 1 unified dispatcher.
+- `phase1_post_process` — phase1 output post-processor.  _[v0.1.51]_
 - `phase1_provenance_presence_check` — Phase 1 D6-traceability gate.
 - `phase1_quality_parity_check` — v0.50 gate  _[v0.50]_
 - `phase1_structured_field_substance_check` — Tier-2 sibling of the

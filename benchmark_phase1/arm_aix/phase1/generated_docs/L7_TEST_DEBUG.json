@@ -1,0 +1,8 @@
+{
+  "doc_id": "L7",
+  "doc_name": "L7_TEST_DEBUG",
+  "applicability": "N/A",
+  "ic_class": "bus_interconnect_protocol",
+  "rationale": "No test/debug architecture; this is a protocol spec",
+  "emitted_by": "l_doc_taxonomy.na_stub v0.1.51"
+}

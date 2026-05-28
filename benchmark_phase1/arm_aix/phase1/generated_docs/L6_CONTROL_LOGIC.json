@@ -1,0 +1,310 @@
+{
+  "schema_version": 2,
+  "doc_class": "control_logic",
+  "ic_name": "UNKNOWN_IC",
+  "reject_rules": [
+    {
+      "rule_id": "R1",
+      "condition": "remaining transfers in the burst. In a read burst, the master can discard read data, but it must complete all transfers",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:2166"
+    },
+    {
+      "rule_id": "R2",
+      "condition": "Discarding read data that is not required can result in lost data when accessing a read-sensitive device such as a",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:2170"
+    },
+    {
+      "rule_id": "R3",
+      "condition": "component can store a local copy of the data, but must propagate the transaction downstream, before discarding that",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:4339"
+    },
+    {
+      "rule_id": "R4",
+      "condition": "A slave that does not support exclusive accesses can ignore the AxLOCK signals. It must provide an OKAY",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:4620"
+    },
+    {
+      "rule_id": "R5",
+      "condition": "\u2022     To ignore the write strobes and treat all write accesses as being the full data bus width",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:5685"
+    },
+    {
+      "rule_id": "R6",
+      "condition": "\u2022     The AxLOCK signals are discarded for all transactions. For a sequence of locked transactions any lock",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:5821"
+    },
+    {
+      "rule_id": "R7",
+      "condition": "\u2022     The AxCACHE signals are discarded. All transactions are treated as Non-modifiable and Non-bufferable.",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:5825"
+    },
+    {
+      "rule_id": "R8",
+      "condition": "\u2022     The WLAST signal is discarded.",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:5843"
+    },
+    {
+      "rule_id": "R9",
+      "condition": "discarded, and an error response is returned to the master that generated the transaction.",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:5869"
+    },
+    {
+      "rule_id": "R10",
+      "condition": "Examples of transactions that are propagated are the discarding of one or more of AxLOCK and",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:5885"
+    },
+    {
+      "rule_id": "R11",
+      "condition": "Examples of transactions that are discarded and generate an error report are burst length or data",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:5887"
+    },
+    {
+      "rule_id": "R12",
+      "condition": "A protection mechanism that discards transactions must provide a protocol-compliant error response to prevent",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:5896"
+    },
+    {
+      "rule_id": "R13",
+      "condition": "\u2022     The AxCACHE signals are discarded. All transactions are treated as Non-modifiable and Non-bufferable.",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:6593"
+    },
+    {
+      "rule_id": "R14",
+      "condition": "\u2022     The WLAST signal is discarded.",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:6597"
+    },
+    {
+      "rule_id": "R15",
+      "condition": "\u2022        When a cache discards a copy of a line, there is no requirement to inform other caches that also have a copy",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:7021"
+    },
+    {
+      "rule_id": "R16",
+      "condition": "have any value and must be ignored.",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:8883"
+    },
+    {
+      "rule_id": "R17",
+      "condition": "If an error is detected, the snooped cache can take appropriate action, such as discarding a Clean",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:9371"
+    },
+    {
+      "rule_id": "R18",
+      "condition": "A WriteEvict transaction can be discarded.",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:10894"
+    },
+    {
+      "rule_id": "R19",
+      "condition": "discarded if it is Clean.",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:12835"
+    },
+    {
+      "rule_id": "R20",
+      "condition": "Dirty data might have been discarded.",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:13004"
+    },
+    {
+      "rule_id": "R21",
+      "condition": "can be discarded. If the discarded CMO is a CSP or CSDP, the BCOMP and BPERSIST signals must be set on the",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:13630"
+    },
+    {
+      "rule_id": "R22",
+      "condition": "barrier transactions can be ignored. For barrier transactions, AxBAR also indicates that the transaction is a memory",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:13954"
+    },
+    {
+      "rule_id": "R23",
+      "condition": "RDATA              No constraint, can take any value. Must be ignored.",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:14017"
+    },
+    {
+      "rule_id": "R24",
+      "condition": "44-bit                        49-bit",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:15795"
+    },
+    {
+      "rule_id": "R25",
+      "condition": "additional address information in a DVM message. In this case, any additional address information must be ignored",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:15801"
+    },
+    {
+      "rule_id": "R26",
+      "condition": "44-bit        49-bit       v8 and above       -            VA[48:45]       ASID[15:8]    VMID[7:0]      ASID[7:0]",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:15824"
+    },
+    {
+      "rule_id": "R27",
+      "condition": "44-bit            49-bit       v8 and above       -               VA[44:41]         VA[39:32]          VA[31:12]     VA[",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:15852"
+    },
+    {
+      "rule_id": "R28",
+      "condition": "\u2014     If the upper 8 bits are nonzero, then over-invalidation will occur, since the 8-bit ASID agent ignores",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:15926"
+    },
+    {
+      "rule_id": "R29",
+      "condition": "\u2014     If the upper 8 bits are nonzero, then over-invalidation will occur, since the 8-bit VMID agent ignores",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:15948"
+    },
+    {
+      "rule_id": "R30",
+      "condition": "The value of AWATOP[3] applies to arithmetic operations only and is ignored for bitwise logical operations.",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:16964"
+    },
+    {
+      "rule_id": "R31",
+      "condition": "\u2022       A master might ignore the write response and only use the response that comes with read data.",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:17106"
+    },
+    {
+      "rule_id": "R32",
+      "condition": "permitted, but not required, that a Dirty copy of the cache line is discarded. The Dirty copy of the",
+      "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:17537"
+    }
+  ],
+  "fsm_states": [],
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
+  "fsm_tokens": [
+    {
+      "name": "FIFO",
+      "type": "structure",
+      "source": "IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "Timer",
+      "type": "structure",
+      "source": "IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "Buffer",
+      "type": "structure",
+      "source": "IHI0022H_amba_axi_protocol_spec.pdf"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/IHI0022H_amba_axi_protocol_spec.pdf": [
+      {
+        "literal": "remaining transfers in the burst. In a read burst, the master can discard read d",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "Discarding read data that is not required can result in lost data when accessing",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "component can store a local copy of the data, but must propagate the transaction",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "A slave that does not support exclusive accesses can ignore the AxLOCK signals. ",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "\u2022     To ignore the write strobes and treat all write accesses as being the full",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "\u2022     The AxLOCK signals are discarded for all transactions. For a sequence of l",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "\u2022     The AxCACHE signals are discarded. All transactions are treated as Non-mod",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "\u2022     The WLAST signal is discarded.",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "discarded, and an error response is returned to the master that generated the tr",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "Examples of transactions that are propagated are the discarding of one or more o",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "Examples of transactions that are discarded and generate an error report are bur",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "A protection mechanism that discards transactions must provide a protocol-compli",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "\u2022     The AxCACHE signals are discarded. All transactions are treated as Non-mod",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "\u2022     The WLAST signal is discarded.",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "\u2022        When a cache discards a copy of a line, there is no requirement to info",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "have any value and must be ignored.",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "If an error is detected, the snooped cache can take appropriate action, such as ",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "A WriteEvict transaction can be discarded.",
+        "label": "reject-rule line"
+      },
+      {
+        "literal": "FIFO",
+        "label": "FSM structure token"
+      },
+      {
+        "literal": "Timer",
+        "label": "FSM structure token"
+      },
+      {
+        "literal": "Buffer",
+        "label": "FSM structure token"
+      }
+    ]
+  },
+  "class_path": "digital_cmd_driven"
+}

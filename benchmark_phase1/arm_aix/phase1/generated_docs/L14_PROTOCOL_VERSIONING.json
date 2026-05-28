@@ -1,0 +1,19 @@
+{
+  "doc_id": "L14",
+  "doc_name": "L14_PROTOCOL_VERSIONING",
+  "applicability": "APPLICABLE",
+  "ic_class": "bus_interconnect_protocol",
+  "fields": {
+    "versions": [],
+    "deprecated_features": [],
+    "backward_compat_traps": []
+  },
+  "evidence": [],
+  "extraction_hints": [
+    "Look for 'Version' / 'Revision' / 'Issue' section headers.",
+    "Capture per-version delta-tables (what changed).",
+    "Capture explicit 'deprecated' callouts."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51"
+}

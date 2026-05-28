@@ -1,0 +1,16 @@
+{
+  "doc_id": "L16",
+  "doc_name": "L16_COMPLIANCE_PROPERTIES",
+  "applicability": "APPLICABLE",
+  "ic_class": "bus_interconnect_protocol",
+  "fields": {
+    "properties": []
+  },
+  "evidence": [],
+  "extraction_hints": [
+    "Look for sentences shaped 'must' / 'shall' / 'is required'.",
+    "Capture as {id, scope, english_form, optional_sva_form, citation}."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51"
+}

@@ -1,0 +1,8 @@
+{
+  "doc_id": "L21",
+  "doc_name": "L21_POWER_INTENT",
+  "applicability": "N/A",
+  "ic_class": "bus_interconnect_protocol",
+  "rationale": "Power intent is per-implementation, not protocol-level",
+  "emitted_by": "l_doc_taxonomy.na_stub v0.1.51"
+}

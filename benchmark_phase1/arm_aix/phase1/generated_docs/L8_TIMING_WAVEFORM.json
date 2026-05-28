@@ -1,0 +1,12 @@
+{
+  "schema_version": "1",
+  "doc_class": "timing_waveform",
+  "ic_name": "UNKNOWN_IC",
+  "timing_windows": [],
+  "timing_constants": [],
+  "waveforms": [],
+  "extraction_evidence": {
+    "input/docs/IHI0022H_amba_axi_protocol_spec.pdf": []
+  },
+  "class_path": "digital_cmd_driven"
+}

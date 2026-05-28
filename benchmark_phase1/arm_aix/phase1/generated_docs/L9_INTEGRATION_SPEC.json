@@ -1,0 +1,1202 @@
+{
+  "schema_version": 2,
+  "doc_class": "integration_spec",
+  "ic_name": "UNKNOWN_IC",
+  "top_module": "SUCH_ARM_TECHNOLOGY",
+  "top_module_extraction_strategy": "l1_ic_name_fallback",
+  "no_top_module_in_input": false,
+  "ports": [
+    {
+      "name": "aclk",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awaddr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awregion",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awlen",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awsize",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awburst",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "incr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awlock",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awcache",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awprot",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awqos",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awvalid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wstrb",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wlast",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wvalid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "bid",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "bresp",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "bvalid",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "bready",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "okay",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "araddr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arregion",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arlen",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arsize",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arburst",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arlock",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arcache",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arprot",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arqos",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arvalid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rid",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rdata",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rresp",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rlast",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rvalid",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rready",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    }
+  ],
+  "top_ports": [
+    {
+      "name": "aclk",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awaddr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awregion",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awlen",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awsize",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awburst",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "incr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awlock",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awcache",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awprot",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awqos",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awvalid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wstrb",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wlast",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wvalid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "bid",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "bresp",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "bvalid",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "bready",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "okay",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "araddr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arregion",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arlen",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arsize",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arburst",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arlock",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arcache",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arprot",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arqos",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arvalid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rid",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rdata",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rresp",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rlast",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rvalid",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rready",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    }
+  ],
+  "top_module_pins": [
+    {
+      "name": "aclk",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awaddr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awregion",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awlen",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awsize",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awburst",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "incr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awlock",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awcache",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awprot",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awqos",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awvalid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "awready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wdata",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wstrb",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wlast",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wvalid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "wready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "bid",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "bresp",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "bvalid",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "bready",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "okay",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "araddr",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arregion",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arlen",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arsize",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arburst",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arlock",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arcache",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arprot",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arqos",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arvalid",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "arready",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rid",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rdata",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rresp",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rlast",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rvalid",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    },
+    {
+      "name": "rready",
+      "mode": "output",
+      "direction": "output",
+      "io": null,
+      "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf"
+    }
+  ],
+  "no_integration_in_input": false,
+  "submodules": [],
+  "no_submodules_in_input": true,
+  "sim_only_modules": [],
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "internal_wires": [],
+  "no_internal_wires_in_input": true,
+  "expected_verdict_byte_hex": null,
+  "expected_verdict_byte_offset": null,
+  "expected_verdict_byte_extraction_strategy": null,
+  "expected_verdict_byte_offset_low_confidence": false,
+  "expected_verdict_byte_hex_low_confidence": false,
+  "cpu_interrupts": [],
+  "no_cpu_interrupts_in_input": true,
+  "memories": [
+    {
+      "name": "MakeUnique",
+      "kind": "cache",
+      "type": "Cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "ReadNoSnoop",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "ReadOnce",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "ReadClean",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "ReadNotSharedDirty",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "ReadShared",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "ReadUnique",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "CleanUnique",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "CleanShared",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "CleanInvalid",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "MakeInvalid",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "WriteNoSnoop",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "WriteUnique",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "WriteLineUnique",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "WriteBack",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "WriteClean",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": "WriteEvict",
+      "kind": "cache",
+      "type": "cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    }
+  ],
+  "memory_candidates": [
+    {
+      "name": null,
+      "kind": "cache",
+      "type": "Cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "fifo",
+      "type": "FIFO",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "ram",
+      "type": "DRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "ram",
+      "type": "SRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    },
+    {
+      "name": null,
+      "kind": "ram",
+      "type": "RAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
+    }
+  ],
+  "no_memory_candidates_in_input": false,
+  "no_memories_in_input": false,
+  "memory_map": [],
+  "no_memory_map_in_input": true,
+  "no_instantiation_template_in_input": true,
+  "extraction_evidence": {
+    "derived_from_L3": []
+  },
+  "interface_type": "axi",
+  "no_interface_type_in_input": false,
+  "interface_types": [
+    {
+      "name": "axi",
+      "occurrences": 563,
+      "first_line": 1,
+      "matched_token": "AXI"
+    }
+  ],
+  "no_interface_types_in_input": false,
+  "chip_top_interfaces": [
+    {
+      "name": "axi",
+      "matched_token": "AXI"
+    }
+  ],
+  "class_path": "digital_cmd_driven"
+}
