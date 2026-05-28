@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 439
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 439)
+- **Total programs (excluding helpers / shims):** 440
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 440)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 430 |
+| `any` | 431 |
 
 ## Alphabetical listing
 
@@ -239,6 +239,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l9_rtl_pin_consistency_check` | any | Wave 79 | Wave 79 cross-layer integrity gate. |
 | `l9_submodule_conformance_check` | any | Wave 79 | cross-check the SUBMODULE half of the |
 | `l_doc_aggregated_blob_size_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
+| `l_doc_parity_diff` | any | v0.1.51 | L-doc parity diff (program-extracted vs fresh-agent-extracted). |
 | `l_doc_structured_field_count_check` | any | Wave 31 | gate (Wave 31/32, v0.119.64). |
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `layer_extension_presence_check` | any | v0.50 | v0.50 plugin gate |
@@ -511,7 +512,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (430 programs)
+### `any` (431 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -721,6 +722,7 @@ _(no programs in this group)_
 - `l9_rtl_pin_consistency_check` — Wave 79 cross-layer integrity gate.  _[Wave 79]_
 - `l9_submodule_conformance_check` — cross-check the SUBMODULE half of the  _[Wave 79]_
 - `l_doc_aggregated_blob_size_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
+- `l_doc_parity_diff` — L-doc parity diff (program-extracted vs fresh-agent-extracted).  _[v0.1.51]_
 - `l_doc_structured_field_count_check` — gate (Wave 31/32, v0.119.64).  _[Wave 31]_
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `layer_extension_presence_check` — v0.50 plugin gate  _[v0.50]_
