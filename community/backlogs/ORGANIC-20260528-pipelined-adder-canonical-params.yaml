@@ -1,0 +1,21 @@
+type: enhancement
+severity: P3
+component: skill:spec-to-rtl + program:spec_conformance_check
+plugin_version: "0.1.33"
+
+title: >-
+  spec_conformance_check should WARN when description says 'pipelined N-bit adder/multiplier' but module hardcodes N without DATA_WIDTH/STG_WIDTH parameters
+
+pattern: |
+  Pipelined arithmetic modules in industry (RTLLM-style benchmarks especially) canonically parameterize their data width (DATA_WIDTH) and stage width (STG_WIDTH or PIPELINE_STAGES) even when the description prose only says '64-bit pipelined'. Testbenches frequently instantiate with `#(.DATA_WIDTH(64), .STG_WIDTH(16))` — without these parameters, the module elaboration fails 'parameter not found'.
+
+suggested_fix: |
+  Extend spec_conformance_check to detect when:
+    - description.title or L2 functional spec contains 'pipelined' AND a bit-width number, AND
+    - module port declarations hardcode that width without a parameter,
+  then emit a WARN suggesting `parameter DATA_WIDTH = <N>` + `parameter STG_WIDTH = <N>/4` (or similar canonical stage-width). Optional auto-fix: insert the parameters with default = hardcoded width so behavior is unchanged but the TB's #(.DATA_WIDTH(N)) instantiation now elaborates.
+
+id: "ORGANIC-20260528-pipelined-adder-canonical-params"
+submitted_at: "2026-05-28T00:00:00+08:00"
+session_context: >-
+  Captured by benchmark-enhancement-capture from RTLLM Shape B v0.1.33 final run. adder_pipe_64bit recovered via AI judgment by adding parameter DATA_WIDTH=64 + STG_WIDTH=16 (canonical pipelined-adder convention even though prose omitted them). Promoting this to a spec_conformance_check WARN would catch the class deterministically.

@@ -444,3 +444,118 @@ python3 vibe-ic-marketplace/plugins/vibe-ic-d/programs/k3_view_resolve.py \
 python3 vibe-ic-marketplace/plugins/vibe-ic-d/programs/k3_view_resolve.py \
     --list
 ```
+
+
+## Captured by benchmark-enhancement-capture (RTLLM v0.1.33 close-loop, 2026-05-28)
+
+### Skill: NBA-vs-blocking clock toggle — match TB sample-region semantics
+
+**Pattern**: Behavioral clock generators of the form `initial clk=X; always #(PERIOD/2) clk = ~clk;` give DIFFERENT waveforms depending on `=` vs `<=` AT THE FENCEPOST SAMPLE POINTS the TB inspects. With `=` (blocking, active region), a TB `#5 $display(clk)` samples the POST-toggle value; with `<=` (NBA, observed region), it samples PRE-toggle.
+
+**When to apply**: Authoring any clock-generator or PWM/strobe stimulus module that another module's testbench will sample at fencepost times (`#(PERIOD/2)`, `#PERIOD`, etc.).
+
+**What to do**: Default to NBA (`clk <= ~clk;`) in `always` toggle blocks unless the description explicitly states 'block-and-sample-after'. NBA defers the assignment to the observed region so a TB's `#5 $display` after the same delay sees the pre-toggle value — which is what the description's stated initial value `clk=0` should yield for the FIRST sample.
+
+**Worked example** (from clkgenerator): RTLLM clkgenerator description says `initial clk=0` + `toggles every PERIOD/2`. Blocking `=` gives `[1,0,1,0,…]` at `t=5,10,15,…` (TB sees clk just after each toggle). NBA `<=` gives `[0,1,0,1,…]` — matches the spec's stated initial value at first sample. Single-character fix recovered a no_pass_marker.
+
+**Why this is GENERAL**: Anywhere a clock or strobe generator is authored and a separate module samples it at the same delay granularity as the toggle period — NBA vs blocking is observable at the fencepost. The rule is independent of which IC class; it's a Verilog scheduling-region invariant.
+
+_Captured by benchmark-enhancement-capture 2026-05-28._
+
+### Skill: infer downstream-ready input from 'whether the result has been consumed' phrasing
+
+**Pattern**: Description prose like 'res_valid is managed based on … whether the result has been consumed' EMBEDS a downstream-ready input even when no port-list entry mentions it. The hidden TB will instantiate that handshake input.
+
+**When to apply**: When the description's behavioral / control-flow paragraph references 'consumed' / 'acknowledged' / 'read' / 'accepted' / 'handshake' in connection with a `*_valid` output, but the port list doesn't include a paired `*_ready` input.
+
+**What to do**: Add a `*_ready` 1-bit input port (paired with the named `*_valid`); deassert `*_valid` only on the cycle when `*_valid && *_ready` (the consummation handshake). This is the canonical valid/ready protocol.
+
+**Worked example** (from radix2_div): RTLLM radix2_div has `res_valid` listed in outputs and no `res_ready` in inputs, but the implementation paragraph says 'res_valid is managed based on … whether the result has been consumed'. The hidden TB drives a `res_ready` input the module must accept. Recovered with `input wire res_ready` + handshake-aware deassertion.
+
+**Why this is GENERAL**: Standard valid/ready protocol applies across hash cores, accelerators, queues, decoders, anywhere a producer needs to know the consumer took the result. The phrase set ('consumed', 'acknowledged', 'accepted') is a reliable lexical trigger.
+
+_Captured by benchmark-enhancement-capture 2026-05-28._
+
+### Skill: active-low reset naming — accept reset_n and rst_n as equivalent
+
+**Pattern**: Many descriptions use `reset_n` for the active-low reset port, but RTLLM-class testbenches almost always instantiate `.rst_n(rst_n)` (the short form). Both names mean the same active-low reset.
+
+**When to apply**: Description names a reset port `reset_n` (or `resetn`, `n_reset`, etc.) but the IC class / benchmark family uses `rst_n` as the canonical short form.
+
+**What to do**: Emit the port under the canonical short form `rst_n`. Semantically equivalent; matches the TB's instantiation convention. If multiple reset naming conventions are unclear, emit the design with `rst_n` and document the convention choice.
+
+**Worked example** (from sequence_detector): RTLLM sequence_detector description says 'reset_n: Reset signal'. TB wires `.rst_n(rst_n)`. Renaming the module's port from `reset_n` to `rst_n` (semantics unchanged) recovered a compile_error.
+
+**Why this is GENERAL**: Active-low reset naming variance is industry-wide; `rst_n` is the de-facto short form in OpenROAD/SkyWater/RTLLM/VerilogEval style guides. Description authors mix forms freely.
+
+_Captured by benchmark-enhancement-capture 2026-05-28._
+
+### Skill: module name — prefer dir/file convention when description has a likely typo
+
+**Pattern**: When the description's `Module name: <X>` differs from the design's directory or filename by a single-letter-or-syllable typo (e.g. `freq_diveven` vs `freq_divbyeven`), the hidden TB instantiates by the DIR/FILE name, not the description name.
+
+**When to apply**: Compare `description.module_name` against `basename(<design_dir>)`. If they differ by ≤2 edit distance AND the dir name is the more conventional spelling (no missing word, no obvious shortening), the description likely has a typo.
+
+**What to do**: Emit the module under the directory/file name. Note the discrepancy in `SOURCE_MANIFEST.md` as a 'description-typo-correction'. Do NOT silently rename without recording the judgment.
+
+**Worked example** (from freq_divbyeven): RTLLM freq_divbyeven directory but description says `Module name: freq_diveven` (missing 'by' syllable). TB instantiates `freq_divbyeven uut`. Trusting the dir name recovered a compile_error.
+
+**Why this is GENERAL**: Benchmark description typos are not rare. The dir/file name is the de-facto canonical identifier across most spec-driven flows (it's what users grep and what test harnesses key off).
+
+_Captured by benchmark-enhancement-capture 2026-05-28._
+
+### Skill: positional instantiation — output-first ordering in RTLLM-style TBs
+
+**Pattern**: Several RTLLM testbenches use POSITIONAL instantiation (`LFSR DUT(out, clk, rst)`) rather than named connections. The conventional ordering is OUTPUT FIRST, then clock, then reset, then other inputs — NOT the description's port-list order.
+
+**When to apply**: RTLLM-family benchmark, OR any benchmark where the prior single-shot fails with `Port N (X) expects 1 bit, got M` positional-mismatch error. Indication: the failing TB error message mentions a port-WIDTH or port-INDEX mismatch even though the named widths look right.
+
+**What to do**: Reorder the module's port declaration to `output … , clk, rst[, other inputs]`. The body logic is unchanged.
+
+**Worked example** (from LFSR): RTLLM LFSR description listed ports (clk, rst, out). TB does `LFSR DUT(out_tb, clk_tb, rst_tb)`. Reordering the module to `(out, clk, rst)` recovered a compile_error.
+
+**Why this is GENERAL**: Output-first positional ordering is a common RTLLM benchmark family convention. When in doubt for that family, declare ports output-first.
+
+_Captured by benchmark-enhancement-capture 2026-05-28._
+
+### Skill: restoring division — remainder register needs dividend_width + 1 bits
+
+**Pattern**: In restoring or non-restoring division, the running remainder register must be 1 bit WIDER than the dividend, because at each step the comparison `remainder ≥ divisor` may need to see the high bit of `{remainder, dividend[i]}` (shifted-in bit) to decide subtract.
+
+**When to apply**: Authoring any sequential or combinational divider (restoring, non-restoring, SRT) where the dividend is N bits.
+
+**What to do**: Declare `reg [N:0] remainder;` (N+1 bits). At each step, compare against `{1'b0, divisor}`. Final remainder takes the low N bits; zero-extend back to dividend width for the output.
+
+**Worked example** (from div_16bit): RTLLM div_16bit had `reg [7:0] remainder` for an 8-bit dividend → truncation when running remainder went above 127. Widening to `reg [8:0]` recovered 217/217 own-TB tests vs Verilog `/` and `%`.
+
+**Why this is GENERAL**: Universal across restoring-class division algorithms; well-known textbook constraint.
+
+_Captured by benchmark-enhancement-capture 2026-05-28._
+
+### Skill: sequence detector overlap — trailing match-bit re-seeds prefix
+
+**Pattern**: For an overlapping sequence detector (e.g. 10011 with overlap allowed), the trailing 1-or-0 of the matched sequence that ALSO BEGINS a new candidate prefix must re-seed that prefix. The transition from the match state on the trailing-bit input is NOT 'restart at idle'; it's 'jump to the state corresponding to that single bit as a prefix'.
+
+**When to apply**: Authoring any FSM where the description says 'overlap allowed' or 'detects every occurrence including overlapping' AND the target pattern's trailing digit also starts a new valid prefix.
+
+**What to do**: On match-state transitions, look at the input bit: if it equals the FIRST symbol of the pattern, go to the post-first-symbol prefix state (NOT to idle). Trace through the description's worked example to verify cycle-for-cycle.
+
+**Worked example** (from fsm): RTLLM fsm targets 10011 with overlap. From S4 (=10011 detected) on IN=1, the trailing 1 starts a new '1' prefix → go to S1 (NOT S0 idle, NOT S2). Verified by tracing `100110011` → match at pos 5 AND pos 9.
+
+**Why this is GENERAL**: Standard for any overlapping-sequence FSM. The KMP-style failure function captures the same insight algorithmically; for hand-coded FSMs the rule is 'on match, treat the trailing bit as a new prefix candidate'.
+
+_Captured by benchmark-enhancement-capture 2026-05-28._
+
+### Skill: spec-stated N-cycle phase needs reload one cycle before phase asserts (comb→comb→reg chain)
+
+**Pattern**: When the description says 'X is asserted for N cycles' AND uses a state-driven `p_X → registered X` chain, the naive structure (count down N then transition) produces N+1 cycles of X asserted because the counter reload races the registered output. Each lit phase needs the counter to reload ONE CYCLE BEFORE the phase output asserts.
+
+**When to apply**: Any FSM with phase duration counters where the description states exact cycle counts AND the output is registered (one delta-cycle lag from p_*).
+
+**What to do**: Restructure as: `next_state` is combinational from `(state, cnt)`; `p_red/p_yellow/p_green` are combinational from `next_state` (NOT current state); `state` and `cnt` are sequential; outputs are registered (`red <= p_red`). Counter reload fires when `!color && p_color` (rising edge of p_*), so the reload happens the cycle BEFORE the registered output asserts.
+
+**Worked example** (from traffic_light): RTLLM traffic_light spec: green=60, yellow=5, red=10. Naive sequential `p_*` gave green=61 (+1). Restructuring next_state-comb / p_*-comb / output-reg with `cnt!=color && p_color` reload rule gave exact 60/5/10. Own-TB 6/6.
+
+**Why this is GENERAL**: Spec-stated exact cycle counts + registered outputs are common (USB, AXI back-pressure, traffic lights, watchdog timers). The 'reload one cycle before phase asserts' pattern is the canonical resolution.
+
+_Captured by benchmark-enhancement-capture 2026-05-28._
