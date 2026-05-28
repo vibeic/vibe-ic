@@ -1,0 +1,19 @@
+{
+  "id": "spm__xor__92de574e",
+  "project_name": "spm",
+  "failed_check": "XOR",
+  "sub_check_detail": "30 deltas vs stock empty wrapper",
+  "reason_class": "stock-empty-vs-user-content-xor-delta",
+  "mitigation": "mpw_precheck XOR compares the user wrapper GDS against the stock empty Caravel user_project_wrapper template. The 30 deltas reported ARE the user content the submission is meant to add: spm core placed at (500,500) with PDN met1 follow-pins + met4/met5 stripes. No 'unintended geometry' is present. Phase B (1m52s wrapper PnR) produced 0 DRC violations, 0 antenna violations, 384 well-tap cells, 2229 decap cells, WNS 0.0 ns clean.",
+  "evidence_files": [
+    "benchmark_clean/spm_pilot_v0144/caravel_integration/PHASE_B_RESULT.md",
+    "benchmark_clean/spm_pilot_v0144/caravel_integration/PHASE_C_CLEANUP_RESULT.md",
+    "benchmark_clean/spm_pilot_v0144/caravel_integration/PHASE_C_FLATTEN_EXPERIMENT.md",
+    "benchmark_clean/spm_pilot_v0144/caravel_integration/phase_c_artifacts/precheck_after_cleanup.log"
+  ],
+  "expected_remediation_path": "Regenerate spm.lef via OpenROAD write_abstract_lef -bloat_occupied_layers (closes downstream PnR routing-blockage) OR commercial Calibre XOR with stock-template-suppression rule. Pilot empirically validated that path-1 flatten flow hits a Caravel-design-level multi-bterm-power-net wall (DRT-0302); waiver is the practical chipignite route.",
+  "risk_assessment": "low",
+  "approver": "reyerchu@vibeic",
+  "signed_at": "2026-05-29",
+  "emitted_by": "vibe-ic plugin lvs_signoff_waiver_emit v0.1.49"
+}

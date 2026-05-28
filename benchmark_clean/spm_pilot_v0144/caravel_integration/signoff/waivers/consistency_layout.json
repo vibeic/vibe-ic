@@ -1,0 +1,20 @@
+{
+  "id": "spm__consistency__c1b733f2",
+  "project_name": "spm",
+  "failed_check": "Consistency",
+  "sub_check_detail": "LAYOUT: Mismatching modules ['sky130_fd_sc_hd__conb_1' 'spm']",
+  "reason_class": "blackbox-macro-signoff-limit",
+  "mitigation": "Wrapper-level structural netlist references spm as a blackbox macro (by name only) and tie cells (sky130_fd_sc_hd__conb_1) are wrapper-PnR-inserted; both appear in the wrapper GDS but cannot be cross-walked from the netlist without flattening. Open-source precheck does not support hard-macro LAYOUT verification. Ports, complexity, modeling, power, and port-types sub-checks all PASS; mpw_precheck Consistency sub-check coverage is 5 of 6. Device-level LVS proven 261=261 in pilot Tier 4.",
+  "evidence_files": [
+    "benchmark_clean/spm_pilot_v0144/RESULT_tier4_lvs.md",
+    "benchmark_clean/spm_pilot_v0144/caravel_integration/PHASE_C_CLEANUP_RESULT.md",
+    "benchmark_clean/spm_pilot_v0144/caravel_integration/PHASE_C_FLATTEN_EXPERIMENT.md",
+    "benchmark_clean/spm_pilot_v0144/caravel_integration/phase_c_artifacts/precheck_after_cleanup.log"
+  ],
+  "expected_remediation_path": "Commercial Calibre LVS at foundry; or Caravel-flatten flow + multi-bterm-power-net router (next-gen open-source TritonRoute)",
+  "risk_assessment": "medium",
+  "risk_justification": "LAYOUT mismatch on a hard-macro is the expected open-source-flow signature for Caravel hard-macro user-projects. The 5 PASSing Consistency sub-checks (ports, complexity, modeling, power-connections, port-types) prove the wrapper is structurally Caravel-conformant; the LAYOUT mismatch carries no incremental tape-out risk over what Caravel itself ships with every hard-macro user-project.",
+  "approver": "reyerchu@vibeic",
+  "signed_at": "2026-05-29",
+  "emitted_by": "vibe-ic plugin lvs_signoff_waiver_emit v0.1.49"
+}
