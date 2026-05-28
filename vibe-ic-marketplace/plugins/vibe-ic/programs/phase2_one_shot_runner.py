@@ -1620,6 +1620,15 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         # (no _asic, _wrapper, _tb, _test names — those are not the L9 top).
         import re as _re
         mod_re = _re.compile(r"^\s*module\s+([A-Za-z_]\w*)\s*[(#]", _re.M)
+        # v0.1.38 fix (Bucket A — 2 RTLLM agents on same LoC + 1 multi-module
+        # report): (1) the `#(parameter)` walker used to set depth=1 after
+        # skipping params, then re-read the same `(` and bump to depth=2 —
+        # parameterized modules never yielded a port block. (2) per-file we
+        # used to look at only the FIRST module declaration; for multi-module
+        # files (e.g. barrel_shifter.v containing helper mux2X1 first, then
+        # barrel_shifter) this picked the wrong top. Now we scan ALL module
+        # decls per file and prefer the one whose name matches file basename
+        # or synth_top.
         candidates = []
         for f in sorted(rtl_dir.glob("*.v")) + sorted(rtl_dir.glob("*.sv")):
             name = f.stem
@@ -1630,43 +1639,67 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                 text = f.read_text(errors="ignore")
             except Exception:
                 continue
-            m = mod_re.search(text)
-            if not m:
-                continue
-            mod_name = m.group(1)
-            if mod_name == synth_top:
-                return  # already in some file
-            # extract port list from module decl up to matching ');' so the
-            # wrapper has identical ports
-            decl_start = m.end() - 1  # position at the '(' or '#'
-            # find the matching closing ')' of the port list (skip params)
-            i = decl_start
-            depth = 0
-            in_params = False
-            while i < len(text):
-                c = text[i]
-                if c == '#' and not in_params:
-                    in_params = True
-                if c == '(':
-                    depth += 1
-                elif c == ')':
-                    depth -= 1
-                    if depth == 0:
-                        if in_params:
-                            in_params = False
-                            # continue to find module port list
-                            j = text.find('(', i + 1)
-                            if j < 0:
+            # scan ALL module decls in this file (v0.1.38 multi-module fix)
+            file_mods = []
+            for m in mod_re.finditer(text):
+                mod_name = m.group(1)
+                if mod_name == synth_top:
+                    return  # already in some file
+                # extract port list from module decl up to matching ')' of the
+                # port list (skipping `#(...)` params if present)
+                decl_start = m.end() - 1  # position at the '(' or '#'
+                i = decl_start
+                depth = 0
+                in_params = False
+                port_block = None
+                while i < len(text):
+                    c = text[i]
+                    if c == '#' and not in_params and depth == 0:
+                        in_params = True
+                    if c == '(':
+                        depth += 1
+                    elif c == ')':
+                        depth -= 1
+                        if depth == 0:
+                            if in_params:
+                                in_params = False
+                                # advance past this `)` and find the next `(`
+                                # opening the actual module port list.
+                                j = text.find('(', i + 1)
+                                if j < 0:
+                                    break
+                                # v0.1.38 fix: position i AT the `(` so the next
+                                # loop iteration's `i += 1` lands inside the
+                                # port list. Reset depth=0 so the `(` re-read
+                                # bumps it cleanly to depth=1 (prior code set
+                                # depth=1 here and ended up at depth=2).
+                                i = j
+                                depth = 0
+                                # fall through to `i += 1` below
+                            else:
+                                port_block = text[decl_start:i + 1]
                                 break
-                            i = j
-                            depth = 1
-                            continue
-                        port_block = text[decl_start:i + 1]
-                        candidates.append((mod_name, port_block, f))
-                        break
-                i += 1
-        if len(candidates) != 1:
-            return  # ambiguous or none — let yosys produce a clear error
+                    i += 1
+                if port_block is not None:
+                    file_mods.append((mod_name, port_block, f))
+            if not file_mods:
+                continue
+            # v0.1.38 (multi-module fix): prefer the module whose name matches
+            # the file basename; else fall back to the first module in file.
+            chosen = next((t for t in file_mods if t[0] == f.stem), file_mods[0])
+            candidates.append(chosen)
+        if not candidates:
+            return  # nothing usable
+        # v0.1.38 (multi-file fix): if any candidate name matches the file
+        # basename of its source file, prefer that one as the dut. If multiple
+        # files contribute, pick deterministically (already sorted by glob).
+        if len(candidates) > 1:
+            # filter to "module name == file stem" pairs only
+            basenamed = [t for t in candidates if t[0] == t[2].stem]
+            if len(basenamed) == 1:
+                candidates = basenamed
+            else:
+                return  # genuinely ambiguous — let yosys report
         mod_name, port_block, src_file = candidates[0]
         # v0.1.33 — extract just the port NAMES from the port_block so the
         # instance uses named-port connections `.a(a), .b(b), …` instead of

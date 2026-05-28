@@ -52,9 +52,10 @@ def _registry_entry(bench: str) -> dict | None:
     return reg.get("benchmarks", {}).get(bench)
 
 
-def run(cmd, cwd=None, timeout=120):
+def run(cmd, cwd=None, timeout=120, env=None):
     try:
-        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
+                           timeout=timeout, env=env)
         return r.returncode, (r.stdout + r.stderr)
     except subprocess.TimeoutExpired:
         return 124, "TIMEOUT"
@@ -98,21 +99,40 @@ def main():
             print(f"MISSING {f} — agent must author it first")
             sys.exit(2)
 
-    # Find phase1_engine.cli + plugin programs. We expect this script to live
-    # under the vibe-ic plugin install; PROGRAMS = <plugin>/programs.
-    repo_root = PLUGIN.parents[1] if PLUGIN.parts[-2:] == ("plugins", "vibe-ic") else PLUGIN
-    # phase1_engine.cli is imported as a Python module from the plugin root
+    # v0.1.38 fix (Bucket A — 3 agents reported): probe BOTH locations for
+    # `tools/phase1_engine`. In a monorepo checkout the package lives at
+    # `<vibe-ic-repo>/tools/phase1_engine` (= PLUGIN.parents[1]/tools/phase1_engine);
+    # in a flat plugin install it lives at `<plugin>/tools/phase1_engine`. The
+    # cwd for the python -m import + the PYTHONPATH must agree.
+    candidates = []
+    if PLUGIN.parts[-2:] == ("plugins", "vibe-ic"):
+        candidates.append(PLUGIN.parents[1])         # monorepo: vibe-ic repo root
+    candidates.append(PLUGIN)                         # flat plugin install
+    cli_cwd = next((c for c in candidates if (c / "tools" / "phase1_engine" / "cli.py").is_file()),
+                   PLUGIN)
     cli_env = os.environ.copy()
-    cli_env["PYTHONPATH"] = str(PLUGIN) + os.pathsep + cli_env.get("PYTHONPATH", "")
+    cli_env["PYTHONPATH"] = str(cli_cwd) + os.pathsep + cli_env.get("PYTHONPATH", "")
 
     # 1. phase1_engine run-all  spec.yaml -> generated_docs/L*.json
+    # v0.1.38 fix (Bucket A — 3 agents reported): pass `env=cli_env` so PYTHONPATH
+    # propagates. Without env=, subprocess inherits a copy that DOES NOT include
+    # cli_env modifications and `tools.phase1_engine` import fails.
     rc, out = run([sys.executable, "-m", "tools.phase1_engine.cli",
                    "run-all", str(spec), str(wd / "out")],
-                  cwd=str(PLUGIN), timeout=180)
+                  cwd=str(cli_cwd), timeout=180, env=cli_env)
     if rc != 0:
-        # Fallback: phase1_engine may live in a different module path on some installs
+        # v0.1.38 fix (Bucket A — Human b7): phase1_one_shot_runner.py takes a
+        # PROJECT DIR (positional), NOT --spec <yaml>. The Path-A bridge inside
+        # the runner converts input/phase1_prompt.md → input/docs/design_description.md.
+        # For Shape C we stage a minimal project: <wd>/input/docs/spec.md (copy of spec).
+        proj = wd / "phase1_proj"
+        (proj / "input" / "docs").mkdir(parents=True, exist_ok=True)
+        try:
+            (proj / "input" / "docs" / "design_description.md").write_text(spec.read_text())
+        except Exception:
+            pass
         rc, out = run([sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
-                       "--spec", str(spec), "--out", str(wd / "out")], timeout=180)
+                       str(proj)], timeout=180, env=cli_env)
     gd = wd / "out/generated_docs"
     l9_ok = gd.is_dir() and any(gd.glob("L9*.json"))
     steps["phase1_run_all"] = {"verdict": "PASS" if rc == 0 and l9_ok else "FAIL",
@@ -120,7 +140,7 @@ def main():
 
     # 2. pre-RTL spec self-consistency lint (prompt alone)
     rc, out = run([sys.executable, str(PROGRAMS / "spec_self_consistency_check.py"),
-                   "--spec", str(prompt)])
+                   "--spec", str(prompt)], env=cli_env)
     steps["spec_self_consistency"] = {"verdict": "PASS" if "PASS" in out else "WARN",
                                       "rc": rc, "log": out[-300:]}
 
@@ -133,7 +153,7 @@ def main():
     sem_manifest = wd / "semantic_manifest.json"
     rc, out = run([sys.executable, str(PROGRAMS / "spec_conformance_check.py"),
                    "--rtl-dir", str(wd), "--spec", str(prompt), "--top", top_module,
-                   "--semantic-manifest", str(sem_manifest)])
+                   "--semantic-manifest", str(sem_manifest)], env=cli_env)
     cverd = "PASS" if "PASS" in out.split("\n")[0] else ("WARN" if "WARN" in out else "FAIL")
     steps["spec_conformance"] = {"verdict": cverd, "rc": rc, "log": out[-500:]}
     if sem_manifest.is_file():
@@ -145,13 +165,13 @@ def main():
     # 5a. ENFORCED power-up determinism (v0.1.24 lesson) — repair reset-less
     #     registered outputs IN-PLACE before emit. Structural + prompt-blind.
     rc, out = run([sys.executable, str(PROGRAMS / "rtl_hygiene_lint.py"),
-                   "--fix", str(sample)])
+                   "--fix", str(sample)], env=cli_env)
     steps["rtl_hygiene_fix"] = {"verdict": "APPLIED" if "repaired" in out else "noop",
                                 "rc": rc, "log": out[-300:]}
 
     # 5b. rtl_hygiene_lint at WARN (informational; v0.1.10 rule 5 + later additions)
     rc, out = run([sys.executable, str(PROGRAMS / "rtl_hygiene_lint.py"),
-                   "--severity", "WARN", str(sample)])
+                   "--severity", "WARN", str(sample)], env=cli_env)
     hverd = "PASS" if rc == 0 else "WARN"
     steps["rtl_hygiene_lint"] = {"verdict": hverd, "rc": rc, "log": out[-600:]}
 

@@ -69,8 +69,10 @@ def main():
     score_src_host = project / "score" / "src"
     test_py = next(score_src_host.glob(f"test_{a.top}.py"), None)
     if not test_py:
-        # any test_*.py
-        test_py = next(score_src_host.glob("test_*.py"), None)
+        # any test_*.py EXCEPT test_runner.py (which is the pytest entry point,
+        # not the cocotb test module). Pick deterministically (sorted).
+        cands = sorted(p for p in score_src_host.glob("test_*.py") if p.name != "test_runner.py")
+        test_py = cands[0] if cands else None
     if not test_py:
         raise SystemExit(f"No test_*.py under {score_src_host}")
     if not (score_src_host / "test_runner.py").is_file():
@@ -91,17 +93,19 @@ def main():
     work_c = _docker_path(work_dir, mount_host, a.mount_container)
     test_module = test_py.stem
 
-    cmd = [
-        "docker", "exec",
-        "-e", f"VERILOG_SOURCES={rtl_c}",
-        "-e", f"SIM={a.simulator}",
-        "-e", f"TOPLEVEL={a.top}",
-        "-e", f"MODULE={test_module}",
-        "-e", f"PYTHONPATH={work_c}",
-        "-w", work_c,
-        a.container,
-        "python3", "-m", "pytest", "-rA", "-s", "test_runner.py",
-    ]
+    # iic-eda container ships iverilog under /foss/tools/bin and libvvp.so under
+    # /foss/tools/iverilog/lib — those paths are only injected by the container's
+    # login profile (`bash -lc`), NOT by plain `docker exec`. Use bash -lc so the
+    # session inherits the full toolchain PATH + LD_LIBRARY_PATH.
+    inner = (
+        f"export VERILOG_SOURCES={rtl_c}; "
+        f"export SIM={a.simulator}; "
+        f"export TOPLEVEL={a.top}; "
+        f"export MODULE={test_module}; "
+        f"export PYTHONPATH={work_c}:${{PYTHONPATH:-}}; "
+        f"cd {work_c} && python3 -m pytest -rA -s test_runner.py"
+    )
+    cmd = ["docker", "exec", a.container, "bash", "-lc", inner]
     t0 = time.time()
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=a.timeout)
     elapsed = time.time() - t0

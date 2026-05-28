@@ -1,0 +1,65 @@
+type: bug
+severity: P1
+status: RESOLVED
+component: agents/ic-expert-agent.md
+plugin_version: "0.1.38"
+resolution: |
+  Resolved same session (2026-05-28) at user direction
+  ("clean up the legacy leakage now"). 21+ specific Prob## / design-name
+  references removed; 14 "Worked example" / "Worked miss" entries rewritten
+  as "Worked pattern (anonymized)". Generic benchmark-family references kept
+  only where they describe class-level conventions (e.g. "output-first
+  positional ordering convention" without naming the benchmark). Grep
+  verifies: 0 ProbNNN, 0 RTLLM/VerilogEval-{v2,Human,Machine} mentions,
+  0 specific design names. Pytest 4060/4060 unchanged.
+resolved_at: "2026-05-28T00:00:00+08:00"
+
+title: >-
+  Legacy ic-expert-agent.md sections leak benchmark Prob IDs and design names
+  (predate v0.1.34 honesty rule)
+
+pattern: |
+  benchmark-enhancement-capture/SKILL.md § honesty rules (added in v0.1.34) state:
+    "NEVER add a Bucket B skill section that names specific benchmark design
+     identifiers. Skills are general patterns, not lookup tables."
+
+  But agents/ic-expert-agent.md still contains explicit references to specific
+  benchmark designs in "Worked example" sections captured before v0.1.34:
+    - VerilogEval Prob067 / Prob070 / Prob078 / Prob089 / Prob092 / Prob113 /
+      Prob145 / Prob149 / Prob150 / Prob154 / Prob042
+    - RTLLM radix2_div / sequence_detector / freq_divbyeven
+    (See line-number grep at v0.1.38 commit.)
+
+  A new user who downloads the plugin and reads ic-expert-agent.md gets
+  hints about WHICH specific benchmark problems are hard AND in which
+  direction the answer leans — that's leakage from prior captured sweeps to
+  their own blind run.
+
+  The v0.1.38 sweep's NEW captures are anonymized ("from a 64-bit pipelined
+  adder + 4-bit pipelined multiplier" instead of "adder_pipe_64bit + multi_pipe_4bit").
+  The legacy entries need to be retroactively anonymized to the same standard.
+
+suggested_fix: |
+  Per-section rewrite each "Worked example" / "Worked miss" entry to:
+    1. Remove all VerilogEval ProbNNN_ identifiers
+    2. Remove all RTLLM design leaf-names (radix2_div, sequence_detector, etc.)
+    3. Keep the worked pattern + the structural fix verbatim — just describe
+       the design category instead ("a restoring-class divider", "a fixed-pattern
+       sequence detector", etc.)
+    4. Re-verify the pattern remains useful as a generalization (does it still
+       teach the lesson without the specific reference?)
+
+  Sweep the rewrite against a corpus of benchmarks to ensure no
+  general-pattern degradation. Ship as v0.1.39 (separate PR — not blocking
+  v0.1.38 commit since v0.1.38's own additions are clean).
+
+id: "ORGANIC-20260528-legacy-ic-expert-agent-benchmark-leakage"
+submitted_at: "2026-05-28T00:00:00+08:00"
+session_context: >-
+  Surfaced when reviewing v0.1.38 commit: user questioned whether the
+  --emit-close-loop-tasklist flag is cheating. Investigation revealed the
+  flag itself is fine (per-user-run, only ships PASS/FAIL feedback, standard
+  pass@k methodology) but the v0.1.38 close-loop captures named specific
+  Prob IDs in worked examples (violating the v0.1.34 honesty rule). Those
+  were fixed in-flight before commit. Audit of pre-v0.1.34 sections found
+  the same violation throughout — filed here for a dedicated cleanup PR.

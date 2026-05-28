@@ -29,6 +29,25 @@ v0.1.24/v0.1.25 fail-case loops 2026-05-27/28):
   7. Vector self-shift fold
      (e.g., `in | {in[98:0],1'b0}` — the unshifted operand re-folds the boundary
       bit so the padded edge bit is NOT 0; shift BOTH operands inside the concat)
+  8. SV reserved-word identifier (v0.1.38, from the close-loop sweep)
+     iverilog 12 treats `packed`, `unique`, `priority`, `final`, `chandle`,
+     `null`, `unique0` as reserved even outside their reserved contexts. Using
+     any of these as a user identifier (variable, port, label) raises a
+     useless `syntax error near …` with no line. Detect at lint time and
+     suggest a `_val` / `_result` suffix. Chip-AGNOSTIC.
+  9. Wire-driven-by-input read inside a clocked block (v0.1.38)
+     `wire X = f(input_port);` followed by `always @(posedge clk) ... X ...`
+     reads X at the same simulation instant as the clock edge — TB sees X
+     evaluated with PRE-edge input values (one-cycle skew). The fix is to
+     inline the expression inside the always block (NBA RHS pre-fetch
+     semantics) OR pre-register the input. Chip-AGNOSTIC sequential hazard.
+  10. Power-up determinism for INTERNAL regs in reset-less modules (v0.1.38)
+     The existing rule 5 covers registered OUTPUT ports and an internal reg
+     that directly drives an output via `assign out = q`. v0.1.38 extends
+     `--fix` to ALSO cover ALL internal `reg` declarations in reset-less
+     modules — the X-propagation through internal pipeline regs at t=0
+     corrupts the output even when the output itself is initialized. Same
+     conservative gate (no reset port). Chip-AGNOSTIC.
 
 Usage:
     python3 rtl_hygiene_lint.py <files.v|.sv ...>
@@ -497,6 +516,157 @@ def rule_vector_self_shift_fold(src: str, path: str) -> List[Finding]:
 
 
 # ---------------------------------------------------------------------------
+# Rule 8: SV reserved-word identifier (v0.1.38, from close-loop sweep)
+# ---------------------------------------------------------------------------
+# iverilog 12 ALWAYS treats these as reserved, even outside their reserved
+# context. Using one as a variable / port / label name produces a
+# "syntax error near …" with no useful location. The list is the conservative
+# intersection of (SV-2012 reserved words used in nowhere-near-anything-else
+# contexts) ∩ (iverilog 12 actually rejects). Adding `parameter` / `wire` /
+# `input` etc. would be redundant — Verilog-1995 already rejects those.
+_RESERVED_IDENT_BLACKLIST = frozenset({
+    "packed", "unique", "unique0", "priority", "final",
+    "chandle", "null", "interconnect",
+})
+
+
+def rule_reserved_word_identifier(src: str, path: str) -> List[Finding]:
+    """Flag user identifiers that match the iverilog-rejects blacklist.
+
+    Detects in three contexts:
+      (a) variable / port DECLARATION (`reg packed`, `wire [N:0] packed`,
+          `input final`)
+      (b) named-block / generate / instance label (`begin : final`)
+      (c) module port-list position (`module m (input final, ...)`)
+
+    Skips occurrences in the legitimate reserved context (`logic packed [3:0]`
+    SystemVerilog struct, `unique case`, `priority case`, `final begin`, etc.)
+    by requiring the reserved word to appear AFTER a type keyword that's
+    expecting an identifier.
+
+    chip-AGNOSTIC; iverilog-substitution-specific (per open-benchmark-methodology
+    skill § 3).
+    """
+    findings: List[Finding] = []
+    for w in _RESERVED_IDENT_BLACKLIST:
+        # (a) immediately follows a type/direction keyword
+        decl = re.compile(
+            r'\b(reg|wire|logic|input|output|inout|integer|real|byte|shortint|int|longint)\b'
+            r'(?:\s+signed)?\s*(?:\[[^\]]+\]\s*)?'
+            r'\b(' + re.escape(w) + r')\b\s*(?=[,;)=]|\[)')
+        for m in decl.finditer(src):
+            lineno = src[:m.start()].count('\n') + 1
+            findings.append(Finding(
+                path, lineno, 'WARN', 'reserved-word-identifier', w,
+                f"identifier '{w}' is reserved by iverilog 12 (Vibe-IC's VCS "
+                f"substitute) even outside its reserved context. Using it as a "
+                f"user identifier triggers 'syntax error near {w}' with no line. "
+                f"Rename to '{w}_val' / '{w}_result' / similar."))
+        # (b) named-block label
+        label = re.compile(r'\b(?:begin|fork|module|generate)\s*:\s*(' + re.escape(w) + r')\b')
+        for m in label.finditer(src):
+            lineno = src[:m.start()].count('\n') + 1
+            findings.append(Finding(
+                path, lineno, 'WARN', 'reserved-word-identifier', w,
+                f"block label '{w}' is reserved by iverilog 12. Rename."))
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Rule 9: wire-driven-by-input read inside a clocked block (v0.1.38)
+# ---------------------------------------------------------------------------
+def rule_wire_input_read_in_clocked_block(src: str, path: str) -> List[Finding]:
+    """Flag `wire X = f(input_port);` then `always @(posedge clk) ... X ...`.
+
+    The wire evaluates at the same simulation instant as the clock edge —
+    iverilog evaluates the continuous-assign expression in the active region;
+    the NBA in the always block samples its RHS in the same active region, so
+    the wire's value is computed from the PRE-edge input. Result: a one-cycle
+    skew that looks like an algorithm bug.
+
+    The fix is either (a) inline the expression inside the always block (uses
+    NBA RHS pre-fetch semantics directly), or (b) pre-register the input first.
+
+    Conservative WARN: fires only when ALL of these are true:
+      • a `wire X = expr;` declaration exists where `expr` reads an input port
+      • `X` appears on the RHS of `<=` inside an `always @(posedge ...)` block
+      • the same `X` is NOT also assigned in any always block (else it's not a
+        pure combinational helper — could be a clocked alias)
+    chip-AGNOSTIC.
+    """
+    findings: List[Finding] = []
+    # collect input port names
+    input_ports: Set[str] = set()
+    for m in re.finditer(
+            r'\binput\b(?:\s+wire)?(?:\s+signed)?\s*(?:\[[^\]]+\]\s*)?'
+            r'([A-Za-z_]\w*)\s*(?=[,;)=])', src):
+        nm = m.group(1)
+        if nm and nm not in VERILOG_KEYWORDS:
+            input_ports.add(nm)
+    if not input_ports:
+        return findings
+    # collect `wire X = expr;` with RHS reading at least one input port
+    wire_helpers: Dict[str, Tuple[int, str]] = {}
+    for m in re.finditer(
+            r'\bwire\b(?:\s+signed)?\s*(?:\[[^\]]+\]\s*)?'
+            r'([A-Za-z_]\w*)\s*=\s*([^;]+);', src):
+        nm, rhs = m.group(1), m.group(2)
+        if nm in VERILOG_KEYWORDS:
+            continue
+        rhs_ids = set(re.findall(r'[A-Za-z_]\w*', rhs))
+        if rhs_ids & input_ports:
+            wire_helpers[nm] = (src[:m.start()].count('\n') + 1, rhs.strip())
+    if not wire_helpers:
+        return findings
+    # A wire is never the LHS of a procedural assignment (Verilog forbids
+    # it), so the only thing that would disqualify a wire helper is being
+    # also written via `<=` (which itself would be a syntax error, but be
+    # conservative). We do NOT collect blocking `=` here — the wire's own
+    # `wire X = expr;` declaration uses `=` and would self-exclude.
+    proc_lhs = {mm.group(1) for mm in
+                re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src)}
+    candidates = {k: v for k, v in wire_helpers.items() if k not in proc_lhs}
+    # scan posedge-clk always blocks for RHS use of a candidate
+    block_re = re.compile(r'\balways\s*@\s*\(\s*(?:pos|neg)edge\b[^)]*\)\s*(begin|[^;]+;)',
+                          re.M | re.S)
+    for m in block_re.finditer(src):
+        head_end = m.end()
+        tail = src[head_end:]
+        # extract body (begin..end or single statement)
+        if m.group(1).strip().startswith('begin'):
+            depth, body = 0, None
+            for tm in re.finditer(r'\b(begin|end)\b', src[m.start():]):
+                if tm.group(1) == 'begin':
+                    depth += 1
+                else:
+                    depth -= 1
+                    if depth == 0:
+                        body = src[m.end():m.start() + tm.start()]
+                        break
+            if body is None:
+                continue
+        else:
+            body = m.group(1)
+        rhs_ids = set(re.findall(r'[A-Za-z_]\w*', body))
+        # collect block-local LHS so we don't false-positive on a local var
+        block_lhs = {mm.group(1) for mm in
+                     re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', body)}
+        for cand, (lineno, rhs_expr) in candidates.items():
+            if cand in rhs_ids and cand not in block_lhs:
+                findings.append(Finding(
+                    path, lineno, 'WARN',
+                    'wire-input-read-in-clocked-block', cand,
+                    f"`wire {cand} = {rhs_expr};` reads an input port and is "
+                    f"then read inside an `always @(posedge ...)` block at the "
+                    f"same simulation instant — the wire evaluates with PRE-edge "
+                    f"input values (one-cycle skew). Fix: inline the expression "
+                    f"inside the always block (uses NBA RHS pre-fetch semantics), "
+                    f"or pre-register the input."))
+                break
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def lint_file(path: Path) -> List[Finding]:
@@ -509,6 +679,17 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_uninit_registered_output(src, str(path))
     results += rule_incomplete_sensitivity(src, str(path))
     results += rule_vector_self_shift_fold(src, str(path))
+    results += rule_reserved_word_identifier(src, str(path))
+    # rule_wire_input_read_in_clocked_block: NOT enabled. Corpus sweep
+    # (362 samples) showed 5 false-positives (all on PASSING samples that
+    # use combinational `wire = f(input)` helpers correctly). Per
+    # benchmark-enhancement-capture honesty rule, a Bucket-A program rule
+    # must be strictly safer than prior state — this one isn't. The function
+    # is kept here as a corpus-sweep target for a future refinement that
+    # narrows to the actual race condition (e.g. input transitions detected
+    # at the SAME `#0` instant as the posedge); until then, the pattern
+    # lives only as an anonymized Bucket-B worked example in
+    # agents/ic-expert-agent.md.
     return results
 
 
@@ -536,9 +717,10 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
             names.append(f.symbol); seen.add(f.symbol)
     # (b) INTERNAL registered regs that drive a module output via a continuous
     #     assign (e.g. `reg q; ... q<=...; assign out=q;`). Same power-up-X bug,
-    #     just one hop removed — Prob053-class. Reset-less modules only.
+    #     just one hop removed. Reset-less modules only.
     input_decls = ' '.join(re.findall(r'\binput\b[^;)\n]*', src))
-    if not _RESET_NAME_RE.search(input_decls):
+    is_resetless = not _RESET_NAME_RE.search(input_decls)
+    if is_resetless:
         out_ports = set(re.findall(
             r'\boutput\b\s+(?:(?:reg|logic|wire)\s+)?(?:signed\s+)?(?:\[[^\]]+\]\s*)?'
             r'([A-Za-z_]\w*)\s*(?=[,;)=])', src))
@@ -557,6 +739,36 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
                         r'\binitial\b[\s\S]{0,200}?\b' + re.escape(rhs_id) + r'\s*(<=|=)', src)
                     if not decl_init and not in_initial:
                         names.append(rhs_id); seen.add(rhs_id)
+    # (c) v0.1.38 — ALL internal `reg` declarations in reset-less modules.
+    # X-propagation through internal pipeline regs at t=0 corrupts the output
+    # even when (a)+(b) already initialized the visible regs. Same conservative
+    # gate (reset-less only). Skip regs that are NEVER written (would be a
+    # different rule's WARN) and regs already covered by (a)/(b).
+    if is_resetless:
+        all_regs: Dict[str, int] = {}
+        # multi-name decls like `reg [W-1:0] a, b, c;` are handled by scanning
+        # the type prefix once and walking the comma list.
+        for m in re.finditer(
+                r'\breg\b(?:\s+signed)?\s*(?:\[[^\]]+\]\s*)?([^;]+);', src):
+            lineno_d = src[:m.start()].count('\n') + 1
+            for nm_match in re.finditer(
+                    r'([A-Za-z_]\w*)\s*(?:\[[^\]]+\])?\s*(?:=[^,;]+)?', m.group(1)):
+                nm = nm_match.group(1)
+                if nm and nm not in VERILOG_KEYWORDS and nm not in all_regs:
+                    all_regs[nm] = lineno_d
+        registered = {mm.group(1) for mm in
+                      re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src)}
+        has_initial = bool(re.search(r'\binitial\b', src))
+        for nm in all_regs:
+            if nm in seen or nm not in registered:
+                continue
+            decl_init = re.search(
+                r'\breg\b[^;\n]*\b' + re.escape(nm) + r'\s*=', src)
+            in_initial = has_initial and re.search(
+                r'\binitial\b[\s\S]{0,200}?\b' + re.escape(nm) + r'\s*(<=|=)', src)
+            if decl_init or in_initial:
+                continue
+            names.append(nm); seen.add(nm)
     if not names:
         return 0, []
     # Insert before the LAST endmodule (single-module samples: the top module).
