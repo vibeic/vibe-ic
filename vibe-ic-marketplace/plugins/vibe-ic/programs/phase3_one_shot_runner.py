@@ -172,10 +172,10 @@ def _normalize_util(util: float) -> Tuple[float, Optional[str]]:
     try:
         u = float(util)
     except (TypeError, ValueError):
-        return 0.45, (f"--util value {util!r} is not numeric; "
+        return 0.30, (f"--util value {util!r} is not numeric; "
                       f"falling back to default fraction 0.45")
     if u != u:  # NaN
-        return 0.45, "--util value is NaN; falling back to 0.45"
+        return 0.30, "--util value is NaN; falling back to 0.30 (v0.1.44 default)"
     if u > 1.0:
         warn = (f"--util={u:g} > 1: a utilization FRACTION (0..1) is "
                 f"expected, interpreting {u:g} as a percentage and "
@@ -4482,7 +4482,13 @@ def main() -> int:
     p.add_argument("--container", default="iic-eda")
     p.add_argument("--die-um", default="200x200",
                    help="Die size W x H in microns")
-    p.add_argument("--util", type=float, default=0.45)
+    p.add_argument("--util", type=float, default=0.30,
+                   help="Global placement density (--density passed to OpenROAD "
+                        "global_placement). v0.1.44 spm pilot Tier 1.5 finding: "
+                        "default 0.45 produced 1780 SKY130A DRC violations on "
+                        "spm 200x200 die (clustered li-min-spacing on adjacent "
+                        "std cell rows); 0.30 produces 0 violations same die. "
+                        "Conservative default; caller can override.")
     p.add_argument("--pdk", default="auto",
                    help="auto (default) | sky130A | <custom>")
     # Design-for-ECO (Step 18) — spare-cell-array density as a fraction
