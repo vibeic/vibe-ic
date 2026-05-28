@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 426
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 426)
+- **Total programs (excluding helpers / shims):** 427
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 427)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 417 |
+| `any` | 418 |
 
 ## Alphabetical listing
 
@@ -356,6 +356,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rtl_hygiene_lint` | any | v0.1.10 | General-purpose RTL hygiene checker. |
 | `rtl_precheck_gate` | any | v0.66 | aggregate every RTL static auditor into a |
 | `rtl_response_byte_oracle_check` | any | — | P0.2 deterministic gate |
+| `rtl_review_aggregate` | any | v0.1.50 | rtl-review skill backing aggregator (Pattern-B → program). |
 | `rtl_signal_name_semantic_check` | any | — | v1.6.232 (merged v229+v231). |
 | `rtl_unit_test_coverage_check` | any | v0.50.2 | v0.50.2 plugin gate |
 | `rx_byte_assembler_ibt_flush_recovery_check` | any | Wave 15 | Wave 15 silent-bug gate. |
@@ -498,7 +499,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (417 programs)
+### `any` (418 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -824,6 +825,7 @@ _(no programs in this group)_
 - `rtl_hygiene_lint` — General-purpose RTL hygiene checker.  _[v0.1.10]_
 - `rtl_precheck_gate` — aggregate every RTL static auditor into a  _[v0.66]_
 - `rtl_response_byte_oracle_check` — P0.2 deterministic gate
+- `rtl_review_aggregate` — rtl-review skill backing aggregator (Pattern-B → program).  _[v0.1.50]_
 - `rtl_signal_name_semantic_check` — v1.6.232 (merged v229+v231).
 - `rtl_unit_test_coverage_check` — v0.50.2 plugin gate  _[v0.50.2]_
 - `rx_byte_assembler_ibt_flush_recovery_check` — Wave 15 silent-bug gate.  _[Wave 15]_

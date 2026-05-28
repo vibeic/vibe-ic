@@ -3,157 +3,95 @@ name: rtl-review
 description: Audit RTL code for lint violations, synthesis hazards, coding-style compliance, and readability. Use when the user says "review this Verilog", "check my RTL", "lint this module", "is this code synthesizable", or shares an HDL file and asks for feedback before simulation or tape-in.
 ---
 
-# RTL Review
+# RTL Review (Pattern-A — program-driven, doctrine-compliant v0.1.50)
 
-Perform a structured review of RTL code, flagging issues by severity and producing a 0–10 quality score. Acts as an LLM-as-a-judge pre-check before the design hits real EDA tools.
+> **Doctrine (user, 2026-05-29):** 把修法寫進工具，而非寫進 prompt。
+>
+> The 6-category checklist + 0-10 scoring rubric that previously lived
+> in this skill prose is now in **`programs/rtl_review_aggregate.py`**
+> (37 pytest cases pin every category mapping + scoring boundary).
+>
+> **You run the program first.** Claude is the backstop for residual
+> prose, NOT the rule applicator.
 
 ## When to use
 
-Trigger when the user:
-- Shares a Verilog/SystemVerilog/VHDL file and asks for feedback
-- Says "review", "lint", "audit", or "sanity check" on HDL
-- Wants to know if code is synthesizable or clean
-- Asks for coding-style or readability comments on hardware code
+User shares an RTL file or directory and asks for a review.
 
-## Review checklist
+## Mandatory: run the program FIRST
 
-Go through every category. For each issue found, record: file, line number, severity (ERROR / WARN / INFO), category, and a one-sentence explanation.
-
-### 1. Synthesis hazards (ERROR)
-- Inferred latches in `always_comb`
-- Multiple drivers on the same net
-- Incomplete sensitivity lists in legacy `always @(*)`
-- `initial` blocks outside testbenches
-- Non-synthesizable constructs (`$display`, `#delay`, `fork/join`)
-- Combinational feedback loops
-
-### 2. Reset and clock-domain hygiene (ERROR/WARN)
-- Flops without reset
-- Mixed sync/async reset on the same signal
-- Cross-clock-domain signals without synchronizers
-- Reset recovery/removal violations
-- Gated clocks without explicit clock-gating cells
-
-> **Deterministic backing — run it, don't eyeball it.** The first two items are
-> enforced by `programs/reset_discipline_check.py` (a hard ERROR on contradictory
-> sync/async mode or polarity for the same reset; a WARN on a state reg missing
-> from its reset branch or a fully-unreset flop). Run it and fold the findings
-> into your report:
-> ```bash
-> python3 programs/reset_discipline_check.py --rtl-dir <rtl>   # ERROR → score ≤5
-> ```
-> It is also part of `programs/rtl_precheck_gate.py`, so the same verdict gates
-> the pre-burn flow.
-
-### 3. Style and readability (WARN/INFO)
-- `always @(posedge clk)` vs `always_ff` consistency
-- `reg`/`wire` vs `logic` in SystemVerilog
-- Magic numbers that should be parameters
-- Missing header comment
-- Signal naming (should follow snake_case)
-- Over-wide always blocks (>50 lines)
-
-### 4. Correctness smells (WARN)
-- Blocking assignments in sequential logic
-- Non-blocking assignments in combinational logic
-- Truncation without explicit slicing
-- Unintended sign extension
-- `x` or `z` literals in synthesizable code
-
-### 5. Parameter and width issues (WARN)
-- Implicit width mismatches in assignments
-- Hard-coded widths that should be parameterized
-- Parameter ranges that allow illegal values
-
-### 6. Port fidelity (ERROR/WARN)
-- Port names/widths/directions match the spec exactly (no drift)
-- No garbled/misread interface (e.g. an indexed family `Y1, Y3` with a missing
-  `Y2` — a misread-spec signature)
-
-> **Deterministic backing.** `programs/spec_rtl_port_fidelity_check.py` detects
-> indexed-name gaps + duplicate ports standalone, and does an exact
-> name+width+direction diff against an integration-spec port list when given one.
-> `--spec` now accepts a raw natural-language prompt (`- input d (8 bits)`), a
-> markdown ```verilog module(...)``` header, or a JSON contract — no hand-built
-> port list needed:
-> ```bash
-> python3 programs/spec_rtl_port_fidelity_check.py --rtl-dir <rtl>            # sanity
-> python3 programs/spec_rtl_port_fidelity_check.py --rtl-dir <rtl> --spec spec.md
-> ```
-> For the **full** Spec↔RTL contract (ports + reset mode/polarity + output
-> latency, not just ports) use `programs/spec_conformance_check.py` (MCP:
-> `eda_spec_conformance`) — it also catches a spec that says "synchronous reset"
-> while the RTL is asynchronous, the class of bug structural lints miss.
-
-## Output format
-
-Produce a review report with this structure:
-
-```
-# RTL Review — <filename>
-
-**Overall Score: X/10**
-
-## Summary
-<2-3 sentence verdict>
-
-## Findings
-
-### Errors (must fix)
-| Line | Category | Issue |
-|------|----------|-------|
-| ...  | ...      | ...   |
-
-### Warnings (should fix)
-| Line | Category | Issue |
-|------|----------|-------|
-
-### Info (consider)
-| Line | Category | Issue |
-|------|----------|-------|
-
-## Recommendations
-- <top 3 things to fix first>
-
-## Next step
-Run /rtl-repair to auto-apply fixes, or /testbench-gen to validate behavior.
+```bash
+python3 plugins/vibe-ic/programs/rtl_review_aggregate.py \
+    --rtl-dir <dir-of-.v-and-.sv> \
+    --out-md  rtl_review.md \
+    --out-json rtl_review.json
 ```
 
-## Scoring rubric
+Exit codes: 0 = PASS or WARN; 1 = FAIL (with `--strict`); 2 = bad input.
 
-- **10**: No errors, no warnings, production-ready
-- **8–9**: Clean code with minor info items
-- **6–7**: Some warnings, no blocking errors
-- **4–5**: Multiple warnings or one error
-- **2–3**: Multiple errors, significant rework needed
-- **0–1**: Not synthesizable, major structural issues
+The program runs three sub-programs:
+- `rtl_hygiene_lint.py` — § 1 synthesis hazards + § 3 style + § 5 width
+- `reset_discipline_check.py` — § 2 reset/clock hygiene
+- `rtl_precheck_gate.py` — § 4 correctness smells + § 6 port fidelity
+
+It aggregates findings into 6 categories, computes the score (rubric in
+`compute_score()`), and emits the same Markdown template the skill
+previously asked the LLM to author by hand.
+
+## What Claude does (backstop only)
+
+After the program emits `rtl_review.md` + `rtl_review.json`:
+
+1. **Read the program output.** Do not re-derive any number it already returned.
+2. **Refuse to claim a higher score than the program returned.** The
+   scoring rubric is deterministic; overriding it would be an honesty-rule
+   violation.
+3. **Add residual prose** the program cannot author: design-intent
+   comments per finding (why a particular latch is intentional, why a
+   width-mismatch is parameterised), and short fix-suggestions per
+   ERROR / WARN.
+4. **Handoff:** if `verdict == "FAIL"`, recommend `/rtl-repair` (which
+   runs `rtl_hygiene_lint.py --fix`). If `WARN`, list the items to address
+   before tapeout. If `PASS`, proceed to `/checkpoint-gate`.
+
+## Scoring rubric (deterministic, in the program)
+
+The skill USED to enumerate this as prose. It is now `compute_score()`
+in `rtl_review_aggregate.py`, pinned by pytest:
+
+| Score | Condition | Verdict |
+|---|---|---|
+| 10 | 0 errors, 0 warns, 0 infos | PASS |
+| 8–9 | 0 errors, 0 warns, INFO-only | PASS |
+| 6–7 | 0 errors, 1–4 warns | WARN |
+| 4–5 | 0–1 errors OR ≥ 5 warns | FAIL |
+| 2–3 | 2+ errors | FAIL |
+| 0–1 | not synthesizable | FAIL |
+
+## Anti-patterns
+
+- ❌ **Authoring the score by reading the file.** The program returns
+  it; you do not re-derive.
+- ❌ **Skipping the program because "it's a small file".** The program
+  is the audit trail. Run it on every review request.
+- ❌ **Claiming PASS when the JSON output says `verdict: FAIL`.**
 
 ## Technical basis
 
-Implements the LLM-as-a-judge pattern validated by RTLBench and similar multi-dimensional evaluation benchmarks. Aligned with industry lint rules from Synopsys SpyGlass, Cadence JasperGold, and Siemens Questa Lint — but pre-filters issues before the paid tools run.
+`programs/rtl_review_aggregate.py` + `programs/tests/test_rtl_review_aggregate.py`
+(37 pytest cases). The 3 sub-programs all pre-existed; this skill's
+former 159-line prose checklist is now a 14-line wrapper because the
+rules moved from prompt-space to tool-space.
 
-## Do not
+## Compliance gate
 
-- Do not "fix" code in this skill — that is `/rtl-repair`'s job
-- Do not run actual simulation — suggest `/testbench-gen` instead
-- Do not invent issues; if the code is clean, say so and give a high score
-
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
-
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
-after producing your output, save it to a file and run:
-
+If `vibe-ic-d` is installed:
 ```bash
 python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
     --requirements plugins/vibe-ic-d/skills/rtl-review/compliance.yaml \
-    <your_output_file>
+    rtl_review.md
 ```
 
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding vibe-ic-d skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.
+Exit 0 = PASS; exit 1 = the program output is missing a required section
+(typically you forgot `--out-md` or the program crashed and you authored
+by hand instead).
