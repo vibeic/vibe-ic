@@ -2450,6 +2450,18 @@ if {{[catch {{detailed_placement}} _gr_dp_err]}} {{
 if {{[catch {{detailed_route}} dr_err]}} {{
   puts "DETAILED_ROUTE_NONFATAL: $dr_err"
 }}
+# === v0.1.48 — decap + filler insertion ===
+# spm pilot Tier 2 EM/decap finding: prior runs (v0.1.25 → v0.1.47) emitted
+# ZERO decap or filler cells. Empty std-cell-row gaps left an MPW-rejecting
+# combination: no dynamic IR margin (no decap), open density-fill rules
+# (no filler in row gaps), and unused silicon area. SKY130 spm pilot added
+# 2079 decap + 150 fill cells; DRC still 0, worst IR 35 µV (2500× margin).
+# NONFATAL-guarded so PDKs without the masters degrade gracefully.
+if {{[catch {{filler_placement {{sky130_fd_sc_hd__decap_3 sky130_fd_sc_hd__decap_4 sky130_fd_sc_hd__decap_6 sky130_fd_sc_hd__decap_8 sky130_fd_sc_hd__decap_12 sky130_fd_sc_hd__fill_1 sky130_fd_sc_hd__fill_2 sky130_fd_sc_hd__fill_4 sky130_fd_sc_hd__fill_8}}}} _fp_err]}} {{
+  puts "FILLER_NONFATAL: $_fp_err"
+}} else {{
+  puts "FILLER_INSERTED: decap_3/4/6/8/12 + fill_1/2/4/8"
+}}
 write_def {out_dir_c}/routed.def
 write_def {out_dir_c}/{top}.def
 write_verilog {out_dir_c}/{top}_pnr.v
