@@ -162,6 +162,13 @@ def main():
     ap.add_argument("--bench", required=True, help="benchmark name (key in BENCHMARK_REGISTRY.json)")
     ap.add_argument("--dataset", required=True, help="path to the benchmark dataset on disk")
     ap.add_argument("--run", required=True, help="path to the run dir (with samples/, problems.list)")
+    ap.add_argument("--emit-close-loop-tasklist", default="",
+                    help="v0.1.38: when set, emit a JSON file at this path listing fails + "
+                         "their verdicts + their prompt path. Intended as input to a second-pass "
+                         "close-loop agent driver (per Vibe-IC architecture: programs first, then "
+                         "Claude judgment as backup). This file is NOT the close-loop runner — it "
+                         "encodes the WHAT, the orchestrator calling Claude calls the HOW. The "
+                         "open-benchmark-methodology skill § 1 'program + LLM backup' contract.")
     a = ap.parse_args()
 
     entry = _load_bench(a.bench)
@@ -201,6 +208,43 @@ def main():
               ", ".join(f"{(r[ident].split('/')[-1])}:{r['reason'].split()[0]}" for r in fails[:25]) +
               ("..." if len(fails) > 25 else ""))
     print("  pass_at_1.json:", run / "pass_at_1.json")
+
+    # v0.1.38 — emit close-loop tasklist for the Vibe-IC "programs first, then
+    # Claude judgment as backup" architecture. The 22-agent v0.1.37 sweep showed
+    # that fresh blind one-shot lands ~95% on VerilogEval and ~72% on RTLLM;
+    # the close-loop second pass (AI re-authors fails using pass/FAIL feedback
+    # only, NEVER reading hidden TB) recovers ~3% on VerilogEval and ~24% on
+    # RTLLM. Emitting this tasklist makes that path turnkey for future runs.
+    if a.emit_close_loop_tasklist and fails:
+        tasklist = {
+            "benchmark": entry["title"],
+            "shape": shape,
+            "run_dir": str(run),
+            "dataset_dir": str(dataset),
+            "fail_count": len(fails),
+            "fails": [
+                {"id": r[ident],
+                 "prior_sample": str(samples / (f"{r[ident].split('/')[-1]}_sample01.sv"
+                                               if shape == "C" else f"{r[ident].split('/')[-1]}.v")),
+                 "prompt": str(dataset / (f"{r[ident].split('/')[-1]}{layout.get('prompt_suffix', '')}"
+                                          if shape == "C" else
+                                          f"{r[ident]}/{layout.get('prompt_filename', '')}")),
+                 "verdict": r["verdict"],
+                 "reason": r.get("reason", ""),
+                 "retry_budget": 3,
+                 "blind_contract": (
+                     "READ-ALLOWED: prompt, prior_sample, scorer PASS/FAIL verdict only. "
+                     "READ-FORBIDDEN: any hidden TB / testbench / verified_*.v / "
+                     "<Prob>_test.sv / <Prob>_ref.sv / cocotb harness. Peeking = "
+                     "benchmark fraud per open-benchmark-methodology skill § 3.")}
+                for r in fails],
+            "rescore_command": (
+                f"python3 {Path(__file__).name} --bench {a.bench} "
+                f"--dataset {dataset} --run {run}"),
+        }
+        Path(a.emit_close_loop_tasklist).write_text(
+            json.dumps(tasklist, indent=2) + "\n")
+        print(f"  close_loop_tasklist:", a.emit_close_loop_tasklist)
 
 
 if __name__ == "__main__":
