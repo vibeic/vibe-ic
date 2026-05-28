@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 427
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 427)
+- **Total programs (excluding helpers / shims):** 435
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 435)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 418 |
+| `any` | 426 |
 
 ## Alphabetical listing
 
@@ -134,6 +134,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dispatcher_tx_arm_order_check` | any | — | TX handshake arm-before-data race. |
 | `doc_consistency_no_unresolved_conflicts_check` | any | Wave 37 | Wave 37 / A4 |
 | `doc_extract` | any | — | Convert vendor docs (.doc/.docx/.pdf/.pptx/.xlsx/.txt) to |
+| `drc_fix_planner` | any | v0.1.50 | DRC fix-planner (Pattern-B → program). |
 | `drc_report_check` | any | — | wrapper for eda_report_audit --mode drc. |
 | `eco_loop_audit` | any | — | Audit ECO (Engineering Change Order) log for completeness. |
 | `eco_status_gen` | any | — | emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json). |
@@ -149,6 +150,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `fetch_round_trip_sentinel_check` | any | — | P0.1 deterministic gate |
 | `final_report_generate` | any | — | generate canonical, chip-AGNOSTIC final |
 | `final_test_attestation_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
+| `fix_fault_cut_names` | any | v0.63 | Rewrite Fault-cut netlist so escaped identifiers with embedded dots |
 | `flow_compliance_check` | any | Wave 91 | Strict Vibe-IC phase 2+3 gate (40 main-track |
 | `flow_stage_check` | any | — | wrapper for signoff_audit --mode flow. |
 | `foundry_handoff_pack_gen` | any | — | emit Step 35 foundry handoff package skeleton. |
@@ -194,6 +196,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `half_duplex_wrapper_open_drain_check` | any | — | structural-RTL gate that |
 | `handshake_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
 | `hardware_pass_attestation_check` | any | v0.50 | v0.50 plugin gate (third layer) |
+| `hold_fix_planner` | any | v0.1.50 | Hold-fix planner (Pattern-B → program). |
 | `host_soft_reset_unwake_path_check` | any | — | Verify that any soft-reset / abort |
 | `hw_acceptance_test_passed_check` | any | v0.119.15 | final-step gate for the closed |
 | `hw_vs_rtl_verdict_check` | any | v0.45 | Require N byte-identical FAILs before blaming hardware. |
@@ -209,6 +212,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ip_catalog_upstream_audit` | any | — | Verify catalog manifests against canonical |
 | `ip_catalog_validate` | any | — | Validate catalog manifests against schema + |
 | `ir_drop_report_check` | any | — | wrapper for eda_report_audit --mode ir_drop. |
+| `ir_drop_triage_classify` | any | v0.1.50 | IR-drop triage classifier (Pattern-B → program). |
 | `isolation_cell_required_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
 | `json_schema_check` | any | — | Deterministic JSON schema key checker. |
 | `klayout_deck_mode_check` | any | v0.112 | BACKLOG-v10 P0.1 enforcement loop. |
@@ -243,6 +247,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `llm_semantic_confirm` | any | — | LLM double-confirm for program-extracted SEMANTIC fields. |
 | `lvs_netgen_setup_emit` | any | v0.1.49 | Netgen supplementary LVS setup-file generator. |
 | `lvs_report_check` | any | — | wrapper for eda_report_audit --mode lvs. |
+| `lvs_triage_classify` | any | v0.1.50 | LVS triage classifier (Pattern-B → program). |
 | `manifest_leak_check` | any | v0.47.6 | Detect benchmark-value leaks in fact manifests. |
 | `manufacturing_fab_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
 | `marketplace_version_sync_check` | any | — | marketplace_version_sync_check.py |
@@ -324,6 +329,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `protocol_gap_check` | any | — | Generate inter-unit gap assertions for any serial protocol. |
 | `protocol_ip_simulation_required_check` | any | v0.116 | BACKLOG-v11 P2.1. |
 | `protocol_reference_tb_pass_check` | any | Wave 28 | Wave 28/29 (v0.119.60+) gate. |
+| `protocol_timeline_assert_gen` | any | v0.1.50 | Half-duplex protocol turnaround cocotb TB generator (Type-A). |
+| `protocol_turnaround_audit` | any | v0.1.50 | Half-duplex protocol turnaround audit (Type-A extraction). |
 | `provenance_check` | any | — | Verify a file was produced by a logged tool run. |
 | `provenance_hash_audit` | any | v0.114 | v0.114 (BACKLOG-v10 P2.3). |
 | `provenance_logger` | any | — | Wrap a tool invocation, record hashed provenance. |
@@ -398,6 +405,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spef_extraction_check` | any | — | Verify parasitic extraction (SPEF) was produced after routing. |
 | `spice_correlation_check` | any | — | deterministic gate for post-layout SPICE verification |
 | `sta_report_check` | any | — | wrapper for eda_report_audit --mode sta. |
+| `sta_triage_classify` | any | v0.1.50 | STA endpoint triage (Pattern-B → program). |
 | `stage1_compliance` | any | — | Stage 1 (RTL + Verification) interim gate. |
 | `stage2_compliance` | any | — | Stage 2 (Synthesis + DFT) interim gate. |
 | `stage3_compliance` | any | — | Stage 3 (Physical Design + Sign-off) interim gate. |
@@ -499,7 +507,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (418 programs)
+### `any` (426 programs)
 
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
@@ -605,6 +613,7 @@ _(no programs in this group)_
 - `dispatcher_tx_arm_order_check` — TX handshake arm-before-data race.
 - `doc_consistency_no_unresolved_conflicts_check` — Wave 37 / A4  _[Wave 37]_
 - `doc_extract` — Convert vendor docs (.doc/.docx/.pdf/.pptx/.xlsx/.txt) to
+- `drc_fix_planner` — DRC fix-planner (Pattern-B → program).  _[v0.1.50]_
 - `drc_report_check` — wrapper for eda_report_audit --mode drc.
 - `eco_loop_audit` — Audit ECO (Engineering Change Order) log for completeness.
 - `eco_status_gen` — emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json).
@@ -620,6 +629,7 @@ _(no programs in this group)_
 - `fetch_round_trip_sentinel_check` — P0.1 deterministic gate
 - `final_report_generate` — generate canonical, chip-AGNOSTIC final
 - `final_test_attestation_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
+- `fix_fault_cut_names` — Rewrite Fault-cut netlist so escaped identifiers with embedded dots  _[v0.63]_
 - `flow_compliance_check` — Strict Vibe-IC phase 2+3 gate (40 main-track  _[Wave 91]_
 - `flow_stage_check` — wrapper for signoff_audit --mode flow.
 - `foundry_handoff_pack_gen` — emit Step 35 foundry handoff package skeleton.
@@ -665,6 +675,7 @@ _(no programs in this group)_
 - `half_duplex_wrapper_open_drain_check` — structural-RTL gate that
 - `handshake_check` — deterministic compliance check derived from <chip-class> v040 debug.
 - `hardware_pass_attestation_check` — v0.50 plugin gate (third layer)  _[v0.50]_
+- `hold_fix_planner` — Hold-fix planner (Pattern-B → program).  _[v0.1.50]_
 - `host_soft_reset_unwake_path_check` — Verify that any soft-reset / abort
 - `hw_acceptance_test_passed_check` — final-step gate for the closed  _[v0.119.15]_
 - `hw_vs_rtl_verdict_check` — Require N byte-identical FAILs before blaming hardware.  _[v0.45]_
@@ -680,6 +691,7 @@ _(no programs in this group)_
 - `ip_catalog_upstream_audit` — Verify catalog manifests against canonical
 - `ip_catalog_validate` — Validate catalog manifests against schema +
 - `ir_drop_report_check` — wrapper for eda_report_audit --mode ir_drop.
+- `ir_drop_triage_classify` — IR-drop triage classifier (Pattern-B → program).  _[v0.1.50]_
 - `isolation_cell_required_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
 - `json_schema_check` — Deterministic JSON schema key checker.
 - `klayout_deck_mode_check` — BACKLOG-v10 P0.1 enforcement loop.  _[v0.112]_
@@ -713,6 +725,7 @@ _(no programs in this group)_
 - `llm_semantic_confirm` — LLM double-confirm for program-extracted SEMANTIC fields.
 - `lvs_netgen_setup_emit` — Netgen supplementary LVS setup-file generator.  _[v0.1.49]_
 - `lvs_report_check` — wrapper for eda_report_audit --mode lvs.
+- `lvs_triage_classify` — LVS triage classifier (Pattern-B → program).  _[v0.1.50]_
 - `manifest_leak_check` — Detect benchmark-value leaks in fact manifests.  _[v0.47.6]_
 - `manufacturing_fab_intake_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
 - `marketplace_version_sync_check` — marketplace_version_sync_check.py
@@ -794,6 +807,8 @@ _(no programs in this group)_
 - `protocol_gap_check` — Generate inter-unit gap assertions for any serial protocol.
 - `protocol_ip_simulation_required_check` — BACKLOG-v11 P2.1.  _[v0.116]_
 - `protocol_reference_tb_pass_check` — Wave 28/29 (v0.119.60+) gate.  _[Wave 28]_
+- `protocol_timeline_assert_gen` — Half-duplex protocol turnaround cocotb TB generator (Type-A).  _[v0.1.50]_
+- `protocol_turnaround_audit` — Half-duplex protocol turnaround audit (Type-A extraction).  _[v0.1.50]_
 - `provenance_check` — Verify a file was produced by a logged tool run.
 - `provenance_hash_audit` — v0.114 (BACKLOG-v10 P2.3).  _[v0.114]_
 - `provenance_logger` — Wrap a tool invocation, record hashed provenance.
@@ -866,6 +881,7 @@ _(no programs in this group)_
 - `spef_extraction_check` — Verify parasitic extraction (SPEF) was produced after routing.
 - `spice_correlation_check` — deterministic gate for post-layout SPICE verification
 - `sta_report_check` — wrapper for eda_report_audit --mode sta.
+- `sta_triage_classify` — STA endpoint triage (Pattern-B → program).  _[v0.1.50]_
 - `stage1_compliance` — Stage 1 (RTL + Verification) interim gate.
 - `stage2_compliance` — Stage 2 (Synthesis + DFT) interim gate.
 - `stage3_compliance` — Stage 3 (Physical Design + Sign-off) interim gate.

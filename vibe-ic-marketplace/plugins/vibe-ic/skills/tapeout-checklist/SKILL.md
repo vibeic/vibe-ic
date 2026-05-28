@@ -5,7 +5,45 @@ description: Run the final pre-tapeout gate — confirm DRC, LVS, STA, IR-drop, 
 
 # Tapeout Checklist
 
-Tape-out is a one-way door. This skill is the last-mile gate: every signoff item must be accounted for, with either a green status or a documented waiver approved by a named engineer.
+> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt。
+> Mandatory program preflight first; AI is the backstop, not the lead.
+
+Tape-out is a one-way door. This skill is the last-mile gate: every
+signoff item must be accounted for, with either a green status or a
+documented waiver approved by a named engineer.
+
+## Mandatory Deterministic Preflight
+
+Run all four programs and read their JSON outputs BEFORE narrating any
+tape-out readiness verdict:
+
+```bash
+# 1. The flow-compliance gate is the SOLE final criterion (see § next):
+python3 plugins/vibe-ic-d/programs/flow_compliance_check.py \
+    <project_dir> --strict
+
+# 2. Tapeout checklist generation:
+python3 plugins/vibe-ic/programs/tapeout_checklist_gen.py <project>
+
+# 3. Signoff audit aggregates DRC/LVS/STA verdicts:
+python3 plugins/vibe-ic/programs/signoff_audit.py <project>
+
+# 4. Foundry signoff plan + (if analog) mixed-signal signoff:
+python3 plugins/vibe-ic/programs/foundry_signoff_plan_check.py <project>
+python3 plugins/vibe-ic/programs/mixed_signal_signoff_check.py <project>
+```
+
+Plus, for chipignite-style submissions, the signoff-waiver pair from
+the v0.1.49 doctrine sweep:
+
+```bash
+# 5. Waiver schema + content gate (HONESTY: refuses 'ai'/'agent' approver):
+python3 plugins/vibe-ic/programs/signoff_waiver_emit.py \
+    --validate-only --strict < signoff/waivers/*.json
+```
+
+**Refuse to claim tape-out-ready if any of these returns non-zero or
+FAIL.** Only after ALL pass can the narrative proceed.
 
 ## ⛔ PHASE 2+3 SOLE ACCEPTANCE CRITERION (READ FIRST)
 

@@ -1,13 +1,12 @@
 {
   "schema_version": 1,
   "_comment": "AUTHORITATIVE AI-skill inventory \u2014 generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
-  "total": 60,
+  "total": 57,
   "by_tier": {
-    "debug": 12,
+    "debug": 13,
     "judgment": 6,
-    "nl_primary": 27,
-    "unclassified": 9,
-    "verification": 6
+    "nl_primary": 31,
+    "verification": 7
   },
   "skills": [
     "ams-sim",
@@ -25,7 +24,6 @@
     "analog-spec-extract",
     "analog-topology-select",
     "architecture-explore",
-    "atpg-name-harmonize",
     "benchmark-enhancement-capture",
     "benchmark-verify",
     "catalog-glue-author",
@@ -56,8 +54,6 @@
     "phase2-rtl-verify",
     "phase3-backend-verify",
     "ppa-predict",
-    "protocol-timeline-assert",
-    "protocol-turnaround-audit",
     "regression-issue-fix",
     "regression-manage",
     "rtl-repair",
@@ -148,14 +144,9 @@
       "tier": "judgment"
     },
     {
-      "name": "atpg-name-harmonize",
-      "frontmatter_name": "atpg-name-harmonize",
-      "tier": "nl_primary"
-    },
-    {
       "name": "benchmark-enhancement-capture",
       "frontmatter_name": "benchmark-enhancement-capture",
-      "tier": "unclassified"
+      "tier": "nl_primary"
     },
     {
       "name": "benchmark-verify",
@@ -165,7 +156,7 @@
     {
       "name": "catalog-glue-author",
       "frontmatter_name": "catalog-glue-author",
-      "tier": "unclassified"
+      "tier": "nl_primary"
     },
     {
       "name": "checkpoint-gate",
@@ -185,7 +176,7 @@
     {
       "name": "core-agent-loop",
       "frontmatter_name": "core-agent-loop",
-      "tier": "unclassified"
+      "tier": "nl_primary"
     },
     {
       "name": "design-for-eco",
@@ -210,7 +201,7 @@
     {
       "name": "field-agent-loop",
       "frontmatter_name": "field-agent-loop",
-      "tier": "unclassified"
+      "tier": "nl_primary"
     },
     {
       "name": "formal-verify",
@@ -265,7 +256,7 @@
     {
       "name": "open-benchmark-methodology",
       "frontmatter_name": "open-benchmark-methodology",
-      "tier": "unclassified"
+      "tier": "nl_primary"
     },
     {
       "name": "phase1",
@@ -275,12 +266,12 @@
     {
       "name": "phase1-completeness-deep-review",
       "frontmatter_name": "phase1-completeness-deep-review",
-      "tier": "unclassified"
+      "tier": "verification"
     },
     {
       "name": "phase1-coverage-loop",
       "frontmatter_name": "phase1-coverage-loop",
-      "tier": "unclassified"
+      "tier": "nl_primary"
     },
     {
       "name": "phase1-output-verify",
@@ -303,19 +294,9 @@
       "tier": "judgment"
     },
     {
-      "name": "protocol-timeline-assert",
-      "frontmatter_name": "protocol-timeline-assert",
-      "tier": "nl_primary"
-    },
-    {
-      "name": "protocol-turnaround-audit",
-      "frontmatter_name": "protocol-turnaround-audit",
-      "tier": "nl_primary"
-    },
-    {
       "name": "regression-issue-fix",
       "frontmatter_name": "regression-issue-fix",
-      "tier": "unclassified"
+      "tier": "debug"
     },
     {
       "name": "regression-manage",
@@ -345,7 +326,7 @@
     {
       "name": "spec-to-rtl",
       "frontmatter_name": "spec-to-rtl",
-      "tier": "unclassified"
+      "tier": "nl_primary"
     },
     {
       "name": "spec-validator",

@@ -5,7 +5,35 @@ description: Read Static Timing Analysis reports, triage setup/hold/recovery/rem
 
 # STA Review
 
-STA signoff runs in a commercial tool (PrimeTime, Tempus, OpenSTA). This skill reads the report, classifies violations, and proposes the minimum-churn fix — keeping senior engineers focused on hard paths.
+> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt。
+> Mandatory program preflight first; AI is the backstop, not the lead.
+
+STA signoff runs in a commercial tool (PrimeTime, Tempus, OpenSTA). The
+deterministic triage (5 endpoint categories → fix strategies) is now in
+`programs/sta_triage_classify.py`; this skill is the wrapper that runs
+it, narrates residual interpretation, and refuses to override the
+program's category counts.
+
+## Mandatory Deterministic Preflight
+
+Before any narrative:
+
+```bash
+# 1. STA report audit (presence, WNS/TNS extraction, basic structure):
+python3 plugins/vibe-ic/programs/sta_report_check.py \
+    --rpt <sta.rpt> --json /tmp/sta_check.json
+
+# 2. Endpoint categorisation (5 categories + fix strategy per category):
+python3 plugins/vibe-ic/programs/sta_triage_classify.py \
+    --endpoints-json <endpoints.json> \
+    --wns <wns_ns> --tns <tns_ns> \
+    --out-md /tmp/sta_triage.md --out-json /tmp/sta_triage.json
+```
+
+The program returns counts per category (cell_delay_limited /
+net_delay_limited / logic_depth_limited / clock_skew_limited /
+hold_violation) plus the fix strategy per category. **Do not author
+these counts by reading the report.**
 
 ## When to use
 

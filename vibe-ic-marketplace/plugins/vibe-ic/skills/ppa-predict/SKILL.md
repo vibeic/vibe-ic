@@ -5,7 +5,28 @@ description: Predict power, performance, and area of an RTL module before runnin
 
 # PPA Predict
 
-Provide fast, pre-synthesis estimates of Power, Performance (Fmax / critical-path delay), and Area for an RTL module. Acts as a Circuit Foundation Model surrogate for the synthesis tool — seconds instead of hours.
+> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt。
+> Mandatory program preflight first; AI is the backstop, not the lead.
+
+Provide fast, pre-synthesis estimates of Power, Performance (Fmax /
+critical-path delay), and Area for an RTL module. Acts as a Circuit
+Foundation Model surrogate for the synthesis tool — seconds instead of
+hours.
+
+## Mandatory Deterministic Preflight
+
+Before any narrative estimate:
+
+```bash
+# Extract any PPA hints already declared in the project README / spec:
+python3 plugins/vibe-ic/programs/readme_ppa_extractor.py \
+    --rtl-dir <rtl> --readme <README.md> --json /tmp/ppa_hints.json
+```
+
+Use the JSON output as the floor of any estimate you state. **Do not
+overclaim a tighter number than the program returned** — the program
+read the actual spec/README declared values; LLM-generated estimates
+without that anchor have a known confabulation rate.
 
 ## When to use
 
