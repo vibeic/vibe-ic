@@ -1,0 +1,150 @@
+{
+  "_comment": "Registry of known open IC-design benchmarks. Drives /vibe-ic-benchmark. Each entry maps a benchmark to its canonical run-shape (per open-benchmark-methodology skill § 2 + § 5 cheat sheet) + the on-disk layout + the dataset source.",
+  "benchmarks": {
+    "verilogeval-v2": {
+      "shape": "C",
+      "title": "VerilogEval-v2 (spec-to-RTL)",
+      "dataset": {
+        "repo": "https://github.com/NVlabs/verilog-eval",
+        "subdir": "dataset_spec-to-rtl",
+        "license": "NVIDIA proprietary"
+      },
+      "layout": {
+        "prompt_suffix": "_prompt.txt",
+        "tb_suffix": "_test.sv",
+        "ref_suffix": "_ref.sv",
+        "module_name_strategy": "always_TopModule"
+      },
+      "scorer": "score_iverilog_tb.py",
+      "scorer_args": {
+        "tb_compile_with_ref": true,
+        "pass_regex": "Mismatches:\\s*0\\s+in\\s+\\d+\\s+samples"
+      },
+      "status": "RUNNABLE — atomic micro-problems, Shape C harness"
+    },
+    "verilogeval-human": {
+      "shape": "C",
+      "title": "VerilogEval-Human (iccad2023 code-complete)",
+      "dataset": {
+        "repo": "https://github.com/NVlabs/verilog-eval",
+        "subdir": "dataset_code-complete-iccad2023",
+        "license": "NVIDIA proprietary"
+      },
+      "layout": {
+        "prompt_suffix": "_prompt.txt",
+        "tb_suffix": "_test.sv",
+        "ref_suffix": "_ref.sv",
+        "module_name_strategy": "always_TopModule"
+      },
+      "scorer": "score_iverilog_tb.py",
+      "scorer_args": {
+        "tb_compile_with_ref": true,
+        "pass_regex": "Mismatches:\\s*0\\s+in\\s+\\d+\\s+samples"
+      },
+      "status": "RUNNABLE — atomic micro-problems, Shape C harness"
+    },
+    "rtllm": {
+      "shape": "B",
+      "title": "RTLLM v2.0 (spec-to-RTL, standalone designs)",
+      "dataset": {
+        "repo": "https://github.com/hkust-zhiyao/RTLLM",
+        "subdir": ".",
+        "license": "MIT"
+      },
+      "layout": {
+        "prompt_filename": "design_description.txt",
+        "tb_filename": "testbench.v",
+        "ref_glob": "verified_*.v",
+        "module_name_strategy": "from_description_module_name_line"
+      },
+      "scorer": "score_iverilog_tb.py",
+      "scorer_args": {
+        "tb_compile_with_ref": false,
+        "pass_regex": "Your Design Passed",
+        "fail_regex": "Test failed|Your Design Failed",
+        "cwd_design_dir": true
+      },
+      "status": "RUNNABLE — standalone designs with own testbench, Shape B harness"
+    },
+    "cvdp": {
+      "shape": "D",
+      "title": "CVDP (Comprehensive Verilog Design Problems, agentic)",
+      "dataset": {
+        "repo": "https://github.com/NVlabs/cvdp_benchmark",
+        "subdir": "example_dataset",
+        "license": "NVIDIA proprietary; full set gated by NVIDIA + Turing"
+      },
+      "layout": {
+        "prompt_filename": "PROMPT.txt",
+        "spec_glob": "docs/specification.md",
+        "harness_subdir": "score"
+      },
+      "scorer": "score_cocotb_mcp.py",
+      "scorer_args": {
+        "use_mcp_eda_cocotb": true,
+        "simulator": "icarus"
+      },
+      "status": "RUNNABLE-N=1 — only the public example_dataset; full 1500+ set gated"
+    },
+    "pyhdl-eval": {
+      "shape": "E",
+      "title": "PyHDL-Eval (168 spec-to-RTL across HDLs)",
+      "dataset": {
+        "repo": "https://github.com/cornell-brg/pyhdl-eval",
+        "license": "MIT"
+      },
+      "blocker": "Golden RefModule .v solutions DELIBERATELY REMOVED from public repo (README confirms: anti-training-contamination). Per-problem _test.v compares DUT vs RefModule; without the 168 RefModule golden files it cannot elaborate. Same gated-oracle situation as CVDP full. Document and skip; do NOT publish a number.",
+      "status": "BLOCKED — gated oracle"
+    },
+    "rtl-repo": {
+      "shape": "E",
+      "title": "RTL-Repo (next-line autocompletion)",
+      "dataset": {
+        "huggingface": "ahmedallam/RTL-Repo",
+        "license": "Apache-2.0"
+      },
+      "blocker": "Metric is Edit-Similarity + Exact-Match string similarity to upstream verbatim — not functional spec-to-RTL generation. Anti-correlated with correct-by-construction generation: a clean module that differs textually from the upstream line scores low even when functionally correct. Out of scope for Vibe-IC; document and skip.",
+      "status": "OUT-OF-SCOPE — wrong metric shape"
+    },
+    "metrex": {
+      "shape": "E",
+      "title": "MetRex (post-synthesis metric reasoning)",
+      "dataset": {
+        "repo": "https://github.com/scale-lab/MetRex"
+      },
+      "blocker": "Task is post-synthesis METRIC REASONING (predict area/delay/power from a netlist), not RTL generation. Different shape from Vibe-IC's spec→silicon flow. Could be pursued as a separate reasoning benchmark but is out of scope for the doc→GDS measurement.",
+      "status": "OUT-OF-SCOPE — different task shape"
+    },
+    "resbench": {
+      "shape": "E",
+      "title": "ResBench (FPGA resource-aware generation)",
+      "dataset": {
+        "repo": "https://github.com/jultrishyyy/ResBench"
+      },
+      "blocker": "FPGA-resource-targeted (LUT/FF/DSP utilization). Requires the full FPGA synth flow (Quartus/Vivado). Vibe-IC has eda_fpga_compile but the resource-metric harness isn't bundled. Doable but deferred until FPGA-resource-harness lands.",
+      "status": "DEFERRED — needs FPGA-resource harness"
+    },
+    "chipagentsbench": {
+      "shape": "E",
+      "title": "ChipAgentsBench (agentic design + verification)",
+      "blocker": "Not yet public (IEEE-EDPS 2025 paper; open subset announced). Re-evaluate when the subset releases.",
+      "status": "NOT-YET-PUBLIC"
+    },
+    "cvdp-full": {
+      "shape": "E",
+      "title": "CVDP full set (1,500+ problems, 13 categories)",
+      "blocker": "Gated by NVIDIA + Turing. Public repo ships only example_dataset (1 problem per category). Apply for access if you need the full set.",
+      "status": "BLOCKED — gated access"
+    },
+    "benchmark_clean": {
+      "shape": "A",
+      "title": "benchmark_clean (full IC, doc→GDS)",
+      "dataset": {
+        "internal": "vibe-ic repo's benchmark_clean/ directory",
+        "license": "see per-IC SOURCE_MANIFEST"
+      },
+      "scorer": "skill:benchmark-verify",
+      "status": "RUNNABLE — full runner + benchmark-verify skill (six pillars)"
+    }
+  }
+}
