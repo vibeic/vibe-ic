@@ -304,10 +304,11 @@ def test_emit_skill_section_accepts_backticked_industry_identifiers():
 
 
 def test_round_trip_existing_skill_titles():
-    """v0.1.42 (Round-4 NEW-1 fix — P0 regression) — the structural rule
-    must accept EVERY existing skill title already in ic-expert-agent.md.
-    If any in-tree title is refused, the closed-loop emit path would
-    break on amendment."""
+    """v0.1.43 (Round-5 R5-5 tightening) — the structural rule must accept
+    EVERY existing skill title already in ic-expert-agent.md. v0.1.42
+    skipped titles containing ANY `→` character (R5-5 false-positive
+    skip); v0.1.43 tightens to skip only the specific promotion markers
+    (`~~Skill:` strikethrough OR `→ NOW A PROGRAM RULE`)."""
     import re as _re
     agent_md = Path(__file__).parent.parent.parent / "agents" / "ic-expert-agent.md"
     titles = []
@@ -316,8 +317,10 @@ def test_round_trip_existing_skill_titles():
         if not m:
             continue
         t = m.group(1).strip()
-        # skip promoted-to-program pointers and strikethrough markers
-        if t.startswith("~~") or "→" in t:
+        # v0.1.43 R5-5: tighten skip to specific promotion markers ONLY.
+        if t.startswith("~~"):
+            continue
+        if "→ NOW A PROGRAM" in t or "→ NOW A SCORER" in t:
             continue
         titles.append(t)
     assert len(titles) >= 20, f"sanity check: should find many titles, got {len(titles)}"
@@ -328,9 +331,105 @@ def test_round_trip_existing_skill_titles():
         except ValueError as e:
             refused.append((t, str(e)[:200]))
     assert not refused, (
-        f"v0.1.42 structural rule refuses {len(refused)} existing in-tree "
-        f"skill titles (NEW-1 regression):\n" +
+        f"structural rule refuses {len(refused)} existing in-tree skill "
+        f"titles (NEW-1-style regression):\n" +
         "\n".join(f"  - {t!r}\n    → {w}" for t, w in refused))
+
+
+def test_round_trip_existing_body_lines():
+    """v0.1.43 (Round-5 R5-3 fix — P0) — extend the round-trip test to
+    the 5 BODY fields of every in-tree skill section. The v0.1.42
+    round-trip only validated titles; auditor found 18 in-tree body
+    lines that the v0.1.42 rule wrongly refused. If body fields don't
+    round-trip, the closed-loop amend path silently breaks on
+    re-emission."""
+    import re as _re
+    agent_md = Path(__file__).parent.parent.parent / "agents" / "ic-expert-agent.md"
+    md = agent_md.read_text()
+    field_map = {
+        "Pattern": "pattern",
+        "When to apply": "when",
+        "What to do": "what",
+        "Worked pattern": "example",
+        "Why this is GENERAL": "generality",
+    }
+    refused = []
+    total = 0
+    for label, field in field_map.items():
+        # NON-GREEDY [^\n]*? so the colon match doesn't skip past Verilog
+        # ternary colons inside backtick code spans.
+        for m in _re.finditer(
+                rf"\*\*{_re.escape(label)}\*\*[^\n]*?:\s*([^\n]*)", md):
+            content = m.group(1).strip()
+            if len(content) < 5:
+                continue
+            total += 1
+            try:
+                _emit_mod._validate_general_text(field, content)
+            except ValueError as e:
+                refused.append((field, content[:80], str(e)[:200]))
+    assert total >= 50, f"sanity check: should find many body lines, got {total}"
+    assert not refused, (
+        f"v0.1.43 structural rule refuses {len(refused)} of {total} "
+        f"existing in-tree body lines (Round-5 R5-3 regression):\n" +
+        "\n".join(f"  - [{f}] {c!r}\n    → {w}" for f, c, w in refused[:10]))
+
+
+def test_backtick_content_validates_no_silent_passthrough():
+    """v0.1.43 (Round-5 R5-1 fix — P0) — the v0.1.42 backtick exemption
+    was unconditional. v0.1.43 validates contents:
+      - Single-identifier backticks (e.g. `radix2_div`) — REFUSE
+      - Code-snippet backticks (multi-token with operators) — only Prob##/
+        homoglyph/enumerated-family checks apply."""
+    # Identifier-form refuses
+    leaky_identifier_cases = [
+        "Use `radix2_div` for example",
+        "See `mux256to1` design",
+        "Try `Prob089`",
+        "See `prob089` (lowercase)",
+    ]
+    for c in leaky_identifier_cases:
+        with pytest.raises(ValueError):
+            _emit_mod._validate_general_text("pattern", c)
+    # Code-snippet form (with spaces/operators) passes if no Prob/homoglyph
+    code_snippet_cases = [
+        "Use `assign MATCH = (state == DONE) && IN;`",
+        "See `initial clk=X; always #(PERIOD/2) clk = ~clk;`",
+        "Try `module #(.DATA_WIDTH(N)) u_dut (...)` instantiation",
+    ]
+    for c in code_snippet_cases:
+        _emit_mod._validate_general_text("pattern", c)  # should not raise
+
+
+def test_unicode_homoglyph_refused():
+    """v0.1.43 (Round-5 R5-2 fix — P0) — fullwidth underscore, Cyrillic
+    homoglyphs, ProbＮＮＮ in fullwidth digits all bypass the v0.1.42
+    ASCII-anchored regex. v0.1.43 NFKC-normalizes + refuses mixed-script
+    tokens."""
+    attacks = [
+        ("pattern", "radix2＿div"),       # fullwidth U+FF3F underscore
+        ("pattern", "rаdix2_div"),       # Cyrillic а
+        ("pattern", "рrоb089 issue"),    # Cyrillic homoglyphs
+        ("pattern", "Prob０８９"),          # fullwidth digits ProbNNN
+    ]
+    for field, val in attacks:
+        with pytest.raises(ValueError):
+            _emit_mod._validate_general_text(field, val)
+
+
+def test_industry_units_and_timing_accepted():
+    """v0.1.43 (Round-5 R5-6/R5-7 fix) — common RF/analog units (`dBm`,
+    `mAh`, `MHz`) and STA timing names (`t_setup`, `t_hold`) must pass
+    without backticks (they're universal industry vocabulary)."""
+    accepted = [
+        "Signal is -3 dBm at the antenna",
+        "Capacitance 1pF; clock 100MHz",
+        "Check `t_setup` and `t_hold` violations",
+        "FIFO `data_width` parameter",
+        "Standard `next_state` FSM idiom",
+    ]
+    for c in accepted:
+        _emit_mod._validate_general_text("pattern", c)  # should not raise
 
 
 def test_emit_backlog_refuses_leaky_slug():

@@ -149,36 +149,158 @@ def _scrub_design_leak(text: str) -> str:
     return text
 
 
+import unicodedata as _ucd
+
+
+def _normalize_text(text: str) -> str:
+    """v0.1.43 (Round-5 R5-2 fix) — Unicode normalization.
+
+    The v0.1.42 regex used Python's default Unicode-aware `\\w`, which means:
+      - Fullwidth underscore U+FF3F doesn't match ASCII `_` → snake_case rule misses
+      - Cyrillic `а`/`о` (look like ASCII a/o) are `\\w` chars → break `\\b` word
+        boundaries → ProbNNN scanner misses `рrоb089`
+
+    Fix: NFKC-normalize so fullwidth/compatibility characters fold to ASCII;
+    refuse mixed-script tokens (a token containing both Latin AND Cyrillic
+    characters is a homoglyph attack — no legitimate IC text mixes scripts).
+    """
+    # NFKC: fullwidth ＿ → ASCII _, fullwidth digits → ASCII digits, etc.
+    n = _ucd.normalize("NFKC", text)
+    # Detect mixed-script identifiers (≥1 Latin letter AND ≥1 non-Latin letter
+    # in the SAME word). Greek/math letters are intentionally allowed
+    # (ΔΣ topology titles); but a single token mixing Latin + Cyrillic is
+    # never legitimate skill prose. Refuse here so the structural regex
+    # doesn't have to deal with it.
+    for m in _leak_re.finditer(r"\w{2,}", n, _leak_re.UNICODE):
+        tok = m.group()
+        has_latin = any("LATIN" in _ucd.name(c, "") for c in tok if c.isalpha())
+        has_cyrillic = any("CYRILLIC" in _ucd.name(c, "") for c in tok if c.isalpha())
+        if has_latin and has_cyrillic:
+            raise ValueError(
+                f"input contains a mixed-script identifier ({tok!r}); "
+                f"refusing. A token mixing Latin and Cyrillic letters is a "
+                f"homoglyph (Cyrillic 'а' / 'о' / 'р' look like ASCII "
+                f"'a' / 'o' / 'p'). Skill prose should be ASCII / Greek "
+                f"letters only.")
+    return n
+
+
+def _check_backtick_content(field_name: str, value: str) -> None:
+    """v0.1.43 (Round-5 R5-1 fix) — validate the contents of each
+    backtick-wrapped token. The v0.1.42 backtick exemption was UNCONDITIONAL
+    (any string wrapped in `…` shipped verbatim), so an attacker could write
+    `` `radix2_div` `` and bypass the entire structural rule.
+
+    v0.1.43 distinguishes two legitimate uses of markdown backticks:
+
+      (1) Single identifier (`rst_n`, `data_width`, `eda_cocotb`):
+          Apply strict identifier-shape rules. Refuse ProbNNN,
+          digit-embedded-in-lowercase (radix2div), over-long tokens.
+
+      (2) Multi-token CODE SNIPPET (`initial clk=X; always #(PERIOD/2) ...`,
+          `assign MATCH = state == MATCH_STATE`):
+          Skill text often quotes multi-statement Verilog/Python in
+          backticks. Apply only the absolute taboos: ProbNNN, mixed-script
+          homoglyphs, enumerated benchmark family names. Skip the
+          single-identifier rules (length, snake_case, digit-embed).
+
+    Distinguishing: a backtick content with whitespace OR Verilog/Python
+    operator characters is a code snippet. A contiguous alphanumeric+
+    underscore token is an identifier.
+    """
+    if not value or "`" not in value:
+        return
+    for m in _leak_re.finditer(r"`([^`]*)`", value):
+        tok = m.group(1).strip()
+        if not tok:
+            continue
+        # Absolute taboos (apply to BOTH identifier and code-snippet form):
+        # Reject ProbNNN inside backticks (case-insensitive).
+        if _leak_re.search(r"\bprob\d+\b", tok, _leak_re.IGNORECASE | _leak_re.ASCII):
+            raise ValueError(
+                f"{field_name} contains a backtick-wrapped Prob ID "
+                f"(`{tok}`); refusing. Backtick wrapping does not exempt "
+                f"benchmark-specific identifiers from the honesty rule.")
+        # Reject enumerated benchmark family tokens.
+        if _leak_re.search(_DESIGN_LEAK_PATTERN, tok, _leak_re.IGNORECASE):
+            raise ValueError(
+                f"{field_name} contains a backtick-wrapped benchmark "
+                f"family name (`{tok}`); refusing.")
+        # Distinguish identifier vs code snippet by presence of operator
+        # characters or whitespace (code snippets have these; identifiers
+        # don't).
+        is_code_snippet = bool(_leak_re.search(r"[\s=;,()\[\]<>&|+\-*/!#@]", tok))
+        if is_code_snippet:
+            continue  # Code snippets: only Prob/family checks above apply.
+        # Identifier-form additional rules:
+        # Allowlist match passes unconditionally.
+        if tok.lower() in _INDUSTRY_TECH_ALLOWLIST:
+            continue
+        # Reject digit-embedded-in-lowercase (radix2div, mux256to1 style)
+        # — this is the exact shape Round-4 NEW-2 used to bypass v0.1.41.
+        # Snake-case forms like `radix2_div` also match (the `2_` boundary
+        # makes the trailing `_div` not interfere with the `[a-z0-9]*$` tail).
+        if _leak_re.search(
+                r"^[a-z]{2,}\d+[a-z0-9_]*$", tok, _leak_re.ASCII):
+            raise ValueError(
+                f"{field_name} contains a backtick-wrapped identifier "
+                f"that matches a benchmark-leaf-name shape (`{tok}`); "
+                f"refusing. Examples of this shape: radix2_div, "
+                f"freq_divbyeven, mux256to1. Wrap legitimate industry "
+                f"identifiers like `rst_n` (no digits) or use a generic "
+                f"description instead.")
+        # Cap length: real industry identifiers are short.
+        if len(tok) > 30:
+            raise ValueError(
+                f"{field_name} contains a backtick-wrapped identifier "
+                f"longer than 30 chars (`{tok}`); refusing as likely "
+                f"concatenated identifier.")
+
+
 def _strip_backticks(text: str) -> str:
     """v0.1.42 — replace `code` spans with same-length whitespace.
 
-    Backticks are the legitimate escape hatch for IC technical identifiers
-    (e.g. `rst_n`, `always_ff`, `eda_cocotb`) that have meaning across
-    designs, not just in one benchmark. After this strip, any underscore
-    or Prob## that remains is, by definition, NOT bracketed by the caller
-    as a known technical identifier — so it's either a legitimate phrase
-    or a benchmark leak. The leak-detector runs on the stripped text.
-
-    Offsets are preserved so a future caller computing line numbers from
-    the stripped text gets correct results.
+    v0.1.43 (Round-5 R5-1 fix): backtick-wrapped contents are now also
+    leak-checked by `_validate_general_text` via `_check_backtick_content`
+    BEFORE this strip runs. The strip itself is for finding leaks OUTSIDE
+    backticks; the prior check handles leaks INSIDE. The strip is still
+    needed so a legitimate backtick-wrapped industry term (`rst_n`,
+    `always_ff`) is exempt from the snake_case rule on the outer text.
     """
     return _leak_re.sub(r"`[^`]*`", lambda m: " " * len(m.group()), text)
 
 
 _INDUSTRY_TECH_ALLOWLIST = frozenset({
-    # v0.1.42 — a tiny seed set of GENERAL Verilog/MCP identifiers that
-    # legitimately appear in skill text without backticks. Keep this SHORT
-    # and add to it only when a real round-trip test demands it. Each
-    # entry must be a general-convention term (industry vocabulary) NOT a
-    # benchmark design leaf-name. The structural rule (require backticks)
-    # is the default; this allowlist is the exception, not the policy.
+    # v0.1.43 (Round-5 R5-4 fix) — purged 11 plugin-specific entries (this
+    # plugin's program/runner names) that v0.1.42 had wrongly included.
+    # Per benchmark-enhancement-capture honesty rule + own docstring:
+    # 'Each entry must be a general-convention term (industry vocabulary)
+    # NOT a benchmark or plugin-specific name.'
+    #
+    # If a skill section needs to reference a plugin-internal name like
+    # `phase2_one_shot_runner`, wrap it in backticks. That marks it as a
+    # code-ish identifier (markdown best practice) AND keeps it out of the
+    # honesty-rule's structural scope.
+    #
+    # Core Verilog/SV identifiers (industry-wide):
     "rst_n", "reset_n", "rst", "clk", "clk_n", "clk_p",
-    "always_ff", "always_comb", "always_latch",
-    "rtl_hygiene_lint", "spec_conformance_check", "chip_top",
-    "eda_cocotb", "eda_lint", "eda_synth",
-    "phase1_engine", "phase2_one_shot_runner", "phase3_one_shot_runner",
-    "ic_class_registry", "benchmark_enhancement_capture",
-    "test_runner", "harness_library",
+    "always_ff", "always_comb", "always_latch", "chip_top",
+    # FSM convention vocabulary (industry-wide; appears in any FSM design):
+    "next_state", "current_state",
+    # Standard valid/ready handshake (any AXI-style stream interface):
+    "res_valid", "res_ready", "dout_valid", "din_valid",
+    # Parameter naming conventions (industry-wide RTL):
+    "data_width", "addr_width", "fifo_depth",
+    # Compile / sim verdict categories (scorer-agnostic):
+    "compile_error", "sim_timeout", "functional_mismatch", "work_dir",
+    # PDK / foundry names (industry vocabulary):
+    "skywater", "gf180", "tsmc", "sky130",
+    # Python exception names mentioned in tool-integration skills:
+    "module_not_found_error",
+    # RF / analog unit suffixes the camelCase rule would otherwise refuse:
+    "dbm", "mah", "mhz", "ghz", "khz",
+    # STA timing names (universal):
+    "t_setup", "t_hold", "t_su", "t_h", "t_cyc", "t_recovery", "t_removal",
 })
 
 
@@ -212,12 +334,23 @@ def _validate_general_text(field_name: str, value: str,
     """
     if not value:
         return value
-    # Backtick-wrapped identifiers are exempt (the caller's positive
-    # declaration that this is a known technical term, not a benchmark
-    # leaf-name).
+    # v0.1.43 (Round-5 R5-2 fix) — Unicode-normalize + reject homoglyphs
+    # BEFORE the regex pass so fullwidth ＿ / Cyrillic а / ProbＮＮＮ all
+    # get caught.
+    value = _normalize_text(value)
+    # v0.1.43 (Round-5 R5-1 fix) — validate INSIDE backticks too: a token
+    # wrapped in backticks must be a real industry term or a safely-shaped
+    # identifier, NOT just any string the caller chose to backtick.
+    _check_backtick_content(field_name, value)
+    # Backtick-wrapped identifiers are exempt from the outer-text rules
+    # (the caller's positive declaration that this is a known technical
+    # term, not a benchmark leaf-name).
     text = _strip_backticks(value)
+    # All structural regexes use re.ASCII so Unicode `\\w` doesn't break
+    # `\\b` word boundaries (Round-5 R5-2 fix supplements R5-2-A above).
     # 1. Snake-case identifiers OUTSIDE the industry allowlist.
-    for m in _leak_re.finditer(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b", text):
+    for m in _leak_re.finditer(
+            r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b", text, _leak_re.ASCII):
         tok = m.group()
         if tok.lower() in _INDUSTRY_TECH_ALLOWLIST:
             continue
@@ -230,42 +363,37 @@ def _validate_general_text(field_name: str, value: str,
             f"benchmark design leaf-name (radix2_div, freq_divbyeven), "
             f"rewrite the {field_name} to describe the GENERAL pattern "
             f"without naming the specific design.")
-    # 1b. v0.1.42 (Round-4 NEW-2 bypass) — digit-embedded-in-lowercase
-    #     token: matches `radix2div`, `mux256to1`, `freqdivbyeven`. Require
-    #     2+ letters BEFORE digit so legit short forms like `1st` /
-    #     `2nd` (ordinal English) and `a4converter` (one-letter prefix) are
-    #     not refused.
-    for m in _leak_re.finditer(r"\b[a-z]{2,}\d+[a-z][A-Za-z0-9]*\b", text):
+    # 1b. Digit-embedded-in-lowercase token: `radix2div`, `mux256to1`.
+    for m in _leak_re.finditer(
+            r"\b[a-z]{2,}\d+[a-z][A-Za-z0-9]*\b", text, _leak_re.ASCII):
         tok = m.group()
         if tok in _INDUSTRY_TECH_ALLOWLIST:
             continue
         raise ValueError(
             f"{field_name} contains a digit-embedded-in-lowercase "
             f"identifier ({tok!r}); refusing. This shape matches benchmark "
-            f"design leaf-names (mux256to1, radix2div). Wrap in backticks "
-            f"if legitimate: `{tok}` — or rewrite as general pattern.")
-    # 1c. v0.1.42 (Round-4 NEW-2 bypass) — camelCase / PascalCase compound
-    #     identifier: `[a-z][A-Z][a-z]` boundary inside a single token, like
-    #     `freqDivByEven`, `SequenceDetector`. Even legitimate Verilog
-    #     identifiers like `TopModule` should be wrapped in backticks in
-    #     skill text (markdown best practice).
-    for m in _leak_re.finditer(r"\b[A-Za-z]*[a-z][A-Z][a-z]+[A-Za-z0-9]*\b", text):
+            f"design leaf-names. Wrap in backticks if legitimate: `{tok}` "
+            f"— or rewrite as general pattern.")
+    # 1c. camelCase / PascalCase compound identifier. v0.1.43 (Round-5
+    #     R5-10 fix) — require min length 5 so `dBm`, `aBc`, `mAh` etc.
+    #     short unit suffixes don't get refused. Real PascalCase compound
+    #     identifiers (`SequenceDetector`, `TopModule`) are ≥7 chars; the
+    #     5-char floor keeps the rule effective without false-positives
+    #     on industry unit suffixes.
+    for m in _leak_re.finditer(
+            r"\b[A-Za-z]*[a-z][A-Z][a-z]+[A-Za-z0-9]*\b", text, _leak_re.ASCII):
         tok = m.group()
-        if tok in _INDUSTRY_TECH_ALLOWLIST:
+        if tok in _INDUSTRY_TECH_ALLOWLIST or tok.lower() in _INDUSTRY_TECH_ALLOWLIST:
             continue
+        if len(tok) < 5:
+            continue  # Unit suffixes / 3-char abbreviations exempt.
         raise ValueError(
             f"{field_name} contains a camelCase/PascalCase compound "
             f"identifier ({tok!r}); refusing. Wrap in backticks if "
             f"legitimate: `{tok}` — or rewrite as space-separated words.")
-    # 1d. v0.1.42 (Round-4 NEW-2 bypass) — kebab-case identifier where the
-    #     LEADING token is letters+digit shape: `radix2-div`, `mux256-to-1`,
-    #     `m2014-q4`. Require 2+ leading letters so single-letter `a4-`
-    #     prefixes (`a4-converter-template`) pass — those are conventional
-    #     analog-class slugs (A4 = analog phase-4). The reverse form
-    #     `2nd-order` (ordinal English) is not matched because it starts
-    #     with digit.
+    # 1d. Kebab-case identifier with digit-bearing leading token.
     for m in _leak_re.finditer(
-            r"\b[a-z]{2,}\d+(?:-[a-z0-9]+){1,}\b", text):
+            r"\b[a-z]{2,}\d+(?:-[a-z0-9]+){1,}\b", text, _leak_re.ASCII):
         tok = m.group()
         if tok in _INDUSTRY_TECH_ALLOWLIST:
             continue
@@ -275,7 +403,7 @@ def _validate_general_text(field_name: str, value: str,
             f"benchmark design leaf-names. Wrap in backticks if legitimate: "
             f"`{tok}`, or rewrite without the digit-bearing token.")
     # 2. Prob## case-insensitive.
-    pm = _leak_re.search(r"\bprob\d+\b", text, _leak_re.IGNORECASE)
+    pm = _leak_re.search(r"\bprob\d+\b", text, _leak_re.IGNORECASE | _leak_re.ASCII)
     if pm:
         raise ValueError(
             f"{field_name} contains a benchmark Prob ID ({pm.group()!r}); "
@@ -323,105 +451,10 @@ def _refuse_if_leaks(field_name: str, value: str) -> str:
     return _validate_general_text(field_name, value)
 
 
-def _refuse_if_leaks_v0141_DEPRECATED(field_name: str, value: str) -> str:
-    """v0.1.41 (re-re-audit Issue 3 fix — STRUCTURAL ALLOWLIST INVERSION).
-
-    Auditor's verdict on v0.1.40's denylist approach: 'every round of audit
-    will keep finding leaks of the same shape with different prefixes,
-    because the cost of a denylist is unbounded and the cost of an allowlist
-    is bounded by the legitimate-input set, which is small.'
-
-    For caller-supplied `skill_title` and `backlog_slug` (which become the
-    section header and the permanent backlog filename), we now use a
-    STRUCTURAL ALLOWLIST keyed to the legitimate input shape:
-
-      skill_title — a human-readable section header.
-        Allowed: Unicode letters (so ΔΣ topology works), digits, space,
-                 dash, comma, period, semicolon, colon, apostrophe,
-                 forward slash, parens.
-        Forbidden: underscore (rules out snake_case identifiers like
-                   radix2_div / freq_divbyeven / asyn_fifo).
-        Forbidden: ProbNNN sequence (rules out Prob089 / Prob042).
-        Forbidden: any single token > 25 chars without a space (rules
-                   out concatenated identifiers like radix2divbyeven).
-
-      backlog_slug — a kebab-case filename slug.
-        Allowed: lowercase ASCII letters, digits, dashes.
-        Forbidden: underscore, uppercase, prob-as-prefix (kebab-token
-                   matching `^prob\\d+`).
-        Each kebab-token must be <= 25 chars.
-
-    The rule is structural — `radix2_div` fails on 'has underscore'
-    regardless of whether 'radix2_div' is a current or future benchmark
-    design name. No enumeration to maintain.
-
-    Raises ValueError with the structural violation cited; caller fixes
-    the input rather than relying on a regex scrub to remove pieces.
-    """
-    if not value:
-        return value
-    if field_name == "skill_title":
-        # Forbid underscore-separated identifiers (snake_case).
-        if _leak_re.search(r"\w_\w", value):
-            raise ValueError(
-                f"skill_title contains a benchmark-design identifier "
-                f"(underscore-separated identifier — likely an RTL "
-                f"module/signal name): {value!r}. Per benchmark-enhancement-"
-                f"capture honesty rule (structural allowlist v0.1.41), the "
-                f"skill_title must describe the GENERAL pattern in human-"
-                f"readable English (use spaces or dashes, not underscores). "
-                f"Suggested form: 'Moore latency anomaly in benchmark FSM' "
-                f"instead of 'Moore latency in Prob089_ece241_2014_q5a'.")
-        # Forbid ProbNNN sequence.
-        if _leak_re.search(r"\bProb\d+", value):
-            raise ValueError(
-                f"skill_title contains a benchmark Prob ID: {value!r}. "
-                f"Per benchmark-enhancement-capture honesty rule (structural "
-                f"allowlist v0.1.41), skill section headers must not name "
-                f"specific benchmark designs. Rewrite as a general pattern "
-                f"description.")
-        # Forbid over-long token without a space (concatenated identifier).
-        for token in _leak_re.split(r"[\s\-]", value):
-            if len(token) > 25:
-                raise ValueError(
-                    f"skill_title contains a single token of length "
-                    f"{len(token)} ({token!r}) — likely a concatenated "
-                    f"identifier, not a human-readable phrase. Use spaces "
-                    f"or dashes between words.")
-        return value
-    if field_name == "backlog_slug":
-        # Must be kebab-case only.
-        if not _leak_re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", value):
-            raise ValueError(
-                f"backlog_slug must be kebab-case ([a-z0-9-], no uppercase, "
-                f"no underscore): {value!r}. Per benchmark-enhancement-"
-                f"capture honesty rule (structural allowlist v0.1.41), the "
-                f"slug becomes a permanent filename + YAML id. Rewrite as "
-                f"a generic kebab-case category, e.g. 'rtl-hygiene-"
-                f"internal-reg-init'.")
-        for token in value.split("-"):
-            if _leak_re.fullmatch(r"prob\d+", token):
-                raise ValueError(
-                    f"backlog_slug contains a Prob ID token ({token!r}): "
-                    f"{value!r}. Rewrite as a generic category not naming "
-                    f"the originating benchmark.")
-            if len(token) > 25:
-                raise ValueError(
-                    f"backlog_slug token {token!r} is {len(token)} chars — "
-                    f"likely a concatenated identifier. Use shorter dashed "
-                    f"tokens describing the issue category.")
-        return value
-    # Generic field — fall back to the previous (denylist-scrub) behavior.
-    # Used by emit_discard_note for the why_discard prose etc.
-    scrubbed = _scrub_design_leak(value)
-    if scrubbed != value:
-        raise ValueError(
-            f"{field_name} contains a benchmark-design identifier "
-            f"({value!r}); refusing to write it to a permanent artifact. "
-            f"Per benchmark-enhancement-capture honesty rule, the {field_name} "
-            f"must describe the GENERAL pattern, not the originating "
-            f"benchmark design. Suggested rewrite: {scrubbed!r}")
-    return value
+# v0.1.43 (Round-5 R5-8 fix) — `_refuse_if_leaks_v0141_DEPRECATED` was
+# 99 lines of unreachable code carried since v0.1.42 for "audit traceability".
+# Removed in v0.1.43; the v0.1.41 → v0.1.42 transition rationale lives in
+# the git history (commits d3ae455 v0.1.41 and 0622db4 v0.1.42).
 
 
 def emit_skill_section(rec: dict) -> str:
