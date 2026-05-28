@@ -2295,6 +2295,40 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                          "for this PDK; latch-up risk if not handled "
                          "out-of-band\"\n")
 
+    # v0.1.47 (spm pilot Tier 2 finding) — emit a Power Distribution Network
+    # (PDN). Prior runs (v0.1.25 → v0.1.46) emitted ZERO SPECIALNETS in the
+    # routed.def, meaning cells had floating power pins and the silicon
+    # would be DOA on tape-out. This is MORE severe than the v0.1.46
+    # tapcell gap (silicon would FAIL, not just be at-risk-of-failing).
+    # SKY130 spm pilot: PDN added, GDS grew 828 KB → 1.1 MB (PDN straps),
+    # WNS preserved at +11.89 ns MET, IR drop < 15 µV, DRC still 0.
+    # NONFATAL-guarded per step so unsupported PDKs degrade gracefully.
+    if pdk.tapcell_master:  # if we have sky130-style cells, assume PDN works
+        pdn_block = (
+            "# === v0.1.47 PDN: global connections + grid + ring ===\n"
+            "if {[catch {\n"
+            "  add_global_connection -net VPWR -pin_pattern \"^VPWR$\" -power\n"
+            "  add_global_connection -net VPWR -pin_pattern \"^VPB$\"  -power\n"
+            "  add_global_connection -net VGND -pin_pattern \"^VGND$\" -ground\n"
+            "  add_global_connection -net VGND -pin_pattern \"^VNB$\"  -ground\n"
+            "  global_connect\n"
+            "  set_voltage_domain -name CORE -power VPWR -ground VGND\n"
+            "  define_pdn_grid -name grid -voltage_domains CORE\n"
+            "  add_pdn_stripe -grid grid -layer met1 -width 0.48 -pitch 5.44 -offset 0 -followpins\n"
+            "  add_pdn_stripe -grid grid -layer met4 -width 1.6 -pitch 40.0 -offset 8.0 -extend_to_core_ring\n"
+            "  add_pdn_stripe -grid grid -layer met5 -width 1.6 -pitch 40.0 -offset 8.0 -extend_to_core_ring\n"
+            "  add_pdn_connect -grid grid -layers {met1 met4}\n"
+            "  add_pdn_connect -grid grid -layers {met4 met5}\n"
+            "  pdngen\n"
+            "} _pdn_err]} {\n"
+            "  puts \"PDN_NONFATAL: $_pdn_err\"\n"
+            "} else {\n"
+            "  puts \"PDN_INSERTED: met1 follow-pins + met4/met5 stripes\"\n"
+            "}\n")
+    else:
+        pdn_block = ("puts \"PDN_SKIPPED: no PDK config for this design; "
+                     "silicon DOA without external PDN insertion\"\n")
+
     # v1.6.36 — emit per-stage DEF snapshots so def_stage_progression_check
     # sees byte-distinct, instance-count-growing, monotone-size files. Each
     # OpenROAD command modifies the in-memory database; write_def after
@@ -2340,7 +2374,7 @@ write_def {out_dir_c}/floorplan.def
 # `sky130_fd_sc_hd__tapvpwrvgnd_1` at 14 µm spacing (SKY130 standard);
 # WNS improved +11.61 → +11.89 ns MET on spm pilot, DRC still 0.
 # NONFATAL-guarded — falls back if PDK has no tapcell master configured.
-{tapcell_block}global_placement -density {util}
+{tapcell_block}{pdn_block}global_placement -density {util}
 detailed_placement
 write_def {out_dir_c}/placed.def
 # === Design-for-ECO Step 18: spare-cell insertion + PROTECTION ===
