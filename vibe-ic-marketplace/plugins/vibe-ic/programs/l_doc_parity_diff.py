@@ -284,10 +284,48 @@ def diff_single_l_doc(
     # --- ABSENT_IN_PROGRAM ---
     # v0.1.64 R18: skip envelope/metadata keys so wrapper-schema choices
     # don't pollute the substantive-content delta.
+    # v0.1.67 R22: nested-shape collapse — when an entire agent top-level
+    # key is missing from program (no overlap at any path under that key),
+    # emit ONE finding for the top-level key instead of N child-flattened
+    # findings. A `burst_type_encodings: {AxBURST[1:0]: {0b00, 0b01, 0b10}}`
+    # missing from program previously emitted 4+ ABSENT findings; under R22
+    # it emits exactly 1.
+    program_top = {k for k in (program.keys() if isinstance(program, dict)
+                                else []) if not _is_envelope_key(k)}
+    agent_top = {k for k in (agent.keys() if isinstance(agent, dict)
+                               else []) if not _is_envelope_key(k)}
+    top_level_only_in_agent = agent_top - program_top
+    # Skip-set: any flat-key whose top-level token is in top_level_only_in_agent
+    # is collapsed into the single top-level finding emitted below.
+    _r22_collapse_prefixes = tuple(top_level_only_in_agent)
+
+    def _r22_should_collapse(k: str) -> bool:
+        top = k.split(".", 1)[0]
+        # Strip list-index brackets so 'foo[0].x' → 'foo'
+        top = re.sub(r"\[\d+\]$", "", top)
+        return top in _r22_collapse_prefixes
+
+    # Emit ONE finding per top-level key that's completely absent
+    for k in sorted(top_level_only_in_agent):
+        v = agent.get(k) if isinstance(agent, dict) else None
+        if _is_empty(v):
+            continue
+        findings.append(Finding(
+            l_doc=name, category="ABSENT_IN_PROGRAM",
+            key=k, program_value=None,
+            agent_value=v,
+            why="agent captured this top-level fact; program did not "
+                 "(R22 collapse: 1 finding per missing top-level key)"))
+        absent += 1
+
     for k, v in a_flat.items():
         if _is_empty(v):
             continue
         if _is_envelope_key(k):
+            continue
+        # v0.1.67 R22: skip flat keys already covered by the top-level
+        # collapse above.
+        if _r22_should_collapse(k):
             continue
         if k not in p_flat or _is_empty(p_flat[k]):
             findings.append(Finding(
