@@ -276,6 +276,12 @@ def check_submodule_presence(l9: dict,
     for s in l9.get("submodules", []) or []:
         if not isinstance(s, dict):
             continue
+        # v0.1.85 — skip naming-delegated functional submodules. A submodule
+        # documented in a "Plugin chooses naming/hierarchy" spec (tagged
+        # low_confidence) is a FUNCTIONAL contract, not a literal RTL module-
+        # name assertion; do not require `module <prose name>` in rtl/.
+        if s.get("low_confidence") is True:
+            continue
         name = s.get("name")
         if not name:
             continue
@@ -312,6 +318,12 @@ def check_submodule_instantiation(l9: dict,
     for s in l9.get("submodules", []) or []:
         if not isinstance(s, dict):
             continue
+        # v0.1.85 — skip naming-delegated functional submodules. A submodule
+        # documented in a "Plugin chooses naming/hierarchy" spec (tagged
+        # low_confidence) is a FUNCTIONAL contract, not a literal RTL module-
+        # name assertion; do not require `module <prose name>` in rtl/.
+        if s.get("low_confidence") is True:
+            continue
         name = s.get("name")
         if not name:
             continue
@@ -344,6 +356,12 @@ def check_submodule_ports_v1(l9: dict,
     findings: List[Finding] = []
     for s in l9.get("submodules", []) or []:
         if not isinstance(s, dict):
+            continue
+        # v0.1.85 — skip naming-delegated functional submodules. A submodule
+        # documented in a "Plugin chooses naming/hierarchy" spec (tagged
+        # low_confidence) is a FUNCTIONAL contract, not a literal RTL module-
+        # name assertion; do not require `module <prose name>` in rtl/.
+        if s.get("low_confidence") is True:
             continue
         name = s.get("name")
         decl_ports = s.get("ports")
