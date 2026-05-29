@@ -1,0 +1,1087 @@
+                                                                                                                                                       PC16550D Universal Asynchronous Receiver/Transmitter with FIFOs
+                                                                                                                                  June 1995
+
+
+
+
+  PC16550D Universal Asynchronous
+  Receiver/Transmitter with FIFOs ²
+  General Description                                                    Features
+  The PC16550D is an improved version of the original 16450              Y Capable of running all existing 16450 software.
+  Universal Asynchronous Receiver/Transmitter (UART).                    Y Pin for pin compatible with the existing 16450 except
+  Functionally identical to the 16450 on powerup (CHARAC-                  for CSOUT (24) and NC (29). The former CSOUT and
+  TER mode)* the PC16550D can be put into an alternate                     NC pins are TXRDY and RXRDY, respectively.
+  mode (FIFO mode) to relieve the CPU of excessive software              Y After reset, all registers are identical to the 16450 reg-
+
+  overhead.                                                                ister set.
+  In this mode internal FIFOs are activated allowing 16 bytes            Y In the FIFO mode transmitter and receiver are each
+
+  (plus 3 bits of error data per byte in the RCVR FIFO) to be              buffered with 16 byte FIFO’s to reduce the number of
+  stored in both receive and transmit modes. All the logic is on           interrrupts presented to the CPU.
+  chip to minimize system overhead and maximize system ef-               Y Adds or deletes standard asynchronous communication
+
+  ficiency. Two pin functions have been changed to allow sig-              bits (start, stop, and parity) to or from the serial data.
+  nalling of DMA transfers.                                              Y Holding and shift registers in the 16450 Mode eliminate
+
+  The UART performs serial-to-parallel conversion on data                  the need for precise synchronization between the CPU
+  characters received from a peripheral device or a MODEM,                 and serial data.
+  and parallel-to-serial conversion on data characters re-               Y Independently controlled transmit, receive, line status,
+
+  ceived from the CPU. The CPU can read the complete                       and data set interrupts.
+  status of the UART at any time during the functional opera-            Y Programmable baud generator divides any input clock
+  tion. Status information reported includes the type and con-             by 1 to (216 b 1) and generates the 16 c clock.
+  dition of the transfer operations being performed by the               Y Independent receiver clock input.
+  UART, as well as any error conditions (parity, overrun, fram-          Y MODEM control functions (CTS, RTS, DSR, DTR, RI,
+  ing, or break interrupt).
+                                                                           and DCD).
+  The UART includes a programmable baud rate generator                   Y Fully programmable serial-interface characteristics:
+  that is capable of dividing the timing reference clock input             Ð 5-, 6-, 7-, or 8-bit characters
+  by divisors of 1 to (216b1), and producing a 16 c clock for              Ð Even, odd, or no-parity bit generation and detection
+  driving the internal transmitter logic. Provisions are also in-          Ð 1-, 1(/2-, or 2-stop bit generation
+  cluded to use this 16 c clock to drive the receiver logic. The           Ð Baud generation (DC to 1.5M baud).
+  UART has complete MODEM-control capability, and a proc-                Y False start bit detection.
+  essor-interrupt system. Interrupts can be programmed to
+                                                                         Y Complete status reporting capabilities.
+  the user’s requirements, minimizing the computing required
+                                                                         Y TRI-STATEÉ TTL drive for the data and control buses.
+  to handle the communications link.
+                                                                         Y Line break generation and detection.
+  The UART is fabricated using National Semiconductor’s ad-
+                                                                         Y Internal diagnostic capabilities:
+  vanced M2CMOS process.
+                                                                           Ð Loopback controls for communications link fault
+  *Can also be reset to 16450 Mode under software control.                    isolation
+  ² Note: This part is patented.                                           Ð Break, parity, overrun, framing error simulation.
+                                                                         Y Full prioritized interrupt system controls.
+
+
+
+  Basic Configuration
+
+
+
+
+                                                                                                      TL/C/8652 – 1
+  TRI-STATEÉ is a registered trademark of National Semiconductor Corp.
+
+
+C1995 National Semiconductor Corporation    TL/C/8652                                                                 RRD-B30M75/Printed in U. S. A.
+                                    Table of Contents
+1.0 ABSOLUTE MAXIMUM RATINGS                    8.0 REGISTERS (Continued)
+
+2.0 DC ELECTRICAL CHARACTERISTICS                8.3 Programmable Baud Generator
+                                                 8.4 Line Status Register
+3.0 AC ELECTRICAL CHARACTERISTICS                8.5 FIFO Control Register
+4.0 TIMING WAVEFORMS                             8.6 Interrupt Identification Register
+                                                 8.7 Interrupt Enable Register
+5.0 BLOCK DIAGRAM
+                                                 8.8 Modem Control Register
+6.0 PIN DESCRIPTIONS                             8.9 Modem Status Register
+                                                 8.10 Scratchpad Register
+7.0 CONNECTION DIAGRAMS
+                                                 8.11 FIFO Interrupt Mode Operation
+8.0 REGISTERS                                    8.12 FIFO Polled Mode Operation
+ 8.1 Line Control Register
+                                                9.0 TYPICAL APPLICATIONS
+ 8.2 Typical Clock Circuits
+
+
+
+
+                                            2
+1.0      Absolute Maximum Ratings
+Temperature Under Bias                           0§ C to a 70§ C        Note: Maximum ratings indicate limits beyond which perma-
+Storage Temperature                       b 65§ C to a 150§ C          nent damage may occur. Continuous operation at these lim-
+                                                                       its is not intended and should be limited to those conditions
+All Input or Output Voltages
+                                                                       specified under DC electrical characteristics.
+  with Respect to VSS                          b 0.5V to a 7.0V
+Power Dissipation                                           1W
+
+
+2.0      DC Electrical Characteristics
+TA e 0§ C to a 70§ C, VDD e a 5V g 10%, VSS e 0V, unless otherwise specified.
+
+ Symbol                    Parameter                          Conditions                     Min              Max            Units
+ VILX              Clock Input Low Voltage                                                  b 0.5              0.8             V
+ VIHX              Clock Input High Voltage                                                  2.0              VDD              V
+ VIL               Input Low Voltage                                                        b 0.5              0.8             V
+ VIH               Input High Voltage                                                        2.0              VDD              V
+ VOL               Output Low Voltage                IOL e 1.6 mA on all (Note 1)                              0.4             V
+ VOH               Output High Voltage               IOH e b1.0 mA (Note 1)                  2.4                               V
+ ICC(AV)           Average Power Supply              VDD e 5.5V, TA e 25§ C
+                   Current                           No Loads on output
+                                                     SIN, DSR, DCD,                                            15             mA
+                                                     CTS, RI e 2.0V
+                                                     All other inputs e 0.8V
+ IIL               Input Leakage                     VDD e 5.5V, VSS e 0V                                     g 10            mA
+                                                     All other pins floating.
+ ICL               Clock Leakage                                                                              g 10            mA
+                                                     VIN e 0V, 5.5V
+
+ IOZ               TRI-STATE Leakage                 VDD e 5.5V, VSS e 0V
+                                                     VOUT e 0V, 5.25V
+                                                      1) Chip deselected                                      g 20            mA
+                                                      2) WRITE mode,
+                                                         chip selected
+ VILMR             MR Schmitt VIL                                                                              0.8             V
+ VIHMR             MR Schmitt VIH                                                            2.0                               V
+Note 1: Does not apply to XOUT
+
+
+
+Capacitance TA e 25§ C, VDD e VSS e 0V
+ Symbol                      Parameter                      Conditions              Min            Typ         Max           Units
+ CXIN                Clock Input Capacitance                                                        7           9             pF
+
+ CXOUT               Clock Output Capacitance            fc e 1 MHz                                 7           9             pF
+                                                         Unmeasured pins
+ CIN                 Input Capacitance                   returned to VSS                            5           7             pF
+ COUT                Output Capacitance                                                             6           8             pF
+ CI/O                Input/Output Capacitance                                                       10          12            pF
+
+
+
+
+                                                                   3
+3.0       AC Electrical Characteristics TA e 0§ C to a 70§ C, VDD e a 5V g 10%
+Symbol                               Parameter                                          Conditions                        Min              Max               Units
+tADS                 Address Strobe Width                                                                                  60                                  ns
+tAH                  Address Hold Time                                                                                     0                                   ns
+tAR                  RD, RD Delay from Address                                            (Note 1)                         30                                  ns
+tAS                  Address Setup Time                                                                                    60                                  ns
+tAW                  WR, WR Delay from Address                                            (Note 1)                         30                                  ns
+tCH                  Chip Select Hold Time                                                                                 0                                   ns
+tCS                  Chip Select Setup Time                                                                                60                                  ns
+tCSR                 RD, RD Delay from Chip Select                                        (Note 1)                         30                                  ns
+tCSW                 WR, WR Delay from Select                                             (Note 1)                         30                                  ns
+tDH                  Data Hold Time                                                                                        30                                  ns
+tDS                  Data Setup Time                                                                                       30                                  ns
+tHZ                  RD, RD to Floating Data Delay                            @ 100 pF loading (Note 3)                    0               100                 ns
+tMR                  Master Reset Pulse Width                                                                            5000                                  ns
+tRA                  Address Hold Time from RD, RD                                        (Note 1)                         20                                  ns
+tRC                  Read Cycle Delay                                                                                     125                                  ns
+tRCS                 Chip Select Hold Time from RD, RD                                    (Note 1)                         20                                  ns
+tRD                  RD, RD Strobe Width                                                                                  125                                  ns
+tRDD                 RD, RD to Driver Enable/Disable                          @ 100 pF loading (Note 3)                                     60                 ns
+tRVD                 Delay from RD, RD to Data                                        @ 100 pF loading                                      60                 ns
+tWA                  Address Hold Time from WR, WR                                        (Note 1)                         20                                  ns
+tWC                  Write Cycle Delay                                                                                    150                                  ns
+tWCS                 Chip Select Hold Time from WR, WR                                    (Note 1)                         20                                  ns
+tWR                  WR, WR Strobe Width                                                                                  100                                  ns
+tXH                  Duration of Clock High Pulse                             External Clock (8, Max.)                     55                                  ns
+tXL                  Duration of Clock Low Pulse                              External Clock (8, Max.)                     55                                  ns
+RC                   Read Cycle e tAR a tRD a tRC                                                                         280                                  ns
+WC                   Write Cycle e tAW a tWR a tWC                                                                        280                                  ns
+Baud Generator
+N                    Baud Divisor                                                                                          1             216b1
+tBHD                 Baud Output Positive Edge Delay                                   100 pF Load                                         175                 ns
+tBLD                 Baud Output Negative Edge Delay                                   100 pF Load                                         175                 ns
+tHW                  Baud Output Up Time                                      fX e 8, d 2, 100 pF Load                     75                                  ns
+tLW                  Baud Output Down Time                                    fX e 8, d 2, 100 pF Load                    100                                  ns
+Receiver
+tRAI                 Delay from Active Edge
+                                                                                                                                            Ð                  ns
+                     of RD to Reset Interrupt
+tRINT                Delay from RD, RD                                                 100 pF Load
+                     (RD RBR/or RD LSR)                                                                                                   1000                 ns
+                     to Reset Interrupt
+tRXI                 Delay from RD RBR
+                                                                                                                                           290                 ns
+                     to RXRDY Inactive
+tSCD                 Delay from RCLK to Sample Time                                                                                       2000                 ns
+tSINT                Delay from Stop to Set Interrupt                                     (Note 2)                                                          RCLK
+                                                                                                                                             1
+                                                                                                                                                            Cycles
+Note 1: Applicable only when ADS is tied low.
+Note 2: In the FIFO mode (FCR0 e 1) the trigger level interrupts, the receiver data available indication, the active RXRDY indication and the overrun error indication
+will be delayed 3 RCLKs. Status indicators (PE, FE, BI) will be delayed 3 RCLKs after the first byte has been received. For subsequently received bytes these
+indicators will be updated immediately after RDRBR goes inactive. Timeout interrupt is delayed 8 RCLKs.
+Note 3: Charge and discharge time is determined by VOL, VOH and the external loading.
+Note 4: These specifications are preliminary.
+
+
+
+
+                                                                                  4
+3.0       AC Electrical Characteristics (Continued)
+ Symbol                                    Parameter                                     Conditions                 Min             Max                  Units
+ Transmitter
+ tHR                   Delay from WR, WR (WR THR)                                       100 pF Load
+                                                                                                                                     175                   ns
+                       to Reset Interrupt
+ tIR                   Delay from RD, RD (RD IIR) to Reset                              100 pF Load
+                                                                                                                                     250                   ns
+                       Interrupt (THRE)
+ tIRS                  Delay from Initial INTR Reset to Transmit                                                                                      BAUDOUT
+                                                                                                                      8               24
+                       Start                                                                                                                           Cycles
+ tSI                   Delay from Initial Write to Interrupt                               (Note 1)                                                   BAUDOUT
+                                                                                                                     16               24
+                                                                                                                                                       Cycles
+ tSTI                  Delay from Stop to Interrupt (THRE)                                 (Note 1)                                                   BAUDOUT
+                                                                                                                      8               8
+                                                                                                                                                       Cycles
+ tSXA                  Delay from Start to TXRDY active                                 100 pF Load                                                   BAUDOUT
+                                                                                                                                      8
+                                                                                                                                                       Cycles
+ tWXI                  Delay from Write to TXRDY inactive                               100 pF Load                                  195                   ns
+ Modem Control
+ tMDO                  Delay from WR, WR (WR MCR) to                                    100 pF Load
+                                                                                                                                     200                   ns
+                       Output
+ tRIM                  Delay from RD, RD to Reset Interrupt                             100 pF Load
+                                                                                                                                     250                   ns
+                       (RD MSR)
+ tSIM                  Delay from MODEM Input to Set Interrupt                          100 pF Load                                  250                   ns
+Note 1: This delay will be lengthened by 1 character time, minus the last stop bit time if the transmitter interrupt delay circuit is active. (See FIFO Interrupt Mode
+Operation).
+Note 2: These specifications are preliminary.
+
+
+4.0       Timing Waveforms (All timings are referenced to valid 0 and valid 1)
+             External Clock Input (24.0 MHz Max.)                                                                   AC Test Points
+
+
+
+
+                                                                                                                                                        TL/C/8652 – 3
+
+
+                                                                TL/C/8652 – 2
+Note 1: The 2.4V and 0.4V levels are the voltages that the inputs are driven to during AC testing.
+Note 2: The 2.0V and 0.8V levels are the voltages at which the timing tests are made.
+
+                                                                      BAUDOUT Timing
+
+
+
+
+                                                                                                                                                TL/C/8652 – 4
+
+
+
+
+                                                                                  5
+4.0      Timing Waveforms (Continued)
+                                         Write Cycle
+
+
+
+
+                                                       TL/C/8652 – 5
+*Applicable Only When ADS is Tied Low.
+
+
+                                         Read Cycle
+
+
+
+
+                                                       TL/C/8652 – 6
+*Applicable Only When ADS is Tied Low.
+
+
+
+                                             6
+4.0      Timing Waveforms (Continued)
+                                         Receiver Timing
+
+
+
+
+                                                              TL/C/8652 – 7
+
+
+
+                                        Transmitter Timing
+
+
+
+
+                                                             TL/C/8652 – 8
+
+
+
+                                    MODEM Control Timing
+
+
+
+
+                                                             TL/C/8652 – 9
+Note 1: See Write Cycle Timing
+Note 2: See Read Cycle Timing
+
+                                                7
+4.0       Timing Waveforms (Continued)
+                                                       RCVR FIFO First Byte (This Sets RDR)
+
+
+
+
+                                                                                                                        TL/C/8652 – 10
+
+
+                                     RCVR FIFO Bytes Other Than the First Byte (RDR Is Already Set)
+
+
+
+
+                                                                                                                        TL/C/8652 – 11
+
+
+                                  Receiver Ready (Pin 29) FCR0 e 0 or FCR0 e 1 and FCR3 e 0 (Mode 0)
+
+
+
+
+                                                                                                       TL/C/8652 – 12
+Note 1: This is the reading of the last byte in the FIFO.
+Note 2: If FCR0 e 1, then tSINT e 3 RCLKs. For a timeout interrupt, tSINT e 8 RCLKs.
+
+
+
+                                                                           8
+4.0       Timing Waveforms (Continued)
+
+                                           Receiver Ready (Pin 29) FCR0 e 1 and FCR3 e 1 (Mode 1)
+
+
+
+
+                                                                                                        TL/C/8652 – 13
+Note 1: This is the reading of the last byte in the FIFO.
+Note 2: If FCR0 e 1, tSINT e 3 RCLKs.
+
+
+
+
+                                Transmitter Ready (Pin 24) FCR0 e 0 or FCR0 e 1 and FCR3 e 0 (Mode 0)
+
+
+
+
+                                                                                                                         TL/C/8652 – 14
+
+
+
+
+                                         Transmitter Ready (Pin 24) FCR0 e 1 and FCR3 e 1 (Mode 1)
+
+
+
+
+                                                                                                                         TL/C/8652 – 15
+
+
+
+
+                                                                     9
+5.0       Block Diagram
+
+
+
+
+                                                                        TL/C/8652 – 16
+Note: Applicable pinout numbers are included within parenthesis.
+
+
+
+
+                                                                   10
+6.0 Pin Descriptions
+The following describes the function of all UART pins. Some                        D7 –D0, Data Bus, Pins 1 – 8: This bus comprises eight TRI-
+of these descriptions reference internal circuits.                                 STATE input/output lines. The bus provides bidirectional
+In the following descriptions, a low represents a logic 0 (0V                      communications between the UART and the CPU. Data,
+nominal) and a high represents a logic 1 ( a 2.4V nominal).                        control words, and status information are transferred via the
+                                                                                   D7 –D0 Data Bus.
+A0, A1, A2, Register Select, Pins 26–28: Address signals
+connected to these 3 inputs select a UART register for the                         DCD, Data Carrier Detect, Pin 38: When low, indicates that
+CPU to read from or write to during data transfer. A table of                      the data carrier has been detected by the MODEM or data
+registers and their addresses is shown below. Note that the                        set. The DCD signal is a MODEM status input whose condi-
+state of the Divisor Latch Access Bit (DLAB), which is the                         tion can be tested by the CPU reading bit 7 (DCD) of the
+most significant bit of the Line Control Register, affects the                     MODEM Status Register. Bit 7 is the complement of the
+selection of certain UART registers. The DLAB must be set                          DCD signal. Bit 3 (DDCD) of the MODEM Status Register
+high by the system software to access the Baud Generator                           indicates whether the DCD input has changed state since
+Divisor Latches.                                                                   the previous reading of the MODEM Status Register. DCD
+                                                                                   has no effect on the receiver.
+                        Register Addresses                                         Note: Whenever the DCD bit of the MODEM Status Register changes state,
+                                                                                         an interrupt is generated if the MODEM Status Interrupt is enabled.
+  DLAB        A2     A1      A0                  Register
+                                                                                   DDIS, Driver Disable, Pin 23: This goes low whenever the
+     0         0      0       0      Receiver Buffer (read),                       CPU is reading data from the UART. It can disable or control
+                                     Transmitter Holding                           the direction of a data bus transceiver between the CPU
+                                     Register (write)                              and the UART.
+    0          0      0       1      Interrupt Enable                              DSR, Data Set Ready, Pin 37: When low, this indicates that
+    X          0      1       0      Interrupt Identification (read)               the MODEM or data set is ready to establish the communi-
+    X          0      1       0      FIFO Control (write)                          cations link with the UART. The DSR signal is a MODEM
+    X          0      1       1      Line Control                                  status input whose condition can be tested by the CPU
+                                                                                   reading bit 5 (DSR) of the MODEM Status Register. Bit 5 is
+    X          1      0       0      MODEM Control
+                                                                                   the complement of the DSR signal. Bit 1 (DDSR) of the
+    X          1      0       1      Line Status
+                                                                                   MODEM Status Register indicates whether the DSR input
+    X          1      1       0      MODEM Status                                  has changed state since the previous reading of the MO-
+    X          1      1       1      Scratch                                       DEM Status Register.
+    1          0      0       0      Divisor Latch                                 Note: Whenever the DDSR bit of the MODEM Status Register changes
+                                     (least significant byte)                            state, an interrupt is generated if the MODEM Status Interrupt is en-
+                                                                                         abled.
+     1         0      0       1      Divisor Latch
+                                     (most significant byte)                       DTR, Data Terminal Ready, Pin 33: When low, this informs
+                                                                                   the MODEM or data set that the UART is ready to establish
+ADS, Address Strobe, Pin 25: The positive edge of an active                        a communications link. The DTR output signal can be set to
+Address Strobe (ADS) signal latches the Register Select                            an active low by programming bit 0 (DTR) of the MODEM
+(A0, A1, A2) and Chip Select (CS0, CS1, CS2) signals.                              Control Register to a high level. A Master Reset operation
+Note: An active ADS input is required when the Register Select (A0, A1, A2)        sets this signal to its inactive (high) state. Loop mode opera-
+      and Chip Select (CS0, CS1, CS2) signals are not stable for the dura-         tion holds this signal in its inactive state.
+      tion of a read or write operation. If not required, tie the ADS input        INTR, Interrupt, Pin 30: This pin goes high whenever any
+      permanently low.
+                                                                                   one of the following interrupt types has an active high condi-
+BAUDOUT, Baud Out, Pin 15: This is the 16 c clock signal                           tion and is enabled via the IER: Receiver Error Flag; Re-
+from the transmitter section of the UART. The clock rate is                        ceived Data Available: timeout (FIFO Mode only); Transmit-
+equal to the main reference oscillator frequency divided by                        ter Holding Register Empty; and MODEM Status. The INTR
+the specified divisor in the Baud Generator Divisor Latches.                       signal is reset low upon the appropriate interrupt service or
+The BAUDOUT may also be used for the receiver section by                           a Master Reset operation.
+tying this output to the RCLK input of the chip.
+                                                                                   MR, Master Reset, Pin 35: When this input is high, it clears
+CS0, CS1, CS2, Chip Select, Pins 12–14: When CS0 and                               all the registers (except the Receiver Buffer, Transmitter
+CS1 are high and CS2 is low, the chip is selected. This                            Holding, and Divisor Latches), and the control logic of the
+enables communication between the UART and the CPU.                                UART. The states of various output signals (SOUT, INTR,
+The positive edge of an active Address Strobe signal latch-                        OUT 1, OUT 2, RTS, DTR) are affected by an active MR
+es the decoded chip select signals, completing chip selec-                         input (Refer to Table I.) This input is buffered with a TTL-
+tion. If ADS is always low, valid chip selects should stabilize                    compatible Schmitt Trigger with 0.5V typical hysteresis.
+according to the tCSW parameter.
+                                                                                   OUT 1, Output 1, Pin 34: This user-designated output can
+CTS, Clear to Send, Pin 36: When low, this indicates that                          be set to an active low by programming bit 2 (OUT 1) of the
+the MODEM or data set is ready to exchange data. The CTS                           MODEM Control Register to a high level. A Master Reset
+signal is a MODEM status input whose conditions can be                             operation sets this signal to its inactive (high) state. Loop
+tested by the CPU reading bit 4 (CTS) of the MODEM Status                          mode operation holds this signal in its inactive state. In the
+Register. Bit 4 is the complement of the CTS signal. Bit 0                         XMOS parts this will achieve TTL levels.
+(DCTS) of the MODEM Status Register indicates whether
+the CTS input has changed state since the previous reading
+of the MODEM Status Register. CTS has no effect on the
+Transmitter.
+Note: Whenever the CTS bit of the MODEM Status Register changes state,
+      an interrupt is generated if the MODEM Status Interrupt is enabled.
+
+                                                                              11
+6.0 Pin Descriptions (Continued)
+OUT 2, Output 2, Pin 31: This user-designated output that                          TXRDY, Mode 0: In the 16450 Mode (FCR0 e 0) or in the
+can be set to an active low by programming bit 3 (OUT 2) of                        FIFO Mode (FCR0 e 1, FCR3 e 0) and there are no charac-
+the MODEM Control Register to a high level. A Master Re-                           ters in the XMIT FIFO or XMIT holding register, the TXRDY
+set operation sets this signal to its inactive (high) state.                       pin (24) will be low active. Once it is activated the TXRDY
+Loop mode operation holds this signal in its inactive state. In                    pin will go inactive after the first character is loaded into the
+the XMOS parts this will achieve TTL levels.                                       XMIT FIFO or holding register.
+RCLK, Receiver Clock, Pin 9: This input is the 16 c baud                           TXRDY, Mode 1: In the FIFO Mode (FCR0 e 1) when
+rate clock for the receiver section of the chip.                                   FCR3 e 1 and there are no characters in the XMIT FIFO, the
+RD, RD, Read, Pins 22 and 21: When RD is high or RD is                             TXRDY pin will go low active. This pin will become inactive
+low while the chip is selected, the CPU can read status                            when the XMIT FIFO is completely full.
+information or data from the selected UART register.                               VDD, Pin 40: a 5V supply.
+Note: Only an active RD or RD input is required to transfer data from the          VSS, Pin 20: Ground (0V) reference.
+      UART during a read operation. Therefore, tie either the RD input per-
+      manently low or the RD input permanently high, when it is not used.          WR, WR, Write, Pins 19 and 18: When WR is high or WR is
+                                                                                   low while the chip is selected, the CPU can write control
+RI, Ring Indicator, Pin 39: When low, this indicates that a
+                                                                                   words or data into the selected UART register.
+telephone ringing signal has been received by the MODEM
+                                                                                   Note: Only an active WR or WR input is required to transfer data to the
+or data set. The RI signal is a MODEM status input whose
+                                                                                         UART during a write operation. Therefore, tie either the WR input
+condition can be tested by the CPU reading bit 6 (RI) of the                             permanently low or the WR input permanently high, when it is not
+MODEM Status Register. Bit 6 is the complement of the RI                                 used.
+signal. Bit 2 (TERI) of the MODEM Status Register indicates                        XIN (External Crystal Input), Pin 16: This signal input is used
+whether the RI input signal has changed from a low to a                            in conjunction with XOUT to form a feedback circuit for the
+high state since the previous reading of the MODEM Status                          baud rate generator’s oscillator. If a clock signal will be gen-
+Register.                                                                          erated off-chip, then it should drive the baud rate generator
+Note: Whenever the RI bit of the MODEM Status Register changes from a              through this pin.
+      high to a low state, an interrupt is generated if the MODEM Status
+      Interrupt is enabled.                                                        XOUT (External Crystal Output), Pin 17: This signal output is
+                                                                                   used in conjunction with XIN to form a feedback circuit for
+RTS, Request to Send, Pin 32: When low, this informs the
+                                                                                   the baud rate generator’s oscillator. If the clock signal will
+MODEM or data set that the UART is ready to exchange
+                                                                                   be generated off-chip, then this pin is unused.
+data. The RTS output signal can be set to an active low by
+programming bit 1 (RTS) of the MODEM Control Register. A
+Master Reset operation sets this signal to its inactive (high)                     7.0      Connection Diagrams
+state. Loop mode operation holds this signal in its inactive
+state.
+                                                                                                          Dual-In-Line Package
+SIN, Serial Input, Pin 10: Serial data input from the commu-
+nications link (peripheral device, MODEM, or data set).
+SOUT, Serial Output, Pin 11: Composite serial data output
+to the communications link (peripheral, MODEM or data
+set). The SOUT signal is set to the Marking (logic 1) state
+upon a Master Reset operation.
+TXRDY, RXRDY, Pins 24, 29: Transmitter and Receiver
+DMA signalling is available through two pins (24 and 29).
+When operating in the FIFO mode, one of two types of DMA
+signalling per pin can be selected via FCR3. When operat-
+ing as in the 16450 Mode, only DMA mode 0 is allowed.
+Mode 0 supports single transfer DMA where a transfer is
+made between CPU bus cycles. Mode 1 supports multi-
+transfer DMA where multiple transfers are made continu-
+ously until the RCVR FIFO has been emptied or the XMIT
+FIFO has been filled.
+RXRDY, Mode 0: When in the 16450 Mode (FCR0 e 0) or in
+the FIFO Mode (FCR0 e 1, FCR3 e 0) and there is at least 1
+character in the RCVR FIFO or RCVR holding register, the
+RXRDY pin (29) will be low active. Once it is activated the
+RXRDY pin will go inactive when there are no more charac-
+ters in the FIFO or holding register.
+RXRDY, Mode 1: In the FIFO Mode (FCR0 e 1) when the
+FCR3 e 1 and the trigger level or the timeout has been
+reached, the RXRDY pin will go low active. Once it is acti-
+vated it will go inactive when there are no more characters
+in the FIFO or holding register.                                                                                                            TL/C/8652 – 17
+
+                                                                                                                  Top View
+                                                                                                     Order Number PC16550DN
+                                                                                                   See NS Package Number N40A
+
+                                                                              12
+7.0       Connection Diagrams (Continued)
+
+                                                                                           Chip Carrier Package
+                            TQFP Package
+
+
+
+
+                                                       TL/C/8652 – 26
+                                                                                                                         TL/C/8652 – 18
+                 Order Number PC16550DVEF
+               See NS Package Number VEF44A                                                     Top View
+                                                                                         Order Number PC16550DV
+                                                                                       See NS Package Number V44A
+
+                                                    TABLE I. UART Reset Configuration
+                Register/Signal                                     Reset Control                          Reset State
+       Interrupt Enable Register                                        Master Reset                0000     0000   (Note 1)
+       Interrupt Identification Register                                Master Reset                0000    0001
+       FIFO Control                                                     Master Reset                0000    0000
+       Line Control Register                                            Master Reset                0000    0000
+       MODEM Control Register                                           Master Reset                0000     0000
+       Line Status Register                                             Master Reset                0110    0000
+       MODEM Status Register                                            Master Reset                XXXX    0000    (Note 2)
+       SOUT                                                             Master Reset                High
+       INTR (RCVR Errs)                                             Read LSR/MR                     Low
+       INTR (RCVR Data Ready)                                       Read RBR/MR                     Low
+       INTR (THRE)                                            Read IIR/Write THR/MR                 Low
+       INTR (Modem Status Changes)                                  Read MSR/MR                     Low
+       OUT 2                                                            Master Reset                High
+       RTS                                                              Master Reset                High
+       DTR                                                              Master Reset                High
+       OUT 1                                                            Master Reset                High
+       RCVR FIFO                                             MR/FCR1 # FCR0/DFCR0                   All Bits Low
+       XMIT FIFO                                             MR/FCR1 # FCR0/DFCR0                   All Bits Low
+Note 1: Boldface bits are permanently low.
+Note 2: Bits 7–4 are driven by the input signals.
+
+
+
+
+                                                                         13
+                                                                                                            TABLE II. Summary of Registers
+                                                                                                                       Register Address
+              0 DLAB e 0             0 DLAB e 0             1 DLAB e 0                  2                   2            3            4          5             6          7       0 DLAB e 1   1 DLAB e 1
+     Bit        Receiver             Transmitter                                   Interrupt               FIFO
+     No.         Buffer                Holding                Interrupt              Ident.              Control      Line       MODEM          Line       MODEM        Scratch    Divisor      Divisor
+                Register              Register                 Enable              Register              Register    Control     Control       Status       Status       Reg-      Latch        Latch
+                 (Read                  (Write                Register               (Read                (Write     Register    Register     Register     Register      ister      (LS)         (MS)
+                 Only)                   Only)                                       Only)                 Only)
+                   RBR                   THR                     IER                   IIR                 FCR          LCR        MCR          LSR           MSR        SCR         DLL         DLM
+     0          Data Bit 0             Data Bit 0              Enable                ‘‘0’’ if              FIFO        Word        Data         Data         Delta       Bit 0       Bit 0       Bit 8
+                 (Note 1)                                     Received             Interrupt              Enable      Length     Terminal      Ready         Clear
+                                                                Data               Pending                             Select     Ready         (DR)        to Send
+                                                              Available                                                 Bit 0     (DTR)                     (DCTS)
+                                                              Interrupt                                               (WLS0)
+                                                              (ERBFI)
+     1          Data Bit 1             Data Bit 1              Enable              Interrupt              RCVR         Word      Request      Overrun        Delta       Bit 1       Bit 1        Bit 9
+                                                            Transmitter                ID                 FIFO        Length     to Send       Error          Data
+                                                              Holding                Bit (0)              Reset        Select     (RTS)        (OE)           Set
+                                                             Register                                                   Bit 1                                Ready
+                                                               Empty                                                  (WLS1)                                (DDSR)
+                                                             Interrupt
+                                                              (ETBEI)
+     2          Data Bit 2             Data Bit 2              Enable              Interrupt              XMIT      Number of      Out 1       Parity        Trailing    Bit 2       Bit 2       Bit 10
+                                                              Receiver                 ID                 FIFO      Stop Bits                  Error       Edge Ring
+
+
+
+
+14
+                                                             Line Status             Bit (1)              Reset       (STB)                    (PE)         Indicator
+                                                              Interrupt                                                                                      (TERI)
+                                                                (ELSI)
+     3          Data Bit 3             Data Bit 3              Enable              Interrupt              DMA         Parity       Out 2      Framing        Delta       Bit 3       Bit 3       Bit 11
+                                                              MODEM                    ID                 Mode        Enable                   Error          Data
+                                                               Status                Bit (2)              Select      (PEN)                     (FE)         Carrier
+                                                              Interrupt            (Note 2)                                                                  Detect
+                                                              (EDSSI)                                                                                       (DDCD)
+     4          Data Bit 4             Data Bit 4                   0                   0                Reserved     Even         Loop         Break        Clear       Bit 4       Bit 4       Bit 12
+                                                                                                                      Parity                  Interrupt       to
+                                                                                                                      Select                     (BI)        Send
+                                                                                                                      (EPS)                                 (CTS)
+     5          Data Bit 5             Data Bit 5                   0                   0                Reserved      Stick         0       Transmitter     Data        Bit 5       Bit 5       Bit 13
+                                                                                                                      Parity                   Holding        Set
+                                                                                                                                              Register      Ready
+                                                                                                                                               (THRE)       (DSR)
+     6          Data Bit 6             Data Bit 6                   0               FIFOs                 RCVR         Set           0       Transmitter     Ring        Bit 6       Bit 6       Bit 14
+                                                                                   Enabled                Trigger     Break                     Empty      Indicator
+                                                                                   (Note 2)                (LSB)                               (TEMT)         (RI)
+     7          Data Bit 7             Data Bit 7                   0               FIFOs                 RCVR       Divisor         0         Error in      Data        Bit 7       Bit 7       Bit 15
+                                                                                   Enabled                Trigger     Latch                    RCVR         Carrier
+                                                                                   (Note 2)               (MSB)     Access Bit                  FIFO        Detect
+                                                                                                                     (DLAB)                   (Note 2)      (DCD)
+     Note 1: Bit 0 is the least significant bit. It is the first bit serially transmitted or received.
+     Note 2: These bits are always 0 in the 16450 Mode.
+8.0       Registers
+The system programmer may access any of the UART reg-                            Bit 3: This bit is the Parity Enable bit. When bit 3 is a logic 1,
+isters summarized in Table II via the CPU. These registers                       a Parity bit is generated (transmit data) or checked (receive
+control UART operations including transmission and recep-                        data) between the last data word bit and Stop bit of the
+tion of data. Each register bit in Table II has its name and                     serial data. (The Parity bit is used to produce an even or odd
+reset state shown.                                                               number of 1s when the data word bits and the Parity bit are
+                                                                                 summed.)
+8.1 LINE CONTROL REGISTER
+                                                                                 Bit 4: This bit is the Even Parity Select bit. When bit 3 is a
+The system programmer specifies the format of the asyn-
+                                                                                 logic 1 and bit 4 is a logic 0, an odd number of logic 1s is
+chronous data communications exchange and set the Divi-
+                                                                                 transmitted or checked in the data word bits and Parity bit.
+sor Latch Access bit via the Line Control Register (LCR).
+                                                                                 When bit 3 is a logic 1 and bit 4 is a logic 1, an even number
+The programmer can also read the contents of the Line
+                                                                                 of logic 1s is transmitted or checked.
+Control Register. The read capability simplifies system pro-
+gramming and eliminates the need for separate storage in                         Bit 5: This bit is the Stick Parity bit. When bits 3, 4 and 5 are
+system memory of the line characteristics. Table II shows                        logic 1 the Parity bit is transmitted and checked as a logic 0.
+the contents of the LCR. Details on each bit follow:                             If bits 3 and 5 are 1 and bit 4 is a logic 0 then the Parity bit is
+                                                                                 transmitted and checked as a logic 1. If bit 5 is a logic 0
+Bits 0 and 1: These two bits specify the number of bits in
+                                                                                 Stick Parity is disabled.
+each transmitted or received serial character. The encoding
+of bits 0 and 1 is as follows:                                                   Bit 6: This bit is the Break Control bit. It causes a break
+                                                                                 condition to be transmitted to the receiving UART. When it
+                                                                                 is set to a logic 1, the serial output (SOUT) is forced to the
+          Bit 1         Bit 0         Character Length
+                                                                                 Spacing (logic 0) state. The break is disabled by setting bit 6
+             0             0                  5 Bits                             to a logic 0. The Break Control bit acts only on SOUT and
+             0             1                  6 Bits                             has no effect on the transmitter logic.
+             1             0                  7 Bits                             Note: This feature enables the CPU to alert a terminal in a computer com-
+                                                                                       munications system. If the following sequence is followed, no errone-
+             1             1                  8 Bits                                   ous or extraneous characters will be transmitted because of the
+                                                                                       break.
+Bit 2: This bit specifies the number of Stop bits transmitted                    1. Load an all 0s, pad character, in response to THRE.
+and received in each serial character. If bit 2 is a logic 0,                    2. Set break after the next THRE.
+one Stop bit is generated in the transmitted data. If bit 2 is a                 3. Wait for the transmitter to be idle, (TEMT e 1), and clear break when
+logic 1 when a 5-bit word length is selected via bits 0 and 1,                      normal transmission has to be restored.
+one and a half Stop bits are generated. If bit 2 is a logic 1                    During the break, the Transmitter can be used as a character timer to accu-
+                                                                                 rately establish the break duration.
+when either a 6-, 7-, or 8-bit word length is selected, two
+Stop bits are generated. The Receiver checks the first Stop-
+bit only, regardless of the number of Stop bits selected.
+
+                                                TABLE III. Baud Rates, Divisors and Crystals
+                          1.8432 MHz Cystal                               3.072 MHz Crystal                               18.432 MHz Crystal
+                  Decimal Divisor                               Decimal Divisor                                 Decimal Divisor
+Baud Rate                                 Percent Error                                   Percent Error                                    Percent Error
+                  for 16 c Clock                                for 16 c Clock                                  for 16 c Clock
+    50                  2304                     Ð                      3840                     Ð                     23040                      Ð
+    75                  1536                     Ð                      2560                     Ð                     15360                      Ð
+   110                  1047                   0.026                    1745                   0.026                   10473                      Ð
+  134.5                 857                    0.058                    1428                   0.034                    8565                      Ð
+   150                  768                      Ð                      1280                     Ð                     7680                       Ð
+   300                  384                      Ð                       640                     Ð                     3840                       Ð
+   600                  192                      Ð                       320                     Ð                     1920                       Ð
+  1200                   96                      Ð                       160                     Ð                      920                       Ð
+  1800                   64                      Ð                       107                   0.312                    640                       Ð
+  2000                   58                     0.69                      96                     Ð                      576                       Ð
+  2400                   48                      Ð                        80                     Ð                      480                       Ð
+  3600                   32                      Ð                        53                   0.628                    320                       Ð
+   4800                  24                      Ð                        40                     Ð                      240                       Ð
+   7200                  16                      Ð                        27                    1.23                     160                      Ð
+   9600                  12                      Ð                        20                     Ð                      120                       Ð
+  19200                   6                      Ð                        10                     Ð                       60                       Ð
+  38400                   3                      Ð                         5                     Ð                       30                       Ð
+  56000                   2                     2.86                      Ð                      Ð                        21                     2.04
+ 128000                  Ð                       Ð                        Ð                      Ð                        9                       Ð
+Note: For baud rates of 250k, 300k, 375k, 500k, 750k and 1.5M using a 24 MHz crystal causes minimal error.
+
+
+
+
+                                                                           15
+8.0       Registers (Continued)
+Bit 7: This bit is the Divisor Latch Access Bit (DLAB). It must                      8.4   LINE STATUS REGISTER
+be set high (logic 1) to access the Divisor Latches of the
+                                                                                     This register provides status information to the CPU con-
+Baud Generator during a Read or Write operation. It must
+                                                                                     cerning the data transfer. Table II shows the contents of the
+be set low (logic 0) to access the Receiver Buffer, the
+                                                                                     Line Status Register. Details on each bit follow.
+Transmitter Holding Register, or the Interrupt Enable Regis-
+ter.                                                                                 Bit 0: This bit is the receiver Data Ready (DR) indicator. Bit
+                                                                                     0 is set to a logic 1 whenever a complete incoming charac-
+8.2    TYPICAL CLOCK CIRCUITS                                                        ter has been received and transferred into the Receiver
+                                                                                     Buffer Register or the FIFO. Bit 0 is reset to a logic 0 by
+                                                                                     reading all of the data in the Receiver Buffer Register or the
+                                                                                     FIFO.
+                                                                                     Bit 1: This bit is the Overrun Error (OE) indicator. Bit 1 indi-
+                                                                                     cates that data in the Receiver Buffer Register was not read
+                                                                                     by the CPU before the next character was transferred into
+                                                                                     the Receiver Buffer Register, thereby destroying the previ-
+                                                                                     ous character. The OE indicator is set to a logic 1 upon
+                                                                                     detection of an overrun condition and reset whenever the
+                                                                                     CPU reads the contents of the Line Status Register. If the
+                                                                                     FIFO mode data continues to fill the FIFO beyond the trig-
+                                                              TL/C/8652–19           ger level, an overrun error will occur only after the FIFO is
+                                                                                     full and the next character has been completely received in
+                                                                                     the shift register. OE is indicated to the CPU as soon as it
+                                                                                     happens. The character in the shift register is overwritten,
+                                                                                     but it is not transferred to the FIFO.
+                                                                                     Bit 2: This bit is the Parity Error (PE) indicator. Bit 2 indi-
+                                                                                     cates that the received data character does not have the
+                                                                                     correct even or odd parity, as selected by the even-parity-
+                                                                                     select bit. The PE bit is set to a logic 1 upon detection of a
+                                                                                     parity error and is reset to a logic 0 whenever the CPU reads
+                                                                                     the contents of the Line Status Register. In the FIFO mode
+                                                                                     this error is associated with the particular character in the
+                                                                                     FIFO it applies to. This error is revealed to the CPU when its
+                                                                                     associated character is at the top of the FIFO.
+                                                              TL/C/8652–20           Bit 3: This bit is the Framing Error (FE) indicator. Bit 3 indi-
+                                                                                     cates that the received character did not have a valid Stop
+          Typical Crystal Oscillator Network (Note)                                  bit. Bit 3 is set to a logic 1 whenever the Stop bit following
+  CRYSTAL              RP         RX2            C1               C2                 the last data bit or parity bit is detected as a logic 0 bit
+                                                                                     (Spacing level). The FE indicator is reset whenever the CPU
+      3.1 MHz        1 MX         1.5k       10-30 pF         40-60 pF               reads the contents of the Line Status Register. In the FIFO
+      1.8 MHz        1 MX         1.5k       10-30 pF         40-60 pF               mode this error is associated with the particular character in
+                                                                                     the FIFO it applies to. This error is revealed to the CPU
+Note: These R and C values are approximate and may vary 2x depending
+      on the crystal characteristics. All crystal circuits should be designed        when its associated character is at the top of the FIFO. The
+      specifically for the system.                                                   UART will try to resynchronize after a framing error. To do
+                                                                                     this it assumes that the framing error was due to the next
+8.3 PROGRAMMABLE BAUD GENERATOR                                                      start bit, so it samples this ‘‘start’’ bit twice and then takes in
+The UART contains a programmable Baud Generator that is                              the ‘‘data’’.
+capable of taking any clock input from DC to 24 MHz and                              Bit 4: This bit is the Break Interrupt (BI) indicator. Bit 4 is set
+dividing it by any divisor from 2 to 216b1. The output fre-                          to a logic 1 whenever the received data input is held in the
+quency of the Baud Generator is 16 c the Baud [divisor Ý                             Spacing (logic 0) state for longer than a full word transmis-
+e (frequency input) d (baud rate c 16)]. Two 8-bit latches
+                                                                                     sion time (that is, the total time of Start bit a data bits a
+store the divisor in a 16-bit binary format. These Divisor                           Parity a Stop bits). The BI indicator is reset whenever the
+Latches must be loaded during initialization to ensure prop-                         CPU reads the contents of the Line Status Register. In the
+er operation of the Baud Generator. Upon loading either of                           FIFO mode this error is associated with the particular char-
+the Divisor Latches, a 16-bit Baud counter is immediately                            acter in the FIFO it applies to. This error is revealed to the
+loaded.                                                                              CPU when its associated character is at the top of the FIFO.
+Table III provides decimal divisors to use with crystal fre-                         When break occurs only one zero character is loaded into
+quencies of 1.8432 MHz, 3.072 MHz and 18.432 MHz, re-                                the FIFO. The next character transfer is enabled after SIN
+spectively. For baud rates of 38400 and below, the error                             goes to the marking state and receives the next valid start
+obtained is minimal. The accuracy of the desired baud rate                           bit.
+is dependent on the crystal frequency chosen. Using a divi-                          Note: Bits 1 through 4 are the error conditions that produce a Receiver Line
+sor of zero is not recommended.                                                            Status interrupt whenever any of the corresponding conditions are
+                                                                                           detected and the interrupt is enabled.
+
+
+
+
+                                                                                16
+ 8.0         Registers (Continued)
+                                                        TABLE IV. Interrupt Control Functions
+FIFO        Interrupt
+Mode      Identification                                                    Interrupt Set and Reset Functions
+Only        Register
+                                Priority
+Bit 3 Bit 2 Bit 1 Bit 0                           Interrupt Type                         Interrupt Source                   Interrupt Reset Control
+                                 Level
+ 0       0        0       1         Ð        None                               None                                                     Ð
+ 0       1        1       0     Highest Receiver Line Status                    Overrun Error or Parity Error or         Reading the Line Status
+                                                                                Framing Error or Break Interrupt         Register
+ 0       1        0       0     Second Received Data Available Receiver Data Available or Trigger                        Reading the Receiver Buffer
+                                                               Level Reached                                             Register or the FIFO Drops
+                                                                                                                         Below the Trigger Level
+ 1       1        0       0     Second Character Timeout                        No Characters Have Been                  Reading the Receiver
+                                       Indication                               Removed From or Input to the             Buffer Register
+                                                                                RCVR FIFO During the Last 4 Char.
+                                                                                Times and There Is at Least 1 Char.
+                                                                                in It During This Time
+ 0       0        1       0       Third      Transmitter Holding                Transmitter Holding                      Reading the IIR Register (if
+                                             Register Empty                     Register Empty                           source of interrupt) or Writing
+                                                                                                                         into the Transmitter Holding
+                                                                                                                         Register
+ 0       0        0       0      Fourth      MODEM Status                       Clear to Send or Data Set Ready or       Reading the MODEM
+                                                                                Ring Indicator or Data Carrier           Status Register
+                                                                                Detect
+
+ Bit 5: This bit is the Transmitter Holding Register Empty                             When changing from the FIFO Mode to the 16450 Mode
+ (THRE) indicator. Bit 5 indicates that the UART is ready to                           and vice versa, data is automatically cleared from the
+ accept a new character for transmission. In addition, this bit                        FIFOs. This bit must be a 1 when other FCR bits are written
+ causes the UART to issue an interrupt to the CPU when the                             to or they will not be programmed.
+ Transmit Holding Register Empty Interrupt enable is set                               Bit 1: Writing a 1 to FCR1 clears all bytes in the RCVR FIFO
+ high. The THRE bit is set to a logic 1 when a character is                            and resets its counter logic to 0. The shift register is not
+ transferred from the Transmitter Holding Register into the                            cleared. The 1 that is written to this bit position is self-clear-
+ Transmitter Shift Register. The bit is reset to logic 0 concur-                       ing.
+ rently with the loading of the Transmitter Holding Register
+                                                                                       Bit 2: Writing a 1 to FCR2 clears all bytes in the XMIT FIFO
+ by the CPU. In the FIFO mode this bit is set when the XMIT
+                                                                                       and resets its counter logic to 0. The shift register is not
+ FIFO is empty; it is cleared when at least 1 byte is written to
+                                                                                       cleared. The 1 that is written to this bit position is self-clear-
+ the XMIT FIFO.
+                                                                                       ing.
+ Bit 6: This bit is the Transmitter Empty (TEMT) indicator. Bit
+                                                                                       Bit 3: Setting FCR3 to a 1 will cause the RXRDY and
+ 6 is set to a logic 1 whenever the Transmitter Holding Regis-
+                                                                                       TXRDY pins to change from mode 0 to mode 1 if FCR0 e 1
+ ter (THR) and the Transmitter Shift Register (TSR) are both
+                                                                                       (see description of RXRDY and TXRDY pins).
+ empty. It is reset to a logic 0 whenever either the THR or
+ TSR contains a data character. In the FIFO mode this bit is                           Bit 4, 5: FCR4 to FCR5 are reserved for future use.
+ set to one whenever the transmitter FIFO and shift register                           Bit 6, 7: FCR6 and FCR7 are used to set the trigger level for
+ are both empty.                                                                       the RCVR FIFO interrupt.
+ Bit 7: In the 16450 Mode this is a 0. In the FIFO mode LSR7
+ is set when there is at least one parity error, framing error or                                                             RCVR FIFO
+                                                                                             7             6
+ break indication in the FIFO. LSR7 is cleared when the CPU                                                              Trigger Level (Bytes)
+ reads the LSR, if there are no subsequent errors in the                                     0             0                        01
+ FIFO.                                                                                       0             1                        04
+ Note: The Line Status Register is intended for read operations only. Writing
+                                                                                             1             0                        08
+       to this register is not recommended as this operation is only used for
+       factory testing. In the FIFO mode the software must load a data byte                  1             1                        14
+       in the Rx FIFO via Loopback Mode in order to write to LSR2–LSR4.
+       LSR0 and LSR7 can’t be written to in FIFO mode.                                 8.6 INTERRUPT IDENTIFICATION REGISTER
+ 8.5 FIFO CONTROL REGISTER                                                             In order to provide minimum software overhead during data
+ This is a write only register at the same location as the IIR                         character transfers, the UART prioritizes interrupts into four
+ (the IIR is a read only register). This register is used to en-                       levels and records these in the interrupt Identification Regis-
+ able the FIFOs, clear the FIFOs, set the RCVR FIFO trigger                            ter. The four levels of interrupt conditions in order of priority
+ level, and select the type of DMA signalling.                                         are Receiver Line Status; Received Data Ready; Transmit-
+                                                                                       ter Holding Register Empty; and MODEM Status.
+ Bit 0: Writing a 1 to FCR0 enables both the XMIT and RCVR
+ FIFOs. Resetting FCR0 will clear all bytes in both FIFOs.
+
+                                                                                 17
+8.0       Registers (Continued)
+When the CPU accesses the IIR, the UART freezes all inter-                          Bit 3: This bit controls the Output 2 (OUT 2) signal, which is
+rupts and indicates the highest priority pending interrupt to                       an auxiliary user-designated output. Bit 3 affects the OUT 2
+the CPU. While this CPU access is occurring, the UART                               output in a manner identical to that described above for bit
+records new interrupts, but does not change its current indi-                       0.
+cation until the access is complete. Table II shows the con-                        Bit 4: This bit provides a local loopback feature for diagnos-
+tents of the IIR. Details on each bit follow:                                       tic testing of the UART. When bit 4 is set to logic 1, the
+Bit 0: This bit can be used in a prioritized interrupt environ-                     following occur: the transmitter Serial Output (SOUT) is set
+ment to indicate whether an interrupt is pending. When bit 0                        to the Marking (logic 1) state; the receiver Serial Input (SIN)
+is a logic 0, an interrupt is pending and the IIR contents may                      is disconnected; the output of the Transmitter Shift Register
+be used as a pointer to the appropriate interrupt service                           is ‘‘looped back’’ into the Receiver Shift Register input; the
+routine. When bit 0 is a logic 1, no interrupt is pending.                          four MODEM Control inputs (DSR, CTS, RI, and DCD) are
+Bits 1 and 2: These two bits of the IIR are used to identify                        disconnected; and the four MODEM Control outputs (DTR,
+the highest priority interrupt pending as indicated in Table                        RTS, OUT 1, and OUT 2) are internally connected to the
+IV.                                                                                 four MODEM Control inputs, and the MODEM Control out-
+                                                                                    put pins are forced to their inactive state (high). In the loop-
+Bit 3: In the 16450 Mode this bit is 0. In the FIFO mode this
+                                                                                    back mode, data that is transmitted is immediately received.
+bit is set along with bit 2 when a timeout interrupt is pending.
+                                                                                    This feature allows the processor to verify the transmit-and
+Bits 4 and 5: These two bits of the IIR are always logic 0.                         received-data paths of the UART.
+Bits 6 and 7: These two bits are set when FCR0 e 1.                                 In the loopback mode, the receiver and transmitter inter-
+8.7 INTERRUPT ENABLE REGISTER                                                       rupts are fully operational. Their sources are external to the
+                                                                                    part. The MODEM Control Interrupts are also operational,
+This register enables the five types of UART interrupts.
+                                                                                    but the interrupts’ sources are now the lower four bits of the
+Each interrupt can individually activate the interrupt (INTR)
+                                                                                    MODEM Control Register instead of the four MODEM Con-
+output signal. It is possible to totally disable the interrupt
+                                                                                    trol inputs. The interrupts are still controlled by the Interrupt
+system by resetting bits 0 through 3 of the Interrupt Enable
+                                                                                    Enable Register.
+Register (IER). Similarly, setting bits of the IER register to a
+logic 1, enables the selected interrupt(s). Disabling an inter-                     Bits 5 through 7: These bits are permanently set to logic 0.
+rupt prevents it from being indicated as active in the IIR and                      8.9 MODEM STATUS REGISTER
+from activating the INTR output signal. All other system
+                                                                                    This register provides the current state of the control lines
+functions operate in their normal manner, including the set-
+                                                                                    from the MODEM (or peripheral device) to the CPU. In addi-
+ting of the Line Status and MODEM Status Registers. Table
+                                                                                    tion to this current-state information, four bits of the MO-
+II shows the contents of the IER. Details on each bit follow.
+                                                                                    DEM Status Register provide change information. These
+Bit 0: This bit enables the Received Data Available Interrupt                       bits are set to a logic 1 whenever a control input from the
+(and timeout interrupts in the FIFO mode) when set to logic                         MODEM changes state. They are reset to logic 0 whenever
+1.                                                                                  the CPU reads the MODEM Status Register.
+Bit 1: This bit enables the Transmitter Holding Register                            The contents of the MODEM Status Register are indicated
+Empty Interrupt when set to logic 1.                                                in Table II and described below.
+Bit 2: This bit enables the Receiver Line Status Interrupt                          Bit 0: This bit is the Delta Clear to Send (DCTS) indicator.
+when set to logic 1.                                                                Bit 0 indicates that the CTS input to the chip has changed
+Bit 3: This bit enables the MODEM Status Interrupt when                             state since the last time it was read by the CPU.
+set to logic 1.                                                                     Bit 1: This bit is the Delta Data Set Ready (DDSR) indicator.
+Bits 4 through 7: These four bits are always logic 0.                               Bit 1 indicates that the DSR input to the chip has changed
+                                                                                    state since the last time it was read by the CPU.
+8.8 MODEM CONTROL REGISTER
+                                                                                    Bit 2: This bit is the Trailing Edge of Ring Indicator (TERI)
+This register controls the interface with the MODEM or data
+                                                                                    detector. Bit 2 indicates that the RI input to the chip has
+set (or a peripheral device emulating a MODEM). The con-
+                                                                                    changed from a low to a high state.
+tents of the MODEM Control Register are indicated in Table
+II and are described below.                                                         Bit 3: This bit is the Delta Data Carrier Detect (DDCD) indi-
+                                                                                    cator. Bit 3 indicates that the DCD input to the chip has
+Bit 0: This bit controls the Data Terminal Ready (DTR) out-
+                                                                                    changed state.
+put. When bit 0 is set to a logic 1, the DTR output is forced
+                                                                                    Note: Whenever bit 0, 1, 2, or 3 is set to logic 1, a MODEM Status Interrupt
+to a logic 0. When bit 0 is reset to a logic 0, the DTR output
+                                                                                          is generated.
+is forced to a logic 1.
+Note: The DTR output of the UART may be applied to an EIA inverting line
+                                                                                    Bit 4: This bit is the complement of the Clear to Send (CTS)
+      driver (such as the DS1488) to obtain the proper polarity input at the        input. If bit 4 (loop) of the MCR is set to a 1, this bit is
+      succeeding MODEM or data set.                                                 equivalent to RTS in the MCR.
+Bit 1: This bit controls the Request to Send (RTS) output.                          Bit 5: This bit is the complement of the Data Set Ready
+Bit 1 affects the RTS output in a manner identical to that                          (DSR) input. If bit 4 of the MCR is set to a 1, this bit is
+described above for bit 0.                                                          equivalent to DTR in the MCR.
+Bit 2: This bit controls the Output 1 (OUT 1) signal, which is                      Bit 6: This bit is the complement of the Ring Indicator (RI)
+an auxiliary user-designated output. Bit 2 affects the OUT 1                        input. If bit 4 of the MCR is set to a 1, this bit is equivalent to
+output in a manner identical to that described above for bit                        OUT 1 in the MCR.
+0.
+
+
+
+
+                                                                               18
+8.0      Registers (Continued)
+Bit 7: This bit is the complement of the Data Carrier Detect            B. The transmitter FIFO empty indications will be delayed 1
+(DCD) input. If bit 4 of the MCR is set to a 1, this bit is                character time minus the last stop bit time whenever the
+equivalent to OUT 2 in the MCR.                                            following occurs: THRE e 1 and there have not been at
+                                                                           least two bytes at the same time in the transmit FIFO,
+8.10 SCRATCHPAD REGISTER                                                   since the last THRE e 1. The first transmitter interrupt af-
+This 8-bit Read/Write Register does not control the UART                   ter changing FCR0 will be immediate, if it is enabled.
+in anyway. It is intended as a scratchpad register to be used           Character timeout and RCVR FIFO trigger level interrupts
+by the programmer to hold data temporarily.                             have the same priority as the current received data avail-
+8.11 FIFO INTERRUPT MODE OPERATION                                      able interrupt; XMIT FIFO empty has the same priority as
+                                                                        the current transmitter holding register empty interrupt.
+When the RCVR FIFO and receiver interrupts are enabled
+(FCR0 e 1, IER0 e 1) RCVR interrupts will occur as follows:             8.12 FIFO POLLED MODE OPERATION
+A. The receive data available interrupt will be issued to the           With FCR0 e 1 resetting IER0, IER1, IER2, IER3 or all to
+   CPU when the FIFO has reached its programmed trigger                 zero puts the UART in the FIFO Polled Mode of operation.
+   level; it will be cleared as soon as the FIFO drops below            Since the RCVR and XMITTER are controlled separately
+   its programmed trigger level.                                        either one or both can be in the polled mode of operation.
+B. The IIR receive data available indication also occurs                In this mode the user’s program will check RCVR and XMIT-
+   when the FIFO trigger level is reached, and like the inter-          TER status via the LSR. As stated previously:
+   rupt it is cleared when the FIFO drops below the trigger                LSR0 will be set as long as there is one byte in the RCVR
+   level.                                                                  FIFO.
+C. The receiver line status interrupt (IIR e 06), as before,               LSR1 to LSR4 will specify which error(s) has occurred.
+   has higher priority than the received data available                    Character error status is handled the same way as when
+   (IIR e 04) interrupt.                                                   in the interrupt mode, the IIR is not affected since
+D. The data ready bit (LSR0) is set as soon as a character is              IER2 e 0.
+   transferred from the shift register to the RCVR FIFO. It is             LSR5 will indicate when the XMIT FIFO is empty.
+   reset when the FIFO is empty.
+                                                                           LSR6 will indicate that both the XMIT FIFO and shift reg-
+When RCVR FIFO and receiver interrupts are enabled,                        ister are empty.
+RCVR FIFO timeout interrupts will occur as follows:
+                                                                           LSR7 will indicate whether there are any errors in the
+A. A FIFO timeout interrupt will occur, if the following condi-            RCVR FIFO.
+   tions exist:
+                                                                        There is no trigger level reached or timeout condition indi-
+        Ð at least one character is in the FIFO                         cated in the FIFO Polled Mode, however, the RCVR and
+        Ð the most recent serial character received was                 XMIT FIFOs are still fully capable of holding characters.
+           longer than 4 continuous character times ago (if 2
+           stop bits are programmed the second one is in-               9.0     Typical Applications
+           cluded in this time delay).
+        Ð the most recent CPU read of the FIFO was longer                                  Typical Interface for a
+           than 4 continuous character times ago.                                         High-Capacity Data Bus
+   The maximum time between a received character and a
+   timeout interrupt will be 160 ms at 300 baud with a 12-bit
+   receive character (i.e., 1 Start, 8 Data, 1 Parity and 2 Stop
+   Bits).
+B. Character times are calculated by using the RCLK input
+   for a clock signal (this makes the delay proportional to
+   the baudrate).
+C. When a timeout interrupt has occurred it is cleared and
+   the timer reset when the CPU reads one character from
+   the RCVR FIFO.                                                                                                          TL/C/8652 – 23
+D. When a timeout interrupt has not occurred the timeout
+   timer is reset after a new character is received or after
+   the CPU reads the RCVR FIFO.
+When the XMIT FIFO and transmitter interrupts are enabled
+(FCR0 e 1, IER1 e 1), XMIT interrupts will occur as follows:
+A. The transmitter holding register interrupt (02) occurs
+   when the XMIT FIFO is empty; it is cleared as soon as
+   the transmitter holding register is written to (1 to 16 char-
+   acters may be written to the XMIT FIFO while servicing
+   this interrupt) or the IIR is read.
+
+
+
+
+                                                                   19
+                                                                                       9.0
+
+
+
+
+     This shows the basic connections of an PC16550D to an 8088 CPU
+                                                                                       Typical Applications (Continued)
+
+
+
+
+20
+                                                                      TL/C/8652 – 22
+10.0   Physical Dimensions inches (millimeters)
+
+
+
+
+                               Plastic Dual-In-Line Package (N)
+                                  Order Number PC16550DN
+                                  NS Package Number N40A
+
+
+
+
+                                44-Lead Plastic Chip Carrier (V)
+                                  Order Number PC16550DV
+                                  NS Package Number V44A
+
+
+
+
+                                              21
+PC16550D Universal Asynchronous Receiver/Transmitter with FIFOs
+                                                                  10.0             Physical Dimensions inches (millimeters) (Continued)
+
+
+
+
+                                                                                                                                                      44-Lead Package (TQEF)
+                                                                                                                                                    Order Number PC16550DVEF
+                                                                                                                                                    NS Package Number VEF44A
+
+
+
+
+                                                                  LIFE SUPPORT POLICY
+
+                                                                  NATIONAL’S PRODUCTS ARE NOT AUTHORIZED FOR USE AS CRITICAL COMPONENTS IN LIFE SUPPORT
+                                                                  DEVICES OR SYSTEMS WITHOUT THE EXPRESS WRITTEN APPROVAL OF THE PRESIDENT OF NATIONAL
+                                                                  SEMICONDUCTOR CORPORATION. As used herein:
+
+                                                                  1. Life support devices or systems are devices or                                                                2. A critical component is any component of a life
+                                                                     systems which, (a) are intended for surgical implant                                                             support device or system whose failure to perform can
+                                                                     into the body, or (b) support or sustain life, and whose                                                         be reasonably expected to cause the failure of the life
+                                                                     failure to perform, when properly used in accordance                                                             support device or system, or to affect its safety or
+                                                                     with instructions for use provided in the labeling, can                                                          effectiveness.
+                                                                     be reasonably expected to result in a significant injury
+                                                                     to the user.
+
+                                                                              National Semiconductor              National Semiconductor          National Semiconductor           National Semiconductor                  National Semiconductores                 National Semiconductor
+                                                                              Corporation                         GmbH                            Japan Ltd.                       Hong Kong Ltd.                          Do Brazil Ltda.                          (Australia) Pty, Ltd.
+                                                                              2900 Semiconductor Drive            Livry-Gargan-Str. 10            Sumitomo Chemical                13th Floor, Straight Block,             Rue Deputado Lacorda Franco              Building 16
+                                                                              P.O. Box 58090                      D-82256 F4urstenfeldbruck       Engineering Center               Ocean Centre, 5 Canton Rd.              120-3A                                   Business Park Drive
+                                                                              Santa Clara, CA 95052-8090          Germany                         Bldg. 7F                         Tsimshatsui, Kowloon                    Sao Paulo-SP                             Monash Business Park
+                                                                              Tel: 1(800) 272-9959                Tel: (81-41) 35-0               1-7-1, Nakase, Mihama-Ku         Hong Kong                               Brazil 05418-000                         Nottinghill, Melbourne
+                                                                              TWX: (910) 339-9240                 Telex: 527649                   Chiba-City,                      Tel: (852) 2737-1600                    Tel: (55-11) 212-5066                    Victoria 3168 Australia
+                                                                                                                  Fax: (81-41) 35-1               Ciba Prefecture 261              Fax: (852) 2736-9960                    Telex: 391-1131931 NSBR BR               Tel: (3) 558-9999
+                                                                                                                                                  Tel: (043) 299-2300                                                      Fax: (55-11) 212-1181                    Fax: (3) 558-9998
+                                                                                                                                                  Fax: (043) 299-2500
+
+                                                                  National does not assume any responsibility for use of any circuitry described, no circuit patent licenses are implied and National reserves the right at any time without notice to change said circuitry and specifications.
+

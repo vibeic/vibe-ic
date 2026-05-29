@@ -49579,6 +49579,25 @@ def main() -> int:
                 except Exception as _i2c_err:
                     print(f"      I2C synth FAILED (fail-open): {_i2c_err}",
                           file=sys.stderr)
+            # v0.1.80 — UART structural sub-detector (SIN+SOUT or
+            # 16450/16550 lineage terminology + start/data/stop framing).
+            # PC16550D-style UART chips have a register file + serial
+            # frame; the structural signature is unique.
+            _is_uart = (
+                ("SIN" in _spi_blob and "SOUT" in _spi_blob)
+                or ("16450" in _spi_blob and "16550" in _spi_blob)
+                or ("UART" in _spi_blob
+                    and "start bit" in _spi_blob.lower()
+                    and "stop bit" in _spi_blob.lower()))
+            if _is_uart:
+                _uart_ic_name = "PC16550D UART"
+                try:
+                    from uart_protocol_synth import apply_uart_synth as _apply_uart
+                    _apply_uart(_gd_r55, _is_uart, _uart_ic_name)
+                    print(f"      → R59/R60/R61 UART synth applied (is_uart={_is_uart})")
+                except Exception as _uart_err:
+                    print(f"      UART synth FAILED (fail-open): {_uart_err}",
+                          file=sys.stderr)
     except Exception as _r55_err:
         print(f"      R53/R54/R55 synth FAILED (fail-open): {_r55_err}",
               file=sys.stderr)

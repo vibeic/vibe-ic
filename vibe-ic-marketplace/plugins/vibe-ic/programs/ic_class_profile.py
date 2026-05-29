@@ -652,29 +652,46 @@ def _looks_like_bus_interconnect_protocol(
 # bus-protocol detector block) does not flag serial-protocol features
 # such as "chip select" (substring "CHI").
 _SERIAL_PROTO_FEATURES: List[tuple[str, re.Pattern]] = [
-    ("master_slave_roles",
+    # 1. role-pair: master/slave OR controller/target OR transmitter/receiver
+    #    OR DTE/DCE. Any of these dual-role pairs marks a serial peripheral.
+    ("role_pair",
      re.compile(r"\b(?:master|controller)s?\b.{0,200}?"
                 r"\b(?:slave|target|peripheral|subordinate)s?\b|"
                 r"\b(?:slave|target|peripheral|subordinate)s?\b.{0,200}?"
-                r"\b(?:master|controller)s?\b",
+                r"\b(?:master|controller)s?\b|"
+                r"\b(?:transmitter|transmit)s?\b.{0,200}?"
+                r"\b(?:receiver|receive)s?\b|"
+                r"\b(?:receiver|receive)s?\b.{0,200}?"
+                r"\b(?:transmitter|transmit)s?\b|"
+                r"\bDTE\b.{0,200}?\bDCE\b|\bDCE\b.{0,200}?\bDTE\b",
                 re.IGNORECASE | re.DOTALL)),
+    # 2. shift-register primitive
     ("shift_register",
-     re.compile(r"\bshift\s+register|\bshifting\b|\bshifted\b",
+     re.compile(r"\bshift\s+registers?|\bshifting\b|\bshifted\b",
                 re.IGNORECASE)),
+    # 3. serial / synchronous serial / asynchronous serial
     ("serial_concept",
      re.compile(r"\b(?:synchronous|asynchronous)?\s*serial\b",
                 re.IGNORECASE)),
+    # 4. clock / baud control primitive — generator OR divisor OR prescaler.
     ("clock_baud_control",
-     re.compile(r"\bbaud\s*(?:rate|divisor)\b|\b(?:clock|sclk|sck)\s+"
-                r"(?:divisor|prescal(?:er|e)|select)\b",
+     re.compile(r"\bbaud\s*(?:rate|divisor|generator)\b|"
+                r"\b(?:clock|sclk|sck)\s+"
+                r"(?:divisor|prescal(?:er|e)|select|generator)\b",
                 re.IGNORECASE)),
+    # 5. small fixed external pin count (≤ 8 pins, often 2-4) — for the
+    #    pure wire-protocol-spec family. UART chip specs have more pins
+    #    so won't fire here, but they hit the role_pair / shift_register
+    #    features instead.
     ("small_pin_count",
      re.compile(r"\b(?:total of|has)\s+\d+\s+external\s+pin|"
                 r"\b(?:two|three|four|five|six|2|3|4|5|6)\s+(?:external\s+)?pins?\b",
                 re.IGNORECASE)),
+    # 6. dedicated function pin / start-stop framing / data line.
     ("dedicated_function_pin",
      re.compile(r"\b(?:slave\s+select|chip\s+select|start\s+bit|stop\s+bit|"
-                r"data\s+line|clock\s+line|enable\s+pin|select\s+pin)\b",
+                r"data\s+line|clock\s+line|enable\s+pin|select\s+pin|"
+                r"asynchronous\s+communication\s+bits)\b",
                 re.IGNORECASE)),
 ]
 
