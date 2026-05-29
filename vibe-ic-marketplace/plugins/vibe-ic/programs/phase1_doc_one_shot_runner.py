@@ -6383,6 +6383,25 @@ def _write_l_doc(project: Path, name: str, content: dict,
     # thin-input and rich-input runs; this defensive pass guarantees the
     # flag is always True/False regardless of which code path produced it.
     _ensure_bool_flags(content)
+    # v0.1.60 capture (R11): wire phase1_post_process.scrub_l_doc into the
+    # write chokepoint so every L doc emission gets the HALLUC_PATTERNS scan
+    # (ic_name lifted from "SUCH ARM TECHNOLOGY" license clause, opcode_hex
+    # cribbed from 2-digit page numbers, etc.). The scrubber existed since
+    # v0.1.51 but was never invoked from the doc-mode runner pipeline; the
+    # AMBA AXI parity run on v0.1.57 reproduced the hallucination across all
+    # 14 L docs. Now caught at emission time, with an audit entry attached.
+    try:
+        from phase1_post_process import scrub_l_doc as _scrub_l_doc
+        _scrub_log = _scrub_l_doc(content, name)
+        if _scrub_log:
+            content.setdefault("extraction_strategy", {})[
+                "hallucination_scrub_v0_1_60"
+            ] = [entry.as_dict() for entry in _scrub_log]
+    except Exception as _e:
+        # Fail-open: scrubber missing or broken shouldn't block emission.
+        content.setdefault("extraction_strategy", {})[
+            "hallucination_scrub_error_v0_1_60"
+        ] = str(_e)[:200]
     out = _pl.generated_docs_dir(project) / f"{name}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(content, indent=2, ensure_ascii=False) + "\n")
