@@ -112,6 +112,31 @@
       "name": "L18_INTERCONNECT_TOPOLOGY",
       "evidence_count": 0,
       "todo_count": 0
+    },
+    {
+      "name": "L19_CONSTRAINTS_PDK",
+      "evidence_count": 0,
+      "todo_count": 0
+    },
+    {
+      "name": "L20_DFT_SCAN_TOPOLOGY",
+      "evidence_count": 0,
+      "todo_count": 0
+    },
+    {
+      "name": "L21_POWER_INTENT",
+      "evidence_count": 0,
+      "todo_count": 0
+    },
+    {
+      "name": "L22_VERIFICATION_PLAN",
+      "evidence_count": 0,
+      "todo_count": 0
+    },
+    {
+      "name": "L23_SECURITY_REQUIREMENTS",
+      "evidence_count": 0,
+      "todo_count": 0
     }
   ],
   "universe_sample": [],

@@ -6472,6 +6472,71 @@ _L14_L18_EXTRACTORS: List[Tuple[str, str]] = [
 ]
 
 
+# v0.1.63 capture (R15) — L19-L23 skeleton emit chain.
+# The runner has no extractor for L19_CONSTRAINTS_PDK / L20_DFT_SCAN_TOPOLOGY /
+# L21_POWER_INTENT / L22_VERIFICATION_PLAN / L23_SECURITY_REQUIREMENTS, but
+# phase1_post_process.emit_l_doc_skeleton produces a typed skeleton with empty
+# fields + extraction_hints that a downstream extractor (or AI backstop) can
+# populate. Wiring this in means: for IC classes where L19-L23 are applicable,
+# the runner emits a typed-skeleton stub instead of nothing-on-disk. R13's
+# applicability gate inside _write_l_doc then either keeps the skeleton (when
+# applicable) or replaces with na_stub (when not). Net effect: every L doc in
+# the L1-L23 set has a deterministic on-disk presence after every run.
+_L19_L23_CODES_AND_NAMES: List[Tuple[str, str]] = [
+    ("L19", "L19_CONSTRAINTS_PDK"),
+    ("L20", "L20_DFT_SCAN_TOPOLOGY"),
+    ("L21", "L21_POWER_INTENT"),
+    ("L22", "L22_VERIFICATION_PLAN"),
+    ("L23", "L23_SECURITY_REQUIREMENTS"),
+]
+
+
+def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
+    """Invoke phase1_post_process.emit_l_doc_skeleton for L19-L23, then write
+    each via _write_l_doc so R11 scrub + R13 applicability gate fire.
+
+    Honesty contract:
+      - The skeletons carry `extraction_status='NOT_YET_EXTRACTED'` so a
+        downstream completeness audit can tell skeleton-stubs from
+        genuinely populated docs.
+      - When R13 declares the L doc not-applicable for the detected
+        ic_class, the gate replaces the skeleton with the canonical
+        na_stub — no leaked APPLICABLE flag for a class that shouldn't
+        carry it.
+      - Fail-open: if emit_l_doc_skeleton is missing, each L doc is
+        skipped (not emitted) and a stderr WARN goes to the runner log.
+    """
+    out: List["LDocResult"] = []
+    try:
+        from phase1_post_process import emit_l_doc_skeleton as _emit_sk
+    except ImportError:
+        return out
+
+    # Need an ic_class to feed the skeleton emitter. Default to "unknown"
+    # if detect_ic_class can't classify; R13 gate will then keep the
+    # skeleton (legacy emit-everything).
+    try:
+        from ic_class_profile import detect_ic_class as _detect
+        profile = _detect(project)
+        ic_class = profile.get("ic_class", "unknown") if isinstance(profile, dict) else "unknown"
+    except Exception:
+        ic_class = "unknown"
+
+    for code, doc_name in _L19_L23_CODES_AND_NAMES:
+        try:
+            skeleton = _emit_sk(code, ic_class)
+            # emit_l_doc_skeleton returns a dict; _write_l_doc takes content + evidence.
+            evidence = skeleton.pop("evidence", []) if isinstance(skeleton.get("evidence"), list) else {}
+            if not isinstance(evidence, dict):
+                evidence = {}
+            r = _write_l_doc(project, doc_name, skeleton, evidence)
+            out.append(r)
+        except Exception as e:
+            print(f"      L19-L23 skeleton emit {doc_name} crashed: {e}",
+                  file=sys.stderr)
+    return out
+
+
 def _emit_l14_to_l18_via_extractor(
         project: Path,
         extracted: Dict[str, str]) -> List["LDocResult"]:
@@ -47940,6 +48005,23 @@ def main() -> int:
     except Exception as _l14_l18_err:
         print(f"      L14-L18 extract FAILED (fail-open): {_l14_l18_err}",
               file=sys.stderr)
+
+    # v0.1.63 capture (R15): emit L19-L23 typed skeleton stubs (or na_stubs
+    # via the R13 gate, depending on detected ic_class applicability). Before
+    # this, L19-L23 were absent from disk after every run, which surfaced as
+    # "missing required L doc" FAILs downstream for IC classes where L19+L22
+    # are applicable. phase1_post_process.emit_l_doc_skeleton existed since
+    # v0.1.51 but was never wired (same dead-code pattern as R11/R12/R13/R14).
+    print(f"[14d/15] L19-L23 skeleton emit ...")
+    try:
+        _l19_l23_results = _emit_l19_to_l23_skeletons(project)
+        results.extend(_l19_l23_results)
+        for r in _l19_l23_results:
+            print(f"      → {r.path.name} (todo={r.todo_count}, "
+                  f"ev={r.evidence_count})")
+    except Exception as _l19_l23_err:
+        print(f"      L19-L23 skeleton emit FAILED (fail-open): "
+              f"{_l19_l23_err}", file=sys.stderr)
 
     # Step 15: coverage report (runs AFTER backfill AND canonical seed so the
     # gate sees the final L docs + explicit pattern set)
