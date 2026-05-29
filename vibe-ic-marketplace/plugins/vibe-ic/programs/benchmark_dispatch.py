@@ -143,21 +143,30 @@ def cmd_setup(bench: str, dataset: str, run: str):
     elif shape == "B":
         fn = layout.get("prompt_filename", "design_description.txt")
         problems = sorted(str(p.parent.relative_to(ds_p)) for p in ds_p.rglob(fn) if p.is_file())
-    elif shape == "D" and bench == "cvdp":
-        # v0.1.55 capture: CVDP ships JSONL — call the dedicated extractor
-        # to emit Shape-D project dirs (work/PROMPT.txt + score/src/*).
-        # Captured from v0.1.53 CVDP run where this gap forced manual staging.
-        import subprocess as _sp
-        extractor = Path(__file__).parent / "cvdp_jsonl_extract.py"
-        rc = _sp.run(["python3", str(extractor),
-                       "--dataset", str(ds_p), "--rundir", str(run_p)],
-                      check=False)
-        if rc.returncode != 0:
-            raise SystemExit(f"cvdp_jsonl_extract failed (rc={rc.returncode})")
-        # The extractor wrote its own problems.list + .bench_config.json;
-        # rely on those (its config is authoritative for CVDP).
-        if (run_p / "problems.list").is_file():
-            problems = [p for p in (run_p / "problems.list").read_text().splitlines() if p]
+    elif shape == "D":
+        # v0.1.56 (general; was bench-name-specific in v0.1.55).
+        # Shape-D agentic benchmarks ship either as JSONL (CVDP-style:
+        # one row per problem with prompt/context/harness) OR as
+        # per-problem subdirs already in the Shape-D layout.
+        #
+        # Auto-detect: if --dataset contains *.jsonl, run the general
+        # agentic_jsonl_to_shape_d.py extractor. Otherwise fall through
+        # to subdir-discovery (next branch) — no benchmark-name branching.
+        if any(ds_p.glob("*.jsonl")):
+            import subprocess as _sp
+            extractor = Path(__file__).parent / "agentic_jsonl_to_shape_d.py"
+            rc = _sp.run(["python3", str(extractor),
+                           "--dataset", str(ds_p), "--rundir", str(run_p)],
+                          check=False)
+            if rc.returncode != 0:
+                raise SystemExit(f"agentic_jsonl_to_shape_d failed (rc={rc.returncode})")
+            if (run_p / "problems.list").is_file():
+                problems = [p for p in (run_p / "problems.list").read_text().splitlines() if p]
+        else:
+            # Already-laid-out per-problem subdirs: each subdir with work/PROMPT.txt
+            # qualifies as a Shape-D problem. Bench-agnostic discovery.
+            problems = sorted(str(p.parent.parent.relative_to(ds_p))
+                              for p in ds_p.rglob("work/PROMPT.txt") if p.is_file())
     (run_p / "problems.list").write_text("\n".join(problems) + "\n")
     # batches of 10
     for i in range(0, len(problems), 10):
