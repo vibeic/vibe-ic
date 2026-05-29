@@ -1053,5 +1053,155 @@ def extract_l1_protocol_metadata(text: str, l8_widths: Optional[Dict] = None,
     return out
 
 
+# ---------------------------------------------------------------------------
+# L9 — Integration Spec (v0.1.72 / R40)
+# ---------------------------------------------------------------------------
+# Bus-interconnect protocol specs describe system-integration concepts:
+# interconnect topology options, slave classification, ordering model,
+# multi-copy atomicity, register slice insertion rules, lite-subset
+# definition, etc. These are paragraph-level concepts the L9 emitter
+# doesn't carry by default.
+#
+# Captured from v0.1.71 parity loop iter 13: L9 had 12 ABSENT findings,
+# all spec-section descriptions that need paragraph-level extraction.
+#
+# Pattern catalog — each (key_name, anchor_regex, capture_window) triple.
+# General, not brand-specific. No 'AMBA' / 'AXI' strings in regex.
+
+# Helper: capture a paragraph after an anchor (3 short bullets or one sentence)
+def _capture_bullets_after(text: str, anchor_re: "re.Pattern",
+                              max_bullets: int = 8) -> Optional[List[str]]:
+    """Find anchor, then collect bullet/dash items in the following 30 lines."""
+    m = anchor_re.search(text)
+    if not m:
+        return None
+    after = text[m.end():m.end() + 4000]
+    lines = after.splitlines()
+    bullets = []
+    for ln in lines[:30]:
+        ln_stripped = ln.strip()
+        # bullet markers: •, ·, -, *, or numbered "1."
+        if re.match(r"^\s*[•·*·\-]\s*", ln) or re.match(r"^\s*\d+\.\s+", ln):
+            content = re.sub(r"^\s*[•·*·\-]\s*|^\s*\d+\.\s+", "", ln).strip()
+            if content:
+                bullets.append(content[:200])
+        elif bullets and not ln_stripped:
+            # blank line after some bullets — likely end
+            if len(bullets) >= 2:
+                break
+        if len(bullets) >= max_bullets:
+            break
+    return bullets if bullets else None
+
+
+def _looks_like_toc(s: str) -> bool:
+    """True iff string looks like a Table-of-Contents entry: contains a
+    multi-dot leader OR a trailing page-number reference like 'A1-3' /
+    'B2-145'."""
+    if re.search(r"\.{5,}", s):
+        return True
+    if re.search(r"\s+[A-Z]\d+[-]\d+\s*$", s):
+        return True
+    # Section-number prefix at start (A1.1, B2.3, etc.) often = TOC line
+    if re.match(r"^\s*[A-Z]\d+(?:\.\d+)*\s+", s):
+        return True
+    return False
+
+
+def _capture_sentence_after(text: str, anchor_re: "re.Pattern",
+                              max_chars: int = 400) -> Optional[str]:
+    """Find anchor, capture the next non-empty sentence-ish text block.
+    Tries every match in turn; skips TOC entries. Returns first prose hit."""
+    for m in anchor_re.finditer(text):
+        after = text[m.end():m.end() + 2000]
+        after = re.sub(r"^[\s.]+", "", after)
+        sent_m = re.match(r"([A-Z][^\n]{20," + str(max_chars) + r"}?\.)\s",
+                          after, re.DOTALL)
+        candidate = None
+        if sent_m:
+            candidate = re.sub(r"\s+", " ", sent_m.group(1)).strip()
+        else:
+            candidate = re.sub(r"\s+", " ", after[:max_chars]).strip() or None
+        if candidate and not _looks_like_toc(candidate):
+            return candidate
+    return None
+
+
+# Catalog: each entry = (output_key, anchor_re, capture_func)
+_L9_CONCEPT_CATALOG: List[Tuple[str, "re.Pattern", str]] = [
+    # (key, anchor regex, capture mode: 'bullets' or 'sentence')
+    ("interconnect_topology_options",
+     re.compile(r"\b(?:Most\s+systems|systems?\s+use\s+one\s+of)\s+(?:one\s+of\s+)?"
+                r"(?:the\s+)?(?:three|several|multiple)?\s*interconnect\s+topologies?\s*:",
+                re.IGNORECASE), "bullets"),
+
+    ("slave_classification",
+     re.compile(r"\b(?:slave\s+component|slave\s+component\s+types?|slave\s+classifications?|"
+                r"types?\s+of\s+slaves?|memory\s+slave\s+component)\b",
+                re.IGNORECASE), "bullets"),
+
+    ("multi_copy_atomicity_property",
+     re.compile(r"(?:multi[\s-]copy[\s-]atomicity|Multi[\s_-]?Copy[\s_-]?Atomicity)\s+(?:property|requirement|definition)",
+                re.IGNORECASE), "sentence"),
+
+    ("register_slice_insertion_rule",
+     re.compile(r"\bregister\s+slices?\b", re.IGNORECASE), "sentence"),
+
+    ("axi4_lite_subset",
+     re.compile(r"\b(?:Definition\s+of\s+\S+[-\s]Lite|"
+                r"\S+[-\s]Lite\s+(?:interface|specification|subset|protocol))",
+                re.IGNORECASE), "sentence"),
+
+    ("default_slave_behavior",
+     re.compile(r"\b(?:DECERR|decode\s+error)\b.*?(?:slave|interconnect)",
+                re.IGNORECASE | re.DOTALL), "sentence"),
+
+    ("interconnect_ordering_requirements",
+     re.compile(r"\bordering\s+(?:requirements?|rules?|model)\b",
+                re.IGNORECASE), "sentence"),
+
+    ("ordered_write_observation_property",
+     re.compile(r"\b(?:Ordered[\s_]Write[\s_]Observation|"
+                r"ordered\s+writes?\s+observation)\b",
+                re.IGNORECASE), "sentence"),
+
+    ("regular_transactions_property",
+     re.compile(r"\bRegular[\s_]Transactions?\s+(?:property|definition|attribute)",
+                re.IGNORECASE), "sentence"),
+
+    ("interconnect_id_handling",
+     re.compile(r"\b(?:ID\s+widening|interconnect.*ID.*append|append.*ID.*interconnect|"
+                r"transaction\s+ID\s+handling)\b",
+                re.IGNORECASE), "sentence"),
+
+    ("interface_categories",
+     re.compile(r"\b(?:Read[-/\s]Write\s+interface|interface\s+categories?|"
+                r"types?\s+of\s+interfaces?)\b",
+                re.IGNORECASE), "sentence"),
+]
+
+
+def extract_l9_integration_spec(text: str) -> Dict[str, Any]:
+    """Extract integration-spec concept paragraphs from a bus-protocol text.
+
+    Returns a dict with one key per catalog entry that matched. Each value
+    is either a list of bullet strings or a single sentence string,
+    depending on the catalog capture mode.
+
+    Pure regex / no LLM. General catalog — no brand keywords.
+    """
+    out: Dict[str, Any] = {
+        "extracted_by": "extract_l9_integration_spec v0.1.72",
+    }
+    for key, anchor_re, mode in _L9_CONCEPT_CATALOG:
+        if mode == "bullets":
+            v = _capture_bullets_after(text, anchor_re)
+        else:
+            v = _capture_sentence_after(text, anchor_re)
+        if v:
+            out[key] = v
+    return out
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(_cli())

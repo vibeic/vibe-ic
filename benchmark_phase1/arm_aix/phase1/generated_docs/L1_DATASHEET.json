@@ -3701,9 +3701,11 @@
       "source": "IHI0022H_amba_axi_protocol_spec.pdf"
     }
   ],
-  "intended_audience": "This specification is written for hardware and software engineers who want to become familiar with AMBA and",
-  "package_info_present": false,
+  "burst_boundary_rule": "must not cross a 4KB address boundary.",
   "electrical_specs_present": false,
+  "intended_audience": "This specification is written for hardware and software engineers who want to become familiar with AMBA and",
+  "document_id": "ARM IHI 0022H",
+  "confidentiality": "Non-Confidential",
   "supported_data_bus_widths_bits": [
     8,
     16,
@@ -3714,10 +3716,8 @@
     512,
     1024
   ],
-  "issuer": "Arm Limited",
-  "document_id": "ARM IHI 0022H",
-  "confidentiality": "Non-Confidential",
-  "purpose": "the AMBA protocols for AXI and ACE.",
   "copyright": "Copyright © 2003-2020 Arm Limited",
-  "burst_boundary_rule": "must not cross a 4KB address boundary."
+  "package_info_present": false,
+  "issuer": "Arm Limited",
+  "purpose": "the AMBA protocols for AXI and ACE."
 }

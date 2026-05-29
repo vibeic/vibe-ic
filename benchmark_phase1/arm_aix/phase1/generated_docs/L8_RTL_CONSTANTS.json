@@ -42,7 +42,8 @@
         "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
       }
     ],
-    "l8_protocol_widths_v0_1_65": "R19 extractor: width_parameters=51"
+    "l8_protocol_widths_v0_1_65": "R19 extractor: width_parameters=51",
+    "l8_encoding_mirror_v0_1_72": "R41: mirrored 3 L15 encoding tables into L8 canonical concept slots"
   },
   "extraction_evidence": {
     "input/docs/IHI0022H_amba_axi_protocol_spec.pdf": []
@@ -936,5 +937,27 @@
         }
       ]
     }
+  },
+  "burst_size_encoding_AxSIZE_to_bytes": {
+    "0b000": 1,
+    "0b001": 2,
+    "0b010": 4,
+    "0b011": 8,
+    "0b100": 16,
+    "0b101": 32,
+    "0b110": 64,
+    "0b111": 128
+  },
+  "burst_type_encoding_AxBURST": {
+    "0b00": "FIXED",
+    "0b01": "INCR",
+    "0b10": "WRAP",
+    "0b11": "Reserved"
+  },
+  "protection_encoding_AxPROT": {
+    "[0]": 0,
+    "1": "Instruction access",
+    "[1]": 0,
+    "[2]": 0
   }
 }

@@ -48025,6 +48025,82 @@ def main() -> int:
         print(f"      L8 widths extract FAILED (fail-open): {_l8_err}",
               file=sys.stderr)
 
+    # v0.1.72 capture (R41): mirror L15 encoding tables into L8 under
+    # Claude's canonical top-level concept naming (burst_size_encoding_AxSIZE
+    # _to_bytes, burst_type_encoding_AxBURST, response_encoding_xRESP, etc.).
+    # Same row parser as R25 (L3 mirror).
+    print(f"[14b3/15] L8 encoding-table overlay (R41) ...")
+    try:
+        from ic_class_profile import detect_ic_class as _detect_r41
+        _profile_r41 = _detect_r41(project)
+        _ic_r41 = _profile_r41.get("ic_class", "unknown") if isinstance(_profile_r41, dict) else "unknown"
+        if _ic_r41 == "bus_interconnect_protocol":
+            _gd_r41 = _pl.generated_docs_dir(project)
+            _l8_path_r41 = _gd_r41 / "L8_RTL_CONSTANTS.json"
+            _l15_path_r41 = _gd_r41 / "L15_ENCODING_TABLES.json"
+            _R41_TABLE_KEYWORDS = {
+                "burst_size_encoding_AxSIZE_to_bytes": ("burst size encoding",),
+                "burst_type_encoding_AxBURST":         ("burst type encoding",),
+                "response_encoding_xRESP":             ("rresp and bresp",),
+                "atomic_access_encoding_AxLOCK":       ("axi3 axlock",),
+                "protection_encoding_AxPROT":          ("protection encoding",),
+                "cache_attribute_AxCACHE_AXI3":        ("awcache bit allocations",),
+            }
+            if _l8_path_r41.is_file() and _l15_path_r41.is_file():
+                _l8_r41 = json.loads(_l8_path_r41.read_text())
+                _l15_r41 = json.loads(_l15_path_r41.read_text())
+                _l15_tables_r41 = _l15_r41.get("fields", {}).get("tables") or []
+                import re as _re_r41
+                _row_re_r41 = _re_r41.compile(r"^\s*(\S+)\s{2,}(.+?)\s*$")
+                _l8_mirror_count = 0
+                for _slot, _kws in _R41_TABLE_KEYWORDS.items():
+                    if _slot in _l8_r41 and _l8_r41[_slot]:
+                        continue
+                    for _t in _l15_tables_r41:
+                        _tname = (_t.get("name") or "").lower()
+                        if not any(kw in _tname for kw in _kws):
+                            continue
+                        _rows = _t.get("rows") or []
+                        if not isinstance(_rows, list) or len(_rows) < 2:
+                            continue
+                        _hdr_m = _row_re_r41.match(str(_rows[0]))
+                        if not _hdr_m:
+                            continue
+                        _encoding = {}
+                        # Only keep rows whose code looks like a real
+                        # encoding value (binary literal '0bNN' or single
+                        # bit index). Skip prose junk rows captured from
+                        # multi-column tables.
+                        _code_re_r41 = _re_r41.compile(r"^(?:0b[01]+|\d+|0x[0-9a-fA-F]+|\[\d+(?::\d+)?\])$")
+                        for _r in _rows[1:]:
+                            _rm = _row_re_r41.match(str(_r))
+                            if not _rm:
+                                continue
+                            _code, _val = _rm.group(1), _rm.group(2)
+                            if not _code or _code.lower() == "table":
+                                continue
+                            if not _code_re_r41.match(_code):
+                                continue
+                            _val_clean = _val.strip().split()[0] if _val else _val
+                            _val_norm = int(_val_clean) if _val_clean.isdigit() else _val.strip()
+                            _encoding[_code] = _val_norm
+                        if _encoding:
+                            # Flatten — Claude's L8 encodings are dict-of-
+                            # code-to-value at the top level (no column-
+                            # header wrapper).
+                            _l8_r41[_slot] = _encoding
+                            _l8_mirror_count += 1
+                            break
+                if _l8_mirror_count:
+                    _l8_r41.setdefault("extraction_strategy", {})[
+                        "l8_encoding_mirror_v0_1_72"] = (
+                        f"R41: mirrored {_l8_mirror_count} L15 encoding "
+                        f"tables into L8 canonical concept slots")
+                    _l8_path_r41.write_text(json.dumps(_l8_r41, indent=2, ensure_ascii=False) + "\n")
+                    print(f"      → L8 encoding overlay: {_l8_mirror_count} tables")
+    except Exception as _r41_err:
+        print(f"      L8 encoding overlay FAILED: {_r41_err}", file=sys.stderr)
+
     # v0.1.62 capture (R14): wire phase1_protocol_spec_extract.py L14-L18
     # extractors into the runner. The extractors existed since v0.1.51 but
     # were never invoked from the doc-mode pipeline — dead code, same
@@ -48103,6 +48179,41 @@ def main() -> int:
     # The direction is inferred from the channel's majority-direction
     # field (master-originated channels: source asserts VALID; slave-
     # originated channels: slave asserts VALID).
+    # v0.1.72 capture (R40): overlay L9_INTEGRATION_SPEC with bus-protocol
+    # integration concepts (interconnect_topology_options, slave_classification,
+    # multi_copy_atomicity_property, register_slice_insertion_rule, ...).
+    # General regex catalog over the spec text — no brand keywords.
+    print(f"[14c0/15] L9 integration_spec overlay (R40) ...")
+    try:
+        from ic_class_profile import detect_ic_class as _detect_r40
+        _profile_r40 = _detect_r40(project)
+        _ic_r40 = _profile_r40.get("ic_class", "unknown") if isinstance(_profile_r40, dict) else "unknown"
+        if _ic_r40 == "bus_interconnect_protocol":
+            from phase1_protocol_spec_extract import (
+                extract_l9_integration_spec as _l9ex,
+            )
+            _all_text_r40 = "\n\n".join(v for v in (extracted or {}).values()
+                                            if isinstance(v, str))
+            _l9_payload = _l9ex(_all_text_r40)
+            _l9_path = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
+            if _l9_path.is_file():
+                try:
+                    _l9_existing = json.loads(_l9_path.read_text())
+                except Exception:
+                    _l9_existing = {}
+                _payload_keys_l9 = set(_l9_payload.keys()) - {"extracted_by"}
+                for _k_l9 in _payload_keys_l9:
+                    _l9_existing[_k_l9] = _l9_payload[_k_l9]
+                _l9_existing.setdefault("extraction_strategy", {})[
+                    "l9_integration_concepts_v0_1_72"] = (
+                    f"R40: overlaid {len(_payload_keys_l9)} integration "
+                    f"concepts for bus_interconnect_protocol class")
+                _l9_path.write_text(json.dumps(_l9_existing, indent=2, ensure_ascii=False) + "\n")
+                print(f"      → L9 overlay: {len(_payload_keys_l9)} concepts")
+    except Exception as _l9_err:
+        print(f"      L9 overlay FAILED (fail-open): {_l9_err}",
+              file=sys.stderr)
+
     print(f"[14c1b/15] L17 handshake_pairs overlay (R27) ...")
     try:
         from ic_class_profile import detect_ic_class as _detect_r27
