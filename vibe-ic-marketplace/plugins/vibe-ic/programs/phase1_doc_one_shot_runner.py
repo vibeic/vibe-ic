@@ -38818,6 +38818,83 @@ def _harvest_bring_up_sequence_from_paragraph(
     return out
 
 
+# v0.1.77 — for the digital benchmark l_doc loop (sha256 / subservient).
+# gen_l10_test_cases used to derive cases ONLY from L3.opcodes, so a
+# non-command-driven datapath (hash, CPU SoC) yielded zero L10 test_cases
+# even when its input verification-plan doc carries an explicit test-vector
+# table. This GENERAL extractor harvests typed test cases from any
+# verification-plan markdown table in the INPUT docs (NO RTL oracle), keyed on
+# bilingual column SEMANTICS (test/expected/input), never on chip literals.
+_L10_TC_TEST_COL = re.compile(
+    r'(?i)測試|\btest\b|vector|向量|scenario|情境|firmware|韌體|\bcase\b|案例|類別')
+_L10_TC_EXP_COL = re.compile(
+    r'(?i)預期|expect|golden|digest|\bresult\b|結果|判定|pass|必過')
+_L10_TC_IN_COL = re.compile(
+    r'(?i)輸入|\binput\b|stimulus|message|訊息|firmware|涵蓋|coverage|範圍')
+
+
+def _harvest_test_cases_from_input_tables(
+        extracted: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Harvest typed test cases from verification-plan tables in the input
+    docs. A table qualifies when its header row carries a test/scenario column
+    AND (an expected column OR an input column). Chip-AGNOSTIC: pure markdown-
+    table + column-semantics parsing; no chip name or value literal anywhere."""
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for fname, text in (extracted or {}).items():
+        if not isinstance(text, str) or '|' not in text:
+            continue
+        lines = text.split('\n')
+        n = len(lines)
+        i = 0
+        while i < n:
+            line = lines[i]
+            if '|' in line and i + 1 < n:
+                hdr = [c.strip() for c in line.strip().strip('|').split('|')]
+                sep = lines[i + 1].strip()
+                is_sep = bool(sep) and set(sep) <= set('|-: ') and '-' in sep
+                hjoin = ' '.join(hdr)
+                if (len(hdr) >= 2 and is_sep
+                        and _L10_TC_TEST_COL.search(hjoin)
+                        and (_L10_TC_EXP_COL.search(hjoin)
+                             or _L10_TC_IN_COL.search(hjoin))):
+                    j = i + 2
+                    while j < n and '|' in lines[j]:
+                        cells = [c.strip()
+                                 for c in lines[j].strip().strip('|').split('|')]
+                        j += 1
+                        if len(cells) < 2 or not cells[0]:
+                            continue
+                        if set(''.join(cells)) <= set('-: '):
+                            continue
+                        first = re.sub(r'[`*]', '', cells[0]).strip()
+                        name = re.sub(r'[^a-z0-9]+', '_',
+                                      first.lower()).strip('_')[:48]
+                        if not name:
+                            # non-Latin (e.g. CJK) first-cell — the row already
+                            # qualified as a data row, so keep it with a
+                            # positional fallback name rather than dropping it.
+                            name = f"case_{len(out) + 1}"
+                        if name in seen:
+                            continue
+                        seen.add(name)
+                        last = re.sub(r'[`*]', '', cells[-1]).strip()
+                        out.append({
+                            "name": name,
+                            "kind": "functional_vector",
+                            "stimulus": cells[1] if len(cells) >= 3 else cells[0],
+                            "expected": last,
+                            "evidence": (f"input/docs/{fname} "
+                                         "(verification-plan table)"),
+                        })
+                        if len(out) >= 24:
+                            return out
+                    i = j
+                    continue
+            i += 1
+    return out
+
+
 def gen_l10_test_cases(project: Path,
                        extracted: Dict[str, str],
                        l3: dict) -> LDocResult:
@@ -38918,6 +38995,20 @@ def gen_l10_test_cases(project: Path,
             "literal": f"{op_hex} {op.get('name','')}",
             "label": "opcode → happy + negative test-cases",
         })
+
+    # v0.1.77 — harvest functional test vectors from input verification-plan
+    # tables (covers non-command-driven datapaths whose L3 has no opcodes but
+    # whose L7 carries an explicit test-vector / scenario table). Dedup by name
+    # against the opcode-derived cases. Input-docs only; chip-AGNOSTIC.
+    _existing_names = {c.get("name") for c in cases}
+    for tc in _harvest_test_cases_from_input_tables(extracted):
+        if tc["name"] not in _existing_names:
+            cases.append(tc)
+            _existing_names.add(tc["name"])
+            evidence.setdefault("derived_from_input_tables", []).append({
+                "literal": tc["name"],
+                "label": "verification-plan table row → functional test case",
+            })
 
     # v1.6.67 — closes issue #8 Bug B (L10 half). Mirror the
     # `no_<X>_in_input` emission convention used by L1/L3/L5/L6/L7/
