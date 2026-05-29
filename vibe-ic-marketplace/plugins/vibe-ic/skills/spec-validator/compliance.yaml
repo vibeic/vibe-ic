@@ -2,7 +2,7 @@
 testability: structured
 
 # Auto-generated compliance spec for skill 'spec-validator' (vibe-ic-d)
-# Refines vibe-ic-core/skills/spec-validator/SKILL.md output requirements.
+# Refines vibe-ic/skills/spec-validator/SKILL.md output requirements.
 skill: spec-validator
 
 requirements:

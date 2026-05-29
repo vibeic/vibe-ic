@@ -1,5 +1,5 @@
 # Auto-generated compliance spec for skill 'mixed-signal-cosim' (vibe-ic-d)
-# Refines vibe-ic-core/skills/mixed-signal-cosim/SKILL.md output requirements.
+# Refines vibe-ic/skills/mixed-signal-cosim/SKILL.md output requirements.
 skill: mixed-signal-cosim
 
 requirements:

@@ -358,7 +358,7 @@ If `NEED_MORE_INPUT`, the PM Agent re-opens dialogue. If `DEFAULTED`, you docume
 
 ## Class-typical structure — generalised learning from auto-run loop (v0.74)
 
-Starting v0.74, `vibe-ic-core/agents/defaults/class_reference.yaml` entries
+Starting v0.74, `vibe-ic/agents/defaults/class_reference.yaml` entries
 may carry a `typical_structure:` block per class. It enumerates the
 **concept names and shapes** that a canonical IC of that class normally
 exposes (not specific numbers):

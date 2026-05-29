@@ -2,7 +2,7 @@
 testability: full_markdown
 
 # Auto-generated compliance spec for skill 'rtl-review' (vibe-ic-d)
-# Refines vibe-ic-core/skills/rtl-review/SKILL.md output requirements.
+# Refines vibe-ic/skills/rtl-review/SKILL.md output requirements.
 skill: rtl-review
 
 requirements:

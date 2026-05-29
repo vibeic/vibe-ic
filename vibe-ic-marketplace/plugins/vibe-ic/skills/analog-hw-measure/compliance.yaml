@@ -1,5 +1,5 @@
 # Auto-generated compliance spec for skill 'analog-hw-measure' (vibe-ic-d)
-# Refines vibe-ic-core/skills/analog-hw-measure/SKILL.md output requirements.
+# Refines vibe-ic/skills/analog-hw-measure/SKILL.md output requirements.
 skill: analog-hw-measure
 
 requirements:

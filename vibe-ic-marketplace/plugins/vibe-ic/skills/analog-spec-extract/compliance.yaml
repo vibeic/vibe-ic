@@ -1,5 +1,5 @@
 # Auto-generated compliance spec for skill 'analog-spec-extract' (vibe-ic-d)
-# Refines vibe-ic-core/skills/analog-spec-extract/SKILL.md output requirements.
+# Refines vibe-ic/skills/analog-spec-extract/SKILL.md output requirements.
 skill: analog-spec-extract
 
 requirements:

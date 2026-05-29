@@ -94,7 +94,7 @@ For each iteration:
 
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
+If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
 after producing your output, save it to a file and run:
 
 ```bash

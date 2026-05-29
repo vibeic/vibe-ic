@@ -2,7 +2,7 @@
 testability: structured
 
 # Auto-generated compliance spec for skill 'hold-fix' (vibe-ic-d)
-# Refines vibe-ic-core/skills/hold-fix/SKILL.md output requirements.
+# Refines vibe-ic/skills/hold-fix/SKILL.md output requirements.
 skill: hold-fix
 
 requirements:

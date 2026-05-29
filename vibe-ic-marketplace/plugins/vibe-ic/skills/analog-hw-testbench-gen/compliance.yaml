@@ -1,5 +1,5 @@
 # Auto-generated compliance spec for skill 'analog-hw-testbench-gen' (vibe-ic-d)
-# Refines vibe-ic-core/skills/analog-hw-testbench-gen/SKILL.md output requirements.
+# Refines vibe-ic/skills/analog-hw-testbench-gen/SKILL.md output requirements.
 skill: analog-hw-testbench-gen
 
 requirements:

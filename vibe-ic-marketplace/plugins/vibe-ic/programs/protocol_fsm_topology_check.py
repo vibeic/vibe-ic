@@ -381,7 +381,7 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
                 f"pulse output(s). Each pulse → consumer-module boundary "
                 f"is a missed-handshake risk if the consumer is not in "
                 f"the same cycle. Recommend fsm_topology=single_fsm — "
-                f"see vibe-ic-core/skills/spec-to-rtl/templates/"
+                f"see vibe-ic/skills/spec-to-rtl/templates/"
                 f"protocol_single_fsm.sv.j2 (BACKLOG-v11 P0.1)."
             ),
         ))

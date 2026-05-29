@@ -1,5 +1,5 @@
 # Auto-generated compliance spec for skill 'catalog-glue-author' (vibe-ic-d)
-# Refines vibe-ic-core/skills/catalog-glue-author/SKILL.md output requirements.
+# Refines vibe-ic/skills/catalog-glue-author/SKILL.md output requirements.
 skill: catalog-glue-author
 
 requirements:

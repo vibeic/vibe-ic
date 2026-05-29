@@ -74,7 +74,7 @@ def _api_get(url: str, token: str) -> Tuple[int, Any]:
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
-        "User-Agent": "vibe-ic-core-agent-poll/1.0",
+        "User-Agent": "vibe-ic-agent-poll/1.0",
     })
     try:
         with urllib.request.urlopen(req, timeout=30) as r:

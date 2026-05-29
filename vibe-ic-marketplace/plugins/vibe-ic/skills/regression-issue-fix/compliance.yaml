@@ -1,5 +1,5 @@
 # Auto-generated compliance spec for skill 'regression-issue-fix' (vibe-ic-d)
-# Refines vibe-ic-core/skills/regression-issue-fix/SKILL.md output requirements.
+# Refines vibe-ic/skills/regression-issue-fix/SKILL.md output requirements.
 skill: regression-issue-fix
 
 requirements:

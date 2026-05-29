@@ -2,7 +2,7 @@
 testability: full_markdown
 
 # Auto-generated compliance spec for skill 'scope-pattern-attestation' (vibe-ic-d)
-# Refines vibe-ic-core/skills/scope-pattern-attestation/SKILL.md output requirements.
+# Refines vibe-ic/skills/scope-pattern-attestation/SKILL.md output requirements.
 skill: scope-pattern-attestation
 
 requirements:

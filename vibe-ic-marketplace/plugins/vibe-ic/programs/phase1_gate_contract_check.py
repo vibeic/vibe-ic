@@ -16,7 +16,7 @@ plugin-level contract so that the flow orchestrator can rely on it:
   5. The gate handles at least one missing-input case by returning
      exit code 2 (smoke-tested by passing a non-existent path).
   6. `tests/test_<name>.py` exists alongside it.
-  7. `<name>` is referenced in `vibe-ic-core/flow/phase1_phase2_phase3.yaml`
+  7. `<name>` is referenced in `vibe-ic/flow/phase1_phase2_phase3.yaml`
      (wired into the 33-step flow, not an orphan).
 
 This meta-check is orthogonal to `skill_compliance_triangle_check.py`

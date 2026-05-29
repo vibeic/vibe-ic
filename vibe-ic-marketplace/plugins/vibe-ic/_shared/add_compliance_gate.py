@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Append the standard vibe-ic-d "Compliance gate" paragraph to every
-vibe-ic-core SKILL.md that doesn't already have one.
+vibe-ic SKILL.md that doesn't already have one.
 """
 from pathlib import Path
 import sys
@@ -10,7 +10,7 @@ GATE = """\
 
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
+If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
 after producing your output, save it to a file and run:
 
 ```bash
@@ -33,7 +33,7 @@ across different agents.
 def main():
     d_plugin = Path(__file__).resolve().parent.parent
     marketplace = d_plugin.parent.parent
-    core_skills = marketplace / 'plugins' / 'vibe-ic-core' / 'skills'
+    core_skills = marketplace / 'plugins' / 'vibe-ic' / 'skills'
     n = 0
     for md in core_skills.glob('*/SKILL.md'):
         content = md.read_text(errors='replace')

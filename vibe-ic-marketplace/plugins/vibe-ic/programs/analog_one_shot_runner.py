@@ -19,7 +19,7 @@ Outputs go to <project>/analog/<block_name>/ and roll up to
 (Step 14 floorplan) for mixed-signal integration.
 
 Each Ai step delegates to the corresponding analog skill / generator under
-plugins/vibe-ic-core/skills/analog-* (or programs/analog_*.py if a
+plugins/vibe-ic/skills/analog-* (or programs/analog_*.py if a
 deterministic gate exists). When a step has no deterministic implementation
 yet, this runner returns WAIVED with the skill name the caller should
 invoke. chip-AGNOSTIC.

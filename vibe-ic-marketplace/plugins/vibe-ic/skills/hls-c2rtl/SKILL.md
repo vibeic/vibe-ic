@@ -81,7 +81,7 @@ HLS is a mature commercial flow. XLS is Google's open-source DSL-based HLS. Key 
 
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
+If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
 after producing your output, save it to a file and run:
 
 ```bash

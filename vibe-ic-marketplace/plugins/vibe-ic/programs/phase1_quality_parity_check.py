@@ -421,13 +421,13 @@ def main():
     if args.class_kb:
         class_kb = Path(args.class_kb)
     else:
-        # Wave 82: vibe-ic-core / vibe-ic-d merged into vibe-ic.
+        # Wave 82: vibe-ic / vibe-ic-d merged into vibe-ic.
         # Probe in order: vibe-ic/agents/class_kb (current),
-        # then legacy vibe-ic-core/agents/class_kb.
+        # then legacy vibe-ic/agents/class_kb.
         here = Path(__file__).resolve().parent
         candidates = [
             here.parent / "agents" / "class_kb",                       # vibe-ic
-            here.parent.parent / "vibe-ic-core" / "agents" / "class_kb",  # legacy
+            here.parent.parent / "vibe-ic" / "agents" / "class_kb",  # legacy
         ]
         class_kb = next(
             (c for c in candidates if c.exists()), candidates[0]

@@ -1,5 +1,5 @@
 # Auto-generated compliance spec for skill 'community-backlog-submit' (vibe-ic-d)
-# Refines vibe-ic-core/skills/community-backlog-submit/SKILL.md output requirements.
+# Refines vibe-ic/skills/community-backlog-submit/SKILL.md output requirements.
 skill: community-backlog-submit
 
 requirements:

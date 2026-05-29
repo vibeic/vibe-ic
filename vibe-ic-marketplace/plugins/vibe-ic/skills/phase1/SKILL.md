@@ -274,9 +274,9 @@ See `../../agents/pm-agent.md` and `../../agents/ic-expert-agent.md`.
 | Renderer (JSON + Markdown) | `tools/phase1_engine/render.py` (`render_layers` + `render_human_docs`) |
 | Retrieval (top-K similar ICs) | `tools/phase1_engine/retrieve.py` |
 | CLI | `tools/phase1_engine/cli.py` (`run-all` / `render --human-docs-dir`) |
-| Class templates (K1) | `vibe-ic-core/agents/class_kb/templates/` |
-| Q-bank (K2) | `vibe-ic-core/agents/qbank/` |
-| Defaults (K3) | `vibe-ic-core/agents/defaults/` |
+| Class templates (K1) | `vibe-ic/agents/class_kb/templates/` |
+| Q-bank (K2) | `vibe-ic/agents/qbank/` |
+| Defaults (K3) | `vibe-ic/agents/defaults/` |
 | Consistency rules (K4) | `vibe-ic-d/programs/phase1_consistency_check.py` |
 | Runtime feedback (K5) | `vibe-ic-d/programs/phase1_k5_quality_check.py` + `tools/training/phase1_k5_autopatch.py` |
 
@@ -293,7 +293,7 @@ were never legacy in spirit — only in v0.58 placement.
 
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
+If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
 after producing your output, save it to a file and run:
 
 ```bash

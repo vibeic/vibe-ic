@@ -2,7 +2,7 @@
 testability: structured
 
 # Auto-generated compliance spec for skill 'fpga-signaltap' (vibe-ic-d)
-# Refines vibe-ic-core/skills/fpga-signaltap/SKILL.md output requirements.
+# Refines vibe-ic/skills/fpga-signaltap/SKILL.md output requirements.
 skill: fpga-signaltap
 
 requirements:

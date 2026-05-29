@@ -13,7 +13,7 @@ left over from a pre-2023 tutorial silently breaks on a fresh OpenROAD build.
 
 This program is a static grep — it does not invoke OpenROAD. It walks
 ``--search-dir`` (default: the plugin root, i.e. the ``plugins/`` directory
-containing both ``vibe-ic-core/`` and ``vibe-ic-d/``), inspects every
+containing both ``vibe-ic/`` and ``vibe-ic-d/``), inspects every
 ``*.tcl`` file AND every ``*.py`` / ``*.js`` / ``*.md`` / ``*.yaml`` / ``*.yml``
 file (for embedded TCL snippets in heredocs, docstrings, or skill docs), and
 flags occurrences of any deprecated token.
@@ -98,7 +98,7 @@ _DEPRECATIONS: Tuple[Deprecation, ...] = (
         version="OpenROAD 2023+",
         replacement=(
             "OpenROAD no longer streams GDS; use the `def2gds` skill "
-            "(plugins/vibe-ic-core/skills/def2gds) to merge routed.def + "
+            "(plugins/vibe-ic/skills/def2gds) to merge routed.def + "
             "cell GDS via KLayout"
         ),
     ),
@@ -259,7 +259,7 @@ def _format_report(findings: List[Finding]) -> str:
 def _default_search_dir() -> Path:
     """Default: the plugins/ directory that contains this program's tree
     (i.e. two levels up from programs/). This matches the commission:
-    scan vibe-ic-core/skills + vibe-ic-d/programs in one shot."""
+    scan vibe-ic/skills + vibe-ic-d/programs in one shot."""
     here = Path(__file__).resolve()
     # here = .../plugins/vibe-ic-d/programs/openroad_tcl_deprecation_check.py
     #        parents[0]=programs parents[1]=vibe-ic-d parents[2]=plugins

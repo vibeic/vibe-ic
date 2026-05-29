@@ -201,6 +201,32 @@ Honesty check: if you're tempted to label something Category A-D to avoid a hard
 re-read the description top-to-bottom** for clues (Category F/G). The 2026-05-28 RTLLM triage
 under-estimated the recoverable fails (radix2_div, adder_pipe_64bit, LFSR) by failing this check.
 
+### § 4.1 — Default action on previously-flagged FLOOR cases (user directive 2026-05-29)
+
+> **User policy (binding)**: "ALWAYS go [re-attempt FLOOR] by default. DON'T CARE ABOUT PREVIOUS RESULT."
+
+When a previously-published run labeled cases as Category A-E (FLOOR), the **default action on
+the next run is to RE-ATTEMPT them blind, NOT to inherit the prior FLOOR label**. Rationale:
+
+1. **Prior categorisation may have been wrong.** The 2026-05-28 RTLLM triage missed 3 recoverable
+   fails; the same blind-spot can hide in any prior session.
+2. **Plugin compounds.** Every v0.1.X release may carry a program/regex/rule extension that
+   silently moves a previously-FLOOR case to PASS. The only way to know is to re-attempt.
+3. **Cheap.** Per-problem re-attempt under Shape C costs minutes; the saved-FLOOR-label optimum
+   over-fits one moment in plugin history.
+
+Operational rule (DEFAULT, do not ask the user):
+- **Re-run the FAILing set blind** on the current plugin version, fresh authoring per problem.
+- ONLY after that re-run can a case retain a FLOOR label — and the label MUST be re-justified
+  from the NEW run's evidence (TB line, iverilog log, descriptor quote), not copy-pasted from
+  the prior RESULT.md.
+- If 0 of the prior FLOOR cases recover, that's evidence the FLOOR is real (this iteration).
+- If ≥ 1 recover, the prior labeling was overcalled — log the recovery and capture the rule
+  into a program/skill per `benchmark-enhancement-capture`.
+
+This rule overrides any "skip, it's a known FLOOR" instinct. Encoded in
+`programs/benchmark_dispatch.py --reattempt-floor` (default-on).
+
 ## § 5 — Per-benchmark cheat sheet (current as of v0.1.26)
 
 | Benchmark | Shape | Authoring entry | Scoring | Status | Notes |
@@ -254,10 +280,26 @@ new run is a **separate datapoint**, not a "v0.X.Y improvement" claim. Label cle
 If a backlog fix (e.g. `ORGANIC-20260528-spec-to-rtl-missing-chip-top-wrapper`) lands and could
 move the number, mention it explicitly + cite the backlog id in the trajectory section.
 
+### § 8.1 — Default re-run policy (user directive 2026-05-29)
+
+> **User policy (binding)**: "ALWAYS GO 2 by default. DON'T CARE ABOUT PREVIOUS RESULT."
+
+When the user asks to "run X benchmark" with no qualifier:
+- **DEFAULT = full re-run of the FAILing set** (per § 4.1 re-attempt-FLOOR rule), regardless
+  of how recent the prior run was.
+- DO NOT propose "skip, prior canonical stands" as the default. That's an OPTION the user can
+  pick, never the default.
+- DO NOT propose "smoke test on 1 problem" as the default either — that's also an OPTION.
+- The DEFAULT action is execute the floor-case re-attempt without asking permission. Surface
+  the result; if the user wanted something narrower they will say so.
+
+Encoded in `programs/benchmark_dispatch.py` as the implicit run mode when no `--smoke` / `--floor`
+/ `--skip-rerun` flag is given.
+
 
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic-core`,
+If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
 after producing your output, save it to a file and run:
 
 ```bash

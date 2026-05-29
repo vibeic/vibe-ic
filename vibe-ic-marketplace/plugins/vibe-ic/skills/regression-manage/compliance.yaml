@@ -2,7 +2,7 @@
 testability: structured
 
 # Auto-generated compliance spec for skill 'regression-manage' (vibe-ic-d)
-# Refines vibe-ic-core/skills/regression-manage/SKILL.md output requirements.
+# Refines vibe-ic/skills/regression-manage/SKILL.md output requirements.
 skill: regression-manage
 
 requirements:

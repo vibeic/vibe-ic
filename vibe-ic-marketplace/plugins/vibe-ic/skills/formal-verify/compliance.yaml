@@ -2,7 +2,7 @@
 testability: structured
 
 # Auto-generated compliance spec for skill 'formal-verify' (vibe-ic-d)
-# Refines vibe-ic-core/skills/formal-verify/SKILL.md output requirements.
+# Refines vibe-ic/skills/formal-verify/SKILL.md output requirements.
 skill: formal-verify
 
 requirements:

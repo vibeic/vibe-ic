@@ -24,7 +24,7 @@ Companion wrapper: phase23_completion_self_audit_check.py — emits a
 single PASS/FAIL plus a clean N/<total> metric for embedding in
 FINAL_REPORT.md.
 
-Reads `vibe-ic-core/flow/phase1_phase2_phase3.yaml` (or the --flow-def override),
+Reads `vibe-ic/flow/phase1_phase2_phase3.yaml` (or the --flow-def override),
 walks the project directory, and verifies every step has:
   (a) all required_outputs present (file globs), AND
   (b) its gate predicate passes.
@@ -82,7 +82,7 @@ def _find_flow_def() -> Path:
        file = <plugin_root>/programs/<this>
        flow = <plugin_root>/flow/phase1_phase2_phase3.yaml
 
-    Pre-v1.0 split layout (deprecated): vibe-ic-core / vibe-ic-d split.
+    Pre-v1.0 split layout (deprecated): vibe-ic / vibe-ic-d split.
     """
     here = Path(__file__).resolve()
     # v1.0.0+ unified: programs/.parent = plugin root, flow/ is sibling.
@@ -98,7 +98,7 @@ def _find_flow_def() -> Path:
                      here.parent.parent.parent.parent):
         if not ancestor.is_dir():
             continue
-        for sib in ("vibe-ic", "vibe-ic-core"):
+        for sib in ("vibe-ic", "vibe-ic"):
             sibling = ancestor / sib
             if not sibling.is_dir():
                 continue

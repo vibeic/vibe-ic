@@ -1,5 +1,5 @@
 # Auto-generated compliance spec for skill 'benchmark-verify' (vibe-ic-d)
-# Refines vibe-ic-core/skills/benchmark-verify/SKILL.md output requirements.
+# Refines vibe-ic/skills/benchmark-verify/SKILL.md output requirements.
 skill: benchmark-verify
 
 requirements:

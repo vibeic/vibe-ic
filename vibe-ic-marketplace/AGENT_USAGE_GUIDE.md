@@ -52,7 +52,7 @@ up-front.
 The plan table must be generated from:
 
 ```
-vibe-ic-core/flow/phase2_phase3.yaml
+vibe-ic/flow/phase2_phase3.yaml
 ```
 
 This YAML is the single source of truth. Skills/programs reference it;
@@ -195,8 +195,8 @@ infrastructure.
 
 | Path | What it is |
 |---|---|
-| `plugins/vibe-ic-core/flow/phase2_phase3.yaml` | 33-step machine-readable flow definition (source of truth) |
-| `plugins/vibe-ic-core/skills/flow-orchestrate/SKILL.md` | Human-readable canonical flow + orchestration rules |
+| `plugins/vibe-ic/flow/phase2_phase3.yaml` | 33-step machine-readable flow definition (source of truth) |
+| `plugins/vibe-ic/skills/flow-orchestrate/SKILL.md` | Human-readable canonical flow + orchestration rules |
 | `plugins/vibe-ic-d/programs/flow_compliance_check.py` | Acceptance gate (must exit 0 for PASS) |
 | `plugins/vibe-ic-d/programs/stage{1,2,3,4}_compliance.py` | Per-stage interim gates |
 | `docs/design/STANDARD_FLOW.md` | The original 33-step specification (human-readable) |
@@ -205,7 +205,7 @@ infrastructure.
 
 ```
 I have been given a phase 2+3 task. Per the Vibe-IC canonical flow
-(vibe-ic-core/flow/phase2_phase3.yaml), the mandatory 33 steps are:
+(vibe-ic/flow/phase2_phase3.yaml), the mandatory 33 steps are:
 
 Stage 1 (RTL + Verification):
   01 Spec-to-RTL         — skill: spec-to-rtl

@@ -247,7 +247,7 @@ not valid until \`flow_compliance_check.py --strict\` returns
 Required next actions:
   1. Identify the missing / failing canonical steps (see audit output).
   2. Either complete them, OR add a justified entry to
-     $PROJECT_DIR/waivers.json (see vibe-ic-core/flow/phase1_phase2_phase3.yaml
+     $PROJECT_DIR/waivers.json (see vibe-ic/flow/phase1_phase2_phase3.yaml
      for the schema).
   3. Re-run:
          python3 vibe-ic-d/programs/phase23_completion_self_audit_check.py \\

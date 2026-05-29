@@ -2,7 +2,7 @@
 testability: structured
 
 # Auto-generated compliance spec for skill 'rtl-repair' (vibe-ic-d)
-# Refines vibe-ic-core/skills/rtl-repair/SKILL.md output requirements.
+# Refines vibe-ic/skills/rtl-repair/SKILL.md output requirements.
 skill: rtl-repair
 
 requirements:

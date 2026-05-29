@@ -1,6 +1,6 @@
 # vibe-ic-d — Deterministic Edition (**v0.40**)
 
-**Content-deterministic skill execution for vibe-ic-core.**
+**Content-deterministic skill execution for vibe-ic.**
 
 ## ► Running open benchmarks (v0.1.29+)
 
@@ -41,7 +41,7 @@ Release: v0.40 (2026-04-20) — 3-layer verification, 41 programs, 412 tests, 0 
 
 ## What it does
 
-When different AI agents execute the same `vibe-ic-core` skill, they
+When different AI agents execute the same `vibe-ic` skill, they
 sometimes skip required sections, omit metadata fields, or forget the
 hand-off block — producing outputs that differ in completeness, not just
 in wording. This plugin makes execution **content-deterministic**:
@@ -62,7 +62,7 @@ Coverage: 58/58 skills have L1. 49/58 have L2. 10/58 have L3.
 
 ## How it works
 
-1. For every vibe-ic-core skill, `vibe-ic-d` ships a `compliance.yaml`
+1. For every vibe-ic skill, `vibe-ic-d` ships a `compliance.yaml`
    that enumerates every required output element (section headers,
    metadata fields, tool invocations, hand-off lines) as a regex list.
 2. A shared driver `_shared/skill_compliance_check.py` audits any

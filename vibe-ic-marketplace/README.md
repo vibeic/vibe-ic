@@ -97,7 +97,7 @@ python3 vibe-ic-marketplace/plugins/vibe-ic-d/programs/acceptance_gate_full.py  
 
 **v0.75 highlights** (2026-04-25, meta-hygiene + v068 on-bench follow-up):
 
-**1. `practical_notes_specificity_check` meta-gate** — enforces `feedback_general_not_specific` across every `vibe-ic-core/skills/*/PRACTICAL_NOTES.md`. HARD_RULES catch chip codenames, tester product names, specific OTP filenames, dated validation tags, vendor PDF filenames, HID command-byte declarations, specific PASS markers, chip-specific pin names, iteration codenames naming a chip, and custom PDK codenames. SOFT_RULES warn on softer provenance leakage (e.g., "from <chip> debug"). `<!-- specificity-allow: <reason> -->` escape hatch for intentional examples. `--strict` promotes SOFT→ERROR. `--paths` for scoped runs. **18 pytest**.
+**1. `practical_notes_specificity_check` meta-gate** — enforces `feedback_general_not_specific` across every `vibe-ic/skills/*/PRACTICAL_NOTES.md`. HARD_RULES catch chip codenames, tester product names, specific OTP filenames, dated validation tags, vendor PDF filenames, HID command-byte declarations, specific PASS markers, chip-specific pin names, iteration codenames naming a chip, and custom PDK codenames. SOFT_RULES warn on softer provenance leakage (e.g., "from <chip> debug"). `<!-- specificity-allow: <reason> -->` escape hatch for intentional examples. `--strict` promotes SOFT→ERROR. `--paths` for scoped runs. **18 pytest**.
 
 **2. PRACTICAL_NOTES.md cleanup — 29 files** — applied the meta-gate to existing notes and rewrote project/vendor-specific markers to generic equivalents ("Real bug from <chip> debug (BUG #N):" → "Observed failure mode:", specific tester names → "protocol tester", vendor foundry codenames → "custom vendor 180nm PDK", dated validation tags → "<calibration date>"). Before: 37 findings across 29 files. **After: errors=0, warnings=0 on 37 files scanned.** Retained open-source PDK names (GF180/SKY130) and generic plugin-version numbers.
 
@@ -208,11 +208,11 @@ v0.63 (released 2026-04-24) outlined 14 IC-agnostic deliverables distilled from 
 | 6 | `tester_oracle_health_check` | `plugins/vibe-ic-d/programs/tester_oracle_health_check.py` | 0 | 10 / 10 |
 | 7 | `hw_vs_rtl_verdict_check` | `plugins/vibe-ic-d/programs/hw_vs_rtl_verdict_check.py` | 0 | 10 / 10 |
 | 8 | `plugin_self_leak_check` | `plugins/vibe-ic-d/programs/plugin_self_leak_check.py` | 0 | 11 / 11 |
-| 9 | `open-rcx-fallback` skill | `plugins/vibe-ic-core/skills/open-rcx-fallback/` | 0 | - |
-| 10 | `drc-from-lef` skill | `plugins/vibe-ic-core/skills/drc-from-lef/` | 0 | - |
-| 11 | `lvs-open-source` skill | `plugins/vibe-ic-core/skills/lvs-open-source/` | 0 | - |
-| 12 | `atpg-name-harmonize` skill | `plugins/vibe-ic-core/skills/atpg-name-harmonize/` | 0 | - |
-| 13 | `lef-psm-patch` skill | `plugins/vibe-ic-core/skills/lef-psm-patch/` | 0 | - |
+| 9 | `open-rcx-fallback` skill | `plugins/vibe-ic/skills/open-rcx-fallback/` | 0 | - |
+| 10 | `drc-from-lef` skill | `plugins/vibe-ic/skills/drc-from-lef/` | 0 | - |
+| 11 | `lvs-open-source` skill | `plugins/vibe-ic/skills/lvs-open-source/` | 0 | - |
+| 12 | `atpg-name-harmonize` skill | `plugins/vibe-ic/skills/atpg-name-harmonize/` | 0 | - |
+| 13 | `lef-psm-patch` skill | `plugins/vibe-ic/skills/lef-psm-patch/` | 0 | - |
 | 14 | `custom_metal_prefix` schema | `mcp-eda-server/src/index.js` (5 tools) | - | - |
 
 **v0.72 counts** (after merge): Skills 71 (unchanged). Programs **105** (v0.70 adds `openroad_tcl_deprecation_check`; v0.71 adds no new programs). plugin.json: **0.72.0** (both core + d) — skipping 0.71.0 to avoid ambiguity with the previously-pushed v0.71 label. mcp-eda-server: **2.3.1** (from v0.71's `custom_metal_prefix` schema fix). Plugin tests: pytest suite combines v0.70's 1658 + v0.71's 72 contract tests; full recount after this commit. Triangle: **71/71**. release_audit: 0 problems.
@@ -221,7 +221,7 @@ v0.63 (released 2026-04-24) outlined 14 IC-agnostic deliverables distilled from 
 
 The v068 fresh-agent Phase 3 (OpenROAD PnR + KLayout DRC + GDS merge) tripped on six plugin-level issues mid-run. The agent patched them by hand and shipped the GDS, but left a backlog for the plugin itself. v0.69 closes all six.
 
-- **New skill `def2gds/`** (`vibe-ic-core/skills/def2gds/` + matching d-side triangle). OpenROAD ≥ 2023 dropped `write_gds`; the canonical Phase-3 GDS generation path now uses KLayout (via `pya` Python bindings or `klayout -b` batch) to merge cell GDS with a routed DEF. Skill takes `--def` / `--tech-lef` / `--cell-lef` / `--cell-gds` / `--layer-map` / `--out` / `--top` and emits the merged GDS. Logic ported from the v052 `def2gds_v2.py` reference, generalised (no hard-coded project paths / design names / m18e80pm180su assumptions). +1 to skills triangle (70/70 → 71/71). Compliance + tests as usual.
+- **New skill `def2gds/`** (`vibe-ic/skills/def2gds/` + matching d-side triangle). OpenROAD ≥ 2023 dropped `write_gds`; the canonical Phase-3 GDS generation path now uses KLayout (via `pya` Python bindings or `klayout -b` batch) to merge cell GDS with a routed DEF. Skill takes `--def` / `--tech-lef` / `--cell-lef` / `--cell-gds` / `--layer-map` / `--out` / `--top` and emits the merged GDS. Logic ported from the v052 `def2gds_v2.py` reference, generalised (no hard-coded project paths / design names / m18e80pm180su assumptions). +1 to skills triangle (70/70 → 71/71). Compliance + tests as usual.
 
 - **New program `drc_rdb_summarize.py`** (`vibe-ic-d/programs/`). KLayout DRC emits `.rdb` (XML report database) or `.rpt` (plain text) depending on invocation; neither is a human-friendly summary. This program parses both formats and returns a single JSON `{total_violations, per_rule, source_file, clean}` — exit 0 on 0 violations, exit 1 on any, exit 2 on arg/IO error. Integration tested against v068's actual DRC output. +13 tests.
 
@@ -470,7 +470,7 @@ Plugin tests: 1352 → **1397 passed / 0 failed** (61 skipped, 6 xfailed). Progr
 
 - **A1 — `release_audit.py`**: single-source-of-truth audit. Scans the live plugin tree for canonical version + skill_count + program_count + test_count, then cross-checks the four public-facing surfaces (plugin README, root README, vibeic.ai README, vibeic.ai/index.html). Catches the "I bumped the count in 3 of 4 places" toil that produced stale numbers in v0.51-v0.54. Section-aware (only audits the current version's changelog block in markdowns; full file in HTML). +21 tests.
 - **A3 — six new gates wired into the canonical 28-step flow**: `bit_level_full_stack_tb_check` (v0.52), `l10_tb_conformance_check` / `l12_tb_coverage_check` / `verilator_coverage_measure` / `fpga_verification_audit` (v0.53), `rtl_bug_report_schema_check` (v0.54) — until now were orphans only fired if the agent knew to invoke them. Now part of `flow/phase2_phase3.yaml` steps 2 / 4 / 5 / 6. New `optional_program_exit_zero` predicate added to `flow_compliance_check.py` so condition-aware gates skip cleanly on projects that don't ship the trigger artefacts. +5 predicate tests.
-- **C1 — `skill_compliance_triangle_check.py`**: invariant gate enforcing that every `vibe-ic-core/skills/<name>/` has a matching `vibe-ic-d/skills/<name>/{compliance.yaml, tests/test_compliance.py}`. Audit at v0.55 release confirmed all 65 skills are triangle-complete; the gate exists to catch any future drift. Catches d-side orphans (renamed-and-not-cleaned-up directories) too. +12 tests.
+- **C1 — `skill_compliance_triangle_check.py`**: invariant gate enforcing that every `vibe-ic/skills/<name>/` has a matching `vibe-ic-d/skills/<name>/{compliance.yaml, tests/test_compliance.py}`. Audit at v0.55 release confirmed all 65 skills are triangle-complete; the gate exists to catch any future drift. Catches d-side orphans (renamed-and-not-cleaned-up directories) too. +12 tests.
 - **C2 — `memory_gc.py`**: advisory tool for Claude Code memory directories. Surfaces STALE (`expires:` past today), ABANDONED (`project_*` unmodified > 30 d, advisory only), DUPLICATE (same `description:` in two files), ORPHAN (in `MEMORY.md` but missing on disk), UNINDEXED (on disk but missing from `MEMORY.md`). Recommended `expires:` frontmatter for `project_*` entries documented in the docstring. +23 tests.
 - Plugin tests: 1282 → **1343 passed / 0 failed** (61 skipped, 6 xfailed). Programs: 84 → **87**.
 
@@ -545,7 +545,7 @@ Plugin tests: 1352 → **1397 passed / 0 failed** (61 skipped, 6 xfailed). Progr
 - **v0.48**: Honest fresh-agent end-to-end pilot covering all 3 phases. Initial 2026-04-22 run hit chain-end (`input/` → `.sof` burned) but BIST was 0/13. The 2026-04-23 debug session applied 5 fixes (BIST harness: cmd reorder + trailing-BR shrink 30→2 cycles / master listen-window race; core RTL: awake_state level export, MAC ↔ tx_phy_ready handshake, shared CRC reset between RX/TX) → **BIST 52/52 PASS**. Same day continued with Phase 3: Yosys synth (3576 cells / 128086 µm²) → Fault ATPG 4.6% combinational (no scan insert) → OpenROAD PnR with m18e80pm180su 6-metal CWB flow + 8 threads (0 routing violations in 6m30s after 5 optimization iterations) → OpenSTA 3-corner (typ/wci/bci, setup WNS=0 TNS=0 all corners; hold violations present, no ECO run) → klayout streamout (5.1 MB GDS, 892k shapes, 0 off-grid) → geometric DRC sanity + netlist-vs-GDS instance count LVS (PDK did not ship vendor DRC/LVS runsets — matches v037v2 reference's known limitation) → `tapeout_signoff_check --mode tapeout` **strict 4-of-4 PASS**. Two RTL bug classes recorded for future `rtl-review` upgrade (pulse-vs-state confusion + producer/consumer rate mismatch).
 - **v0.47.8**: Closed the input→RTL extraction gap. 3 new programs: `xlsx_extract.py` (tables from .xlsx spec docs — vendors ship CRC golden vectors + OTP maps in .xlsx that prior skills ignored); `cmd_protocol_crc_verify.py` (derive CRC poly/init/refin from golden vectors — no more guessing from a polynomial's name); `clock_scale_consistency_check.py` (reject threshold values lacking `domain_clock` / `source_clock` / `scale_factor` — prevents the 20× scale-factor class of bug). Three SKILL.md files (cmd-protocol-gen, regmap-gen, rtl-constants-gen) now mandate these checks. +15 tests.
 - **v0.47.7**: Sanitized `lessons/manifests/L1_manifest.json` — 24 of 40 `ic_expert_default` fields lifted verbatim from the benchmark are now `null` with `provenance_hint: user_required`. New `manifest_leak_check.py` (+6 tests) rejects any future manifest where `benchmark_value == ic_expert_default` for non-generic paths. Closes the same cheat class as v0.47.6 at the Phase-1 layer.
-- **v0.47.6**: **Removed `references/&lt;vendor-rtl&gt;/` (17-file verbatim benchmark IC RTL bundle)** from `plugins/vibe-ic-core/skills/spec-to-rtl/`. The bundle shipped production RTL as an "answer key" and biased "fresh-agent PASS" metrics into mimicry. All v044 / v045 / v046 "reference-reuse PASS" claims retracted. SKILL.md instruction "prefer using the reference verbatim" removed; PRACTICAL_NOTES re-written to say the opposite.
+- **v0.47.6**: **Removed `references/&lt;vendor-rtl&gt;/` (17-file verbatim benchmark IC RTL bundle)** from `plugins/vibe-ic/skills/spec-to-rtl/`. The bundle shipped production RTL as an "answer key" and biased "fresh-agent PASS" metrics into mimicry. All v044 / v045 / v046 "reference-reuse PASS" claims retracted. SKILL.md instruction "prefer using the reference verbatim" removed; PRACTICAL_NOTES re-written to say the opposite.
 - **v0.47.5**: MCP server auto-logs provenance on `eda_synth / eda_pnr / eda_gds / eda_sta / eda_lvs / eda_drc_klayout`. Agents can no longer opt out — any tool call through the MCP server records a hashed JSONL entry.
 - **v0.47.4**: `provenance_check` made **mandatory** at Steps 9 / 19 / 24 / 27. Agents must wrap tool calls with `provenance_logger.py`; gates verify logged hash matches disk hash. Fixes `datetime.utcnow()` deprecation.
 - **v0.47.3**: `provenance_logger.py` + `provenance_check.py` + `fpga_on_board_attestation_check.py`. Step 28 now needs 4 evidence classes (JSON + bitstream-hash match + programmer log + non-JSON hardware artefact). +19 tests.
@@ -578,7 +578,7 @@ Vibe-IC brings the "Vibe Coding" paradigm to IC design. Instead of manually driv
 
 **This is not AI4EDA** (bolting ML onto existing tools). This is **AI-Native Design**: the AI agent is the core decision-maker; EDA tools are callable execution engines.
 
-### Three-phase design flow (**source of truth: `plugins/vibe-ic-core/flow/phase2_phase3.yaml`**)
+### Three-phase design flow (**source of truth: `plugins/vibe-ic/flow/phase2_phase3.yaml`**)
 
 ```
 ┌────────────┬────────────────────────────────────────────────┬────────────────────────┐
@@ -608,12 +608,12 @@ Verified on **GF180MCU 180 nm**, **SKY130 130 nm**, and the **m18e80pm180su** cu
 
 | Plugin | Purpose | Count |
 |--------|---------|-------|
-| **[vibe-ic-core](plugins/vibe-ic-core/)** | Skill catalog — one SKILL.md per task. Includes `flow-orchestrate` (strict 33-step entry point), 2 agents, 10 lesson files, Phase-1 orchestrator, L2-L9 doc generators. | 60 skills + 2 agents + 10 lessons |
+| **[vibe-ic](plugins/vibe-ic/)** | Skill catalog — one SKILL.md per task. Includes `flow-orchestrate` (strict 33-step entry point), 2 agents, 10 lesson files, Phase-1 orchestrator, L2-L9 doc generators. | 60 skills + 2 agents + 10 lessons |
 | **[vibe-ic-d](plugins/vibe-ic-d/)** | **Deterministic edition** — compliance YAMLs + programs that make skill execution auditable. Includes `flow_compliance_check`, 4 per-stage gates, `waivers_schema_check`, `fault_atpg_run`, and the v0.47.2-.4 anti-fabrication layer (`def_stage_progression_check`, `provenance_logger/check`, `fpga_on_board_attestation_check`). | 60 compliance specs + 64 programs |
 
-### vibe-ic-core vs vibe-ic-d
+### vibe-ic vs vibe-ic-d
 
-- `vibe-ic-core` alone gives you the skill library and the agent definitions. Agents produce high-quality output but **different agents may skip different sections** — a variability source that breaks reproducibility.
+- `vibe-ic` alone gives you the skill library and the agent definitions. Agents produce high-quality output but **different agents may skip different sections** — a variability source that breaks reproducibility.
 - `vibe-ic-d` adds a **compliance gate** at two levels:
   1. **Per-skill** — every SKILL.md has a matching `compliance.yaml` enumerating required output elements (section headers, metadata fields, handoff lines, tool invocations). A generic driver audits skill output; task only completes when the audit returns PASS.
   2. **Per-flow** — the 33-step canonical Phase 2+3 flow has per-step gate predicates and a top-level `flow_compliance_check --strict` that must exit 0 before any PASS claim. Waivers are machine-validated (reason ≥ 20 chars, non-self approver).
@@ -630,7 +630,7 @@ See [plugins/vibe-ic-d/README.md](plugins/vibe-ic-d/README.md) for the full prog
 
 ## The canonical Phase 2+3 flow (33 steps)
 
-**Source of truth**: [`plugins/vibe-ic-core/flow/phase2_phase3.yaml`](plugins/vibe-ic-core/flow/phase2_phase3.yaml)
+**Source of truth**: [`plugins/vibe-ic/flow/phase2_phase3.yaml`](plugins/vibe-ic/flow/phase2_phase3.yaml)
 
 **Entry point for agents**: [`AGENT_USAGE_GUIDE.md`](AGENT_USAGE_GUIDE.md) — mandatory first read.
 
@@ -703,7 +703,7 @@ Rubber-stamp waivers are rejected: reason must be ≥ 20 chars and not a placeho
 
 ## Agent architecture (Phase 1)
 
-[`plugins/vibe-ic-core/agents/`](plugins/vibe-ic-core/agents/)
+[`plugins/vibe-ic/agents/`](plugins/vibe-ic/agents/)
 
 ### Two agents, strict separation of concerns
 
@@ -712,7 +712,7 @@ Rubber-stamp waivers are rejected: reason must be ≥ 20 chars and not a placeho
 
 ### Fact manifest — Phase-1 source of truth
 
-[`plugins/vibe-ic-core/agents/lessons/manifests/`](plugins/vibe-ic-core/agents/lessons/manifests/) — one manifest per layer. Each entry:
+[`plugins/vibe-ic/agents/lessons/manifests/`](plugins/vibe-ic/agents/lessons/manifests/) — one manifest per layer. Each entry:
 
 ```jsonc
 {
@@ -751,7 +751,7 @@ git clone https://github.com/reyerchu/AI_IC_design.git
 cd AI_IC_design
 
 # Install core skills + agents
-claude plugin install vibe-ic-marketplace/plugins/vibe-ic-core
+claude plugin install vibe-ic-marketplace/plugins/vibe-ic
 
 # Install the deterministic edition (recommended — compliance gates)
 claude plugin install vibe-ic-marketplace/plugins/vibe-ic-d
@@ -763,7 +763,7 @@ cd mcp-eda-server && npm install && npm start
 Manual install:
 
 ```bash
-cp -r vibe-ic-marketplace/plugins/vibe-ic-core /path/to/your-project/.claude/plugins/
+cp -r vibe-ic-marketplace/plugins/vibe-ic /path/to/your-project/.claude/plugins/
 cp -r vibe-ic-marketplace/plugins/vibe-ic-d    /path/to/your-project/.claude/plugins/
 ```
 
@@ -897,7 +897,7 @@ vibe-ic-marketplace/
 ├── README.md                        ← this file
 ├── .claude-plugin/marketplace.json
 └── plugins/
-    ├── vibe-ic-core/
+    ├── vibe-ic/
     │   ├── flow/
     │   │   └── phase2_phase3.yaml   ← 33-step source of truth
     │   ├── agents/

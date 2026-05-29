@@ -2,7 +2,7 @@
 testability: structured
 
 # Auto-generated compliance spec for skill 'architecture-explore' (vibe-ic-d)
-# Refines vibe-ic-core/skills/architecture-explore/SKILL.md output requirements.
+# Refines vibe-ic/skills/architecture-explore/SKILL.md output requirements.
 skill: architecture-explore
 
 requirements:

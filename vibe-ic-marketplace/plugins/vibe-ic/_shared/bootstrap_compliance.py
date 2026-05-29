@@ -3,11 +3,11 @@
 Bootstrap compliance.yaml for every vibe-ic-d-tracked skill.
 
 Layout (vibe-ic marketplace):
-    vibe-ic-core/skills/<skill>/SKILL.md        - the skill definition
+    vibe-ic/skills/<skill>/SKILL.md        - the skill definition
     vibe-ic-d/skills/<skill>/compliance.yaml    - THIS tool writes these
     vibe-ic-d/skills/<skill>/tests/test_compliance.py  - (gen_compliance_tests.py writes)
 
-For every vibe-ic-core skill we emit a starter compliance.yaml in the
+For every vibe-ic skill we emit a starter compliance.yaml in the
 parallel vibe-ic-d tree. Each file is a starting point - human review
 (or /rtl-review compliance-spec pass) is expected to refine patterns.
 """
@@ -56,7 +56,7 @@ def gen_yaml(skill_name, detected):
         seen.add(r[0]); uniq.append(r)
     lines = [
         f"# Auto-generated compliance spec for skill '{skill_name}' (vibe-ic-d)",
-        f"# Refines vibe-ic-core/skills/{skill_name}/SKILL.md output requirements.",
+        f"# Refines vibe-ic/skills/{skill_name}/SKILL.md output requirements.",
         f"skill: {skill_name}",
         "",
         "requirements:",
@@ -74,12 +74,12 @@ def gen_yaml(skill_name, detected):
 
 
 def main():
-    # Wave 82: vibe-ic-core / vibe-ic-d merged into vibe-ic. Try the
+    # Wave 82: vibe-ic / vibe-ic-d merged into vibe-ic. Try the
     # merged-plugin layout first, fall back to legacy split for older
     # checkouts.
     d_plugin = Path(__file__).resolve().parent.parent
     marketplace = d_plugin.parent.parent
-    legacy_core = marketplace / 'plugins' / 'vibe-ic-core' / 'skills'
+    legacy_core = marketplace / 'plugins' / 'vibe-ic' / 'skills'
     if legacy_core.is_dir():
         core_skills = legacy_core
     else:

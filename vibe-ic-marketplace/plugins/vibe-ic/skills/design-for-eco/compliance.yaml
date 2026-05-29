@@ -1,5 +1,5 @@
 # Auto-generated compliance spec for skill 'design-for-eco' (vibe-ic-d)
-# Refines vibe-ic-core/skills/design-for-eco/SKILL.md output requirements.
+# Refines vibe-ic/skills/design-for-eco/SKILL.md output requirements.
 skill: design-for-eco
 
 requirements:

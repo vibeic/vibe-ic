@@ -1,5 +1,5 @@
 # Auto-generated compliance spec for skill 'open-benchmark-methodology' (vibe-ic-d)
-# Refines vibe-ic-core/skills/open-benchmark-methodology/SKILL.md output requirements.
+# Refines vibe-ic/skills/open-benchmark-methodology/SKILL.md output requirements.
 skill: open-benchmark-methodology
 
 requirements:

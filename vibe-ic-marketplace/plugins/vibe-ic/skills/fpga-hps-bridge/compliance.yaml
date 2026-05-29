@@ -2,7 +2,7 @@
 testability: structured
 
 # Auto-generated compliance spec for skill 'fpga-hps-bridge' (vibe-ic-d)
-# Refines vibe-ic-core/skills/fpga-hps-bridge/SKILL.md output requirements.
+# Refines vibe-ic/skills/fpga-hps-bridge/SKILL.md output requirements.
 skill: fpga-hps-bridge
 
 requirements:

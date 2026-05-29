@@ -2,7 +2,7 @@
 testability: structured
 
 # Auto-generated compliance spec for skill 'analog-layout' (vibe-ic-d)
-# Refines vibe-ic-core/skills/analog-layout/SKILL.md output requirements.
+# Refines vibe-ic/skills/analog-layout/SKILL.md output requirements.
 skill: analog-layout
 
 requirements:

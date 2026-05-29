@@ -2,7 +2,7 @@
 testability: structured
 
 # Auto-generated compliance spec for skill 'equivalence-check' (vibe-ic-d)
-# Refines vibe-ic-core/skills/equivalence-check/SKILL.md output requirements.
+# Refines vibe-ic/skills/equivalence-check/SKILL.md output requirements.
 skill: equivalence-check
 
 requirements:

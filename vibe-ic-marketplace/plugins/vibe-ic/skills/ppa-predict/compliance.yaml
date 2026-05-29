@@ -2,7 +2,7 @@
 testability: structured
 
 # Auto-generated compliance spec for skill 'ppa-predict' (vibe-ic-d)
-# Refines vibe-ic-core/skills/ppa-predict/SKILL.md output requirements.
+# Refines vibe-ic/skills/ppa-predict/SKILL.md output requirements.
 skill: ppa-predict
 
 requirements:

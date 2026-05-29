@@ -23,7 +23,7 @@ INDEX_JS = ROOT / "src" / "index.js"
 #       → gate at ROOT/../vibe-ic-marketplace/plugins/vibe-ic/programs/
 #   - plugin mirror:   ROOT = .../plugins/vibe-ic/mcp-eda-server  (bundled copy)
 #       → gate at ROOT/../programs/   (sibling of the bundled mcp-eda-server)
-# Wave 82 merged vibe-ic-d / vibe-ic-core into vibe-ic; the legacy split path
+# Wave 82 merged vibe-ic-d / vibe-ic into vibe-ic; the legacy split path
 # is kept last as a fallback for older checkouts. Probing both layouts is what
 # lets the broad CI collection (run from the plugin root, which picks up the
 # mirror copy) resolve the gate — a single canonical-only path silently

@@ -237,7 +237,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--json", default=None, help="Output JSON path")
     ap.add_argument("--ic-class", default=None,
                     help="Path to the IC class template YAML (e.g. "
-                         "plugins/vibe-ic-core/agents/class_kb/templates/"
+                         "plugins/vibe-ic/agents/class_kb/templates/"
                          "cable-side-id-ic.yaml). When provided, the gate "
                          "reads `sequence_naming.strip_suffixes` from it to "
                          "form abbreviated tb candidate names. Without this, "

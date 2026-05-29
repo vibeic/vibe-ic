@@ -1,5 +1,5 @@
 # Auto-generated compliance spec for skill 'analog-sizing-loop' (vibe-ic-d)
-# Refines vibe-ic-core/skills/analog-sizing-loop/SKILL.md output requirements.
+# Refines vibe-ic/skills/analog-sizing-loop/SKILL.md output requirements.
 skill: analog-sizing-loop
 
 requirements:

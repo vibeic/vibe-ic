@@ -2,7 +2,7 @@
 testability: structured
 
 # Auto-generated compliance spec for skill 'analog-sizing' (vibe-ic-d)
-# Refines vibe-ic-core/skills/analog-sizing/SKILL.md output requirements.
+# Refines vibe-ic/skills/analog-sizing/SKILL.md output requirements.
 skill: analog-sizing
 
 requirements:

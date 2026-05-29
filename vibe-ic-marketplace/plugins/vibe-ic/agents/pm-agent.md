@@ -40,7 +40,7 @@ The CLI calls an extraction LLM (Anthropic Haiku by default) and produces
 `confidence: 0.7`.
 
 You must first **resolve the IC class** from the description:
-- Read the class tree at `vibe-ic-core/agents/class_kb/class-tree.yaml`.
+- Read the class tree at `vibe-ic/agents/class_kb/class-tree.yaml`.
 - Pick the most specific class whose keywords match (e.g. "cable ID IC
   for USB-C" → `cable-side-id-ic`).
 - If uncertain, ask the user one clarifying question: "Is this a CPU, a
@@ -55,7 +55,7 @@ python3 -m tools.phase1_engine.cli gaps facts.yaml --out-json gaps.json
 The gap report lists every required-but-missing fact plus suggested
 defaults. For each gap:
 
-1. **Look up the Q-bank variant** (`vibe-ic-core/agents/qbank/<class>_L<N>.yaml`)
+1. **Look up the Q-bank variant** (`vibe-ic/agents/qbank/<class>_L<N>.yaml`)
    — use the variant matching the user's apparent expertise level:
    - `expert` — user gave CRC polynomial, bit timing, opcode table
    - `intermediate` — user gave block diagram + functional description
@@ -217,8 +217,8 @@ translation sources in this priority order:
 |---|---|
 | CLI | `tools/phase1_engine/cli.py` |
 | NL extractor | `tools/phase1_engine/nl_ingest.py` |
-| Q-bank (your script) | `vibe-ic-core/agents/qbank/<class>_L<N>.yaml` |
-| Class templates | `vibe-ic-core/agents/class_kb/templates/` |
-| Default library (IC Expert uses, you cite) | `vibe-ic-core/agents/defaults/` |
-| **K3 class-typical structure (translation source)** | `vibe-ic-core/agents/defaults/class_reference.yaml` → `<class>.typical_structure` |
-| IC Expert agent | `vibe-ic-core/agents/ic-expert-agent.md` |
+| Q-bank (your script) | `vibe-ic/agents/qbank/<class>_L<N>.yaml` |
+| Class templates | `vibe-ic/agents/class_kb/templates/` |
+| Default library (IC Expert uses, you cite) | `vibe-ic/agents/defaults/` |
+| **K3 class-typical structure (translation source)** | `vibe-ic/agents/defaults/class_reference.yaml` → `<class>.typical_structure` |
+| IC Expert agent | `vibe-ic/agents/ic-expert-agent.md` |

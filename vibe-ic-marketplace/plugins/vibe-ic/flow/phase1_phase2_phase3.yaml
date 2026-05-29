@@ -43,7 +43,7 @@ total_steps: 41
 analog_steps: 9
 
 # When a step maps to a plugin skill, use the `skill:` field with the
-# SKILL.md directory name (relative to vibe-ic-core/skills/).
+# SKILL.md directory name (relative to vibe-ic/skills/).
 # When a step maps to a deterministic program, use `program:` with the
 # .py filename (relative to vibe-ic-d/programs/).
 # Multiple entries imply sequence; all must succeed.

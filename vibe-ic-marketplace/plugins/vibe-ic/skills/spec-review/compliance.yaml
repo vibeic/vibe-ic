@@ -2,7 +2,7 @@
 testability: structured
 
 # Auto-generated compliance spec for skill 'spec-review' (vibe-ic-d)
-# Refines vibe-ic-core/skills/spec-review/SKILL.md output requirements.
+# Refines vibe-ic/skills/spec-review/SKILL.md output requirements.
 skill: spec-review
 
 requirements:

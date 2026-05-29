@@ -13,7 +13,7 @@ Doing so turns the plugin into an answer-key for the benchmark IC:
       from the user.
 
 This is the manifest-level analogue of
-`plugins/vibe-ic-core/skills/spec-to-rtl/references/aid/` — the
+`plugins/vibe-ic/skills/spec-to-rtl/references/aid/` — the
 verbatim RTL bundle removed in v0.47.6.
 
 Rules applied

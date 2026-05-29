@@ -2,7 +2,7 @@
 testability: structured
 
 # Auto-generated compliance spec for skill 'hls-c2rtl' (vibe-ic-d)
-# Refines vibe-ic-core/skills/hls-c2rtl/SKILL.md output requirements.
+# Refines vibe-ic/skills/hls-c2rtl/SKILL.md output requirements.
 skill: hls-c2rtl
 
 requirements:

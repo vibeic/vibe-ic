@@ -128,7 +128,7 @@ class TestMaintenanceTools:
     def test_add_gate_is_idempotent(self):
         """Running add_compliance_gate twice must not duplicate the section."""
         marketplace = PLUGIN.parent.parent
-        core = marketplace / "plugins" / "vibe-ic-core" / "skills"
+        core = marketplace / "plugins" / "vibe-ic" / "skills"
         before = {}
         for md in core.glob("*/SKILL.md"):
             before[md.name] = md.read_text()
@@ -142,15 +142,15 @@ class TestMaintenanceTools:
 
 
 # ---------------------------------------------------------------------------
-# Merged-plugin schema validation (Wave 82 — vibe-ic-core/vibe-ic-d
-# merged into vibe-ic). Tests originally probed vibe-ic-core/skills/
+# Merged-plugin schema validation (Wave 82 — vibe-ic/vibe-ic-d
+# merged into vibe-ic). Tests originally probed vibe-ic/skills/
 # under the split layout; after the merge the canonical place for
 # SKILL.md is vibe-ic/skills/. Legacy core dir is still consulted as
 # fallback for backwards-compat with checkouts mid-migration.
 # ---------------------------------------------------------------------------
 def _skill_dirs():
     """Return the directory holding canonical SKILL.md files."""
-    legacy = PLUGIN.parent / "vibe-ic-core" / "skills"
+    legacy = PLUGIN.parent / "vibe-ic" / "skills"
     if legacy.is_dir():
         legacy_dirs = [d for d in legacy.iterdir()
                        if d.is_dir() and (d / "SKILL.md").exists()]
@@ -205,14 +205,14 @@ class TestCoreSkillSchema:
                    if d.is_dir()}
         # If core points at vibe-ic/skills/ (merged), the sets are
         # identical by construction. If core points at the legacy
-        # vibe-ic-core/skills/ (split), every vibe-ic-d skill must
-        # have a peer in vibe-ic-core/skills/.
+        # vibe-ic/skills/ (split), every vibe-ic-d skill must
+        # have a peer in vibe-ic/skills/.
         if core == (PLUGIN / "skills"):
             assert d_names == core_names
             return
         orphan_d = d_names - core_names
         assert not orphan_d, (
-            f"vibe-ic has compliance for skills not in vibe-ic-core: "
+            f"vibe-ic has compliance for skills not in vibe-ic: "
             f"{orphan_d}")
 
 

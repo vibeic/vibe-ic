@@ -60,6 +60,17 @@ def cmd_show(bench: str):
     e = _entry(bench)
     print(f"# {e.get('title', bench)}")
     print(f"  Shape: {e['shape']}     Status: {e.get('status')}")
+    # § 4.1 + § 8.1 of open-benchmark-methodology (user directive 2026-05-29):
+    # DEFAULT on "run X benchmark" with no qualifier = re-attempt the FAILing
+    # set BLIND on the current plugin version. Do NOT skip on prior FLOOR.
+    print()
+    print("# DEFAULT BEHAVIOUR (per skill § 4.1 + § 8.1, 2026-05-29 user policy):")
+    print("# When the user asks 'run <bench>' with no other flag, the default action")
+    print("# is to RE-ATTEMPT prior FAIL/FLOOR cases BLIND on the current plugin —")
+    print("# NOT to publish the prior canonical and skip. Use --reattempt-floor to")
+    print("# print the prior FAILing-problem list for this benchmark from the")
+    print("# newest pass_at_1.json under benchmark_external/<bench>/.")
+    print()
     if "dataset" in e:
         ds = e["dataset"]
         if "repo" in ds:
@@ -151,6 +162,58 @@ def cmd_setup(bench: str, dataset: str, run: str):
         print(f"  Read the blind instructions next: {bi}")
 
 
+def cmd_reattempt_floor(bench: str) -> int:
+    """v0.1.53 — per § 4.1 / § 8.1 user directive. Surface the prior FAIL
+    list (across pass_at_1.json files) so the next run can re-attempt
+    them BLIND. Default policy: do NOT inherit FLOOR labels — every fail
+    must be re-justified from a FRESH re-run on the current plugin.
+
+    Searches `benchmark_external/<bench>/**/pass_at_1.json`, picks the
+    newest, and prints the FAILing problems + reasons.
+    """
+    import glob
+    # Find newest pass_at_1.json under benchmark_external/<bench>/
+    # Map benchmark name to its on-disk folder.
+    name_map = {
+        "verilogeval-v2":    "verilogeval_v2",
+        "verilogeval-human": "verilogeval_human",
+        "rtllm":             "rtllm",
+        "cvdp":              "cvdp",
+    }
+    bench_dir = name_map.get(bench, bench.replace("-", "_"))
+    pattern = f"benchmark_external/{bench_dir}/**/pass_at_1.json"
+    candidates = sorted(glob.glob(pattern, recursive=True),
+                        key=lambda p: os.path.getmtime(p), reverse=True)
+    if not candidates:
+        print(f"No prior pass_at_1.json under benchmark_external/{bench_dir}/")
+        print(f"This is a FIRST RUN — there are no prior fails to re-attempt.")
+        print(f"Proceed with the standard --setup workflow.")
+        return 0
+    newest = candidates[0]
+    print(f"# Newest pass_at_1.json: {newest}")
+    data = json.loads(Path(newest).read_text())
+    total = data.get("total", "?")
+    passed = data.get("passed", "?")
+    pct = data.get("pass_at_1_pct", "?")
+    print(f"# Prior canonical: {passed}/{total} = {pct}%")
+    fails = [r for r in data.get("results", []) if r.get("verdict") != "PASS"]
+    print(f"# Prior FAILing problems: {len(fails)}")
+    print()
+    print("# § 4.1 + § 8.1 policy: re-attempt EACH of these BLIND on the")
+    print("# current plugin version. The FLOOR label only sticks if it survives")
+    print("# a fresh attempt — re-justify from new run, not from prior RESULT.md.")
+    print()
+    for r in fails:
+        prob = r["problem"]
+        reason = r.get("reason", "")
+        print(f"  {prob:<36} {reason[:80]}")
+    print()
+    print("# Next step:")
+    print("#   For each problem, run the Shape-C gates per blind_instructions_shape_c.md.")
+    print("#   gates_atomic.py --prob <Prob> --workdir <RUNDIR>/work --dataset <DS> --bench {}".format(bench))
+    return 0
+
+
 def cmd_score(bench: str, run: str, dataset: str | None):
     e = _entry(bench)
     if e["shape"] not in ("B", "C"):
@@ -175,6 +238,8 @@ def main():
     ap.add_argument("--list", action="store_true", help="list known benchmarks")
     ap.add_argument("--setup", action="store_true", help="create run dir scaffold")
     ap.add_argument("--score", action="store_true", help="invoke the scorer on an existing run dir")
+    ap.add_argument("--reattempt-floor", action="store_true",
+                    help="print prior FAILing-problem list (per § 4.1 default policy)")
     ap.add_argument("--dataset", help="dataset path on disk")
     ap.add_argument("--run", help="run dir")
     a = ap.parse_args()
@@ -195,6 +260,8 @@ def main():
             raise SystemExit("--score requires --run")
         cmd_score(a.bench, a.run, a.dataset)
         return
+    if a.reattempt_floor:
+        sys.exit(cmd_reattempt_floor(a.bench))
 
     # default: show plan + env status
     env = _env_check()

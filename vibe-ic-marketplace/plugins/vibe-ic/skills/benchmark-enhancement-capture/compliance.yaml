@@ -1,5 +1,5 @@
 # Auto-generated compliance spec for skill 'benchmark-enhancement-capture' (vibe-ic-d)
-# Refines vibe-ic-core/skills/benchmark-enhancement-capture/SKILL.md output requirements.
+# Refines vibe-ic/skills/benchmark-enhancement-capture/SKILL.md output requirements.
 skill: benchmark-enhancement-capture
 
 requirements:
