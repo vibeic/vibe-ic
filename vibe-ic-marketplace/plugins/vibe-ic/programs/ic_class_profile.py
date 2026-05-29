@@ -614,10 +614,13 @@ def _harvest_strings(obj: Any, sink: List[str], max_strings: int = 4000,
 
 def _looks_like_bus_interconnect_protocol(
         l1: Optional[dict], l2: Optional[dict]) -> bool:
-    """True iff the L1+L2 content exhibits ≥3 of the 6 bus-protocol structural
-    features. Walks ALL string leaves (not just specific keys) so the detector
-    works across L doc schema variations. NO benchmark-specific brand names
-    consulted — only structural concepts (per memory 'general, not keyword').
+    """True iff the L1+L2 content exhibits the bus-protocol structural
+    signature: ≥4 of the 6 features AND >=2 explicit NAMED channels
+    (e.g. 'read channel', 'address channel', 'write channel') — this
+    distinguishes multi-channel bus protocols (AMBA AXI/AHB/APB,
+    Wishbone, TileLink, OCP) from single-data-line serial peripherals
+    (I2C, SPI, UART) that happen to mention 'master/slave' or
+    'arbitration'. Walks ALL string leaves; NO brand-name keywords.
     """
     parts: List[str] = []
     for layer in (l1, l2):
@@ -627,7 +630,18 @@ def _looks_like_bus_interconnect_protocol(
     if not text:
         return False
     hits = sum(1 for _, pat in _BUS_PROTO_FEATURES if pat.search(text))
-    return hits >= 3
+    if hits < 4:
+        return False
+    # v0.1.79 — require ≥2 distinct NAMED channels (read/write/address/
+    # data/response/snoop/command channel). I2C / SPI / UART specs mention
+    # "channels" generically (often as an abstract concept) but do NOT
+    # enumerate multiple typed channels; multi-channel bus protocols do.
+    _NAMED_CH_RE = re.compile(
+        r"\b(?:read|write|address|data|response|command|request|reply|"
+        r"snoop|control|coherent)\s+channel\b",
+        re.IGNORECASE)
+    distinct_named = set(m.group(0).lower() for m in _NAMED_CH_RE.finditer(text))
+    return len(distinct_named) >= 2
 
 
 # v0.1.77 — serial_peripheral_protocol structural detector.

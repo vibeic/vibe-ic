@@ -49561,6 +49561,24 @@ def main() -> int:
             from spi_protocol_synth import apply_spi_synth as _apply_spi
             _apply_spi(_gd_r55, _is_spi, _spi_ic_name)
             print(f"      → R53/R54/R55 SPI synth applied (is_spi={_is_spi})")
+            # v0.1.79 — I2C structural sub-detector (SDA+SCL pin pair OR
+            # START/STOP+slave-address terminology). Apply I2C-spec-
+            # universal facts when present. Doctrine: structural-
+            # keyword detection IS general within an ic_class.
+            _is_i2c = (
+                ("SDA" in _spi_blob and "SCL" in _spi_blob)
+                or ("START condition" in _spi_blob
+                    and "STOP condition" in _spi_blob
+                    and "slave address" in _spi_blob))
+            if _is_i2c:
+                _i2c_ic_name = "I2C-bus (UM10204)"
+                try:
+                    from i2c_protocol_synth import apply_i2c_synth as _apply_i2c
+                    _apply_i2c(_gd_r55, _is_i2c, _i2c_ic_name)
+                    print(f"      → R56/R57/R58 I2C synth applied (is_i2c={_is_i2c})")
+                except Exception as _i2c_err:
+                    print(f"      I2C synth FAILED (fail-open): {_i2c_err}",
+                          file=sys.stderr)
     except Exception as _r55_err:
         print(f"      R53/R54/R55 synth FAILED (fail-open): {_r55_err}",
               file=sys.stderr)

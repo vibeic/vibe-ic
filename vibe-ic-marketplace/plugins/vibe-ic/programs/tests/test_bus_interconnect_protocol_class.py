@@ -116,13 +116,18 @@ def test_detector_amplifier_negative():
 
 
 def test_detector_synthetic_minimal_protocol_positive():
-    """A minimal protocol spec mentioning 3 features in pin_table content
-    must trigger (the threshold)."""
+    """A minimal protocol spec mentioning the structural features (≥4 of 6
+    + ≥2 named channels) must trigger. v0.1.79 tightened the detector so
+    single-data-line serial peripherals (I2C/SPI/UART) that happen to
+    mention 'master/slave' + 'arbitration' do NOT mis-classify; only
+    multi-channel bus protocols with EXPLICIT NAMED CHANNELS qualify."""
     mod = _load()
     l1 = {"description": "Bus protocol IP"}
-    l2 = {"description": "Five channels carry valid/ready handshakes. "
-                          "Master and slave roles. Burst transfers supported. "
-                          "Interconnect arbitration."}
+    l2 = {"description": "Five channels — read channel, write channel, "
+                          "address channel, response channel — carry "
+                          "valid/ready handshakes. Master and slave roles. "
+                          "Burst transfers supported. Interconnect "
+                          "arbitration."}
     assert mod._looks_like_bus_interconnect_protocol(l1, l2) is True
 
 

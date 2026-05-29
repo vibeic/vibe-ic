@@ -1,10 +1,16 @@
 {
-  "doc_id": "L4",
-  "doc_name": "L4_REGMAP",
-  "applicability": "N/A",
-  "ic_class": "bus_interconnect_protocol",
-  "rationale": "Bus protocols expose channels, not memory-mapped registers",
-  "emitted_by": "l_doc_taxonomy.na_stub v0.1.51",
+  "schema_version": 2,
+  "doc_class": "regmap",
+  "ic_name": "UNKNOWN_IC",
+  "registers": [],
+  "no_registers_in_input": true,
+  "otp_layout": null,
+  "no_otp_layout_in_input": true,
+  "otp_ip_macro": {},
+  "internal_registers": [],
+  "extraction_evidence": {
+    "input/docs/IHI0022H_amba_axi_protocol_spec.pdf": []
+  },
   "extraction_strategy": {
     "hallucination_scrub_v0_1_60": [
       {
@@ -15,8 +21,7 @@
         "new_value": "UNKNOWN_IC",
         "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
       }
-    ],
-    "ic_class_applicability_gate_v0_1_62": "ic_class='bus_interconnect_protocol' declares LL4 not applicable; emitted as N/A stub (l_doc_taxonomy.na_stub)"
+    ]
   },
   "register_map_present": false,
   "notes": "If a future system-integration L4 is required, the canonical 'address-side fields' to capture would be: AxADDR width (implementation-defined), AxREGION (4 bits, AXI4+), AxQOS (4 bits, AXI4+), Slave_ID_WIDTH = max(master ID_WIDTH) + ceil(log2(num_masters)). Bus-interconnect protocol specification itself has no architectural register map; implementation-side configuration registers (if any) are integration-defined."
