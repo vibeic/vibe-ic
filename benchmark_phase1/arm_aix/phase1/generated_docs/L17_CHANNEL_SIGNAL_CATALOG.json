@@ -282,26 +282,11 @@
       "total_signals_including_ACLK_ARESETn": 46
     },
     "handshake_pairs": {
-      "AR": {
-        "valid": "ARVALID",
-        "ready": "ARREADY"
-      },
-      "AW": {
-        "valid": "AWVALID",
-        "ready": "AWREADY"
-      },
-      "R": {
-        "valid": "RVALID",
-        "ready": "RREADY"
-      },
-      "W": {
-        "valid": "WVALID",
-        "ready": "WREADY"
-      },
-      "B": {
-        "valid": "BVALID",
-        "ready": "BREADY"
-      }
+      "AW": "AWVALID (master) / AWREADY (slave)",
+      "W": "WVALID (master) / WREADY (slave)",
+      "B": "BVALID (slave) / BREADY (master)",
+      "AR": "ARVALID (master) / ARREADY (slave)",
+      "R": "RVALID (slave) / RREADY (master)"
     },
     "dependency_graph": {
       "common_rule": "VALID once asserted MUST remain asserted until READY also asserted on the same cycle",
@@ -314,5 +299,8 @@
   "schema_version": "v0.1.62",
   "doc_class": "L17",
   "emitted_by": "phase1_protocol_spec_extract.extract_l17_channels v0.1.62",
-  "extraction_evidence": {}
+  "extraction_evidence": {},
+  "extraction_strategy": {
+    "l17_handshake_pairs_v0_1_70": "R27: synthesised 5 handshake_pairs from L17.channels"
+  }
 }

@@ -48097,6 +48097,51 @@ def main() -> int:
     # has substantive content matching the canonical agent shape, instead of
     # the chip-template placeholders (opcodes / crc_parameters / verdict_byte_*)
     # that don't apply.
+    # v0.1.70 capture (R27): synthesize L17.handshake_pairs from the
+    # extracted channels. Every bus-protocol channel <C> follows the same
+    # valid/ready pattern: <C>VALID + <C>READY between master and slave.
+    # The direction is inferred from the channel's majority-direction
+    # field (master-originated channels: source asserts VALID; slave-
+    # originated channels: slave asserts VALID).
+    print(f"[14c1b/15] L17 handshake_pairs overlay (R27) ...")
+    try:
+        from ic_class_profile import detect_ic_class as _detect_r27
+        _profile_r27 = _detect_r27(project)
+        _ic_r27 = _profile_r27.get("ic_class", "unknown") if isinstance(_profile_r27, dict) else "unknown"
+        if _ic_r27 == "bus_interconnect_protocol":
+            _gd_r27 = _pl.generated_docs_dir(project)
+            _l17p_r27 = _gd_r27 / "L17_CHANNEL_SIGNAL_CATALOG.json"
+            if _l17p_r27.is_file():
+                _l17_r27 = json.loads(_l17p_r27.read_text())
+                _l17_fields_r27 = _l17_r27.get("fields") or {}
+                _channels = _l17_fields_r27.get("channels") or []
+                _hs_pairs: dict = {}
+                for _ch in _channels:
+                    if not isinstance(_ch, dict):
+                        continue
+                    _name = _ch.get("name") or ""
+                    _dir = (_ch.get("direction_majority") or
+                             _ch.get("direction") or "Master")
+                    _dir_low = _dir.lower()
+                    if "master" in _dir_low:
+                        _hs_pairs[_name] = (
+                            f"{_name}VALID (master) / {_name}READY (slave)")
+                    else:
+                        _hs_pairs[_name] = (
+                            f"{_name}VALID (slave) / {_name}READY (master)")
+                if _hs_pairs:
+                    _l17_fields_r27["handshake_pairs"] = _hs_pairs
+                    _l17_r27["fields"] = _l17_fields_r27
+                    _l17_r27.setdefault("extraction_strategy", {})[
+                        "l17_handshake_pairs_v0_1_70"] = (
+                        f"R27: synthesised {len(_hs_pairs)} handshake_pairs "
+                        f"from L17.channels")
+                    _l17p_r27.write_text(json.dumps(_l17_r27, indent=2, ensure_ascii=False) + "\n")
+                    print(f"      → L17.handshake_pairs: {len(_hs_pairs)} pairs")
+    except Exception as _r27_err:
+        print(f"      L17 handshake_pairs FAILED (fail-open): {_r27_err}",
+              file=sys.stderr)
+
     print(f"[14c2/15] L3 protocol mirror from L14-L18 (R21) ...")
     try:
         from ic_class_profile import detect_ic_class as _detect3
@@ -48115,6 +48160,10 @@ def main() -> int:
                 _l17_handshakes = _l17_fields.get("handshake_pairs")
                 if isinstance(_l17_channels, list) and _l17_channels:
                     _l3["channels"] = _l17_channels
+                # Note: R21 leaves valid_ready_handshake_rules to Claude-only
+                # because Claude's shape is list-of-strings (rule sentences)
+                # while R27's L17.handshake_pairs is dict-of-channel-handshake.
+                # Different semantic content — don't mirror.
                 if isinstance(_l17_handshakes, list) and _l17_handshakes:
                     _l3["valid_ready_handshake_rules"] = _l17_handshakes
                 # v0.1.69 R25: shape-normalised L15 encoding-table mirror.
