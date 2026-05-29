@@ -56,6 +56,14 @@ v0.1.24/v0.1.25 fail-case loops 2026-05-27/28):
      behavior (steady-state semantics are independent of t=0 power-up
      value); idempotent re-runs add nothing. Zero functional regressions
      across the 42 — the safety claim holds; only the count was wrong.
+  11. Unguarded simulation-only immediate assertion (v0.1.61, from the CVDP
+     v0.1.59 Shape-D run). An immediate `assert (cond) else $error(...);` is
+     simulation-only; yosys/DC reject it (yosys: `syntax error near else`).
+     CVDP's assertion-injection task (`priority_encoder_8x3`) — and the
+     benchmark's OWN provided module — shipped it unguarded, FAILing the
+     synth gate. `--fix` fences it with `// synthesis translate_off …
+     translate_on` (yosys/DC skip it; iverilog/cocotb keep it live). Safe,
+     whole-line-only, idempotent, chip-AGNOSTIC.
 
 Usage:
     python3 rtl_hygiene_lint.py <files.v|.sv ...>
@@ -677,9 +685,192 @@ def rule_wire_input_read_in_clocked_block(src: str, path: str) -> List[Finding]:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Rule 11: Unguarded simulation-only immediate assertion (v0.1.61)
+#
+# An immediate `assert (cond) [else $error(...)];` is a SIMULATION-ONLY construct.
+# Synthesis front-ends reject it: yosys' `read_verilog -sv` raises
+# `syntax error, unexpected TOK_ELSE` at the `else` action, and Design Compiler /
+# Genus refuse it outside a pragma guard. CVDP `priority_encoder_8x3` (the
+# assertion-injection task, v0.1.59 run) FAILed `yosys_synth` for exactly this —
+# and the benchmark's OWN provided module shipped the same unguarded construct.
+#
+# The conventional, tool-agnostic remedy is to fence the construct with a
+# synthesis pragma — `// synthesis translate_off … translate_on` — which yosys /
+# DC / Genus honour (skip the region) while iverilog / VCS / cocotb keep it live
+# in simulation. `--fix` inserts that fence deterministically so an
+# assertion-injection deliverable stops false-failing the synth gate. Chip-
+# AGNOSTIC, simulation-semantics-preserving (the assertion still runs in sim).
+# ---------------------------------------------------------------------------
+_ASSERT_IMMEDIATE_RE = re.compile(r'\bassert\b\s*(?!property\b)\(')
+_GUARD_OFF_RE = re.compile(r'//\s*(?:synthesis|synopsys|pragma)?\s*translate_off', re.I)
+_GUARD_ON_RE = re.compile(r'//\s*(?:synthesis|synopsys|pragma)?\s*translate_on', re.I)
+
+
+def _is_testbench(raw: str, path: str) -> bool:
+    """Testbenches legitimately use assertions and are never synthesized — skip them."""
+    name = Path(path).name.lower()
+    if re.search(r'(^|[_.])(tb|test|testbench)([_.]|$)', name):
+        return True
+    if re.search(r'\bmodule\s+(?:\w*_tb|tb_?\w*|testbench\w*)\b', raw, re.I):
+        return True
+    return False
+
+
+def _guard_regions(raw: str) -> List[Tuple[int, int]]:
+    """Char ranges fenced from synthesis: `translate_off`..`translate_on` and
+    `` `ifdef ``/`` `ifndef `` <…SYNTH…> .. `` `endif ``. Scanned on RAW source
+    because the fences are comments / preprocessor directives."""
+    regions: List[Tuple[int, int]] = []
+    ons = [m.end() for m in _GUARD_ON_RE.finditer(raw)]
+    for m in _GUARD_OFF_RE.finditer(raw):
+        off = m.start()
+        nxt = [o for o in ons if o > off]
+        regions.append((off, nxt[0] if nxt else len(raw)))
+    for m in re.finditer(r'`(?:ifdef|ifndef)\s+(\w+)', raw):
+        if 'SYNTH' in m.group(1).upper():
+            end = raw.find('`endif', m.end())
+            regions.append((m.start(), end + 6 if end >= 0 else len(raw)))
+    return regions
+
+
+def _in_region(pos: int, regions: List[Tuple[int, int]]) -> bool:
+    return any(a <= pos < b for a, b in regions)
+
+
+def _assert_stmt_end(s: str, start: int):
+    """Return the char offset just AFTER the terminating `;` of the immediate
+    assert statement beginning at `start` (covering an optional
+    `else <action>` / `else begin … end`). None if it can't be bounded."""
+    i = s.find('(', start)
+    if i < 0:
+        return None
+    depth = 0
+    while i < len(s):
+        if s[i] == '(':
+            depth += 1
+        elif s[i] == ')':
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    if i >= len(s):
+        return None
+    j = i + 1
+    while j < len(s) and s[j] in ' \t\r\n':
+        j += 1
+    if s[j:j + 4] == 'else' and (j + 4 >= len(s) or not (s[j + 4].isalnum() or s[j + 4] == '_')):
+        k = j + 4
+        while k < len(s) and s[k] in ' \t\r\n':
+            k += 1
+        if s[k:k + 5] == 'begin' and (k + 5 >= len(s) or not (s[k + 5].isalnum() or s[k + 5] == '_')):
+            depth = 0
+            for mm in re.finditer(r'\b(begin|end)\b', s[k:]):
+                depth += 1 if mm.group(1) == 'begin' else -1
+                if depth == 0:
+                    return k + mm.end()
+            return None
+        semi = s.find(';', k)
+        return semi + 1 if semi >= 0 else None
+    semi = s.find(';', i)
+    return semi + 1 if semi >= 0 else None
+
+
+def rule_unguarded_sim_only_assert(raw: str, path: str) -> List[Finding]:
+    """Rule 11 — flag immediate `assert` statements not fenced from synthesis."""
+    findings: List[Finding] = []
+    if _is_testbench(raw, path):
+        return findings
+    regions = _guard_regions(raw)
+    stripped = strip_comments(raw)  # offsets preserved (comments → spaces)
+    for m in _ASSERT_IMMEDIATE_RE.finditer(stripped):
+        pos = m.start()
+        if _in_region(pos, regions):
+            continue
+        lineno = raw[:pos].count('\n') + 1
+        findings.append(Finding(
+            path, lineno, 'WARN', 'unguarded-sim-only-assert', 'assert',
+            "immediate `assert` is simulation-only and breaks synthesis "
+            "(yosys: syntax error near `else`); fence it with "
+            "`// synthesis translate_off … translate_on` "
+            "(rtl_hygiene_lint --fix inserts this)."))
+    return findings
+
+
+def autofix_guard_sim_only_assert(path: Path) -> Tuple[int, List[str]]:
+    """Deterministically fence unguarded immediate assertions with
+    `// synthesis translate_off … translate_on` so they no longer fail the
+    synthesis gate while staying live in simulation.
+
+    Safe by construction: only wraps when the assertion construct occupies whole
+    lines (nothing else shares its first/last line) and only two shapes are
+    handled — (A) a standalone assert statement, and (B) an `if/else-if/else`
+    chain whose every controlled statement is an assert (the CVDP encoder shape).
+    Anything ambiguous is left for the WARN finding + manual handling, never
+    auto-edited into broken RTL. Idempotent (re-runs see the fence and skip).
+
+    Returns (count_wrapped, [labels]). No-op (0, []) if nothing to wrap.
+    """
+    raw = path.read_text(errors='replace')
+    if _is_testbench(raw, str(path)):
+        return 0, []
+    regions = _guard_regions(raw)
+    stripped = strip_comments(raw)  # offsets preserved
+
+    units: List[Tuple[int, int]] = []
+    # Shape B — if/else-if/else chain of asserts (wrap the whole chain as one unit).
+    chain_re = re.compile(
+        r'\bif\s*\((?:[^()]|\([^()]*\))*\)\s*assert\b[^;]*;'
+        r'(?:\s*else\s*(?:if\s*\((?:[^()]|\([^()]*\))*\)\s*)?assert\b[^;]*;)*')
+    for m in chain_re.finditer(stripped):
+        units.append((m.start(), m.end()))
+    # Shape A — standalone assert statements not already inside a Shape-B unit.
+    for m in _ASSERT_IMMEDIATE_RE.finditer(stripped):
+        s0 = m.start()
+        if any(a <= s0 < b for a, b in units):
+            continue
+        end = _assert_stmt_end(stripped, s0)
+        if end is None:
+            continue
+        pj = s0 - 1
+        while pj >= 0 and stripped[pj] in ' \t\r\n':
+            pj -= 1
+        prevtok = stripped[max(0, pj - 5):pj + 1]
+        if pj < 0 or stripped[pj] == ';' or re.search(r'(?:begin|end)$', prevtok):
+            units.append((s0, end))
+        # else: controlled by a non-chain if/for/while — leave to the WARN finding.
+
+    # Filter to clean, unguarded, whole-line units; wrap from bottom up.
+    edits: List[Tuple[int, int, str]] = []
+    labels: List[str] = []
+    for (s0, e0) in units:
+        if _in_region(s0, regions):
+            continue
+        line_start = raw.rfind('\n', 0, s0) + 1
+        line_end = raw.find('\n', e0)
+        if line_end < 0:
+            line_end = len(raw)
+        if raw[line_start:s0].strip() or raw[e0:line_end].strip():
+            continue  # shares a line with other code — skip (safety)
+        indent = re.match(r'[ \t]*', raw[line_start:]).group(0)
+        edits.append((line_start, line_end, indent))
+        labels.append(f"assert@L{raw[:s0].count(chr(10)) + 1}")
+
+    if not edits:
+        return 0, []
+    for (line_start, line_end, indent) in sorted(edits, key=lambda x: x[0], reverse=True):
+        raw = (raw[:line_start]
+               + f"{indent}// synthesis translate_off\n"
+               + raw[line_start:line_end]
+               + f"\n{indent}// synthesis translate_on"
+               + raw[line_end:])
+    path.write_text(raw)
+    return len(edits), labels
+
+
 def lint_file(path: Path) -> List[Finding]:
-    src = path.read_text(errors='replace')
-    src = strip_comments(src)
+    raw = path.read_text(errors='replace')
+    src = strip_comments(raw)
     results = []
     results += rule_undriven_and_unread(src, str(path))
     results += rule_case_coverage(src, str(path))
@@ -688,6 +879,7 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_incomplete_sensitivity(src, str(path))
     results += rule_vector_self_shift_fold(src, str(path))
     results += rule_reserved_word_identifier(src, str(path))
+    results += rule_unguarded_sim_only_assert(raw, str(path))
     # rule_wire_input_read_in_clocked_block: NOT enabled.
     #
     # v0.1.39 honesty correction (audit Finding 2): the v0.1.38 disable
@@ -911,13 +1103,17 @@ def main():
     ap.add_argument('--severity', choices=['ERROR', 'WARN', 'INFO'], default='INFO',
                     help='Minimum severity to report (default: INFO)')
     ap.add_argument('--fix', action='store_true',
-                    help='Deterministically repair the uninit-registered-output finding '
-                         'in-place (insert `initial <reg>=0;`). Enforces the power-up '
-                         'determinism lesson regardless of caller/prompt.')
+                    help='Deterministically repair in-place: (a) the '
+                         'uninit-registered-output finding (insert `initial <reg>=0;`), '
+                         'enforcing the power-up determinism lesson; and (b) the '
+                         'unguarded-sim-only-assert finding (fence immediate `assert` '
+                         'statements in `// synthesis translate_off … translate_on` so '
+                         'they stop false-failing the synth gate). Regardless of caller/prompt.')
     args = ap.parse_args()
 
     if args.fix:
         total = 0
+        guarded_total = 0
         for f in args.files:
             p = Path(f)
             if not p.exists():
@@ -927,7 +1123,14 @@ def main():
             total += n
             if n:
                 print(f"{f}: inserted `initial` power-up 0 for {names}")
-        print(f"rtl_hygiene_lint --fix: repaired {total} reset-less registered output(s)")
+            # Run the sim-only-assert fence AFTER the power-up fix (the latter
+            # appends an `initial` block before endmodule; order is independent).
+            g, glabels = autofix_guard_sim_only_assert(p)
+            guarded_total += g
+            if g:
+                print(f"{f}: fenced sim-only assertion(s) in translate_off guard: {glabels}")
+        print(f"rtl_hygiene_lint --fix: repaired {total} reset-less registered output(s), "
+              f"fenced {guarded_total} sim-only assertion construct(s)")
         return 0
 
     sev_order = {'ERROR': 2, 'WARN': 1, 'INFO': 0}
