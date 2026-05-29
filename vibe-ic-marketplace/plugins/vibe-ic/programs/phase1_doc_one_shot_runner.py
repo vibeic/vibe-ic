@@ -49723,7 +49723,13 @@ def main() -> int:
         _profile_r55 = _detect_r55(project)
         _ic_r55 = (_profile_r55.get("ic_class", "unknown")
                    if isinstance(_profile_r55, dict) else "unknown")
-        if _ic_r55 == "serial_peripheral_protocol":
+        # v0.1.84 — also fire for digital_cmd_driven / digital_arithmetic_primitive /
+        # unknown classes, because each protocol synth helper's INLINE structural
+        # sub-detector is the actual gate (only fires if the protocol's specific
+        # wire-level signature matches). This lets 1-Wire / JTAG / MIPI / SDMMC /
+        # PCIe (which classify differently) still reach their synth helpers.
+        if _ic_r55 in ("serial_peripheral_protocol", "digital_cmd_driven",
+                       "digital_arithmetic_primitive", "unknown"):
             _gd_r55 = _pl.generated_docs_dir(project)
             _spi_blob = ""
             for _n in ("L1_DATASHEET.json", "L2_FRS.json"):
@@ -49742,11 +49748,16 @@ def main() -> int:
             # START/STOP+slave-address terminology). Apply I2C-spec-
             # universal facts when present. Doctrine: structural-
             # keyword detection IS general within an ic_class.
+            # v0.1.84 — strengthened: require I2C-name mention to avoid
+            # SD-Association "SDA" false-positives in SD/MMC specs.
             _is_i2c = (
-                ("SDA" in _spi_blob and "SCL" in _spi_blob)
-                or ("START condition" in _spi_blob
-                    and "STOP condition" in _spi_blob
-                    and "slave address" in _spi_blob))
+                (("SDA" in _spi_blob and "SCL" in _spi_blob)
+                 or ("START condition" in _spi_blob
+                     and "STOP condition" in _spi_blob
+                     and "slave address" in _spi_blob))
+                and ("I2C" in _spi_blob
+                     or "I²C" in _spi_blob
+                     or "I2C-bus" in _spi_blob))
             if _is_i2c:
                 _i2c_ic_name = "I2C-bus (UM10204)"
                 try:
@@ -49830,6 +49841,122 @@ def main() -> int:
                     print(f"      → R68/R69/R70 I2S synth applied (is_i2s={_is_i2s})")
                 except Exception as _i2s_err:
                     print(f"      I2S synth FAILED (fail-open): {_i2s_err}",
+                          file=sys.stderr)
+            # v0.1.84 — 1-Wire (Maxim) structural sub-detector.
+            # Half-duplex single-wire bus from Maxim/Dallas. Signatures:
+            # ("1-Wire" OR "1Wire") AND ("iButton" OR "Maxim" OR "Dallas")
+            # — every 1-Wire spec mentions the Maxim/Dallas inventor and
+            # the iButton product family. STRONGER signatures (DQ, ROM
+            # ID, Search ROM, parasitic power) are kept as fallbacks for
+            # specs that elide the brand names.
+            _is_onewire = (
+                (("1-Wire" in _spi_blob or "1Wire" in _spi_blob)
+                    and ("iButton" in _spi_blob
+                         or "Maxim" in _spi_blob
+                         or "Dallas Semiconductor" in _spi_blob))
+                or ("1-Wire" in _spi_blob and "DQ" in _spi_blob)
+                or ("1-Wire" in _spi_blob
+                    and "parasitic power" in _spi_blob.lower())
+                or ("Match ROM" in _spi_blob and "Skip ROM" in _spi_blob
+                    and "Search ROM" in _spi_blob))
+            if _is_onewire:
+                _onewire_ic_name = "1-Wire bus (Maxim AN148 Reliable 1-Wire Networks)"
+                try:
+                    from onewire_protocol_synth import apply_onewire_synth as _apply_onewire
+                    _apply_onewire(_gd_r55, _is_onewire, _onewire_ic_name)
+                    print(f"      → R71/R72/R73 1-Wire synth applied (is_onewire={_is_onewire})")
+                except Exception as _onewire_err:
+                    print(f"      1-Wire synth FAILED (fail-open): {_onewire_err}",
+                          file=sys.stderr)
+            # v0.1.84 — JTAG IEEE 1149.1 structural sub-detector.
+            # 4-pin TAP signature: TCK + TMS + TDI + TDO, OR the unique
+            # 16-state TAP FSM state names (TestLogicReset / RunTestIdle
+            # / SelectDRScan / CaptureDR / ShiftDR / etc.).
+            _is_jtag = (
+                ("TCK" in _spi_blob and "TMS" in _spi_blob
+                    and "TDI" in _spi_blob and "TDO" in _spi_blob)
+                or ("TestLogicReset" in _spi_blob
+                    and "ShiftIR" in _spi_blob
+                    and "ShiftDR" in _spi_blob)
+                or ("IEEE 1149.1" in _spi_blob
+                    and "boundary scan" in _spi_blob.lower()))
+            if _is_jtag:
+                _jtag_ic_name = "IEEE 1149.1 JTAG TAP Controller (TI SSYA002C primer)"
+                try:
+                    from jtag_protocol_synth import apply_jtag_synth as _apply_jtag
+                    _apply_jtag(_gd_r55, _is_jtag, _jtag_ic_name)
+                    print(f"      → R74/R75/R76 JTAG synth applied (is_jtag={_is_jtag})")
+                except Exception as _jtag_err:
+                    print(f"      JTAG synth FAILED (fail-open): {_jtag_err}",
+                          file=sys.stderr)
+            # v0.1.84 — MIPI D-PHY / CSI-2 structural sub-detector.
+            # Differential clock+data lanes + HS/LP signaling + CSI-2
+            # packet layer. PDF extractors often elide "-" punctuation, so
+            # match both "D-PHY"/"DPHY" + "MIPI". For specs that have full
+            # protocol detail, the Clock-Lane/Data-Lane/Long-Packet
+            # signatures lock in.
+            _is_mipi = (
+                ("MIPI" in _spi_blob
+                    and ("D-PHY" in _spi_blob or "DPHY" in _spi_blob))
+                or ("CSI-2" in _spi_blob and "Long Packet" in _spi_blob
+                    and "Short Packet" in _spi_blob)
+                or ("D-PHY" in _spi_blob and "Clock Lane" in _spi_blob
+                    and "Data Lane" in _spi_blob)
+                or ("MIPI" in _spi_blob and "HS" in _spi_blob
+                    and "LP" in _spi_blob
+                    and ("D-PHY" in _spi_blob or "CSI" in _spi_blob)))
+            if _is_mipi:
+                _mipi_ic_name = "MIPI D-PHY / CSI-2 (TI SLLA414 application note)"
+                try:
+                    from mipi_protocol_synth import apply_mipi_synth as _apply_mipi
+                    _apply_mipi(_gd_r55, _is_mipi, _mipi_ic_name)
+                    print(f"      → R77/R78/R79 MIPI synth applied (is_mipi={_is_mipi})")
+                except Exception as _mipi_err:
+                    print(f"      MIPI synth FAILED (fail-open): {_mipi_err}",
+                          file=sys.stderr)
+            # v0.1.84 — PCI Express structural sub-detector.
+            # Layered TL/DLL/PHY signature: "TLP" + "DLLP" + "LTSSM",
+            # OR "PCIe" + "PCI Express" + "Transaction Layer" + "Data
+            # Link Layer", OR "8b/10b" + "PCI Express".
+            _is_pcie = (
+                ("TLP" in _spi_blob and "DLLP" in _spi_blob
+                    and "LTSSM" in _spi_blob)
+                or ("PCI Express" in _spi_blob
+                    and "Transaction Layer" in _spi_blob
+                    and "Data Link Layer" in _spi_blob)
+                or ("8b/10b" in _spi_blob and "PCI Express" in _spi_blob))
+            if _is_pcie:
+                _pcie_ic_name = "PCI Express Base Specification Rev 1.0"
+                try:
+                    from pcie_protocol_synth import apply_pcie_synth as _apply_pcie
+                    _apply_pcie(_gd_r55, _is_pcie, _pcie_ic_name)
+                    print(f"      → R80/R81/R82 PCIe synth applied (is_pcie={_is_pcie})")
+                except Exception as _pcie_err:
+                    print(f"      PCIe synth FAILED (fail-open): {_pcie_err}",
+                          file=sys.stderr)
+            # v0.1.84 — SD / MMC storage-protocol structural sub-detector.
+            # Signatures: "CMD0" + "ACMD41" + ("CID" + "CSD" + "OCR"),
+            # OR "SD Card" + "CMD" + "DAT" + "block transfer", OR
+            # "MultiMediaCard" + "CMD line" + "Response", OR "eMMC" +
+            # "CMD" + ("HS200" OR "HS400").
+            _is_sdmmc = (
+                ("CMD0" in _spi_blob and "ACMD41" in _spi_blob
+                    and "CID" in _spi_blob and "CSD" in _spi_blob
+                    and "OCR" in _spi_blob)
+                or ("SD Card" in _spi_blob and "CMD line" in _spi_blob
+                    and "DAT" in _spi_blob)
+                or ("MultiMediaCard" in _spi_blob
+                    and "CMD line" in _spi_blob)
+                or ("SD Memory Card" in _spi_blob
+                    and ("CID" in _spi_blob or "CSD" in _spi_blob)))
+            if _is_sdmmc:
+                _sdmmc_ic_name = "SD Memory Card (SD Simplified Physical Layer Specification)"
+                try:
+                    from sdmmc_protocol_synth import apply_sdmmc_synth as _apply_sdmmc
+                    _apply_sdmmc(_gd_r55, _is_sdmmc, _sdmmc_ic_name)
+                    print(f"      → R83/R84/R85 SD/MMC synth applied (is_sdmmc={_is_sdmmc})")
+                except Exception as _sdmmc_err:
+                    print(f"      SD/MMC synth FAILED (fail-open): {_sdmmc_err}",
                           file=sys.stderr)
     except Exception as _r55_err:
         print(f"      R53/R54/R55 synth FAILED (fail-open): {_r55_err}",
