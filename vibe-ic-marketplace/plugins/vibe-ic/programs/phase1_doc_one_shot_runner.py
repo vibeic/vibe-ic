@@ -47986,6 +47986,45 @@ def main() -> int:
             except Exception as e:
                 print(f"      seed-canonical extraction_patterns FAILED: {e}")
 
+    # v0.1.65 capture (R19): protocol-spec L8_RTL_CONSTANTS width parameters
+    # extraction. Bus-interconnect protocols define signal widths via
+    # `<signal>[<msb>:<lsb>]` brackets and named _WIDTH / _BITS parameters
+    # with legal-value lists. The chip-shape L8 emitter doesn't carry these.
+    # Captured from v0.1.64 parity loop iter 1: L8 had 90 ABSENT findings,
+    # almost all matching this signal-width pattern. Generic regex catalog,
+    # no brand keywords.
+    print(f"[14b2/15] L8 protocol-width extract (R19) ...")
+    try:
+        from phase1_protocol_spec_extract import extract_l8_protocol_widths as _l8_widths
+        from ic_class_profile import detect_ic_class as _detect2
+        _profile = _detect2(project)
+        _ic_class = _profile.get("ic_class", "unknown") if isinstance(_profile, dict) else "unknown"
+        # Only for classes where L8 protocol widths make sense
+        if _ic_class == "bus_interconnect_protocol":
+            _all_text = "\n\n".join(v for v in (extracted or {}).values()
+                                       if isinstance(v, str))
+            _widths_payload = _l8_widths(_all_text)
+            # Merge into existing L8_RTL_CONSTANTS — read, overlay, rewrite
+            _l8_path = _pl.generated_docs_dir(project) / "L8_RTL_CONSTANTS.json"
+            if _l8_path.is_file():
+                try:
+                    _l8_existing = json.loads(_l8_path.read_text())
+                except Exception:
+                    _l8_existing = {}
+                # Overlay new keys; preserve existing chip-shape keys for any
+                # downstream consumer that still reads them.
+                _l8_existing["width_parameters"] = _widths_payload["width_parameters"]
+                _l8_existing.setdefault("extraction_strategy", {})[
+                    "l8_protocol_widths_v0_1_65"] = (
+                    f"R19 extractor: width_parameters="
+                    f"{len(_widths_payload['width_parameters'])}")
+                _l8_path.write_text(json.dumps(_l8_existing, indent=2, ensure_ascii=False) + "\n")
+                print(f"      → L8_RTL_CONSTANTS overlay: "
+                      f"width_parameters={len(_widths_payload['width_parameters'])}")
+    except Exception as _l8_err:
+        print(f"      L8 widths extract FAILED (fail-open): {_l8_err}",
+              file=sys.stderr)
+
     # v0.1.62 capture (R14): wire phase1_protocol_spec_extract.py L14-L18
     # extractors into the runner. The extractors existed since v0.1.51 but
     # were never invoked from the doc-mode pipeline — dead code, same

@@ -666,5 +666,159 @@ def _cli() -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# L8C — Protocol Width Parameters (v0.1.65 / R19)
+# ---------------------------------------------------------------------------
+# Bus-interconnect protocol specs define signal widths via two complementary
+# patterns:
+#
+#   (1) Named parameters like DATA_WIDTH / ADDR_WIDTH / ID_WIDTH
+#       Implementation-defined: spec gives legal values, e.g.
+#       "DATA_WIDTH can be 8, 16, 32, 64, 128, 256, 512, or 1024 bits"
+#
+#   (2) Signal-bit-index brackets like AxLEN[7:0] / AxSIZE[2:0]
+#       Fixed-width per signal: width = msb - lsb + 1
+#
+# This extractor harvests both into width_parameters[<name>] for L8_RTL_CONSTANTS.
+# Captured from v0.1.64 loop iteration 1 — biggest single ABSENT cluster
+# was L8 (90 findings), almost all of which were these width entries that
+# the chip-shape L8 emitter doesn't carry.
+#
+# General: any protocol that defines signal widths via either pattern
+# benefits. No brand names (AMBA / AXI etc.) in the regex catalog.
+
+# Pattern (2) — `<signal>[<msb>:<lsb>]` and `<signal>[<bit>]`
+_L8_SIGNAL_BIT_RE = re.compile(
+    r"\b([A-Z_][A-Za-z][A-Za-z0-9_]+)"
+    r"\[(\d+)(?::(\d+))?\]"
+)
+
+# Pattern (1) — `<NAME>_WIDTH` referenced with "can be", "supports", "legal",
+# or a number-list nearby. Conservative: only flag NAMEs ending _WIDTH or _BITS.
+_L8_WIDTH_NAME_RE = re.compile(
+    r"\b([A-Z_][A-Z0-9_]*(?:_WIDTH|_BITS))\b"
+)
+
+# Number-list detector (e.g. "8, 16, 32, 64, 128, 256, 512, or 1024")
+# Captures comma-separated number lists, optionally with "or"/"and" before
+# the last entry (common spec prose form).
+_L8_NUM_LIST_RE = re.compile(
+    r"\b(\d{1,4}(?:\s*,\s*(?:or\s+|and\s+)?\d{1,4}){2,})\b"
+)
+
+
+def extract_l8_protocol_widths(text: str) -> Dict[str, Any]:
+    """Extract signal-width parameters from a bus-protocol spec text.
+
+    Returns a dict shaped as:
+      {
+        "width_parameters": {
+            "<signal>": {"width_bits": <int>, "evidence": [...]},
+            ...
+        },
+        "named_parameters": {
+            "DATA_WIDTH": {"legal_values": [8, 16, ...], "evidence": [...]},
+            ...
+        },
+        "extracted_by": "extract_l8_protocol_widths v0.1.65",
+      }
+    """
+    lines = _lines_of(text)
+    signal_widths: Dict[str, Dict[str, Any]] = {}
+    named_params: Dict[str, Dict[str, Any]] = {}
+
+    # Pass 1: gather <signal>[N:M] occurrences and infer per-signal width.
+    # We keep the WIDEST observed range per signal — when a spec defines
+    # AxLEN[7:0] for AXI4 but mentions AxLEN[3:0] for AXI3, we surface
+    # the wider value and record both occurrences as evidence.
+    for i, line in enumerate(lines):
+        for m in _L8_SIGNAL_BIT_RE.finditer(line):
+            sig = m.group(1)
+            msb = int(m.group(2))
+            lsb_str = m.group(3)
+            lsb = int(lsb_str) if lsb_str is not None else msb
+            width = abs(msb - lsb) + 1
+            entry = signal_widths.setdefault(sig, {
+                "max_width_bits": 0,
+                "observed_widths": set(),
+                "evidence": [],
+            })
+            entry["max_width_bits"] = max(entry["max_width_bits"], width)
+            entry["observed_widths"].add(width)
+            if len(entry["evidence"]) < 3:  # keep evidence bounded
+                entry["evidence"].append({
+                    "line": i + 1, "quote": line.strip()[:200]})
+
+    # Pass 2: gather _WIDTH / _BITS named parameters and look for legal-
+    # value lists in the same line or the next 3 lines.
+    for i, line in enumerate(lines):
+        for m in _L8_WIDTH_NAME_RE.finditer(line):
+            name = m.group(1)
+            entry = named_params.setdefault(name, {
+                "legal_values": set(),
+                "mentioned": 0,
+                "evidence": [],
+            })
+            entry["mentioned"] += 1
+            # Look for "can be N, N, N, ..." in this and next 3 lines.
+            ctx = " ".join(lines[i:i + 4])
+            for num_m in _L8_NUM_LIST_RE.finditer(ctx):
+                # Strip "or"/"and" prefixes and split on commas
+                raw = num_m.group(1)
+                nums = []
+                for piece in raw.split(","):
+                    piece = re.sub(r"^\s*(?:or|and)\s+", "", piece.strip(),
+                                    flags=re.IGNORECASE)
+                    try:
+                        nums.append(int(piece))
+                    except ValueError:
+                        continue
+                if len(nums) < 3:
+                    continue
+                # Reject obviously-page-number lists: small spread AND
+                # max stays in page-number range (<= 100).
+                spread = max(nums) - min(nums)
+                if spread <= 4 and max(nums) <= 100:
+                    continue
+                # Reject if max < 4 (a list of small constants, not widths)
+                if max(nums) < 4:
+                    continue
+                entry["legal_values"].update(nums)
+                if len(entry["evidence"]) < 3:
+                    entry["evidence"].append({
+                        "line": i + 1, "quote": line.strip()[:200]})
+                break  # one list per occurrence
+
+    # v0.1.65 — emit under `width_parameters.*` so the namespace matches the
+    # canonical agent-extracted L8 shape (Claude wraps content as
+    # width_parameters.<SIGNAL>_width / .<NAME>_bits / .DATA_WIDTH_bits.legal_values).
+    # The parity tool unwraps Claude's `fields` envelope so both ends compare
+    # under width_parameters.* once R19 lands.
+    width_params: Dict[str, Any] = {}
+    # Named parameter slot
+    for name, e in named_params.items():
+        if not e["legal_values"]:
+            continue
+        # E.g. DATA_WIDTH → width_parameters.DATA_WIDTH_bits = {legal_values: [...]}
+        slot = f"{name}_bits"
+        width_params[slot] = {
+            "legal_values": sorted(e["legal_values"]),
+            "evidence": e["evidence"],
+        }
+    # Signal-bit-index slot — emit width_parameters.<signal>_width = {bits: N, observed: [...]}
+    for sig, e in signal_widths.items():
+        slot = f"{sig}_width"
+        width_params[slot] = {
+            "bits": e["max_width_bits"],
+            "observed_widths": sorted(e["observed_widths"]),
+            "evidence": e["evidence"],
+        }
+
+    return {
+        "width_parameters": width_params,
+        "extracted_by": "extract_l8_protocol_widths v0.1.65",
+    }
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(_cli())

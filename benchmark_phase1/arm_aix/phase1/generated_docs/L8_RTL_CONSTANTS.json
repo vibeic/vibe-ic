@@ -41,9 +41,898 @@
         "new_value": "UNKNOWN_IC",
         "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
       }
-    ]
+    ],
+    "l8_protocol_widths_v0_1_65": "R19 extractor: width_parameters=51"
   },
   "extraction_evidence": {
     "input/docs/IHI0022H_amba_axi_protocol_spec.pdf": []
+  },
+  "width_parameters": {
+    "DATA_WIDTH_bits": {
+      "legal_values": [
+        8,
+        16,
+        32,
+        64,
+        128,
+        256,
+        512,
+        1024
+      ],
+      "evidence": [
+        {
+          "line": 20198,
+          "quote": "DATA_WIDTH                   8        1024                  WDATA,                •        32 or 64 for AXI4-Lite."
+        }
+      ]
+    },
+    "ARLEN_width": {
+      "bits": 8,
+      "observed_widths": [
+        8
+      ],
+      "evidence": [
+        {
+          "line": 2141,
+          "quote": "•     ARLEN[7:0], for read transfers"
+        },
+        {
+          "line": 5528,
+          "quote": "master can calculate the last read data transfer from the burst length ARLEN[7:0] signals."
+        },
+        {
+          "line": 15604,
+          "quote": "ARLEN                  The burst length must be 1, which means ARLEN[7:0] must be 0x00. See Address"
+        }
+      ]
+    },
+    "AWLEN_width": {
+      "bits": 8,
+      "observed_widths": [
+        8
+      ],
+      "evidence": [
+        {
+          "line": 2142,
+          "quote": "•     AWLEN[7:0], for write transfers"
+        },
+        {
+          "line": 5523,
+          "quote": "can calculate the last write data transfer from the burst length AWLEN[7:0] signals."
+        }
+      ]
+    },
+    "AxLEN_width": {
+      "bits": 8,
+      "observed_widths": [
+        4,
+        8
+      ],
+      "evidence": [
+        {
+          "line": 2153,
+          "quote": "Burst_Length = AxLEN[3:0] + 1"
+        },
+        {
+          "line": 2157,
+          "quote": "Burst_Length = AxLEN[7:0] + 1"
+        }
+      ]
+    },
+    "ARSIZE_width": {
+      "bits": 3,
+      "observed_widths": [
+        3
+      ],
+      "evidence": [
+        {
+          "line": 2201,
+          "quote": "•    ARSIZE[2:0], for read transfers"
+        }
+      ]
+    },
+    "AWSIZE_width": {
+      "bits": 3,
+      "observed_widths": [
+        3
+      ],
+      "evidence": [
+        {
+          "line": 2202,
+          "quote": "•    AWSIZE[2:0], for write transfers"
+        }
+      ]
+    },
+    "AxSIZE_width": {
+      "bits": 3,
+      "observed_widths": [
+        3
+      ],
+      "evidence": [
+        {
+          "line": 2210,
+          "quote": "AxSIZE[2:0]         Bytes in transfer"
+        }
+      ]
+    },
+    "ARBURST_width": {
+      "bits": 2,
+      "observed_widths": [
+        2
+      ],
+      "evidence": [
+        {
+          "line": 2280,
+          "quote": "•     ARBURST[1:0], for read transfers"
+        }
+      ]
+    },
+    "AWBURST_width": {
+      "bits": 2,
+      "observed_widths": [
+        2
+      ],
+      "evidence": [
+        {
+          "line": 2281,
+          "quote": "•     AWBURST[1:0], for write transfers"
+        }
+      ]
+    },
+    "AxBURST_width": {
+      "bits": 2,
+      "observed_widths": [
+        2
+      ],
+      "evidence": [
+        {
+          "line": 2289,
+          "quote": "AxBURST[1:0]           Burst type"
+        }
+      ]
+    },
+    "WDATA_width": {
+      "bits": 64,
+      "observed_widths": [
+        32,
+        64
+      ],
+      "evidence": [
+        {
+          "line": 2607,
+          "quote": "WDATA[31:0]"
+        },
+        {
+          "line": 2636,
+          "quote": "WDATA[63:0]"
+        },
+        {
+          "line": 2779,
+          "quote": "WDATA[31:0]"
+        }
+      ]
+    },
+    "RRESP_width": {
+      "bits": 3,
+      "observed_widths": [
+        1,
+        2,
+        3
+      ],
+      "evidence": [
+        {
+          "line": 2912,
+          "quote": "•     RRESP[1:0], for read transfers."
+        },
+        {
+          "line": 2933,
+          "quote": "RRESP[1:0]"
+        },
+        {
+          "line": 7071,
+          "quote": "Read data            RRESP[3:2]               Interconnect      See Read data channel (R) signals on page D2-171."
+        }
+      ]
+    },
+    "BRESP_width": {
+      "bits": 3,
+      "observed_widths": [
+        2,
+        3
+      ],
+      "evidence": [
+        {
+          "line": 2913,
+          "quote": "•     BRESP[1:0], for write transfers."
+        },
+        {
+          "line": 2934,
+          "quote": "BRESP[1:0]        Response"
+        },
+        {
+          "line": 12532,
+          "quote": "BRESP[1:0] = 0b00 write response."
+        }
+      ]
+    },
+    "AxCACHE_width": {
+      "bits": 4,
+      "observed_widths": [
+        1,
+        2,
+        4
+      ],
+      "evidence": [
+        {
+          "line": 3083,
+          "quote": "In AXI3, the AxCACHE[3:0] signals specify the Bufferable, Cacheable, and Allocate attributes of the transaction."
+        },
+        {
+          "line": 3107,
+          "quote": "AxCACHE[0], Bufferable (B) bit"
+        },
+        {
+          "line": 3115,
+          "quote": "AxCACHE[1], Cacheable (C) bit"
+        }
+      ]
+    },
+    "AWCACHE_width": {
+      "bits": 4,
+      "observed_widths": [
+        1,
+        2,
+        4
+      ],
+      "evidence": [
+        {
+          "line": 3318,
+          "quote": "AWCACHE[3]            Allocate              When asserted, the transaction must be looked up in a cache because"
+        },
+        {
+          "line": 3320,
+          "quote": "looked up in a cache if AWCACHE[2] is asserted."
+        },
+        {
+          "line": 3321,
+          "quote": "When deasserted, if AWCACHE[2] is also deasserted, then the"
+        }
+      ]
+    },
+    "ARCACHE_width": {
+      "bits": 4,
+      "observed_widths": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "evidence": [
+        {
+          "line": 3371,
+          "quote": "ARCACHE[3]        Other Allocate        When asserted, the transaction must be looked up in a cache because"
+        },
+        {
+          "line": 3374,
+          "quote": "transaction must also be looked up in a cache if ARCACHE[2] is"
+        },
+        {
+          "line": 3376,
+          "quote": "When deasserted, if ARCACHE[2] is also deasserted, then the"
+        }
+      ]
+    },
+    "ARPROT_width": {
+      "bits": 3,
+      "observed_widths": [
+        1,
+        3
+      ],
+      "evidence": [
+        {
+          "line": 3761,
+          "quote": "•    ARPROT[2:0] defines the access permissions for read accesses."
+        },
+        {
+          "line": 23166,
+          "quote": "ARMPAM                          11      M        ARPROT[1]     MPAM_Support                         C       C              C           C             C       N"
+        }
+      ]
+    },
+    "AWPROT_width": {
+      "bits": 3,
+      "observed_widths": [
+        1,
+        3
+      ],
+      "evidence": [
+        {
+          "line": 3762,
+          "quote": "•    AWPROT[2:0] defines the access permissions for write accesses."
+        },
+        {
+          "line": 22963,
+          "quote": "AWMPAM                          11      M        AWPROT[1]     MPAM_Support                         C       C              C           C             C       N"
+        }
+      ]
+    },
+    "AxPROT_width": {
+      "bits": 3,
+      "observed_widths": [
+        1,
+        3
+      ],
+      "evidence": [
+        {
+          "line": 3765,
+          "quote": "Table A4-6 shows the AxPROT[2:0] encoding."
+        },
+        {
+          "line": 3787,
+          "quote": "of privilege to memory access. AxPROT[0] identifies an access as unprivileged or privileged."
+        },
+        {
+          "line": 3797,
+          "quote": "security to memory access. AxPROT[1] identifies an access as Secure or Non-secure. AxPROT[1]"
+        }
+      ]
+    },
+    "AxLOCK_width": {
+      "bits": 2,
+      "observed_widths": [
+        2
+      ],
+      "evidence": [
+        {
+          "line": 4793,
+          "quote": "AxLOCK[1:0]      Access type"
+        }
+      ]
+    },
+    "AWLOCK_width": {
+      "bits": 2,
+      "observed_widths": [
+        2
+      ],
+      "evidence": [
+        {
+          "line": 4818,
+          "quote": "•      AWLOCK[1:0] = 0b10 is converted to a normal write transaction, AWLOCK = 0b0"
+        }
+      ]
+    },
+    "ARLOCK_width": {
+      "bits": 2,
+      "observed_widths": [
+        2
+      ],
+      "evidence": [
+        {
+          "line": 4819,
+          "quote": "•      ARLOCK[1:0] = 0b10 is converted to a normal read transaction, ARLOCK = 0b0"
+        }
+      ]
+    },
+    "ARDOMAIN_width": {
+      "bits": 2,
+      "observed_widths": [
+        2
+      ],
+      "evidence": [
+        {
+          "line": 7057,
+          "quote": "Read address         ARDOMAIN[1:0]            Master            See Read address channel (AR) signals on"
+        },
+        {
+          "line": 7943,
+          "quote": "ARDOMAIN[1:0]           Master       Indicates the shareability domain of a read transaction"
+        },
+        {
+          "line": 8169,
+          "quote": "Read address channel           ARDOMAIN[1:0]          Master       Indicates shareability domain of a read transaction"
+        }
+      ]
+    },
+    "ARSNOOP_width": {
+      "bits": 4,
+      "observed_widths": [
+        4
+      ],
+      "evidence": [
+        {
+          "line": 7059,
+          "quote": "ARSNOOP[3:0]             Master"
+        },
+        {
+          "line": 7941,
+          "quote": "ARSNOOP[3:0]            Master       Indicates the transaction type for Shareable read transactions"
+        },
+        {
+          "line": 8327,
+          "quote": "Read address channel         ARSNOOP[3:0]          Master       Indicates the transaction type for Shareable read"
+        }
+      ]
+    },
+    "ARBAR_width": {
+      "bits": 2,
+      "observed_widths": [
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "line": 7061,
+          "quote": "ARBAR[1:0]               Master"
+        },
+        {
+          "line": 7945,
+          "quote": "ARBAR[1:0]              Master       Indicates whether a transaction is a read barrier"
+        },
+        {
+          "line": 8297,
+          "quote": "Read address channel         ARBAR[1:0]           Master    Indicates whether a transaction is a"
+        }
+      ]
+    },
+    "AWDOMAIN_width": {
+      "bits": 2,
+      "observed_widths": [
+        2
+      ],
+      "evidence": [
+        {
+          "line": 7063,
+          "quote": "Write address        AWDOMAIN[1:0]            Master            See Write address channel (AW) signals on"
+        },
+        {
+          "line": 7958,
+          "quote": "AWDOMAIN[1:0]               Master       Indicates the shareability domain of a write transaction"
+        },
+        {
+          "line": 8171,
+          "quote": "Write address channel          AWDOMAIN[1:0]          Master       Indicates shareability domain of a write transaction"
+        }
+      ]
+    },
+    "AWSNOOP_width": {
+      "bits": 3,
+      "observed_widths": [
+        1,
+        3
+      ],
+      "evidence": [
+        {
+          "line": 7065,
+          "quote": "AWSNOOP[2:0]             Master"
+        },
+        {
+          "line": 7956,
+          "quote": "AWSNOOP[2:0]                Master       Indicates the transaction type for Shareable write transactions"
+        },
+        {
+          "line": 8330,
+          "quote": "Write address channel        AWSNOOP[2:0]          Master       Indicates the transaction type for Shareable write"
+        }
+      ]
+    },
+    "AWBAR_width": {
+      "bits": 2,
+      "observed_widths": [
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "line": 7067,
+          "quote": "AWBAR[1:0]               Master"
+        },
+        {
+          "line": 7960,
+          "quote": "AWBAR[1:0]                  Master       Indicates whether a transaction is a write barrier"
+        },
+        {
+          "line": 8300,
+          "quote": "Write address channel        AWBAR[1:0]           Master    Indicates whether a transaction is a"
+        }
+      ]
+    },
+    "ACSNOOP_width": {
+      "bits": 4,
+      "observed_widths": [
+        4
+      ],
+      "evidence": [
+        {
+          "line": 7123,
+          "quote": "ACSNOOP[3:0]               Interconnect"
+        },
+        {
+          "line": 8017,
+          "quote": "ACSNOOP[3:0]             Interconnect      Snoop transaction type"
+        },
+        {
+          "line": 9146,
+          "quote": "ACSNOOP[3:0]             Interconnect             Snoop transaction type. See Table D3-19"
+        }
+      ]
+    },
+    "ACPROT_width": {
+      "bits": 3,
+      "observed_widths": [
+        1,
+        3
+      ],
+      "evidence": [
+        {
+          "line": 7125,
+          "quote": "ACPROT[2:0]                Interconnect"
+        },
+        {
+          "line": 8019,
+          "quote": "ACPROT[2:0]b             Interconnect      Protection attributes of a snoop transaction"
+        },
+        {
+          "line": 8022,
+          "quote": "b. The ACE specification only assigns meaning to ACPROT[1]."
+        }
+      ]
+    },
+    "CRRESP_width": {
+      "bits": 5,
+      "observed_widths": [
+        1,
+        5
+      ],
+      "evidence": [
+        {
+          "line": 7131,
+          "quote": "CRRESP[4:0]                Master"
+        },
+        {
+          "line": 8037,
+          "quote": "CRRESP[4:0]        Master            Snoop response, indicates the status of a snoop transfer"
+        },
+        {
+          "line": 9250,
+          "quote": "CRRESP[4:0]        Master            Snoop response.          Read response, indicates the status of a snoop"
+        }
+      ]
+    },
+    "AxDOMAIN_width": {
+      "bits": 2,
+      "observed_widths": [
+        2
+      ],
+      "evidence": [
+        {
+          "line": 8195,
+          "quote": "Table D3-2 shows the AxDOMAIN[1:0] signal encoding."
+        },
+        {
+          "line": 8199,
+          "quote": "AxDOMAIN[1:0]        Domain"
+        }
+      ]
+    },
+    "AxBAR_width": {
+      "bits": 2,
+      "observed_widths": [
+        1,
+        2
+      ],
+      "evidence": [
+        {
+          "line": 8305,
+          "quote": "In this specification, AxBAR indicates ARBAR or AWBAR. Table D3-5 shows the AxBAR[1:0] signal encoding:"
+        },
+        {
+          "line": 8309,
+          "quote": "AxBAR[1:0]        Barrier type"
+        },
+        {
+          "line": 8762,
+          "quote": "For a barrier transaction, as indicated by AxBAR[0] equal to 1, constraints apply to the read address and write"
+        }
+      ]
+    },
+    "AWCMO_width": {
+      "bits": 2,
+      "observed_widths": [
+        2
+      ],
+      "evidence": [
+        {
+          "line": 13216,
+          "quote": "AWCMO[1:0]                       Write address channel CMO indicator."
+        },
+        {
+          "line": 13363,
+          "quote": "AWCMO[1:0]           0b00: CleanInvalid"
+        }
+      ]
+    },
+    "VMID_width": {
+      "bits": 8,
+      "observed_widths": [
+        4,
+        8
+      ],
+      "evidence": [
+        {
+          "line": 15818,
+          "quote": "32-bit        32-bit       All versions       -            -               -             VMID[7:0]      ASID[7:0]"
+        },
+        {
+          "line": 15820,
+          "quote": "40-bit        32-bit       All versions       -            -               SBZ           VMID[7:0]      ASID[7:0]"
+        },
+        {
+          "line": 15822,
+          "quote": "41-bit       v8 and above       -            -               ASID[15:8]    VMID[7:0]      ASID[7:0]"
+        }
+      ]
+    },
+    "ASID_width": {
+      "bits": 8,
+      "observed_widths": [
+        8
+      ],
+      "evidence": [
+        {
+          "line": 15818,
+          "quote": "32-bit        32-bit       All versions       -            -               -             VMID[7:0]      ASID[7:0]"
+        },
+        {
+          "line": 15820,
+          "quote": "40-bit        32-bit       All versions       -            -               SBZ           VMID[7:0]      ASID[7:0]"
+        },
+        {
+          "line": 15822,
+          "quote": "41-bit       v8 and above       -            -               ASID[15:8]    VMID[7:0]      ASID[7:0]"
+        }
+      ]
+    },
+    "AxVMIDEXT_width": {
+      "bits": 4,
+      "observed_widths": [
+        4
+      ],
+      "evidence": [
+        {
+          "line": 15964,
+          "quote": "•    VMID[11:8] is transported using AxVMIDEXT[3:0]"
+        },
+        {
+          "line": 15979,
+          "quote": "•    VMID[11:8] is transported using AxVMIDEXT[3:0] in the first part"
+        },
+        {
+          "line": 15980,
+          "quote": "•    VMID[15:12] is transported using AxVMIDEXT[3:0] in the second part"
+        }
+      ]
+    },
+    "AxADDR_width": {
+      "bits": 16,
+      "observed_widths": [
+        4,
+        8,
+        16
+      ],
+      "evidence": [
+        {
+          "line": 15965,
+          "quote": "•    VMID[15:12] is transported using AxADDR[43:40]"
+        },
+        {
+          "line": 16032,
+          "quote": "[6]              VMID or VA             0b0             AxADDR[31:24] and AxVMIDEXT[3:0] must be zero,"
+        },
+        {
+          "line": 16034,
+          "quote": "0b1             AxADDR[31:24] and AxVMIDEXT[3:0] contains"
+        }
+      ]
+    },
+    "NUM_width": {
+      "bits": 3,
+      "observed_widths": [
+        2,
+        3
+      ],
+      "evidence": [
+        {
+          "line": 16102,
+          "quote": "[5:4]                    VA[5:4] or PA[5:4] or NUM[4:3]a"
+        },
+        {
+          "line": 16106,
+          "quote": "[2:0]                    NUM[2:0]a"
+        },
+        {
+          "line": 16154,
+          "quote": "[5:4]                   NUM[4:3]               A constant used as a multiplication factor in the range calculation"
+        }
+      ]
+    },
+    "AWATOP_width": {
+      "bits": 6,
+      "observed_widths": [
+        1,
+        3,
+        6
+      ],
+      "evidence": [
+        {
+          "line": 16946,
+          "quote": "AWATOP[5:0]            Description"
+        },
+        {
+          "line": 16959,
+          "quote": "For AtomicStore and AtomicLoad transactions AWATOP[3] indicates the endianness that is required for the atomic"
+        },
+        {
+          "line": 16964,
+          "quote": "The value of AWATOP[3] applies to arithmetic operations only and is ignored for bitwise logical operations."
+        }
+      ]
+    },
+    "AWSTASHNID_width": {
+      "bits": 11,
+      "observed_widths": [
+        11
+      ],
+      "evidence": [
+        {
+          "line": 17354,
+          "quote": "AWSTASHNID[10:0]           Node Identifier of the target for a stash operation"
+        },
+        {
+          "line": 17367,
+          "quote": "•       AWSTASHNID[10:0] must be driven to all zeros when AWSTASHNIDEN is deasserted."
+        },
+        {
+          "line": 18635,
+          "quote": "•     No stash target is supported. If present, AWSTASHNID[10:0], AWSTASHNIDEN, AWSTASHLPID[4:0],"
+        }
+      ]
+    },
+    "AWSTASHLPID_width": {
+      "bits": 5,
+      "observed_widths": [
+        5
+      ],
+      "evidence": [
+        {
+          "line": 17358,
+          "quote": "AWSTASHLPID[4:0]           Logical Processor Identifier within the target for a stash operation"
+        },
+        {
+          "line": 18635,
+          "quote": "•     No stash target is supported. If present, AWSTASHNID[10:0], AWSTASHNIDEN, AWSTASHLPID[4:0],"
+        }
+      ]
+    },
+    "VARQOSACCEPT_width": {
+      "bits": 4,
+      "observed_widths": [
+        4
+      ],
+      "evidence": [
+        {
+          "line": 17827,
+          "quote": "VARQOSACCEPT[3:0]                QoS acceptance level for read transactions"
+        }
+      ]
+    },
+    "VAWQOSACCEPT_width": {
+      "bits": 4,
+      "observed_widths": [
+        4
+      ],
+      "evidence": [
+        {
+          "line": 17829,
+          "quote": "VAWQOSACCEPT[3:0]                QoS acceptance level for write transactions."
+        }
+      ]
+    },
+    "AxMMUFLOW_width": {
+      "bits": 1,
+      "observed_widths": [
+        1
+      ],
+      "evidence": [
+        {
+          "line": 18363,
+          "quote": "AxMMUATST is equivalent to AxMMUFLOW[0] when"
+        },
+        {
+          "line": 18364,
+          "quote": "AxMMUFLOW[1] is deasserted."
+        }
+      ]
+    },
+    "AWNSAID_width": {
+      "bits": 4,
+      "observed_widths": [
+        4
+      ],
+      "evidence": [
+        {
+          "line": 18682,
+          "quote": "AWNSAID[3:0]          Master       Non-secure Access Identifier for a write transaction."
+        }
+      ]
+    },
+    "ARNSAID_width": {
+      "bits": 4,
+      "observed_widths": [
+        4
+      ],
+      "evidence": [
+        {
+          "line": 18684,
+          "quote": "ARNSAID[3:0]          Master       Non-secure Access Identifier for a read transaction."
+        }
+      ]
+    },
+    "CRNSAID_width": {
+      "bits": 4,
+      "observed_widths": [
+        4
+      ],
+      "evidence": [
+        {
+          "line": 18686,
+          "quote": "CRNSAID[3:0]a         Master       Non-secure Access Identifier for a snoop response."
+        }
+      ]
+    },
+    "ARMPAM_width": {
+      "bits": 11,
+      "observed_widths": [
+        11
+      ],
+      "evidence": [
+        {
+          "line": 19207,
+          "quote": "ARMPAM[10:0]           Master               Read address channel MPAM information"
+        }
+      ]
+    },
+    "AWMPAM_width": {
+      "bits": 11,
+      "observed_widths": [
+        11
+      ],
+      "evidence": [
+        {
+          "line": 19209,
+          "quote": "AWMPAM[10:0]           Master               Write address channel MPAM information"
+        }
+      ]
+    },
+    "AxMPAM_width": {
+      "bits": 9,
+      "observed_widths": [
+        1,
+        9
+      ],
+      "evidence": [
+        {
+          "line": 19218,
+          "quote": "MPAM_NS         Security indicator                 1               AxPROT[1]           AxMPAM[0]"
+        },
+        {
+          "line": 19220,
+          "quote": "PARTID          Partition identifier              9                0x000               AxMPAM[9:1]"
+        },
+        {
+          "line": 19222,
+          "quote": "PMG             Performance monitor group          1               0b0                 AxMPAM[10]"
+        }
+      ]
+    }
   }
 }
