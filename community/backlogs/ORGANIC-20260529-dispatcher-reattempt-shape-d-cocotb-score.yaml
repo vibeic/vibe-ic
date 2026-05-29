@@ -1,0 +1,60 @@
+type: enhancement
+severity: P4
+component: program:benchmark_dispatch
+plugin_version: "0.1.54"
+id: ORGANIC-20260529-dispatcher-reattempt-shape-d-cocotb-score
+submitted_at: 2026-05-29
+
+title: >-
+  benchmark_dispatch.py --reattempt-floor only scans pass_at_1.json (Shape-C
+  scoring artifact); Shape-D benchmarks (CVDP) emit cocotb_score.json with a
+  different schema, so the dispatcher reports "FIRST RUN" for benchmarks that
+  do have prior runs.
+
+pattern: |
+  Captured during the v0.1.53 CVDP N=1 Shape-D run. After v0.1.53 enshrined
+  the § 4.1 / § 8.1 default-reattempt policy, the dispatcher gained
+  --reattempt-floor:
+
+    cmd_reattempt_floor() searches benchmark_external/<bench>/**/pass_at_1.json,
+    picks the newest, prints the prior FAILing list.
+
+  For CVDP this said:
+    "No prior pass_at_1.json under benchmark_external/cvdp/
+     This is a FIRST RUN — there are no prior fails to re-attempt."
+
+  But there WAS a prior run: run_fresh_v0125/RESULT_v0125_fresh.md (PASS 9/9).
+  The dispatcher missed it because:
+    - Shape-D CVDP runs emit cocotb_score.json, not pass_at_1.json.
+    - v0.1.13-era runs predated score_cocotb_mcp.py so cocotb_score.json
+      also wasn't emitted; only a free-text RESULT.md exists.
+
+  Action consequence: NONE — there were no FAILs to re-attempt (prior was
+  PASS), and the user proceeded with --setup, which is the correct fallback.
+  But the "FIRST RUN" message is misleading.
+
+suggested_fix: |
+  Extend cmd_reattempt_floor() to:
+
+  1. If pass_at_1.json found → existing behaviour (per-problem fails list).
+  2. Else if cocotb_score.json (Shape D) found in the newest run dir under
+     benchmark_external/<bench>/ → report `tests / passed / failed / skipped`
+     summary and any FAILing test names if present in the score JSON.
+  3. Else if a RESULT.md or RESULT_*.md is present in the newest run dir →
+     report its first H1/headline so the user sees prior context instead of
+     "FIRST RUN".
+
+  Per-test FAIL extraction for Shape D requires score_cocotb_mcp.py to
+  also emit a per-test list (currently it only emits aggregate counts).
+  That's a separate sub-fix and probably wants a cocotb-pytest hook to
+  capture individual `test_<name>` PASS/FAIL outcomes.
+
+session_context: |
+  v0.1.53 CVDP N=1 Shape-D run. Filed as P4 because the dispatcher's action
+  (proceed with --setup when prior FAIL list is empty) was correct; only the
+  message was incomplete.
+
+related:
+  - ORGANIC-20260529-cvdp-jsonl-to-project-extractor — both touch CVDP
+    dispatcher; the JSONL extractor is the prerequisite for runnable
+    Shape-D corpus sweeps anyway.
