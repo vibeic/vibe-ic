@@ -2559,6 +2559,41 @@ def _l9_strategy_a0b_rst_h3_subsections_v1_6_313(
             }
 
 
+# v0.1.82 — for the digital benchmark l_doc loop (subservient SoC). SoC
+# integration specs list required sub-modules as NUMBERED sub-headings
+# (`### 8.2.1 SERV core(必含)`, `### 8.2.4 GPIO peripheral`) rather than a
+# bullet list under one heading, so the bullet extractor missed them and L9
+# carried submodules=[]. This heading extractor parses numbered sub-headings
+# in a submodule-integration-context doc. Chip-AGNOSTIC + input-docs only.
+_RE_L9_SUBMOD_NUM_HEADING = re.compile(
+    r'^#{2,4}\s*\d+(?:\.\d+)+\s+([^\n(（]+?)\s*(?:[\(（]|$)', re.M)
+_RE_L9_SUBMOD_DOC_CTX = re.compile(
+    r'(?i)sub[\s_-]?module|submodule|對外契約|module\s+integration|階層')
+
+
+def _l9_heading_submodule_extract(text: str) -> List[str]:
+    """Parse numbered sub-headings (`### N.N[.N] <name>`) of a submodule-
+    integration-context doc into submodule names. Skips section titles that
+    are themselves about the integration spec (not a concrete submodule)."""
+    if not text or not _RE_L9_SUBMOD_DOC_CTX.search(text):
+        return []
+    out: List[str] = []
+    # Section-title words (not concrete submodule names) to drop.
+    _skip = ('integration', 'spec', 'overview', 'sub-module', 'submodule',
+             '契約', '適用', '總覽', '概述', 'option', '選擇', '必要',
+             '層級', '不在', '約束', '範圍', '概覽', 'level', 'scope')
+    for m in _RE_L9_SUBMOD_NUM_HEADING.finditer(text):
+        nm = m.group(1).strip().strip('`*').strip()
+        if not nm or len(nm) > 48:
+            continue
+        low = nm.lower()
+        if any(w in low for w in _skip):
+            continue
+        if nm not in out:
+            out.append(nm)
+    return out
+
+
 def _l9_bullet_submodule_extract(text: str) -> List[str]:
     """Return list of submodule names from a `<heading>:` + bullet-
     list block under recognised L9 submodule-related headings.
@@ -24515,6 +24550,18 @@ def _extract_memmap_range_constants(
     return out
 
 
+# v0.1.82 — input assertion that the IC has NO SW-visible chip-level register
+# map (CPU-core / SoC whose control is ISA/CSR or firmware memory-mapping, not
+# a chip register file). Bilingual, negation/N-A anchored. Used by gen_l4 to
+# emit the honest L4 register_map_present=false flag. Chip-AGNOSTIC.
+_RE_L4_NO_REGMAP = re.compile(
+    r'(?i)status:\s*not[\s-]*applicable|'
+    r'無\s*SW-?visible\s*(?:chip[\s-]*(?:level)?\s*)?register|'
+    r'無\s*chip[\s-]*(?:level\s*)?register|沒有\s*(?:chip[\s-]*)?register|'
+    r'\bno\s+SW-?visible\s+(?:chip[\s-]*(?:level\s+)?)?register|'
+    r'不需\s*產生.*register\s*file')
+
+
 def gen_l4_regmap(project: Path,
                   extracted: Dict[str, str]) -> LDocResult:
     """L4: register / OTP layout + IP macro reference.
@@ -26469,6 +26516,24 @@ def gen_l4_regmap(project: Path,
         if _v1_6_512_encoding_lifted > 0:
             content["encoding_lifted_count_v1_6_512"] = (
                 _v1_6_512_encoding_lifted)
+
+    # v0.1.82 — honest L4 N/A flag. When NO registers were extracted AND the
+    # input register-map doc explicitly asserts there is no SW-visible chip
+    # register map, emit register_map_present=false so the gate's N/A escape
+    # applies (mirrors L5.no_analog / L12.no_calibration). Input-docs only.
+    _regs = content.get("registers")
+    if not (isinstance(_regs, list) and any(isinstance(r, dict) for r in _regs)):
+        for _f, _t in (extracted or {}).items():
+            fl = _f.lower()
+            if not ("register" in fl or "l4" in fl or "l5" in fl):
+                continue
+            if isinstance(_t, str) and _RE_L4_NO_REGMAP.search(_t):
+                content["register_map_present"] = False
+                evidence.setdefault(f"input/docs/{_f}", []).append({
+                    "literal": "register-map N/A assertion",
+                    "label": "input states no SW-visible chip register map",
+                })
+                break
 
     return _write_l_doc(project, "L4_REGMAP", content, evidence)
 
@@ -37377,6 +37442,21 @@ def gen_l9_integration_spec(project: Path,
     # v1.6.415 — for #297 P2. DSL-class submodule provenance counter.
     _v1_6_415_dsl_class_filtered = 0
     for fname, text in extracted.items():
+        # v0.1.82 — numbered submodule-contract sub-headings (SoC integration
+        # specs list required sub-modules as `### N.N <name>`). Input-docs only.
+        for nm in _l9_heading_submodule_extract(text or ""):
+            if nm in seen_submods:
+                continue
+            seen_submods.add(nm)
+            submodules.append({
+                "name": nm,
+                "instances": 1,
+                "type": "markdown submodule-contract heading",
+                "role": "documented submodule",
+                "low_confidence": True,
+            })
+            if len(submodules) >= 32:
+                break
         for nm in _l9_bullet_submodule_extract(text or ""):
             if nm in seen_submods:
                 continue
@@ -39386,6 +39466,16 @@ def gen_l11_otp_content(project: Path,
     return _write_l_doc(project, "L11_OTP_CONTENT", content, evidence)
 
 
+# v0.1.82 — input assertion that the part has NO calibration / trimming / OTP
+# trim. Bilingual (zh + en), negation-anchored. Used by gen_l12 to emit the
+# honest L12 no_calibration flag for pure-digital parts. Chip-AGNOSTIC.
+_RE_L12_NO_CALIBRATION = re.compile(
+    r'(?i)無\s*(?:trim|trimming|otp[\s-]*(?:based)?\s*cal|calibration|校準|校准)|'
+    r'不需\s*(?:calibration|trim|校準)|沒有\s*(?:calibration|trim|校準)|'
+    r'\bno\s+(?:calibration|trimming|trim)\b|'
+    r'\bnot\s+calibrat|\bno\s+otp[\s-]*based\s+calibration\b')
+
+
 def gen_l12_behavioral(project: Path,
                        extracted: Dict[str, str],
                        l3: dict) -> LDocResult:
@@ -39470,12 +39560,28 @@ def gen_l12_behavioral(project: Path,
     # v1.6.78 — closes #11 FLAG-EVIDENCE CONSISTENCY for L12.behavioral_sequences.
     no_behavioral_sequences_in_input = _flag_no_X_in_input(
         sequences, evidence, "behavioral_sequences")
+    # v0.1.82 — emit no_calibration when the input explicitly asserts the part
+    # has no calibration (e.g. "無 trimming", "無 OTP-based calibration", "no
+    # calibration / trimming"). Honest N/A for a pure-digital part; satisfies
+    # the L12 gate without fabricating calibration data. Input-docs only,
+    # chip-AGNOSTIC; only fires when no sequences were found.
+    no_calibration = False
+    if not sequences:
+        for _f, _t in (extracted or {}).items():
+            if isinstance(_t, str) and _RE_L12_NO_CALIBRATION.search(_t):
+                no_calibration = True
+                evidence.setdefault(f"input/docs/{_f}", []).append({
+                    "literal": "no-calibration assertion",
+                    "label": "input explicitly states no calibration/trimming",
+                })
+                break
     content = {
         "schema_version": 2,
         "doc_class": "behavioral_sequences",
         "ic_name": ic_name,
         "behavioral_sequences": sequences,
         "no_behavioral_sequences_in_input": no_behavioral_sequences_in_input,
+        "no_calibration": no_calibration,
     }
     return _write_l_doc(project, "L12_BEHAVIORAL_SEQUENCES", content, evidence)
 
@@ -49617,6 +49723,24 @@ def main() -> int:
                     print(f"      → R62/R63/R64 CAN synth applied (is_can={_is_can})")
                 except Exception as _can_err:
                     print(f"      CAN synth FAILED (fail-open): {_can_err}",
+                          file=sys.stderr)
+            # v0.1.82 — USB structural sub-detector (D+/D- pair + VBUS,
+            # OR USB 2.0 / 1.1 / 1.0 mention + NRZI, OR tiered-star +
+            # hub + endpoint + token / data / handshake terminology).
+            _is_usb = (
+                ("D+" in _spi_blob and "D-" in _spi_blob
+                    and "VBUS" in _spi_blob)
+                or ("USB" in _spi_blob and "NRZI" in _spi_blob)
+                or ("USB" in _spi_blob and "endpoint" in _spi_blob.lower()
+                    and "host controller" in _spi_blob.lower()))
+            if _is_usb:
+                _usb_ic_name = "Universal Serial Bus (USB 2.0)"
+                try:
+                    from usb_protocol_synth import apply_usb_synth as _apply_usb
+                    _apply_usb(_gd_r55, _is_usb, _usb_ic_name)
+                    print(f"      → R65/R66/R67 USB synth applied (is_usb={_is_usb})")
+                except Exception as _usb_err:
+                    print(f"      USB synth FAILED (fail-open): {_usb_err}",
                           file=sys.stderr)
     except Exception as _r55_err:
         print(f"      R53/R54/R55 synth FAILED (fail-open): {_r55_err}",

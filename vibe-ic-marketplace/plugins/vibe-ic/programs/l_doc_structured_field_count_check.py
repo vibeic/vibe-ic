@@ -287,6 +287,15 @@ def _check_l_doc(layer: int, data: dict,
                 "L3 cmd_protocol must carry a `crc_parameters` (or `crc`) "
                 "dict block (polynomial_hex / init_hex / bit_order / ...).")
     elif layer == 4:
+        # v0.1.82 — honest N/A escape, mirroring L5.no_analog /
+        # L12.no_calibration. A CPU-core / SoC spec can explicitly declare it
+        # has NO SW-visible chip-level register map (control via ISA/CSR or
+        # firmware-defined memory-mapping, not a chip register file). When the
+        # L4 doc carries `register_map_present: false` (set by phase1 only from
+        # an explicit input N/A assertion), the ≥5-entry floor does not apply.
+        if data.get("register_map_present") is False \
+                or data.get("no_register_map") is True:
+            return True, ""
         # Wave 32 — L4 owns registers + control_bits + otp_layout.
         # Either ≥5 typed register entries OR ≥5 populated otp_layout
         # sub-fields satisfies the minimum (chip-AGNOSTIC: regmap-only
