@@ -209,8 +209,17 @@ def _l3_has_commands(l3: Optional[dict]) -> bool:
     for k in ("commands", "command_table", "opcodes",
              "opcodes_supported", "opcode_set"):
         v = l3.get(k)
+        # v0.1.62: when every list entry is a hallucination-scrubbed opcode
+        # (hex == '<HALLUCINATION_SCRUBBED>'), treat the list as empty so a
+        # bus-protocol spec (which has no real opcodes) doesn't get
+        # mis-classified as digital_cmd_driven on the strength of placeholder
+        # OTP-template opcodes the runner emitted before scrubbing.
         if isinstance(v, list) and v:
-            return True
+            real = [op for op in v
+                    if not (isinstance(op, dict)
+                             and op.get("hex") == "<HALLUCINATION_SCRUBBED>")]
+            if real:
+                return True
         if isinstance(v, dict) and v:
             return True
     return False
@@ -499,6 +508,22 @@ def detect_ic_class(project_dir: Path) -> Dict[str, Any]:
         profile["ic_class"] = "digital_cmd_driven"
         return profile
 
+    # v0.1.62 — bus_interconnect_protocol detector. AMBA AXI/AHB/APB/ACE,
+    # Wishbone, TileLink, CHI, OCP, AvalonMM, STBus and similar all share a
+    # structural signature: per-direction channels carrying valid/ready (or
+    # req/ack) handshakes between explicit master/slave (or manager/subordinate)
+    # roles with burst transfers. The detector counts these structural
+    # features in L1+L2 description text — NO benchmark-specific brand names
+    # (per memory 'enhancements must be general, not keyword'). digital
+    # adders/filters/hashes don't talk about channels+handshake+master/slave,
+    # so this branch is positive only for genuine bus protocol specs.
+    if l1 is not None or l2 is not None:
+        if (not profile["has_analog"]
+                and not profile["has_command_protocol"]
+                and _looks_like_bus_interconnect_protocol(l1, l2)):
+            profile["ic_class"] = "bus_interconnect_protocol"
+            return profile
+
     # v1.6.523 — for #358 P2 root fix. Pure digital + no protocol + no analog +
     # L1/L2 present → digital_arithmetic_primitive (NOT bare_fpga, which
     # implies FPGA-only with no silicon target — wrong for ASIC datapath
@@ -513,6 +538,79 @@ def detect_ic_class(project_dir: Path) -> Dict[str, Any]:
 
     profile["ic_class"] = "unknown"
     return profile
+
+
+# v0.1.62 — bus_interconnect_protocol structural detector.
+# General, not bench-keyword: scores 6 orthogonal structural features in
+# L1+L2 description text and triggers on threshold ≥ 3. No brand strings.
+_BUS_PROTO_FEATURES: List[tuple[str, re.Pattern]] = [
+    # 1. valid/ready (or req/ack) handshake — the per-cycle commit primitive
+    ("valid_ready_handshake",
+     re.compile(r"\bvalid\b.{0,80}?\bready\b|\bready\b.{0,80}?\bvalid\b|"
+                r"\breq(?:uest)?\b.{0,40}?\back(?:nowledge)?\b",
+                re.IGNORECASE | re.DOTALL)),
+    # 2. channels — bus protocols partition into multiple typed channels
+    ("multiple_channels",
+     re.compile(r"\bchannels?\b", re.IGNORECASE)),
+    # 3. master/slave or manager/subordinate role labels
+    ("master_slave_roles",
+     re.compile(r"\b(?:master|manager)s?\b.{0,200}?"
+                r"\b(?:slave|subordinate|target)s?\b|"
+                r"\b(?:slave|subordinate|target)s?\b.{0,200}?"
+                r"\b(?:master|manager)s?\b",
+                re.IGNORECASE | re.DOTALL)),
+    # 4. burst transfers — addressed-then-streamed transactions
+    ("burst_transfers",
+     re.compile(r"\bbursts?\b|\bbeat(?:s|ed|ing)?\b\s+(?:of\s+)?(?:data|transfer)",
+                re.IGNORECASE)),
+    # 5. interconnect / topology / arbitration — protocol talks about fabric
+    ("interconnect_topology",
+     re.compile(r"\binterconnect\b|\barbitration\b|\bfabric\b",
+                re.IGNORECASE)),
+    # 6. handshake mentioned as a concept (separate from the literal pair)
+    ("handshake_concept",
+     re.compile(r"\bhandshakes?\b", re.IGNORECASE)),
+]
+
+
+def _harvest_strings(obj: Any, sink: List[str], max_strings: int = 4000,
+                      max_depth: int = 8) -> None:
+    """Walk nested dict/list and append every string leaf to `sink`. Bounded
+    so a 100KB L doc with 5000 keys doesn't blow out. Skips obvious metadata
+    fields (`extraction_evidence`, `extraction_strategy`) that contain only
+    snippets re-quoted from the input and would double-count features."""
+    if len(sink) >= max_strings or max_depth <= 0:
+        return
+    if isinstance(obj, str):
+        sink.append(obj)
+        return
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in ("extraction_evidence", "extraction_strategy",
+                     "auto_cited_sections", "vendor_short_literals"):
+                continue
+            _harvest_strings(v, sink, max_strings, max_depth - 1)
+    elif isinstance(obj, list):
+        for v in obj:
+            _harvest_strings(v, sink, max_strings, max_depth - 1)
+
+
+def _looks_like_bus_interconnect_protocol(
+        l1: Optional[dict], l2: Optional[dict]) -> bool:
+    """True iff the L1+L2 content exhibits ≥3 of the 6 bus-protocol structural
+    features. Walks ALL string leaves (not just specific keys) so the detector
+    works across L doc schema variations. NO benchmark-specific brand names
+    consulted — only structural concepts (per memory 'general, not keyword').
+    """
+    parts: List[str] = []
+    for layer in (l1, l2):
+        if isinstance(layer, dict):
+            _harvest_strings(layer, parts)
+    text = "\n".join(parts)
+    if not text:
+        return False
+    hits = sum(1 for _, pat in _BUS_PROTO_FEATURES if pat.search(text))
+    return hits >= 3
 
 
 # ---------------------------------------------------------------------

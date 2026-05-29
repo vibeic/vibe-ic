@@ -1,8 +1,4 @@
 {
-  "doc_id": "L16",
-  "doc_name": "L16_COMPLIANCE_PROPERTIES",
-  "applicability": "APPLICABLE",
-  "ic_class": "bus_interconnect_protocol",
   "fields": {
     "properties": [
       {
@@ -67,13 +63,13 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     A master interface must drive ARVALID, AWVALID, and WVALID LOW.",
+        "english_form": "•     A master interface must drive ARVALID, AWVALID, and WVALID LOW.",
         "line": 1645,
         "scope": "AR_channel"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     A slave interface must drive RVALID and BVALID LOW.",
+        "english_form": "•     A slave interface must drive RVALID and BVALID LOW.",
         "line": 1646,
         "scope": "R_channel"
       },
@@ -127,13 +123,13 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022    A write response must always follow the last write transfer in a write transaction.",
+        "english_form": "•    A write response must always follow the last write transfer in a write transaction.",
         "line": 1883,
         "scope": "B_channel"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022    Read data must always follow the read address of the data.",
+        "english_form": "•    Read data must always follow the read address of the data.",
         "line": 1884,
         "scope": "AR_channel"
       },
@@ -145,19 +141,19 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     The master must not wait for the slave to assert ARREADY before asserting ARVALID.",
+        "english_form": "•     The master must not wait for the slave to assert ARREADY before asserting ARVALID.",
         "line": 1951,
         "scope": "AR_channel"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     The slave must not wait for the master to assert RREADY before asserting RVALID.",
+        "english_form": "•     The slave must not wait for the master to assert RREADY before asserting RVALID.",
         "line": 1960,
         "scope": "R_channel"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     The slave must wait for both WVALID and WREADY to be asserted before asserting BVALID.",
+        "english_form": "•     The slave must wait for both WVALID and WREADY to be asserted before asserting BVALID.",
         "line": 1990,
         "scope": "W_channel"
       },
@@ -175,7 +171,7 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     The slave must not wait for the master to assert BREADY before asserting BVALID.",
+        "english_form": "•     The slave must not wait for the master to assert BREADY before asserting BVALID.",
         "line": 1994,
         "scope": "B_channel"
       },
@@ -217,13 +213,13 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022    For wrapping bursts, the burst length must be 2, 4, 8, or 16.",
+        "english_form": "•    For wrapping bursts, the burst length must be 2, 4, 8, or 16.",
         "line": 2160,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022    A burst must not cross a 4KB address boundary.",
+        "english_form": "•    A burst must not cross a 4KB address boundary.",
         "line": 2161,
         "scope": "general"
       },
@@ -235,13 +231,13 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     The start address must be aligned to the size of each transfer.",
+        "english_form": "•     The start address must be aligned to the size of each transfer.",
         "line": 2265,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     The length of the burst must be 2, 4, 8, or 16 transfers.",
+        "english_form": "•     The length of the burst must be 2, 4, 8, or 16 transfers.",
         "line": 2266,
         "scope": "general"
       },
@@ -313,7 +309,7 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     A transaction must be looked up in a cache if the value of AxCACHE[3:2] is not 0b00.",
+        "english_form": "•     A transaction must be looked up in a cache if the value of AxCACHE[3:2] is not 0b00.",
         "line": 3294,
         "scope": "general"
       },
@@ -337,31 +333,31 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     The write response must be obtained from the final destination.",
+        "english_form": "•     The write response must be obtained from the final destination.",
         "line": 3469,
         "scope": "B_channel"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     Read data must be obtained from the final destination.",
+        "english_form": "•     Read data must be obtained from the final destination.",
         "line": 3470,
         "scope": "R_channel"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     Reads must not be prefetched. Writes must not be merged.",
+        "english_form": "•     Reads must not be prefetched. Writes must not be merged.",
         "line": 3472,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2014      It must be obtained from the most recent version of the write.",
+        "english_form": "—      It must be obtained from the most recent version of the write.",
         "line": 3529,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2014      The data must not be cached to service a later read.",
+        "english_form": "—      The data must not be cached to service a later read.",
         "line": 3530,
         "scope": "general"
       },
@@ -379,7 +375,7 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     For Device Bufferable memory, read data must be obtained from the final destination.",
+        "english_form": "•     For Device Bufferable memory, read data must be obtained from the final destination.",
         "line": 3714,
         "scope": "R_channel"
       },
@@ -433,7 +429,7 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022      A transaction to a Peripheral region must be entirely contained within that region.",
+        "english_form": "•      A transaction to a Peripheral region must be entirely contained within that region.",
         "line": 4125,
         "scope": "general"
       },
@@ -487,7 +483,7 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     The burst length for an exclusive access must not exceed 16 transfers.",
+        "english_form": "•     The burst length for an exclusive access must not exceed 16 transfers.",
         "line": 4658,
         "scope": "general"
       },
@@ -499,13 +495,13 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     The domain must be Non-shareable or System-shareable.",
+        "english_form": "•     The domain must be Non-shareable or System-shareable.",
         "line": 4664,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     The transaction type must be ReadNoSnoop or WriteNoSnoop.",
+        "english_form": "•     The transaction type must be ReadNoSnoop or WriteNoSnoop.",
         "line": 4666,
         "scope": "general"
       },
@@ -601,7 +597,7 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     If not already present, add ID signals. The slave must mirror ARID onto RID and AWID onto BID.",
+        "english_form": "•     If not already present, add ID signals. The slave must mirror ARID onto RID and AWID onto BID.",
         "line": 6635,
         "scope": "general"
       },
@@ -613,19 +609,19 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022        A line in a Unique state must only be in one cache.",
+        "english_form": "•        A line in a Unique state must only be in one cache.",
         "line": 7014,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022        A line that is in more than one cache must be in a Shared state in every cache it is in.",
+        "english_form": "•        A line that is in more than one cache must be in a Shared state in every cache it is in.",
         "line": 7016,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022        When a cache obtains a new copy of a line, other caches that also have a copy of the line must be notified.",
+        "english_form": "•        When a cache obtains a new copy of a line, other caches that also have a copy of the line must be notified.",
         "line": 7018,
         "scope": "general"
       },
@@ -637,7 +633,7 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022        A line that has been updated, relative to main memory, must be in a Dirty state in one cache.",
+        "english_form": "•        A line that has been updated, relative to main memory, must be in a Dirty state in one cache.",
         "line": 7024,
         "scope": "general"
       },
@@ -715,25 +711,25 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     A master interface must drive RACK, WACK, CRVALID, and CDVALID LOW.",
+        "english_form": "•     A master interface must drive RACK, WACK, CRVALID, and CDVALID LOW.",
         "line": 8113,
         "scope": "R_channel"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     An interconnect must drive ACVALID LOW.",
+        "english_form": "•     An interconnect must drive ACVALID LOW.",
         "line": 8114,
         "scope": "interconnect"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022      A Device transaction, indicated by AxCACHE[1] equal to zero, must only use domain level System.",
+        "english_form": "•      A Device transaction, indicated by AxCACHE[1] equal to zero, must only use domain level System.",
         "line": 8210,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022      A Cacheable transaction, indicated by AxCACHE[3:2] not equal to zero, must not use domain level System.",
+        "english_form": "•      A Cacheable transaction, indicated by AxCACHE[3:2] not equal to zero, must not use domain level System.",
         "line": 8211,
         "scope": "general"
       },
@@ -871,19 +867,19 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022      The IsShared and PassDirty responses must be constant for all data transfers within a burst.",
+        "english_form": "•      The IsShared and PassDirty responses must be constant for all data transfers within a burst.",
         "line": 8834,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022      The IsShared response must be LOW for the transactions that require all other cached copies to be removed.",
+        "english_form": "•      The IsShared response must be LOW for the transactions that require all other cached copies to be removed.",
         "line": 8836,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022      The PassDirty response must be LOW for the transactions that do not permit the passing of Dirty data. The",
+        "english_form": "•      The PassDirty response must be LOW for the transactions that do not permit the passing of Dirty data. The",
         "line": 8844,
         "scope": "general"
       },
@@ -979,13 +975,13 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     All cache line size transactions must be a full data bus width.",
+        "english_form": "•     All cache line size transactions must be a full data bus width.",
         "line": 9534,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     The burst length must be 1, 2, 4, 8, or 16.",
+        "english_form": "•     The burst length must be 1, 2, 4, 8, or 16.",
         "line": 9535,
         "scope": "general"
       },
@@ -997,13 +993,13 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     The interconnect must not wait for the master to assert ACREADY before asserting ACVALID.",
+        "english_form": "•     The interconnect must not wait for the master to assert ACREADY before asserting ACVALID.",
         "line": 9613,
         "scope": "interconnect"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     The master must wait for both ACVALID and ACREADY to be asserted before asserting CRVALID.",
+        "english_form": "•     The master must wait for both ACVALID and ACREADY to be asserted before asserting CRVALID.",
         "line": 9617,
         "scope": "R_channel"
       },
@@ -1015,7 +1011,7 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     If a transaction read response has PassDirty asserted, then the cache line must move to a Dirty state. The",
+        "english_form": "•     If a transaction read response has PassDirty asserted, then the cache line must move to a Dirty state. The",
         "line": 9854,
         "scope": "general"
       },
@@ -1033,49 +1029,49 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022      After a WriteBack transaction, the cache line must be in the Invalid state.",
+        "english_form": "•      After a WriteBack transaction, the cache line must be in the Invalid state.",
         "line": 9920,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022      After a WriteClean transaction, the cache line must be in a Clean state.",
+        "english_form": "•      After a WriteClean transaction, the cache line must be in a Clean state.",
         "line": 9921,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     For CleanShared, the cache line must be in a Clean or Invalid state.",
+        "english_form": "•     For CleanShared, the cache line must be in a Clean or Invalid state.",
         "line": 9931,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022     For CleanInvalid and MakeInvalid, the cache line must be in the Invalid state.",
+        "english_form": "•     For CleanInvalid and MakeInvalid, the cache line must be in the Invalid state.",
         "line": 9932,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022      The IsShared response must be deasserted.",
+        "english_form": "•      The IsShared response must be deasserted.",
         "line": 10015,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022      The PassDirty response must be deasserted.",
+        "english_form": "•      The PassDirty response must be deasserted.",
         "line": 10016,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022      The IsShared response must be deasserted to indicate that the cache line is Unique.",
+        "english_form": "•      The IsShared response must be deasserted to indicate that the cache line is Unique.",
         "line": 10305,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022      The PassDirty response must indicate when the cache line is Clean or Dirty.",
+        "english_form": "•      The PassDirty response must indicate when the cache line is Clean or Dirty.",
         "line": 10306,
         "scope": "general"
       },
@@ -1087,7 +1083,7 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022      The IsShared response must be deasserted indicating that the cache line is unique.",
+        "english_form": "•      The IsShared response must be deasserted indicating that the cache line is unique.",
         "line": 10572,
         "scope": "general"
       },
@@ -1171,13 +1167,13 @@
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022       If the end state of the cache line is any Valid state, the IsShared snoop response bit must be asserted.",
+        "english_form": "•       If the end state of the cache line is any Valid state, the IsShared snoop response bit must be asserted.",
         "line": 11432,
         "scope": "general"
       },
       {
         "anchor_token": "must",
-        "english_form": "\u2022       If the cache line moves from a Dirty state to a Clean state, the PassDirty snoop response bit must be asserted.",
+        "english_form": "•       If the cache line moves from a Dirty state to a Clean state, the PassDirty snoop response bit must be asserted.",
         "line": 11434,
         "scope": "general"
       },
@@ -1207,813 +1203,9 @@
       }
     ]
   },
-  "evidence": [
-    {
-      "line": 102,
-      "quote": "Agreement shall prevail."
-    },
-    {
-      "line": 134,
-      "quote": "controlled, directly or indirectly, by You. A company shall be a Subsidiary only for the period during which such control exists."
-    },
-    {
-      "line": 170,
-      "quote": "AGREEMENT) SHALL NOT EXCEED THE FEES PAID (IF ANY) BY LICENSEE TO ARM UNDER THIS AGREEMENT."
-    },
-    {
-      "line": 179,
-      "quote": "7. This Licence shall remain in force until terminated by you or by Arm. Without prejudice to any of its other rights if LICENSEE"
-    },
-    {
-      "line": 184,
-      "quote": "clauses 6 and 7 shall survive."
-    },
-    {
-      "line": 186,
-      "quote": "8. The validity, construction and performance of this Agreement shall be governed by English Law."
-    },
-    {
-      "line": 890,
-      "quote": "when they occur, have clear labels. You must not assume any timing information that is not explicit in the diagrams."
-    },
-    {
-      "line": 1383,
-      "quote": "AWCACHE                     Master      Indicates how a write transaction is required to progress through a system."
-    },
-    {
-      "line": 1524,
-      "quote": "ARCACHE                    Master           Indicates how a read transaction is required to progress through a system."
-    },
-    {
-      "line": 1637,
-      "quote": "On master and slave interfaces, there must be no combinatorial paths between input and output signals."
-    },
-    {
-      "line": 1645,
-      "quote": "\u2022     A master interface must drive ARVALID, AWVALID, and WVALID LOW."
-    },
-    {
-      "line": 1646,
-      "quote": "\u2022     A slave interface must drive RVALID and BVALID LOW."
-    },
-    {
-      "line": 1806,
-      "quote": "asserted, AWVALID must remain asserted until the rising clock edge after the slave asserts AWREADY."
-    },
-    {
-      "line": 1809,
-      "quote": "HIGH. When AWREADY is HIGH, the slave must be able to accept any valid address that is presented to it."
-    },
-    {
-      "line": 1828,
-      "quote": "WVALID must remain asserted until the rising clock edge after the slave asserts WREADY."
-    },
-    {
-      "line": 1832,
-      "quote": "The master must assert the WLAST signal while it is driving the final write transfer in the burst."
-    },
-    {
-      "line": 1847,
-      "quote": "asserted, ARVALID must remain asserted until the rising clock edge after the slave asserts the ARREADY signal."
-    },
-    {
-      "line": 1850,
-      "quote": "HIGH. If ARREADY is HIGH, then the slave must be able to accept any valid address that is presented to it."
-    },
-    {
-      "line": 1861,
-      "quote": "data, it must assert the RVALID signal only in response to a request for data."
-    },
-    {
-      "line": 1866,
-      "quote": "The slave must assert the RLAST signal when it is driving the final read transfer in the burst."
-    },
-    {
-      "line": 1883,
-      "quote": "\u2022    A write response must always follow the last write transfer in a write transaction."
-    },
-    {
-      "line": 1884,
-      "quote": "\u2022    Read data must always follow the read address of the data."
-    },
-    {
-      "line": 1911,
-      "quote": "To prevent a deadlock situation, the dependency rules that exist between the handshake signals must be observed."
-    },
-    {
-      "line": 1951,
-      "quote": "\u2022     The master must not wait for the slave to assert ARREADY before asserting ARVALID."
-    },
-    {
-      "line": 1960,
-      "quote": "\u2022     The slave must not wait for the master to assert RREADY before asserting RVALID."
-    },
-    {
-      "line": 1990,
-      "quote": "\u2022     The slave must wait for both WVALID and WREADY to be asserted before asserting BVALID."
-    },
-    {
-      "line": 1991,
-      "quote": "The slave must also wait for WLAST to be asserted before asserting BVALID. Waiting is required because"
-    },
-    {
-      "line": 1992,
-      "quote": "the write response, BRESP, must be signaled only after the last data transfer of a write transaction."
-    },
-    {
-      "line": 1994,
-      "quote": "\u2022     The slave must not wait for the master to assert BREADY before asserting BVALID."
-    },
-    {
-      "line": 2022,
-      "quote": "The dependency rules must be observed to prevent a deadlock condition. For example, a master must not wait for"
-    },
-    {
-      "line": 2040,
-      "quote": "Double-headed arrows point to signals that must be asserted only after assertion of the previous signal."
-    },
-    {
-      "line": 2057,
-      "quote": "The slave must also wait for WLAST to be asserted before asserting BVALID. This wait is because the write"
-    },
-    {
-      "line": 2058,
-      "quote": "response, BRESP, must be signaled only after the last data transfer of a write transaction."
-    },
-    {
-      "line": 2131,
-      "quote": "A burst must not cross a 4KB address boundary."
-    },
-    {
-      "line": 2135,
-      "quote": "increments that a slave must support."
-    },
-    {
-      "line": 2160,
-      "quote": "\u2022    For wrapping bursts, the burst length must be 2, 4, 8, or 16."
-    },
-    {
-      "line": 2161,
-      "quote": "\u2022    A burst must not cross a 4KB address boundary."
-    },
-    {
-      "line": 2232,
-      "quote": "The size of any transfer must not exceed the data bus width of either agent in the transaction."
-    },
-    {
-      "line": 2265,
-      "quote": "\u2022     The start address must be aligned to the size of each transfer."
-    },
-    {
-      "line": 2266,
-      "quote": "\u2022     The length of the burst must be 2, 4, 8, or 16 transfers."
-    },
-    {
-      "line": 2573,
-      "quote": "A master must ensure that the write strobes are HIGH only for byte lanes that contain valid data."
-    },
-    {
-      "line": 2751,
-      "quote": "The information on the low-order address lines must be consistent with the information on the byte lane strobes."
-    },
-    {
-      "line": 2951,
-      "quote": "The protocol specifies that the required number of data transfers must be performed, even if an error is reported. For"
-    },
-    {
-      "line": 2996,
-      "quote": "If the interconnect cannot successfully decode a slave access, it must return the DECERR response. This"
-    },
-    {
-      "line": 3001,
-      "quote": "Any component giving a DECERR response must meet this requirement."
-    },
-    {
-      "line": 3042,
-      "quote": "A memory slave is required to handle all transaction types correctly."
-    },
-    {
-      "line": 3127,
-      "quote": "The RA bit must not be asserted if the C bit is deasserted."
-    },
-    {
-      "line": 3131,
-      "quote": "The WA bit must not be asserted if the C bit is deasserted."
-    },
-    {
-      "line": 3166,
-      "quote": "A Non-modifiable transaction must not be split into multiple transactions or merged with other transactions."
-    },
-    {
-      "line": 3168,
-      "quote": "In a Non-modifiable transaction, the parameters that are shown in Table A4-2 must not be changed."
-    },
-    {
-      "line": 3215,
-      "quote": "transaction must be modified."
-    },
-    {
-      "line": 3294,
-      "quote": "\u2022     A transaction must be looked up in a cache if the value of AxCACHE[3:2] is not 0b00."
-    },
-    {
-      "line": 3323,
-      "quote": "transaction must propagate to the final destination."
-    },
-    {
-      "line": 3338,
-      "quote": "the transaction must not be modified."
-    },
-    {
-      "line": 3341,
-      "quote": "write response must be given from the final destination."
-    },
-    {
-      "line": 3469,
-      "quote": "\u2022     The write response must be obtained from the final destination."
-    },
-    {
-      "line": 3470,
-      "quote": "\u2022     Read data must be obtained from the final destination."
-    },
-    {
-      "line": 3472,
-      "quote": "\u2022     Reads must not be prefetched. Writes must not be merged."
-    },
-    {
-      "line": 3529,
-      "quote": "\u2014      It must be obtained from the most recent version of the write."
-    },
-    {
-      "line": 3530,
-      "quote": "\u2014      The data must not be cached to service a later read."
-    },
-    {
-      "line": 3668,
-      "quote": "All masters must use transactions with both AxCACHE[3:2] deasserted."
-    },
-    {
-      "line": 3670,
-      "quote": "All masters must use transactions with either of AxCACHE[3:2] asserted."
-    },
-    {
-      "line": 3714,
-      "quote": "\u2022     For Device Bufferable memory, read data must be obtained from the final destination."
-    },
-    {
-      "line": 3725,
-      "quote": "used for forwarding must not persist indefinitely. The protocol does not define any mechanism for"
-    },
-    {
-      "line": 3727,
-      "quote": "mechanism, the act of reading the data must not reset the data timeout period."
-    },
-    {
-      "line": 3800,
-      "quote": "Non-secure address spaces must be handled correctly."
-    },
-    {
-      "line": 3828,
-      "quote": "In AXI4, all Device transactions using the same ID to the same slave must be ordered with respect to each other."
-    },
-    {
-      "line": 3862,
-      "quote": "A write transaction that is marked as Device Bufferable is required to reach its final destination in a timely manner."
-    },
-    {
-      "line": 3915,
-      "quote": "that must be returned in order."
-    },
-    {
-      "line": 3976,
-      "quote": "value that must be specified by the designer of the slave."
-    },
-    {
-      "line": 3982,
-      "quote": "A master must issue write data in the same order that it issues the transaction addresses."
-    },
-    {
-      "line": 4125,
-      "quote": "\u2022      A transaction to a Peripheral region must be entirely contained within that region."
-    },
-    {
-      "line": 4222,
-      "quote": "Systems that contain Arm Architecture-compliant processors must be multi-copy atomic. That is, the"
-    },
-    {
-      "line": 4223,
-      "quote": "Multi_Copy_Atomicity property must be True."
-    },
-    {
-      "line": 4305,
-      "quote": "When the interconnect is acting as a slave component, it must also adhere to the slave requirements."
-    },
-    {
-      "line": 4435,
-      "quote": "single-copy atomicity size must update memory in blocks of at least the single-copy atomicity size."
-    },
-    {
-      "line": 4449,
-      "quote": "in a given communication must support the required size of atomic element. If two masters are communicating"
-    },
-    {
-      "line": 4536,
-      "quote": "A system must have the Multi_Copy_Atomicity property if Arm v8 Architecture processors are used. This is"
-    },
-    {
-      "line": 4606,
-      "quote": "A master must not start the write part of an exclusive access sequence until the read part is complete."
-    },
-    {
-      "line": 4623,
-      "quote": "A slave that supports exclusive access must have monitor hardware. This specification recommends that such a"
-    },
-    {
-      "line": 4658,
-      "quote": "\u2022     The burst length for an exclusive access must not exceed 16 transfers."
-    },
-    {
-      "line": 4662,
-      "quote": "the monitor, then the exclusive access must be Non-bufferable or Non-cacheable."
-    },
-    {
-      "line": 4664,
-      "quote": "\u2022     The domain must be Non-shareable or System-shareable."
-    },
-    {
-      "line": 4666,
-      "quote": "\u2022     The transaction type must be ReadNoSnoop or WriteNoSnoop."
-    },
-    {
-      "line": 4735,
-      "quote": "AXI4 does not support locked transactions. However, an AXI3 implementation must support locked transactions."
-    },
-    {
-      "line": 4751,
-      "quote": "from the same master completes. An arbiter within the interconnect must enforce this restriction."
-    },
-    {
-      "line": 4764,
-      "quote": "The master must ensure that all transactions in a locked sequence have the same AxID value."
-    },
-    {
-      "line": 4893,
-      "quote": "A master that cannot produce its own AxQOS values must use the default value."
-    },
-    {
-      "line": 4946,
-      "quote": "address map, the interconnect must use the default AxREGION values. See Chapter A9 Default Signaling and"
-    },
-    {
-      "line": 4957,
-      "quote": "A slave must ensure the correct protocol signaling and the correct ordering of transactions are maintained. A slave"
-    },
-    {
-      "line": 4961,
-      "quote": "A slave must also ensure the correct protocol signaling for any values of AxREGION. If a slave implements fewer"
-    },
-    {
-      "line": 4973,
-      "quote": "AxREGION must only be present on an interface that is downstream of an address decode function."
-    },
-    {
-      "line": 5193,
-      "quote": "A memory slave must handle all transaction types correctly."
-    },
-    {
-      "line": 5482,
-      "quote": "bits from the master must be left unconnected."
-    },
-    {
-      "line": 5683,
-      "quote": "All master interfaces and interconnect components must provide correct write strobes. A slave is permitted to:"
-    },
-    {
-      "line": 5688,
-      "quote": "A slave that provides memory access must fully support write strobes. Other slaves in the memory map might"
-    },
-    {
-      "line": 5779,
-      "quote": "AXI data width must first be converted to the AXI4-Lite data width."
-    },
-    {
-      "line": 5791,
-      "quote": "than 1 must take into consideration the burst type. An unaligned start address must be incremented and"
-    },
-    {
-      "line": 6566,
-      "quote": "than 1 must consider the burst type. An unaligned start address must be incremented and aligned for"
-    },
-    {
-      "line": 6635,
-      "quote": "\u2022     If not already present, add ID signals. The slave must mirror ARID onto RID and AWID onto BID."
-    },
-    {
-      "line": 6642,
-      "quote": "indicated by the relevant WSTRB bits. A write with no strobes asserted must be supported."
-    },
-    {
-      "line": 7014,
-      "quote": "\u2022        A line in a Unique state must only be in one cache."
-    },
-    {
-      "line": 7016,
-      "quote": "\u2022        A line that is in more than one cache must be in a Shared state in every cache it is in."
-    },
-    {
-      "line": 7018,
-      "quote": "\u2022        When a cache obtains a new copy of a line, other caches that also have a copy of the line must be notified."
-    },
-    {
-      "line": 7019,
-      "quote": "This copy might have the line in a Unique state and must be notified to hold the line in a Shared state."
-    },
-    {
-      "line": 7024,
-      "quote": "\u2022        A line that has been updated, relative to main memory, must be in a Dirty state in one cache."
-    },
-    {
-      "line": 7347,
-      "quote": "snoop transaction relating to the Master1 store operation, it must remove its original copy of the data. Master"
-    },
-    {
-      "line": 7353,
-      "quote": "in time, it must fetch the data again."
-    },
-    {
-      "line": 7407,
-      "quote": "it must subsequently write back to memory. Typically, the ReadClean transaction is used by"
-    },
-    {
-      "line": 7545,
-      "quote": "receives a CleanInvalid transaction, it must remove its local copy of the cache line. If a snooped"
-    },
-    {
-      "line": 7551,
-      "quote": "it must remove its local copy, but it is not required to provide any data, even if the cache line is Dirty."
-    },
-    {
-      "line": 7578,
-      "quote": "observe any transaction after the barrier it must be able to observe every transaction prior to the barrier."
-    },
-    {
-      "line": 7621,
-      "quote": "5.       Each cached master that receives a snoop transaction must provide a snoop response. Some masters might"
-    },
-    {
-      "line": 7655,
-      "quote": "information to determine what other master components must be snooped to complete the transaction."
-    },
-    {
-      "line": 7714,
-      "quote": "For transactions that must be visible to all other master components in the system, the System domain is used."
-    },
-    {
-      "line": 7716,
-      "quote": "transactions must not be cached at any level."
-    },
-    {
-      "line": 7837,
-      "quote": "generates a fault, that must be notified to the agent that maintains the translation tables. For the required access to"
-    },
-    {
-      "line": 7838,
-      "quote": "proceed, that agent must then provide the required VA to PA translation. Typically, it will update the translation"
-    },
-    {
-      "line": 8113,
-      "quote": "\u2022     A master interface must drive RACK, WACK, CRVALID, and CDVALID LOW."
-    },
-    {
-      "line": 8114,
-      "quote": "\u2022     An interconnect must drive ACVALID LOW."
-    },
-    {
-      "line": 8210,
-      "quote": "\u2022      A Device transaction, indicated by AxCACHE[1] equal to zero, must only use domain level System."
-    },
-    {
-      "line": 8211,
-      "quote": "\u2022      A Cacheable transaction, indicated by AxCACHE[3:2] not equal to zero, must not use domain level System."
-    },
-    {
-      "line": 8260,
-      "quote": "a. Shows which caches must be accessed to complete the transaction."
-    },
-    {
-      "line": 8336,
-      "quote": "Non-snooping             These transactions must not snoop other masters."
-    },
-    {
-      "line": 8341,
-      "quote": "Memory update            These transactions update main memory and must not snoop other masters."
-    },
-    {
-      "line": 8453,
-      "quote": "a. A component that supports the WriteEvict transaction must provide the AWUNIQUE signal."
-    },
-    {
-      "line": 8496,
-      "quote": "WriteClean               Must be deasserted.                              The cache line cannot be held in a Unique"
-    },
-    {
-      "line": 8504,
-      "quote": "WriteEvict               Must be asserted.                                A WriteEvict transaction is only permitted"
-    },
-    {
-      "line": 8525,
-      "quote": "signal. In this case, the input to the interconnect must be tied low. This is protocol-compliant as all transactions are"
-    },
-    {
-      "line": 8573,
-      "quote": "Cache line size transactions must comply with the constraints for Regular transactions. See Regular transactions on"
-    },
-    {
-      "line": 8580,
-      "quote": "AxLEN            -                   The burst length must be 1, 2, 4, 8 or 16 transfers. See Burst length on"
-    },
-    {
-      "line": 8610,
-      "quote": "AxDOMAIN          All transactions    The domain must be Inner Shareable or Outer Shareable."
-    },
-    {
-      "line": 8617,
-      "quote": "CleanShared         The domain must be Non-shareable, Inner Shareable or Outer Shareable."
-    },
-    {
-      "line": 8622,
-      "quote": "AxBAR             -                   Must be a normal access."
-    },
-    {
-      "line": 8624,
-      "quote": "AxCACHE           -                   Must be Modifiable."
-    },
-    {
-      "line": 8688,
-      "quote": "ACE-Lite must provide a translation for a FIXED burst."
-    },
-    {
-      "line": 8708,
-      "quote": "The burst length must be 2, 4, 8 or 16."
-    },
-    {
-      "line": 8709,
-      "quote": "AWSIZE x AWLEN must not exceed the cache line size in bytes."
-    },
-    {
-      "line": 8711,
-      "quote": "INCR            The burst length must be 16 or less."
-    },
-    {
-      "line": 8712,
-      "quote": "The transaction must not cross a cache line boundary. The location of the last"
-    },
-    {
-      "line": 8719,
-      "quote": "AWDOMAIN          -               Must not be domain type System."
-    },
-    {
-      "line": 8721,
-      "quote": "AWBAR             -               Must be normal access."
-    },
-    {
-      "line": 8737,
-      "quote": "AWCACHE           -               Must be Modifiable."
-    },
-    {
-      "line": 8739,
-      "quote": "AWLOCK            -               Must be normal access."
-    },
-    {
-      "line": 8834,
-      "quote": "\u2022      The IsShared and PassDirty responses must be constant for all data transfers within a burst."
-    },
-    {
-      "line": 8836,
-      "quote": "\u2022      The IsShared response must be LOW for the transactions that require all other cached copies to be removed."
-    },
-    {
-      "line": 8844,
-      "quote": "\u2022      The PassDirty response must be LOW for the transactions that do not permit the passing of Dirty data. The"
-    },
-    {
-      "line": 8882,
-      "quote": "These transactions complete in a single read data channel transfer and must have RLAST asserted. RDATA can"
-    },
-    {
-      "line": 8883,
-      "quote": "have any value and must be ignored."
-    },
-    {
-      "line": 8980,
-      "quote": "The RACK signal must be asserted for a single cycle and the interconnect must accept it in a single cycle."
-    },
-    {
-      "line": 8986,
-      "quote": "Read acknowledge must be sent for all transactions including coherent, barrier, and DVM transactions."
-    },
-    {
-      "line": 9042,
-      "quote": "handshake. The assertion of WACK must not be delayed to wait for the completion of another transaction. See"
-    },
-    {
-      "line": 9076,
-      "quote": "interconnect must take to complete the snoop process."
-    },
-    {
-      "line": 9155,
-      "quote": "ACSNOOP must not change, until ACREADY is asserted by the master. When ACVALID is asserted, it must"
-    },
-    {
-      "line": 9161,
-      "quote": "ACADDR must be aligned to the data transfer size, which is determined by the width of the snoop data bus in bytes."
-    },
-    {
-      "line": 9167,
-      "quote": "and Non-secure address spaces must be handled correctly."
-    },
-    {
-      "line": 9214,
-      "quote": "A snoop transaction of burst length greater than one must be of burst type WRAP. A snoop transaction of burst"
-    },
-    {
-      "line": 9215,
-      "quote": "length one must be of burst type INCR."
-    },
-    {
-      "line": 9217,
-      "quote": "A snoop transaction must be a full cache line in length."
-    },
-    {
-      "line": 9224,
-      "quote": "A snoop transaction must be the same width as the snoop data channel."
-    },
-    {
-      "line": 9256,
-      "quote": "HIGH. When CRVALID is asserted, it must remain asserted until CRREADY is asserted."
-    },
-    {
-      "line": 9521,
-      "quote": "When CDVALID is asserted, it must remain asserted until CDREADY is asserted."
-    },
-    {
-      "line": 9534,
-      "quote": "\u2022     All cache line size transactions must be a full data bus width."
-    },
-    {
-      "line": 9535,
-      "quote": "\u2022     The burst length must be 1, 2, 4, 8, or 16."
-    },
-    {
-      "line": 9552,
-      "quote": "The CDLAST signal must be asserted during the final data transfer associated with a snoop transaction."
-    },
-    {
-      "line": 9613,
-      "quote": "\u2022     The interconnect must not wait for the master to assert ACREADY before asserting ACVALID."
-    },
-    {
-      "line": 9617,
-      "quote": "\u2022     The master must wait for both ACVALID and ACREADY to be asserted before asserting CRVALID."
-    },
-    {
-      "line": 9825,
-      "quote": "cached master must be able to broadcast cache lines that are allocated and cache lines that are evicted."
-    },
-    {
-      "line": 9854,
-      "quote": "\u2022     If a transaction read response has PassDirty asserted, then the cache line must move to a Dirty state. The"
-    },
-    {
-      "line": 9886,
-      "quote": "line. After the store to a cache line, the master must be in the UniqueDirty state. The transactions that obtain"
-    },
-    {
-      "line": 9917,
-      "quote": "After an update to main memory, the cache line must be in a Clean or Invalid state."
-    },
-    {
-      "line": 9920,
-      "quote": "\u2022      After a WriteBack transaction, the cache line must be in the Invalid state."
-    },
-    {
-      "line": 9921,
-      "quote": "\u2022      After a WriteClean transaction, the cache line must be in a Clean state."
-    },
-    {
-      "line": 9931,
-      "quote": "\u2022     For CleanShared, the cache line must be in a Clean or Invalid state."
-    },
-    {
-      "line": 9932,
-      "quote": "\u2022     For CleanInvalid and MakeInvalid, the cache line must be in the Invalid state."
-    },
-    {
-      "line": 10015,
-      "quote": "\u2022      The IsShared response must be deasserted."
-    },
-    {
-      "line": 10016,
-      "quote": "\u2022      The PassDirty response must be deasserted."
-    },
-    {
-      "line": 10305,
-      "quote": "\u2022      The IsShared response must be deasserted to indicate that the cache line is Unique."
-    },
-    {
-      "line": 10306,
-      "quote": "\u2022      The PassDirty response must indicate when the cache line is Clean or Dirty."
-    },
-    {
-      "line": 10440,
-      "quote": "CleanUnique transaction must be delayed until the store is complete."
-    },
-    {
-      "line": 10572,
-      "quote": "\u2022      The IsShared response must be deasserted indicating that the cache line is unique."
-    },
-    {
-      "line": 10576,
-      "quote": "because a MakeUnique transaction must be coupled to a full cache line store operation."
-    },
-    {
-      "line": 10688,
-      "quote": "A cache line must only move from the Invalid state to a Valid state if a full cache line store has been performed."
-    },
-    {
-      "line": 10716,
-      "quote": "that is required to propagate to main memory or a downstream cache."
-    },
-    {
-      "line": 10742,
-      "quote": "occurs, that is required to propagate to main memory or a downstream cache."
-    },
-    {
-      "line": 10745,
-      "quote": "A WriteLineUnique transaction must be a full cache line store and all bytes within the cache line must be updated."
-    },
-    {
-      "line": 10974,
-      "quote": "transfer associated with an Evict transaction. An Evict transaction must be used only in a Shareable memory region."
-    },
-    {
-      "line": 11028,
-      "quote": "At this point, Master2 must invalidate any local copy that it has of the cache line. If Master2 does not have a"
-    },
-    {
-      "line": 11325,
-      "quote": "does assert the PassDirty snoop response, then the cache line must move to a Clean or Invalid state."
-    },
-    {
-      "line": 11331,
-      "quote": "The snooped cache must broadcast a transaction before it can perform a store to the cache line. That"
-    },
-    {
-      "line": 11332,
-      "quote": "is, the snooped cache must consider that another master can hold a copy of the cache line."
-    },
-    {
-      "line": 11343,
-      "quote": "The following state changes must not occur due to a snoop transaction. A cache line must not move from:"
-    },
-    {
-      "line": 11350,
-      "quote": "A cache line must not move from the UniqueDirty state to the UniqueClean state. Such a transition would indicate"
-    },
-    {
-      "line": 11376,
-      "quote": "transaction must be applied, followed by the snoop transaction state transition that Table D5-4 shows."
-    },
-    {
-      "line": 11432,
-      "quote": "\u2022       If the end state of the cache line is any Valid state, the IsShared snoop response bit must be asserted."
-    },
-    {
-      "line": 11434,
-      "quote": "\u2022       If the cache line moves from a Dirty state to a Clean state, the PassDirty snoop response bit must be asserted."
-    },
-    {
-      "line": 11437,
-      "quote": "MakeInvalid, then the PassDirty snoop response bit must be asserted."
-    },
-    {
-      "line": 11511,
-      "quote": "the cached master must ensure that the data value is available so that the original transaction can complete. The"
-    },
-    {
-      "line": 11584,
-      "quote": "example, the response to a CleanShared snoop must have PassDirty asserted if the line is in a Dirty state. However,"
-    },
-    {
-      "line": 11586,
-      "quote": "master must wait for the update to complete before responding to a CleanShared snoop."
-    }
-  ],
-  "extraction_hints": [
-    "Look for sentences shaped 'must' / 'shall' / 'is required'.",
-    "Capture as {id, scope, english_form, optional_sva_form, citation}."
-  ],
   "extraction_status": "EXTRACTED",
-  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
-  "extracted_by": "phase1_protocol_spec_extract.extract_l16_* v0.1.51"
+  "schema_version": "v0.1.62",
+  "doc_class": "L16",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l16_compliance v0.1.62",
+  "extraction_evidence": {}
 }

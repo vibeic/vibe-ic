@@ -1,8 +1,4 @@
 {
-  "doc_id": "L14",
-  "doc_name": "L14_PROTOCOL_VERSIONING",
-  "applicability": "APPLICABLE",
-  "ic_class": "bus_interconnect_protocol",
   "fields": {
     "versions": [
       {
@@ -70,59 +66,9 @@
     ],
     "backward_compat_traps": []
   },
-  "evidence": [
-    {
-      "line": 27,
-      "quote": "16 June 2003          A         Non-Confidential               First release",
-      "extracted_by": "L14_ROW_RE"
-    },
-    {
-      "line": 29,
-      "quote": "19 March 2004         B         Non-Confidential               First release of AXI specification v1.0",
-      "extracted_by": "L14_ROW_RE"
-    },
-    {
-      "line": 31,
-      "quote": "03 March 2010         C         Non-Confidential               First release of AXI specification v2.0",
-      "extracted_by": "L14_ROW_RE"
-    },
-    {
-      "line": 35,
-      "quote": "28 October 2011       D         Non-Confidential               First release of AMBA AXI and ACE Protocol Specification",
-      "extracted_by": "L14_ROW_RE"
-    },
-    {
-      "line": 37,
-      "quote": "22 February 2013      E         Non-Confidential               Second release of AMBA AXI and ACE Protocol Specification",
-      "extracted_by": "L14_ROW_RE"
-    },
-    {
-      "line": 39,
-      "quote": "18 December 2017      F         Non-Confidential               EAC-0 release of version F.",
-      "extracted_by": "L14_ROW_RE"
-    },
-    {
-      "line": 43,
-      "quote": "21 December 2017      F.b       Non-Confidential               EAC-1 release to address issues found with the EAC-0 release of",
-      "extracted_by": "L14_ROW_RE"
-    },
-    {
-      "line": 47,
-      "quote": "30 July 2019          G         Non-Confidential               EAC-0 release of version G.",
-      "extracted_by": "L14_ROW_RE"
-    },
-    {
-      "line": 50,
-      "quote": "31 March 2020         H         Non-Confidential               EAC-0 release of version H.",
-      "extracted_by": "L14_ROW_RE"
-    }
-  ],
-  "extraction_hints": [
-    "Look for 'Version' / 'Revision' / 'Issue' section headers.",
-    "Capture per-version delta-tables (what changed).",
-    "Capture explicit 'deprecated' callouts."
-  ],
   "extraction_status": "EXTRACTED",
-  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
-  "extracted_by": "phase1_protocol_spec_extract.extract_l14_* v0.1.51"
+  "schema_version": "v0.1.62",
+  "doc_class": "L14",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l14_versioning v0.1.62",
+  "extraction_evidence": {}
 }

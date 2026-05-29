@@ -5,7 +5,7 @@
 - **overall.pct = 100.0%**
 - status: **PASS** (target ≥80%)
 - curated: **517/517 = 100.0%**
-- hands_on: **555/555 = 100.0%**
+- hands_on: **550/550 = 100.0%**
 
 ## Per-L-doc
 
@@ -23,3 +23,8 @@
 - L12_BEHAVIORAL_SEQUENCES: evidence=2 todo=0
 - L13_LAB_CALIBRATION: evidence=0 todo=0
 - L8_TIMING_WAVEFORM: evidence=0 todo=0
+- L14_PROTOCOL_VERSIONING: evidence=0 todo=0
+- L15_ENCODING_TABLES: evidence=0 todo=0
+- L16_COMPLIANCE_PROPERTIES: evidence=0 todo=0
+- L17_CHANNEL_SIGNAL_CATALOG: evidence=0 todo=0
+- L18_INTERCONNECT_TOPOLOGY: evidence=0 todo=0

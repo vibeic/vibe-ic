@@ -6402,6 +6402,39 @@ def _write_l_doc(project: Path, name: str, content: dict,
         content.setdefault("extraction_strategy", {})[
             "hallucination_scrub_error_v0_1_60"
         ] = str(_e)[:200]
+    # v0.1.62 capture (R13): consult l_doc_taxonomy.is_applicable. When the
+    # detected ic_class declares this L doc not-applicable (e.g.
+    # bus_interconnect_protocol legitimately has no L4 regmap / L5 analog /
+    # L11 OTP / L13 lab calibration), replace the over-filled content with
+    # the canonical na_stub. Preserves any R11 scrub audit so the trail
+    # stays complete. Fail-open: missing taxonomy → emit as before.
+    try:
+        from l_doc_taxonomy import is_applicable as _is_applicable
+        from l_doc_taxonomy import na_stub as _na_stub
+        from l_doc_taxonomy import l_doc_spec as _l_doc_spec
+        from ic_class_profile import detect_ic_class as _detect_ic_class
+        _profile = _detect_ic_class(project)
+        _ic_class = _profile.get("ic_class", "unknown") if isinstance(_profile, dict) else "unknown"
+        _spec_code = _l_doc_spec(name).code
+        # is_applicable returns True for unknown ic_class (legacy-compat
+        # default emit-everything). It only flips to False when the registry
+        # entry explicitly excludes this L doc for this class.
+        if _ic_class != "unknown" and not _is_applicable(_ic_class, _spec_code):
+            _scrub = (content.get("extraction_strategy") or {}).get(
+                "hallucination_scrub_v0_1_60")
+            content = _na_stub(_ic_class, name)
+            if _scrub:
+                content.setdefault("extraction_strategy", {})[
+                    "hallucination_scrub_v0_1_60"] = _scrub
+            content.setdefault("extraction_strategy", {})[
+                "ic_class_applicability_gate_v0_1_62"] = (
+                f"ic_class={_ic_class!r} declares L{_spec_code} not "
+                "applicable; emitted as N/A stub (l_doc_taxonomy.na_stub)")
+    except Exception as _e:
+        # Fail-open: gate missing / partial → emission proceeds.
+        content.setdefault("extraction_strategy", {})[
+            "ic_class_applicability_gate_error_v0_1_62"
+        ] = str(_e)[:200]
     out = _pl.generated_docs_dir(project) / f"{name}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(content, indent=2, ensure_ascii=False) + "\n")
@@ -6422,6 +6455,85 @@ def _try_load_l_doc(project: Path, name: str) -> Optional[dict]:
     except Exception:
         pass
     return None
+
+
+# v0.1.62 capture (R14) — protocol-spec L14-L18 emit chain.
+# Maps the phase1_protocol_spec_extract.py extractor functions to the
+# canonical L-doc names that _write_l_doc expects. Each extractor
+# returns a dict; we wrap it with the standard doc envelope and call
+# _write_l_doc so R11 scrub + R13 applicability gate both fire on the
+# emitted content the same way they do for L1-L13.
+_L14_L18_EXTRACTORS: List[Tuple[str, str]] = [
+    ("L14_PROTOCOL_VERSIONING",    "extract_l14_versioning"),
+    ("L15_ENCODING_TABLES",        "extract_l15_encoding_tables"),
+    ("L16_COMPLIANCE_PROPERTIES",  "extract_l16_compliance"),
+    ("L17_CHANNEL_SIGNAL_CATALOG", "extract_l17_channels"),
+    ("L18_INTERCONNECT_TOPOLOGY",  "extract_l18_interconnect"),
+]
+
+
+def _emit_l14_to_l18_via_extractor(
+        project: Path,
+        extracted: Dict[str, str]) -> List["LDocResult"]:
+    """Invoke phase1_protocol_spec_extract.py L14-L18 extractors on the
+    concatenated input-doc text, then write each result via _write_l_doc.
+
+    Honesty contract:
+      - The extractors are deterministic regex passes over the input text;
+        no LLM call, no input/score peeking.
+      - When ic_class is not bus_interconnect_protocol, the R13 applicability
+        gate inside _write_l_doc replaces the extracted content with the
+        canonical na_stub — so this function is safe to invoke for ALL
+        classes. The extractor work is wasted for non-protocol classes
+        but the L doc still ends up correctly labelled N/A.
+      - Fail-open: if phase1_protocol_spec_extract is missing or any
+        extractor crashes, the surrounding emit continues; the broken
+        extractor's L doc is skipped (not stubbed) so the failure is
+        visible in the SUMMARY count.
+    """
+    out: List["LDocResult"] = []
+    try:
+        import phase1_protocol_spec_extract as _proto_ext
+    except ImportError:
+        # Extractor module not present — skip silently (downstream gates
+        # will see a 14/14 instead of 19/19 doc count, which is the
+        # correct pre-R14 baseline).
+        return out
+
+    # Concatenate every input-doc text. Each extractor's regex catalog
+    # scans the joined buffer; the L14 versioning extractor looks for
+    # table-shape rows, L15 for table-headed encoding rows, etc.
+    text = "\n\n".join(v for v in (extracted or {}).values()
+                       if isinstance(v, str))
+    if not text.strip():
+        return out
+
+    for doc_name, fn_name in _L14_L18_EXTRACTORS:
+        fn = getattr(_proto_ext, fn_name, None)
+        if fn is None:
+            continue
+        try:
+            payload = fn(text) if fn_name != "extract_l16_compliance" else fn(text)
+            if not isinstance(payload, dict):
+                payload = {"extracted": payload}
+            payload.setdefault("schema_version", "v0.1.62")
+            payload.setdefault("doc_class", doc_name.split("_", 1)[0])
+            payload.setdefault("emitted_by",
+                                f"phase1_protocol_spec_extract.{fn_name} v0.1.62")
+            # _write_l_doc will run R11 scrub + R13 applicability gate.
+            # Evidence is per-extractor; pass empty if the extractor
+            # didn't carry one (gate-internal evidence sanitiser handles it).
+            evidence = payload.pop("evidence", {})
+            if not isinstance(evidence, dict):
+                evidence = {}
+            r = _write_l_doc(project, doc_name, payload, evidence)
+            out.append(r)
+        except Exception as e:
+            # Continue with the next extractor; failed one is visible
+            # by absence in `out`. Stderr-only so the runner log captures it.
+            print(f"      L14-L18 extractor {fn_name} crashed: {e}",
+                  file=sys.stderr)
+    return out
 
 
 # v1.6.58 — closes GitHub issue #5 BUG 1. Quality gate constants used
@@ -47808,6 +47920,26 @@ def main() -> int:
                 _seed_canonical_from_backfilled_subset(project, auto, canonical)
             except Exception as e:
                 print(f"      seed-canonical extraction_patterns FAILED: {e}")
+
+    # v0.1.62 capture (R14): wire phase1_protocol_spec_extract.py L14-L18
+    # extractors into the runner. The extractors existed since v0.1.51 but
+    # were never invoked from the doc-mode pipeline — dead code, same
+    # pattern as the R11 scrubber. For bus_interconnect_protocol-class
+    # specs (AMBA AXI / Wishbone / TileLink / ...), these are the
+    # SUBSTANTIVE docs: protocol versioning, encoding tables, compliance
+    # properties, channel catalog, interconnect rules. For other classes
+    # the applicability gate (R13) writes them as N/A stubs anyway, so
+    # this call is safe to invoke unconditionally.
+    print(f"[14c/15] L14-L18 protocol spec extract ...")
+    try:
+        _l14_l18_results = _emit_l14_to_l18_via_extractor(project, extracted)
+        results.extend(_l14_l18_results)
+        for r in _l14_l18_results:
+            print(f"      → {r.path.name} (todo={r.todo_count}, "
+                  f"ev={r.evidence_count})")
+    except Exception as _l14_l18_err:
+        print(f"      L14-L18 extract FAILED (fail-open): {_l14_l18_err}",
+              file=sys.stderr)
 
     # Step 15: coverage report (runs AFTER backfill AND canonical seed so the
     # gate sees the final L docs + explicit pattern set)

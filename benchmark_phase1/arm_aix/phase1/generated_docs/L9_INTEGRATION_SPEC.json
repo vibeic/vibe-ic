@@ -1209,6 +1209,5 @@
       "name": "axi",
       "matched_token": "AXI"
     }
-  ],
-  "class_path": "digital_cmd_driven"
+  ]
 }

@@ -79,6 +79,22 @@
       "owner_plugin": "vibe-ic"
     },
     {
+      "name": "bus_interconnect_protocol",
+      "description": "v0.1.62 — for AMBA AXI/AHB/APB/ACE, Wishbone, TileLink, CHI, OCP, AvalonMM, STBus, and any other multi-channel master/slave bus-interconnect protocol SPEC document. Distinguished by valid/ready (or req/ack) handshake on per-direction channels with burst transfers and explicit master/slave (or manager/subordinate) roles. NO SW-visible opcode/command protocol — payload is data, not instructions; protocol behaviour is in channel-handshake rules. L4 (regmap), L5 (analog), L6 (FSM), L10 (test cases), L11 (OTP), L12 (calibration), L13 (lab) legitimately N/A — the spec defines wire-level protocol, not an end IC. L14-L18 (versioning, encoding tables, compliance rules, channel catalog, interconnect rules) are the SUBSTANTIVE content. Phase 2 runner dispatches via fallback_skill=spec-to-rtl when ingesting a spec for a protocol IP (e.g. an AXI master adapter); for the spec document itself, Phase 2 is N/A.",
+      "synonyms": [
+        "bus_protocol",
+        "interconnect_protocol",
+        "multi_channel_handshake_protocol"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic"
+    },
+    {
       "name": "digital_arithmetic_primitive",
       "description": "v1.6.522 — for #358 P2. Pure digital data-transform IP (multiplier, adder, filter, hash core, encoder/decoder, arithmetic sub-block). No SW-visible protocol / register map / calibration. Single top module with clock + reset + data ports. L4/L5/L6 legitimately N/A — L2 describes a deterministic combinational/sequential data transform. Phase 2 runner dispatches via fallback_skill=spec-to-rtl since there is no deterministic RTL generator for this open family.",
       "synonyms": [

@@ -1,22 +1,10 @@
 {
-  "schema_version": 2,
-  "doc_class": "test_debug",
-  "ic_name": "UNKNOWN_IC",
-  "test_modes": [],
-  "no_test_modes_in_input": true,
-  "debug_observability": [],
-  "no_debug_observability_in_input": true,
-  "debug_registers": [],
-  "debug_parameters": [],
-  "no_debug_parameters_in_input": true,
-  "formal_interfaces": [],
-  "no_formal_interfaces_in_input": true,
-  "verification_strategy": [],
-  "no_verification_strategy_in_input": true,
-  "engineer_mode_unlock_sequence": null,
-  "no_engineer_mode_unlock_in_input": true,
-  "vsuite_per_kw_cap_skipped_v1_6_373": 0,
-  "extraction_evidence": {},
+  "doc_id": "L7",
+  "doc_name": "L7_TEST_DEBUG",
+  "applicability": "N/A",
+  "ic_class": "bus_interconnect_protocol",
+  "rationale": "No test/debug architecture; this is a protocol spec",
+  "emitted_by": "l_doc_taxonomy.na_stub v0.1.51",
   "extraction_strategy": {
     "hallucination_scrub_v0_1_60": [
       {
@@ -27,7 +15,7 @@
         "new_value": "UNKNOWN_IC",
         "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
       }
-    ]
-  },
-  "class_path": "digital_cmd_driven"
+    ],
+    "ic_class_applicability_gate_v0_1_62": "ic_class='bus_interconnect_protocol' declares LL7 not applicable; emitted as N/A stub (l_doc_taxonomy.na_stub)"
+  }
 }

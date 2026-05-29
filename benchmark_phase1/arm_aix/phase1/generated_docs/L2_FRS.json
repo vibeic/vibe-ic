@@ -577,7 +577,6 @@
       }
     ]
   },
-  "class_path": "digital_cmd_driven",
   "auto_cited_sections": [
     {
       "file_ref": "phase1/input_doc/IHI0022H_amba_axi_protocol_spec.txt:7",

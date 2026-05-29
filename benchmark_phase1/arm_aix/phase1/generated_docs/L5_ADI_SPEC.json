@@ -1,80 +1,10 @@
 {
-  "schema_version": 2,
-  "doc_class": "adi_spec",
-  "ic_name": "UNKNOWN_IC",
-  "analog_blocks_detected": false,
-  "analog_blocks": [],
-  "no_analog": true,
-  "external_components": [],
-  "electrical_specs": [],
-  "design_parameters": [
-    {
-      "parameter": "Number_Bytes",
-      "value": "2",
-      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
-      "raw": "Number_Bytes = 2 ^ AxSIZE",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Burst length",
-      "value": "4",
-      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
-      "raw": "Burst length: 4 transfers",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Burst length",
-      "value": "5",
-      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
-      "raw": "Burst length: 5 transfers    0x0F     0x0E         0x0D    0x0C    4th transfer",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "AWLEN",
-      "value": "0",
-      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
-      "raw": "- AWLEN=0",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "ARESETn",
-      "value": "0",
-      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
-      "raw": "ARESETn = 0",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "SYSCOREQ",
-      "value": "0",
-      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
-      "raw": "SYSCOREQ = 0                                                                           SYSCOREQ = 0",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "SYSCOACK",
-      "value": "0",
-      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
-      "raw": "SYSCOACK = 0                                                                           SYSCOACK = 1",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "SYSCOREQ",
-      "value": "1",
-      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
-      "raw": "SYSCOREQ = 1",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "SYSCOACK",
-      "value": "1",
-      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
-      "raw": "SYSCOACK = 1",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    }
-  ],
-  "extraction_evidence": {
-    "input/docs/IHI0022H_amba_axi_protocol_spec.pdf": []
-  },
+  "doc_id": "L5",
+  "doc_name": "L5_ADI_SPEC",
+  "applicability": "N/A",
+  "ic_class": "bus_interconnect_protocol",
+  "rationale": "No analog interface; pure digital protocol",
+  "emitted_by": "l_doc_taxonomy.na_stub v0.1.51",
   "extraction_strategy": {
     "hallucination_scrub_v0_1_60": [
       {
@@ -85,7 +15,7 @@
         "new_value": "UNKNOWN_IC",
         "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
       }
-    ]
-  },
-  "class_path": "digital_cmd_driven"
+    ],
+    "ic_class_applicability_gate_v0_1_62": "ic_class='bus_interconnect_protocol' declares LL5 not applicable; emitted as N/A stub (l_doc_taxonomy.na_stub)"
+  }
 }

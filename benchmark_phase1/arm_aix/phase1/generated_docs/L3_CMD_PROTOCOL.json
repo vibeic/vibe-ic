@@ -482,6 +482,5 @@
         "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
       }
     ]
-  },
-  "class_path": "digital_cmd_driven"
+  }
 }
