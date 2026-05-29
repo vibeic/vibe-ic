@@ -481,6 +481,264 @@
         "new_value": "<HALLUCINATION_SCRUBBED>",
         "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
       }
-    ]
-  }
+    ],
+    "l3_protocol_mirror_v0_1_66": "R21: mirrored L17.channels + L17.handshake_pairs into L3 for bus_interconnect_protocol class"
+  },
+  "channels": [
+    {
+      "name": "AW",
+      "direction_majority": "Master",
+      "signal_count": 13,
+      "signals": [
+        {
+          "name": "AWID",
+          "direction": "Master",
+          "semantics": "Identification tag for a write transaction."
+        },
+        {
+          "name": "AWADDR",
+          "direction": "Master",
+          "semantics": "The address of the first transfer in a write transaction."
+        },
+        {
+          "name": "AWLEN",
+          "direction": "Master",
+          "semantics": "Length, the exact number of data transfers in a write transaction. This information"
+        },
+        {
+          "name": "AWSIZE",
+          "direction": "Master",
+          "semantics": "Size, the number of bytes in each data transfer in a write transaction."
+        },
+        {
+          "name": "AWBURST",
+          "direction": "Master",
+          "semantics": "Burst type, indicates how address changes between each transfer in a write"
+        },
+        {
+          "name": "AWLOCK",
+          "direction": "Master",
+          "semantics": "Provides information about the atomic characteristics of a write transaction."
+        },
+        {
+          "name": "AWCACHE",
+          "direction": "Master",
+          "semantics": "Indicates how a write transaction is required to progress through a system."
+        },
+        {
+          "name": "AWPROT",
+          "direction": "Master",
+          "semantics": "Protection attributes of a write transaction: privilege, security level, and access"
+        },
+        {
+          "name": "AWQOS",
+          "direction": "Master",
+          "semantics": "Quality of Service identifier for a write transaction."
+        },
+        {
+          "name": "AWREGION",
+          "direction": "Master",
+          "semantics": "Region indicator for a write transaction."
+        },
+        {
+          "name": "AWUSER",
+          "direction": "Master",
+          "semantics": "User-defined extension for the write address channel."
+        },
+        {
+          "name": "AWVALID",
+          "direction": "Master",
+          "semantics": "Indicates that the write address channel signals are valid."
+        },
+        {
+          "name": "AWREADY",
+          "direction": "Slave",
+          "semantics": "Indicates that a transfer on the write address channel can be accepted."
+        }
+      ]
+    },
+    {
+      "name": "W",
+      "direction_majority": "Master",
+      "signal_count": 7,
+      "signals": [
+        {
+          "name": "WID",
+          "direction": "Master",
+          "semantics": "The ID tag of the write data transfer."
+        },
+        {
+          "name": "WDATA",
+          "direction": "Master",
+          "semantics": "Write data."
+        },
+        {
+          "name": "WSTRB",
+          "direction": "Master",
+          "semantics": "Write strobes, indicate which byte lanes hold valid data."
+        },
+        {
+          "name": "WLAST",
+          "direction": "Master",
+          "semantics": "Indicates whether this is the last data transfer in a write transaction."
+        },
+        {
+          "name": "WUSER",
+          "direction": "Master",
+          "semantics": "User-defined extension for the write data channel."
+        },
+        {
+          "name": "WVALID",
+          "direction": "Master",
+          "semantics": "Indicates that the write data channel signals are valid."
+        },
+        {
+          "name": "WREADY",
+          "direction": "Slave",
+          "semantics": "Indicates that a transfer on the write data channel can be accepted."
+        }
+      ]
+    },
+    {
+      "name": "B",
+      "direction_majority": "Slave",
+      "signal_count": 5,
+      "signals": [
+        {
+          "name": "BID",
+          "direction": "Slave",
+          "semantics": "Identification tag for a write response."
+        },
+        {
+          "name": "BRESP",
+          "direction": "Slave",
+          "semantics": "Write response, indicates the status of a write transaction."
+        },
+        {
+          "name": "BUSER",
+          "direction": "Slave",
+          "semantics": "User-defined extension for the write response channel."
+        },
+        {
+          "name": "BVALID",
+          "direction": "Slave",
+          "semantics": "Indicates that the write response channel signals are valid."
+        },
+        {
+          "name": "BREADY",
+          "direction": "Master",
+          "semantics": "Indicates that a transfer on the write response channel can be accepted."
+        }
+      ]
+    },
+    {
+      "name": "AR",
+      "direction_majority": "Master",
+      "signal_count": 13,
+      "signals": [
+        {
+          "name": "ARID",
+          "direction": "Master",
+          "semantics": "Identification tag for a read transaction."
+        },
+        {
+          "name": "ARADDR",
+          "direction": "Master",
+          "semantics": "The address of the first transfer in a read transaction."
+        },
+        {
+          "name": "ARLEN",
+          "direction": "Master",
+          "semantics": "Length, the exact number of data transfers in a read transaction. This changes between"
+        },
+        {
+          "name": "ARSIZE",
+          "direction": "Master",
+          "semantics": "Size, the number of bytes in each data transfer in a read transaction."
+        },
+        {
+          "name": "ARBURST",
+          "direction": "Master",
+          "semantics": "Burst type, indicates how address changes between each transfer in a read transaction."
+        },
+        {
+          "name": "ARLOCK",
+          "direction": "Master",
+          "semantics": "Provides information about the atomic characteristics of a read transaction. This"
+        },
+        {
+          "name": "ARCACHE",
+          "direction": "Master",
+          "semantics": "Indicates how a read transaction is required to progress through a system."
+        },
+        {
+          "name": "ARPROT",
+          "direction": "Master",
+          "semantics": "Protection attributes of a read transaction: privilege, security level, and access type."
+        },
+        {
+          "name": "ARQOS",
+          "direction": "Master",
+          "semantics": "Quality of Service identifier for a read transaction."
+        },
+        {
+          "name": "ARREGION",
+          "direction": "Master",
+          "semantics": "Region indicator for a read transaction."
+        },
+        {
+          "name": "ARUSER",
+          "direction": "Master",
+          "semantics": "User-defined extension for the read address channel."
+        },
+        {
+          "name": "ARVALID",
+          "direction": "Master",
+          "semantics": "Indicates that the read address channel signals are valid."
+        },
+        {
+          "name": "ARREADY",
+          "direction": "Slave",
+          "semantics": "Indicates that a transfer on the read address channel can be accepted."
+        }
+      ]
+    },
+    {
+      "name": "R",
+      "direction_majority": "Slave",
+      "signal_count": 6,
+      "signals": [
+        {
+          "name": "RID",
+          "direction": "Slave",
+          "semantics": "Identification tag for read data and response."
+        },
+        {
+          "name": "RRESP",
+          "direction": "Slave",
+          "semantics": "Read response, indicates the status of a read transfer."
+        },
+        {
+          "name": "RLAST",
+          "direction": "Slave",
+          "semantics": "Indicates whether this is the last data transfer in a read transaction."
+        },
+        {
+          "name": "RUSER",
+          "direction": "Slave",
+          "semantics": "User-defined extension for the read data channel."
+        },
+        {
+          "name": "RVALID",
+          "direction": "Slave",
+          "semantics": "Indicates that the read data channel signals are valid."
+        },
+        {
+          "name": "RREADY",
+          "direction": "Master",
+          "semantics": "Indicates that a transfer on the read data channel can be accepted."
+        }
+      ]
+    }
+  ]
 }

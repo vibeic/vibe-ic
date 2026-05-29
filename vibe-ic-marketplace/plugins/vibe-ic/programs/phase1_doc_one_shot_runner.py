@@ -48045,6 +48045,46 @@ def main() -> int:
         print(f"      L14-L18 extract FAILED (fail-open): {_l14_l18_err}",
               file=sys.stderr)
 
+    # v0.1.66 capture (R21): for bus_interconnect_protocol class, the
+    # canonical L3_CMD_PROTOCOL content is the protocol description (channels,
+    # encodings, handshake rules) — exactly what the L14-L18 extractors just
+    # produced. Mirror selected L14-L18 fields into L3 so the bus-protocol L3
+    # has substantive content matching the canonical agent shape, instead of
+    # the chip-template placeholders (opcodes / crc_parameters / verdict_byte_*)
+    # that don't apply.
+    print(f"[14c2/15] L3 protocol mirror from L14-L18 (R21) ...")
+    try:
+        from ic_class_profile import detect_ic_class as _detect3
+        _profile3 = _detect3(project)
+        _ic3 = _profile3.get("ic_class", "unknown") if isinstance(_profile3, dict) else "unknown"
+        if _ic3 == "bus_interconnect_protocol":
+            _gd = _pl.generated_docs_dir(project)
+            _l3p = _gd / "L3_CMD_PROTOCOL.json"
+            _l17p = _gd / "L17_CHANNEL_SIGNAL_CATALOG.json"
+            if _l3p.is_file() and _l17p.is_file():
+                _l3 = json.loads(_l3p.read_text())
+                _l17 = json.loads(_l17p.read_text())
+                # L17 wraps content under .fields per the L14-L18 extractor schema
+                _l17_fields = _l17.get("fields") if isinstance(_l17.get("fields"), dict) else _l17
+                _l17_channels = _l17_fields.get("channels")
+                _l17_handshakes = _l17_fields.get("handshake_pairs")
+                if isinstance(_l17_channels, list) and _l17_channels:
+                    _l3["channels"] = _l17_channels
+                if isinstance(_l17_handshakes, list) and _l17_handshakes:
+                    _l3["valid_ready_handshake_rules"] = _l17_handshakes
+                _l3.setdefault("extraction_strategy", {})[
+                    "l3_protocol_mirror_v0_1_66"] = (
+                    "R21: mirrored L17.channels + L17.handshake_pairs into "
+                    "L3 for bus_interconnect_protocol class")
+                _l3p.write_text(json.dumps(_l3, indent=2, ensure_ascii=False) + "\n")
+                print(f"      → L3 overlay: channels="
+                      f"{len(_l17_channels) if isinstance(_l17_channels, list) else 0}, "
+                      f"handshakes="
+                      f"{len(_l17_handshakes) if isinstance(_l17_handshakes, list) else 0}")
+    except Exception as _l3_err:
+        print(f"      L3 protocol mirror FAILED (fail-open): {_l3_err}",
+              file=sys.stderr)
+
     # v0.1.63 capture (R15): emit L19-L23 typed skeleton stubs (or na_stubs
     # via the R13 gate, depending on detected ic_class applicability). Before
     # this, L19-L23 were absent from disk after every run, which surfaced as

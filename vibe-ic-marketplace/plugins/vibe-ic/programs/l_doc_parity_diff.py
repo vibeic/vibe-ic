@@ -219,6 +219,36 @@ def _is_envelope_key(flat_key: str) -> bool:
     return top in _IGNORED_ENVELOPE_KEY_PREFIXES
 
 
+# v0.1.66 capture (R20): partial-value-match relaxation. Real extraction
+# pairs commonly land on the same content with slightly different verbosity
+# ("All zeros" vs "All zeros (0x0)"; "Required" vs "Required (no default)";
+# "Data bus width" vs "Data bus width (i.e. AxSIZE=log2(DATA_WIDTH/8))").
+# Counting these as VALUE_MISMATCH inflates the metric without naming a
+# real discrepancy. When one stripped string is a substring of the other
+# AND both meet the minimum-length / non-numeric-trap guards, treat the
+# pair as MATCH (not flagged).
+_PARTIAL_MATCH_MIN_LEN = 3
+
+
+def _is_partial_value_match(prog: Any, agent: Any) -> bool:
+    """True iff prog and agent are STRING values where one is a non-trivial
+    substring of the other. Anti-false-positive guards:
+      - Each value must be at least _PARTIAL_MATCH_MIN_LEN chars (else
+        e.g. '1' would match '10').
+      - Pure-numeric values must match exactly (avoid '8' matching '88').
+    Non-string values fall through to exact-comparison (the caller's job).
+    """
+    if not isinstance(prog, str) or not isinstance(agent, str):
+        return False
+    p = prog.strip()
+    a = agent.strip()
+    if len(p) < _PARTIAL_MATCH_MIN_LEN or len(a) < _PARTIAL_MATCH_MIN_LEN:
+        return False
+    if p.isdigit() and a.isdigit():
+        return p == a
+    return p in a or a in p
+
+
 def diff_single_l_doc(
     program_path: Path,
     agent_path: Path,
@@ -273,6 +303,11 @@ def diff_single_l_doc(
             continue
         if k in a_flat and not _is_empty(v) and not _is_empty(a_flat[k]):
             if str(v) != str(a_flat[k]):
+                # v0.1.66 R20: substring-match relaxation — when one value
+                # is a non-trivial substring of the other (e.g. agent
+                # elaborates with a parenthetical detail), treat as match.
+                if _is_partial_value_match(v, a_flat[k]):
+                    continue
                 findings.append(Finding(
                     l_doc=name, category="VALUE_MISMATCH",
                     key=k, program_value=v, agent_value=a_flat[k],
