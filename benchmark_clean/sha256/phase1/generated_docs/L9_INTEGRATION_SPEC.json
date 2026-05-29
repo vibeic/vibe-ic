@@ -228,8 +228,37 @@
     }
   ],
   "no_integration_in_input": false,
-  "submodules": [],
-  "no_submodules_in_input": true,
+  "submodules": [
+    {
+      "name": "Register file",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    },
+    {
+      "name": "Hash core",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    },
+    {
+      "name": "Message scheduler",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    },
+    {
+      "name": "K constants",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    }
+  ],
+  "no_submodules_in_input": false,
   "sim_only_modules": [],
   "fsm_states": [
     {

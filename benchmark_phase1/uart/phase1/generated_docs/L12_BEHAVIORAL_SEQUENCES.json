@@ -4,6 +4,7 @@
   "ic_name": "PC16550D UART",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
+  "no_calibration": false,
   "extraction_evidence": {},
   "initialization_sequence": [
     "1. Pulse MR HIGH for ≥ 1 µs to reset the chip.",

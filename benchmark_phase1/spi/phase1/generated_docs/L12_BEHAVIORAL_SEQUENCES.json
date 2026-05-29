@@ -4,6 +4,7 @@
   "ic_name": "SPI Block (S12SPIV4)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
+  "no_calibration": false,
   "extraction_evidence": {},
   "typical_master_transmit_sequence": [
     "1. Software writes SPICR1 to set SPE=1, MSTR=1 + desired {CPOL, CPHA, LSBFE, SSOE, SPIE, SPTIE}.",

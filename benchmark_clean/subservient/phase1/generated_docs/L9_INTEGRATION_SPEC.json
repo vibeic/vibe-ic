@@ -54,8 +54,51 @@
     }
   ],
   "no_integration_in_input": false,
-  "submodules": [],
-  "no_submodules_in_input": true,
+  "submodules": [
+    {
+      "name": "SERV core",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    },
+    {
+      "name": "Servile wrapper",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    },
+    {
+      "name": "共享 SRAM",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    },
+    {
+      "name": "GPIO peripheral",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    },
+    {
+      "name": "RF-RAM interface",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    },
+    {
+      "name": "Debug switch",
+      "instances": 1,
+      "type": "markdown submodule-contract heading",
+      "role": "documented submodule",
+      "low_confidence": true
+    }
+  ],
+  "no_submodules_in_input": false,
   "sim_only_modules": [],
   "fsm_states": [],
   "no_fsm_states_in_input": true,

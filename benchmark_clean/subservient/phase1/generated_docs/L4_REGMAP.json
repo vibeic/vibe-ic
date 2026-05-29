@@ -18,7 +18,14 @@
   "no_otp_layout_in_input": false,
   "otp_ip_macro": {},
   "internal_registers": [],
+  "register_map_present": false,
   "extraction_evidence": {
-    "input/docs/L5_register_map.md": []
+    "input/docs/L5_register_map.md": [],
+    "input/docs/L4_command_protocol.md": [
+      {
+        "literal": "register-map N/A assertion",
+        "label": "input states no SW-visible chip register map"
+      }
+    ]
   }
 }

@@ -4,6 +4,7 @@
   "ic_name": "I2C-bus (UM10204)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
+  "no_calibration": false,
   "extraction_evidence": {},
   "class_path": "serial_peripheral_protocol",
   "typical_master_write_sequence": [

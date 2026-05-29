@@ -4,6 +4,7 @@
   "ic_name": "CAN Specification (Bosch CAN 2.0)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
+  "no_calibration": false,
   "extraction_evidence": {},
   "typical_data_frame_transmit_sequence": [
     "1. Wait for bus idle (≥ 11 consecutive recessive bits).",
