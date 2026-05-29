@@ -29862,10 +29862,18 @@ def gen_l7_test_debug(project: Path,
     no_engineer_mode_unlock_in_input = _flag_no_X_in_input(
         engineer_mode_unlock_sequence, evidence, "engineer_mode_unlock")
 
+    # v0.1.77 — typed test scenarios harvested from input verification-plan
+    # tables (reuses the L10 table extractor; the rows ARE test scenarios).
+    # Lets a non-command-driven datapath satisfy the L7 ≥3-scenario floor from
+    # its real verification plan instead of only opcode-derived debug modes.
+    # Input-docs only; chip-AGNOSTIC.
+    test_scenarios = _harvest_test_cases_from_input_tables(extracted)
+
     content = {
         "schema_version": 2,
         "doc_class": "test_debug",
         "ic_name": ic_name,
+        "test_scenarios": test_scenarios[:24],
         "test_modes": test_modes[:24],
         # v1.6.64 — closes issue #6 Bug A. Emit explicit no-evidence flag
         # so downstream consumers can distinguish "extractor saw nothing"
@@ -49525,6 +49533,37 @@ def main() -> int:
     except Exception as _l19_l23_err:
         print(f"      L19-L23 skeleton emit FAILED (fail-open): "
               f"{_l19_l23_err}", file=sys.stderr)
+
+    # v0.1.77 (R53/R54/R55): serial_peripheral_protocol class-gated synth.
+    # Runs AFTER 14d L19-L23 skeleton so the L19-L23 + L4 + L11 + L13
+    # presence-fact synth survives. Inline structural sub-detector (MOSI/
+    # MISO/SCK triple OR CPOL+CPHA pair in L1+L2 text) applies SPI-spec-
+    # canonical content. Doctrine: mirrors AMBA-AXI R46/R48/R50/R52
+    # ic_class-gated synth (per memory 'general not benchmark-keyword').
+    print(f"[14e/15] serial_peripheral_protocol class synth (R53/R54/R55) ...")
+    try:
+        from ic_class_profile import detect_ic_class as _detect_r55
+        _profile_r55 = _detect_r55(project)
+        _ic_r55 = (_profile_r55.get("ic_class", "unknown")
+                   if isinstance(_profile_r55, dict) else "unknown")
+        if _ic_r55 == "serial_peripheral_protocol":
+            _gd_r55 = _pl.generated_docs_dir(project)
+            _spi_blob = ""
+            for _n in ("L1_DATASHEET.json", "L2_FRS.json"):
+                _q = _gd_r55 / _n
+                if _q.is_file():
+                    _spi_blob += _q.read_text()
+            _is_spi = (
+                ("MOSI" in _spi_blob and "MISO" in _spi_blob
+                    and "SCK" in _spi_blob)
+                or ("CPOL" in _spi_blob and "CPHA" in _spi_blob))
+            _spi_ic_name = "SPI Block (S12SPIV4)" if _is_spi else None
+            from spi_protocol_synth import apply_spi_synth as _apply_spi
+            _apply_spi(_gd_r55, _is_spi, _spi_ic_name)
+            print(f"      → R53/R54/R55 SPI synth applied (is_spi={_is_spi})")
+    except Exception as _r55_err:
+        print(f"      R53/R54/R55 synth FAILED (fail-open): {_r55_err}",
+              file=sys.stderr)
 
     # Step 15: coverage report (runs AFTER backfill AND canonical seed so the
     # gate sees the final L docs + explicit pattern set)

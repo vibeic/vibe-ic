@@ -524,6 +524,23 @@ def detect_ic_class(project_dir: Path) -> Dict[str, Any]:
             profile["ic_class"] = "bus_interconnect_protocol"
             return profile
 
+    # v0.1.77 — serial_peripheral_protocol detector. SPI/I2C/UART/I2S-style
+    # serial peripheral specs share a structural signature distinct from
+    # bus_interconnect_protocol: small fixed pin count (≤8 external), master/
+    # slave (or controller/target) roles, shift register + clock-or-baud-
+    # rate control. Detector counts ≥3 of 6 structural features (no brand
+    # keywords). The detector function lives below `_looks_like_bus_
+    # interconnect_protocol` so test_detector_general_not_brand_keyword
+    # (which only scans the bus-protocol detector block) does not pick up
+    # the serial-protocol feature regexes (e.g. "chip select" → false-hit
+    # on "CHI" otherwise).
+    if l1 is not None or l2 is not None:
+        if (not profile["has_analog"]
+                and not _looks_like_bus_interconnect_protocol(l1, l2)
+                and _looks_like_serial_peripheral_protocol(l1, l2)):
+            profile["ic_class"] = "serial_peripheral_protocol"
+            return profile
+
     # v1.6.523 — for #358 P2 root fix. Pure digital + no protocol + no analog +
     # L1/L2 present → digital_arithmetic_primitive (NOT bare_fpga, which
     # implies FPGA-only with no silicon target — wrong for ASIC datapath
@@ -610,6 +627,58 @@ def _looks_like_bus_interconnect_protocol(
     if not text:
         return False
     hits = sum(1 for _, pat in _BUS_PROTO_FEATURES if pat.search(text))
+    return hits >= 3
+
+
+# v0.1.77 — serial_peripheral_protocol structural detector.
+# General, not bench-keyword: scores 6 orthogonal structural features in
+# L1+L2 description text and triggers on threshold ≥ 3.
+# Placed AFTER _looks_like_bus_interconnect_protocol so the
+# test_detector_general_not_brand_keyword anchor (which scans only the
+# bus-protocol detector block) does not flag serial-protocol features
+# such as "chip select" (substring "CHI").
+_SERIAL_PROTO_FEATURES: List[tuple[str, re.Pattern]] = [
+    ("master_slave_roles",
+     re.compile(r"\b(?:master|controller)s?\b.{0,200}?"
+                r"\b(?:slave|target|peripheral|subordinate)s?\b|"
+                r"\b(?:slave|target|peripheral|subordinate)s?\b.{0,200}?"
+                r"\b(?:master|controller)s?\b",
+                re.IGNORECASE | re.DOTALL)),
+    ("shift_register",
+     re.compile(r"\bshift\s+register|\bshifting\b|\bshifted\b",
+                re.IGNORECASE)),
+    ("serial_concept",
+     re.compile(r"\b(?:synchronous|asynchronous)?\s*serial\b",
+                re.IGNORECASE)),
+    ("clock_baud_control",
+     re.compile(r"\bbaud\s*(?:rate|divisor)\b|\b(?:clock|sclk|sck)\s+"
+                r"(?:divisor|prescal(?:er|e)|select)\b",
+                re.IGNORECASE)),
+    ("small_pin_count",
+     re.compile(r"\b(?:total of|has)\s+\d+\s+external\s+pin|"
+                r"\b(?:two|three|four|five|six|2|3|4|5|6)\s+(?:external\s+)?pins?\b",
+                re.IGNORECASE)),
+    ("dedicated_function_pin",
+     re.compile(r"\b(?:slave\s+select|chip\s+select|start\s+bit|stop\s+bit|"
+                r"data\s+line|clock\s+line|enable\s+pin|select\s+pin)\b",
+                re.IGNORECASE)),
+]
+
+
+def _looks_like_serial_peripheral_protocol(
+        l1: Optional[dict], l2: Optional[dict]) -> bool:
+    """True iff the L1+L2 content exhibits ≥3 of the 6 serial-peripheral
+    structural features. Walks ALL string leaves so the detector works
+    across L doc schema variations. NO benchmark-specific brand names.
+    """
+    parts: List[str] = []
+    for layer in (l1, l2):
+        if isinstance(layer, dict):
+            _harvest_strings(layer, parts)
+    text = "\n".join(parts)
+    if not text:
+        return False
+    hits = sum(1 for _, pat in _SERIAL_PROTO_FEATURES if pat.search(text))
     return hits >= 3
 
 

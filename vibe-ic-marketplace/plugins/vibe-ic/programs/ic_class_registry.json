@@ -95,6 +95,18 @@
       "owner_plugin": "vibe-ic"
     },
     {
+      "name": "serial_peripheral_protocol",
+      "description": "v0.1.77 — for SPI / I2C / UART / I2S / 1-Wire / CAN / SMBus / Microwire and similar synchronous-or-asynchronous serial peripheral SPEC documents. Distinguished by a small fixed external pin count (typically 2-4) carrying named functions (data/clock/select), master/slave (or controller/target) roles, a shift register as the core data-movement primitive, and clock-divisor / baud-rate control. No multi-channel handshake (that's bus_interconnect_protocol) and no SW-visible opcode protocol (that's digital_cmd_driven). L4 register map IS present (configuration register file at the host-bus interface); L5 (analog), L11 (OTP), L13 (lab cal) typically N/A. L14-L18 (versioning, encoding tables, compliance rules, channel catalog, interconnect rules) all apply to the serial protocol layer. Phase 2 runner dispatches via fallback_skill=spec-to-rtl since the spec is a wire-level protocol, not a complete IC.",
+      "synonyms": ["serial_protocol", "synchronous_serial_protocol", "asynchronous_serial_protocol", "two_wire_interface", "spi_protocol", "i2c_protocol", "uart_protocol"],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic"
+    },
+    {
       "name": "digital_arithmetic_primitive",
       "description": "v1.6.522 — for #358 P2. Pure digital data-transform IP (multiplier, adder, filter, hash core, encoder/decoder, arithmetic sub-block). No SW-visible protocol / register map / calibration. Single top module with clock + reset + data ports. L4/L5/L6 legitimately N/A — L2 describes a deterministic combinational/sequential data transform. Phase 2 runner dispatches via fallback_skill=spec-to-rtl since there is no deterministic RTL generator for this open family.",
       "synonyms": [

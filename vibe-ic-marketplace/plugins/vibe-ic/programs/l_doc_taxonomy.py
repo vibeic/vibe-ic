@@ -179,6 +179,25 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
             "L23": "Security is per-implementation, not protocol-level",
         },
     },
+    "serial_peripheral_protocol": {
+        "applicable": [
+            "L1", "L2", "L3", "L4", "L6", "L7", "L8C", "L8T", "L9", "L10", "L12",
+            "L14", "L15", "L16", "L17", "L18",
+            "L19", "L22",
+        ],
+        "not_applicable": [
+            "L5", "L11", "L13",
+            "L20", "L21", "L23",
+        ],
+        "rationale_not_applicable": {
+            "L5": "No analog interface; pure digital serial protocol",
+            "L11": "No OTP fuses",
+            "L13": "No lab calibration",
+            "L20": "DFT scan is per-implementation, not protocol-level",
+            "L21": "Power intent is per-implementation, not protocol-level",
+            "L23": "Security is per-implementation, not protocol-level",
+        },
+    },
     "cpu_core_isa": {
         "applicable": [
             "L1", "L2", "L6", "L8C", "L8T", "L9", "L10", "L12",
