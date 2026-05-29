@@ -209,6 +209,10 @@ def main() -> int:
                    "--max-eco", str(args.max_eco)]
         if args.skip_hardware:
             p2_args.append("--skip-hardware")
+        # v0.1.54 capture: forward --skip-analog so phase2 final_audit doesn't
+        # FAIL a digital-only project on missing phase1/analog/analog_block_list.json.
+        if args.skip_analog:
+            p2_args.append("--skip-analog")
         rc = _run_phase("PHASE 2 (= 2a + 2b)", runner, p2_args)
         rep = _read_report(_pl.report_path(project, "phase2_one_shot.json"))
         verdict = rep.get("verdict") or ("PASS" if rc == 0 else "FAIL")

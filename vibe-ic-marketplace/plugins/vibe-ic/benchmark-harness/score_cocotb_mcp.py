@@ -42,6 +42,51 @@ def _docker_path(host_path: Path, mount_host: Path, mount_container: str = "/fos
     return f"{mount_container}/{rel}"
 
 
+def _container_mounts(container: str):
+    """Return list of (host_source, container_destination) tuples from `docker inspect`.
+
+    Empty list means the container doesn't exist or has no bind mounts. Raises
+    SystemExit on container-not-found so we fail fast before scoring.
+    """
+    try:
+        out = subprocess.check_output(
+            ["docker", "inspect", container], text=True, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as e:
+        raise SystemExit(
+            f"docker inspect {container!r} failed (is the container running?): {e.output.strip()}")
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return []
+    if not data:
+        return []
+    mounts = data[0].get("Mounts", []) or []
+    return [(Path(m["Source"]).resolve(), m["Destination"]) for m in mounts if m.get("Source")]
+
+
+def _validate_mount(container: str, mount_host: Path, mount_container: str):
+    """Refuse to proceed if --mount-root + --mount-container don't match an actual
+    docker bind mount. Captured from v0.1.53 CVDP run: a wrong --mount-root produced
+    a silent TESTS=0 PASS=0 FAIL=0 SKIP=0 with the real error ('cd: ... No such file
+    or directory') buried in log_tail. Fail loudly instead."""
+    actual = _container_mounts(container)
+    if not actual:
+        # container has no mounts at all — proceeding is futile
+        raise SystemExit(
+            f"Container {container!r} has no bind mounts; cannot reach project from host.\n"
+            f"  Expected mount: {mount_host} → {mount_container}")
+    # accept either an EXACT match or a parent-of relationship (mount_host is under an actual source)
+    for src, dst in actual:
+        if (mount_host == src or src in mount_host.parents) and dst == mount_container:
+            return
+    listing = "\n".join(f"    {s} → {d}" for s, d in actual)
+    raise SystemExit(
+        f"--mount-root {mount_host} → {mount_container} is NOT an actual bind mount on container {container!r}.\n"
+        f"Actual mounts:\n{listing}\n"
+        f"Fix: either pass --mount-root that matches one of the above sources, or rsync the\n"
+        f"project under one of them and re-run with the matching --mount-root.")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--project", required=True, help="Shape-D project dir (work/ + score/ subdirs)")
@@ -61,6 +106,11 @@ def main():
             f"Project must live UNDER --mount-root ({mount_host}) so the container can see it.\n"
             f"  project    = {project}\n"
             f"Symlinks are NOT followed across the docker mount; rsync the project under the mount.")
+
+    # Verify the host-side mount-root is actually bind-mounted into the container.
+    # Without this, a wrong --mount-root produces a silent TESTS=0 PASS=0 FAIL=0 SKIP=0
+    # with the real error ('cd: ... No such file or directory') buried in log_tail.
+    _validate_mount(a.container, mount_host, a.mount_container)
 
     rtl_host = project / a.rtl
     if not rtl_host.is_file():

@@ -3088,10 +3088,15 @@ def step_emit_phase2_manifests(project: Path,
 
 
 def _build_final_audit_cmd(project: Path, audit: Path,
-                            phase: int = 3) -> List[str]:
+                            phase: int = 3,
+                            skip_analog: bool = False) -> List[str]:
     """Build the flow_compliance_check.py argv for step_final_audit.
 
     Factored out (v1.6.100) so the cmd-list contract is unit-testable.
+    v0.1.54: forward --skip-analog when the caller passed it, so digital-only
+    Shape-D / Shape-B projects don't get spurious FAILs on analog file-existence
+    checks. Captured from the v0.1.53 CVDP run where final_audit FAILed on
+    missing phase1/analog/analog_block_list.json under --skip-analog.
     """
     # v1.6.100: forward --allow-thin-input so coverage-shape WAIVERs
     # (l_doc_structured_field_count + phase1_input_vs_generated_completeness)
@@ -3100,12 +3105,16 @@ def _build_final_audit_cmd(project: Path, audit: Path,
     # The plugin's coverage-shape predicate (v1.6.98) gates this flag — thick-
     # input projects hitting the same gates STAY FAIL. Unconditional forwarding
     # is therefore safe.
-    return ["python3", str(audit), str(project),
-            "--phase", str(phase), "--strict-structural",
-            "--allow-thin-input"]
+    cmd = ["python3", str(audit), str(project),
+           "--phase", str(phase), "--strict-structural",
+           "--allow-thin-input"]
+    if skip_analog:
+        cmd.append("--skip-analog")
+    return cmd
 
 
-def step_final_audit(project: Path, phase: int = 3) -> StepResult:
+def step_final_audit(project: Path, phase: int = 3,
+                     skip_analog: bool = False) -> StepResult:
     t0 = time.time()
     audit = PROGRAMS_DIR / "flow_compliance_check.py"
     if not audit.is_file():
@@ -3133,7 +3142,7 @@ def step_final_audit(project: Path, phase: int = 3) -> StepResult:
     audit_env: Optional[Dict[str, str]] = None
     if phase == 2:
         audit_env = {"PHASE23_ANALOG_FPGA_STUB": "1"}
-    rc, out, err = _run(_build_final_audit_cmd(project, audit, phase),
+    rc, out, err = _run(_build_final_audit_cmd(project, audit, phase, skip_analog),
                         timeout=300, env=audit_env)
     transcript = _pl.report_path(project, "flow_compliance_check.log")
     transcript.parent.mkdir(parents=True, exist_ok=True)
@@ -3166,6 +3175,10 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("--skip-hardware", action="store_true")
+    p.add_argument("--skip-analog", action="store_true",
+                   help="Forward --skip-analog to final_audit so analog A1-A8 "
+                        "file-existence checks don't FAIL a digital-only project. "
+                        "Captured from v0.1.53 CVDP run.")
     p.add_argument("--max-eco", type=int, default=3)
     p.add_argument("--top-name", default="chip_top")
     p.add_argument("--container", default="iic-eda")
@@ -3535,7 +3548,7 @@ def main() -> int:
     # Phase 2 only — Phase 3 lives in phase3_one_shot_runner.py and is
     # chained by phase23_one_shot_runner.py.
     plan.append(step_emit_phase2_manifests(project, plan))
-    plan.append(step_final_audit(project, phase=2))
+    plan.append(step_final_audit(project, phase=2, skip_analog=args.skip_analog))
 
     summary = {
         "project": str(project),
