@@ -9150,7 +9150,14 @@ def _is_real_port_token(tok, l1_chip_name=None):
     # never match these dev-kit-board hardware-pin shapes.
     if _matches_dev_kit_pattern(tok):
         return False
-    if len(tok) < 3:
+    # v0.1.86 — 1-char tokens only. The prior ≥3 floor dropped legitimate
+    # 2-char control ports (cs / we / oe / rd / wr / en / ce / hs), e.g.
+    # sha256's `cs` (chip-select) + `we` (write-enable), which then broke
+    # l9_rtl_pin_consistency (RTL had cs/we, L9 didn't). The other reject
+    # filters above (power rails, Verilog reserved words, version codes like
+    # `E4`, power/narrative tokens) already screen the common 2-char noise, so
+    # the length floor only needs to reject 1-char tokens. Chip-AGNOSTIC.
+    if len(tok) < 2:
         return False
     return True
 
@@ -46213,12 +46220,24 @@ def _post_emit_derive_l9_clocks_v1_6_323(project: Path) -> None:
         if name_raw in seen:
             continue
         seen.add(name_raw)
-        clocks.append({
+        _entry: Dict[str, Any] = {
             "name": name_raw,
             "edge": "posedge",
             "extraction_strategy":
                 "l9_top_port_clock_derive",
-        })
+        }
+        # v0.1.86 — inherit typed depth (freq / period / role) from the
+        # matching deep clock_domains[] entry so this derived clock view is not
+        # a shallow stub that fails l8_clock_domains_typed_check (which scans
+        # clock entries across ALL L docs). Chip-AGNOSTIC.
+        for _cd in (l9.get("clock_domains") or []):
+            if isinstance(_cd, dict) and _cd.get("name") == name_raw:
+                for _k in ("freq_hz", "freq_mhz", "period_ns",
+                           "role", "source", "domain_kind"):
+                    if _cd.get(_k) is not None and _entry.get(_k) is None:
+                        _entry[_k] = _cd[_k]
+                break
+        clocks.append(_entry)
     if not clocks:
         return
     l9.setdefault("clocks", clocks)
@@ -46345,6 +46364,18 @@ def _post_emit_seed_l8b_clocks_from_l1_v1_6_571(project: Path) -> None:
             "extraction_strategy":
                 "seeded_from_l1_clock_port_v1_6_571",
         }
+        # v0.1.86 — inherit typed depth (freq / period / role) from the
+        # matching deep clock_domains[] entry so the seed is not a shallow stub
+        # that fails l8_clock_domains_typed_check. The clock_domains walker
+        # already resolved period_ns/freq from the input; share it with the
+        # clocks[] view of the same physical clock. Chip-AGNOSTIC.
+        for _cd in (l8b.get("clock_domains") or []):
+            if isinstance(_cd, dict) and _cd.get("name") == name:
+                for _k in ("freq_hz", "freq_mhz", "period_ns",
+                           "role", "source", "domain_kind"):
+                    if _cd.get(_k) is not None and entry.get(_k) is None:
+                        entry[_k] = _cd[_k]
+                break
         seeded.append(entry)
     if not seeded:
         return
