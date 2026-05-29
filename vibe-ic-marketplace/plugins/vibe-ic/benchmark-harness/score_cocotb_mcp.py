@@ -168,6 +168,16 @@ def main():
     else:
         tests = passed = failed = skipped = 0
 
+    # v0.1.57 capture: distinguish DUT-FAIL from HARNESS-SUBSTITUTION error.
+    # When tests==0 AND pytest reported a TypeError/ImportError/ModuleNotFoundError
+    # raised by the harness (cocotb-tools / harness_library.py) BEFORE any cocotb
+    # test ran, the scorer was looking at a tool-substitution gap (per § 3 +
+    # § 4 Cat D), not a DUT bug. Surface this in the JSON so the agent
+    # consuming cocotb_score.json can classify correctly without having to
+    # parse log_tail by eye, and without violating the blind rule by reading
+    # score/src/harness_library.py.
+    harness_error = _detect_harness_error(out, tests, p.returncode)
+
     # Single-pass scorer. We do NOT silently retry with alternative RTL variants
     # (sync→async, etc.) — that would over-fit to the hidden harness's reset
     # convention, violating the open-benchmark-methodology skill § 4 Cat A/E
@@ -186,13 +196,66 @@ def main():
         "verdict": "PASS" if (tests > 0 and failed == 0 and skipped == 0 and passed == tests) else "FAIL",
         "elapsed_s": round(elapsed, 2),
         "log_tail": out[-2000:],
+        # v0.1.57: when verdict==FAIL with tests==0, harness_error tells the
+        # consumer whether to triage as Cat D (tool gap) vs unknown.
+        "harness_error": harness_error,
     }
     reports = project / "reports"
     reports.mkdir(exist_ok=True)
     (reports / "cocotb_score.json").write_text(json.dumps(summary, indent=2) + "\n")
-    print(f"{a.top} (Shape D)  TESTS={tests} PASS={passed} FAIL={failed} SKIP={skipped}  → verdict {summary['verdict']}")
+    note = ""
+    if harness_error and tests == 0:
+        note = f"  ← {harness_error['kind']} in cocotb runner (Cat-D candidate; see harness_error in cocotb_score.json)"
+    print(f"{a.top} (Shape D)  TESTS={tests} PASS={passed} FAIL={failed} SKIP={skipped}  → verdict {summary['verdict']}{note}")
     print(f"  cocotb_score.json: {reports / 'cocotb_score.json'}")
     raise SystemExit(0 if summary["verdict"] == "PASS" else 1)
+
+
+# Patterns that indicate a HARNESS-SIDE failure (cocotb-tools / runner / version
+# mismatch / missing import / docker substitution gap), NOT a DUT bug. When
+# tests==0 AND one of these fires, the right § 4 triage is Cat D
+# (tool-substitution gap), not Cat F-H (agent-fixable).
+_HARNESS_ERROR_PATTERNS = (
+    # cocotb runner.test() internal — what we saw in CVDP priority_encoder v0.1.56
+    (re.compile(r"TypeError: int\(\) argument must be a string"),
+     "cocotb-tools-typeerror"),
+    (re.compile(r"ModuleNotFoundError: No module named"),
+     "cocotb-import-missing-module"),
+    (re.compile(r"ImportError:"),
+     "cocotb-import-error"),
+    # Container / env mismatch
+    (re.compile(r"command not found"), "container-tool-missing"),
+    (re.compile(r"docker: Error"), "container-error"),
+    # Iverilog couldn't elaborate at ALL (no harness gets to run) — distinguish
+    # this from "iverilog elaborated but cocotb crashed inside runner.test()"
+    (re.compile(r"^error: ", re.MULTILINE), "iverilog-elaboration-error"),
+    # General Python traceback in harness layer
+    (re.compile(r"harness_library\.py:\d+:"), "harness-library-internal-error"),
+)
+
+
+def _detect_harness_error(out: str, tests: int, returncode: int) -> dict | None:
+    """Inspect pytest stdout/stderr for harness-side errors that fired BEFORE
+    any cocotb test could run. Returns a dict {kind, signal_lines} when one
+    pattern matches and tests==0; None otherwise.
+
+    Honesty: this scans ONLY the SCORER OUTPUT (stdout/stderr from pytest),
+    not the contents of score/src/harness_library.py — the blind rule still
+    holds. The output is something the user already sees in log_tail; this
+    helper just classifies it so the consumer doesn't have to parse it by eye.
+    """
+    if tests > 0:
+        # If any cocotb test reported, FAIL/PASS are DUT-level signals.
+        return None
+    if returncode == 0:
+        # Clean exit with tests==0 — likely no tests were collected, not a
+        # harness error. Don't fabricate a Cat-D label.
+        return None
+    for pat, kind in _HARNESS_ERROR_PATTERNS:
+        m = pat.search(out)
+        if m:
+            return {"kind": kind, "signal": m.group(0)[:200]}
+    return None
 
 
 if __name__ == "__main__":

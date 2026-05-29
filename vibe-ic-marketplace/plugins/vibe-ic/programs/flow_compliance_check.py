@@ -1572,8 +1572,24 @@ MAX_THICK_DOC_THRESHOLD = 200       # anti-gaming floor on doc count
 _THIN_INPUT_WAIVER_GATES = (
     "phase1_doc_input_completeness_check",
     "l_doc_structured_field_count_check",
+    # v0.1.57 capture: atomic Shape-D problems (CVDP-style: brief prompt + 1-page
+    # spec) have spec-faithful L docs that legitimately don't carry the depth
+    # these two gates expect of SoC-grade inputs. Without waivers, atomic
+    # single-module IPs can never reach PASS_WITH_WAIVERS even when their
+    # RTL/synth/lint pass cleanly. Eligibility is still gated by the
+    # _is_thin_input_eligible predicate so rich projects don't get a free pass.
+    "l9_submodule_conformance_check",
+    "metadata_content_substance_check",
 )
 _THIN_INPUT_WAIVER_TICKET = "thin-input-v1.6.97"
+
+# v0.1.57: absolute-size threshold for the "100% capture of a tiny input"
+# case. The existing predicate (any doc <100%) doesn't fire when the
+# extractor caught everything from a brief input — but those L docs are
+# still too thin to support SoC-grade structural gates. When sum(raw_total
+# across non-reference docs) <= this many tokens, the project counts as
+# thin even when capture is 100%.
+TINY_INPUT_TOTAL_RAW_TOKENS = 100
 
 
 # v1.6.210 (#91) — PASS_WITH_OPEN_SOURCE_CONSTRAINTS verdict tier.
@@ -1868,6 +1884,22 @@ def _is_thin_input_eligible(project: Path) -> bool:
         return False
     if len(per_doc) > MAX_THICK_DOC_THRESHOLD:
         return False
+    # v0.1.57: "tiny absolute-size input" predicate, orthogonal to coverage%.
+    # If sum(raw_total) across non-reference docs is <= TINY_INPUT_TOTAL_RAW_TOKENS,
+    # the input is too small to support SoC-grade structural gates even when
+    # the extractor captured 100% of it. CVDP atomic problems hit this case
+    # (the v0.1.56 fixed_priority_arbiter had sum(raw_total)=0; the
+    # priority_encoder had sum(raw_total)=3).
+    total_raw = 0
+    for entry in per_doc:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("reference_doc") is True:
+            continue
+        total_raw += int(entry.get("raw_total") or 0)
+    if total_raw <= TINY_INPUT_TOTAL_RAW_TOKENS:
+        return True
+    # Original predicate: any non-reference doc below 100% capture.
     for entry in per_doc:
         if not isinstance(entry, dict):
             continue
