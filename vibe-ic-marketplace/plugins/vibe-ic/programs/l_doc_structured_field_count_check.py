@@ -203,6 +203,16 @@ def _facts_yaml_escape_flags(project: Path) -> dict[str, bool]:
     return out
 
 
+# v0.1.83 — datapath/compute + CPU classes. Their L1-L9 specs document the
+# external contract and delegate internal micro-architecture (FSM depth, exact
+# timing) to the implementation, so the protocol-chip-tuned L6 (≥5 FSM) / L8
+# (≥10 timing) floors are relaxed for them (to ≥2 / ≥3) — a real floor, not a
+# skip. NOT a command-driven or protocol class (those keep the strict default).
+_DATAPATH_COMPUTE_CLASSES = frozenset({
+    "digital_arithmetic_primitive", "processor_cpu",
+})
+
+
 def _check_l_doc(layer: int, data: dict,
                  escapes: dict[str, bool] | None = None,
                  ic_class: str = "unknown") -> tuple[bool, str]:
@@ -342,13 +352,22 @@ def _check_l_doc(layer: int, data: dict,
                 f"L5 adi_spec must carry ≥3 typed analog blocks (or "
                 f"set `no_analog: true`); have {n_blocks}.")
     elif layer == 6:
+        # v0.1.83 — IC-class-aware FSM floor. The ≥5 default is tuned for
+        # command/protocol chips with explicit multi-state control FSMs. A pure
+        # datapath/compute primitive (multiplier, hash, ALU) or a CPU-SoC
+        # integration spec deliberately delegates the internal micro-
+        # architecture FSM to the implementation ("round impl 由 Plugin 自選")
+        # and realistically documents a minimal control FSM (idle/active/done).
+        # Relax to ≥2 for those classes — a real floor, not a skip. Command-
+        # driven / protocol / unknown classes keep ≥5 (fail-closed).
+        l6_min = 2 if ic_class in _DATAPATH_COMPUTE_CLASSES else 5
         states = (data.get("fsm_states") or data.get("states")
                   or data.get("state_table"))
         n_states = _list_len_of_dicts(states)
         # Wave 35 (v0.119.67) — accept `fsms: [{name, states[]}, ...]`
         # multi-FSM container schema. Sum total state count across
         # all enumerated FSMs.
-        if n_states < 5:
+        if n_states < l6_min:
             fsms = data.get("fsms")
             if isinstance(fsms, list):
                 total_states = 0
@@ -357,9 +376,9 @@ def _check_l_doc(layer: int, data: dict,
                         total_states += _list_len_of_dicts(f.get("states"))
                 if total_states > n_states:
                     n_states = total_states
-        if n_states < 5:
+        if n_states < l6_min:
             return False, (
-                f"L6 control_logic must carry ≥5 typed FSM states in "
+                f"L6 control_logic must carry ≥{l6_min} typed FSM states in "
                 f"`fsm_states` (each with name/transitions/actions); "
                 f"have {n_states}.")
     elif layer == 7:
@@ -430,9 +449,16 @@ def _check_l_doc(layer: int, data: dict,
                          if vv not in (None, "", [], {}))
             elif isinstance(v, (int, float, str)) and v not in (None, ""):
                 n += 1
-        if n < 10:
+        # v0.1.83 — IC-class-aware timing floor. The ≥10 default suits a
+        # protocol chip with a rich timing-waveform table (bit periods,
+        # classifier ticks, turnaround windows). A datapath/compute primitive
+        # or CPU-SoC documents a handful of timing facts (clock period, cycle
+        # count, latency); relax to ≥3 for those classes. Protocol / command /
+        # unknown classes keep ≥10 (fail-closed).
+        l8_min = 3 if ic_class in _DATAPATH_COMPUTE_CLASSES else 10
+        if n < l8_min:
             return False, (
-                f"L8 timing_waveform must carry ≥10 typed timing "
+                f"L8 timing_waveform must carry ≥{l8_min} typed timing "
                 f"constants (timing_parameters dict + rx_classifier_ticks "
                 f"dict + constants[] list-of-dicts + typed-dict sidecar "
                 f"sections (clock{{}}/wake_timing{{}}/etc) + scalar "
