@@ -49813,6 +49813,24 @@ def main() -> int:
                 except Exception as _usb_err:
                     print(f"      USB synth FAILED (fail-open): {_usb_err}",
                           file=sys.stderr)
+            # v0.1.83 — I2S structural sub-detector (SCK+WS+SD triple,
+            # OR Word Select + Inter-IC Sound mention). Philips/NXP I2S
+            # spec family.
+            _is_i2s = (
+                ("SCK" in _spi_blob and "WS" in _spi_blob
+                    and "SD" in _spi_blob
+                    and "Word Select" in _spi_blob)
+                or ("Inter-IC Sound" in _spi_blob)
+                or ("I2S" in _spi_blob and "Word Select" in _spi_blob))
+            if _is_i2s:
+                _i2s_ic_name = "I2S Bus (Inter-IC Sound, UM11732)"
+                try:
+                    from i2s_protocol_synth import apply_i2s_synth as _apply_i2s
+                    _apply_i2s(_gd_r55, _is_i2s, _i2s_ic_name)
+                    print(f"      → R68/R69/R70 I2S synth applied (is_i2s={_is_i2s})")
+                except Exception as _i2s_err:
+                    print(f"      I2S synth FAILED (fail-open): {_i2s_err}",
+                          file=sys.stderr)
     except Exception as _r55_err:
         print(f"      R53/R54/R55 synth FAILED (fail-open): {_r55_err}",
               file=sys.stderr)
