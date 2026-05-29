@@ -69,7 +69,8 @@ def cmd_show(bench: str):
     print("# is to RE-ATTEMPT prior FAIL/FLOOR cases BLIND on the current plugin —")
     print("# NOT to publish the prior canonical and skip. Use --reattempt-floor to")
     print("# print the prior FAILing-problem list for this benchmark from the")
-    print("# newest pass_at_1.json under benchmark_external/<bench>/.")
+    print("# newest scoring artifact under benchmark_external/<bench>/")
+    print("# (Shape-C pass_at_1.json / Shape-D cocotb_score.json / RESULT.md).")
     print()
     if "dataset" in e:
         ds = e["dataset"]
@@ -142,6 +143,21 @@ def cmd_setup(bench: str, dataset: str, run: str):
     elif shape == "B":
         fn = layout.get("prompt_filename", "design_description.txt")
         problems = sorted(str(p.parent.relative_to(ds_p)) for p in ds_p.rglob(fn) if p.is_file())
+    elif shape == "D" and bench == "cvdp":
+        # v0.1.55 capture: CVDP ships JSONL — call the dedicated extractor
+        # to emit Shape-D project dirs (work/PROMPT.txt + score/src/*).
+        # Captured from v0.1.53 CVDP run where this gap forced manual staging.
+        import subprocess as _sp
+        extractor = Path(__file__).parent / "cvdp_jsonl_extract.py"
+        rc = _sp.run(["python3", str(extractor),
+                       "--dataset", str(ds_p), "--rundir", str(run_p)],
+                      check=False)
+        if rc.returncode != 0:
+            raise SystemExit(f"cvdp_jsonl_extract failed (rc={rc.returncode})")
+        # The extractor wrote its own problems.list + .bench_config.json;
+        # rely on those (its config is authoritative for CVDP).
+        if (run_p / "problems.list").is_file():
+            problems = [p for p in (run_p / "problems.list").read_text().splitlines() if p]
     (run_p / "problems.list").write_text("\n".join(problems) + "\n")
     # batches of 10
     for i in range(0, len(problems), 10):
@@ -164,16 +180,17 @@ def cmd_setup(bench: str, dataset: str, run: str):
 
 def cmd_reattempt_floor(bench: str) -> int:
     """v0.1.53 — per § 4.1 / § 8.1 user directive. Surface the prior FAIL
-    list (across pass_at_1.json files) so the next run can re-attempt
-    them BLIND. Default policy: do NOT inherit FLOOR labels — every fail
-    must be re-justified from a FRESH re-run on the current plugin.
+    list so the next run can re-attempt them BLIND. Default policy: do NOT
+    inherit FLOOR labels — every fail must be re-justified from a FRESH
+    re-run on the current plugin.
 
-    Searches `benchmark_external/<bench>/**/pass_at_1.json`, picks the
-    newest, and prints the FAILing problems + reasons.
+    v0.1.55 capture: in addition to Shape-C `pass_at_1.json`, scan Shape-D
+    `cocotb_score.json` and, as a final fallback, the newest RESULT*.md, so
+    benchmarks like CVDP don't get falsely labelled as "FIRST RUN" when they
+    actually have prior runs.
     """
     import glob
-    # Find newest pass_at_1.json under benchmark_external/<bench>/
-    # Map benchmark name to its on-disk folder.
+    # Find newest scoring artifact under benchmark_external/<bench>/
     name_map = {
         "verilogeval-v2":    "verilogeval_v2",
         "verilogeval-human": "verilogeval_human",
@@ -181,36 +198,90 @@ def cmd_reattempt_floor(bench: str) -> int:
         "cvdp":              "cvdp",
     }
     bench_dir = name_map.get(bench, bench.replace("-", "_"))
-    pattern = f"benchmark_external/{bench_dir}/**/pass_at_1.json"
-    candidates = sorted(glob.glob(pattern, recursive=True),
-                        key=lambda p: os.path.getmtime(p), reverse=True)
+    e = _entry(bench)
+    shape = e.get("shape", "?")
+    base = f"benchmark_external/{bench_dir}"
+
+    # Shape-aware scoring-artifact priority
+    if shape == "D":
+        artifact_globs = [f"{base}/**/cocotb_score.json",
+                          f"{base}/**/pass_at_1.json"]
+    else:
+        artifact_globs = [f"{base}/**/pass_at_1.json",
+                          f"{base}/**/cocotb_score.json"]
+
+    candidates: list[str] = []
+    for g in artifact_globs:
+        candidates.extend(glob.glob(g, recursive=True))
+    candidates = sorted(candidates, key=lambda p: os.path.getmtime(p), reverse=True)
+
     if not candidates:
-        print(f"No prior pass_at_1.json under benchmark_external/{bench_dir}/")
-        print(f"This is a FIRST RUN — there are no prior fails to re-attempt.")
-        print(f"Proceed with the standard --setup workflow.")
+        # Fallback: any prior RESULT*.md is still proof of a prior run.
+        md = sorted(glob.glob(f"{base}/**/RESULT*.md", recursive=True),
+                    key=lambda p: os.path.getmtime(p), reverse=True)
+        if not md:
+            print(f"No prior scoring artifact under {base}/")
+            print("This is a FIRST RUN — there are no prior fails to re-attempt.")
+            print("Proceed with the standard --setup workflow.")
+            return 0
+        newest = md[0]
+        head = "\n".join(Path(newest).read_text().splitlines()[:6])
+        print(f"# Newest RESULT.md: {newest}")
+        print("# (no machine-readable score; cannot enumerate per-problem fails)")
+        print("# RESULT headline:")
+        for line in head.splitlines():
+            print(f"#   {line}")
+        print()
+        print("# Action: re-run blind (the FLOOR re-attempt policy applies).")
         return 0
+
     newest = candidates[0]
-    print(f"# Newest pass_at_1.json: {newest}")
+    print(f"# Newest scoring artifact: {newest}")
     data = json.loads(Path(newest).read_text())
-    total = data.get("total", "?")
-    passed = data.get("passed", "?")
-    pct = data.get("pass_at_1_pct", "?")
-    print(f"# Prior canonical: {passed}/{total} = {pct}%")
-    fails = [r for r in data.get("results", []) if r.get("verdict") != "PASS"]
-    print(f"# Prior FAILing problems: {len(fails)}")
-    print()
-    print("# § 4.1 + § 8.1 policy: re-attempt EACH of these BLIND on the")
-    print("# current plugin version. The FLOOR label only sticks if it survives")
-    print("# a fresh attempt — re-justify from new run, not from prior RESULT.md.")
-    print()
-    for r in fails:
-        prob = r["problem"]
-        reason = r.get("reason", "")
-        print(f"  {prob:<36} {reason[:80]}")
-    print()
-    print("# Next step:")
-    print("#   For each problem, run the Shape-C gates per blind_instructions_shape_c.md.")
-    print("#   gates_atomic.py --prob <Prob> --workdir <RUNDIR>/work --dataset <DS> --bench {}".format(bench))
+
+    # Shape-C / aggregate-per-problem schema
+    if "results" in data and isinstance(data["results"], list):
+        total = data.get("total", "?")
+        passed = data.get("passed", "?")
+        pct = data.get("pass_at_1_pct", "?")
+        print(f"# Prior canonical: {passed}/{total} = {pct}%")
+        fails = [r for r in data["results"] if r.get("verdict") != "PASS"]
+        print(f"# Prior FAILing problems: {len(fails)}")
+        print()
+        print("# § 4.1 + § 8.1 policy: re-attempt EACH of these BLIND on the")
+        print("# current plugin version. The FLOOR label only sticks if it")
+        print("# survives a fresh attempt — re-justify from new run.")
+        print()
+        for r in fails:
+            prob = r["problem"]
+            reason = r.get("reason", "")
+            print(f"  {prob:<36} {reason[:80]}")
+        print()
+        print("# Next step (Shape C):")
+        print(f"#   gates_atomic.py --prob <Prob> --workdir <RUNDIR>/work --dataset <DS> --bench {bench}")
+        return 0
+
+    # Shape-D cocotb_score.json schema (per-cocotb-run aggregate counts)
+    if "tests" in data and "failed" in data:
+        print(f"# Prior Shape-D cocotb run: TESTS={data.get('tests')} PASS={data.get('passed')} FAIL={data.get('failed')} SKIP={data.get('skipped')}")
+        print(f"# Verdict: {data.get('verdict')}")
+        if data.get("variant_fallback_used"):
+            print(f"# variant_fallback used: {data.get('variant_fallback_rtl')}")
+        if int(data.get("failed", 0) or 0) == 0:
+            print("# No prior FAILs to re-attempt — but per § 4.1 default policy,")
+            print("# re-run BLIND anyway (DON'T inherit prior PASS labels either).")
+        else:
+            print(f"# Prior FAIL count: {data.get('failed')}")
+            print("# Shape-D cocotb_score.json carries aggregate counts only; per-test")
+            print("# FAIL names are in log_tail — inspect manually before re-attempting.")
+        print()
+        print("# Next step (Shape D):")
+        print(f"#   1. python3 vibe_ic_one_shot_runner.py <project> --skip-phase3 --skip-analog --skip-hardware")
+        print(f"#   2. python3 score_cocotb_mcp.py --project <project> --top <dut> --rtl work/rtl/<dut>.sv --mount-root <ROOT>")
+        return 0
+
+    print(f"# Unrecognised scoring schema in {newest}; cannot enumerate fails.")
+    print("# Re-run blind per the default policy.")
     return 0
 
 
