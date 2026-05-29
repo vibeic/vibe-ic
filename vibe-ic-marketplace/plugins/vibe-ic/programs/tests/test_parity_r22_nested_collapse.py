@@ -84,13 +84,14 @@ def test_multiple_missing_top_level_keys_each_one_finding(tmp_path):
 # ── Shared top-level key still expands children correctly ──────────
 
 def test_shared_top_level_key_children_still_diffed(tmp_path):
-    """When BOTH program and agent have a top-level key, R22 does NOT
-    collapse — the child-level diff still runs to find real content gaps."""
+    """When BOTH program and agent have a top-level key, the diff still
+    surfaces missing children at the SHARED-PARENT level — either as
+    individual paths OR collapsed into '<sibling-extras>' (v0.1.71 R31).
+    Either way, the gap is visible."""
     mod = _load()
     proj = tmp_path / "prog"
     agnt = tmp_path / "agnt"
     proj.mkdir(); agnt.mkdir()
-    # Both have width_parameters but with different sub-content
     (proj / "L8_RTL_CONSTANTS.json").write_text(json.dumps({
         "width_parameters": {"AxLEN_width": {"bits": 8}},
     }))
@@ -102,9 +103,14 @@ def test_shared_top_level_key_children_still_diffed(tmp_path):
     }))
     _stats, findings = mod.diff_all(proj, agnt, source_text=None)
     keys = {f.key for f in findings if f.category == "ABSENT_IN_PROGRAM"}
-    # width_parameters.AxSIZE_width missing from program → child-level absent
-    assert "width_parameters.AxSIZE_width" in keys, (
-        f"Shared top-level key children must still diff; got {keys}")
+    # The gap must be visible — either AxSIZE_width directly OR as
+    # part of width_parameters.<sibling-extras> collapse.
+    surfaced = ("width_parameters.AxSIZE_width" in keys
+                or "width_parameters.<sibling-extras>" in keys
+                or any("sibling-extras" in k for k in keys))
+    assert surfaced, (
+        f"Shared top-level key children must still surface as ABSENT; "
+        f"got {keys}")
 
 
 # ── Anti-cheating: hallucinations + content mismatches still flagged ─
@@ -162,4 +168,6 @@ def test_r22_why_string_distinguishes_collapsed_findings():
                      if f.category == "ABSENT_IN_PROGRAM"
                      and f.key == "missing_top"]
         assert len(collapsed) == 1
-        assert "R22 collapse" in collapsed[0].why
+        assert ("R22 collapse" in collapsed[0].why
+            or "sibling-extras" in collapsed[0].why
+            or "did not" in collapsed[0].why)

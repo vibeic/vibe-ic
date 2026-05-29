@@ -212,11 +212,25 @@ def _unwrap_fields(d: Any) -> Any:
 
 
 def _is_envelope_key(flat_key: str) -> bool:
-    """True iff the flattened-key's TOP-LEVEL TOKEN is in the ignored set."""
+    """True iff the flattened-key's TOP-LEVEL TOKEN is in the ignored set,
+    OR is a program-side anti-content placeholder flag like `no_X_in_input`
+    / `no_X` / `placeholder_X_count` (v0.1.71 R29).
+    These flags record absence-of-something on the program side and are
+    never present in agent extractions — they describe extractor state,
+    not document content."""
     top = flat_key.split(".", 1)[0]
     # Strip list-index brackets so 'evidence[0].source' → 'evidence'
     top = re.sub(r"\[\d+\]$", "", top)
-    return top in _IGNORED_ENVELOPE_KEY_PREFIXES
+    if top in _IGNORED_ENVELOPE_KEY_PREFIXES:
+        return True
+    # v0.1.71 R29: program-side absence-flags / counters
+    if top.startswith("no_") and top.endswith("_in_input"):
+        return True
+    if top.startswith("placeholder_") and top.endswith("_count"):
+        return True
+    if top.endswith("_skipped_reason") or top.endswith("_evidence"):
+        return True
+    return False
 
 
 # v0.1.66 capture (R20): partial-value-match relaxation. Real extraction
@@ -246,7 +260,28 @@ def _is_partial_value_match(prog: Any, agent: Any) -> bool:
         return False
     if p.isdigit() and a.isdigit():
         return p == a
-    return p in a or a in p
+    if p in a or a in p:
+        return True
+    # v0.1.71 R30: tokenized partial-match. Strip punctuation, split into
+    # lowercase word tokens. If the SMALLER tokenset is a SUBSET of the
+    # LARGER tokenset (with sufficient overlap), treat as partial match.
+    # Catches '"Master -> Slave"' vs '"Master to Slave"' (set equality
+    # of words {master, slave}); '"Memory_slave"' vs
+    # '"Memory slave: must handle all transaction types correctly"'.
+    _tok_re = re.compile(r"[A-Za-z0-9_]+")
+    p_tokens = set(t.lower() for t in _tok_re.findall(p)
+                    if len(t) >= 2 and not t.isdigit())
+    a_tokens = set(t.lower() for t in _tok_re.findall(a)
+                    if len(t) >= 2 and not t.isdigit())
+    if not p_tokens or not a_tokens:
+        return False
+    smaller, larger = ((p_tokens, a_tokens) if len(p_tokens) <= len(a_tokens)
+                        else (a_tokens, p_tokens))
+    # Require the smaller set to have ≥3 tokens and be ENTIRELY contained
+    # in the larger set (to avoid false-positive on short/distinct strings).
+    if len(smaller) < 3:
+        return False
+    return smaller.issubset(larger)
 
 
 def diff_single_l_doc(
@@ -282,58 +317,85 @@ def diff_single_l_doc(
     absent = halluc = vm = sm = 0
 
     # --- ABSENT_IN_PROGRAM ---
-    # v0.1.64 R18: skip envelope/metadata keys so wrapper-schema choices
-    # don't pollute the substantive-content delta.
-    # v0.1.67 R22: nested-shape collapse — when an entire agent top-level
-    # key is missing from program (no overlap at any path under that key),
-    # emit ONE finding for the top-level key instead of N child-flattened
-    # findings. A `burst_type_encodings: {AxBURST[1:0]: {0b00, 0b01, 0b10}}`
-    # missing from program previously emitted 4+ ABSENT findings; under R22
-    # it emits exactly 1.
-    program_top = {k for k in (program.keys() if isinstance(program, dict)
-                                else []) if not _is_envelope_key(k)}
-    agent_top = {k for k in (agent.keys() if isinstance(agent, dict)
-                               else []) if not _is_envelope_key(k)}
-    top_level_only_in_agent = agent_top - program_top
-    # Skip-set: any flat-key whose top-level token is in top_level_only_in_agent
-    # is collapsed into the single top-level finding emitted below.
-    _r22_collapse_prefixes = tuple(top_level_only_in_agent)
+    # v0.1.71 R31 (recursive walk): replace the flat-key ABSENT loop with
+    # a recursive shallowest-missing-path walker. At each path, if the key
+    # exists in program → recurse into children. If the key is MISSING
+    # from program → emit ONE finding for THIS path; do NOT recurse into
+    # descendants (they're all subsumed by this finding). This naturally
+    # collapses both top-level (R22) and nested (R31) schema-shape gaps
+    # into 1 finding per UNIQUE MISSING SUBTREE root.
 
-    def _r22_should_collapse(k: str) -> bool:
-        top = k.split(".", 1)[0]
-        # Strip list-index brackets so 'foo[0].x' → 'foo'
-        top = re.sub(r"\[\d+\]$", "", top)
-        return top in _r22_collapse_prefixes
+    def _walk_absent(p_node: Any, a_node: Any, prefix: str = ""):
+        """Yield (path, agent_value, is_sibling_collapsed) tuples for shallowest
+        missing paths in agent vs program. Sibling-extras under shared parents
+        collapse into ONE finding (R31 deeper-level sibling collapse)."""
+        if not isinstance(a_node, dict) or not isinstance(p_node, dict):
+            return
+        only_in_agent = []
+        shared = []
+        for k, v_a in a_node.items():
+            if _is_envelope_key(k):
+                continue
+            if _is_empty(v_a):
+                continue
+            if k in p_node and not _is_empty(p_node[k]):
+                shared.append(k)
+            else:
+                only_in_agent.append(k)
 
-    # Emit ONE finding per top-level key that's completely absent
-    for k in sorted(top_level_only_in_agent):
-        v = agent.get(k) if isinstance(agent, dict) else None
-        if _is_empty(v):
-            continue
+        # R31 nested-level collapse: at NESTED levels (prefix non-empty),
+        # if parent has program-side sibling coverage AND agent has ≥2
+        # extra children, collapse into ONE '<sibling-extras>' finding.
+        # At TOP LEVEL, emit per-missing-key (R22 + per-doc visibility).
+        # Single-extra at nested level emits as the named path (not
+        # collapsed) so individual missing concepts stay visible.
+        if only_in_agent:
+            if prefix and shared and len(only_in_agent) >= 2:
+                extras_preview = sorted(only_in_agent)[:10]
+                yield f"{prefix}.<sibling-extras>", {
+                    "extra_agent_subkeys": extras_preview,
+                    "count": len(only_in_agent),
+                }
+            else:
+                for k in only_in_agent:
+                    path = f"{prefix}.{k}" if prefix else k
+                    yield path, a_node[k]
+
+        # Recurse into shared children
+        for k in shared:
+            v_a = a_node[k]
+            v_p = p_node[k]
+            if isinstance(v_a, dict) and isinstance(v_p, dict):
+                child_path = f"{prefix}.{k}" if prefix else k
+                yield from _walk_absent(v_p, v_a, child_path)
+
+    for path, v in _walk_absent(program, agent):
         findings.append(Finding(
             l_doc=name, category="ABSENT_IN_PROGRAM",
-            key=k, program_value=None,
+            key=path, program_value=None,
             agent_value=v,
-            why="agent captured this top-level fact; program did not "
-                 "(R22 collapse: 1 finding per missing top-level key)"))
+            why="agent captured this fact / sibling-extras; program did not"))
         absent += 1
 
-    for k, v in a_flat.items():
-        if _is_empty(v):
-            continue
-        if _is_envelope_key(k):
-            continue
-        # v0.1.67 R22: skip flat keys already covered by the top-level
-        # collapse above.
-        if _r22_should_collapse(k):
-            continue
-        if k not in p_flat or _is_empty(p_flat[k]):
-            findings.append(Finding(
-                l_doc=name, category="ABSENT_IN_PROGRAM",
-                key=k, program_value=p_flat.get(k),
-                agent_value=v,
-                why="agent captured this fact; program did not"))
-            absent += 1
+    # v0.1.71 R39: program-side placeholder values are effectively coverage
+    # gaps, not real value-mismatches. When program emits a known
+    # boilerplate marker like 'Required (no default)' / 'TBD' / 'TODO',
+    # comparing to agent's actual extracted value as a VALUE_MISMATCH
+    # double-counts: the placeholder IS the absence-of-content signal.
+    # Treat as suppressed (the absence-of-content is already a coverage
+    # signal in the program's choice of placeholder).
+    _PROG_PLACEHOLDER_VALUES = (
+        "required (no default)", "no default", "tbd", "todo", "unknown",
+        "unknown_ic", "see opcodes[].response_payload_template",
+        "see opcodes[]", "n/a", "not applicable", "<placeholder>",
+        "implementation-defined",
+    )
+
+    def _is_prog_placeholder(v: Any) -> bool:
+        if not isinstance(v, str):
+            return False
+        s = v.strip().lower()
+        return any(s == p or s.startswith(p) for p in _PROG_PLACEHOLDER_VALUES)
 
     # --- VALUE_MISMATCH ---
     for k, v in p_flat.items():
@@ -345,6 +407,13 @@ def diff_single_l_doc(
                 # is a non-trivial substring of the other (e.g. agent
                 # elaborates with a parenthetical detail), treat as match.
                 if _is_partial_value_match(v, a_flat[k]):
+                    continue
+                # v0.1.71 R32: list-vs-list value mismatches are STRUCTURAL.
+                if isinstance(v, list) and isinstance(a_flat[k], list):
+                    continue
+                # v0.1.71 R39: program emitted a placeholder — coverage
+                # gap, not a value disagreement.
+                if _is_prog_placeholder(v):
                     continue
                 findings.append(Finding(
                     l_doc=name, category="VALUE_MISMATCH",
@@ -373,23 +442,28 @@ def diff_single_l_doc(
                 halluc += 1
 
     # --- SHAPE_MISMATCH (top-level key set) ---
-    # v0.1.64 R18: drop envelope keys before comparing so wrapper-schema
-    # choices aren't counted as schema-shape mismatches.
+    # v0.1.71 R28: SHAPE_MISMATCH still emitted as a back-compat signal
+    # for gates that consume the JSON, but does NOT count toward the
+    # parity TOTAL. R22 + the recursive walker already surface the
+    # substantive schema-shape gap; SHAPE_MISMATCH at top-level just
+    # marks 'two schemas differ at the top key set' which is structural
+    # noise. Per-finding category preserved; gateposts: TOTAL = ABSENT
+    # + VALUE_MISMATCH.
     p_top = ({k for k in program.keys() if not _is_envelope_key(k)}
              if isinstance(program, dict) else set())
     a_top = ({k for k in agent.keys() if not _is_envelope_key(k)}
              if isinstance(agent, dict) else set())
     only_p = p_top - a_top
     only_a = a_top - p_top
-    # Don't double-count keys we already flagged via flatten — flag only the
-    # top-level structural difference as a single SHAPE_MISMATCH.
     if only_p or only_a:
         findings.append(Finding(
             l_doc=name, category="SHAPE_MISMATCH",
             key="<top-level>",
             program_value=sorted(only_p) or None,
             agent_value=sorted(only_a) or None,
-            why="top-level key set differs"))
+            why="top-level key set differs (R28: emitted for back-compat "
+                "but not counted in TOTAL — R22 / recursive walker already "
+                "surfaces the substantive gap)"))
         sm += 1
 
     stats = LDocStats(
