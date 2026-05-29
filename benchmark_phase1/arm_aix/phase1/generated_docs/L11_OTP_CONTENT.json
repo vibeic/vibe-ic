@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "otp_content",
-  "ic_name": "SUCH ARM TECHNOLOGY",
+  "ic_name": "UNKNOWN_IC",
   "depth": null,
   "width_bits": null,
   "content_hex": null,
@@ -646,6 +646,18 @@
   "no_operating_modes_in_input": true,
   "fsm_state_catalogue": [],
   "extraction_evidence": {},
+  "extraction_strategy": {
+    "hallucination_scrub_v0_1_60": [
+      {
+        "l_doc": "L11_OTP_CONTENT",
+        "pattern_name": "ic_name_from_license_clause",
+        "path": "ic_name",
+        "old_value": "SUCH ARM TECHNOLOGY",
+        "new_value": "UNKNOWN_IC",
+        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
+      }
+    ]
+  },
   "class_path": "digital_cmd_driven",
   "no_otp_fsm_in_input": true
 }

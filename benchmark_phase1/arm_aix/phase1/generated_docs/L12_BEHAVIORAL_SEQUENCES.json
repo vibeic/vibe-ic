@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
   "doc_class": "behavioral_sequences",
-  "ic_name": "SUCH ARM TECHNOLOGY",
+  "ic_name": "UNKNOWN_IC",
   "behavioral_sequences": [
     {
       "name": "sequence_opcode_name_unknown",
-      "trigger": "host_sends_0x16",
+      "trigger": "host_sends_<HALLUCINATION_SCRUBBED>",
       "steps": [
         {
           "step": 1,
@@ -16,7 +16,7 @@
         },
         {
           "step": 2,
-          "action": "host_byte=0x16",
+          "action": "host_byte=<HALLUCINATION_SCRUBBED>",
           "expected_signal": "byte_valid",
           "latency_us": 70,
           "next_state": "S_DISPATCH"
@@ -33,7 +33,7 @@
     },
     {
       "name": "sequence_opcode_name_unknown",
-      "trigger": "host_sends_0x48",
+      "trigger": "host_sends_<HALLUCINATION_SCRUBBED>",
       "steps": [
         {
           "step": 1,
@@ -44,7 +44,7 @@
         },
         {
           "step": 2,
-          "action": "host_byte=0x48",
+          "action": "host_byte=<HALLUCINATION_SCRUBBED>",
           "expected_signal": "byte_valid",
           "latency_us": 70,
           "next_state": "S_DISPATCH"
@@ -64,12 +64,24 @@
   "extraction_evidence": {
     "derived_from_L3": [
       {
-        "literal": "0x16 OPCODE_NAME_UNKNOWN",
+        "literal": "<HALLUCINATION_SCRUBBED> OPCODE_NAME_UNKNOWN",
         "label": "behavioral sequence per opcode"
       },
       {
-        "literal": "0x48 OPCODE_NAME_UNKNOWN",
+        "literal": "<HALLUCINATION_SCRUBBED> OPCODE_NAME_UNKNOWN",
         "label": "behavioral sequence per opcode"
+      }
+    ]
+  },
+  "extraction_strategy": {
+    "hallucination_scrub_v0_1_60": [
+      {
+        "l_doc": "L12_BEHAVIORAL_SEQUENCES",
+        "pattern_name": "ic_name_from_license_clause",
+        "path": "ic_name",
+        "old_value": "SUCH ARM TECHNOLOGY",
+        "new_value": "UNKNOWN_IC",
+        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
       }
     ]
   },

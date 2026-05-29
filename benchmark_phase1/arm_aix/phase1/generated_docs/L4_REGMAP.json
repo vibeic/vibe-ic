@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "regmap",
-  "ic_name": "SUCH ARM TECHNOLOGY",
+  "ic_name": "UNKNOWN_IC",
   "registers": [],
   "no_registers_in_input": true,
   "otp_layout": null,
@@ -10,6 +10,18 @@
   "internal_registers": [],
   "extraction_evidence": {
     "input/docs/IHI0022H_amba_axi_protocol_spec.pdf": []
+  },
+  "extraction_strategy": {
+    "hallucination_scrub_v0_1_60": [
+      {
+        "l_doc": "L4_REGMAP",
+        "pattern_name": "ic_name_from_license_clause",
+        "path": "ic_name",
+        "old_value": "SUCH ARM TECHNOLOGY",
+        "new_value": "UNKNOWN_IC",
+        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
+      }
+    ]
   },
   "class_path": "digital_cmd_driven"
 }

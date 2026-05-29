@@ -1,38 +1,38 @@
 {
   "schema_version": 2,
   "doc_class": "test_cases",
-  "ic_name": "SUCH ARM TECHNOLOGY",
+  "ic_name": "UNKNOWN_IC",
   "test_cases": [
     {
       "name": "send_opcode_name_unknown_happy",
       "kind": "happy_path",
-      "stimulus": "host sends 0x16",
+      "stimulus": "host sends <HALLUCINATION_SCRUBBED>",
       "expected": "DUT replies per response_payload_template",
-      "opcode_hex": "0x16",
+      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
       "evidence": "L3.opcodes"
     },
     {
       "name": "send_opcode_name_unknown_no_wake",
       "kind": "pre_wake_false",
-      "stimulus": "host sends 0x16 immediately after POR (no preceding wake pulse)",
+      "stimulus": "host sends <HALLUCINATION_SCRUBBED> immediately after POR (no preceding wake pulse)",
       "expected": "DUT silent (no response frame)",
-      "opcode_hex": "0x16",
+      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
       "evidence": "L3.pre_wake_allowed"
     },
     {
       "name": "send_opcode_name_unknown_happy",
       "kind": "happy_path",
-      "stimulus": "host sends 0x48",
+      "stimulus": "host sends <HALLUCINATION_SCRUBBED>",
       "expected": "DUT replies per response_payload_template",
-      "opcode_hex": "0x48",
+      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
       "evidence": "L3.opcodes"
     },
     {
       "name": "send_opcode_name_unknown_no_wake",
       "kind": "pre_wake_false",
-      "stimulus": "host sends 0x48 immediately after POR (no preceding wake pulse)",
+      "stimulus": "host sends <HALLUCINATION_SCRUBBED> immediately after POR (no preceding wake pulse)",
       "expected": "DUT silent (no response frame)",
-      "opcode_hex": "0x48",
+      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
       "evidence": "L3.pre_wake_allowed"
     }
   ],
@@ -42,12 +42,24 @@
   "extraction_evidence": {
     "derived_from_L3": [
       {
-        "literal": "0x16 OPCODE_NAME_UNKNOWN",
+        "literal": "<HALLUCINATION_SCRUBBED> OPCODE_NAME_UNKNOWN",
         "label": "opcode → happy + negative test-cases"
       },
       {
-        "literal": "0x48 OPCODE_NAME_UNKNOWN",
+        "literal": "<HALLUCINATION_SCRUBBED> OPCODE_NAME_UNKNOWN",
         "label": "opcode → happy + negative test-cases"
+      }
+    ]
+  },
+  "extraction_strategy": {
+    "hallucination_scrub_v0_1_60": [
+      {
+        "l_doc": "L10_TEST_CASES",
+        "pattern_name": "ic_name_from_license_clause",
+        "path": "ic_name",
+        "old_value": "SUCH ARM TECHNOLOGY",
+        "new_value": "UNKNOWN_IC",
+        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
       }
     ]
   },

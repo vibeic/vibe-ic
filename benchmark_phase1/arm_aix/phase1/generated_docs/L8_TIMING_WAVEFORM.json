@@ -1,12 +1,24 @@
 {
   "schema_version": "1",
   "doc_class": "timing_waveform",
-  "ic_name": "SUCH ARM TECHNOLOGY",
+  "ic_name": "UNKNOWN_IC",
   "timing_windows": [],
   "timing_constants": [],
   "waveforms": [],
   "extraction_evidence": {
     "input/docs/IHI0022H_amba_axi_protocol_spec.pdf": []
+  },
+  "extraction_strategy": {
+    "hallucination_scrub_v0_1_60": [
+      {
+        "l_doc": "L8_TIMING_WAVEFORM",
+        "pattern_name": "ic_name_from_license_clause",
+        "path": "ic_name",
+        "old_value": "SUCH ARM TECHNOLOGY",
+        "new_value": "UNKNOWN_IC",
+        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
+      }
+    ]
   },
   "class_path": "digital_cmd_driven"
 }

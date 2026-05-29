@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "integration_spec",
-  "ic_name": "SUCH ARM TECHNOLOGY",
+  "ic_name": "UNKNOWN_IC",
   "top_module": "SUCH_ARM_TECHNOLOGY",
   "top_module_extraction_strategy": "l1_ic_name_fallback",
   "no_top_module_in_input": false,
@@ -1180,6 +1180,18 @@
   "no_instantiation_template_in_input": true,
   "extraction_evidence": {
     "derived_from_L3": []
+  },
+  "extraction_strategy": {
+    "hallucination_scrub_v0_1_60": [
+      {
+        "l_doc": "L9_INTEGRATION_SPEC",
+        "pattern_name": "ic_name_from_license_clause",
+        "path": "ic_name",
+        "old_value": "SUCH ARM TECHNOLOGY",
+        "new_value": "UNKNOWN_IC",
+        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
+      }
+    ]
   },
   "interface_type": "axi",
   "no_interface_type_in_input": false,

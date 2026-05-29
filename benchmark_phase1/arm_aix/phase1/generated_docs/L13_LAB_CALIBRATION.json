@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "lab_calibration",
-  "ic_name": "SUCH ARM TECHNOLOGY",
+  "ic_name": "UNKNOWN_IC",
   "calibration_targets": [],
   "no_lab_calibration_in_input": true,
   "calibration_steps": [],
@@ -14,5 +14,17 @@
   "no_l13_test_cases_in_input": true,
   "trim_loop": [],
   "extraction_evidence": {},
+  "extraction_strategy": {
+    "hallucination_scrub_v0_1_60": [
+      {
+        "l_doc": "L13_LAB_CALIBRATION",
+        "pattern_name": "ic_name_from_license_clause",
+        "path": "ic_name",
+        "old_value": "SUCH ARM TECHNOLOGY",
+        "new_value": "UNKNOWN_IC",
+        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
+      }
+    ]
+  },
   "class_path": "digital_cmd_driven"
 }

@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "datasheet",
-  "ic_name": "SUCH ARM TECHNOLOGY",
+  "ic_name": "UNKNOWN_IC",
   "no_ic_name_in_input": false,
   "package_info": null,
   "no_package_in_input": true,
@@ -544,6 +544,18 @@
       {
         "literal": "AWQOS",
         "label": "pin name (output)"
+      }
+    ]
+  },
+  "extraction_strategy": {
+    "hallucination_scrub_v0_1_60": [
+      {
+        "l_doc": "L1_DATASHEET",
+        "pattern_name": "ic_name_from_license_clause",
+        "path": "ic_name",
+        "old_value": "SUCH ARM TECHNOLOGY",
+        "new_value": "UNKNOWN_IC",
+        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
       }
     ]
   },

@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
   "doc_class": "cmd_protocol",
-  "ic_name": "SUCH ARM TECHNOLOGY",
+  "ic_name": "UNKNOWN_IC",
   "opcodes": [
     {
-      "hex": "0x16",
+      "hex": "<HALLUCINATION_SCRUBBED>",
       "name": "OPCODE_NAME_UNKNOWN",
       "rx_len": 31,
       "tx_len": 24,
@@ -137,7 +137,7 @@
       "argument_constraints": []
     },
     {
-      "hex": "0x48",
+      "hex": "<HALLUCINATION_SCRUBBED>",
       "name": "OPCODE_NAME_UNKNOWN",
       "rx_len": 63,
       "tx_len": 56,
@@ -452,6 +452,34 @@
       {
         "literal": "0x48",
         "label": "opcode (rx_len=63 tx_len=56 tx_addr=55)"
+      }
+    ]
+  },
+  "extraction_strategy": {
+    "hallucination_scrub_v0_1_60": [
+      {
+        "l_doc": "L3_CMD_PROTOCOL",
+        "pattern_name": "ic_name_from_license_clause",
+        "path": "ic_name",
+        "old_value": "SUCH ARM TECHNOLOGY",
+        "new_value": "UNKNOWN_IC",
+        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
+      },
+      {
+        "l_doc": "L3_CMD_PROTOCOL",
+        "pattern_name": "opcode_from_two_digit_decimal_page_number",
+        "path": "opcodes[0].hex",
+        "old_value": "0x16",
+        "new_value": "<HALLUCINATION_SCRUBBED>",
+        "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
+      },
+      {
+        "l_doc": "L3_CMD_PROTOCOL",
+        "pattern_name": "opcode_from_two_digit_decimal_page_number",
+        "path": "opcodes[1].hex",
+        "old_value": "0x48",
+        "new_value": "<HALLUCINATION_SCRUBBED>",
+        "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
       }
     ]
   },
