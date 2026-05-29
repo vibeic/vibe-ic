@@ -48045,6 +48045,51 @@ def main() -> int:
         print(f"      L14-L18 extract FAILED (fail-open): {_l14_l18_err}",
               file=sys.stderr)
 
+    # v0.1.68 capture (R23): for bus_interconnect_protocol class, overlay
+    # L1_DATASHEET with protocol-document metadata (document_id, copyright,
+    # confidentiality, endianness, purpose, intended_audience, issuer,
+    # burst_boundary_rule, supported_data_bus_widths_bits, release_history).
+    # The chip-shape L1 emitter writes ordering_info / package_info /
+    # tapeout_metadata which don't apply to protocol-spec documents.
+    print(f"[14c1/15] L1 protocol metadata overlay (R23) ...")
+    try:
+        from ic_class_profile import detect_ic_class as _detect_r23
+        _profile_r23 = _detect_r23(project)
+        _ic_r23 = _profile_r23.get("ic_class", "unknown") if isinstance(_profile_r23, dict) else "unknown"
+        if _ic_r23 == "bus_interconnect_protocol":
+            from phase1_protocol_spec_extract import (
+                extract_l1_protocol_metadata as _l1m,
+                extract_l8_protocol_widths as _l8w_for_l1,
+                extract_l14_versioning as _l14_for_l1,
+            )
+            _all_text = "\n\n".join(v for v in (extracted or {}).values()
+                                        if isinstance(v, str))
+            _l8_for_l1_result = _l8w_for_l1(_all_text)
+            _l14_for_l1_result = _l14_for_l1(_all_text)
+            _l1_payload = _l1m(_all_text,
+                                l8_widths=_l8_for_l1_result,
+                                l14_versioning=_l14_for_l1_result)
+            _l1_path = _pl.generated_docs_dir(project) / "L1_DATASHEET.json"
+            if _l1_path.is_file():
+                try:
+                    _l1_existing = json.loads(_l1_path.read_text())
+                except Exception:
+                    _l1_existing = {}
+                # Overlay protocol-doc keys without clobbering ic_name
+                # (R11 scrubbed) or pin_table (still useful).
+                _payload_keys = set(_l1_payload.keys()) - {"extracted_by"}
+                for k in _payload_keys:
+                    _l1_existing[k] = _l1_payload[k]
+                _l1_existing.setdefault("extraction_strategy", {})[
+                    "l1_protocol_metadata_v0_1_68"] = (
+                    f"R23: overlaid {len(_payload_keys)} protocol-doc keys "
+                    f"for bus_interconnect_protocol class")
+                _l1_path.write_text(json.dumps(_l1_existing, indent=2, ensure_ascii=False) + "\n")
+                print(f"      → L1_DATASHEET overlay: {len(_payload_keys)} protocol-doc keys")
+    except Exception as _l1_err:
+        print(f"      L1 protocol overlay FAILED (fail-open): {_l1_err}",
+              file=sys.stderr)
+
     # v0.1.66 capture (R21): for bus_interconnect_protocol class, the
     # canonical L3_CMD_PROTOCOL content is the protocol description (channels,
     # encodings, handshake rules) — exactly what the L14-L18 extractors just
@@ -48072,15 +48117,70 @@ def main() -> int:
                     _l3["channels"] = _l17_channels
                 if isinstance(_l17_handshakes, list) and _l17_handshakes:
                     _l3["valid_ready_handshake_rules"] = _l17_handshakes
+                # v0.1.69 R25: shape-normalised L15 encoding-table mirror.
+                # Parse raw L15 table rows ('0b000   1') into the canonical
+                # nested-dict shape Claude uses: {<signal>[<bits>]: {<code>:
+                # <value>}}. CONSERVATIVE FORMAT: only mirror tables whose
+                # name unambiguously matches an encoding-table (not channel
+                # signal listings which contain the bare 'response'/'lock'
+                # keywords in their column headers).
+                _R25_TABLE_KEYWORDS: dict = {
+                    "burst_size_encodings":         ("burst size encoding",),
+                    "burst_type_encodings":         ("burst type encoding",),
+                }
+                _l15p = _gd / "L15_ENCODING_TABLES.json"
+                _l15_mirror_count = 0
+                if _l15p.is_file():
+                    try:
+                        import re as _re_l15
+                        _l15 = json.loads(_l15p.read_text())
+                        _l15_tables = _l15.get("fields", {}).get("tables") or []
+                        _row_re = _re_l15.compile(
+                            r"^\s*(\S+)\s{2,}(.+?)\s*$"
+                        )
+                        for _slot, _kws in _R25_TABLE_KEYWORDS.items():
+                            if _slot in _l3 and _l3[_slot]:
+                                continue
+                            for _t in _l15_tables:
+                                _tname = (_t.get("name") or "").lower()
+                                if not any(kw in _tname for kw in _kws):
+                                    continue
+                                _rows = _t.get("rows") or []
+                                if not isinstance(_rows, list) or len(_rows) < 2:
+                                    continue
+                                _hdr_m = _row_re.match(str(_rows[0]))
+                                if not _hdr_m:
+                                    continue
+                                _header_col1 = _hdr_m.group(1)
+                                _encoding: dict = {}
+                                for _r in _rows[1:]:
+                                    _rm = _row_re.match(str(_r))
+                                    if not _rm:
+                                        continue
+                                    _code, _val = _rm.group(1), _rm.group(2)
+                                    if not _code or _code.lower() == "table":
+                                        continue
+                                    _val_norm: object = _val
+                                    if isinstance(_val, str) and _val.isdigit():
+                                        _val_norm = int(_val)
+                                    _encoding[_code] = _val_norm
+                                if _encoding:
+                                    _l3[_slot] = {_header_col1: _encoding}
+                                    _l15_mirror_count += 1
+                                    break
+                    except Exception:
+                        pass
                 _l3.setdefault("extraction_strategy", {})[
-                    "l3_protocol_mirror_v0_1_66"] = (
-                    "R21: mirrored L17.channels + L17.handshake_pairs into "
-                    "L3 for bus_interconnect_protocol class")
+                    "l3_protocol_mirror_v0_1_69"] = (
+                    f"R21+R25: mirrored L17.channels + L17.handshake_pairs "
+                    f"+ {_l15_mirror_count} L15 encoding tables (canonical "
+                    f"nested-dict shape) into L3 for bus_interconnect_protocol")
                 _l3p.write_text(json.dumps(_l3, indent=2, ensure_ascii=False) + "\n")
                 print(f"      → L3 overlay: channels="
                       f"{len(_l17_channels) if isinstance(_l17_channels, list) else 0}, "
                       f"handshakes="
-                      f"{len(_l17_handshakes) if isinstance(_l17_handshakes, list) else 0}")
+                      f"{len(_l17_handshakes) if isinstance(_l17_handshakes, list) else 0}, "
+                      f"L15 encodings={_l15_mirror_count}")
     except Exception as _l3_err:
         print(f"      L3 protocol mirror FAILED (fail-open): {_l3_err}",
               file=sys.stderr)

@@ -6,17 +6,28 @@
   "all_keep_attr_intact": true,
   "keep_check_applied": true,
   "verdict": "PASS",
-  "artefacts": [
+  "artefact_labels": [
     "def",
     "gds",
     "netlist"
   ],
   "program": "spare_cell_preservation_check",
   "version": "1.0.0",
-  "project_dir": "/home/reyerchu/vibe-ic/benchmark_clean/sha256",
+  "project_dir": ".",
   "artefact_paths": {
-    "netlist": "/home/reyerchu/vibe-ic/benchmark_clean/sha256/phase3/stage3/pnr/sha256_pnr.v",
-    "def": "/home/reyerchu/vibe-ic/benchmark_clean/sha256/phase3/stage3/pnr/filled.def",
-    "gds": "/home/reyerchu/vibe-ic/benchmark_clean/sha256/phase3/stage4/gds/sha256.gds"
-  }
+    "netlist": "phase3/stage3/pnr/sha256_pnr.v",
+    "def": "phase3/stage3/pnr/filled.def",
+    "gds": "phase3/stage4/gds/sha256.gds"
+  },
+  "output_files": [
+    {
+      "path": "phase3/stage3/pnr/sha256_pnr.v"
+    },
+    {
+      "path": "phase3/stage3/pnr/filled.def"
+    },
+    {
+      "path": "phase3/stage4/gds/sha256.gds"
+    }
+  ]
 }

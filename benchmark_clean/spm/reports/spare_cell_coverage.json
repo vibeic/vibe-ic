@@ -10,8 +10,8 @@
   "reasons": [],
   "program": "spare_cell_coverage_check",
   "version": "1.0.0",
-  "project_dir": "/home/reyerchu/vibe-ic/benchmark_clean/spm",
-  "spare_cells_json": "/home/reyerchu/vibe-ic/benchmark_clean/spm/phase3/stage3/pnr/spare_cells.json",
-  "coverage_summary_json": "/home/reyerchu/vibe-ic/benchmark_clean/spm/reports/spare_cell_coverage.json",
+  "project_dir": ".",
+  "spare_cells_json": "phase3/stage3/pnr/spare_cells.json",
+  "coverage_summary_json": "reports/spare_cell_coverage.json",
   "status": "PASS"
 }

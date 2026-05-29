@@ -68,7 +68,10 @@ def test_l3_mirror_attaches_audit_trail():
     src = RUNNER.read_text()
     block = src[src.find("[14c2/15] L3 protocol mirror"):
                  src.find("[14d/15] L19-L23 skeleton emit")]
-    assert "l3_protocol_mirror_v0_1_66" in block
+    # v0.1.69 R25 bumped the audit-trail key to v0_1_69 (mirror now also
+    # carries R25 L15 encoding-table mirror).
+    assert ("l3_protocol_mirror_v0_1_66" in block
+            or "l3_protocol_mirror_v0_1_69" in block)
 
 
 def test_l3_mirror_fail_open():

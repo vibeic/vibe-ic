@@ -820,5 +820,204 @@ def extract_l8_protocol_widths(text: str) -> Dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# L1 — Protocol Document Metadata (v0.1.68 / R23)
+# ---------------------------------------------------------------------------
+# Bus-interconnect protocol specs are DOCUMENTS first, ICs second. The
+# canonical L1 for such a doc is the document metadata + protocol overview,
+# not the chip-shape (ordering_info / package_info / tapeout_metadata)
+# emitted by the OTP-template L1 emitter.
+#
+# Captured from v0.1.67 parity loop iter 5: program L1 had 19 ABSENT
+# findings, all of which were document/protocol metadata keys Claude
+# captured but the chip-shape L1 emitter doesn't know about.
+#
+# Pattern catalogs are general — no brand names. The doc_id pattern
+# matches any "<acronym>\s*<number><letter>?" near 'Document', 'Specification',
+# or 'Issue' keywords. Copyright captures any "Copyright.*?(\d{4}.*?Limited
+# |Inc|Corporation|Foundation)" form.
+
+_L1_DOC_ID_RE = re.compile(
+    r"(?:Document\s+Number|Specification\s+ID|Issue|Doc\s*ID|Identifier)\s*:?\s*"
+    r"([A-Z]{2,}[\s.-]*\d{2,}[A-Z]?(?:\s*\(\s*ID\d{4,}\s*\))?)",
+    re.IGNORECASE,
+)
+# Fallback: any "<2-5 capital letters> <2-5 digits><optional letter>" string
+# at a line start (typical doc-cover pattern).
+_L1_DOC_ID_FALLBACK_RE = re.compile(
+    r"^\s*([A-Z]{2,5}\s+(?:I[A-Z]+\s+)?\d{4,}[A-Z]?)\b",
+    re.MULTILINE,
+)
+
+_L1_COPYRIGHT_RE = re.compile(
+    r"(Copyright\s*(?:\(c\)|©)?\s*(?:\d{4}(?:\s*[-–]\s*\d{4})?)?\s+"
+    r"[A-Z][^.\n]{2,200}?(?:Limited|Inc\.?|Corporation|Foundation|"
+    r"Holdings|LLC|GmbH|Co\.?|S\.A\.?))",
+    re.IGNORECASE,
+)
+
+_L1_CONFIDENTIALITY_RE = re.compile(
+    r"\b(Non-?Confidential|Confidential|Restricted|Public|Internal\s+Use\s+Only)\b",
+    re.IGNORECASE,
+)
+
+_L1_ENDIANNESS_RE = re.compile(
+    r"\b(little[\s-]endian|big[\s-]endian|byte[\s-]invariant)\b",
+    re.IGNORECASE,
+)
+
+# Purpose hints — first sentence following "Purpose", "Abstract", "Scope",
+# "Overview", or "This (specification|document|standard|protocol)..." patterns.
+# Reject lines that look like a Table-of-Contents entry (dotted leader +
+# page number / chapter-section reference like "A1.1 About the X .. A1-2").
+_L1_PURPOSE_TOC_RE = re.compile(
+    r"\.{3,}|^\s*[A-Z]\d+(?:\.\d+)*\s+|"
+    r"\s+[A-Z]\d+(?:\.\d+)*\s*$"
+)
+_L1_PURPOSE_RE = re.compile(
+    r"(?:Purpose|Abstract|Scope|Overview|Introduction)\s*:?\s*\n+\s*"
+    r"([A-Z][^\n]{20,400})",
+    re.IGNORECASE | re.MULTILINE,
+)
+_L1_PURPOSE_FALLBACK_RE = re.compile(
+    r"\bThis\s+(?:specification|document|standard|protocol|guide)"
+    r"\s+(?:defines|describes|specifies|introduces)\s+([^.\n]{20,400}\.)",
+    re.IGNORECASE,
+)
+
+_L1_INTENDED_AUDIENCE_RE = re.compile(
+    r"(?:Intended\s+audience|Target\s+audience|Audience|Readers)\s*:?\s*\n*\s*"
+    r"([A-Z][^\n]{20,400})",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Burst-or-similar boundary rules — pattern "<N><unit> boundary" or
+# "must not cross a <N><unit> boundary".
+_L1_BOUNDARY_RULE_RE = re.compile(
+    r"((?:must\s+not\s+cross|cannot\s+cross|shall\s+not\s+cross)[^\n]*?"
+    r"\d+\s*[KMG]?B?\s+(?:address\s+)?boundary[^\n]*\.)",
+    re.IGNORECASE,
+)
+
+# Issuer / vendor — captured from copyright string usually. Also direct
+# patterns like "Issued by", "Published by", "Released by".
+_L1_ISSUER_RE = re.compile(
+    r"(?:Issued\s+by|Published\s+by|Released\s+by|Produced\s+by)\s*:?\s*"
+    r"([A-Z][^\n]{2,100}?(?:Limited|Inc\.?|Corporation|Foundation|"
+    r"Holdings|LLC|GmbH|Co\.?))",
+    re.IGNORECASE,
+)
+
+
+def extract_l1_protocol_metadata(text: str, l8_widths: Optional[Dict] = None,
+                                    l14_versioning: Optional[Dict] = None
+                                    ) -> Dict[str, Any]:
+    """Extract protocol-document metadata for L1_DATASHEET.
+
+    For bus_interconnect_protocol class. Captures: document_id, copyright,
+    confidentiality, endianness, purpose, intended_audience, issuer,
+    burst_boundary_rule, electrical_specs_present (False), package_info_present
+    (False), supported_data_bus_widths_bits (mirrored from L8), and
+    release_history (mirrored from L14).
+
+    Optional `l8_widths` / `l14_versioning` arguments mirror content from
+    those extractors instead of re-deriving.
+    """
+    out: Dict[str, Any] = {
+        "extracted_by": "extract_l1_protocol_metadata v0.1.68",
+    }
+
+    # document_id
+    m = _L1_DOC_ID_RE.search(text)
+    if m:
+        out["document_id"] = m.group(1).strip()
+    else:
+        m = _L1_DOC_ID_FALLBACK_RE.search(text)
+        if m:
+            out["document_id"] = m.group(1).strip()
+
+    # copyright
+    m = _L1_COPYRIGHT_RE.search(text)
+    if m:
+        out["copyright"] = m.group(1).strip()
+
+    # confidentiality
+    m = _L1_CONFIDENTIALITY_RE.search(text)
+    if m:
+        out["confidentiality"] = m.group(1).strip()
+
+    # endianness
+    eds = sorted(set(m.group(1).lower().replace("-", " ").replace(" endian", "-endian")
+                       for m in _L1_ENDIANNESS_RE.finditer(text)))
+    if eds:
+        out["endianness"] = (
+            eds[0] if len(eds) == 1 else "; ".join(eds))
+
+    # purpose — prefer the "This <spec> defines/describes ..." form which
+    # is a natural-prose sentence; the heading-prefix form often picks up
+    # a TOC line (dotted leader + page number).
+    purpose_candidate: Optional[str] = None
+    m = _L1_PURPOSE_FALLBACK_RE.search(text)
+    if m:
+        purpose_candidate = m.group(1)
+    elif (m := _L1_PURPOSE_RE.search(text)) is not None:
+        cand = m.group(1)
+        # Reject TOC-shaped candidates: contain dotted leaders or section
+        # numbers like "A1.1" that imply a heading-row capture, not prose.
+        if not _L1_PURPOSE_TOC_RE.search(cand):
+            purpose_candidate = cand
+    if purpose_candidate:
+        out["purpose"] = re.sub(r"\s+", " ", purpose_candidate).strip()[:400]
+
+    # intended_audience
+    m = _L1_INTENDED_AUDIENCE_RE.search(text)
+    if m:
+        out["intended_audience"] = re.sub(r"\s+", " ", m.group(1)).strip()[:400]
+
+    # issuer / vendor — derive from copyright string first (most reliable),
+    # only fall back to the standalone regex if copyright is missing.
+    if "copyright" in out:
+        cop = out["copyright"]
+        # Match the entity name between the year and the legal suffix.
+        m2 = re.search(
+            r"\d{4}(?:\s*[-–]\s*\d{4})?\s+"
+            r"([A-Z][^.\n,]{2,100}?"
+            r"(?:Limited|Inc\.?|Corporation|Foundation|Holdings|LLC|GmbH|Co\.?))",
+            cop)
+        if m2:
+            out["issuer"] = m2.group(1).strip()
+    if "issuer" not in out:
+        m = _L1_ISSUER_RE.search(text)
+        if m:
+            out["issuer"] = m.group(1).strip()
+
+    # burst_boundary_rule
+    m = _L1_BOUNDARY_RULE_RE.search(text)
+    if m:
+        out["burst_boundary_rule"] = re.sub(r"\s+", " ", m.group(1)).strip()[:400]
+
+    # electrical_specs_present / package_info_present — bus protocols
+    # define LOGICAL signals only, not electrical or package info.
+    # We set these False unless evidence-of-presence found.
+    out["electrical_specs_present"] = False
+    out["package_info_present"] = False
+
+    # supported_data_bus_widths_bits — mirror from L8 if provided
+    if isinstance(l8_widths, dict):
+        wp = l8_widths.get("width_parameters", {})
+        dw = wp.get("DATA_WIDTH_bits", {}) if isinstance(wp, dict) else {}
+        legal = dw.get("legal_values") if isinstance(dw, dict) else None
+        if isinstance(legal, list) and legal:
+            out["supported_data_bus_widths_bits"] = legal
+
+    # release_history — mirror from L14 if provided
+    if isinstance(l14_versioning, dict):
+        versions = l14_versioning.get("versions")
+        if isinstance(versions, list) and versions:
+            out["release_history"] = versions
+
+    return out
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(_cli())

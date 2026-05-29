@@ -482,7 +482,7 @@
         "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
       }
     ],
-    "l3_protocol_mirror_v0_1_66": "R21: mirrored L17.channels + L17.handshake_pairs into L3 for bus_interconnect_protocol class"
+    "l3_protocol_mirror_v0_1_69": "R21+R25: mirrored L17.channels + L17.handshake_pairs + 2 L15 encoding tables (canonical nested-dict shape) into L3 for bus_interconnect_protocol"
   },
   "channels": [
     {
@@ -740,5 +740,31 @@
         }
       ]
     }
-  ]
+  ],
+  "burst_size_encodings": {
+    "AxSIZE[2:0]": {
+      "0b000": 1,
+      "0b001": 2,
+      "0b010": 4,
+      "0b011": 8,
+      "0b100": 16,
+      "0b101": 32,
+      "0b110": 64,
+      "0b111": 128
+    }
+  },
+  "burst_type_encodings": {
+    "AxBURST[1:0]": {
+      "0b00": "FIXED",
+      "0b01": "INCR",
+      "0b10": "WRAP",
+      "0b11": "Reserved",
+      "Start_Address": "The start address that is issued by the master.",
+      "Number_Bytes": "The maximum number of bytes in each data transfer.",
+      "Data_Bus_Bytes": "The number of byte lanes in the data bus.",
+      "Aligned_Address": "The aligned version of the start address.",
+      "Burst_Length": "The total number of data transfers within a burst.",
+      "Address_N": "The address of transfer N in a burst. N is 1 for the first transfer in a burst."
+    }
+  }
 }

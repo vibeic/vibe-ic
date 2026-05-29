@@ -1620,6 +1620,84 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         # (no _asic, _wrapper, _tb, _test names — those are not the L9 top).
         import re as _re
         mod_re = _re.compile(r"^\s*module\s+([A-Za-z_]\w*)\s*[(#]", _re.M)
+
+        # v0.1.62 fix (Bucket A — spm benchmark, chip_top auto-emit) — the
+        # paren-matching walker that extracts the port list used to count `(`
+        # and `)` that appear INSIDE COMMENTS. spm's port has
+        # `input wire y,  // serial multiplier (LSB-first)` — the `(LSB-first)`
+        # was counted, and combined with an off-by-one depth after skipping the
+        # `#(parameter …)` block, the walker mistook the `)` in that comment for
+        # the port-list close → truncated port list → `module chip_top (… y,);`
+        # with no closing `)` → yosys "syntax error, unexpected '('". Fix:
+        # (a) scan a COMMENT-MASKED copy (offsets preserved) so comment parens
+        #     never count, and (b) capture the `#(params)` block SEPARATELY from
+        #     the port list so the instance connects only real ports while the
+        #     wrapper header still declares the params (so `[size-1:0]` resolves).
+        # Chip-AGNOSTIC: applies to any parameterized module with commented ports.
+        def _mask_comments(s: str) -> str:
+            out = []
+            i = 0
+            n = len(s)
+            while i < n:
+                if s[i:i+2] == '//':
+                    j = s.find('\n', i)
+                    if j < 0:
+                        j = n
+                    out.append(''.join('\n' if c == '\n' else ' ' for c in s[i:j]))
+                    i = j
+                elif s[i:i+2] == '/*':
+                    j = s.find('*/', i + 2)
+                    j = n if j < 0 else j + 2
+                    out.append(''.join('\n' if c == '\n' else ' ' for c in s[i:j]))
+                    i = j
+                else:
+                    out.append(s[i])
+                    i += 1
+            return ''.join(out)
+
+        def _match_paren(s: str, open_idx: int):
+            """Return index of the ')' matching the '(' at open_idx, or -1."""
+            depth = 0
+            k = open_idx
+            n = len(s)
+            while k < n:
+                if s[k] == '(':
+                    depth += 1
+                elif s[k] == ')':
+                    depth -= 1
+                    if depth == 0:
+                        return k
+                k += 1
+            return -1
+
+        def _extract_param_and_ports(scan: str, start: int):
+            """From `start` (index of the '(' or '#' right after the module
+            name), return (param_block, port_block) where param_block is the
+            optional `#( … )` (or '') and port_block is the `( … )` port list.
+            Returns (None, None) if the port list can't be bounded. `scan` MUST
+            be comment-masked so commented parens don't miscount."""
+            n = len(scan)
+            i = start
+            while i < n and scan[i] in ' \t\r\n':
+                i += 1
+            param_block = ''
+            if i < n and scan[i] == '#':
+                pj = scan.find('(', i)
+                if pj < 0:
+                    return None, None
+                pe = _match_paren(scan, pj)
+                if pe < 0:
+                    return None, None
+                param_block = scan[i:pe + 1]
+                i = pe + 1
+                while i < n and scan[i] in ' \t\r\n':
+                    i += 1
+            if i >= n or scan[i] != '(':
+                return None, None
+            pe = _match_paren(scan, i)
+            if pe < 0:
+                return None, None
+            return param_block, scan[i:pe + 1]
         # v0.1.38 fix (Bucket A — 2 RTLLM agents on same LoC + 1 multi-module
         # report): (1) the `#(parameter)` walker used to set depth=1 after
         # skipping params, then re-read the same `(` and bump to depth=2 —
@@ -1639,49 +1717,18 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                 text = f.read_text(errors="ignore")
             except Exception:
                 continue
-            # scan ALL module decls in this file (v0.1.38 multi-module fix)
+            # scan ALL module decls in this file (v0.1.38 multi-module fix);
+            # v0.1.62 — comment-masked, params captured separately.
+            text_scan = _mask_comments(text)
             file_mods = []
-            for m in mod_re.finditer(text):
+            for m in mod_re.finditer(text_scan):
                 mod_name = m.group(1)
                 if mod_name == synth_top:
                     return  # already in some file
-                # extract port list from module decl up to matching ')' of the
-                # port list (skipping `#(...)` params if present)
-                decl_start = m.end() - 1  # position at the '(' or '#'
-                i = decl_start
-                depth = 0
-                in_params = False
-                port_block = None
-                while i < len(text):
-                    c = text[i]
-                    if c == '#' and not in_params and depth == 0:
-                        in_params = True
-                    if c == '(':
-                        depth += 1
-                    elif c == ')':
-                        depth -= 1
-                        if depth == 0:
-                            if in_params:
-                                in_params = False
-                                # advance past this `)` and find the next `(`
-                                # opening the actual module port list.
-                                j = text.find('(', i + 1)
-                                if j < 0:
-                                    break
-                                # v0.1.38 fix: position i AT the `(` so the next
-                                # loop iteration's `i += 1` lands inside the
-                                # port list. Reset depth=0 so the `(` re-read
-                                # bumps it cleanly to depth=1 (prior code set
-                                # depth=1 here and ended up at depth=2).
-                                i = j
-                                depth = 0
-                                # fall through to `i += 1` below
-                            else:
-                                port_block = text[decl_start:i + 1]
-                                break
-                    i += 1
+                param_block, port_block = _extract_param_and_ports(
+                    text_scan, m.end() - 1)
                 if port_block is not None:
-                    file_mods.append((mod_name, port_block, f))
+                    file_mods.append((mod_name, param_block, port_block, f))
             if not file_mods:
                 continue
             # v0.1.38 (multi-module fix): prefer the module whose name matches
@@ -1695,12 +1742,12 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         # files contribute, pick deterministically (already sorted by glob).
         if len(candidates) > 1:
             # filter to "module name == file stem" pairs only
-            basenamed = [t for t in candidates if t[0] == t[2].stem]
+            basenamed = [t for t in candidates if t[0] == t[3].stem]
             if len(basenamed) == 1:
                 candidates = basenamed
             else:
                 return  # genuinely ambiguous — let yosys report
-        mod_name, port_block, src_file = candidates[0]
+        mod_name, param_block, port_block, src_file = candidates[0]
         # v0.1.33 — extract just the port NAMES from the port_block so the
         # instance uses named-port connections `.a(a), .b(b), …` instead of
         # splatting the full DECLARATIONS (input wire …) into the instance
@@ -1728,15 +1775,29 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             if ids:
                 port_names.append(ids[-1])
         connects = ",\n    ".join(f".{n}({n})" for n in port_names)
+        # v0.1.62 — if the DUT is parameterized, declare the SAME params on the
+        # wrapper (so widths like `[size-1:0]` resolve in the wrapper port list)
+        # AND propagate them by name to the instance.
+        param_header = f" {param_block.strip()}" if param_block.strip() else ""
+        inst_params = ""
+        if param_block.strip():
+            pnames = []
+            for pm in _re.finditer(r'\b(?:parameter|localparam)\b[^=,()]*?'
+                                   r'([A-Za-z_]\w*)\s*=', param_block):
+                if pm.group(1) not in pnames:
+                    pnames.append(pm.group(1))
+            if pnames:
+                inst_params = " #(" + ", ".join(
+                    f".{p}({p})" for p in pnames) + ")"
         wrapper = (
             f"// SPDX-License-Identifier: Apache-2.0\n"
-            f"// v0.1.33 auto-emitted chip_top wrapper (phase2_one_shot_runner).\n"
+            f"// v0.1.62 auto-emitted chip_top wrapper (phase2_one_shot_runner).\n"
             f"// L9.top_module = '{synth_top}' but rtl/ only defined '{mod_name}'\n"
             f"// (in {src_file.name}). This thin pass-through lets yosys synth\n"
             f"// against L9's expected top without modifying the authored RTL.\n"
             f"`default_nettype none\n"
-            f"module {synth_top} {port_block};\n"
-            f"  {mod_name} u_dut (\n    {connects}\n  );\n"
+            f"module {synth_top}{param_header} {port_block};\n"
+            f"  {mod_name}{inst_params} u_dut (\n    {connects}\n  );\n"
             f"endmodule\n"
             f"`default_nettype wire\n"
         )
