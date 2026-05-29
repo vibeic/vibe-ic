@@ -49598,6 +49598,26 @@ def main() -> int:
                 except Exception as _uart_err:
                     print(f"      UART synth FAILED (fail-open): {_uart_err}",
                           file=sys.stderr)
+            # v0.1.81 — CAN structural sub-detector (DATA FRAME / REMOTE
+            # FRAME / ERROR FRAME / OVERLOAD FRAME terminology OR
+            # dominant/recessive bus values OR ARBITRATION FIELD + RTR +
+            # IDENTIFIER terminology). Bosch CAN 2.0 family / ISO 11898.
+            _is_can = (
+                ("DATA FRAME" in _spi_blob and "REMOTE FRAME" in _spi_blob
+                    and "ERROR FRAME" in _spi_blob)
+                or ("dominant" in _spi_blob and "recessive" in _spi_blob
+                    and ("ARBITRATION" in _spi_blob.upper()
+                         or "IDENTIFIER" in _spi_blob.upper()))
+                or ("CAN" in _spi_blob and "Bosch" in _spi_blob))
+            if _is_can:
+                _can_ic_name = "CAN Specification (Bosch CAN 2.0)"
+                try:
+                    from can_protocol_synth import apply_can_synth as _apply_can
+                    _apply_can(_gd_r55, _is_can, _can_ic_name)
+                    print(f"      → R62/R63/R64 CAN synth applied (is_can={_is_can})")
+                except Exception as _can_err:
+                    print(f"      CAN synth FAILED (fail-open): {_can_err}",
+                          file=sys.stderr)
     except Exception as _r55_err:
         print(f"      R53/R54/R55 synth FAILED (fail-open): {_r55_err}",
               file=sys.stderr)

@@ -1,0 +1,13 @@
+{
+  "_comment": "Auto-discovered extraction patterns (Wave 6 LL-38). Review and promote curated entries to extraction_patterns.json.",
+  "Bosch_CAN_specification_v2.0.txt": [
+    {
+      "literal": "Section 3.3",
+      "label": "auto-discovered (section_ref)"
+    },
+    {
+      "literal": "polynomial",
+      "label": "auto-discovered (crc_polynomial)"
+    }
+  ]
+}

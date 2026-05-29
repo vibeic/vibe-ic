@@ -673,11 +673,15 @@ _SERIAL_PROTO_FEATURES: List[tuple[str, re.Pattern]] = [
     ("serial_concept",
      re.compile(r"\b(?:synchronous|asynchronous)?\s*serial\b",
                 re.IGNORECASE)),
-    # 4. clock / baud control primitive — generator OR divisor OR prescaler.
+    # 4. clock / bit-rate control primitive — generator OR divisor OR
+    #    prescaler OR bit-time/bit-rate (frame-based protocols like CAN
+    #    use "nominal bit rate" / "bit time" / "bit timing" instead of
+    #    "baud" terminology).
     ("clock_baud_control",
      re.compile(r"\bbaud\s*(?:rate|divisor|generator)\b|"
                 r"\b(?:clock|sclk|sck)\s+"
-                r"(?:divisor|prescal(?:er|e)|select|generator)\b",
+                r"(?:divisor|prescal(?:er|e)|select|generator)\b|"
+                r"\b(?:nominal\s+)?bit\s+(?:rate|time|timing)\b",
                 re.IGNORECASE)),
     # 5. small fixed external pin count (≤ 8 pins, often 2-4) — for the
     #    pure wire-protocol-spec family. UART chip specs have more pins
@@ -687,11 +691,14 @@ _SERIAL_PROTO_FEATURES: List[tuple[str, re.Pattern]] = [
      re.compile(r"\b(?:total of|has)\s+\d+\s+external\s+pin|"
                 r"\b(?:two|three|four|five|six|2|3|4|5|6)\s+(?:external\s+)?pins?\b",
                 re.IGNORECASE)),
-    # 6. dedicated function pin / start-stop framing / data line.
+    # 6. dedicated function pin / start-stop framing / data line / frame
+    #    delimiter (frame-based protocols use START OF FRAME / END OF
+    #    FRAME markers rather than per-bit start/stop bits).
     ("dedicated_function_pin",
      re.compile(r"\b(?:slave\s+select|chip\s+select|start\s+bit|stop\s+bit|"
                 r"data\s+line|clock\s+line|enable\s+pin|select\s+pin|"
-                r"asynchronous\s+communication\s+bits)\b",
+                r"asynchronous\s+communication\s+bits|"
+                r"start\s+of\s+frame|end\s+of\s+frame|frame\s+delimiter)\b",
                 re.IGNORECASE)),
 ]
 
