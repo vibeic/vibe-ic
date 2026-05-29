@@ -48035,7 +48035,16 @@ def main() -> int:
     total_ev = sum(r.evidence_count for r in results)
     print()
     print(f"=== SUMMARY ===")
-    print(f"L docs emitted: {len(results)}/14")
+    # v0.1.64 capture (R17): denominator is the canonical L-doc taxonomy
+    # size from l_doc_taxonomy, not the obsolete hardcoded 14. Post R14+R15
+    # the runner emits up to 24 docs (L1-L13 + L8_TIMING + L14-L18 + L19-L23);
+    # printing N/14 was misleading once N exceeded 14.
+    try:
+        from l_doc_taxonomy import all_l_doc_codes as _all_l_doc_codes
+        _l_doc_target = len(_all_l_doc_codes())
+    except Exception:
+        _l_doc_target = 14
+    print(f"L docs emitted: {len(results)}/{_l_doc_target}")
     print(f"Total evidence entries: {total_ev}")
     print(f"Total __TODO__ stubs: {total_todo}")
     # v1.6.9 Fix 5 — render both curated + hands_on coverage so the

@@ -139,6 +139,86 @@ def _is_empty(v: Any) -> bool:
     return False
 
 
+# v0.1.64 capture (R18): envelope/metadata keys that BOTH the program runner
+# and the AGENT extractor use as wrappers carry NO substantive content — they
+# describe the doc itself (schema_version, emitted_by) or audit metadata
+# (extraction_evidence, extraction_strategy). Counting these as
+# ABSENT_IN_PROGRAM (when Claude uses 'doc_id'/'fields'/'evidence' but the
+# program uses 'extraction_strategy'/'class_path') vastly over-counts the real
+# extraction gap. The user identified this in GAP_v0157: 'absent 其實高估了
+# 差距 — 兩邊 schema 不相容'. Excluding them from the counting buckets
+# reflects the SUBSTANTIVE content delta, not wrapper-schema choices.
+#
+# Each entry is a TOP-LEVEL TOKEN (anything before the first '.' in a
+# flattened key). General, not bench-specific.
+_IGNORED_ENVELOPE_KEY_PREFIXES: frozenset[str] = frozenset({
+    # Program-side wrappers (phase1_doc_one_shot_runner emit envelope)
+    "schema_version",
+    "doc_class",
+    "class_path",
+    "emitted_by",
+    "extraction_evidence",
+    "extraction_strategy",
+    "vendor_short_literals",
+    "auto_discovered_identifiers",
+    "auto_cited_sections",
+    # Agent-side wrappers (Claude Opus 4.7 unified envelope)
+    "doc_id",
+    "doc_name",
+    "extraction_source",
+    "extraction_method",
+    "extraction_timestamp",
+    "evidence",        # parallel to extraction_evidence on the agent side
+    # NOTE: Claude wraps SUBSTANTIVE content under .fields.* — we do
+    # NOT add 'fields' to this set; instead, _unwrap_fields() below
+    # lifts agent's fields.* up to top-level BEFORE the diff so the
+    # content is counted in the same namespace as the program.
+    # Applicability metadata both sides emit
+    "applicability",
+    "ic_class",
+    "rationale",
+    "extraction_status",
+    "extraction_hints",
+})
+
+
+def _unwrap_fields(d: Any) -> Any:
+    """v0.1.64 R18: if `d` is a dict with a top-level 'fields' dict, lift the
+    fields' content up to top-level. This normalises Claude's wrapper schema
+    {doc_id, fields:{ic_name, pin_table, ...}, evidence} to align with the
+    program's flat schema {ic_name, pin_table, ...} so they compare in the
+    same namespace.
+
+    Non-conflicting keys merge. If a key exists at both top level and inside
+    fields, the top-level value wins (the wrapper's siblings are usually
+    metadata like 'notes' the agent puts alongside 'fields').
+    """
+    if not isinstance(d, dict):
+        return d
+    fields = d.get("fields")
+    if not isinstance(fields, dict):
+        return d
+    merged: Dict[str, Any] = {}
+    # Start with the wrapped content
+    for k, v in fields.items():
+        merged[k] = v
+    # Then overlay sibling top-level keys (so e.g. 'notes' from the L4 stub
+    # case wins over a same-name field key, which is rare but safe).
+    for k, v in d.items():
+        if k == "fields":
+            continue
+        merged[k] = v
+    return merged
+
+
+def _is_envelope_key(flat_key: str) -> bool:
+    """True iff the flattened-key's TOP-LEVEL TOKEN is in the ignored set."""
+    top = flat_key.split(".", 1)[0]
+    # Strip list-index brackets so 'evidence[0].source' → 'evidence'
+    top = re.sub(r"\[\d+\]$", "", top)
+    return top in _IGNORED_ENVELOPE_KEY_PREFIXES
+
+
 def diff_single_l_doc(
     program_path: Path,
     agent_path: Path,
@@ -160,6 +240,11 @@ def diff_single_l_doc(
     except Exception:
         agent = {}
 
+    # v0.1.64 R18: lift agent's `fields.*` wrapper up to top-level so
+    # substantive content compares in the same namespace as the program.
+    program = _unwrap_fields(program)
+    agent = _unwrap_fields(agent)
+
     p_flat = _flatten_keys(program)
     a_flat = _flatten_keys(agent)
 
@@ -167,8 +252,12 @@ def diff_single_l_doc(
     absent = halluc = vm = sm = 0
 
     # --- ABSENT_IN_PROGRAM ---
+    # v0.1.64 R18: skip envelope/metadata keys so wrapper-schema choices
+    # don't pollute the substantive-content delta.
     for k, v in a_flat.items():
         if _is_empty(v):
+            continue
+        if _is_envelope_key(k):
             continue
         if k not in p_flat or _is_empty(p_flat[k]):
             findings.append(Finding(
@@ -180,6 +269,8 @@ def diff_single_l_doc(
 
     # --- VALUE_MISMATCH ---
     for k, v in p_flat.items():
+        if _is_envelope_key(k):
+            continue
         if k in a_flat and not _is_empty(v) and not _is_empty(a_flat[k]):
             if str(v) != str(a_flat[k]):
                 findings.append(Finding(
@@ -209,8 +300,12 @@ def diff_single_l_doc(
                 halluc += 1
 
     # --- SHAPE_MISMATCH (top-level key set) ---
-    p_top = set(program.keys()) if isinstance(program, dict) else set()
-    a_top = set(agent.keys()) if isinstance(agent, dict) else set()
+    # v0.1.64 R18: drop envelope keys before comparing so wrapper-schema
+    # choices aren't counted as schema-shape mismatches.
+    p_top = ({k for k in program.keys() if not _is_envelope_key(k)}
+             if isinstance(program, dict) else set())
+    a_top = ({k for k in agent.keys() if not _is_envelope_key(k)}
+             if isinstance(agent, dict) else set())
     only_p = p_top - a_top
     only_a = a_top - p_top
     # Don't double-count keys we already flagged via flatten — flag only the
