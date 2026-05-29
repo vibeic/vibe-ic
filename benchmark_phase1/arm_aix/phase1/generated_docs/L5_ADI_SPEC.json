@@ -17,5 +17,7 @@
       }
     ],
     "ic_class_applicability_gate_v0_1_62": "ic_class='bus_interconnect_protocol' declares LL5 not applicable; emitted as N/A stub (l_doc_taxonomy.na_stub)"
-  }
+  },
+  "analog_digital_interface_present": false,
+  "signaling_summary": "Pure digital protocol: synchronous CMOS single-ended signals; rising-edge sampling on ACLK; no analog content."
 }

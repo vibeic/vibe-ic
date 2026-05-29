@@ -459,14 +459,15 @@
     "byte_order": null,
     "wake_required_pre_command": null,
     "evidence": "interface keyword match (i2c/spi/uart/...)",
+    "burst_based": true,
+    "multiple_outstanding": true,
+    "out_of_order_completion": true,
     "atomicity_modes": [
       "Normal",
       "Exclusive",
       "Locked (AXI3 only)"
     ],
-    "burst_based": "All transfers are burst-based with only the start address issued on the address channel.",
-    "endianness": "Byte-invariant; supports both little- and big-endian data structures in the same memory.",
-    "multiple_outstanding": "Multiple outstanding transactions supported; ordering preserved per (master, ID)."
+    "endianness": "Byte-invariant; supports both little- and big-endian data structures in the same memory."
   },
   "no_protocol_overview_in_input": false,
   "compliance_requirements": [],

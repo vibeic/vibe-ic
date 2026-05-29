@@ -298,9 +298,9 @@
       "read_data_ordering": "Interconnect must ensure that read data from a slave is returned to the master in the order in which the requests were issued for the same ARID.",
       "write_response_ordering": "Slave BRESP must be returned in the order in which writes with the same AWID were accepted.",
       "address_ordering": "Address-channel requests with the same xID retain order; different IDs may be reordered by the interconnect.",
-      "response_ordering": "Write BRESP retains AWID order; read RDATA retains ARID order.",
+      "response_ordering": "Transaction responses with the same ID are returned in the same order as the requests were issued. No ordering between different IDs, different masters, or read-vs-write at the same address.",
       "same_id_same_destination": "Same xID + same destination => strictly in-order.",
-      "write_data_ordering": "W data beats follow strict WLAST-marked burst boundaries."
+      "write_data_ordering": "Master must issue write data in the same order as transaction addresses. AXI4+ removes WID and prohibits write data interleaving."
     }
   },
   "extraction_status": "EXTRACTED",

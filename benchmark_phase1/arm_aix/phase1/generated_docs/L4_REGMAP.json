@@ -17,5 +17,7 @@
       }
     ],
     "ic_class_applicability_gate_v0_1_62": "ic_class='bus_interconnect_protocol' declares LL4 not applicable; emitted as N/A stub (l_doc_taxonomy.na_stub)"
-  }
+  },
+  "register_map_present": false,
+  "notes": "If a future system-integration L4 is required, the canonical 'address-side fields' to capture would be: AxADDR width (implementation-defined), AxREGION (4 bits, AXI4+), AxQOS (4 bits, AXI4+), Slave_ID_WIDTH = max(master ID_WIDTH) + ceil(log2(num_masters)). Bus-interconnect protocol specification itself has no architectural register map; implementation-side configuration registers (if any) are integration-defined."
 }

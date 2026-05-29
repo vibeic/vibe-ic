@@ -782,7 +782,8 @@
       "bits": "[7:0]",
       "burst_length_formula": "AxLEN + 1",
       "range_INCR": "1..256",
-      "range_FIXED_WRAP": "1..16"
+      "range_FIXED_WRAP": "1..16",
+      "range": "1 to 256 transfers for INCR; 1 to 16 for FIXED/WRAP"
     },
     "wrap_only_allowed": [
       2,
@@ -804,7 +805,7 @@
       "0b00": "OKAY    - normal access success (or exclusive failed)",
       "0b01": "EXOKAY  - exclusive access success",
       "0b10": "SLVERR  - slave error",
-      "0b11": "DECERR  - decode error (interconnect could not find slave)"
+      "0b11": "DECERR  - decode error (no slave at address)"
     }
   },
   "lock_encodings": {
@@ -817,7 +818,8 @@
     "AXI4_AxLOCK": {
       "0b0": "Normal access",
       "0b1": "Exclusive access"
-    }
+    },
+    "note": "AXI4 removes locked-access support and uses a 1-bit AxLOCK"
   },
   "cache_attribute_encoding_AXI3": {
     "AxCACHE[0]": "Bufferable  (B)",

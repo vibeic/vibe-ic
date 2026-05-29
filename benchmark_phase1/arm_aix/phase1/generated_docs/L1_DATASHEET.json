@@ -3701,14 +3701,20 @@
       "source": "IHI0022H_amba_axi_protocol_spec.pdf"
     }
   ],
-  "electrical_specs_present": false,
-  "package_info_present": false,
-  "copyright": "Copyright © 2003-2020 Arm Limited",
   "vendor": "Arm Limited",
-  "intended_audience": "This specification is written for hardware and software engineers who want to become familiar with AMBA and",
-  "confidentiality": "Non-Confidential",
-  "issuer": "Arm Limited",
+  "max_burst_length": {
+    "AXI3": 16,
+    "AXI4_INCR": 256,
+    "AXI4_FIXED_WRAP": 16
+  },
   "burst_boundary_rule": "must not cross a 4KB address boundary.",
+  "electrical_specs_rationale": "Protocol spec defines only logical signal semantics (synchronous, sampled on rising clock edge). Electrical levels are per-implementation.",
+  "purpose": "the AMBA protocols for AXI and ACE.",
+  "document_id": "ARM IHI 0022H",
+  "package_info_present": false,
+  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
+  "confidentiality": "Non-Confidential",
+  "electrical_specs_present": false,
   "supported_data_bus_widths_bits": [
     8,
     16,
@@ -3719,15 +3725,9 @@
     512,
     1024
   ],
-  "max_burst_length": {
-    "AXI3": 16,
-    "AXI4_INCR": 256,
-    "AXI4_FIXED_WRAP": 16
-  },
-  "document_id": "ARM IHI 0022H",
-  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
-  "purpose": "the AMBA protocols for AXI and ACE.",
-  "electrical_specs_rationale": "Protocol spec defines only logical signal semantics (synchronous, sampled on rising clock edge). Electrical levels are per-implementation.",
+  "issuer": "Arm Limited",
+  "copyright": "Copyright © 2003-2020 Arm Limited",
+  "intended_audience": "This specification is written for hardware and software engineers who want to become familiar with AMBA and",
   "five_channels": [
     {
       "name": "AW",

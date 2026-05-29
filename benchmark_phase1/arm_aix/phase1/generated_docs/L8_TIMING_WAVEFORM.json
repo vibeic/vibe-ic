@@ -56,8 +56,8 @@
         "WLAST + WREADY -> BVALID",
         "BVALID -> BREADY"
       ],
-      "figure": "A3-3",
-      "note": "AXI3 allows BVALID to follow W handshake before AW handshake completes (relaxed write-response dependency)."
+      "figure": "A3-6",
+      "note": "AXI3 BVALID depends only on W handshake + WLAST, NOT on AW handshake."
     },
     "write_AXI4_AXI5": {
       "arrows": [
@@ -66,17 +66,18 @@
         "AW handshake + WLAST -> BVALID",
         "BVALID -> BREADY"
       ],
-      "figure": "A3-4",
+      "figure": "A3-7",
       "note": "AXI4/AXI5 add an additional slave dependency on AW handshake before BVALID, so slaves never need to buffer write data without the address."
     }
   },
   "max_outstanding_rules": {
     "same_ID_ordering": "All transactions with the same AXI ID must remain in order (request order = response order).",
     "different_ID_reordering": "Transactions with different IDs may be reordered by the interconnect or slave.",
-    "different_ID_ordering": "Different ID transactions may complete out of order.",
+    "different_ID_ordering": "No ordering constraint between different IDs.",
     "implementation_defined_max": "Maximum outstanding transactions is implementation-defined per master+ID pair.",
-    "no_outstanding_count_in_spec": "The AXI spec does not pin a numeric outstanding count; it is an integration parameter.",
-    "read_response_ordering": "Read data for the same ARID is returned in order."
+    "no_outstanding_count_in_spec": "Spec defines no maximum number of outstanding transactions; an implementation-defined value.",
+    "read_response_ordering": "Read data for the same ARID is returned in order.",
+    "read_reordering_depth": "Implementation-defined; describes how many outstanding read transactions with different ARIDs may be in flight before the master needs to stall."
   },
   "narrow_transfer_waveforms": "Narrow-bus transfers (transfer width < bus width) use the address+size pair to determine byte lanes per beat; refer to spec figure for example with 5-beat 8-bit incrementing burst on a 32-bit data bus.",
   "write_response_dependency_rules": [

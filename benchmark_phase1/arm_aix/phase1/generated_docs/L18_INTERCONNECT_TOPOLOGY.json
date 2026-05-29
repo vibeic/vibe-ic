@@ -195,7 +195,7 @@
     },
     "slave_classification": {
       "Memory_slave": "Required to handle all transaction types correctly. Memory slaves use Tables A9-1..A9-4 for default signal values when signals are omitted.",
-      "Peripheral_slave": "Has an IMPLEMENTATION DEFINED method of access. Any non-conforming access must complete protocol-compliantly. Reorder restrictions; side-effects per access; may support a subset of transaction types."
+      "Peripheral_slave": "Has an IMPLEMENTATION DEFINED method of access. Any non-conforming access must complete protocol-compliantly but the peripheral is not required to operate correctly under all access patterns; side effects per access; reorder restrictions; may support a subset of transaction types."
     },
     "default_signal_values_evidence_tables": [
       "Table A9-1 Master interface write channel signals and default signal values",

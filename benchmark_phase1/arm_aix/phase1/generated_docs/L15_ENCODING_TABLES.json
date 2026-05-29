@@ -4839,7 +4839,22 @@
           "type"
         ]
       }
-    ]
+    ],
+    "burst_address_equations": {
+      "Start_Address": "AxADDR",
+      "Number_Bytes": "2 ^ AxSIZE",
+      "Burst_Length": "AxLEN + 1",
+      "Aligned_Address": "INT(Start_Address / Number_Bytes) * Number_Bytes",
+      "Address_1": "Start_Address (first transfer)",
+      "Address_N_INCR": "Aligned_Address + (N - 1) * Number_Bytes",
+      "Address_N_INCR_or_pre-wrap": "Aligned_Address + (N - 1) * Number_Bytes  (INCR; or unwrapped portion of WRAP before crossing the wrap boundary)",
+      "Address_N_FIXED": "Start_Address",
+      "Address_N_WRAP": "Aligned_Address + ((N - 1) * Number_Bytes) MOD (Number_Bytes * Burst_Length) + Wrap_Boundary",
+      "Wrap_Boundary": "INT(Start_Address / (Number_Bytes * Burst_Length)) * (Number_Bytes * Burst_Length)",
+      "WRAP_wrap_condition": "Address_N >= Wrap_Boundary + (Number_Bytes * Burst_Length) → Address_N := Address_N - (Number_Bytes * Burst_Length)",
+      "Lower_Byte_Lane_first": "Start_Address - INT(Start_Address / Data_Bus_Bytes) * Data_Bus_Bytes",
+      "Upper_Byte_Lane_first": "Aligned_Address + (Number_Bytes - 1) - INT(Start_Address / Data_Bus_Bytes) * Data_Bus_Bytes"
+    }
   },
   "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",
