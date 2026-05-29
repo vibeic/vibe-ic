@@ -25,10 +25,16 @@ adopts the same prompt+context+harness packaging.
 
 ## Emitted Shape-D layout (per row)
 
-    <rundir>/<row.id>/work/PROMPT.txt          ← row["prompt"]
-    <rundir>/<row.id>/work/<context-relpaths>  ← row["context"][rel] (e.g. docs/spec.md)
-    <rundir>/<row.id>/score/<harness-relpaths> ← row["harness"][rel] (e.g. src/test_*.py)
-    <rundir>/<row.id>/.row_meta.json           ← non-content row fields (id, categories, ...)
+    <rundir>/<row.id>/work/PROMPT.txt              ← row["prompt"]   (blind input)
+    <rundir>/<row.id>/work/<context-relpaths>      ← row["context"][rel] (e.g. docs/spec.md)
+    <rundir>/<row.id>/input/phase1_prompt.md       ← copy of prompt   (runner phase1 ingester)
+    <rundir>/<row.id>/input/docs/design_description.md ← prompt + concatenated context (.md files)
+    <rundir>/<row.id>/score/<harness-relpaths>     ← row["harness"][rel] (e.g. src/test_*.py)
+    <rundir>/<row.id>/.row_meta.json               ← non-content row fields (id, categories, ...)
+
+The `input/` mirror is what `vibe_ic_one_shot_runner.py`'s phase1 reads.
+Without it the user has to manually duplicate `work/PROMPT.txt` →
+`input/phase1_prompt.md` before invoking the runner. Captured at v0.1.59.
 
 Plus, at the run dir root:
     <rundir>/problems.list                     ← deduped row IDs
@@ -108,7 +114,8 @@ def extract_row(row: dict, rundir: Path) -> Path:
     score.mkdir(parents=True, exist_ok=True)
 
     # 1. PROMPT.txt (mandatory)
-    (work / "PROMPT.txt").write_text(row[PROMPT_KEY])
+    prompt_body = row[PROMPT_KEY]
+    (work / "PROMPT.txt").write_text(prompt_body)
 
     # 2. Optional auxiliary AI prompt context (system_message etc.)
     sysmsg = row.get(SYSMSG_KEY)
@@ -124,7 +131,25 @@ def extract_row(row: dict, rundir: Path) -> Path:
     # 4. harness → score/ (HIDDEN from the AI per blind rule; we just stage it)
     _emit_files(score, row[HARNESS_KEY])
 
-    # 5. row metadata (everything that isn't content)
+    # 5. v0.1.59 capture (R9): also stage the runner's input/ layout so
+    # vibe_ic_one_shot_runner.py's phase1 ingester can read the prompt
+    # without a manual mkdir+cp dance. The blind rule is preserved: input/
+    # contains the SAME content as work/PROMPT.txt + work/<docs|verif>;
+    # nothing under score/ is exposed.
+    input_dir = proj / "input"
+    input_docs = input_dir / "docs"
+    input_docs.mkdir(parents=True, exist_ok=True)
+    (input_dir / "phase1_prompt.md").write_text(prompt_body)
+    # Concatenate prompt + any context-side .md docs into design_description.md
+    composed = [prompt_body.rstrip() + "\n"]
+    if isinstance(ctx, dict):
+        for rel in sorted(ctx.keys()):
+            if rel.endswith(".md") and rel.startswith("docs/"):
+                v = ctx[rel]
+                composed.append("\n" + (v if isinstance(v, str) else str(v)).rstrip() + "\n")
+    (input_docs / "design_description.md").write_text("".join(composed))
+
+    # 6. row metadata (everything that isn't content)
     content_keys = {PROMPT_KEY, CONTEXT_KEY, HARNESS_KEY, SYSMSG_KEY}
     meta = {k: v for k, v in row.items() if k not in content_keys}
     (proj / ".row_meta.json").write_text(json.dumps(meta, indent=2) + "\n")

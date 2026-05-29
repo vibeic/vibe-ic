@@ -91,7 +91,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--project", required=True, help="Shape-D project dir (work/ + score/ subdirs)")
     ap.add_argument("--top", required=True, help="DUT top module name")
-    ap.add_argument("--rtl", required=True, help="RTL file path (relative to --project) — the candidate to score")
+    ap.add_argument("--rtl", required=False, default=None,
+                    help="RTL file path (relative to --project) — the candidate to score. "
+                         "If omitted (v0.1.59 R10), auto-discover from canonical runner output "
+                         "locations: work/rtl/<top>.{sv|v} → phase2/stage1/rtl/<top>.{sv|v}. "
+                         "Pass --rtl explicitly to score a non-canonical RTL file.")
     ap.add_argument("--mount-root", required=True, help="host path mounted into the container as /foss/designs (e.g. /home/<user>/AI_IC_design)")
     ap.add_argument("--mount-container", default="/foss/designs")
     ap.add_argument("--container", default="iic-eda")
@@ -112,9 +116,20 @@ def main():
     # with the real error ('cd: ... No such file or directory') buried in log_tail.
     _validate_mount(a.container, mount_host, a.mount_container)
 
-    rtl_host = project / a.rtl
-    if not rtl_host.is_file():
-        raise SystemExit(f"RTL not found: {rtl_host}")
+    # v0.1.59 R10: auto-discover RTL from canonical locations when --rtl omitted.
+    if a.rtl:
+        rtl_host = project / a.rtl
+        if not rtl_host.is_file():
+            raise SystemExit(f"RTL not found: {rtl_host}")
+    else:
+        rtl_host = _autodiscover_rtl(project, a.top)
+        if rtl_host is None:
+            raise SystemExit(
+                f"--rtl omitted and no canonical RTL found for top={a.top!r}.\n"
+                f"  Searched: work/rtl/{a.top}.sv, work/rtl/{a.top}.v, "
+                f"phase2/stage1/rtl/{a.top}.sv, phase2/stage1/rtl/{a.top}.v\n"
+                f"  under {project}\n"
+                f"Pass --rtl <relpath> explicitly to score a non-canonical RTL.")
 
     score_src_host = project / "score" / "src"
     test_py = next(score_src_host.glob(f"test_{a.top}.py"), None)
@@ -232,6 +247,28 @@ _HARNESS_ERROR_PATTERNS = (
     # General Python traceback in harness layer
     (re.compile(r"harness_library\.py:\d+:"), "harness-library-internal-error"),
 )
+
+
+def _autodiscover_rtl(project: Path, top: str) -> Path | None:
+    """v0.1.59 R10: locate a candidate RTL file under the runner's canonical
+    output locations when the scorer was called without --rtl. Returns the
+    first match in priority order:
+      1. work/rtl/<top>.sv       (Shape-D blind-instructions step 3 target)
+      2. work/rtl/<top>.v        (.v fallback for Verilog-2001)
+      3. phase2/stage1/rtl/<top>.sv  (the spec-to-rtl skill emits here)
+      4. phase2/stage1/rtl/<top>.v   (.v fallback)
+    Returns None if nothing matches; caller emits an explicit error then.
+    """
+    candidates = [
+        project / "work" / "rtl" / f"{top}.sv",
+        project / "work" / "rtl" / f"{top}.v",
+        project / "phase2" / "stage1" / "rtl" / f"{top}.sv",
+        project / "phase2" / "stage1" / "rtl" / f"{top}.v",
+    ]
+    for c in candidates:
+        if c.is_file():
+            return c
+    return None
 
 
 def _detect_harness_error(out: str, tests: int, returncode: int) -> dict | None:
