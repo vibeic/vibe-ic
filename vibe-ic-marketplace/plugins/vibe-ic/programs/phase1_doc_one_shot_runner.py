@@ -39180,6 +39180,73 @@ def gen_l10_test_cases(project: Path,
     return _write_l_doc(project, "L10_TEST_CASES", content, evidence)
 
 
+# v0.1.83 — for the digital benchmark l_doc loop (sha256 L11). A register-
+# command IC documents its host→device commands as a table (操作/方式/描述 =
+# operation/how/effect). Each row IS a behavioral interaction (host writes X →
+# device does Y). This GENERAL extractor surfaces them as L11
+# behavioral_sequences when the IC has no OTP image. Keyed on bilingual column
+# SEMANTICS (operation + how/method); chip-AGNOSTIC; input-docs only.
+_L11_CMD_OP_COL = re.compile(
+    r'(?i)操作|operation|\bcommand\b|命令|動作|register\s+access|存取')
+_L11_CMD_HOW_COL = re.compile(
+    r'(?i)方式|\bhow\b|method|寫|讀|\bwrite\b|\bread\b|存取|access|\bbit\b|action')
+
+
+def _harvest_command_sequences_from_input_tables(
+        extracted: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Harvest typed behavioral sequences from a register-command table in the
+    input docs. A table qualifies when its FIRST column is an operation/command
+    column AND the header carries a how/method column. Chip-AGNOSTIC."""
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for fname, text in (extracted or {}).items():
+        if not isinstance(text, str) or '|' not in text:
+            continue
+        lines = text.split('\n')
+        n = len(lines)
+        i = 0
+        while i < n:
+            line = lines[i]
+            if '|' in line and i + 1 < n:
+                hdr = [c.strip() for c in line.strip().strip('|').split('|')]
+                sep = lines[i + 1].strip()
+                is_sep = bool(sep) and set(sep) <= set('|-: ') and '-' in sep
+                if (len(hdr) >= 2 and is_sep and hdr[0]
+                        and _L11_CMD_OP_COL.search(hdr[0])
+                        and _L11_CMD_HOW_COL.search(' '.join(hdr))):
+                    j = i + 2
+                    while j < n and '|' in lines[j]:
+                        cells = [c.strip()
+                                 for c in lines[j].strip().strip('|').split('|')]
+                        j += 1
+                        if len(cells) < 2 or not cells[0]:
+                            continue
+                        if set(''.join(cells)) <= set('-: '):
+                            continue
+                        nm = re.sub(r'[`*]', '', cells[0]).strip()
+                        slug = re.sub(r'[^a-z0-9]+', '_',
+                                      nm.lower()).strip('_')[:40]
+                        if not slug:
+                            slug = f"cmd_{len(out) + 1}"
+                        if slug in seen:
+                            continue
+                        seen.add(slug)
+                        out.append({
+                            "name": slug,
+                            "kind": "register_command",
+                            "trigger": re.sub(r'[`*]', '', cells[1]).strip()
+                            if len(cells) >= 2 else "",
+                            "effect": re.sub(r'[`*]', '', cells[-1]).strip(),
+                            "evidence": f"input/docs/{fname} (command table)",
+                        })
+                        if len(out) >= 16:
+                            return out
+                    i = j
+                    continue
+            i += 1
+    return out
+
+
 def gen_l11_otp_content(project: Path,
                         extracted: Dict[str, str]) -> LDocResult:
     """L11: OTP image bytes from input/otp/*.{hex,mif,ver}."""
@@ -39414,7 +39481,11 @@ def gen_l11_otp_content(project: Path,
         #   on OTP-less projects too
         "behavioral_sequences": (
             (behavioral_sequences if has_otp_evidence_l11 else [])
-            + reject_coverage_sequences),
+            + reject_coverage_sequences
+            # v0.1.83 — documented register-command behaviors (host→device)
+            # for OTP-less register-command ICs (e.g. a hash core). Real
+            # command-table rows from the input, not fabricated.
+            + _harvest_command_sequences_from_input_tables(extracted)),
         "calibration_tables": (calibration_tables
                                 if has_otp_evidence_l11 else []),
         # v1.6.79 — closes issue #12. Previously emitted the prose
