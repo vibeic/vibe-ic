@@ -727,10 +727,18 @@ def extract_l8_protocol_widths(text: str) -> Dict[str, Any]:
     signal_widths: Dict[str, Dict[str, Any]] = {}
     named_params: Dict[str, Dict[str, Any]] = {}
 
+    # v0.1.70 R26 — version-aware capture. For each signal-bit match, look
+    # backward in the preceding 10 lines for a "for/in <VERSION>" pattern
+    # where <VERSION> is any spec-version-shaped token (UPPERCASE WORD +
+    # digit, possibly hyphen-suffixed). When found, attach the version
+    # so the per-variant width can be reported separately (matches Claude's
+    # 'AxLEN_width.AXI3' / 'AxLEN_width.AXI4_AXI5' canonical shape).
+    # General pattern — no specific protocol family hardcoded.
+    _version_token_re = re.compile(
+        r"\b(?:for|in|under|per)\s+([A-Z][A-Z0-9]{1,8}\d+(?:[-+][A-Z][a-zA-Z]*|\d+)?)\b"
+    )
+
     # Pass 1: gather <signal>[N:M] occurrences and infer per-signal width.
-    # We keep the WIDEST observed range per signal — when a spec defines
-    # AxLEN[7:0] for AXI4 but mentions AxLEN[3:0] for AXI3, we surface
-    # the wider value and record both occurrences as evidence.
     for i, line in enumerate(lines):
         for m in _L8_SIGNAL_BIT_RE.finditer(line):
             sig = m.group(1)
@@ -742,12 +750,33 @@ def extract_l8_protocol_widths(text: str) -> Dict[str, Any]:
                 "max_width_bits": 0,
                 "observed_widths": set(),
                 "evidence": [],
+                "per_version": {},
             })
             entry["max_width_bits"] = max(entry["max_width_bits"], width)
             entry["observed_widths"].add(width)
-            if len(entry["evidence"]) < 3:  # keep evidence bounded
+            if len(entry["evidence"]) < 3:
                 entry["evidence"].append({
                     "line": i + 1, "quote": line.strip()[:200]})
+            # v0.1.70 R26 — find the NEAREST "for/in <VERSION>" mention to
+            # the bit-bracket line (up to 5 lines back). Each version gets
+            # the most-recently-asserted width, so a later, more-specific
+            # occurrence overrides an earlier one.
+            ctx_start = max(0, i - 5)
+            ctx = "\n".join(lines[ctx_start:i + 1])
+            versions_in_ctx = []
+            for vm in _version_token_re.finditer(ctx):
+                versions_in_ctx.append(vm.group(1))
+            # If exactly ONE version mentioned in context, attach width to it.
+            # If MULTIPLE versions mentioned (e.g. paragraph comparing AXI3
+            # and AXI4), do NOT auto-attach — too ambiguous, parity-tool-safe
+            # default falls back to the un-versioned bits/observed_widths.
+            if len(set(versions_in_ctx)) == 1:
+                ver = versions_in_ctx[0]
+                ver_key = ver.replace("-", "_").replace("+", "")
+                width_str = (f"{width} bits ({sig}[{msb}:{lsb}])"
+                              if lsb_str else f"{width} bit ({sig}[{msb}])")
+                # Override-on-later: later occurrences win
+                entry["per_version"][ver_key] = width_str
 
     # Pass 2: gather _WIDTH / _BITS named parameters and look for legal-
     # value lists in the same line or the next 3 lines.
@@ -805,14 +834,19 @@ def extract_l8_protocol_widths(text: str) -> Dict[str, Any]:
             "legal_values": sorted(e["legal_values"]),
             "evidence": e["evidence"],
         }
-    # Signal-bit-index slot — emit width_parameters.<signal>_width = {bits: N, observed: [...]}
+    # Signal-bit-index slot — emit width_parameters.<signal>_width
+    # If per-version variants were detected, emit them as nested subkeys
+    # matching Claude's canonical 'AxLEN_width.AXI3' / .AXI4_AXI5 shape.
     for sig, e in signal_widths.items():
         slot = f"{sig}_width"
-        width_params[slot] = {
+        entry = {
             "bits": e["max_width_bits"],
             "observed_widths": sorted(e["observed_widths"]),
             "evidence": e["evidence"],
         }
+        if e.get("per_version"):
+            entry.update(e["per_version"])
+        width_params[slot] = entry
 
     return {
         "width_parameters": width_params,

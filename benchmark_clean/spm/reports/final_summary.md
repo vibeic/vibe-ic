@@ -1,6 +1,6 @@
 # Phase 2+3 Final Summary — spm
 
-_Auto-generated chip-AGNOSTIC summary by_ `final_report_generate.py` _at 2026-05-29T07:58:07Z (UTC)._
+_Auto-generated chip-AGNOSTIC summary by_ `final_report_generate.py` _at 2026-05-29T08:01:48Z (UTC)._
 
 - **IC**: `(unknown — fill in via L1_DATASHEET.json[ic_name])`
 - **Project root**: `/home/reyerchu/vibe-ic/benchmark_clean/spm`

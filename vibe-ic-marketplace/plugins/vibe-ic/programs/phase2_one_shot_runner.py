@@ -1525,6 +1525,83 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
 
 
 # -------------------------------------------------------------------------
+# chip_top wrapper port-list extraction (v0.1.62 — module-level + testable)
+#
+# The chip_top auto-emit (step_yosys_synth) extracts a DUT's parameter block
+# and port list to build a thin pass-through wrapper. These helpers are pure
+# and module-level so the regression suite can pin them directly (the spm
+# benchmark regression: commented port `// (LSB-first)` was mis-counted by the
+# old comment-blind paren walker, truncating the port list).
+# -------------------------------------------------------------------------
+def _chip_top_mask_comments(s: str) -> str:
+    """Replace // and /* */ comments with same-length whitespace (newlines
+    preserved) so paren-matching never counts parens inside comments."""
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        if s[i:i+2] == '//':
+            j = s.find('\n', i)
+            j = n if j < 0 else j
+            out.append(''.join('\n' if c == '\n' else ' ' for c in s[i:j]))
+            i = j
+        elif s[i:i+2] == '/*':
+            j = s.find('*/', i + 2)
+            j = n if j < 0 else j + 2
+            out.append(''.join('\n' if c == '\n' else ' ' for c in s[i:j]))
+            i = j
+        else:
+            out.append(s[i])
+            i += 1
+    return ''.join(out)
+
+
+def _chip_top_match_paren(s: str, open_idx: int) -> int:
+    """Index of the ')' matching the '(' at open_idx, or -1."""
+    depth = 0
+    k = open_idx
+    n = len(s)
+    while k < n:
+        if s[k] == '(':
+            depth += 1
+        elif s[k] == ')':
+            depth -= 1
+            if depth == 0:
+                return k
+        k += 1
+    return -1
+
+
+def _chip_top_extract_param_and_ports(scan: str, start: int):
+    """From `start` (index of the '(' or '#' right after the module name),
+    return (param_block, port_block): param_block is the optional `#( … )`
+    (or ''), port_block is the `( … )` port list. (None, None) if unbounded.
+    `scan` MUST be comment-masked."""
+    n = len(scan)
+    i = start
+    while i < n and scan[i] in ' \t\r\n':
+        i += 1
+    param_block = ''
+    if i < n and scan[i] == '#':
+        pj = scan.find('(', i)
+        if pj < 0:
+            return None, None
+        pe = _chip_top_match_paren(scan, pj)
+        if pe < 0:
+            return None, None
+        param_block = scan[i:pe + 1]
+        i = pe + 1
+        while i < n and scan[i] in ' \t\r\n':
+            i += 1
+    if i >= n or scan[i] != '(':
+        return None, None
+    pe = _chip_top_match_paren(scan, i)
+    if pe < 0:
+        return None, None
+    return param_block, scan[i:pe + 1]
+
+
+# -------------------------------------------------------------------------
 # 4. yosys offline synth
 # -------------------------------------------------------------------------
 def step_yosys_synth(project: Path, top_name: str = "chip_top",
@@ -1634,70 +1711,9 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         #     the port list so the instance connects only real ports while the
         #     wrapper header still declares the params (so `[size-1:0]` resolves).
         # Chip-AGNOSTIC: applies to any parameterized module with commented ports.
-        def _mask_comments(s: str) -> str:
-            out = []
-            i = 0
-            n = len(s)
-            while i < n:
-                if s[i:i+2] == '//':
-                    j = s.find('\n', i)
-                    if j < 0:
-                        j = n
-                    out.append(''.join('\n' if c == '\n' else ' ' for c in s[i:j]))
-                    i = j
-                elif s[i:i+2] == '/*':
-                    j = s.find('*/', i + 2)
-                    j = n if j < 0 else j + 2
-                    out.append(''.join('\n' if c == '\n' else ' ' for c in s[i:j]))
-                    i = j
-                else:
-                    out.append(s[i])
-                    i += 1
-            return ''.join(out)
-
-        def _match_paren(s: str, open_idx: int):
-            """Return index of the ')' matching the '(' at open_idx, or -1."""
-            depth = 0
-            k = open_idx
-            n = len(s)
-            while k < n:
-                if s[k] == '(':
-                    depth += 1
-                elif s[k] == ')':
-                    depth -= 1
-                    if depth == 0:
-                        return k
-                k += 1
-            return -1
-
-        def _extract_param_and_ports(scan: str, start: int):
-            """From `start` (index of the '(' or '#' right after the module
-            name), return (param_block, port_block) where param_block is the
-            optional `#( … )` (or '') and port_block is the `( … )` port list.
-            Returns (None, None) if the port list can't be bounded. `scan` MUST
-            be comment-masked so commented parens don't miscount."""
-            n = len(scan)
-            i = start
-            while i < n and scan[i] in ' \t\r\n':
-                i += 1
-            param_block = ''
-            if i < n and scan[i] == '#':
-                pj = scan.find('(', i)
-                if pj < 0:
-                    return None, None
-                pe = _match_paren(scan, pj)
-                if pe < 0:
-                    return None, None
-                param_block = scan[i:pe + 1]
-                i = pe + 1
-                while i < n and scan[i] in ' \t\r\n':
-                    i += 1
-            if i >= n or scan[i] != '(':
-                return None, None
-            pe = _match_paren(scan, i)
-            if pe < 0:
-                return None, None
-            return param_block, scan[i:pe + 1]
+        # Helpers are module-level (_chip_top_*) so the regression suite pins them.
+        _mask_comments = _chip_top_mask_comments
+        _extract_param_and_ports = _chip_top_extract_param_and_ports
         # v0.1.38 fix (Bucket A — 2 RTLLM agents on same LoC + 1 multi-module
         # report): (1) the `#(parameter)` walker used to set depth=1 after
         # skipping params, then re-read the same `(` and bump to depth=2 —

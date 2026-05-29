@@ -117,7 +117,8 @@
           "line": 2157,
           "quote": "Burst_Length = AxLEN[7:0] + 1"
         }
-      ]
+      ],
+      "AXI4": "8 bits (AxLEN[7:0])"
     },
     "ARSIZE_width": {
       "bits": 3,
@@ -513,7 +514,8 @@
           "line": 8330,
           "quote": "Write address channel        AWSNOOP[2:0]          Master       Indicates the transaction type for Shareable write"
         }
-      ]
+      ],
+      "ACE5_Lite": "1 bit (AWSNOOP[3])"
     },
     "AWBAR_width": {
       "bits": 2,
