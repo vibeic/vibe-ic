@@ -3040,11 +3040,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         for r in results:
             if r.id == "P0" and r.status == "FAIL":
                 for reason in r.reasons:
+                    line = None
                     if reason.startswith("FAIL: "):
-                        structural_fail_lines.append(reason[len("FAIL: "):])
+                        line = reason[len("FAIL: "):]
                     elif reason.lstrip().startswith("- "):
-                        structural_fail_lines.append(
-                            reason.lstrip()[2:])
+                        line = reason.lstrip()[2:]
+                    if line is None:
+                        continue
+                    # v0.1.62 — INFORMATIONAL_GATES (e.g.
+                    # bit_level_full_stack_tb_check) are coverage gaps, not
+                    # deployment blockers, and are already excluded from the
+                    # step-level verdict. Exclude them from the strict-
+                    # structural P0 count too so the treatment is consistent
+                    # (they still appear in the per-step listing). Without
+                    # this, a non-protocol IC (spm multiplier, sha256 hash)
+                    # hard-failed on a single-wire bit-level TB gate that
+                    # does not apply to it.
+                    if any(g in line for g in INFORMATIONAL_GATES):
+                        continue
+                    structural_fail_lines.append(line)
             elif r.status in ("FAIL", "MISSING") and \
                     isinstance(r.id, int) and 1 <= r.id <= 13:
                 # Phase-2b step-level FAIL/MISSING. With --strict-step-

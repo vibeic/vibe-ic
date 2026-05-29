@@ -138,3 +138,51 @@ def test_bad_dir(tmp_path):
         capture_output=True, text=True,
     )
     assert r.returncode == 2
+
+
+# ---------------------------------------------------------------------------
+# v0.1.62 — low_confidence blocks are advisory, NOT gating (spm benchmark).
+# spm's L5 lifted a "dac" block from a NEGATED sentence
+# ("→ 不需 … analog trim DAC 等" = the DAC is NOT needed); both speculative
+# blocks were marked low_confidence:true. A low-confidence guess must not
+# hard-block the silicon flow by demanding spice/drc/lvs decks.
+# ---------------------------------------------------------------------------
+def _write_l5(project: Path, blocks, detected=True):
+    gd = project / "phase1" / "generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    (gd / "L5_ADI_SPEC.json").write_text(json.dumps({
+        "doc_class": "adi_spec",
+        "ic_name": "TEST_IC",
+        "analog_blocks_detected": detected,
+        "analog_blocks": blocks,
+    }))
+
+
+def test_low_confidence_blocks_do_not_gate(tmp_path):
+    # spm-shape: two low_confidence speculative blocks, no PDK decks present.
+    _write_l5(tmp_path, [
+        {"name": "dac", "type": "dac", "low_confidence": True,
+         "evidence": "L6 (DAC) — negated context"},
+        {"name": "esd", "type": "esd", "low_confidence": True},
+    ])
+    r = _run(tmp_path)
+    assert r.returncode == 0, f"low-confidence blocks must not FAIL: {r.stdout}"
+
+
+def test_high_confidence_block_still_gates(tmp_path):
+    # A real (high-confidence) analog block with NO decks must still FAIL.
+    _write_l5(tmp_path, [
+        {"name": "ldo_main", "type": "ldo", "spec": "1.8 V"},
+    ])
+    r = _run(tmp_path)
+    assert r.returncode == 1, f"real analog block w/o decks must FAIL: {r.stdout}"
+
+
+def test_mixed_only_high_confidence_counts(tmp_path):
+    # One low-confidence + one high-confidence → still gates on the real one.
+    _write_l5(tmp_path, [
+        {"name": "dac", "type": "dac", "low_confidence": True},
+        {"name": "bandgap", "type": "bandgap", "spec": "1.2 V ref"},
+    ])
+    r = _run(tmp_path)
+    assert r.returncode == 1

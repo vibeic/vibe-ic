@@ -316,6 +316,60 @@
         "new_value": "UNKNOWN_IC",
         "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
       }
+    ],
+    "l6_control_logic_v0_1_72": "R42: overlaid 9 L6 concepts (paragraph + L17-channel-synth)"
+  },
+  "write_transaction_fsm_master": [
+    "Drive AWADDR + AW* fields; assert AWVALID.",
+    "Drive WDATA + WSTRB + WLAST per beat; assert WVALID.",
+    "Wait for AWREADY and WREADY handshakes per channel.",
+    "Wait for BVALID; sample BRESP.",
+    "Assert BREADY to complete write response."
+  ],
+  "interleaving": "interleaving of write data with different IDs was permitted in AXI3, but is deprecated in AXI4 and later.",
+  "fsm_hints": {
+    "per_channel_states": [
+      "IDLE      (VALID=0)",
+      "VALID     (VALID=1, READY=0; data held)",
+      "HANDSHAKE (VALID=1, READY=1; transfer occurs)"
+    ],
+    "rule": "Transfer occurs only when both VALID and READY are HIGH at a rising clock edge."
+  },
+  "channel_dependency_rules_AXI3_write": {
+    "BVALID_dependency": [
+      "WVALID",
+      "WREADY",
+      "WLAST"
     ]
+  },
+  "channel_dependency_rules_read": {
+    "RVALID_dependency": [
+      "ARVALID",
+      "ARREADY"
+    ]
+  },
+  "channel_dependency_rules_AXI4_AXI5_write": {
+    "BVALID_dependency": [
+      "AWVALID",
+      "AWREADY",
+      "WVALID",
+      "WREADY",
+      "WLAST"
+    ],
+    "note": "AXI4+ adds AW handshake as a BVALID prerequisite."
+  },
+  "read_transaction_fsm_master": [
+    "Drive ARADDR + AR* fields; assert ARVALID.",
+    "Wait for ARREADY handshake.",
+    "Sample RDATA + RRESP per beat when RVALID HIGH.",
+    "Assert RREADY each beat until RLAST observed."
+  ],
+  "exit_from_reset": "earliest point after reset that a master is permitted to begin driving ARVALID, AWVALID, or WVALID HIGH is at a rising ACLK edge after ARESETn is HIGH.",
+  "default_ready_state_recommendation": {
+    "AWREADY": "Default HIGH recommended (slave accepts any valid request in one cycle)",
+    "WREADY": "Default HIGH recommended (slave accepts any valid request in one cycle)",
+    "BREADY": "Default HIGH recommended (slave accepts any valid request in one cycle)",
+    "ARREADY": "Default HIGH recommended (slave accepts any valid request in one cycle)",
+    "RREADY": "Default HIGH recommended (slave accepts any valid request in one cycle)"
   }
 }

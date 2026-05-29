@@ -482,7 +482,7 @@
         "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
       }
     ],
-    "l3_protocol_mirror_v0_1_69": "R21+R25: mirrored L17.channels + L17.handshake_pairs + 2 L15 encoding tables (canonical nested-dict shape) into L3 for bus_interconnect_protocol"
+    "l3_protocol_mirror_v0_1_69": "R21+R25+R45: mirrored L17.channels + L17.handshake_pairs + 2 L15 encoding tables + synth-universal L3 facts for bus_interconnect_protocol"
   },
   "channels": [
     {
@@ -766,5 +766,35 @@
       "Burst_Length": "The total number of data transfers within a burst.",
       "Address_N": "The address of transfer N in a burst. N is 1 for the first transfer in a burst."
     }
-  }
+  },
+  "burst_length_field": {
+    "AxLEN_AXI3": {
+      "bits": "[3:0]",
+      "burst_length_formula": "AxLEN + 1"
+    },
+    "AxLEN_AXI4_5": {
+      "bits": "[7:0]",
+      "burst_length_formula": "AxLEN + 1"
+    }
+  },
+  "qos": {
+    "AxQOS": "4-bit Quality of Service identifier. Default 0b0000 = not participating in QoS."
+  },
+  "region": {
+    "AxREGION": "4-bit region identifier; up to 16 logical regions; must reflect a single physical address map region."
+  },
+  "single_response_for_write": "For a write transaction, a single BRESP is signaled for the entire burst on B channel.",
+  "per_beat_response_for_read": "For a read transaction, the slave can signal different RRESP values for each beat on R channel.",
+  "exclusive_access_sequence": [
+    "Master issues an exclusive read with some ARID at address X.",
+    "Slave returns RDATA with RRESP=EXOKAY (monitor armed).",
+    "Master performs local modify operation.",
+    "Master issues exclusive write with AWID=ARID at same address X.",
+    "Slave returns BRESP=EXOKAY (monitor held) or OKAY (monitor lost)."
+  ],
+  "exclusive_access_restrictions": [
+    "Address must be aligned to (burst_size * burst_length).",
+    "Number of bytes in the exclusive access must equal a single beat or a power-of-two burst.",
+    "AxLOCK = Exclusive set on the read and matching write of the pair."
+  ]
 }

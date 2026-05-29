@@ -555,7 +555,7 @@
         "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
       }
     ],
-    "l1_protocol_metadata_v0_1_68": "R23: overlaid 11 protocol-doc keys for bus_interconnect_protocol class"
+    "l1_protocol_metadata_v0_1_68": "R23+R44: overlaid 15 extractor keys + sibling-L-doc synth"
   },
   "class_path": null,
   "no_class_path_in_input": true,
@@ -3701,11 +3701,9 @@
       "source": "IHI0022H_amba_axi_protocol_spec.pdf"
     }
   ],
-  "burst_boundary_rule": "must not cross a 4KB address boundary.",
-  "electrical_specs_present": false,
-  "intended_audience": "This specification is written for hardware and software engineers who want to become familiar with AMBA and",
-  "document_id": "ARM IHI 0022H",
   "confidentiality": "Non-Confidential",
+  "copyright": "Copyright © 2003-2020 Arm Limited",
+  "burst_boundary_rule": "must not cross a 4KB address boundary.",
   "supported_data_bus_widths_bits": [
     8,
     16,
@@ -3716,8 +3714,40 @@
     512,
     1024
   ],
-  "copyright": "Copyright © 2003-2020 Arm Limited",
-  "package_info_present": false,
+  "purpose": "the AMBA protocols for AXI and ACE.",
+  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
   "issuer": "Arm Limited",
-  "purpose": "the AMBA protocols for AXI and ACE."
+  "document_id": "ARM IHI 0022H",
+  "electrical_specs_present": false,
+  "package_info_present": false,
+  "electrical_specs_rationale": "Protocol spec defines only logical signal semantics (synchronous, sampled on rising clock edge). Electrical levels are per-implementation.",
+  "max_burst_length": {
+    "AXI3": 16,
+    "AXI4_INCR": 256,
+    "AXI4_FIXED_WRAP": 16
+  },
+  "vendor": "Arm Limited",
+  "intended_audience": "This specification is written for hardware and software engineers who want to become familiar with AMBA and",
+  "five_channels": [
+    {
+      "name": "AW",
+      "direction": "Master"
+    },
+    {
+      "name": "W",
+      "direction": "Master"
+    },
+    {
+      "name": "B",
+      "direction": "Slave"
+    },
+    {
+      "name": "AR",
+      "direction": "Master"
+    },
+    {
+      "name": "R",
+      "direction": "Slave"
+    }
+  ]
 }

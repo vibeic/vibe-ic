@@ -1690,6 +1690,22 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         chip_top_sv = rtl_dir / f"{synth_top}.sv"
         if chip_top_v.is_file() or chip_top_sv.is_file():
             return  # caller already provided one
+        # v0.1.62 — the design's declared top (L9.top_module) disambiguates which
+        # DUT to wrap when rtl/ has several modules (e.g. sha256 = sha256 +
+        # sha256_core + sha256_k). Without this, the multi-module case bailed
+        # "ambiguous" → no chip_top → yosys "Module 'chip_top' not found".
+        l9_top_module = None
+        try:
+            _l9p = (project / "phase1" / "generated_docs"
+                    / "L9_INTEGRATION_SPEC.json")
+            if _l9p.is_file():
+                _l9 = json.loads(_l9p.read_text(errors="replace"))
+                if isinstance(_l9, dict):
+                    v = _l9.get("top_module")
+                    if isinstance(v, str) and v.strip():
+                        l9_top_module = v.strip()
+        except Exception:
+            pass
         # Find candidate authored top modules in rtl/. A "candidate" is any
         # .v / .sv whose first `module <name>(...)` declaration has at least
         # one port. Skip files whose top-module declaration matches synth_top
@@ -1756,6 +1772,14 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         # v0.1.38 (multi-file fix): if any candidate name matches the file
         # basename of its source file, prefer that one as the dut. If multiple
         # files contribute, pick deterministically (already sorted by glob).
+        if len(candidates) > 1:
+            # v0.1.62 — first prefer the candidate whose module name matches the
+            # design's declared L9.top_module (resolves multi-module designs like
+            # sha256 deterministically instead of bailing ambiguous).
+            if l9_top_module:
+                preferred = [t for t in candidates if t[0] == l9_top_module]
+                if len(preferred) == 1:
+                    candidates = preferred
         if len(candidates) > 1:
             # filter to "module name == file stem" pairs only
             basenamed = [t for t in candidates if t[0] == t[3].stem]

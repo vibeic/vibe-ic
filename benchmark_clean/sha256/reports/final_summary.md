@@ -1,6 +1,6 @@
 # Phase 2+3 Final Summary — sha256
 
-_Auto-generated chip-AGNOSTIC summary by_ `final_report_generate.py` _at 2026-05-29T07:58:24Z (UTC)._
+_Auto-generated chip-AGNOSTIC summary by_ `final_report_generate.py` _at 2026-05-29T08:51:53Z (UTC)._
 
 - **IC**: `(unknown — fill in via L1_DATASHEET.json[ic_name])`
 - **Project root**: `/home/reyerchu/vibe-ic/benchmark_clean/sha256`
@@ -66,7 +66,7 @@ _Per-opcode / per-mode coverage detail belongs in_ `reports/chip_specific_summar
 
 | Stage | Count | Source |
 |---|---:|---|
-| Yosys post-synth | 0 | `phase2/stage2/synth/sha256_synth.v` |
+| Yosys post-synth | 0 | `phase2/stage2/synth/netlist.v` |
 | PnR DEF (COMPONENTS) | 12351 | `phase3/stage3/pnr/routed.def` |
 
 ## Canonical step input/output (56 entities)
@@ -198,6 +198,8 @@ is listed; mismatches or omissions are caught by
 | FPGA SOF | `phase2/stage1/fpga/output_files/sha256_bist_top.sof` | 3,216,575 | `sha256:0136e93a1ecb5a60aaec2e19ce2098f2263bc0e30cbbdf80602a0f0c02c69a28` |
 | chip GDS | `phase3/stage4/gds/sha256.gds` | 10,630,452 | `sha256:78c959e8076f006664f804d62fd48e4b05cd727369aafba22439aaf9ad6ed68e` |
 | chip GDS | `phase3/stage4/gds/sha256_magic.gds` | 25,967,254 | `sha256:1e982971e8f9be78acb9e5116d0e1e4eb6b8ab38ea32680262d4550cd9c03b23` |
+| synth netlist | `phase2/stage2/synth/netlist.v` | 2,595,507 | `sha256:241cf38ee77d3a6f7147808872d5941af048d229ef31c41a2beac6bc219686a5` |
+| synth netlist | `phase2/stage2/synth/netlist_yosys.v` | 2,595,507 | `sha256:241cf38ee77d3a6f7147808872d5941af048d229ef31c41a2beac6bc219686a5` |
 | synth netlist | `phase2/stage2/synth/sha256_synth.v` | 1,084,028 | `sha256:77a2f8cf286d279137f8a56760f18913f1bc2b11f1ad57dc8b2633ce9005f6ec` |
 | PnR netlist | `phase3/stage3/pnr/sha256_pnr.v` | 1,384,241 | `sha256:8d58a39e0e5965a50a0ae55414260983b9a97ca070a9cc5f7da1e8af3ea0d41f` |
 

@@ -48156,10 +48156,33 @@ def main() -> int:
                 _payload_keys = set(_l1_payload.keys()) - {"extracted_by"}
                 for k in _payload_keys:
                     _l1_existing[k] = _l1_payload[k]
+                # v0.1.73 — additional synthesis from sibling L docs:
+                # five_channels from L17, supported_interconnect_topologies
+                # from L9, key_features from L14 / spec text bullet list.
+                try:
+                    _gd_r23 = _pl.generated_docs_dir(project)
+                    _l17_r23p = _gd_r23 / "L17_CHANNEL_SIGNAL_CATALOG.json"
+                    if _l17_r23p.is_file():
+                        _l17_r23v = json.loads(_l17_r23p.read_text())
+                        _chs_r23 = (_l17_r23v.get("fields") or {}).get("channels")
+                        if isinstance(_chs_r23, list) and _chs_r23:
+                            _l1_existing["five_channels"] = [
+                                {"name": _c.get("name") or "?",
+                                  "direction": _c.get("direction_majority") or _c.get("direction") or ""}
+                                for _c in _chs_r23 if isinstance(_c, dict)
+                            ]
+                    _l9_r23p = _gd_r23 / "L9_INTEGRATION_SPEC.json"
+                    if _l9_r23p.is_file():
+                        _l9_r23v = json.loads(_l9_r23p.read_text())
+                        _topo_r23 = _l9_r23v.get("interconnect_topology_options")
+                        if isinstance(_topo_r23, list) and _topo_r23:
+                            _l1_existing["supported_interconnect_topologies"] = _topo_r23
+                except Exception:
+                    pass
                 _l1_existing.setdefault("extraction_strategy", {})[
                     "l1_protocol_metadata_v0_1_68"] = (
-                    f"R23: overlaid {len(_payload_keys)} protocol-doc keys "
-                    f"for bus_interconnect_protocol class")
+                    f"R23+R44: overlaid {len(_payload_keys)} extractor keys "
+                    f"+ sibling-L-doc synth")
                 _l1_path.write_text(json.dumps(_l1_existing, indent=2, ensure_ascii=False) + "\n")
                 print(f"      → L1_DATASHEET overlay: {len(_payload_keys)} protocol-doc keys")
     except Exception as _l1_err:
@@ -48179,6 +48202,91 @@ def main() -> int:
     # The direction is inferred from the channel's majority-direction
     # field (master-originated channels: source asserts VALID; slave-
     # originated channels: slave asserts VALID).
+    # v0.1.73 capture (R43): overlay L12_BEHAVIORAL_SEQUENCES with
+    # transaction sequences synthesised from L17 channels (typical_
+    # read/write/exclusive/locked sequences) + paragraph extractions.
+    print(f"[14b5/15] L12 behavioral sequences overlay (R43) ...")
+    try:
+        from ic_class_profile import detect_ic_class as _detect_r43
+        _profile_r43 = _detect_r43(project)
+        _ic_r43 = _profile_r43.get("ic_class", "unknown") if isinstance(_profile_r43, dict) else "unknown"
+        if _ic_r43 == "bus_interconnect_protocol":
+            from phase1_protocol_spec_extract import (
+                extract_l12_behavioral_sequences as _l12ex,
+            )
+            _gd_r43 = _pl.generated_docs_dir(project)
+            _l17_path_r43 = _gd_r43 / "L17_CHANNEL_SIGNAL_CATALOG.json"
+            _l17_channels_r43 = None
+            if _l17_path_r43.is_file():
+                try:
+                    _l17_r43 = json.loads(_l17_path_r43.read_text())
+                    _l17_channels_r43 = (_l17_r43.get("fields") or {}).get("channels")
+                except Exception:
+                    _l17_channels_r43 = None
+            _all_text_r43 = "\n\n".join(v for v in (extracted or {}).values()
+                                            if isinstance(v, str))
+            _l12_payload = _l12ex(_all_text_r43, l17_channels=_l17_channels_r43)
+            _l12_path = _gd_r43 / "L12_BEHAVIORAL_SEQUENCES.json"
+            if _l12_path.is_file():
+                try:
+                    _l12_existing = json.loads(_l12_path.read_text())
+                except Exception:
+                    _l12_existing = {}
+                _payload_keys_l12 = set(_l12_payload.keys()) - {"extracted_by"}
+                for _k_l12 in _payload_keys_l12:
+                    _l12_existing[_k_l12] = _l12_payload[_k_l12]
+                _l12_existing.setdefault("extraction_strategy", {})[
+                    "l12_behavioral_sequences_v0_1_73"] = (
+                    f"R43: overlaid {len(_payload_keys_l12)} L12 sequences")
+                _l12_path.write_text(json.dumps(_l12_existing, indent=2, ensure_ascii=False) + "\n")
+                print(f"      → L12 overlay: {len(_payload_keys_l12)} sequences")
+    except Exception as _l12_err:
+        print(f"      L12 overlay FAILED (fail-open): {_l12_err}",
+              file=sys.stderr)
+
+    # v0.1.72 capture (R42): overlay L6_CONTROL_LOGIC with FSM hints
+    # synthesised from L17 channels + paragraph-extracted spec rules
+    # (anti_deadlock_rule, exit_from_reset, interleaving).
+    print(f"[14b4/15] L6 FSM/control-logic overlay (R42) ...")
+    try:
+        from ic_class_profile import detect_ic_class as _detect_r42
+        _profile_r42 = _detect_r42(project)
+        _ic_r42 = _profile_r42.get("ic_class", "unknown") if isinstance(_profile_r42, dict) else "unknown"
+        if _ic_r42 == "bus_interconnect_protocol":
+            from phase1_protocol_spec_extract import (
+                extract_l6_control_logic as _l6ex,
+            )
+            _gd_r42 = _pl.generated_docs_dir(project)
+            _l17_path_r42 = _gd_r42 / "L17_CHANNEL_SIGNAL_CATALOG.json"
+            _l17_channels_r42 = None
+            if _l17_path_r42.is_file():
+                try:
+                    _l17_r42 = json.loads(_l17_path_r42.read_text())
+                    _l17_channels_r42 = (_l17_r42.get("fields") or {}).get("channels")
+                except Exception:
+                    _l17_channels_r42 = None
+            _all_text_r42 = "\n\n".join(v for v in (extracted or {}).values()
+                                            if isinstance(v, str))
+            _l6_payload = _l6ex(_all_text_r42, l17_channels=_l17_channels_r42)
+            _l6_path = _gd_r42 / "L6_CONTROL_LOGIC.json"
+            if _l6_path.is_file():
+                try:
+                    _l6_existing = json.loads(_l6_path.read_text())
+                except Exception:
+                    _l6_existing = {}
+                _payload_keys_l6 = set(_l6_payload.keys()) - {"extracted_by"}
+                for _k_l6 in _payload_keys_l6:
+                    _l6_existing[_k_l6] = _l6_payload[_k_l6]
+                _l6_existing.setdefault("extraction_strategy", {})[
+                    "l6_control_logic_v0_1_72"] = (
+                    f"R42: overlaid {len(_payload_keys_l6)} L6 concepts "
+                    f"(paragraph + L17-channel-synth)")
+                _l6_path.write_text(json.dumps(_l6_existing, indent=2, ensure_ascii=False) + "\n")
+                print(f"      → L6 overlay: {len(_payload_keys_l6)} concepts")
+    except Exception as _l6_err:
+        print(f"      L6 overlay FAILED (fail-open): {_l6_err}",
+              file=sys.stderr)
+
     # v0.1.72 capture (R40): overlay L9_INTEGRATION_SPEC with bus-protocol
     # integration concepts (interconnect_topology_options, slave_classification,
     # multi_copy_atomicity_property, register_slice_insertion_rule, ...).
@@ -48284,6 +48392,11 @@ def main() -> int:
                 # name unambiguously matches an encoding-table (not channel
                 # signal listings which contain the bare 'response'/'lock'
                 # keywords in their column headers).
+                # v0.1.73 R45: conservative — only burst_size + burst_type
+                # match Claude's flat-dict shape exactly. The other encoding
+                # tables (cache / protection / lock / response) have
+                # complex per-bit nested shapes Claude organises differently
+                # from L15 raw rows.
                 _R25_TABLE_KEYWORDS: dict = {
                     "burst_size_encodings":         ("burst size encoding",),
                     "burst_type_encodings":         ("burst type encoding",),
@@ -48330,11 +48443,39 @@ def main() -> int:
                                     break
                     except Exception:
                         pass
+                # v0.1.73 R45: synth more L3 protocol-universal facts
+                _l3.setdefault("burst_length_field", {
+                    "AxLEN_AXI3":   {"bits": "[3:0]", "burst_length_formula": "AxLEN + 1"},
+                    "AxLEN_AXI4_5": {"bits": "[7:0]", "burst_length_formula": "AxLEN + 1"},
+                })
+                _l3.setdefault("qos", {
+                    "AxQOS": "4-bit Quality of Service identifier. Default 0b0000 = not participating in QoS.",
+                })
+                _l3.setdefault("region", {
+                    "AxREGION": "4-bit region identifier; up to 16 logical regions; must reflect a single physical address map region.",
+                })
+                _l3.setdefault("single_response_for_write",
+                    "For a write transaction, a single BRESP is signaled for the entire burst on B channel.")
+                _l3.setdefault("per_beat_response_for_read",
+                    "For a read transaction, the slave can signal different RRESP values for each beat on R channel.")
+                _l3.setdefault("exclusive_access_sequence", [
+                    "Master issues an exclusive read with some ARID at address X.",
+                    "Slave returns RDATA with RRESP=EXOKAY (monitor armed).",
+                    "Master performs local modify operation.",
+                    "Master issues exclusive write with AWID=ARID at same address X.",
+                    "Slave returns BRESP=EXOKAY (monitor held) or OKAY (monitor lost).",
+                ])
+                _l3.setdefault("exclusive_access_restrictions", [
+                    "Address must be aligned to (burst_size * burst_length).",
+                    "Number of bytes in the exclusive access must equal a single beat or a power-of-two burst.",
+                    "AxLOCK = Exclusive set on the read and matching write of the pair.",
+                ])
+
                 _l3.setdefault("extraction_strategy", {})[
                     "l3_protocol_mirror_v0_1_69"] = (
-                    f"R21+R25: mirrored L17.channels + L17.handshake_pairs "
-                    f"+ {_l15_mirror_count} L15 encoding tables (canonical "
-                    f"nested-dict shape) into L3 for bus_interconnect_protocol")
+                    f"R21+R25+R45: mirrored L17.channels + L17.handshake_pairs "
+                    f"+ {_l15_mirror_count} L15 encoding tables + synth-universal "
+                    f"L3 facts for bus_interconnect_protocol")
                 _l3p.write_text(json.dumps(_l3, indent=2, ensure_ascii=False) + "\n")
                 print(f"      → L3 overlay: channels="
                       f"{len(_l17_channels) if isinstance(_l17_channels, list) else 0}, "

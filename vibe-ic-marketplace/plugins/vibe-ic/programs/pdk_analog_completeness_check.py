@@ -170,6 +170,14 @@ def _has_analog_blocks(project: Path) -> Tuple[bool, int]:
     for b in blocks:
         if not isinstance(b, dict):
             continue
+        # v0.1.62 — a `low_confidence: true` block is a SPECULATIVE keyword
+        # guess, often lifted from NEGATED context (e.g. spm's L5 extracted a
+        # "dac" block from "→ 不需 … analog trim DAC 等" — a sentence stating the
+        # DAC is NOT needed). A low-confidence guess must NOT hard-block the
+        # silicon flow (require spice/drc/lvs decks). Real analog blocks are
+        # high-confidence (carry actual specs). Advisory only — not gating.
+        if b.get("low_confidence") is True:
+            continue
         for k in ("name", "type", "block_type", "spec", "spec_summary"):
             v = b.get(k)
             if isinstance(v, str) and len(v.strip()) >= 2:
