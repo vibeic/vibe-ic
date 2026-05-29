@@ -1211,23 +1211,32 @@
       "matched_token": "AXI"
     }
   ],
-  "multi_copy_atomicity_property": "must be True. The response to a Bufferable write request can be sent from an intermediate point. It does not guarantee that the write has completed at the endpoint, but it is observable to future transactions. A6.5.3 Response ordering guarantees Transaction responses have all the following ordering guarantees:",
-  "axi4_lite_subset": ", the following sections should be read: • Part A AMBA AXI Protocol Specification • Part B AMBA AXI4-Lite Interface Specification If using either AXI5 or AXI5-Lite interfaces, the following sections should be read: • Part A AMBA AXI Protocol Specification • Part C AMBA AXI5 and AXI5-Lite Interface",
-  "ordered_write_observation_property": "on page A6-91 ARM IHI 0022H Copyright © 2003-2020 Arm Limited or its affiliates. All rights reserved. A6-83 ID040120 Non-Confidential A6 AXI Ordering Model A6.1 AXI ordering model overview A6.1 AXI ordering model overview The AXI ordering model is based on the use of the transaction identifier, which is sig",
-  "default_slave_behavior": "component, to indicate that there is no slave at the transaction address. See DECERR, decode error on page A3-60. Table A3-5 shows the encoding of the RRESP and BRESP signals. Table A3-5 RRESP and BRESP encoding",
   "slave_classification": [
     "Interconnect component",
     "The complete set of required operations on the AXI bus form the AXI Transaction",
     "Any required payload data is transferred as an AXI Burst",
     "A burst can comprise multiple data transfers, or AXI Beats"
   ],
-  "interface_categories": ", the following sections should be read: • Part A AMBA AXI Protocol Specification • Part D AMBA ACE and ACE-Lite Protocol Specification • Part E AMBA 5 Protocol Features • Part F AMBA ACE5, ACE5-Lite, ACE5-LiteDVM, and ACE5-LiteACPInterface Specification Those already familiar with this",
-  "register_slice_insertion_rule": "Each AXI channel transfers information in only one direction, and the architecture does not require any fixed relationship between the channels. These qualities mean that a register slice can be inserted at almost any point in any channel, at the cost of an additional cycle of latency. Note These qualities",
+  "regular_transactions_property": "The Regular_Transactions_Only property is used to define whether a master issues only Regular type transactions and if a slave only supports Regular transactions: TRUE Only Regular transactions are supported. FALSE All legal combinations of AxBURST, AxSIZE, and AxLEN are supported. If Regular_Tr",
+  "axi4_lite_subset": "AXI4-Lite is a subset of AXI4 for simpler control-register-style interfaces (defined in Part B of the AMBA AXI Protocol Specification).",
+  "interconnect_ordering_requirements": "A description of the AXI ordering model.",
   "interconnect_topology_options": [
     "Shared address and data buses",
     "Shared address buses and multiple data buses",
     "Multilayer, with multiple address and data buses"
   ],
-  "regular_transactions_property": "The Regular_Transactions_Only property is used to define whether a master issues only Regular type transactions and if a slave only supports Regular transactions: TRUE Only Regular transactions are supported. FALSE All legal combinations of AxBURST, AxSIZE, and AxLEN are supported. If Regular_Tr",
-  "interconnect_ordering_requirements": "A description of the AXI ordering model."
+  "interface_categories": [
+    "Read/Write interface (AR, R, AW, W, B)",
+    "Read-only interface (AR, R only; no exclusive support)",
+    "Write-only interface (AW, W, B only)"
+  ],
+  "multi_copy_atomicity_property": "must be True. The response to a Bufferable write request can be sent from an intermediate point. It does not guarantee that the write has completed at the endpoint, but it is observable to future transactions. A6.5.3 Response ordering guarantees Transaction responses have all the following ordering guarantees:",
+  "ordered_write_observation_property": "on page A6-91 ARM IHI 0022H Copyright © 2003-2020 Arm Limited or its affiliates. All rights reserved. A6-83 ID040120 Non-Confidential A6 AXI Ordering Model A6.1 AXI ordering model overview A6.1 AXI ordering model overview The AXI ordering model is based on the use of the transaction identifier, which is sig",
+  "default_slave_behavior": "component, to indicate that there is no slave at the transaction address. See DECERR, decode error on page A3-60. Table A3-5 shows the encoding of the RRESP and BRESP signals. Table A3-5 RRESP and BRESP encoding",
+  "register_slice_insertion_rule": "Each AXI channel transfers information in only one direction, and the architecture does not require any fixed relationship between the channels. These qualities mean that a register slice can be inserted at almost any point in any channel, at the cost of an additional cycle of latency. Note These qualities",
+  "interconnect_id_handling": {
+    "id_widening": "When a master is connected to an interconnect, the interconnect appends additional bits to the master's xID to distinguish requests from different masters at the slave-side port.",
+    "id_collision_avoidance": "The slave-side ID_WIDTH must accommodate the maximum of (master-side ID_WIDTH + log2(number_of_masters))."
+  },
+  "default_signal_values_when_omitted": "Refer to Tables A9-1..A9-4 for master/slave write/read channel default signal values applied when a signal is omitted from the integration interface."
 }

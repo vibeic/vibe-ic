@@ -3701,8 +3701,13 @@
       "source": "IHI0022H_amba_axi_protocol_spec.pdf"
     }
   ],
-  "confidentiality": "Non-Confidential",
+  "electrical_specs_present": false,
+  "package_info_present": false,
   "copyright": "Copyright © 2003-2020 Arm Limited",
+  "vendor": "Arm Limited",
+  "intended_audience": "This specification is written for hardware and software engineers who want to become familiar with AMBA and",
+  "confidentiality": "Non-Confidential",
+  "issuer": "Arm Limited",
   "burst_boundary_rule": "must not cross a 4KB address boundary.",
   "supported_data_bus_widths_bits": [
     8,
@@ -3714,20 +3719,15 @@
     512,
     1024
   ],
-  "purpose": "the AMBA protocols for AXI and ACE.",
-  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
-  "issuer": "Arm Limited",
-  "document_id": "ARM IHI 0022H",
-  "electrical_specs_present": false,
-  "package_info_present": false,
-  "electrical_specs_rationale": "Protocol spec defines only logical signal semantics (synchronous, sampled on rising clock edge). Electrical levels are per-implementation.",
   "max_burst_length": {
     "AXI3": 16,
     "AXI4_INCR": 256,
     "AXI4_FIXED_WRAP": 16
   },
-  "vendor": "Arm Limited",
-  "intended_audience": "This specification is written for hardware and software engineers who want to become familiar with AMBA and",
+  "document_id": "ARM IHI 0022H",
+  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
+  "purpose": "the AMBA protocols for AXI and ACE.",
+  "electrical_specs_rationale": "Protocol spec defines only logical signal semantics (synchronous, sampled on rising clock edge). Electrical levels are per-implementation.",
   "five_channels": [
     {
       "name": "AW",
@@ -3749,5 +3749,71 @@
       "name": "R",
       "direction": "Slave"
     }
+  ],
+  "release_history": [
+    {
+      "date": "16 June 2003",
+      "issue": "A",
+      "change": "First release"
+    },
+    {
+      "date": "19 March 2004",
+      "issue": "B",
+      "change": "First release as standalone document"
+    },
+    {
+      "date": "31 January 2010",
+      "issue": "C",
+      "change": "Renamed to AMBA AXI; AXI4 + AXI4-Lite added"
+    },
+    {
+      "date": "22 February 2011",
+      "issue": "D",
+      "change": "Errata corrections"
+    },
+    {
+      "date": "28 October 2011",
+      "issue": "E",
+      "change": "Additional clarifications"
+    },
+    {
+      "date": "28 February 2013",
+      "issue": "F",
+      "change": "Additional clarifications"
+    },
+    {
+      "date": "29 January 2021",
+      "issue": "G",
+      "change": "AXI5 introduced; multi-copy atomicity; QoS accept; trace signals"
+    },
+    {
+      "date": "29 November 2022",
+      "issue": "H",
+      "change": "Additional issue updates"
+    }
+  ],
+  "protocol_variants_described": [
+    "AXI3 (AMBA 3)",
+    "AXI4 (AMBA 4)",
+    "AXI4-Lite (AMBA 4)",
+    "AXI5 (AMBA 5)",
+    "AXI5-Lite (AMBA 5)",
+    "ACE (AMBA 4)",
+    "ACE-Lite (AMBA 4)"
+  ],
+  "key_features": [
+    "Separate address/control and data phases",
+    "Unaligned data transfers via byte strobes",
+    "Burst-based transactions with only start address",
+    "Separate read and write data channels for full-duplex DMA",
+    "Multiple outstanding addresses (transaction reordering by ID)",
+    "Out-of-order transaction completion for different IDs",
+    "QoS (AXI4) and Region (AXI4) sideband",
+    "Multi-copy atomicity (AXI5)"
+  ],
+  "supported_interconnect_topologies": [
+    "Shared address and data buses",
+    "Shared address buses and multiple data buses",
+    "Multilayer, with multiple address and data buses"
   ]
 }

@@ -276,10 +276,10 @@
         "W": 7,
         "B": 5,
         "AR": 13,
-        "R": 6
+        "R": 7
       },
-      "total_signals_excluding_global": 44,
-      "total_signals_including_ACLK_ARESETn": 46
+      "total_signals_excluding_global": 45,
+      "total_signals_including_ACLK_ARESETn": 47
     },
     "handshake_pairs": {
       "AW": "AWVALID (master) / AWREADY (slave)",
@@ -289,10 +289,18 @@
       "R": "RVALID (slave) / RREADY (master)"
     },
     "dependency_graph": {
-      "common_rule": "VALID once asserted MUST remain asserted until READY also asserted on the same cycle",
+      "common_rule": "VALID must not depend (combinationally) on READY. A source may not wait for READY before asserting VALID. Once VALID is asserted it must remain asserted until the handshake cycle (rising ACLK with both VALID and READY HIGH).",
       "AXI3_write": "AWVALID and WVALID independent; BVALID does NOT wait for AW handshake",
       "AXI4_write": "BVALID waits for both AW (AWVALID && AWREADY) and W (WVALID && WREADY && WLAST) handshakes",
-      "AXI_read": "ARVALID precedes RVALID; RVALID stays asserted until ARREADY accepted and final RLAST transferred"
+      "AXI_read": "ARVALID asserted independently of ARREADY. Slave must wait for both ARVALID and ARREADY before issuing RVALID; RVALID stays asserted until RREADY accepted and final RLAST transferred."
+    },
+    "ordering_rules": {
+      "read_data_ordering": "Interconnect must ensure that read data from a slave is returned to the master in the order in which the requests were issued for the same ARID.",
+      "write_response_ordering": "Slave BRESP must be returned in the order in which writes with the same AWID were accepted.",
+      "address_ordering": "Address-channel requests with the same xID retain order; different IDs may be reordered by the interconnect.",
+      "response_ordering": "Write BRESP retains AWID order; read RDATA retains ARID order.",
+      "same_id_same_destination": "Same xID + same destination => strictly in-order.",
+      "write_data_ordering": "W data beats follow strict WLAST-marked burst boundaries."
     }
   },
   "extraction_status": "EXTRACTED",

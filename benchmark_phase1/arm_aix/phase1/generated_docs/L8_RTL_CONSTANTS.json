@@ -65,7 +65,8 @@
           "line": 20198,
           "quote": "DATA_WIDTH                   8        1024                  WDATA,                •        32 or 64 for AXI4-Lite."
         }
-      ]
+      ],
+      "source": "A1.2.1 (Read/Write data channel)"
     },
     "ARLEN_width": {
       "bits": 8,
@@ -119,7 +120,9 @@
           "quote": "Burst_Length = AxLEN[7:0] + 1"
         }
       ],
-      "AXI4": "8 bits (AxLEN[7:0])"
+      "AXI4": "8 bits (AxLEN[7:0])",
+      "AXI3": "4 bits (AxLEN[3:0])",
+      "AXI4_AXI5": "8 bits (AxLEN[7:0])"
     },
     "ARSIZE_width": {
       "bits": 3,
@@ -389,7 +392,9 @@
           "line": 4793,
           "quote": "AxLOCK[1:0]      Access type"
         }
-      ]
+      ],
+      "AXI3": "2 bits",
+      "AXI4_AXI5": "1 bit"
     },
     "AWLOCK_width": {
       "bits": 2,
@@ -936,7 +941,16 @@
           "quote": "PMG             Performance monitor group          1               0b0                 AxMPAM[10]"
         }
       ]
-    }
+    },
+    "ADDR_WIDTH_bits": "Implementation-defined; typically 32 or 64 bits.",
+    "AxQOS_width": "4 bits",
+    "AxREGION_width": "4 bits",
+    "ID_WIDTH_bits": "Implementation-defined; typically 1-8 bits on master side; slave side >= master + log2(num_masters).",
+    "RRESP_BRESP_width": "2 bits each",
+    "USER_width": "0 (optional; implementation-defined when present).",
+    "USER_DATA_WIDTH": "Implementation-defined (W_USER / R_USER sideband width).",
+    "USER_REQ_WIDTH": "Implementation-defined (AW_USER / AR_USER sideband width).",
+    "USER_RESP_WIDTH": "Implementation-defined (B_USER / R_USER sideband width)."
   },
   "burst_size_encoding_AxSIZE_to_bytes": {
     "0b000": 1,
@@ -955,9 +969,117 @@
     "0b11": "Reserved"
   },
   "protection_encoding_AxPROT": {
-    "[0]": 0,
-    "1": "Instruction access",
-    "[1]": 0,
-    "[2]": 0
+    "AxPROT[0]": {
+      "0": "Unprivileged",
+      "1": "Privileged"
+    },
+    "AxPROT[1]": {
+      "0": "Secure",
+      "1": "Non-secure"
+    },
+    "AxPROT[2]": {
+      "0": "Data",
+      "1": "Instruction"
+    }
+  },
+  "burst_length_formula": {
+    "AXI3": "Burst_Length = AxLEN[3:0] + 1   (range 1..16)",
+    "AXI4": "Burst_Length = AxLEN[7:0] + 1   (INCR: 1..256; FIXED/WRAP: 1..16)",
+    "AXI5": "Burst_Length = AxLEN[7:0] + 1   (same as AXI4)"
+  },
+  "response_encoding_xRESP": {
+    "0b00": "OKAY",
+    "0b01": "EXOKAY",
+    "0b10": "SLVERR",
+    "0b11": "DECERR"
+  },
+  "atomic_access_encoding_AxLOCK": {
+    "AXI3_AxLOCK_1_0": {
+      "0b00": "Normal",
+      "0b01": "Exclusive",
+      "0b10": "Locked",
+      "0b11": "Reserved"
+    },
+    "AXI4_AxLOCK": {
+      "0b0": "Normal",
+      "0b1": "Exclusive"
+    }
+  },
+  "cache_attribute_AxCACHE_AXI3": {
+    "bit0_Bufferable": {
+      "0": "Non-bufferable",
+      "1": "Bufferable"
+    },
+    "bit1_Cacheable": {
+      "0": "Non-cacheable",
+      "1": "Cacheable"
+    },
+    "bit2_RA": {
+      "0": "No read allocate",
+      "1": "Read-Allocate"
+    },
+    "bit3_WA": {
+      "0": "No write allocate",
+      "1": "Write-Allocate"
+    },
+    "bit2_ReadAllocate": {
+      "0": "No read allocate",
+      "1": "Read-Allocate"
+    },
+    "bit3_WriteAllocate": {
+      "0": "No write allocate",
+      "1": "Write-Allocate"
+    },
+    "AXI4_rename": "AxCACHE[1] is renamed 'Modifiable' in AXI4 (functionality unchanged)."
+  },
+  "burst_address_pseudocode": {
+    "Start_Address": "AxADDR",
+    "Number_Bytes": "2 ^ AxSIZE",
+    "Burst_Length": "AxLEN + 1",
+    "Aligned_Address": "INT(Start_Address / Number_Bytes) * Number_Bytes",
+    "WRAP_Boundary": "INT(Start_Address / (Number_Bytes * Burst_Length)) * (Number_Bytes * Burst_Length)",
+    "Address_1": "Start_Address (first beat).",
+    "Address_N": "Aligned_Address + (N - 1) * Number_Bytes  (INCR)",
+    "Address_N_INCR_or_unwrapped_WRAP": "Aligned_Address + (N - 1) * Number_Bytes (INCR or unwrapped portion of WRAP).",
+    "Address_N_FIXED": "Start_Address  (every beat)",
+    "Wrap_Boundary": "See WRAP_Boundary (alias).",
+    "Wrap_Address_N": "When Address_N >= Wrap_Boundary + (Number_Bytes * Burst_Length): Address_N - (Number_Bytes * Burst_Length)."
+  },
+  "byte_lane_pseudocode": {
+    "Lower_Byte_Lane_first_beat": "Start_Address - INT(Start_Address / Data_Bus_Bytes) * Data_Bus_Bytes",
+    "Upper_Byte_Lane_first_beat": "Aligned_Address + (Number_Bytes - 1) - INT(Start_Address / Data_Bus_Bytes) * Data_Bus_Bytes",
+    "Lower_Byte_Lane_subsequent": "Address_N - INT(Address_N / Data_Bus_Bytes) * Data_Bus_Bytes",
+    "Upper_Byte_Lane_subsequent": "Lower_Byte_Lane_subsequent + Number_Bytes - 1",
+    "Data_window": "Each beat occupies byte lanes [Lower_Byte_Lane:Upper_Byte_Lane] of the data bus."
+  },
+  "key_constants_for_RTL_authoring": {
+    "wrap_burst_length_allowed_values": [
+      2,
+      4,
+      8,
+      16
+    ],
+    "burst_4KB_boundary_rule": "A burst must not cross a 4KB address boundary (mandatory for all transactions).",
+    "max_INCR_length_AXI3": 16,
+    "max_INCR_length_AXI4_AXI5": 256,
+    "max_FIXED_length": 16,
+    "max_WRAP_length": 16,
+    "exclusive_max_burst_length_transfers": 16,
+    "exclusive_max_total_bytes": 128,
+    "exclusive_address_alignment_rule": "An exclusive access must be aligned to its total number of bytes."
+  },
+  "default_signal_values_when_omitted_master_write_channel": {
+    "AWID": "All zeros (Optional output)",
+    "AWREGION": "All zeros (Optional output)",
+    "AWLEN": "All zeros, Length 1 (Optional output)",
+    "AWSIZE": "Data bus width (Optional output)",
+    "AWBURST": "0b01 INCR (Optional output)",
+    "AWLOCK": "All zeros, Normal access (Optional output)",
+    "AWCACHE": "0b0000 (Optional output)",
+    "AWPROT": "0b010 Unprivileged Non-secure Data access (Required output)",
+    "AWQOS": "0b0000 (Optional output)",
+    "AWUSER": "All zeros (Optional output)",
+    "WSTRB": "All ones (Optional output)",
+    "WLAST": "1 for the final beat (Required for AXI3 only; AXI4+ derives from AWLEN)"
   }
 }

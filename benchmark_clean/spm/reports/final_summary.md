@@ -1,6 +1,6 @@
 # Phase 2+3 Final Summary — spm
 
-_Auto-generated chip-AGNOSTIC summary by_ `final_report_generate.py` _at 2026-05-29T08:49:07Z (UTC)._
+_Auto-generated chip-AGNOSTIC summary by_ `final_report_generate.py` _at 2026-05-29T09:05:09Z (UTC)._
 
 - **IC**: `(unknown — fill in via L1_DATASHEET.json[ic_name])`
 - **Project root**: `/home/reyerchu/vibe-ic/benchmark_clean/spm`
@@ -13,27 +13,27 @@ _Auto-generated chip-AGNOSTIC summary by_ `final_report_generate.py` _at 2026-05
 === Vibe-IC phase1_phase2_phase3 compliance ===
 Project: /home/reyerchu/vibe-ic/benchmark_clean/spm
 Flow def: /home/reyerchu/.claude/plugins/cache/vibe-ic-marketplace/vibe-ic/0.1.61/flow/phase1_phase2_phase3.yaml
-Steps: 56 total (9/39 executed PASS, 0 DEFERRED via waiver)
-  PASS=8  FAIL=5  MISSING=25  WAIVED-DEFERRED=0  SKIPPED=17  VACUOUS-PASS=1
+Steps: 56 total (12/39 executed PASS, 0 DEFERRED via waiver)
+  PASS=11  FAIL=4  MISSING=23  WAIVED-DEFERRED=0  SKIPPED=17  VACUOUS-PASS=1
 ```
 
-- PASS=7 — every executed canonical step passed deterministically.
+- PASS=10 — every executed canonical step passed deterministically.
 - SKIPPED-CONDITION=17 — gate predicate not yet met (e.g., manufacturing steps awaiting silicon).
 - VACUOUS-PASS=1 — gate accepts the present project shape; check whether it should be a real PASS for your flow.
-- **FAIL=5** — blocking; do not claim PASS.
+- **FAIL=4** — blocking; do not claim PASS.
 
-Per the SOLE ACCEPTANCE CRITERION: `executed PASS = 7/7, deferred = 0 pending foundry sign-off`. Engineering Phase 2+3 INCOMPLETE — fix FAILs before claiming.
+Per the SOLE ACCEPTANCE CRITERION: `executed PASS = 10/10, deferred = 0 pending foundry sign-off`. Engineering Phase 2+3 INCOMPLETE — fix FAILs before claiming.
 
 ## Stage breakdown
 
 | Stage | Steps | PASS | Other |
 |---|---|---:|---|
 | Stage 1 (RTL) | 1–6, P0 (7) | 4 / 7 | ❌=3 |
-| Stage 2 (Synth/DFT) | 7–13 (7) | 1 / 7 | ❌=1 ❓=5 |
+| Stage 2 (Synth/DFT) | 7–13 (7) | 2 / 7 | ❓=5 |
 | Stage 3 (PD) | 14–31 (18) | 2 / 18 | 🟦=1 ❓=16 |
 | Analog (A1–A9) | A1–A9 (9) | 0 / 9 | ⏭️=9 |
 | Mixed-Signal (M1–M4) | M1–M4 (4) | 0 / 4 | ⏭️=4 |
-| Stage 4 (Sign-off) | 32–37 (6) | 1 / 6 | ❌=1 ❓=4 |
+| Stage 4 (Sign-off) | 32–37 (6) | 3 / 6 | ❌=1 ❓=2 |
 | Stage 5 (Mfg) | 38–41 (4) | 0 / 4 | ⏭️=4 |
 
 ## Output #1 — Hardware verification (generic)
@@ -101,7 +101,7 @@ _Per_ `flow/phase1_phase2_phase3.yaml` _v2._
 
 | ID | Step | ← | Output | V |
 |---:|---|:---:|---|:---:|
-| 7 | Constraint setup | 1 | `phase2/stage2/constra…` | ❌ |
+| 7 | Constraint setup | 1 | `phase2/stage2/constra…` | ✅ |
 | 8 | SDC validation | 7 | `reports/phase2/sdc_ch…` | ❓ |
 | 9 | Synthesis | 2, 3, 8 | `phase2/stage2/synth/n…` | ✅ |
 | 10 | Pre-layout STA | 9 | `phase3/stage3/sta/pre…` | ❓ |
@@ -161,9 +161,9 @@ _Per_ `flow/phase1_phase2_phase3.yaml` _v2._
 |---:|---|:---:|---|:---:|
 | 32 | Power analysis | 23 | `reports/phase3/power.…` | ❓ |
 | 33 | Metal Fill | 31 | `phase3/stage3/pnr/fil…` | ❓ |
-| 34 | Tapeout checklist | 30, 31, 32, 33 | `reports/audit/tapeout…` | ❓ |
+| 34 | Tapeout checklist | 30, 31, 32, 33 | `reports/audit/tapeout…` | ✅ |
 | 35 | GDSII output | 33, 34 | `phase3/stage4/gds/*.g…` | ✅ |
-| 36 | Foundry Handoff | 35 | `phase3/stage4/foundry…` | ❓ |
+| 36 | Foundry Handoff | 35 | `phase3/stage4/foundry…` | ✅ |
 | 37 | FPGA final sign-off | 13 | `phase2/stage1/fpga/fi…` | ❌ |
 
 ### Stage 5 — Manufacturing (silicon-dependent)
@@ -179,21 +179,28 @@ _Per_ `flow/phase1_phase2_phase3.yaml` _v2._
 
 | Verdict | Count |
 |---|---:|
-| ✅ PASS | 7 |
+| ✅ PASS | 10 |
 | 🟦 VACUOUS-PASS | 1 |
 | ⏭️ SKIPPED-CONDITION | 17 |
-| ❌ FAIL | 5 |
-| ❓ MISSING | 26 |
+| ❌ FAIL | 4 |
+| ❓ MISSING | 24 |
 | **Total** | **56** |
 
 ## Waivers (must be human-reviewed before tapeout)
 
-_No waivers — every executed step verified deterministically._
+### Step ? — `TAPEOUT-AUTOGEN-LVS`
+
+- **Approver**: `—`    **review_required**: ✅
+- **Evidence**: `['reports/orchestrator/phase3_one_shot.json#steps[name=lvs]']`
+
+```
+(no reason given — waiver is INVALID)
+```
 
 ## Resource log
 
 - Analog blocks: 2 × 9 stages = 18 per-block step-runs (artefacts present: 0/18)
-- Canonical step PASS: **7/39** (deferred via waiver: 0, vacuous-pass: 1, manufacturing-skipped: 17)
+- Canonical step PASS: **10/39** (deferred via waiver: 0, vacuous-pass: 1, manufacturing-skipped: 17)
 
 ## SHA-256 Attestation
 
@@ -207,6 +214,9 @@ is listed; mismatches or omissions are caught by
 |---|---|---:|---|
 | FPGA SOF | `phase2/stage1/fpga/output_files/spm_fpga_bist.sof` | 3,216,569 | `sha256:abfb472d8510ac392e05a0e4f1a2878a35fd3c6643c0fca82accd54ee7cda9dd` |
 | chip GDS | `phase3/stage4/gds/spm.gds` | 4,260,752 | `sha256:59beabf942baa0a64819058f55e0ad54575b51384883e04fed46eeb179bd3fe0` |
+| foundry GDS | `phase3/stage4/foundry_handoff/scribe_line_layout.gds` | 137 | `sha256:aa06450c7345ae3e71d83f98b09879db39dd45f091515a377557320c565e3122` |
+| foundry GDS | `phase3/stage4/foundry_handoff/spm.gds` | 4,260,752 | `sha256:59beabf942baa0a64819058f55e0ad54575b51384883e04fed46eeb179bd3fe0` |
+| synth netlist | `phase2/stage2/synth/_dlatch_map.v` | 192 | `sha256:d22ec196b64163ed3f84528bfd444723b1a5bb262d3047801457e324a5da16eb` |
 | synth netlist | `phase2/stage2/synth/netlist.v` | 61,667 | `sha256:70be730d369a913d97655a16b2cc7942bc1bb5ef2b922e03758807b483c158da` |
 | synth netlist | `phase2/stage2/synth/netlist_yosys.v` | 61,667 | `sha256:70be730d369a913d97655a16b2cc7942bc1bb5ef2b922e03758807b483c158da` |
 | synth netlist | `phase2/stage2/synth/spm_synth.v` | 30,900 | `sha256:d684cdf4837a08e96bf7e300c68980a5b5790a9e5dc39fa975b9e2fddc8f7ebd` |

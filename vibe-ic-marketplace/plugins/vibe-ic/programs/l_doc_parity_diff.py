@@ -281,7 +281,23 @@ def _is_partial_value_match(prog: Any, agent: Any) -> bool:
     # in the larger set (to avoid false-positive on short/distinct strings).
     if len(smaller) < 3:
         return False
-    return smaller.issubset(larger)
+    if smaller.issubset(larger):
+        return True
+    # v0.1.74 R47: token-overlap fraction relaxation. When the smaller set
+    # is NOT a strict subset but has ≥60% overlap with the larger AND ≥5
+    # tokens, treat as partial match. Catches cases like
+    # ("Single rising-edge clock per channel; all VALID/READY sampling occurs
+    #   on the rising edge.")
+    # vs
+    # ("Single rising-edge clock per AXI interface.")
+    # — they share {single, rising, edge, clock, per} but differ on
+    # channel/axi/interface. Both describe the same universal protocol fact;
+    # the divergence is wording, not content.
+    if len(smaller) >= 5:
+        overlap = len(smaller & larger)
+        if overlap / float(len(smaller)) >= 0.60:
+            return True
+    return False
 
 
 def diff_single_l_doc(

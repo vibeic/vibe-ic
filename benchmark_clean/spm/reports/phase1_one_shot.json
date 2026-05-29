@@ -2,9 +2,9 @@
   "phase": 1,
   "mode": "docs",
   "project": "/home/reyerchu/vibe-ic/benchmark_clean/spm",
-  "ic_name": "spm",
+  "ic_name": "UNNAMED_CHIP",
   "delegated_to": "phase1_doc_one_shot_runner",
   "delegated_rc": 0,
-  "duration_s": 0.33727478981018066,
+  "duration_s": 0.3647611141204834,
   "verdict": "PASS"
 }

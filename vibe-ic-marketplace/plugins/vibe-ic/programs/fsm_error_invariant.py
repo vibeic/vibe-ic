@@ -171,6 +171,37 @@ def main():
     args = ap.parse_args()
 
     # Expand directories to (.v, .sv, .vh) files for directory inputs.
+    # v0.1.62 — this gate audits DESIGN-RTL FSM error invariants. Generated
+    # test/BIST/FPGA/sim scaffolding (e.g. `fpga/<top>_fpga_bist.v`) legitimately
+    # latches a `fail`/`error` flag — that IS its purpose — so scanning it
+    # produced a false-positive on spm/sha256. When a project root is given,
+    # prefer the design RTL dir and exclude generated verification scaffolding.
+    _SCAFFOLD_DIR_PARTS = {"fpga", "sim", "sim_full_stack", "tb", "test",
+                           "tests", "testbench", "bench", "verif",
+                           "verification", "formal"}
+
+    def _is_scaffold(path: Path) -> bool:
+        parts = {seg.lower() for seg in path.parts}
+        if parts & _SCAFFOLD_DIR_PARTS:
+            return True
+        stem = path.stem.lower()
+        return (stem.startswith(("tb_", "test_")) or
+                stem.endswith(("_tb", "_test", "_bist", "_bench",
+                               "_tb_full", "_harness")))
+
+    def _dir_rtl_files(d: Path) -> List[Path]:
+        # Prefer the canonical design-RTL directory if present.
+        for cand in ("phase2/stage1/rtl", "rtl", "src", "hdl"):
+            sub = d / cand
+            if sub.is_dir() and (any(sub.glob("*.v")) or any(sub.glob("*.sv"))):
+                return [f for f in sorted(sub.rglob("*"))
+                        if f.is_file() and f.suffix in (".v", ".sv", ".vh", ".svh")
+                        and not _is_scaffold(f)]
+        # Fall back to a filtered project-wide scan.
+        return [f for f in sorted(d.rglob("*"))
+                if f.is_file() and f.suffix in (".v", ".sv", ".vh", ".svh")
+                and not _is_scaffold(f)]
+
     expanded: List[Path] = []
     for f in args.files:
         p = Path(f)
@@ -178,9 +209,7 @@ def main():
             print(f"WARNING: {f} not found", file=sys.stderr)
             continue
         if p.is_dir():
-            for sub in sorted(p.rglob("*")):
-                if sub.is_file() and sub.suffix in (".v", ".sv", ".vh", ".svh"):
-                    expanded.append(sub)
+            expanded.extend(_dir_rtl_files(p))
         else:
             expanded.append(p)
 

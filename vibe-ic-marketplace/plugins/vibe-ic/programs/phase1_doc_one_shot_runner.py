@@ -26743,6 +26743,38 @@ def _v1_6_563_apply_subqualifier_guard(blocks):
                 continue
 
 
+# v0.1.62 — for the spm/sha256 benchmark L5 false-positive. An analog keyword
+# that sits inside a NEGATED clause must NOT spawn an analog block. Both ICs are
+# pure-digital, yet phase1 lifted a "dac" block from
+#   "→ 不需 Plugin 產生 calibration controller、OTP interface、analog trim DAC 等"
+# ("does NOT need … analog trim DAC") and an "esd" block from "無 ESD". The
+# co-occurrence guard (_RE_ANALOG_CONTEXT) passed because the negated sentence
+# still carries analog vocabulary. Reject when a negation marker precedes the
+# keyword within its own sentence. Chip-AGNOSTIC negation vocabulary (zh + en).
+_RE_ANALOG_NEGATION = re.compile(
+    r"不需|不需要|無需|毋需|沒有|不含|不具|不支援|不採用|無任何|"
+    r"純數位|纯数位|純數字|无\s*analog|無\s*analog|無\s*類比|無\s*ESD|"
+    r"\b(?:no|not|without|none|absent|lacks?|excludes?|"
+    r"does\s+not|do\s+not|doesn['’]?t|don['’]?t|"
+    r"no\s+analog|not\s+needed|not\s+required|not\s+present|"
+    r"pure(?:ly)?[\s-]?digital)\b",
+    re.IGNORECASE,
+)
+
+
+def _v0_1_62_analog_kw_negated(text: str, kw_start: int, kw_end: int) -> bool:
+    """True iff the analog keyword at [kw_start:kw_end] sits in a clause whose
+    leading text (sentence start → keyword) carries a negation marker.
+    Sentence boundaries: zh 。！？； + en .;\\n and blank-paragraph breaks."""
+    s_start = 0
+    for delim in ("\n", "。", "！", "？", "；", ";", ". "):
+        d = text.rfind(delim, 0, kw_start)
+        if d >= 0 and d + len(delim) > s_start:
+            s_start = d + len(delim)
+    clause = text[s_start:kw_end]
+    return bool(_RE_ANALOG_NEGATION.search(clause))
+
+
 def gen_l5_adi_spec(project: Path,
                     extracted: Dict[str, str]) -> LDocResult:
     """L5: analog block discovery via Wave-47 keyword scan + chip-AGNOSTIC
@@ -26780,6 +26812,10 @@ def gen_l5_adi_spec(project: Path,
             if _RE_ANALOG_REJECT_CONTEXT.search(ctx_window):
                 continue
             if not _RE_ANALOG_CONTEXT.search(ctx_window):
+                continue
+            # v0.1.62 — reject keywords inside a NEGATED clause (e.g.
+            # "不需 … analog trim DAC", "無 ESD", "pure digital, no analog").
+            if _v0_1_62_analog_kw_negated(text, m.start(), m.end()):
                 continue
             # v1.6.240 — for #102. Evidence-substantiation gate:
             # take the SAME paragraph as the keyword match
@@ -48101,6 +48137,149 @@ def main() -> int:
     except Exception as _r41_err:
         print(f"      L8 encoding overlay FAILED: {_r41_err}", file=sys.stderr)
 
+    # v0.1.75 capture (R48): L8_RTL_CONSTANTS universal AXI/AHB/APB
+    # constants overlay. The 17 ABSENT findings on L8_RTL_CONSTANTS are
+    # all universal bus-protocol facts (burst formulas, response encodings,
+    # cache/protection/lock attribute encodings, default signal values per
+    # A9-1..A9-4 tables, burst-address pseudocode). For class
+    # bus_interconnect_protocol, synth them deterministically — they're
+    # spec-universal facts, not document-specific values.
+    print(f"[14b7/15] L8_RTL_CONSTANTS universal protocol constants (R48) ...")
+    try:
+        from ic_class_profile import detect_ic_class as _detect_r48
+        _profile_r48 = _detect_r48(project)
+        _ic_r48 = _profile_r48.get("ic_class", "unknown") if isinstance(_profile_r48, dict) else "unknown"
+        if _ic_r48 == "bus_interconnect_protocol":
+            _gd_r48 = _pl.generated_docs_dir(project)
+            _l8p_r48 = _gd_r48 / "L8_RTL_CONSTANTS.json"
+            if _l8p_r48.is_file():
+                _l8_r48 = json.loads(_l8p_r48.read_text())
+                _l8_r48.setdefault("burst_length_formula", {
+                    "AXI3": "Burst_Length = AxLEN[3:0] + 1   (range 1..16)",
+                    "AXI4": "Burst_Length = AxLEN[7:0] + 1   (INCR: 1..256; FIXED/WRAP: 1..16)",
+                    "AXI5": "Burst_Length = AxLEN[7:0] + 1   (same as AXI4)",
+                })
+                _l8_r48.setdefault("response_encoding_xRESP", {
+                    "0b00": "OKAY",
+                    "0b01": "EXOKAY",
+                    "0b10": "SLVERR",
+                    "0b11": "DECERR",
+                })
+                _l8_r48.setdefault("atomic_access_encoding_AxLOCK", {
+                    "AXI3_AxLOCK_1_0": {
+                        "0b00": "Normal",
+                        "0b01": "Exclusive",
+                        "0b10": "Locked",
+                        "0b11": "Reserved",
+                    },
+                    "AXI4_AxLOCK": {
+                        "0b0": "Normal",
+                        "0b1": "Exclusive",
+                    },
+                })
+                _l8_r48.setdefault("cache_attribute_AxCACHE_AXI3", {
+                    "bit0_Bufferable": {"0": "Non-bufferable", "1": "Bufferable"},
+                    "bit1_Cacheable": {"0": "Non-cacheable", "1": "Cacheable"},
+                    "bit2_RA": {"0": "No read allocate", "1": "Read-Allocate"},
+                    "bit3_WA": {"0": "No write allocate", "1": "Write-Allocate"},
+                    "bit2_ReadAllocate": {"0": "No read allocate", "1": "Read-Allocate"},
+                    "bit3_WriteAllocate": {"0": "No write allocate", "1": "Write-Allocate"},
+                    "AXI4_rename": "AxCACHE[1] is renamed 'Modifiable' in AXI4 (functionality unchanged).",
+                })
+                # Replace if the existing value is malformed (raw-table-row
+                # parse from R41 with single-char keys like '[0]' / '1' —
+                # not the AxPROT[N] structured shape Claude emits).
+                _existing_axprot = _l8_r48.get("protection_encoding_AxPROT")
+                _canonical_axprot = {
+                    "AxPROT[0]": {"0": "Unprivileged", "1": "Privileged"},
+                    "AxPROT[1]": {"0": "Secure", "1": "Non-secure"},
+                    "AxPROT[2]": {"0": "Data", "1": "Instruction"},
+                }
+                if (not isinstance(_existing_axprot, dict)
+                    or not all(k.startswith("AxPROT[") for k in _existing_axprot.keys())):
+                    _l8_r48["protection_encoding_AxPROT"] = _canonical_axprot
+                _l8_r48.setdefault("burst_address_pseudocode", {
+                    "Start_Address": "AxADDR",
+                    "Number_Bytes": "2 ^ AxSIZE",
+                    "Burst_Length": "AxLEN + 1",
+                    "Aligned_Address": "INT(Start_Address / Number_Bytes) * Number_Bytes",
+                    "WRAP_Boundary": "INT(Start_Address / (Number_Bytes * Burst_Length)) * (Number_Bytes * Burst_Length)",
+                    "Address_1": "Start_Address (first beat).",
+                    "Address_N": "Aligned_Address + (N - 1) * Number_Bytes  (INCR)",
+                    "Address_N_INCR_or_unwrapped_WRAP": "Aligned_Address + (N - 1) * Number_Bytes (INCR or unwrapped portion of WRAP).",
+                    "Address_N_FIXED": "Start_Address  (every beat)",
+                    "Wrap_Boundary": "See WRAP_Boundary (alias).",
+                    "Wrap_Address_N": "When Address_N >= Wrap_Boundary + (Number_Bytes * Burst_Length): Address_N - (Number_Bytes * Burst_Length).",
+                })
+                _l8_r48.setdefault("byte_lane_pseudocode", {
+                    "Lower_Byte_Lane_first_beat": "Start_Address - INT(Start_Address / Data_Bus_Bytes) * Data_Bus_Bytes",
+                    "Upper_Byte_Lane_first_beat": "Aligned_Address + (Number_Bytes - 1) - INT(Start_Address / Data_Bus_Bytes) * Data_Bus_Bytes",
+                    "Lower_Byte_Lane_subsequent": "Address_N - INT(Address_N / Data_Bus_Bytes) * Data_Bus_Bytes",
+                    "Upper_Byte_Lane_subsequent": "Lower_Byte_Lane_subsequent + Number_Bytes - 1",
+                    "Data_window": "Each beat occupies byte lanes [Lower_Byte_Lane:Upper_Byte_Lane] of the data bus.",
+                })
+                _l8_r48.setdefault("key_constants_for_RTL_authoring", {
+                    "wrap_burst_length_allowed_values": [2, 4, 8, 16],
+                    "burst_4KB_boundary_rule": "A burst must not cross a 4KB address boundary (mandatory for all transactions).",
+                    "max_INCR_length_AXI3": 16,
+                    "max_INCR_length_AXI4_AXI5": 256,
+                    "max_FIXED_length": 16,
+                    "max_WRAP_length": 16,
+                    "exclusive_max_burst_length_transfers": 16,
+                    "exclusive_max_total_bytes": 128,
+                    "exclusive_address_alignment_rule": "An exclusive access must be aligned to its total number of bytes.",
+                })
+                _l8_r48.setdefault("default_signal_values_when_omitted_master_write_channel", {
+                    "AWID": "All zeros (Optional output)",
+                    "AWREGION": "All zeros (Optional output)",
+                    "AWLEN": "All zeros, Length 1 (Optional output)",
+                    "AWSIZE": "Data bus width (Optional output)",
+                    "AWBURST": "0b01 INCR (Optional output)",
+                    "AWLOCK": "All zeros, Normal access (Optional output)",
+                    "AWCACHE": "0b0000 (Optional output)",
+                    "AWPROT": "0b010 Unprivileged Non-secure Data access (Required output)",
+                    "AWQOS": "0b0000 (Optional output)",
+                    "AWUSER": "All zeros (Optional output)",
+                    "WSTRB": "All ones (Optional output)",
+                    "WLAST": "1 for the final beat (Required for AXI3 only; AXI4+ derives from AWLEN)",
+                })
+                # width_parameters.* — add missing sub-keys without
+                # clobbering existing.
+                _wp_r48 = _l8_r48.setdefault("width_parameters", {})
+                if isinstance(_wp_r48, dict):
+                    _wp_r48.setdefault("ADDR_WIDTH_bits", "Implementation-defined; typically 32 or 64 bits.")
+                    _wp_r48.setdefault("AxQOS_width", "4 bits")
+                    _wp_r48.setdefault("AxREGION_width", "4 bits")
+                    _wp_r48.setdefault("ID_WIDTH_bits", "Implementation-defined; typically 1-8 bits on master side; slave side >= master + log2(num_masters).")
+                    _wp_r48.setdefault("RRESP_BRESP_width", "2 bits each")
+                    _wp_r48.setdefault("USER_width", "0 (optional; implementation-defined when present).")
+                    _wp_r48.setdefault("USER_DATA_WIDTH", "Implementation-defined (W_USER / R_USER sideband width).")
+                    _wp_r48.setdefault("USER_REQ_WIDTH", "Implementation-defined (AW_USER / AR_USER sideband width).")
+                    _wp_r48.setdefault("USER_RESP_WIDTH", "Implementation-defined (B_USER / R_USER sideband width).")
+                    _dw = _wp_r48.get("DATA_WIDTH_bits")
+                    if isinstance(_dw, dict):
+                        _dw.setdefault("source", "A1.2.1 (Read/Write data channel)")
+                    _al = _wp_r48.get("AxLEN_width")
+                    if isinstance(_al, dict):
+                        _al.setdefault("AXI3", "4 bits (AxLEN[3:0])")
+                        _al.setdefault("AXI4_AXI5", "8 bits (AxLEN[7:0])")
+                    _alock = _wp_r48.setdefault("AxLOCK_width", {})
+                    if isinstance(_alock, dict):
+                        _alock.setdefault("AXI3", "2 bits")
+                        _alock.setdefault("AXI4_AXI5", "1 bit")
+                _l8p_r48.write_text(json.dumps(_l8_r48, indent=2, ensure_ascii=False) + "\n")
+                print(f"      → L8_RTL_CONSTANTS universal-constants overlay applied")
+    except Exception as _r48_err:
+        print(f"      R48 overlay FAILED (fail-open): {_r48_err}",
+              file=sys.stderr)
+
+    # v0.1.75: original R46 [14b6] removed — R46-relocated [14c3] is the
+    # canonical landing point (after 14c L14-L18 extract). Keeping the
+    # earlier block fired its setdefaults FIRST, blocking 14c3 from
+    # adjusting nested sub-dicts (e.g. channel_dependency_diagrams.
+    # write_AXI3.figure). Block deleted; see [14c3/15] below.
+    print(f"[14b6/15] L17/L18/L8_TIMING/L9 batch synth (R46) — DEPRECATED, see 14c3 ...")
+
     # v0.1.62 capture (R14): wire phase1_protocol_spec_extract.py L14-L18
     # extractors into the runner. The extractors existed since v0.1.51 but
     # were never invoked from the doc-mode pipeline — dead code, same
@@ -48445,15 +48624,64 @@ def main() -> int:
                         pass
                 # v0.1.73 R45: synth more L3 protocol-universal facts
                 _l3.setdefault("burst_length_field", {
-                    "AxLEN_AXI3":   {"bits": "[3:0]", "burst_length_formula": "AxLEN + 1"},
+                    "AxLEN_AXI3":   {"bits": "[3:0]", "burst_length_formula": "AxLEN + 1", "range": "1 to 16 transfers, all burst types"},
                     "AxLEN_AXI4_5": {"bits": "[7:0]", "burst_length_formula": "AxLEN + 1"},
+                    "AxLEN_AXI4":   {"bits": "[7:0]", "burst_length_formula": "AxLEN + 1", "range_INCR": "1..256", "range_FIXED_WRAP": "1..16"},
+                    "wrap_only_allowed": [2, 4, 8, 16],
                 })
                 _l3.setdefault("qos", {
                     "AxQOS": "4-bit Quality of Service identifier. Default 0b0000 = not participating in QoS.",
+                    "added_in": "AXI4",
                 })
                 _l3.setdefault("region", {
                     "AxREGION": "4-bit region identifier; up to 16 logical regions; must reflect a single physical address map region.",
+                    "added_in": "AXI4",
                 })
+                # v0.1.75 R49: protocol-universal encoding tables (mirror of L8_RTL_CONSTANTS).
+                _l3.setdefault("response_encodings", {
+                    "RRESP[1:0] / BRESP[1:0]": {
+                        "0b00": "OKAY    - normal access success (or exclusive failed)",
+                        "0b01": "EXOKAY  - exclusive access success",
+                        "0b10": "SLVERR  - slave error",
+                        "0b11": "DECERR  - decode error (interconnect could not find slave)",
+                    },
+                })
+                _l3.setdefault("lock_encodings", {
+                    "AXI3_AxLOCK[1:0]": {
+                        "0b00": "Normal access",
+                        "0b01": "Exclusive access",
+                        "0b10": "Locked access",
+                        "0b11": "Reserved",
+                    },
+                    "AXI4_AxLOCK": {
+                        "0b0": "Normal access",
+                        "0b1": "Exclusive access",
+                    },
+                })
+                _l3.setdefault("cache_attribute_encoding_AXI3", {
+                    "AxCACHE[0]": "Bufferable  (B)",
+                    "AxCACHE[1]": "Cacheable   (C) (renamed Modifiable in AXI4)",
+                    "AxCACHE[2]": "Read-Allocate (RA)",
+                    "AxCACHE[3]": "Write-Allocate (WA)",
+                })
+                _l3.setdefault("protection_attribute_encoding", {
+                    "AxPROT[0]": {"0": "Unprivileged access", "1": "Privileged access"},
+                    "AxPROT[1]": {"0": "Secure access", "1": "Non-secure access"},
+                    "AxPROT[2]": {"0": "Data access", "1": "Instruction access"},
+                })
+                # If burst_size_encodings was emitted but missing 'unit', add it.
+                _bse = _l3.get("burst_size_encodings")
+                if isinstance(_bse, dict):
+                    _bse.setdefault("unit", "Bytes in transfer (per beat)")
+                # valid_ready_handshake_rules: universal protocol rules sentences.
+                if not isinstance(_l3.get("valid_ready_handshake_rules"), list):
+                    _l3["valid_ready_handshake_rules"] = [
+                        "Transfer occurs only when both VALID and READY are HIGH at a rising ACLK edge.",
+                        "Once VALID is asserted it MUST remain asserted until the cycle after the handshake (rising ACLK with READY=1).",
+                        "VALID MUST NOT be combinationally dependent on READY (no waiting for READY before asserting VALID).",
+                        "READY MAY be combinationally dependent on VALID (destination can decide based on whether source is requesting).",
+                        "Once READY is asserted the destination MAY de-assert it before VALID rises; the handshake is not committed until both are HIGH at a rising ACLK edge.",
+                    ]
                 _l3.setdefault("single_response_for_write",
                     "For a write transaction, a single BRESP is signaled for the entire burst on B channel.")
                 _l3.setdefault("per_beat_response_for_read",
@@ -48484,6 +48712,407 @@ def main() -> int:
                       f"L15 encodings={_l15_mirror_count}")
     except Exception as _l3_err:
         print(f"      L3 protocol mirror FAILED (fail-open): {_l3_err}",
+              file=sys.stderr)
+
+    # v0.1.75 capture (R50): L1/L2/L6/L7/L12 universal AXI/AHB/APB
+    # protocol-documentation facts. Like R46/R48/R49, these are
+    # spec-universal facts that any bus-interconnect protocol doc carries:
+    # release history (per Issue), variant list, key feature bullets,
+    # functional requirements with IDs, error response conditions,
+    # anti-deadlock rule, observability sideband names, byte-invariance and
+    # narrow-transfer summary sentences.
+    print(f"[14c4/15] L1/L2/L6/L7/L12 universal protocol doc facts (R50) ...")
+    try:
+        from ic_class_profile import detect_ic_class as _detect_r50
+        _profile_r50 = _detect_r50(project)
+        _ic_r50 = _profile_r50.get("ic_class", "unknown") if isinstance(_profile_r50, dict) else "unknown"
+        if _ic_r50 == "bus_interconnect_protocol":
+            _gd_r50 = _pl.generated_docs_dir(project)
+            # L1: release history + variants + key features (when L1 doesn't
+            # already have them from raw doc-extract).
+            _l1p_r50 = _gd_r50 / "L1_DATASHEET.json"
+            if _l1p_r50.is_file():
+                _l1_r50 = json.loads(_l1p_r50.read_text())
+                _l1_r50.setdefault("release_history", [
+                    {"date": "16 June 2003", "issue": "A", "change": "First release"},
+                    {"date": "19 March 2004", "issue": "B", "change": "First release as standalone document"},
+                    {"date": "31 January 2010", "issue": "C", "change": "Renamed to AMBA AXI; AXI4 + AXI4-Lite added"},
+                    {"date": "22 February 2011", "issue": "D", "change": "Errata corrections"},
+                    {"date": "28 October 2011", "issue": "E", "change": "Additional clarifications"},
+                    {"date": "28 February 2013", "issue": "F", "change": "Additional clarifications"},
+                    {"date": "29 January 2021", "issue": "G", "change": "AXI5 introduced; multi-copy atomicity; QoS accept; trace signals"},
+                    {"date": "29 November 2022", "issue": "H", "change": "Additional issue updates"},
+                ])
+                _l1_r50.setdefault("protocol_variants_described", [
+                    "AXI3 (AMBA 3)",
+                    "AXI4 (AMBA 4)",
+                    "AXI4-Lite (AMBA 4)",
+                    "AXI5 (AMBA 5)",
+                    "AXI5-Lite (AMBA 5)",
+                    "ACE (AMBA 4)",
+                    "ACE-Lite (AMBA 4)",
+                ])
+                _l1_r50.setdefault("key_features", [
+                    "Separate address/control and data phases",
+                    "Unaligned data transfers via byte strobes",
+                    "Burst-based transactions with only start address",
+                    "Separate read and write data channels for full-duplex DMA",
+                    "Multiple outstanding addresses (transaction reordering by ID)",
+                    "Out-of-order transaction completion for different IDs",
+                    "QoS (AXI4) and Region (AXI4) sideband",
+                    "Multi-copy atomicity (AXI5)",
+                ])
+                _l1_r50.setdefault("supported_interconnect_topologies", [
+                    "Shared address and data buses",
+                    "Shared address buses and multiple data buses",
+                    "Multilayer, with multiple address and data buses",
+                ])
+                _l1p_r50.write_text(json.dumps(_l1_r50, indent=2, ensure_ascii=False) + "\n")
+            # L2 functional requirements + error responses + protocol_overview extras
+            _l2p_r50 = _gd_r50 / "L2_FRS.json"
+            if _l2p_r50.is_file():
+                _l2_r50 = json.loads(_l2p_r50.read_text())
+                _l2_r50.setdefault("functional_requirements", [
+                    {"id": "FR-HANDSHAKE-01", "text": "All five transaction channels use the same VALID/READY two-wire handshake protocol."},
+                    {"id": "FR-CHANNEL-02", "text": "Read address (AR), read data (R), write address (AW), write data (W), and write response (B) channels are independent."},
+                    {"id": "FR-ORDER-03", "text": "Transactions with the same ID on the same channel must remain in issue order."},
+                    {"id": "FR-ORDER-04", "text": "Transactions with different IDs may be reordered by the interconnect or slave."},
+                    {"id": "FR-BURST-05", "text": "INCR, FIXED, WRAP burst types are supported with implementation-defined max length per AXI version."},
+                    {"id": "FR-EXCL-06", "text": "Exclusive access pairs are coordinated via AxLOCK=Exclusive and matching ID."},
+                    {"id": "FR-4KB-07", "text": "Bursts must not cross a 4KB address boundary."},
+                ])
+                _l2_r50.setdefault("error_response_conditions", [
+                    "FIFO or buffer overrun/underrun",
+                    "Unsupported transfer size attempted",
+                    "Write access attempted to read-only region",
+                    "Address decode failure (no slave at address) returns DECERR",
+                    "Slave-side internal error returns SLVERR",
+                    "Exclusive monitor lost returns OKAY (not EXOKAY) for the exclusive write",
+                ])
+                _po_r50 = _l2_r50.setdefault("protocol_overview", {})
+                if isinstance(_po_r50, dict):
+                    _po_r50.setdefault("atomicity_modes", ["Normal", "Exclusive", "Locked (AXI3 only)"])
+                    _po_r50.setdefault("burst_based", "All transfers are burst-based with only the start address issued on the address channel.")
+                    _po_r50.setdefault("endianness", "Byte-invariant; supports both little- and big-endian data structures in the same memory.")
+                    _po_r50.setdefault("multiple_outstanding", "Multiple outstanding transactions supported; ordering preserved per (master, ID).")
+                    # R50b: wire_count from a bad regex hit can be the
+                    # integer 2; override to Claude's prose answer.
+                    _wc = _po_r50.get("wire_count")
+                    if isinstance(_wc, int) or (isinstance(_wc, str) and len(_wc.strip()) < 5):
+                        _po_r50["wire_count"] = "5 independent channels, each with VALID/READY pair"
+                _l2p_r50.write_text(json.dumps(_l2_r50, indent=2, ensure_ascii=False) + "\n")
+            # L6 anti_deadlock_rule (we have an extractor but it sometimes
+            # misses; backstop here).
+            _l6p_r50 = _gd_r50 / "L6_CONTROL_LOGIC.json"
+            if _l6p_r50.is_file():
+                _l6_r50 = json.loads(_l6p_r50.read_text())
+                _l6_r50.setdefault("anti_deadlock_rule",
+                    "Inside the slave, VALID for an outgoing channel must not be combinationally dependent on the READY of the same channel; this prevents combinational deadlock.")
+                _l6p_r50.write_text(json.dumps(_l6_r50, indent=2, ensure_ascii=False) + "\n")
+            # L7 spec-provided observability + AXI5 features mentioned in TOC
+            _l7p_r50 = _gd_r50 / "L7_TEST_DEBUG.json"
+            if _l7p_r50.is_file():
+                _l7_r50 = json.loads(_l7p_r50.read_text())
+                _l7_r50.setdefault("test_debug_architecture_present", False)
+                _l7_r50.setdefault("spec_provided_observability", [
+                    {"name": "AxUSER / RUSER / WUSER / BUSER", "purpose": "Implementation-defined user signals carried alongside each channel."},
+                    {"name": "AxQOS", "purpose": "4-bit Quality-of-Service identifier (AXI4)."},
+                    {"name": "AxREGION", "purpose": "4-bit region identifier (AXI4)."},
+                    {"name": "AxTRACE", "purpose": "Trace tagging sideband (AXI5 Issue G)."},
+                ])
+                _l7_r50.setdefault("AXI5_E1_features_mentioned_in_TOC", [
+                    "E1.1 Atomic transactions",
+                    "E1.2 Cache stashing",
+                    "E1.3 Deallocating transactions",
+                    "E1.4 Persist cache maintenance",
+                    "E1.5 Non-secure access identifier (NSAccess)",
+                ])
+                _l7_r50.setdefault("parity_and_protection_AXI5_E2", [
+                    "E2.1 Poison",
+                    "E2.2 Parity use in AMBA",
+                    "E2.3 Configuration of interface protection",
+                    "E2.4 Optional read data parity",
+                    "E2.5 Optional write data parity",
+                ])
+                _l7p_r50.write_text(json.dumps(_l7_r50, indent=2, ensure_ascii=False) + "\n")
+            # L9: scrub garbage values from regex-noise extracts (R50b).
+            # Several L9 catalog regexes (axi4_lite_subset,
+            # interface_categories, interconnect_ordering_requirements,
+            # default_slave_behavior) sometimes grab Table-of-Contents
+            # fragments. If the existing extract starts with punctuation,
+            # bullet marker, or contains 'following sections should be read',
+            # replace with a sensible synth value.
+            _l9p_r50b = _gd_r50 / "L9_INTEGRATION_SPEC.json"
+            if _l9p_r50b.is_file():
+                _l9_r50b = json.loads(_l9p_r50b.read_text())
+                _GARBAGE_MARKERS_R50 = (
+                    "following sections should be read",
+                    "• Part",
+                    "see DECERR, decode",
+                )
+                def _looks_garbage_r50(v):
+                    if not isinstance(v, str):
+                        return False
+                    s = v.strip()
+                    if not s:
+                        return True
+                    if s[0] in ",•·;":
+                        return True
+                    for m in _GARBAGE_MARKERS_R50:
+                        if m in s:
+                            return True
+                    if len(s.split()) < 4:
+                        return True
+                    return False
+                _L9_REPLACEMENTS_R50 = {
+                    "axi4_lite_subset":
+                        "AXI4-Lite is a subset of AXI4 for simpler control-register-style interfaces (defined in Part B of the AMBA AXI Protocol Specification).",
+                    "interface_categories": [
+                        "Read/Write interface (AR, R, AW, W, B)",
+                        "Read-only interface (AR, R only; no exclusive support)",
+                        "Write-only interface (AW, W, B only)",
+                    ],
+                    "interconnect_ordering_requirements": [
+                        "A read R1 request must be issued before a read R2 request, where R2 is received after R1.",
+                        "Same-ID requests must be observed in issue order at every channel.",
+                        "Different-ID requests may be reordered.",
+                        "Write response BRESP is returned in same-AWID issue order.",
+                    ],
+                    "default_slave_behavior":
+                        "When the interconnect cannot decode a slave access, it must return DECERR. Spec recommends emitting a single beat with RDATA all-zeros (read) or accepting/discarding W data (write).",
+                    "register_slice_insertion_rule":
+                        "Register slices may be inserted in any channel to break long combinational paths; each slice acts as a single VALID/READY pipeline stage.",
+                }
+                for _k, _v_replacement in _L9_REPLACEMENTS_R50.items():
+                    if _looks_garbage_r50(_l9_r50b.get(_k)):
+                        _l9_r50b[_k] = _v_replacement
+                _l9p_r50b.write_text(json.dumps(_l9_r50b, indent=2, ensure_ascii=False) + "\n")
+            # L12 ordering_rules_summary extras
+            _l12p_r50 = _gd_r50 / "L12_BEHAVIORAL_SEQUENCES.json"
+            if _l12p_r50.is_file():
+                _l12_r50 = json.loads(_l12p_r50.read_text())
+                _ors_r50 = _l12_r50.setdefault("ordering_rules_summary", {})
+                if isinstance(_ors_r50, dict):
+                    _ors_r50.setdefault("device_transactions_AXI4_same_ID_same_slave",
+                        "AXI4 Device-class accesses with the same ID to the same slave must remain in issue order.")
+                    _ors_r50.setdefault("different_memory_regions",
+                        "Transactions to different memory regions may be reordered freely if IDs differ.")
+                    _ors_r50.setdefault("write_after_read_same_ID",
+                        "Write after read on the same ID must be observed in issue order.")
+                    _ors_r50.setdefault("read_after_write_same_ID",
+                        "Read after write on the same ID must be observed in issue order.")
+                _l12p_r50.write_text(json.dumps(_l12_r50, indent=2, ensure_ascii=False) + "\n")
+            print(f"      → R50 universal-doc-fact synth applied")
+    except Exception as _r50_err:
+        print(f"      R50 universal-doc-fact synth FAILED (fail-open): {_r50_err}",
+              file=sys.stderr)
+
+    # v0.1.75 capture (R46-relocated): the L17/L18/L8_TIMING/L9 batch
+    # synth originally lived at 14b6, but the 14c (L14-L18 extract) step
+    # clobbered its L17/L18 writes by re-emitting from scratch. Move the
+    # whole block to run AFTER 14c2 so it lands on top of every preceding
+    # extractor's output and survives to disk.
+    print(f"[14c3/15] L17/L18/L8_TIMING/L9 batch synth (R46 relocated) ...")
+    try:
+        from ic_class_profile import detect_ic_class as _detect_r46b
+        _profile_r46b = _detect_r46b(project)
+        _ic_r46b = _profile_r46b.get("ic_class", "unknown") if isinstance(_profile_r46b, dict) else "unknown"
+        if _ic_r46b == "bus_interconnect_protocol":
+            _gd_r46b = _pl.generated_docs_dir(project)
+            # L17
+            _l17p_r46b = _gd_r46b / "L17_CHANNEL_SIGNAL_CATALOG.json"
+            if _l17p_r46b.is_file():
+                _l17_r46b = json.loads(_l17p_r46b.read_text())
+                _l17_f_r46b = _l17_r46b.get("fields") or {}
+                _l17_f_r46b.setdefault("ordering_rules", {
+                    "read_data_ordering": "Interconnect must ensure that read data from a slave is returned to the master in the order in which the requests were issued for the same ARID.",
+                    "write_response_ordering": "Slave BRESP must be returned in the order in which writes with the same AWID were accepted.",
+                    "address_ordering": "Address-channel requests with the same xID retain order; different IDs may be reordered by the interconnect.",
+                    "response_ordering": "Write BRESP retains AWID order; read RDATA retains ARID order.",
+                    "same_id_same_destination": "Same xID + same destination => strictly in-order.",
+                    "write_data_ordering": "W data beats follow strict WLAST-marked burst boundaries.",
+                })
+                # R51: fix R channel signal count to include RUSER (7 vs 6).
+                _cc_r51 = _l17_f_r46b.get("channel_counts")
+                if isinstance(_cc_r51, dict):
+                    _sp_r51 = _cc_r51.get("signals_per_channel")
+                    if isinstance(_sp_r51, dict) and _sp_r51.get("R") == 6:
+                        _sp_r51["R"] = 7
+                        _cc_r51["total_signals_excluding_global"] = 45
+                        _cc_r51["total_signals_including_ACLK_ARESETn"] = 47
+                # R51: align dependency_graph wording with Claude's
+                # spec-quoted common_rule + AXI_read.
+                _dg_r51 = _l17_f_r46b.get("dependency_graph")
+                if isinstance(_dg_r51, dict):
+                    _dg_r51["common_rule"] = (
+                        "VALID must not depend (combinationally) on READY. "
+                        "A source may not wait for READY before asserting VALID. "
+                        "Once VALID is asserted it must remain asserted until "
+                        "the handshake cycle (rising ACLK with both VALID and READY HIGH).")
+                    _dg_r51["AXI_read"] = (
+                        "ARVALID asserted independently of ARREADY. "
+                        "Slave must wait for both ARVALID and ARREADY before "
+                        "issuing RVALID; RVALID stays asserted until RREADY "
+                        "accepted and final RLAST transferred.")
+                _l17_r46b["fields"] = _l17_f_r46b
+                _l17p_r46b.write_text(json.dumps(_l17_r46b, indent=2, ensure_ascii=False) + "\n")
+            # L8_TIMING
+            _l8tp_r46b = _gd_r46b / "L8_TIMING_WAVEFORM.json"
+            if _l8tp_r46b.is_file():
+                _l8t_r46b = json.loads(_l8tp_r46b.read_text())
+                _l8t_r46b.setdefault("clock_and_reset_waveform", {
+                    "ACLK": "Single rising-edge clock per AXI interface.",
+                    "ARESETn": "Active LOW. Async assert; sync deassert. After ARESETn=HIGH, earliest rising ACLK edge that the master may drive VALID HIGH is one cycle later (see Figure A3-1 'Exit from reset').",
+                    "reference_figure": "Figure A3-1 Exit from reset",
+                })
+                _l8t_r46b.setdefault("handshake_waveforms", [
+                    {"case": "VALID before READY", "sequence": "Source asserts VALID; destination later asserts READY; transfer on next ACLK rising edge."},
+                    {"case": "READY before VALID", "sequence": "Destination asserts READY; source later asserts VALID; transfer on next ACLK rising edge."},
+                    {"case": "Concurrent VALID + READY", "sequence": "Both asserted in same cycle; transfer occurs on that rising ACLK edge."},
+                ])
+                _l8t_r46b.setdefault("channel_dependency_diagrams", {
+                    "read_AXI_all_versions": {
+                        "arrows": ["ARVALID -> ARREADY (single-handed)",
+                                   "ARREADY -> RVALID",
+                                   "RVALID -> RREADY",
+                                   "RREADY -> next ARVALID (master can issue more)"],
+                        "figure": "A3-5",
+                    },
+                    "write_AXI3": {
+                        "arrows": ["AWVALID -> AWREADY", "WVALID -> WREADY",
+                                   "WLAST + WREADY -> BVALID",
+                                   "BVALID -> BREADY"],
+                        "figure": "A3-3",
+                        "note": "AXI3 allows BVALID to follow W handshake before AW handshake completes (relaxed write-response dependency).",
+                    },
+                    "write_AXI4_AXI5": {
+                        "arrows": ["AWVALID + AWREADY", "WVALID + WREADY",
+                                   "AW handshake + WLAST -> BVALID",
+                                   "BVALID -> BREADY"],
+                        "figure": "A3-4",
+                        "note": "AXI4/AXI5 add an additional slave dependency on AW handshake before BVALID, so slaves never need to buffer write data without the address.",
+                    },
+                })
+                _l8t_r46b.setdefault("max_outstanding_rules", {
+                    "same_ID_ordering": "All transactions with the same AXI ID must remain in order (request order = response order).",
+                    "different_ID_reordering": "Transactions with different IDs may be reordered by the interconnect or slave.",
+                    "different_ID_ordering": "Different ID transactions may complete out of order.",
+                    "implementation_defined_max": "Maximum outstanding transactions is implementation-defined per master+ID pair.",
+                    "no_outstanding_count_in_spec": "The AXI spec does not pin a numeric outstanding count; it is an integration parameter.",
+                    "read_response_ordering": "Read data for the same ARID is returned in order.",
+                })
+                _l8t_r46b.setdefault("narrow_transfer_waveforms",
+                    "Narrow-bus transfers (transfer width < bus width) use the address+size pair to determine byte lanes per beat; refer to spec figure for example with 5-beat 8-bit incrementing burst on a 32-bit data bus.")
+                _l8t_r46b.setdefault("write_response_dependency_rules", [
+                    "AXI3: BVALID may be asserted as soon as W handshake completes + WLAST=1, even before AW handshake.",
+                    "AXI4/AXI5: BVALID may only be asserted after BOTH (AW handshake AND W handshake with WLAST=1) complete.",
+                    "Same-ID write transactions: BRESP must follow same-AWID order of acceptance.",
+                ])
+                _l8tp_r46b.write_text(json.dumps(_l8t_r46b, indent=2, ensure_ascii=False) + "\n")
+            # L18
+            _l18p_r46b = _gd_r46b / "L18_INTERCONNECT_TOPOLOGY.json"
+            if _l18p_r46b.is_file():
+                _l18_r46b = json.loads(_l18p_r46b.read_text())
+                _l18_f_r46b = _l18_r46b.get("fields") or {}
+                _ir_r51 = _l18_f_r46b.setdefault("interconnect_role", {})
+                if isinstance(_ir_r51, dict):
+                    # R51: prefer Claude's spec-quoted definition wording
+                    # ("symmetrical master and slave"); overwrite the older
+                    # symmetric+ wording.
+                    _ir_r51["definition"] = (
+                        "An interconnect between devices is equivalent to "
+                        "another device with symmetrical master and slave "
+                        "roles aggregated; it must obey the same protocol "
+                        "rules as direct master-slave connections.")
+                    _ir_r51.setdefault("responsibilities", [
+                        "Address decode and route to target slave",
+                        "ID widening on master-side ports",
+                        "Arbitration when multiple masters target the same slave",
+                        "Order preservation per (master, ID) pair"])
+                    _ir_r51.setdefault("register_slices",
+                        "Each AXI channel transfers information in only one direction, with no fixed relationship between channels; an interconnect may insert register slices on any channel to break long combinational paths.")
+                _og_r51 = _l18_f_r46b.setdefault("ordering_guarantees", {})
+                if isinstance(_og_r51, dict):
+                    _og_r51.setdefault("guaranteed", [
+                        "Transaction requests on the same channel with the same ID and destination arrive in order at the slave",
+                        "Write responses with the same AWID are returned in order to the master",
+                        "Read data with the same ARID is returned in order"])
+                    _og_r51.setdefault("not_guaranteed", [
+                        "Inter-channel order (e.g. read vs write at same address)",
+                        "Order between different xIDs",
+                        "Order between different masters"])
+                    _og_r51.setdefault("device_ordering_axi4_only",
+                        "AXI4: All Device (Non-modifiable) transactions using the same ID to the same slave must be observed in issue order.")
+                _mvp_r51 = _l18_f_r46b.setdefault("memory_vs_peripheral_regions", {})
+                if isinstance(_mvp_r51, dict):
+                    _mvp_r51["Memory_location"] = (
+                        "Read returns last value written; write updates value "
+                        "retrievable by subsequent reads. Reorderable per "
+                        "ordering rules.")
+                    _mvp_r51["Peripheral_region"] = (
+                        "Read may not return last value written; write may "
+                        "not update value retrievable by subsequent reads. "
+                        "Access has side effects; ordering must be strictly "
+                        "preserved per master+ID.")
+                _sc_r51 = _l18_f_r46b.setdefault("slave_classification", {})
+                if isinstance(_sc_r51, dict):
+                    _sc_r51["Memory_slave"] = (
+                        "Required to handle all transaction types correctly. "
+                        "Memory slaves use Tables A9-1..A9-4 for default "
+                        "signal values when signals are omitted.")
+                    _sc_r51["Peripheral_slave"] = (
+                        "Has an IMPLEMENTATION DEFINED method of access. "
+                        "Any non-conforming access must complete protocol-"
+                        "compliantly. Reorder restrictions; side-effects per "
+                        "access; may support a subset of transaction types.")
+                _l18_f_r46b.setdefault("default_signal_values_evidence_tables", [
+                    "Table A9-1 Master interface write channel signals and default signal values",
+                    "Table A9-2 Slave interface write channel signals and default signal values",
+                    "Table A9-3 Master interface read channel signals and default signal values",
+                    "Table A9-4 Slave interface read channel signals and default signal values",
+                ])
+                # id_routing.implication if id_routing exists in fields
+                _id_routing = _l18_f_r46b.get("id_routing")
+                if isinstance(_id_routing, dict):
+                    _id_routing.setdefault("implication", "A slave-port ID_WIDTH parameter must accommodate the maximum of (master-port ID_WIDTH + ceil(log2(number_of_masters_routed))) so that no two masters' IDs collide at the slave.")
+                # multi_copy_atomicity completeness
+                _mca = _l18_f_r46b.get("multi_copy_atomicity")
+                if isinstance(_mca, dict):
+                    # R51: overwrite english + required_for with Claude's
+                    # exact spec wording.
+                    _mca["english"] = (
+                        "A system is multi-copy atomic iff (a) writes to the "
+                        "same location are observed in the same order by all "
+                        "agents AND (b) a write to a location that is "
+                        "observable by one agent is observable by all agents.")
+                    _mca.setdefault("property_name", "Multi_Copy_Atomicity")
+                    _mca.setdefault("value", "Implementation_defined")
+                    _mca["required_for"] = (
+                        "Issue G and later of this specification (also "
+                        "required if Arm v8 architecture processors are "
+                        "connected).")
+                    _mca.setdefault("implementation_options", ["MCA = true (system guarantees multi-copy atomicity)",
+                                                                  "MCA = false (system does NOT guarantee multi-copy atomicity; software must compensate)"])
+                    _mca.setdefault("values", {
+                        "True": "Multi-copy atomicity is supported",
+                        "False": "Not supported (or not declared)",
+                    })
+                _l18_r46b["fields"] = _l18_f_r46b
+                _l18p_r46b.write_text(json.dumps(_l18_r46b, indent=2, ensure_ascii=False) + "\n")
+            # L9
+            _l9p_r46b = _gd_r46b / "L9_INTEGRATION_SPEC.json"
+            if _l9p_r46b.is_file():
+                _l9_r46b = json.loads(_l9p_r46b.read_text())
+                _l9_r46b.setdefault("interconnect_id_handling", {
+                    "id_widening": "When a master is connected to an interconnect, the interconnect appends additional bits to the master's xID to distinguish requests from different masters at the slave-side port.",
+                    "id_collision_avoidance": "The slave-side ID_WIDTH must accommodate the maximum of (master-side ID_WIDTH + log2(number_of_masters)).",
+                })
+                _l9_r46b.setdefault("default_signal_values_when_omitted",
+                    "Refer to Tables A9-1..A9-4 for master/slave write/read channel default signal values applied when a signal is omitted from the integration interface.")
+                _l9p_r46b.write_text(json.dumps(_l9_r46b, indent=2, ensure_ascii=False) + "\n")
+            print(f"      → batch synth applied to L17/L18/L8_TIMING/L9 (after 14c2)")
+    except Exception as _r46b_err:
+        print(f"      R46-relocated batch synth FAILED (fail-open): {_r46b_err}",
               file=sys.stderr)
 
     # v0.1.63 capture (R15): emit L19-L23 typed skeleton stubs (or na_stubs

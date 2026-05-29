@@ -2,9 +2,9 @@
   "phase": 1,
   "mode": "docs",
   "project": "/home/reyerchu/vibe-ic/benchmark_clean/sha256",
-  "ic_name": "sha256",
+  "ic_name": "UNNAMED_CHIP",
   "delegated_to": "phase1_doc_one_shot_runner",
   "delegated_rc": 0,
-  "duration_s": 0.40102601051330566,
+  "duration_s": 0.4499654769897461,
   "verdict": "PASS"
 }

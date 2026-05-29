@@ -17,5 +17,38 @@
       }
     ],
     "ic_class_applicability_gate_v0_1_62": "ic_class='bus_interconnect_protocol' declares LL7 not applicable; emitted as N/A stub (l_doc_taxonomy.na_stub)"
-  }
+  },
+  "test_debug_architecture_present": false,
+  "spec_provided_observability": [
+    {
+      "name": "AxUSER / RUSER / WUSER / BUSER",
+      "purpose": "Implementation-defined user signals carried alongside each channel."
+    },
+    {
+      "name": "AxQOS",
+      "purpose": "4-bit Quality-of-Service identifier (AXI4)."
+    },
+    {
+      "name": "AxREGION",
+      "purpose": "4-bit region identifier (AXI4)."
+    },
+    {
+      "name": "AxTRACE",
+      "purpose": "Trace tagging sideband (AXI5 Issue G)."
+    }
+  ],
+  "AXI5_E1_features_mentioned_in_TOC": [
+    "E1.1 Atomic transactions",
+    "E1.2 Cache stashing",
+    "E1.3 Deallocating transactions",
+    "E1.4 Persist cache maintenance",
+    "E1.5 Non-secure access identifier (NSAccess)"
+  ],
+  "parity_and_protection_AXI5_E2": [
+    "E2.1 Poison",
+    "E2.2 Parity use in AMBA",
+    "E2.3 Configuration of interface protection",
+    "E2.4 Optional read data parity",
+    "E2.5 Optional write data parity"
+  ]
 }

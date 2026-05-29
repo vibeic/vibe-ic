@@ -751,7 +751,8 @@
       "0b101": 32,
       "0b110": 64,
       "0b111": 128
-    }
+    },
+    "unit": "Bytes in transfer (per beat)"
   },
   "burst_type_encodings": {
     "AxBURST[1:0]": {
@@ -770,19 +771,81 @@
   "burst_length_field": {
     "AxLEN_AXI3": {
       "bits": "[3:0]",
-      "burst_length_formula": "AxLEN + 1"
+      "burst_length_formula": "AxLEN + 1",
+      "range": "1 to 16 transfers, all burst types"
     },
     "AxLEN_AXI4_5": {
       "bits": "[7:0]",
       "burst_length_formula": "AxLEN + 1"
-    }
+    },
+    "AxLEN_AXI4": {
+      "bits": "[7:0]",
+      "burst_length_formula": "AxLEN + 1",
+      "range_INCR": "1..256",
+      "range_FIXED_WRAP": "1..16"
+    },
+    "wrap_only_allowed": [
+      2,
+      4,
+      8,
+      16
+    ]
   },
   "qos": {
-    "AxQOS": "4-bit Quality of Service identifier. Default 0b0000 = not participating in QoS."
+    "AxQOS": "4-bit Quality of Service identifier. Default 0b0000 = not participating in QoS.",
+    "added_in": "AXI4"
   },
   "region": {
-    "AxREGION": "4-bit region identifier; up to 16 logical regions; must reflect a single physical address map region."
+    "AxREGION": "4-bit region identifier; up to 16 logical regions; must reflect a single physical address map region.",
+    "added_in": "AXI4"
   },
+  "response_encodings": {
+    "RRESP[1:0] / BRESP[1:0]": {
+      "0b00": "OKAY    - normal access success (or exclusive failed)",
+      "0b01": "EXOKAY  - exclusive access success",
+      "0b10": "SLVERR  - slave error",
+      "0b11": "DECERR  - decode error (interconnect could not find slave)"
+    }
+  },
+  "lock_encodings": {
+    "AXI3_AxLOCK[1:0]": {
+      "0b00": "Normal access",
+      "0b01": "Exclusive access",
+      "0b10": "Locked access",
+      "0b11": "Reserved"
+    },
+    "AXI4_AxLOCK": {
+      "0b0": "Normal access",
+      "0b1": "Exclusive access"
+    }
+  },
+  "cache_attribute_encoding_AXI3": {
+    "AxCACHE[0]": "Bufferable  (B)",
+    "AxCACHE[1]": "Cacheable   (C) (renamed Modifiable in AXI4)",
+    "AxCACHE[2]": "Read-Allocate (RA)",
+    "AxCACHE[3]": "Write-Allocate (WA)"
+  },
+  "protection_attribute_encoding": {
+    "AxPROT[0]": {
+      "0": "Unprivileged access",
+      "1": "Privileged access"
+    },
+    "AxPROT[1]": {
+      "0": "Secure access",
+      "1": "Non-secure access"
+    },
+    "AxPROT[2]": {
+      "0": "Data access",
+      "1": "Instruction access"
+    }
+  },
+  "valid_ready_handshake_rules": [
+    "Transfer occurs only when both VALID and READY are HIGH at a rising ACLK edge.",
+    "Once VALID is asserted it MUST remain asserted until the cycle after the handshake (rising ACLK with READY=1).",
+    "VALID MUST NOT be combinationally dependent on READY (no waiting for READY before asserting VALID).",
+    "READY MAY be combinationally dependent on VALID (destination can decide based on whether source is requesting).",
+    "Once READY is asserted the destination MAY de-assert it before VALID rises; the handshake is not committed until both are HIGH at a rising ACLK edge."
+  ],
   "single_response_for_write": "For a write transaction, a single BRESP is signaled for the entire burst on B channel.",
   "per_beat_response_for_read": "For a read transaction, the slave can signal different RRESP values for each beat on R channel.",
   "exclusive_access_sequence": [

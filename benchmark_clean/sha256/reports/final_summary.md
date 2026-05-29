@@ -1,6 +1,6 @@
 # Phase 2+3 Final Summary — sha256
 
-_Auto-generated chip-AGNOSTIC summary by_ `final_report_generate.py` _at 2026-05-29T08:51:53Z (UTC)._
+_Auto-generated chip-AGNOSTIC summary by_ `final_report_generate.py` _at 2026-05-29T09:14:50Z (UTC)._
 
 - **IC**: `(unknown — fill in via L1_DATASHEET.json[ic_name])`
 - **Project root**: `/home/reyerchu/vibe-ic/benchmark_clean/sha256`
@@ -45,6 +45,10 @@ Per the SOLE ACCEPTANCE CRITERION: `executed PASS = 0/0, deferred = 0 pending fo
 ## Output #3 — Test patterns (count summary)
 
 - _No `reports/test_cases.json` found._
+- **sim_full_stack vectors**: 8 / 8 PASS
+- **Distinct opcodes / commands exercised**: 5
+- **Distinct non-padding bytes**: 10
+- _sim_full_stack source_: `phase2/stage1/sim_full_stack/results.json`
 
 _Per-opcode / per-mode coverage detail belongs in_ `reports/chip_specific_summary.md` _(this section stays chip-agnostic)._
 
