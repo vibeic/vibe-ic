@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "control_logic",
-  "ic_name": "UNKNOWN_IC",
+  "ic_name": "SUCH ARM TECHNOLOGY",
   "reject_rules": [
     {
       "rule_id": "R1",
@@ -29,25 +29,25 @@
     },
     {
       "rule_id": "R5",
-      "condition": "\u2022     To ignore the write strobes and treat all write accesses as being the full data bus width",
+      "condition": "•     To ignore the write strobes and treat all write accesses as being the full data bus width",
       "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
       "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:5685"
     },
     {
       "rule_id": "R6",
-      "condition": "\u2022     The AxLOCK signals are discarded for all transactions. For a sequence of locked transactions any lock",
+      "condition": "•     The AxLOCK signals are discarded for all transactions. For a sequence of locked transactions any lock",
       "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
       "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:5821"
     },
     {
       "rule_id": "R7",
-      "condition": "\u2022     The AxCACHE signals are discarded. All transactions are treated as Non-modifiable and Non-bufferable.",
+      "condition": "•     The AxCACHE signals are discarded. All transactions are treated as Non-modifiable and Non-bufferable.",
       "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
       "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:5825"
     },
     {
       "rule_id": "R8",
-      "condition": "\u2022     The WLAST signal is discarded.",
+      "condition": "•     The WLAST signal is discarded.",
       "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
       "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:5843"
     },
@@ -77,19 +77,19 @@
     },
     {
       "rule_id": "R13",
-      "condition": "\u2022     The AxCACHE signals are discarded. All transactions are treated as Non-modifiable and Non-bufferable.",
+      "condition": "•     The AxCACHE signals are discarded. All transactions are treated as Non-modifiable and Non-bufferable.",
       "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
       "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:6593"
     },
     {
       "rule_id": "R14",
-      "condition": "\u2022     The WLAST signal is discarded.",
+      "condition": "•     The WLAST signal is discarded.",
       "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
       "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:6597"
     },
     {
       "rule_id": "R15",
-      "condition": "\u2022        When a cache discards a copy of a line, there is no requirement to inform other caches that also have a copy",
+      "condition": "•        When a cache discards a copy of a line, there is no requirement to inform other caches that also have a copy",
       "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
       "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:7021"
     },
@@ -167,13 +167,13 @@
     },
     {
       "rule_id": "R28",
-      "condition": "\u2014     If the upper 8 bits are nonzero, then over-invalidation will occur, since the 8-bit ASID agent ignores",
+      "condition": "—     If the upper 8 bits are nonzero, then over-invalidation will occur, since the 8-bit ASID agent ignores",
       "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
       "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:15926"
     },
     {
       "rule_id": "R29",
-      "condition": "\u2014     If the upper 8 bits are nonzero, then over-invalidation will occur, since the 8-bit VMID agent ignores",
+      "condition": "—     If the upper 8 bits are nonzero, then over-invalidation will occur, since the 8-bit VMID agent ignores",
       "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
       "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:15948"
     },
@@ -185,7 +185,7 @@
     },
     {
       "rule_id": "R31",
-      "condition": "\u2022       A master might ignore the write response and only use the response that comes with read data.",
+      "condition": "•       A master might ignore the write response and only use the response that comes with read data.",
       "action": "DROP_FRAME_AND_RETURN_TO_IDLE",
       "evidence": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf:17106"
     },
@@ -237,19 +237,19 @@
         "label": "reject-rule line"
       },
       {
-        "literal": "\u2022     To ignore the write strobes and treat all write accesses as being the full",
+        "literal": "•     To ignore the write strobes and treat all write accesses as being the full",
         "label": "reject-rule line"
       },
       {
-        "literal": "\u2022     The AxLOCK signals are discarded for all transactions. For a sequence of l",
+        "literal": "•     The AxLOCK signals are discarded for all transactions. For a sequence of l",
         "label": "reject-rule line"
       },
       {
-        "literal": "\u2022     The AxCACHE signals are discarded. All transactions are treated as Non-mod",
+        "literal": "•     The AxCACHE signals are discarded. All transactions are treated as Non-mod",
         "label": "reject-rule line"
       },
       {
-        "literal": "\u2022     The WLAST signal is discarded.",
+        "literal": "•     The WLAST signal is discarded.",
         "label": "reject-rule line"
       },
       {
@@ -269,15 +269,15 @@
         "label": "reject-rule line"
       },
       {
-        "literal": "\u2022     The AxCACHE signals are discarded. All transactions are treated as Non-mod",
+        "literal": "•     The AxCACHE signals are discarded. All transactions are treated as Non-mod",
         "label": "reject-rule line"
       },
       {
-        "literal": "\u2022     The WLAST signal is discarded.",
+        "literal": "•     The WLAST signal is discarded.",
         "label": "reject-rule line"
       },
       {
-        "literal": "\u2022        When a cache discards a copy of a line, there is no requirement to info",
+        "literal": "•        When a cache discards a copy of a line, there is no requirement to info",
         "label": "reject-rule line"
       },
       {

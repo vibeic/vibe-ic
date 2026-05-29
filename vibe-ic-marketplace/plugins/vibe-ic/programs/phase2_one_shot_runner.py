@@ -3548,6 +3548,15 @@ def main() -> int:
     # Phase 2 only — Phase 3 lives in phase3_one_shot_runner.py and is
     # chained by phase23_one_shot_runner.py.
     plan.append(step_emit_phase2_manifests(project, plan))
+    # v0.1.58 capture: regenerate final_summary.md BEFORE the audit so the
+    # attestation table reflects the SHA256 of every artefact emitted
+    # earlier in this phase2 run (e.g. phase2/stage2/synth/netlist.v from
+    # yosys_synth). Otherwise the audit reads a stale final_summary and
+    # `agent_report_sha256_attestation_check` FAILs with a phantom gap.
+    # The FPGA path (line 3545 above) already follows this pattern; the
+    # --skip-hardware / --skip-phase3 path was missing it, producing a
+    # spurious FAIL on CVDP-class atomic runs (captured from v0.1.57).
+    _pl.emit_final_summary(project, PROGRAMS_DIR)
     plan.append(step_final_audit(project, phase=2, skip_analog=args.skip_analog))
 
     summary = {

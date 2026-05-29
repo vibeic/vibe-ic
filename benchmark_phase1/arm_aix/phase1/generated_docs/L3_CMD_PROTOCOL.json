@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
   "doc_class": "cmd_protocol",
-  "ic_name": "UNKNOWN_IC",
+  "ic_name": "SUCH ARM TECHNOLOGY",
   "opcodes": [
     {
-      "hex": "<HALLUCINATION_SCRUBBED>",
+      "hex": "0x16",
       "name": "OPCODE_NAME_UNKNOWN",
       "rx_len": 31,
       "tx_len": 24,
@@ -137,7 +137,7 @@
       "argument_constraints": []
     },
     {
-      "hex": "<HALLUCINATION_SCRUBBED>",
+      "hex": "0x48",
       "name": "OPCODE_NAME_UNKNOWN",
       "rx_len": 63,
       "tx_len": 56,

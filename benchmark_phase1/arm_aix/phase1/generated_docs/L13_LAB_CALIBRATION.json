@@ -1,8 +1,18 @@
 {
-  "doc_id": "L13",
-  "doc_name": "L13_LAB_CALIBRATION",
-  "applicability": "N/A",
-  "ic_class": "bus_interconnect_protocol",
-  "rationale": "No lab calibration",
-  "emitted_by": "l_doc_taxonomy.na_stub v0.1.51"
+  "schema_version": 2,
+  "doc_class": "lab_calibration",
+  "ic_name": "SUCH ARM TECHNOLOGY",
+  "calibration_targets": [],
+  "no_lab_calibration_in_input": true,
+  "calibration_steps": [],
+  "no_calibration_steps_in_input": true,
+  "lab_equipment": [],
+  "no_lab_equipment_in_input": true,
+  "rig_pin_assignments": {},
+  "no_rig_pin_assignments_in_input": true,
+  "test_cases": [],
+  "no_l13_test_cases_in_input": true,
+  "trim_loop": [],
+  "extraction_evidence": {},
+  "class_path": "digital_cmd_driven"
 }

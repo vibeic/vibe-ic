@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
   "doc_class": "test_cases",
-  "ic_name": "UNKNOWN_IC",
+  "ic_name": "SUCH ARM TECHNOLOGY",
   "test_cases": [
     {
       "name": "send_opcode_name_unknown_happy",
       "kind": "happy_path",
       "stimulus": "host sends 0x16",
       "expected": "DUT replies per response_payload_template",
-      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
+      "opcode_hex": "0x16",
       "evidence": "L3.opcodes"
     },
     {
@@ -16,7 +16,7 @@
       "kind": "pre_wake_false",
       "stimulus": "host sends 0x16 immediately after POR (no preceding wake pulse)",
       "expected": "DUT silent (no response frame)",
-      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
+      "opcode_hex": "0x16",
       "evidence": "L3.pre_wake_allowed"
     },
     {
@@ -24,7 +24,7 @@
       "kind": "happy_path",
       "stimulus": "host sends 0x48",
       "expected": "DUT replies per response_payload_template",
-      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
+      "opcode_hex": "0x48",
       "evidence": "L3.opcodes"
     },
     {
@@ -32,7 +32,7 @@
       "kind": "pre_wake_false",
       "stimulus": "host sends 0x48 immediately after POR (no preceding wake pulse)",
       "expected": "DUT silent (no response frame)",
-      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
+      "opcode_hex": "0x48",
       "evidence": "L3.pre_wake_allowed"
     }
   ],
@@ -43,11 +43,11 @@
     "derived_from_L3": [
       {
         "literal": "0x16 OPCODE_NAME_UNKNOWN",
-        "label": "opcode \u2192 happy + negative test-cases"
+        "label": "opcode → happy + negative test-cases"
       },
       {
         "literal": "0x48 OPCODE_NAME_UNKNOWN",
-        "label": "opcode \u2192 happy + negative test-cases"
+        "label": "opcode → happy + negative test-cases"
       }
     ]
   },
