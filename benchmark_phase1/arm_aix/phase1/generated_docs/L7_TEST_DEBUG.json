@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "test_debug",
-  "ic_name": "UNKNOWN_IC",
+  "ic_name": "AMBA AXI / ACE Protocol Specification",
   "test_scenarios": [],
   "test_modes": [],
   "no_test_modes_in_input": true,
@@ -62,5 +62,40 @@
     "E2.3 Configuration of interface protection",
     "E2.4 Optional read data parity",
     "E2.5 Optional write data parity"
-  ]
+  ],
+  "fields": {
+    "ic_name": "AMBA AXI / ACE Protocol Specification",
+    "test_debug_architecture_present": false,
+    "rationale": "AXI/ACE does not define a JTAG/scan/BIST/MBIST/debug architecture. Debug visibility must be added by the integrator (typically via ARM CoreSight components).",
+    "spec_provided_observability": [
+      {
+        "name": "AxUSER / RUSER / WUSER / BUSER (inherited from AXI4)",
+        "purpose": "Implementation-defined; spec recommends avoiding due to interop risk."
+      },
+      {
+        "name": "CRRESP[1] Error",
+        "purpose": "Cached master signals snoop failure."
+      },
+      {
+        "name": "RRESP[3:0] full encoding",
+        "purpose": "PassDirty + IsShared bits expose coherency state."
+      },
+      {
+        "name": "Default-slave DECERR injection",
+        "purpose": "Catches out-of-map accesses."
+      },
+      {
+        "name": "Coherency monitor (architectural)",
+        "purpose": "Implementation-defined point of serialization for trace/debug."
+      }
+    ],
+    "ace_optional_features_via_properties": [
+      "Snoop_Filter — interconnect tracks shareability state.",
+      "WriteEvict — optional AWSNOOP=0b101, requires AWUNIQUE.",
+      "DVM support — DVMMessage / DVMComplete; optional per implementation.",
+      "Snoop data bus width — 32/64/128/256/512/1024 bits.",
+      "ACE-Lite — subset for non-cached masters."
+    ],
+    "boundary_with_AXI5_E_features": "AXI5 (AMBA 5) E-series features (cache stashing, deallocating transactions, atomic transactions, MPAM, tagging) are NOT part of IHI 0022E — they belong to AXI5/ACE5 successor specs."
+  }
 }

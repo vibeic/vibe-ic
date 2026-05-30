@@ -270,6 +270,10 @@
       }
     ],
     "channel_counts": {
+      "axi_channels": 5,
+      "ace_snoop_channels": 3,
+      "ace_lite_snoop_channels": 0,
+      "ack_signals": 2,
       "channels": 5,
       "signals_per_channel": {
         "AW": 13,
@@ -301,6 +305,274 @@
       "response_ordering": "Transaction responses with the same ID are returned in the same order as the requests were issued. No ordering between different IDs, different masters, or read-vs-write at the same address.",
       "same_id_same_destination": "Same xID + same destination => strictly in-order.",
       "write_data_ordering": "Master must issue write data in the same order as transaction addresses. AXI4+ removes WID and prohibits write data interleaving."
+    },
+    "ic_name": "AMBA AXI / ACE Protocol Specification",
+    "axi_channels_with_ace_additions": [
+      {
+        "name": "AW",
+        "full_name": "Write Address Channel (with ACE extensions)",
+        "direction": "Master -> Slave",
+        "signals_axi_inherited": [
+          "AWID",
+          "AWADDR",
+          "AWLEN",
+          "AWSIZE",
+          "AWBURST",
+          "AWLOCK",
+          "AWCACHE",
+          "AWPROT",
+          "AWQOS",
+          "AWREGION",
+          "AWUSER",
+          "AWVALID",
+          "AWREADY"
+        ],
+        "signals_ace_added": [
+          {
+            "name": "AWDOMAIN",
+            "width": "2",
+            "semantics": "Shareability domain."
+          },
+          {
+            "name": "AWSNOOP",
+            "width": "3",
+            "semantics": "Coherent write type."
+          },
+          {
+            "name": "AWBAR",
+            "width": "2",
+            "semantics": "Barrier encoding."
+          },
+          {
+            "name": "AWUNIQUE",
+            "width": "1",
+            "semantics": "Optional, for WriteEvict."
+          }
+        ]
+      },
+      {
+        "name": "W",
+        "full_name": "Write Data Channel (inherited from AXI)",
+        "direction": "Master -> Slave",
+        "signals_axi_inherited": [
+          "WID (AXI3 only)",
+          "WDATA",
+          "WSTRB",
+          "WLAST",
+          "WUSER",
+          "WVALID",
+          "WREADY"
+        ],
+        "signals_ace_added": []
+      },
+      {
+        "name": "B",
+        "full_name": "Write Response Channel (with ACE extensions)",
+        "direction": "Slave -> Master",
+        "signals_axi_inherited": [
+          "BID",
+          "BVALID",
+          "BREADY",
+          "BUSER"
+        ],
+        "signals_ace_added": [
+          {
+            "name": "BRESP",
+            "width": "3",
+            "semantics": "Extended; [2]=DataTransfer."
+          }
+        ]
+      },
+      {
+        "name": "AR",
+        "full_name": "Read Address Channel (with ACE extensions)",
+        "direction": "Master -> Slave",
+        "signals_axi_inherited": [
+          "ARID",
+          "ARADDR",
+          "ARLEN",
+          "ARSIZE",
+          "ARBURST",
+          "ARLOCK",
+          "ARCACHE",
+          "ARPROT",
+          "ARQOS",
+          "ARREGION",
+          "ARUSER",
+          "ARVALID",
+          "ARREADY"
+        ],
+        "signals_ace_added": [
+          {
+            "name": "ARDOMAIN",
+            "width": "2",
+            "semantics": "Shareability domain."
+          },
+          {
+            "name": "ARSNOOP",
+            "width": "4",
+            "semantics": "Coherent read / cache-maintenance / DVM type."
+          },
+          {
+            "name": "ARBAR",
+            "width": "2",
+            "semantics": "Barrier encoding."
+          }
+        ]
+      },
+      {
+        "name": "R",
+        "full_name": "Read Data Channel (with ACE extensions)",
+        "direction": "Slave -> Master",
+        "signals_axi_inherited": [
+          "RID",
+          "RDATA",
+          "RLAST",
+          "RUSER",
+          "RVALID",
+          "RREADY"
+        ],
+        "signals_ace_added": [
+          {
+            "name": "RRESP",
+            "width": "4",
+            "semantics": "Extended; [2]=PassDirty, [3]=IsShared."
+          }
+        ]
+      }
+    ],
+    "ace_snoop_channels_new": [
+      {
+        "name": "AC",
+        "full_name": "Snoop Address Channel",
+        "direction": "Interconnect -> Master (cached)",
+        "signals": [
+          {
+            "name": "ACVALID",
+            "width": "1",
+            "direction": "Interconnect",
+            "semantics": "Snoop address valid."
+          },
+          {
+            "name": "ACREADY",
+            "width": "1",
+            "direction": "Master",
+            "semantics": "Master accepts snoop."
+          },
+          {
+            "name": "ACADDR",
+            "width": "ADDR_WIDTH",
+            "direction": "Interconnect",
+            "semantics": "Snoop address."
+          },
+          {
+            "name": "ACSNOOP",
+            "width": "4",
+            "direction": "Interconnect",
+            "semantics": "Snoop type."
+          },
+          {
+            "name": "ACPROT",
+            "width": "3",
+            "direction": "Interconnect",
+            "semantics": "Snoop protection."
+          }
+        ]
+      },
+      {
+        "name": "CR",
+        "full_name": "Snoop Response Channel",
+        "direction": "Master (cached) -> Interconnect",
+        "signals": [
+          {
+            "name": "CRVALID",
+            "width": "1",
+            "direction": "Master",
+            "semantics": "Snoop response valid."
+          },
+          {
+            "name": "CRREADY",
+            "width": "1",
+            "direction": "Interconnect",
+            "semantics": "Accept snoop response."
+          },
+          {
+            "name": "CRRESP",
+            "width": "5",
+            "direction": "Master",
+            "semantics": "DataTransfer/Error/PassDirty/IsShared/WasUnique."
+          }
+        ]
+      },
+      {
+        "name": "CD",
+        "full_name": "Snoop Data Channel",
+        "direction": "Master (cached) -> Interconnect",
+        "signals": [
+          {
+            "name": "CDVALID",
+            "width": "1",
+            "direction": "Master",
+            "semantics": "Snoop data valid."
+          },
+          {
+            "name": "CDREADY",
+            "width": "1",
+            "direction": "Interconnect",
+            "semantics": "Accept snoop data."
+          },
+          {
+            "name": "CDDATA",
+            "width": "CD_DATA_WIDTH",
+            "direction": "Master",
+            "semantics": "Snoop data payload."
+          },
+          {
+            "name": "CDLAST",
+            "width": "1",
+            "direction": "Master",
+            "semantics": "Final beat of snoop data burst."
+          }
+        ]
+      }
+    ],
+    "ace_acknowledge_signals": [
+      {
+        "name": "RACK",
+        "width": "1",
+        "direction": "Master -> Interconnect",
+        "semantics": "Single-cycle pulse one ACLK after RLAST handshake."
+      },
+      {
+        "name": "WACK",
+        "width": "1",
+        "direction": "Master -> Interconnect",
+        "semantics": "Single-cycle pulse one ACLK after B handshake."
+      }
+    ],
+    "handshake_pairs_summary": {
+      "AW": "AWVALID/AWREADY",
+      "W": "WVALID/WREADY",
+      "B": "BVALID/BREADY",
+      "AR": "ARVALID/ARREADY",
+      "R": "RVALID/RREADY",
+      "AC": "ACVALID/ACREADY",
+      "CR": "CRVALID/CRREADY",
+      "CD": "CDVALID/CDREADY"
+    },
+    "dependency_graph_ace_snoops": {
+      "rule_1": "Interconnect drives ACVALID independent of ACREADY.",
+      "rule_2": "Master waits for ACVALID+ACREADY before CRVALID.",
+      "rule_3": "Master waits for ACVALID+ACREADY before CDVALID (if DataTransfer=1).",
+      "rule_4": "CRVALID/CDVALID must not depend combinationally on CRREADY/CDREADY.",
+      "rule_5": "Interconnect may wait for CRVALID/CDVALID before completing snoop."
+    },
+    "ordering_rules_ace": {
+      "snoop_ordering": "CR responses follow AC address order.",
+      "RACK_required_before": "Interconnect must observe RACK before dependent snoops.",
+      "WACK_required_before": "Interconnect must observe WACK before dependent snoops.",
+      "same_id_ordering": "Inherited from AXI.",
+      "different_id_ordering": "Inherited from AXI."
     }
   },
   "extraction_status": "EXTRACTED",
@@ -310,5 +582,8 @@
   "extraction_evidence": {},
   "extraction_strategy": {
     "l17_handshake_pairs_v0_1_70": "R27: synthesised 5 handshake_pairs from L17.channels"
-  }
+  },
+  "doc_name": "L17_CHANNEL_SIGNAL_CATALOG",
+  "applicability": "APPLICABLE",
+  "ic_class": "bus_interconnect_protocol"
 }

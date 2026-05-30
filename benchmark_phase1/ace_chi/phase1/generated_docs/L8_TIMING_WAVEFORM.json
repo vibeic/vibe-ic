@@ -1,0 +1,332 @@
+{
+  "schema_version": "1",
+  "doc_class": "timing_waveform",
+  "ic_name": "AMBA AXI / ACE Protocol Specification (ARM IHI 0022E)",
+  "timing_windows": [],
+  "timing_constants": [],
+  "waveforms": [],
+  "extraction_evidence": {},
+  "clock_and_reset_waveform": {
+    "ACLK": "Single rising-edge clock per AXI interface.",
+    "ARESETn": "Active LOW. Async assert; sync deassert. After ARESETn=HIGH, earliest rising ACLK edge that the master may drive VALID HIGH is one cycle later (see Figure A3-1 'Exit from reset').",
+    "reference_figure": "Figure A3-1 Exit from reset"
+  },
+  "handshake_waveforms": [
+    {
+      "case": "VALID before READY",
+      "sequence": "Source asserts VALID; destination later asserts READY; transfer on next ACLK rising edge."
+    },
+    {
+      "case": "READY before VALID",
+      "sequence": "Destination asserts READY; source later asserts VALID; transfer on next ACLK rising edge."
+    },
+    {
+      "case": "Concurrent VALID + READY",
+      "sequence": "Both asserted in same cycle; transfer occurs on that rising ACLK edge."
+    }
+  ],
+  "channel_dependency_diagrams": {
+    "read_AXI_all_versions": {
+      "arrows": [
+        "ARVALID -> ARREADY (single-handed)",
+        "ARREADY -> RVALID",
+        "RVALID -> RREADY",
+        "RREADY -> next ARVALID (master can issue more)"
+      ],
+      "figure": "A3-5"
+    },
+    "write_AXI3": {
+      "arrows": [
+        "AWVALID -> AWREADY",
+        "WVALID -> WREADY",
+        "WLAST + WREADY -> BVALID",
+        "BVALID -> BREADY"
+      ],
+      "figure": "A3-6",
+      "note": "AXI3 BVALID depends only on W handshake + WLAST, NOT on AW handshake."
+    },
+    "write_AXI4_AXI5": {
+      "arrows": [
+        "AWVALID + AWREADY",
+        "WVALID + WREADY",
+        "AW handshake + WLAST -> BVALID",
+        "BVALID -> BREADY"
+      ],
+      "figure": "A3-7",
+      "note": "AXI4/AXI5 add an additional slave dependency on AW handshake before BVALID, so slaves never need to buffer write data without the address."
+    }
+  },
+  "max_outstanding_rules": {
+    "same_ID_ordering": "All transactions with the same AXI ID must remain in order (request order = response order).",
+    "different_ID_reordering": "Transactions with different IDs may be reordered by the interconnect or slave.",
+    "different_ID_ordering": "No ordering constraint between different IDs.",
+    "implementation_defined_max": "Maximum outstanding transactions is implementation-defined per master+ID pair.",
+    "no_outstanding_count_in_spec": "Spec defines no maximum number of outstanding transactions; an implementation-defined value.",
+    "read_response_ordering": "Read data for the same ARID is returned in order.",
+    "read_reordering_depth": "Implementation-defined; describes how many outstanding read transactions with different ARIDs may be in flight before the master needs to stall.",
+    "ahb": "AHB-Lite is single-Manager; only one outstanding transfer at a time (no AXI-style outstanding queues). Pipelining means address phase of next transfer overlaps data phase of current transfer.",
+    "apb": "APB has no pipelining; only one transfer in flight at a time; minimum 2 PCLK cycles per transfer."
+  },
+  "narrow_transfer_waveforms": "Narrow-bus transfers (transfer width < bus width) use the address+size pair to determine byte lanes per beat; refer to spec figure for example with 5-beat 8-bit incrementing burst on a 32-bit data bus.",
+  "write_response_dependency_rules": [
+    "AXI3: BVALID may be asserted as soon as W handshake completes + WLAST=1, even before AW handshake.",
+    "AXI4/AXI5: BVALID may only be asserted after BOTH (AW handshake AND W handshake with WLAST=1) complete.",
+    "Same-ID write transactions: BRESP must follow same-AWID order of acceptance."
+  ],
+  "clock_and_reset_waveform_ahb": {
+    "HCLK": "Single rising-edge clock per AHB interface.",
+    "HRESETn": "Active LOW; the only active-LOW signal in AHB.",
+    "reference_section": "AHB Chapter 7 Clock and Reset"
+  },
+  "clock_and_reset_waveform_apb": {
+    "PCLK": "Rising edge times all APB transfers.",
+    "PRESETn": "Active LOW; normally tied to system bus reset."
+  },
+  "ahb_basic_transfer_waveform": {
+    "case": "Read transfer, no wait state (Figure 3-1)",
+    "sequence": [
+      "T0: Manager drives HADDR=A, HWRITE=0; HREADY=1.",
+      "T1: Subordinate samples address+control on rising HCLK.",
+      "T2: Subordinate drives HRDATA=Data(A); Manager samples on T3.",
+      "Address phase of next transfer overlaps data phase."
+    ]
+  },
+  "ahb_waited_transfer_waveform": {
+    "case": "Read transfer with two wait states (Figure 3-3)",
+    "sequence": [
+      "One-cycle address phase.",
+      "Data phase extended over three cycles: HREADY=0, 0, then 1 with HRDATA=Data(A).",
+      "Address phase of next transfer also extended."
+    ]
+  },
+  "ahb_error_response_waveform": {
+    "case": "Two-cycle ERROR response (Figure 5-2)",
+    "sequence": [
+      "Cycle 1: HRESP=1, HREADYOUT=0.",
+      "Cycle 2: HRESP=1, HREADYOUT=1.",
+      "Manager option: continue burst OR drive HTRANS=IDLE during the 2-cycle ERROR to cancel."
+    ]
+  },
+  "ahb_burst_waveforms": [
+    {
+      "name": "WRAP4 word (Figure 3-8)",
+      "addresses": [
+        "0x38",
+        "0x3C",
+        "0x30",
+        "0x34"
+      ],
+      "htrans_sequence": [
+        "NONSEQ",
+        "SEQ",
+        "SEQ",
+        "SEQ"
+      ],
+      "note": "Wraps at 16-byte boundary."
+    },
+    {
+      "name": "INCR4 word (Figure 3-9)",
+      "addresses": [
+        "0x38",
+        "0x3C",
+        "0x40",
+        "0x44"
+      ],
+      "htrans_sequence": [
+        "NONSEQ",
+        "SEQ",
+        "SEQ",
+        "SEQ"
+      ],
+      "note": "Crosses 16-byte boundary; address keeps incrementing."
+    },
+    {
+      "name": "WRAP8 word (Figure 3-10)",
+      "addresses": [
+        "0x34",
+        "0x38",
+        "0x3C",
+        "0x20",
+        "0x24",
+        "0x28",
+        "0x2C",
+        "0x30"
+      ],
+      "htrans_sequence": [
+        "NONSEQ",
+        "SEQ",
+        "SEQ",
+        "SEQ",
+        "SEQ",
+        "SEQ",
+        "SEQ",
+        "SEQ"
+      ],
+      "note": "Wraps at 32-byte boundary."
+    },
+    {
+      "name": "INCR8 halfword (Figure 3-11)",
+      "addresses": [
+        "0x34",
+        "0x36",
+        "0x38",
+        "0x3A",
+        "0x3C",
+        "0x3E",
+        "0x40",
+        "0x42"
+      ],
+      "htrans_sequence": [
+        "NONSEQ",
+        "SEQ",
+        "SEQ",
+        "SEQ",
+        "SEQ",
+        "SEQ",
+        "SEQ",
+        "SEQ"
+      ],
+      "note": "Halfword transfers crossing 16-byte boundary."
+    },
+    {
+      "name": "INCR undefined-length (Figure 3-12)",
+      "htrans_sequence": [
+        "NONSEQ",
+        "SEQ",
+        "NONSEQ",
+        "SEQ",
+        "SEQ"
+      ],
+      "note": "Two undefined-length bursts shown."
+    }
+  ],
+  "ahb_busy_transfer_waveform": {
+    "case": "Transfer-type example (Figure 3-6) NONSEQ+BUSY+SEQ+SEQ+SEQ in INCR",
+    "sequence": [
+      "T0-T1: NONSEQ at 0x20.",
+      "T1-T2: BUSY at 0x24.",
+      "T2-T3: SEQ at 0x24 (Manager continues).",
+      "T3-T4: SEQ at 0x28.",
+      "T4-T5: SEQ at 0x2C with wait state (HREADY=0).",
+      "T5-T6: data of 0x28 returns."
+    ]
+  },
+  "ahb_locked_transfer_waveform": {
+    "case": "HMASTLOCK with SWP-like sequence (Figure 3-7)",
+    "sequence": [
+      "Cycle 1: NONSEQ read, HMASTLOCK=1, HADDR=A.",
+      "Cycle 2: NONSEQ write, HMASTLOCK=1, HADDR=A.",
+      "Cycle 3: IDLE, HMASTLOCK=0."
+    ]
+  },
+  "apb_basic_transfer_waveform_write_no_wait": {
+    "case": "APB write, no wait states (Figure 3-1)",
+    "sequence": [
+      "T0-T1: IDLE (PSEL=0, PENABLE=0).",
+      "T1: PADDR=Addr1, PWRITE=1, PSEL=1, PWDATA=Data1 — SETUP.",
+      "T2: PENABLE=1, PREADY=1 — ACCESS; transfer completes.",
+      "T3: bus may go IDLE or directly to next SETUP."
+    ]
+  },
+  "apb_basic_transfer_waveform_write_with_wait": {
+    "case": "APB write, two wait states (Figure 3-2)",
+    "sequence": [
+      "SETUP at T1.",
+      "ACCESS at T2 with PREADY=0.",
+      "ACCESS at T3 with PREADY=0.",
+      "ACCESS at T4 with PREADY=1 — transfer completes."
+    ]
+  },
+  "apb_failing_transfer_waveform": {
+    "case": "APB failing write transfer (Figure 3-6)",
+    "sequence": [
+      "SETUP at T1, ACCESS at T2 with PREADY=0.",
+      "ACCESS at T3 with PREADY=1 and PSLVERR=1 — error signaled.",
+      "After T3: bus returns to IDLE."
+    ]
+  },
+  "apb_state_diagram_waveform_summary": {
+    "states": [
+      "IDLE",
+      "SETUP",
+      "ACCESS"
+    ],
+    "edges": [
+      "IDLE -> SETUP on transfer required",
+      "SETUP -> ACCESS unconditional next rising PCLK",
+      "ACCESS -> ACCESS while PREADY=0",
+      "ACCESS -> IDLE on PREADY=1 + no further transfer",
+      "ACCESS -> SETUP on PREADY=1 + back-to-back transfer"
+    ]
+  },
+  "interconnect_combination_rules": {
+    "ahb_HREADY_chain": "Multiplexor combines all Subordinate HREADYOUTs into a single global HREADY broadcast (Figure 4-2). HRDATA / HRESP / HEXOKAY mux'd by decoder HSEL.",
+    "ahb_apb_bridge": "AHB-to-APB bridge is an AHB Subordinate + APB Manager; PSLVERR -> HRESP=ERROR."
+  },
+  "fields": {
+    "ic_name": "AMBA AXI / ACE Protocol Specification (ARM IHI 0022E)",
+    "clock_and_reset_waveform": {
+      "ACLK": "Single rising-edge clock per ACE interface.",
+      "ARESETn": "Active LOW. Async assert; sync deassert."
+    },
+    "handshake_waveforms_inherited_axi": [
+      {
+        "case": "VALID before READY (Figure A3-2)",
+        "sequence": "Source VALID at T1; READY at T2; Transfer at T3."
+      },
+      {
+        "case": "READY before VALID (Figure A3-3)",
+        "sequence": "READY at T1; VALID at T2; Transfer at T3."
+      },
+      {
+        "case": "VALID with READY same cycle (Figure A3-4)",
+        "sequence": "Both at T1; Transfer at T2."
+      }
+    ],
+    "ace_snoop_channel_dependency_waveform": {
+      "figure": "Figure C3-1 Snoop channel dependencies",
+      "arrows": [
+        "ACVALID -> ACREADY (single-headed)",
+        "ACVALID + ACREADY -> CRVALID (double-headed)",
+        "ACVALID + ACREADY -> CDVALID (double-headed)",
+        "CRVALID -> CRREADY (single-headed)",
+        "CDVALID -> CDREADY (single-headed)",
+        "ACVALID must not depend on ACREADY",
+        "CRVALID/CDVALID must not depend on CRREADY/CDREADY"
+      ]
+    },
+    "ace_snoop_dependency_diagram": {
+      "figure": "Figure C3-1",
+      "summary": "Interconnect drives ACVALID independent of ACREADY. Master may default ACREADY=HIGH or wait. Master must wait for both ACVALID + ACREADY before CRVALID and CDVALID. If DataTransfer=1, master delivers CD beats (CDDATA + CDLAST) gated by CDREADY."
+    },
+    "ace_read_transaction_waveform_with_snoops": {
+      "sequence": [
+        "T0: Master drives AR* + ARDOMAIN/ARSNOOP/ARBAR; ARVALID.",
+        "T1: ARREADY HIGH; AR handshake complete.",
+        "T2+: Interconnect issues snoops on AC channel.",
+        "T3+: Other masters drive ACREADY; deliver CRRESP/CD.",
+        "T5+: Interconnect aggregates; drives R + RRESP[3:0].",
+        "T9: Master asserts RREADY; RLAST=1 on final beat.",
+        "T10: Master pulses RACK for one ACLK cycle.",
+        "Install line per (RRESP[3:2], ARSNOOP)."
+      ]
+    },
+    "ace_write_transaction_waveform_with_RACK_WACK": {
+      "sequence": [
+        "T0: Master drives AW* + AWDOMAIN/AWSNOOP/AWBAR; AWVALID.",
+        "T0: Master may drive WDATA + WSTRB + WLAST.",
+        "T1+: AW and W handshakes complete (any order).",
+        "T5+: Slave drives BRESP[2:0] + BVALID.",
+        "T6: Master asserts BREADY; B handshake complete.",
+        "T7: Master pulses WACK for one ACLK cycle."
+      ]
+    },
+    "snoop_response_ordering_rule": "Each snoop transaction is fully ordered: response on CR must be in the same order as addresses on AC. Master may not reorder snoops issued by the interconnect.",
+    "max_outstanding_rules_inherited": {
+      "same_AxID_ordering": "All transactions with the same AXI ID must remain in order.",
+      "different_AxID_ordering": "No ordering constraint between different IDs.",
+      "ACE_snoop_ordering": "Snoop responses on CR follow AC address order."
+    },
+    "ace_lite_no_snoop_channels": "ACE-Lite masters have no AC/CR/CD channels. They observe RRESP[3:2] / BRESP[2] but do not participate in snoop traffic."
+  }
+}

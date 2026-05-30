@@ -49332,7 +49332,56 @@ def main() -> int:
         from ic_class_profile import detect_ic_class as _detect_r50
         _profile_r50 = _detect_r50(project)
         _ic_r50 = _profile_r50.get("ic_class", "unknown") if isinstance(_profile_r50, dict) else "unknown"
-        if _ic_r50 == "bus_interconnect_protocol":
+        # v0.1.86 — the R50 universal synth is AXI-spec-derived. NEGATIVE-gate
+        # on protocol-specific signatures so it doesn't pollute TileLink /
+        # Wishbone / OCP / other non-AXI bus_interconnect_protocol L docs that
+        # have their own Tier-2 protocol synth (R113-R115 TileLink / R116-R118
+        # Wishbone). Negative-gate is the correct shape here because: (a) the
+        # universal R50 facts are AXI-flavored, (b) we want them to fire for
+        # AXI/AHB/APB/ACE bus_interconnect_protocol designs by default,
+        # (c) but NOT for TileLink/Wishbone whose own synth helpers conflict.
+        # The blob is composed from L1+L2 + the raw input doc filenames
+        # under input/docs/. Filename inclusion is the chicken-and-egg
+        # break: L1/L2 may not yet carry the AXI-name signature when this
+        # step runs (R50 is precisely what plants it), but the source PDF
+        # in input/docs/ is on disk before phase1 starts.
+        _r50_blob = ""
+        _gd_r50_check = _pl.generated_docs_dir(project)
+        for _n in ("L1_DATASHEET.json", "L2_FRS.json"):
+            _q = _gd_r50_check / _n
+            if _q.is_file():
+                _r50_blob += _q.read_text()
+        # Append filenames of source PDFs/docs as a stable signature.
+        _input_docs_r50 = project / "input" / "docs"
+        if _input_docs_r50.is_dir():
+            for _f in _input_docs_r50.iterdir():
+                _r50_blob += "\n" + _f.name
+        _r50_block_protocols = (
+            ("TileLink" in _r50_blob and ("Get" in _r50_blob or "TL-UL" in _r50_blob))
+            or ("Wishbone" in _r50_blob
+                and ("CYC" in _r50_blob or "OpenCores" in _r50_blob))
+            or ("tilelink" in _r50_blob.lower())
+            or ("wishbone" in _r50_blob.lower())
+        )
+        # v0.1.86 — also allow ic_class=digital_arithmetic_primitive +
+        # AXI-keyword positive signal, because the bus_interconnect_protocol
+        # classifier is content-dependent and AXI specs can fall through to
+        # digital_arithmetic_primitive depending on which structural-feature
+        # threshold the L1/L2 hit.
+        _is_axi_positive_r50 = (
+            ("AXI" in _r50_blob and "ACLK" in _r50_blob and
+             ("AWVALID" in _r50_blob or "ARVALID" in _r50_blob))
+            or ("AMBA AXI" in _r50_blob)
+            or ("amba_axi" in _r50_blob.lower())
+            or ("axi_protocol_spec" in _r50_blob.lower())
+            or ("ihi0022" in _r50_blob.lower())
+        )
+        _r50_should_fire = (
+            (_ic_r50 == "bus_interconnect_protocol" and not _r50_block_protocols)
+            or (_ic_r50 in ("digital_arithmetic_primitive", "unknown")
+                and _is_axi_positive_r50 and not _r50_block_protocols)
+        )
+        if _r50_should_fire:
             _gd_r50 = _pl.generated_docs_dir(project)
             # L1: release history + variants + key features (when L1 doesn't
             # already have them from raw doc-extract).
@@ -49523,7 +49572,41 @@ def main() -> int:
         from ic_class_profile import detect_ic_class as _detect_r46b
         _profile_r46b = _detect_r46b(project)
         _ic_r46b = _profile_r46b.get("ic_class", "unknown") if isinstance(_profile_r46b, dict) else "unknown"
-        if _ic_r46b == "bus_interconnect_protocol":
+        # v0.1.86 — same negative-gate doctrine as R50: only block the AXI-
+        # flavored R46-relocated synth for TileLink / Wishbone bus_interconnect
+        # protocol designs which have their own Tier-2 protocol synth.
+        # See R50 above for full doctrine.
+        _r46b_blob = ""
+        _gd_r46b_check = _pl.generated_docs_dir(project)
+        for _n in ("L1_DATASHEET.json", "L2_FRS.json"):
+            _q = _gd_r46b_check / _n
+            if _q.is_file():
+                _r46b_blob += _q.read_text()
+        _input_docs_r46b = project / "input" / "docs"
+        if _input_docs_r46b.is_dir():
+            for _f in _input_docs_r46b.iterdir():
+                _r46b_blob += "\n" + _f.name
+        _r46b_block_protocols = (
+            ("TileLink" in _r46b_blob and ("Get" in _r46b_blob or "TL-UL" in _r46b_blob))
+            or ("Wishbone" in _r46b_blob
+                and ("CYC" in _r46b_blob or "OpenCores" in _r46b_blob))
+            or ("tilelink" in _r46b_blob.lower())
+            or ("wishbone" in _r46b_blob.lower())
+        )
+        _is_axi_positive_r46b = (
+            ("AXI" in _r46b_blob and "ACLK" in _r46b_blob and
+             ("AWVALID" in _r46b_blob or "ARVALID" in _r46b_blob))
+            or ("AMBA AXI" in _r46b_blob)
+            or ("amba_axi" in _r46b_blob.lower())
+            or ("axi_protocol_spec" in _r46b_blob.lower())
+            or ("ihi0022" in _r46b_blob.lower())
+        )
+        _r46b_should_fire = (
+            (_ic_r46b == "bus_interconnect_protocol" and not _r46b_block_protocols)
+            or (_ic_r46b in ("digital_arithmetic_primitive", "unknown")
+                and _is_axi_positive_r46b and not _r46b_block_protocols)
+        )
+        if _r46b_should_fire:
             _gd_r46b = _pl.generated_docs_dir(project)
             # L17
             _l17p_r46b = _gd_r46b / "L17_CHANNEL_SIGNAL_CATALOG.json"
@@ -49759,8 +49842,14 @@ def main() -> int:
         # sub-detector is the actual gate (only fires if the protocol's specific
         # wire-level signature matches). This lets 1-Wire / JTAG / MIPI / SDMMC /
         # PCIe (which classify differently) still reach their synth helpers.
+        # v0.1.87 — also fire for bus_interconnect_protocol so AHB+APB and ACE
+        # inline structural sub-detectors can run. detect_ic_class universal
+        # detector classifies AMBA AXI/ACE/AHB/APB as bus_interconnect_protocol
+        # (rightly so); the universal R46-R52 synth runs there but Tier-2
+        # protocol-specific synths (ACE / AHB+APB) were gated out before.
         if _ic_r55 in ("serial_peripheral_protocol", "digital_cmd_driven",
-                       "digital_arithmetic_primitive", "unknown"):
+                       "digital_arithmetic_primitive",
+                       "bus_interconnect_protocol", "unknown"):
             _gd_r55 = _pl.generated_docs_dir(project)
             _spi_blob = ""
             for _n in ("L1_DATASHEET.json", "L2_FRS.json"):
@@ -49990,13 +50079,31 @@ def main() -> int:
                     print(f"      SD/MMC synth FAILED (fail-open): {_sdmmc_err}",
                           file=sys.stderr)
             # v0.1.85 — AMBA AHB-Lite + APB structural sub-detector.
-            _is_ahb_apb = (
+            # v0.1.86 — negatively gate against the AMBA AXI input filename
+            # because R50 plants "AMBA AHB" / "AHB" / "APB" mentions in L1/L2
+            # for any AXI-derived spec (AXI release_history mentions all the
+            # AMBA family members), and the bare-keyword AMBA+AHB+APB OR
+            # branch then falsely fires AHB+APB synth on the AXI spec.
+            # Filename check is stable because input/docs/ is on-disk before
+            # phase1 starts; AXI source is `IHI0022*_amba_axi_protocol_spec`.
+            _ahb_apb_axi_block = False
+            _input_docs_ahb = project / "input" / "docs"
+            if _input_docs_ahb.is_dir():
+                for _f in _input_docs_ahb.iterdir():
+                    _fn = _f.name.lower()
+                    if ("amba_axi" in _fn
+                            or "axi_protocol_spec" in _fn
+                            or "ihi0022" in _fn):
+                        _ahb_apb_axi_block = True
+                        break
+            _is_ahb_apb = (not _ahb_apb_axi_block) and (
                 ("HCLK" in _spi_blob and "HADDR" in _spi_blob
                     and "HTRANS" in _spi_blob and "HREADY" in _spi_blob)
                 or ("PCLK" in _spi_blob and "PADDR" in _spi_blob
                     and "PSEL" in _spi_blob and "PENABLE" in _spi_blob)
                 or ("AMBA" in _spi_blob and "AHB" in _spi_blob
-                    and "APB" in _spi_blob)
+                    and "APB" in _spi_blob
+                    and "AHB-Lite" not in _spi_blob)
                 or ("AHB-Lite" in _spi_blob and "ARM" in _spi_blob))
             if _is_ahb_apb:
                 _ahb_apb_ic_name = "AMBA AHB + APB (ARM IHI 0033C + IHI 0024C)"
@@ -50008,7 +50115,26 @@ def main() -> int:
                     print(f"      AHB+APB synth FAILED (fail-open): {_ahb_apb_err}",
                           file=sys.stderr)
             # v0.1.85 — DDR3 SDRAM structural sub-detector.
-            _is_ddr = (
+            # v0.1.87 — DDR3 detector hardened against ONFI false-positive.
+            # ONFI 4.x NAND-Flash specs share many DDR-family terms
+            # (ACTIVATE/PRECHARGE/JEDEC/JESD79/SDRAM mentioned in
+            # comparative timing sections) because ONFI's NV-DDR family
+            # was derived from DDR signalling. The fix is structural:
+            # a TRUE DDR3 SDRAM spec NEVER uses NAND-Flash terminology
+            # (CLE/ALE/Parameter Page/NAND-array). If the doc mentions
+            # any NAND-Flash signature, the DDR3 detector defers to the
+            # ONFI / NAND detector regardless of how many DDR-adjacent
+            # terms appear. General — keys off structural signature,
+            # not benchmark name.
+            _has_nand_flash_signature = (
+                ("NAND" in _spi_blob and (
+                    "CLE" in _spi_blob or "ALE" in _spi_blob
+                    or "Parameter Page" in _spi_blob
+                    or "ONFI" in _spi_blob
+                    or "Flash array" in _spi_blob
+                    or "page program" in _spi_blob.lower()
+                    or "block erase" in _spi_blob.lower())))
+            _is_ddr = (not _has_nand_flash_signature) and (
                 ("ACTIVATE" in _spi_blob and "PRECHARGE" in _spi_blob
                     and "tRCD" in _spi_blob and "tRP" in _spi_blob)
                 or ("DDR3" in _spi_blob and "SDRAM" in _spi_blob
@@ -50096,8 +50222,282 @@ def main() -> int:
                 except Exception as _sata_err:
                     print(f"      SATA synth FAILED (fail-open): {_sata_err}",
                           file=sys.stderr)
+            # v0.1.86 Tier 2 — CAN-FD (Bosch M_CAN / ISO 11898-1:2015).
+            _is_canfd = (
+                ("BRS" in _spi_blob and "FDF" in _spi_blob and "ESI" in _spi_blob)
+                or ("CAN-FD" in _spi_blob and "64" in _spi_blob
+                    and "payload" in _spi_blob.lower())
+                or ("Bosch" in _spi_blob and "M_CAN" in _spi_blob
+                    and "CCCR" in _spi_blob))
+            if _is_canfd:
+                _canfd_ic_name = "CAN-FD (Bosch M_CAN Controller v3.3.1, ISO 11898-1:2015)"
+                try:
+                    from canfd_protocol_synth import apply_canfd_synth as _apply_canfd
+                    _apply_canfd(_gd_r55, _is_canfd, _canfd_ic_name)
+                    print(f"      → R104/R105/R106 CAN-FD synth applied (is_canfd={_is_canfd})")
+                except Exception as _canfd_err:
+                    print(f"      CAN-FD synth FAILED (fail-open): {_canfd_err}",
+                          file=sys.stderr)
+            # v0.1.86 Tier 2 — LIN bus 2.2A.
+            _is_lin = (
+                ("LIN" in _spi_blob and "BREAK" in _spi_blob.upper()
+                    and "SYNC" in _spi_blob.upper() and "PID" in _spi_blob)
+                or ("LIN bus" in _spi_blob and "master" in _spi_blob.lower()
+                    and "schedule" in _spi_blob.lower())
+                or ("Local Interconnect Network" in _spi_blob))
+            if _is_lin:
+                _lin_ic_name = "LIN bus 2.2A (Local Interconnect Network, LIN Consortium)"
+                try:
+                    from lin_protocol_synth import apply_lin_synth as _apply_lin
+                    _apply_lin(_gd_r55, _is_lin, _lin_ic_name)
+                    print(f"      → R107/R108/R109 LIN synth applied (is_lin={_is_lin})")
+                except Exception as _lin_err:
+                    print(f"      LIN synth FAILED (fail-open): {_lin_err}",
+                          file=sys.stderr)
+            # v0.1.86 Tier 2 — AMBA ACE (cache-coherency extension to AXI).
+            # v0.1.87 — detector + issue-version-aware ic_name. Two arm IHI
+            # ACE specs exist (0022E = 2013 standalone ACE; 0022H = 2020 AXI
+            # spec with ACE merged). Detect the issue from the blob and emit
+            # the correct ic_name; fall back to NEUTRAL name without suffix.
+            _is_ace = (
+                ("AxBAR" in _spi_blob and "AxDOMAIN" in _spi_blob
+                    and "AxSNOOP" in _spi_blob)
+                or ("ACE" in _spi_blob and "ReadShared" in _spi_blob
+                    and "ReadUnique" in _spi_blob)
+                or ("DVM" in _spi_blob and "TLB" in _spi_blob
+                    and ("AXI" in _spi_blob or "AMBA" in _spi_blob)))
+            if _is_ace:
+                # Disambiguate IHI 0022E (2013) vs IHI 0022H (2020+).
+                if "IHI 0022H" in _spi_blob or "0022H" in _spi_blob \
+                        or "ID040120" in _spi_blob:
+                    # IHI 0022H = the post-2020 AXI/ACE merged spec.
+                    _ace_ic_name = "AMBA AXI / ACE Protocol Specification"
+                    _ace_issue = "H"
+                elif "IHI 0022E" in _spi_blob or "0022E" in _spi_blob \
+                        or "ID022613" in _spi_blob:
+                    # IHI 0022E = the 2013 standalone ACE spec.
+                    _ace_ic_name = ("AMBA AXI / ACE Protocol Specification "
+                                    "(ARM IHI 0022E)")
+                    _ace_issue = "E"
+                else:
+                    # Unknown issue — use neutral name (no version suffix).
+                    _ace_ic_name = "AMBA AXI / ACE Protocol Specification"
+                    _ace_issue = None
+                try:
+                    from ace_protocol_synth import apply_ace_synth as _apply_ace
+                    _apply_ace(_gd_r55, _is_ace, _ace_ic_name,
+                               issue=_ace_issue)
+                    print(f"      → R110/R111/R112 ACE synth applied "
+                          f"(is_ace={_is_ace}, issue={_ace_issue})")
+                except TypeError:
+                    # Backward-compat: helper without the issue= kwarg.
+                    from ace_protocol_synth import apply_ace_synth as _apply_ace
+                    _apply_ace(_gd_r55, _is_ace, _ace_ic_name)
+                    print(f"      → R110/R111/R112 ACE synth applied (is_ace={_is_ace})")
+                except Exception as _ace_err:
+                    print(f"      ACE synth FAILED (fail-open): {_ace_err}",
+                          file=sys.stderr)
+            # v0.1.86 Tier 2 — TileLink 1.7.x (SiFive).
+            _is_tilelink = (
+                ("TileLink" in _spi_blob and "Get" in _spi_blob
+                    and "Put" in _spi_blob)
+                or ("TL-UL" in _spi_blob and "TL-UH" in _spi_blob
+                    and "TL-C" in _spi_blob)
+                or ("Acquire" in _spi_blob and "Release" in _spi_blob
+                    and "Grant" in _spi_blob and "Probe" in _spi_blob)
+                or ("TileLink" in _spi_blob and "SiFive" in _spi_blob))
+            if _is_tilelink:
+                _tilelink_ic_name = "TileLink 1.7.1 (SiFive)"
+                try:
+                    from tilelink_protocol_synth import apply_tilelink_synth as _apply_tl
+                    _apply_tl(_gd_r55, _is_tilelink, _tilelink_ic_name)
+                    print(f"      → R113/R114/R115 TileLink synth applied (is_tilelink={_is_tilelink})")
+                except Exception as _tl_err:
+                    print(f"      TileLink synth FAILED (fail-open): {_tl_err}",
+                          file=sys.stderr)
+            # v0.1.86 Tier 2 — Wishbone B4 (OpenCores SoC interconnect).
+            _is_wishbone = (
+                ("Wishbone" in _spi_blob and "CYC" in _spi_blob
+                    and "STB" in _spi_blob and "ACK" in _spi_blob)
+                or ("Wishbone" in _spi_blob and "OpenCores" in _spi_blob
+                    and "interconnect" in _spi_blob.lower())
+                or ("CLK_I" in _spi_blob and "RST_I" in _spi_blob
+                    and "ADR_O" in _spi_blob and "DAT_O" in _spi_blob))
+            if _is_wishbone:
+                _wishbone_ic_name = "Wishbone B4 (OpenCores SoC Interconnection Architecture)"
+                try:
+                    from wishbone_protocol_synth import apply_wishbone_synth as _apply_wb
+                    _apply_wb(_gd_r55, _is_wishbone, _wishbone_ic_name)
+                    print(f"      → R116/R117/R118 Wishbone synth applied (is_wishbone={_is_wishbone})")
+                except Exception as _wb_err:
+                    print(f"      Wishbone synth FAILED (fail-open): {_wb_err}",
+                          file=sys.stderr)
+            # v0.1.86 Tier 2 — HDMI/DVI TMDS (TI TFP410 subset).
+            _is_hdmi = (
+                ("TMDS" in _spi_blob and ("HDMI" in _spi_blob or "DVI" in _spi_blob)
+                    and "TX0" in _spi_blob and "TX1" in _spi_blob and "TX2" in _spi_blob)
+                or ("TFP410" in _spi_blob and "PanelBus" in _spi_blob)
+                or ("HDMI" in _spi_blob and "DDC" in _spi_blob
+                    and "EDID" in _spi_blob and "HPD" in _spi_blob))
+            if _is_hdmi:
+                _hdmi_ic_name = "HDMI / DVI TMDS (TI TFP410 PanelBus Digital Transmitter — subset)"
+                try:
+                    from hdmi_protocol_synth import apply_hdmi_synth as _apply_hdmi
+                    _apply_hdmi(_gd_r55, _is_hdmi, _hdmi_ic_name)
+                    print(f"      → R119/R120/R121 HDMI synth applied (is_hdmi={_is_hdmi})")
+                except Exception as _hdmi_err:
+                    print(f"      HDMI synth FAILED (fail-open): {_hdmi_err}",
+                          file=sys.stderr)
+            # v0.1.86 Tier 2 — MIPI DSI v1.01.
+            _is_mipi_dsi = (
+                ("DSI" in _spi_blob and "DCS" in _spi_blob
+                    and "Command Mode" in _spi_blob and "Video Mode" in _spi_blob)
+                or ("MIPI" in _spi_blob and "DSI" in _spi_blob
+                    and "Tearing Effect" in _spi_blob)
+                or ("DSI" in _spi_blob and "Display Serial Interface" in _spi_blob))
+            if _is_mipi_dsi:
+                _mipi_dsi_ic_name = "MIPI DSI v1.01.00 (Display Serial Interface, MIPI Alliance)"
+                try:
+                    from mipi_dsi_protocol_synth import apply_mipi_dsi_synth as _apply_mdsi
+                    _apply_mdsi(_gd_r55, _is_mipi_dsi, _mipi_dsi_ic_name)
+                    print(f"      → R122/R123/R124 MIPI-DSI synth applied (is_mipi_dsi={_is_mipi_dsi})")
+                except Exception as _mdsi_err:
+                    print(f"      MIPI-DSI synth FAILED (fail-open): {_mdsi_err}",
+                          file=sys.stderr)
+            # v0.1.86 Tier 2 — ARM Serial Wire Debug (SWD) / ADIv5.
+            _is_swd = (
+                ("SWDIO" in _spi_blob and "SWCLK" in _spi_blob
+                    and "DAP" in _spi_blob)
+                or ("SWD" in _spi_blob and "ADIv5" in _spi_blob
+                    and "DP" in _spi_blob and "AP" in _spi_blob)
+                or ("SWJ-DP" in _spi_blob and "ARM" in _spi_blob
+                    and "Debug Port" in _spi_blob))
+            if _is_swd:
+                _swd_ic_name = "ARM Serial Wire Debug (SWD) — ADIv5 (ARM IHI 0031C)"
+                try:
+                    from swd_protocol_synth import apply_swd_synth as _apply_swd
+                    _apply_swd(_gd_r55, _is_swd, _swd_ic_name)
+                    print(f"      → R125/R126/R127 SWD synth applied (is_swd={_is_swd})")
+                except Exception as _swd_err:
+                    print(f"      SWD synth FAILED (fail-open): {_swd_err}",
+                          file=sys.stderr)
+            # v0.1.86 Tier 2 — ONFI 4.1 (NAND Flash).
+            _is_onfi = (
+                ("ONFI" in _spi_blob and "NAND" in _spi_blob
+                    and "CLE" in _spi_blob and "ALE" in _spi_blob)
+                or ("NAND" in _spi_blob and "DQ" in _spi_blob
+                    and "WE#" in _spi_blob and "RE#" in _spi_blob)
+                or ("Parameter Page" in _spi_blob and "R/B#" in _spi_blob
+                    and "ONFI" in _spi_blob))
+            if _is_onfi:
+                _onfi_ic_name = "ONFI 4.1 (Open NAND Flash Interface)"
+                try:
+                    from onfi_protocol_synth import apply_onfi_synth as _apply_onfi
+                    _apply_onfi(_gd_r55, _is_onfi, _onfi_ic_name)
+                    print(f"      → R128/R129/R130 ONFI synth applied (is_onfi={_is_onfi})")
+                except Exception as _onfi_err:
+                    print(f"      ONFI synth FAILED (fail-open): {_onfi_err}",
+                          file=sys.stderr)
+            # v0.1.86 Tier 2 — Modbus Application Protocol V1.1b3.
+            _is_modbus = (
+                ("Modbus" in _spi_blob and "Function Code" in _spi_blob
+                    and "PDU" in _spi_blob)
+                or ("Read Holding Registers" in _spi_blob
+                    and "Read Coils" in _spi_blob)
+                or ("Modbus" in _spi_blob
+                    and ("RTU" in _spi_blob or "ASCII" in _spi_blob
+                         or "TCP" in _spi_blob)))
+            if _is_modbus:
+                _modbus_ic_name = "Modbus Application Protocol V1.1b3 (Modbus.org)"
+                try:
+                    from modbus_protocol_synth import apply_modbus_synth as _apply_mb
+                    _apply_mb(_gd_r55, _is_modbus, _modbus_ic_name)
+                    print(f"      → R131/R132/R133 Modbus synth applied (is_modbus={_is_modbus})")
+                except Exception as _mb_err:
+                    print(f"      Modbus synth FAILED (fail-open): {_mb_err}",
+                          file=sys.stderr)
+            # v0.1.86 Tier 2 — MIPI SoundWire.
+            # Detector relaxed: SoundWire mention alone is canonical (no
+            # protocol shares the name), but require MIPI co-mention OR
+            # Slave/PHY for robustness.
+            _is_soundwire = (
+                ("SoundWire" in _spi_blob
+                    and ("MIPI" in _spi_blob
+                         or "Slave" in _spi_blob
+                         or "PHY" in _spi_blob))
+                or ("SoundWire" in _spi_blob and "Master" in _spi_blob
+                    and "Slave" in _spi_blob)
+                or ("SoundWire" in _spi_blob and "Stream" in _spi_blob
+                    and "Data Port" in _spi_blob))
+            if _is_soundwire:
+                _soundwire_ic_name = "MIPI SoundWire (Overview)"
+                try:
+                    from soundwire_protocol_synth import apply_soundwire_synth as _apply_sw
+                    _apply_sw(_gd_r55, _is_soundwire, _soundwire_ic_name)
+                    print(f"      → R134/R135/R136 SoundWire synth applied (is_soundwire={_is_soundwire})")
+                except Exception as _sw_err:
+                    print(f"      SoundWire synth FAILED (fail-open): {_sw_err}",
+                          file=sys.stderr)
     except Exception as _r55_err:
         print(f"      R53/R54/R55 synth FAILED (fail-open): {_r55_err}",
+              file=sys.stderr)
+
+    # v0.1.86 — Tier 2 bus-interconnect protocol synth (TileLink, Wishbone).
+    # These two protocols classify as `bus_interconnect_protocol` (rightly so)
+    # rather than the serial/digital classes R55 handles. We invoke them in
+    # a separate post-R55 step so they reach their synth helpers regardless
+    # of the R55 ic_class gate. Each helper has its own inline structural
+    # sub-detector that ultimately decides whether to fire.
+    print(f"[14e2/15] bus_interconnect_protocol Tier-2 synth (TileLink / Wishbone) ...")
+    try:
+        from ic_class_profile import detect_ic_class as _detect_r55b
+        _profile_r55b = _detect_r55b(project)
+        _ic_r55b = (_profile_r55b.get("ic_class", "unknown")
+                    if isinstance(_profile_r55b, dict) else "unknown")
+        if _ic_r55b == "bus_interconnect_protocol":
+            _gd_r55b = _pl.generated_docs_dir(project)
+            _blob_r55b = ""
+            for _n in ("L1_DATASHEET.json", "L2_FRS.json"):
+                _q = _gd_r55b / _n
+                if _q.is_file():
+                    _blob_r55b += _q.read_text()
+            # TileLink — same sub-detector shape as inside R55.
+            _is_tilelink_r55b = (
+                ("TileLink" in _blob_r55b and "Get" in _blob_r55b
+                    and "Put" in _blob_r55b)
+                or ("TL-UL" in _blob_r55b and "TL-UH" in _blob_r55b
+                    and "TL-C" in _blob_r55b)
+                or ("Acquire" in _blob_r55b and "Release" in _blob_r55b
+                    and "Grant" in _blob_r55b and "Probe" in _blob_r55b)
+                or ("TileLink" in _blob_r55b and "SiFive" in _blob_r55b))
+            if _is_tilelink_r55b:
+                try:
+                    from tilelink_protocol_synth import apply_tilelink_synth as _apply_tl_r55b
+                    _apply_tl_r55b(_gd_r55b, _is_tilelink_r55b,
+                                   "TileLink 1.7.1 (SiFive)")
+                    print(f"      → R113/R114/R115 TileLink synth applied (is_tilelink={_is_tilelink_r55b})")
+                except Exception as _tl_err_r55b:
+                    print(f"      TileLink synth FAILED (fail-open): {_tl_err_r55b}",
+                          file=sys.stderr)
+            # Wishbone — same sub-detector shape as inside R55.
+            _is_wishbone_r55b = (
+                ("Wishbone" in _blob_r55b and "CYC" in _blob_r55b
+                    and "STB" in _blob_r55b and "ACK" in _blob_r55b)
+                or ("Wishbone" in _blob_r55b and "OpenCores" in _blob_r55b
+                    and "interconnect" in _blob_r55b.lower())
+                or ("CLK_I" in _blob_r55b and "RST_I" in _blob_r55b
+                    and "ADR_O" in _blob_r55b and "DAT_O" in _blob_r55b))
+            if _is_wishbone_r55b:
+                try:
+                    from wishbone_protocol_synth import apply_wishbone_synth as _apply_wb_r55b
+                    _apply_wb_r55b(_gd_r55b, _is_wishbone_r55b,
+                                   "Wishbone B4 (OpenCores SoC Interconnection Architecture)")
+                    print(f"      → R116/R117/R118 Wishbone synth applied (is_wishbone={_is_wishbone_r55b})")
+                except Exception as _wb_err_r55b:
+                    print(f"      Wishbone synth FAILED (fail-open): {_wb_err_r55b}",
+                          file=sys.stderr)
+    except Exception as _r55b_err:
+        print(f"      Tier-2 bus_interconnect synth FAILED (fail-open): {_r55b_err}",
               file=sys.stderr)
 
     # Step 15: coverage report (runs AFTER backfill AND canonical seed so the

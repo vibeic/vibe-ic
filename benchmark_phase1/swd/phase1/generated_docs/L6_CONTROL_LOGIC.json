@@ -1,0 +1,434 @@
+{
+  "schema_version": 2,
+  "doc_class": "control_logic",
+  "ic_name": "ARM Serial Wire Debug (SWD) — ADIv5 (ARM IHI 0031C)",
+  "reject_rules": [],
+  "fsm_states": [
+    {
+      "name": "CAPTURE",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose transition v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "SHIFT",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose transition v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "CONNECTION",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "INTERFACE",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "REFERRING",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "DBGTAPSM",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "POSSIBLE",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "VARY",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "PROTOCOL",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "ENSURE",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "DORMANT",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "ZERO",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "EQUAL",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "SEVEN",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "WRAP",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "RETURNS",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "BRFIFO1",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "BRFIFO4",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "BWFIFO1",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "BWFIFO4",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "REGISTERS",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "ACCESS",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "ACCESSES",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
+      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+    },
+    {
+      "name": "DBGTAP",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SWD_ADIv5.pdf (prose 'in X state')"
+    }
+  ],
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "no_fsm_states_in_input": false,
+  "no_fsm_in_input": false,
+  "fsm_tokens": [
+    {
+      "name": "Buffer",
+      "type": "structure",
+      "source": "SWD_ADIv5.pdf"
+    },
+    {
+      "name": "FIFO",
+      "type": "structure",
+      "source": "SWD_ADIv5.pdf"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/SWD_ADIv5.pdf": [
+      {
+        "literal": "Buffer",
+        "label": "FSM structure token"
+      },
+      {
+        "literal": "FIFO",
+        "label": "FSM structure token"
+      }
+    ]
+  },
+  "class_path": "serial_peripheral_protocol",
+  "fsm_summary": "SWD wire-level state machine sequences each 46-bit transaction through 6 phases (Request → Turnaround → ACK → Data → Parity → Turnaround). SWDIO direction flips at the Turnaround periods. The SWJ-DP variant adds a mode-select state machine that watches for the 16-bit JTAG-to-SWD (0xE79E) and SWD-to-JTAG (0xE73C) selection sequences.",
+  "fsm_hints": {
+    "clock": "SWCLK is host-driven and free-running during a transaction.",
+    "sampling_edge": "Target samples SWDIO on SWCLK rising edge during Request and Data-Write phases.",
+    "drive_edge": "Target drives SWDIO on SWCLK falling edge during ACK and Data-Read phases.",
+    "abort": "50 consecutive SWCLK cycles with SWDIO=HIGH = line reset.",
+    "transaction_overlap": "Posted reads: data of read N delivered with ACK of read N+1.",
+    "instruction_change_path": "Switching from DP to AP transactions requires writing DP.SELECT first."
+  },
+  "anti_deadlock_rule": "50-cycle line reset is the universal escape — there is no SWD state from which this sequence does not return to Idle. Guarantees host can always recover SWD without power-cycling.",
+  "exit_from_reset_or_poweron": "On power-up, SW-DP starts quiescent; host's first action is a 50-cycle line reset followed by an IDCODE/DPIDR read. On line reset, SELECT and CTRL/STAT are cleared, AP selection resets to APSEL=0/APBANKSEL=0, and the posted-read queue is drained. DPIDR is hard-wired and always available.",
+  "default_ready_state_recommendation": {
+    "SWCLK": "Idle level not specified; debug probe drives. Most probes leave SWCLK low between transactions.",
+    "SWDIO": "Idle level HIGH (line-reset compatible)."
+  },
+  "configurations": [
+    {
+      "name": "Single-target SWD",
+      "description": "One SoC on the SWD bus; host directly drives SWCLK/SWDIO."
+    },
+    {
+      "name": "Multi-drop SWD",
+      "description": "Multiple SoCs share SWDIO/SWCLK; per-target selection via DP TARGETSEL (ADIv5.2)."
+    },
+    {
+      "name": "SWJ-DP mode-switched",
+      "description": "SoC supports both SWD and JTAG; mode is selected at runtime via 16-bit selection sequences."
+    }
+  ],
+  "timing_dependency_rule": "All transaction-state-machine transitions are synchronous to SWCLK. Target drives SWDIO on the falling edge during target-driven phases; host samples on the rising edge.",
+  "ahb_fsm_hints": {
+    "per_transfer_phases": [
+      "ADDRESS_PHASE (one HCLK cycle, extended by previous data phase).",
+      "DATA_PHASE (one or more HCLK cycles; HREADY controls end)."
+    ],
+    "address_phase_rule": "One cycle; cannot be extended by the Subordinate, only by the previous data phase.",
+    "data_phase_rule": "Manager holds HWDATA stable through extended cycles; Subordinate need not drive HRDATA until transfer is about to complete.",
+    "pipeline_rule": "Address phase of transfer N+1 overlaps data phase of transfer N.",
+    "burst_constancy_rule": "HSIZE, HBURST, HWRITE, HPROT, HMASTLOCK, HNONSEC remain constant across burst.",
+    "manager_per_burst_fsm": [
+      "Drive first beat: HTRANS=NONSEQ + address + control signals.",
+      "If burst length > 1: drive subsequent beats with HTRANS=SEQ and incrementing/wrapping address.",
+      "If unable to continue immediately during the burst (undefined-length burst only): drive HTRANS=BUSY with the address that the next SEQ transfer will use.",
+      "On the cycle following the LAST data beat (HREADY=HIGH for the final SEQ): drive HTRANS=IDLE or start the next NONSEQ."
+    ],
+    "subordinate_per_transfer_fsm": [
+      "Sample HSELx, HADDR, HBURST, HSIZE, HTRANS, HPROT, HWRITE only when HREADY=HIGH (previous transfer completing).",
+      "For HTRANS=IDLE or HTRANS=BUSY: provide zero-wait-state OKAY (HREADYOUT=HIGH, HRESP=0); transfer ignored.",
+      "For HTRANS=NONSEQ or HTRANS=SEQ: perform the access; drive HREADYOUT=LOW to insert wait states if needed.",
+      "On completion: drive HREADYOUT=HIGH with HRESP=OKAY (or ERROR - two cycles).",
+      "AHB5 Exclusive: also drive HEXOKAY in parallel with HRESP."
+    ]
+  },
+  "ahb_manager_per_burst_fsm": [
+    "Drive first beat HTRANS=NONSEQ + address + control.",
+    "For length > 1: drive subsequent beats with HTRANS=SEQ.",
+    "If unable to continue immediately (undefined-length burst only): drive HTRANS=BUSY with next-SEQ address.",
+    "On the cycle after the LAST data beat: drive HTRANS=IDLE or new NONSEQ."
+  ],
+  "ahb_subordinate_per_transfer_fsm": [
+    "Sample HSELx + HADDR + HBURST + HSIZE + HTRANS + HPROT + HWRITE only when HREADY=HIGH.",
+    "For HTRANS=IDLE/BUSY: zero-wait HREADYOUT=1, HRESP=0; transfer ignored.",
+    "For HTRANS=NONSEQ/SEQ: perform access; drive HREADYOUT=0 to wait if needed.",
+    "On completion: HREADYOUT=1 with HRESP=OKAY (or ERROR — two cycles).",
+    "AHB5 Exclusive: also drive HEXOKAY in parallel with HRESP."
+  ],
+  "ahb_error_response_2cyc_fsm": [
+    "Cycle 1: Subordinate drives HRESP=1, HREADYOUT=0.",
+    "Cycle 2: Subordinate drives HRESP=1, HREADYOUT=1.",
+    "Manager option A: continue burst.",
+    "Manager option B: drive HTRANS=IDLE during the 2-cycle ERROR to cancel."
+  ],
+  "ahb_locked_access_fsm": [
+    "Manager asserts HMASTLOCK with the address phase of the first locked transfer.",
+    "Bus locked once HMASTLOCK=1, HSEL=1 (if present), HREADY=HIGH for >= 1 cycle.",
+    "All locked transfers address same Subordinate region.",
+    "Manager deasserts HMASTLOCK with the first unlocked transfer's address.",
+    "Recommendation: IDLE after a locked sequence."
+  ],
+  "apb_fsm_states": [
+    {
+      "state": "IDLE",
+      "PSELx": 0,
+      "PENABLE": 0,
+      "outputs": "PSELx=0; bus is idle"
+    },
+    {
+      "state": "SETUP",
+      "PSELx": 1,
+      "PENABLE": 0,
+      "outputs": "PADDR + PWRITE + PWDATA (write) + PSTRB + PPROT driven by bridge"
+    },
+    {
+      "state": "ACCESS",
+      "PSELx": 1,
+      "PENABLE": 1,
+      "outputs": "Subordinate drives PREADY (+ PRDATA for read, PSLVERR if used)"
+    }
+  ],
+  "apb_fsm_transitions": [
+    {
+      "from": "IDLE",
+      "to": "SETUP",
+      "cond": "Transfer required"
+    },
+    {
+      "from": "SETUP",
+      "to": "ACCESS",
+      "cond": "Unconditional on next rising PCLK"
+    },
+    {
+      "from": "ACCESS",
+      "to": "ACCESS",
+      "cond": "PREADY=0 (wait)"
+    },
+    {
+      "from": "ACCESS",
+      "to": "IDLE",
+      "cond": "PREADY=1 + no further transfer"
+    },
+    {
+      "from": "ACCESS",
+      "to": "SETUP",
+      "cond": "PREADY=1 + back-to-back transfer"
+    }
+  ],
+  "exit_from_reset": {
+    "ahb": "Earliest non-IDLE transfer = first rising HCLK after HRESETn=HIGH; integrators typically initialize HTRANS=IDLE during reset.",
+    "apb": "Bus enters IDLE (PSELx=0, PENABLE=0) on PRESETn=LOW."
+  },
+  "transfer_type_change_during_wait_states_ahb": {
+    "IDLE_to_NONSEQ": "Permitted; HTRANS then constant until HREADY=HIGH.",
+    "BUSY_to_SEQ_fixed": "Permitted in fixed-length bursts.",
+    "BUSY_to_other_undef": "Permitted in undefined-length bursts (BUSY -> any type while HREADY=LOW)."
+  },
+  "address_change_during_wait_states_ahb": {
+    "IDLE_change_once": "Manager can change the address once during an IDLE-waited transfer.",
+    "after_ERROR": "Manager may change the address while HREADY=LOW after an ERROR response."
+  },
+  "fsm_states_swd_transaction": [
+    {
+      "name": "Idle",
+      "kind": "stable",
+      "description": "Between transactions. SWDIO is host-driven HIGH."
+    },
+    {
+      "name": "RequestRx",
+      "kind": "transient (8 SWCLK)",
+      "description": "Target shifts in the 8-bit Request packet."
+    },
+    {
+      "name": "RequestDecode",
+      "kind": "transient (combinational)",
+      "description": "Target validates Start/Stop/Park and parity."
+    },
+    {
+      "name": "TurnaroundA",
+      "kind": "transient (1 SWCLK, configurable 1-4)",
+      "description": "Direction-change cycle."
+    },
+    {
+      "name": "ACK_Drive",
+      "kind": "transient (3 SWCLK)",
+      "description": "Target drives the 3-bit ACK."
+    },
+    {
+      "name": "DataDrive_Read",
+      "kind": "transient (32 SWCLK)",
+      "description": "Read + ACK=OK: target drives 32 data bits."
+    },
+    {
+      "name": "DataDrive_Write",
+      "kind": "transient (32 SWCLK)",
+      "description": "Write + ACK=OK: host drives 32 data bits."
+    },
+    {
+      "name": "ParityDrive_Read",
+      "kind": "transient (1 SWCLK)",
+      "description": "Read: target drives parity."
+    },
+    {
+      "name": "ParityDrive_Write",
+      "kind": "transient (1 SWCLK)",
+      "description": "Write: host drives parity; target checks → WDATAERR on mismatch."
+    },
+    {
+      "name": "TurnaroundB",
+      "kind": "transient (1 SWCLK, configurable 1-4)",
+      "description": "Direction-change cycle."
+    },
+    {
+      "name": "WaitOrFault",
+      "kind": "transient",
+      "description": "ACK=WAIT or FAULT: host ignores data."
+    },
+    {
+      "name": "LineResetDetect",
+      "kind": "background (always active)",
+      "description": "Detects 50+ SWCLKs with SWDIO=HIGH; forces SW-DP Idle."
+    }
+  ],
+  "fsm_states_swj_dp_mode_select": [
+    {
+      "name": "JTAG_Mode",
+      "kind": "stable",
+      "description": "SWJ-DP in JTAG mode."
+    },
+    {
+      "name": "WatchSWDSelect",
+      "kind": "background",
+      "description": "After ≥ 50 cycles TMS=1, watches for 0xE79E pattern."
+    },
+    {
+      "name": "SWD_Mode",
+      "kind": "stable",
+      "description": "SWJ-DP in SWD mode."
+    },
+    {
+      "name": "WatchJTAGSelect",
+      "kind": "background",
+      "description": "After ≥ 50 cycles SWDIO=1, watches for 0xE73C pattern."
+    }
+  ],
+  "swd_to_jtag_mode_switching": {
+    "jtag_to_swd_selection_sequence_hex": "0xE79E",
+    "swd_to_jtag_selection_sequence_hex": "0xE73C",
+    "selection_sequence_width_bits": 16,
+    "selection_sequence_bit_order": "LSB first on SWDIO/TMS",
+    "selection_sequence_preconditions": "Both selection sequences must be preceded by ≥ 50 cycles of SWDIO/TMS=HIGH and followed by ≥ 50 cycles of SWDIO/TMS=HIGH."
+  }
+}

@@ -1,0 +1,863 @@
+{
+  "fields": {
+    "channels": [
+      {
+        "name": "AW",
+        "direction_majority": "Master",
+        "signal_count": 13,
+        "signals": [
+          {
+            "name": "AWID",
+            "direction": "Master",
+            "semantics": "Write address ID. This signal is the identification tag for the write address group"
+          },
+          {
+            "name": "AWADDR",
+            "direction": "Master",
+            "semantics": "Write address. The write address gives the address of the first transfer in a write"
+          },
+          {
+            "name": "AWLEN",
+            "direction": "Master",
+            "semantics": "Burst length. The burst length gives the exact number of transfers in a burst. This"
+          },
+          {
+            "name": "AWSIZE",
+            "direction": "Master",
+            "semantics": "Burst size. This signal indicates the size of each transfer in the burst. See Burst size"
+          },
+          {
+            "name": "AWBURST",
+            "direction": "Master",
+            "semantics": "Burst type. The burst type and the size information, determine how the address for"
+          },
+          {
+            "name": "AWLOCK",
+            "direction": "Master",
+            "semantics": "Lock type. Provides additional information about the atomic characteristics of the"
+          },
+          {
+            "name": "AWCACHE",
+            "direction": "Master",
+            "semantics": "Memory type. This signal indicates how transactions are required to progress"
+          },
+          {
+            "name": "AWPROT",
+            "direction": "Master",
+            "semantics": "Protection type. This signal indicates the privilege and security level of the"
+          },
+          {
+            "name": "AWQOS",
+            "direction": "Master",
+            "semantics": "Quality of Service, QoS. The QoS identifier sent for each write transaction."
+          },
+          {
+            "name": "AWREGION",
+            "direction": "Master",
+            "semantics": "Region identifier. Permits a single physical interface on a slave to be used for"
+          },
+          {
+            "name": "AWUSER",
+            "direction": "Master",
+            "semantics": "User signal. Optional User-defined signal in the write address channel."
+          },
+          {
+            "name": "AWVALID",
+            "direction": "Master",
+            "semantics": "Write address valid. This signal indicates that the channel is signaling valid write"
+          },
+          {
+            "name": "AWREADY",
+            "direction": "Slave",
+            "semantics": "Write address ready. This signal indicates that the slave is ready to accept an"
+          }
+        ]
+      },
+      {
+        "name": "W",
+        "direction_majority": "Master",
+        "signal_count": 7,
+        "signals": [
+          {
+            "name": "WID",
+            "direction": "Master",
+            "semantics": "Write ID tag. This signal is the ID tag of the write data transfer. Supported only in AXI3."
+          },
+          {
+            "name": "WDATA",
+            "direction": "Master",
+            "semantics": "Write data."
+          },
+          {
+            "name": "WSTRB",
+            "direction": "Master",
+            "semantics": "Write strobes. This signal indicates which byte lanes hold valid data. There is one write"
+          },
+          {
+            "name": "WLAST",
+            "direction": "Master",
+            "semantics": "Write last. This signal indicates the last transfer in a write burst. See Write data channel"
+          },
+          {
+            "name": "WUSER",
+            "direction": "Master",
+            "semantics": "User signal. Optional User-defined signal in the write data channel."
+          },
+          {
+            "name": "WVALID",
+            "direction": "Master",
+            "semantics": "Write valid. This signal indicates that valid write data and strobes are available. See"
+          },
+          {
+            "name": "WREADY",
+            "direction": "Slave",
+            "semantics": "Write ready. This signal indicates that the slave can accept the write data. See Channel"
+          }
+        ]
+      },
+      {
+        "name": "B",
+        "direction_majority": "Slave",
+        "signal_count": 5,
+        "signals": [
+          {
+            "name": "BID",
+            "direction": "Slave",
+            "semantics": "Response ID tag. This signal is the ID tag of the write response. See Transaction ID on"
+          },
+          {
+            "name": "BRESP",
+            "direction": "Slave",
+            "semantics": "Write response. This signal indicates the status of the write transaction. See Read and"
+          },
+          {
+            "name": "BUSER",
+            "direction": "Slave",
+            "semantics": "User signal. Optional User-defined signal in the write response channel. Supported only"
+          },
+          {
+            "name": "BVALID",
+            "direction": "Slave",
+            "semantics": "Write response valid. This signal indicates that the channel is signaling a valid write"
+          },
+          {
+            "name": "BREADY",
+            "direction": "Master",
+            "semantics": "Response ready. This signal indicates that the master can accept a write response. See"
+          }
+        ]
+      },
+      {
+        "name": "AR",
+        "direction_majority": "Master",
+        "signal_count": 13,
+        "signals": [
+          {
+            "name": "ARID",
+            "direction": "Master",
+            "semantics": "Read address ID. This signal is the identification tag for the read address group of"
+          },
+          {
+            "name": "ARADDR",
+            "direction": "Master",
+            "semantics": "Read address. The read address gives the address of the first transfer in a read burst"
+          },
+          {
+            "name": "ARLEN",
+            "direction": "Master",
+            "semantics": "Burst length. This signal indicates the exact number of transfers in a burst. This"
+          },
+          {
+            "name": "ARSIZE",
+            "direction": "Master",
+            "semantics": "Burst size. This signal indicates the size of each transfer in the burst. See Burst size on"
+          },
+          {
+            "name": "ARBURST",
+            "direction": "Master",
+            "semantics": "Burst type. The burst type and the size information determine how the address for each"
+          },
+          {
+            "name": "ARLOCK",
+            "direction": "Master",
+            "semantics": "Lock type. This signal provides additional information about the atomic characteristics"
+          },
+          {
+            "name": "ARCACHE",
+            "direction": "Master",
+            "semantics": "Memory type. This signal indicates how transactions are required to progress through"
+          },
+          {
+            "name": "ARPROT",
+            "direction": "Master",
+            "semantics": "Protection type. This signal indicates the privilege and security level of the transaction,"
+          },
+          {
+            "name": "ARQOS",
+            "direction": "Master",
+            "semantics": "Quality of Service, QoS. QoS identifier sent for each read transaction. Implemented"
+          },
+          {
+            "name": "ARREGION",
+            "direction": "Master",
+            "semantics": "Region identifier. Permits a single physical interface on a slave to be used for multiple"
+          },
+          {
+            "name": "ARUSER",
+            "direction": "Master",
+            "semantics": "User signal. Optional User-defined signal in the read address channel."
+          },
+          {
+            "name": "ARVALID",
+            "direction": "Master",
+            "semantics": "Read address valid. This signal indicates that the channel is signaling valid read"
+          },
+          {
+            "name": "ARREADY",
+            "direction": "Slave",
+            "semantics": "Read address ready. This signal indicates that the slave is ready to accept an address"
+          }
+        ]
+      },
+      {
+        "name": "R",
+        "direction_majority": "Slave",
+        "signal_count": 6,
+        "signals": [
+          {
+            "name": "RID",
+            "direction": "Slave",
+            "semantics": "Read ID tag. This signal is the identification tag for the read data group of signals"
+          },
+          {
+            "name": "RRESP",
+            "direction": "Slave",
+            "semantics": "Read response. This signal indicates the status of the read transfer. See Read and write"
+          },
+          {
+            "name": "RLAST",
+            "direction": "Slave",
+            "semantics": "Read last. This signal indicates the last transfer in a read burst. See Read data channel on"
+          },
+          {
+            "name": "RUSER",
+            "direction": "Slave",
+            "semantics": "User signal. Optional User-defined signal in the read data channel."
+          },
+          {
+            "name": "RVALID",
+            "direction": "Slave",
+            "semantics": "Read valid. This signal indicates that the channel is signaling the required read data. See"
+          },
+          {
+            "name": "RREADY",
+            "direction": "Master",
+            "semantics": "Read ready. This signal indicates that the master can accept the read data and response"
+          }
+        ]
+      }
+    ],
+    "global_signals": [
+      {
+        "name": "ACLK",
+        "direction": "Global",
+        "semantics": "source     Global clock signal. See Clock on page A3-38."
+      },
+      {
+        "name": "ARESETn",
+        "direction": "Global",
+        "semantics": "source     Global reset signal, active LOW. See Reset on page A3-38."
+      }
+    ],
+    "channel_counts": {
+      "axi_channels": 5,
+      "ace_snoop_channels": 3,
+      "ace_lite_snoop_channels": 0,
+      "ack_signals": 2,
+      "channels": 5,
+      "signals_per_channel": {
+        "AW": 13,
+        "W": 7,
+        "B": 5,
+        "AR": 13,
+        "R": 7
+      },
+      "total_signals_excluding_global": 45,
+      "total_signals_including_ACLK_ARESETn": 47
+    },
+    "handshake_pairs": {
+      "AW": "AWVALID (master) / AWREADY (slave)",
+      "W": "WVALID (master) / WREADY (slave)",
+      "B": "BVALID (slave) / BREADY (master)",
+      "AR": "ARVALID (master) / ARREADY (slave)",
+      "R": "RVALID (slave) / RREADY (master)",
+      "ahb_address_to_data": "HSELx + HREADY co-sampled in Subordinate; HREADYOUT drives wait states; HRESP drives error response.",
+      "apb_setup_access": "PSELx + PENABLE jointly indicate state; PREADY extends ACCESS."
+    },
+    "dependency_graph": {
+      "ahb_common_rule": "Subordinate samples HSELx + address-phase signals only when HREADY=HIGH. Subordinate drives HREADYOUT to extend the data phase. AHB has no AXI-style VALID/READY decoupling — instead it uses HTRANS + HREADY co-sampled.",
+      "ahb_address_phase": "Address phase one cycle (extended only by previous data phase).",
+      "ahb_data_phase": "Data phase one or more cycles; controlled by HREADY.",
+      "ahb_pipeline": "Address phase of transfer N+1 overlaps data phase of transfer N.",
+      "apb_state_transitions": "IDLE -> SETUP on transfer-required; SETUP -> ACCESS unconditional next PCLK; ACCESS -> ACCESS while PREADY=0; ACCESS -> IDLE or SETUP on PREADY=1."
+    },
+    "ordering_rules": {
+      "ahb_strict_in_order": "AHB-Lite is single-Manager and strictly in-order; one outstanding transfer with address/data pipelining.",
+      "ahb_burst_order": "Beats of a burst are in HBURST-defined order (incrementing or wrapping); all beats use same HSIZE / HWRITE / HPROT / HMASTLOCK.",
+      "apb_strict_in_order": "APB is single-Manager (bridge); strictly in-order; one transfer in progress at a time."
+    },
+    "ic_name": "AMBA AXI / ACE Protocol Specification (ARM IHI 0022E)",
+    "ahb_global_signals": [
+      {
+        "name": "HCLK",
+        "width": 1,
+        "direction": "Clock source -> all",
+        "semantics": "Bus clock; rising edge times all transfers."
+      },
+      {
+        "name": "HRESETn",
+        "width": 1,
+        "direction": "Reset controller -> all",
+        "semantics": "Bus reset, active LOW (only active-LOW signal in AHB)."
+      }
+    ],
+    "ahb_manager_signals": [
+      {
+        "name": "HADDR",
+        "width": "ADDR_WIDTH (default 32)",
+        "direction": "Manager -> Subordinate+Decoder",
+        "semantics": "Byte address of transfer."
+      },
+      {
+        "name": "HBURST",
+        "width": "0 or 3",
+        "direction": "Manager -> Subordinate",
+        "semantics": "Burst type."
+      },
+      {
+        "name": "HMASTLOCK",
+        "width": 1,
+        "direction": "Manager -> Subordinate",
+        "semantics": "Locked sequence indicator."
+      },
+      {
+        "name": "HPROT",
+        "width": "0, 4, or 7",
+        "direction": "Manager -> Subordinate",
+        "semantics": "Protection control."
+      },
+      {
+        "name": "HSIZE",
+        "width": 3,
+        "direction": "Manager -> Subordinate",
+        "semantics": "Transfer size."
+      },
+      {
+        "name": "HNONSEC",
+        "width": 1,
+        "direction": "Manager -> Subordinate+Decoder",
+        "semantics": "Secure/Non-secure (AHB5)."
+      },
+      {
+        "name": "HEXCL",
+        "width": 1,
+        "direction": "Manager -> Monitor",
+        "semantics": "Exclusive transfer (AHB5)."
+      },
+      {
+        "name": "HMASTER",
+        "width": "0..8",
+        "direction": "Manager -> Monitor+Subordinate",
+        "semantics": "Manager ID (AHB5)."
+      },
+      {
+        "name": "HTRANS",
+        "width": 2,
+        "direction": "Manager -> Subordinate",
+        "semantics": "Transfer type."
+      },
+      {
+        "name": "HWDATA",
+        "width": "DATA_WIDTH",
+        "direction": "Manager -> Subordinate",
+        "semantics": "Write data."
+      },
+      {
+        "name": "HWSTRB",
+        "width": "DATA_WIDTH/8",
+        "direction": "Manager -> Subordinate",
+        "semantics": "Write strobes (Issue C)."
+      },
+      {
+        "name": "HWRITE",
+        "width": 1,
+        "direction": "Manager -> Subordinate",
+        "semantics": "Direction: 1=write."
+      }
+    ],
+    "ahb_subordinate_signals": [
+      {
+        "name": "HRDATA",
+        "width": "DATA_WIDTH",
+        "direction": "Subordinate -> Mux -> Manager",
+        "semantics": "Read data."
+      },
+      {
+        "name": "HREADYOUT",
+        "width": 1,
+        "direction": "Subordinate -> Mux",
+        "semantics": "Per-Subordinate ready; combined into HREADY."
+      },
+      {
+        "name": "HRESP",
+        "width": 1,
+        "direction": "Subordinate -> Mux -> Manager",
+        "semantics": "Response: 0=OKAY, 1=ERROR (two-cycle)."
+      },
+      {
+        "name": "HEXOKAY",
+        "width": 1,
+        "direction": "Subordinate -> Mux -> Manager",
+        "semantics": "Exclusive okay (AHB5)."
+      }
+    ],
+    "ahb_decoder_signals": [
+      {
+        "name": "HSELx",
+        "width": 1,
+        "direction": "Decoder -> Subordinate",
+        "semantics": "One per Subordinate."
+      }
+    ],
+    "ahb_multiplexor_signals": [
+      {
+        "name": "HRDATA",
+        "width": "DATA_WIDTH",
+        "direction": "Mux -> Manager",
+        "semantics": "Selected by decoder."
+      },
+      {
+        "name": "HREADY",
+        "width": 1,
+        "direction": "Mux -> Manager+all Subordinates",
+        "semantics": "Combined HREADYOUT chain."
+      },
+      {
+        "name": "HRESP",
+        "width": 1,
+        "direction": "Mux -> Manager",
+        "semantics": "Selected by decoder."
+      },
+      {
+        "name": "HEXOKAY",
+        "width": 1,
+        "direction": "Mux -> Manager",
+        "semantics": "Selected by decoder (AHB5)."
+      }
+    ],
+    "apb_signals": [
+      {
+        "name": "PCLK",
+        "width": 1,
+        "direction": "Clock source -> all",
+        "semantics": "Rising edge times all transfers."
+      },
+      {
+        "name": "PRESETn",
+        "width": 1,
+        "direction": "System reset -> all",
+        "semantics": "Active LOW."
+      },
+      {
+        "name": "PADDR",
+        "width": "up to 32",
+        "direction": "Bridge -> Sub",
+        "semantics": "APB address bus."
+      },
+      {
+        "name": "PPROT",
+        "width": 3,
+        "direction": "Bridge -> Sub",
+        "semantics": "Protection (APB4)."
+      },
+      {
+        "name": "PSELx",
+        "width": 1,
+        "direction": "Bridge -> Sub",
+        "semantics": "Per-peripheral select."
+      },
+      {
+        "name": "PENABLE",
+        "width": 1,
+        "direction": "Bridge -> Sub",
+        "semantics": "Second cycle of an APB transfer."
+      },
+      {
+        "name": "PWRITE",
+        "width": 1,
+        "direction": "Bridge -> Sub",
+        "semantics": "1=write, 0=read."
+      },
+      {
+        "name": "PWDATA",
+        "width": "up to 32",
+        "direction": "Bridge -> Sub",
+        "semantics": "Write data."
+      },
+      {
+        "name": "PSTRB",
+        "width": "PWDATA_WIDTH/8",
+        "direction": "Bridge -> Sub",
+        "semantics": "Write strobes (APB4); all-LOW on reads."
+      },
+      {
+        "name": "PREADY",
+        "width": 1,
+        "direction": "Sub -> Bridge",
+        "semantics": "Slave ready; LOW extends ACCESS (APB3+)."
+      },
+      {
+        "name": "PRDATA",
+        "width": "up to 32",
+        "direction": "Sub -> Bridge",
+        "semantics": "Read data."
+      },
+      {
+        "name": "PSLVERR",
+        "width": 1,
+        "direction": "Sub -> Bridge",
+        "semantics": "Transfer failure (APB3+, optional)."
+      }
+    ],
+    "ahb_user_signals_AHB5": [
+      {
+        "name": "HAUSER",
+        "width": "USER_REQ_WIDTH (impl-defined)",
+        "direction": "Manager -> Subordinate",
+        "semantics": "User signal on Address channel."
+      },
+      {
+        "name": "HWUSER",
+        "width": "USER_DATA_WIDTH (impl-defined)",
+        "direction": "Manager -> Subordinate",
+        "semantics": "User signal on Write data channel."
+      },
+      {
+        "name": "HRUSER",
+        "width": "USER_DATA_WIDTH (impl-defined)",
+        "direction": "Subordinate -> Manager",
+        "semantics": "User signal on Read data channel."
+      },
+      {
+        "name": "HBUSER",
+        "width": "USER_RESP_WIDTH (impl-defined)",
+        "direction": "Subordinate -> Manager",
+        "semantics": "User signal on Response channel."
+      }
+    ],
+    "ahb_parity_check_signals_AHB5": [
+      {
+        "name": "HADDRCHK",
+        "purpose": "Parity check signal for HADDR (and the Manager control bits)."
+      },
+      {
+        "name": "HCTRLCHK",
+        "purpose": "Parity check signal for the address-phase control signals."
+      },
+      {
+        "name": "HWDATACHK",
+        "purpose": "Parity check signal for HWDATA + HWSTRB."
+      },
+      {
+        "name": "HRDATACHK",
+        "purpose": "Parity check signal for HRDATA."
+      },
+      {
+        "name": "HRESPCHK",
+        "purpose": "Parity check signal for HRESP."
+      },
+      {
+        "name": "HREADYCHK",
+        "purpose": "Parity check signal for HREADY."
+      }
+    ],
+    "axi_channels_with_ace_additions": [
+      {
+        "name": "AW",
+        "full_name": "Write Address Channel (with ACE extensions)",
+        "direction": "Master -> Slave",
+        "signals_axi_inherited": [
+          "AWID",
+          "AWADDR",
+          "AWLEN",
+          "AWSIZE",
+          "AWBURST",
+          "AWLOCK",
+          "AWCACHE",
+          "AWPROT",
+          "AWQOS",
+          "AWREGION",
+          "AWUSER",
+          "AWVALID",
+          "AWREADY"
+        ],
+        "signals_ace_added": [
+          {
+            "name": "AWDOMAIN",
+            "width": "2",
+            "semantics": "Shareability domain."
+          },
+          {
+            "name": "AWSNOOP",
+            "width": "3",
+            "semantics": "Coherent write type."
+          },
+          {
+            "name": "AWBAR",
+            "width": "2",
+            "semantics": "Barrier encoding."
+          },
+          {
+            "name": "AWUNIQUE",
+            "width": "1",
+            "semantics": "Optional, for WriteEvict."
+          }
+        ]
+      },
+      {
+        "name": "W",
+        "full_name": "Write Data Channel (inherited from AXI)",
+        "direction": "Master -> Slave",
+        "signals_axi_inherited": [
+          "WID (AXI3 only)",
+          "WDATA",
+          "WSTRB",
+          "WLAST",
+          "WUSER",
+          "WVALID",
+          "WREADY"
+        ],
+        "signals_ace_added": []
+      },
+      {
+        "name": "B",
+        "full_name": "Write Response Channel (with ACE extensions)",
+        "direction": "Slave -> Master",
+        "signals_axi_inherited": [
+          "BID",
+          "BVALID",
+          "BREADY",
+          "BUSER"
+        ],
+        "signals_ace_added": [
+          {
+            "name": "BRESP",
+            "width": "3",
+            "semantics": "Extended; [2]=DataTransfer."
+          }
+        ]
+      },
+      {
+        "name": "AR",
+        "full_name": "Read Address Channel (with ACE extensions)",
+        "direction": "Master -> Slave",
+        "signals_axi_inherited": [
+          "ARID",
+          "ARADDR",
+          "ARLEN",
+          "ARSIZE",
+          "ARBURST",
+          "ARLOCK",
+          "ARCACHE",
+          "ARPROT",
+          "ARQOS",
+          "ARREGION",
+          "ARUSER",
+          "ARVALID",
+          "ARREADY"
+        ],
+        "signals_ace_added": [
+          {
+            "name": "ARDOMAIN",
+            "width": "2",
+            "semantics": "Shareability domain."
+          },
+          {
+            "name": "ARSNOOP",
+            "width": "4",
+            "semantics": "Coherent read / cache-maintenance / DVM type."
+          },
+          {
+            "name": "ARBAR",
+            "width": "2",
+            "semantics": "Barrier encoding."
+          }
+        ]
+      },
+      {
+        "name": "R",
+        "full_name": "Read Data Channel (with ACE extensions)",
+        "direction": "Slave -> Master",
+        "signals_axi_inherited": [
+          "RID",
+          "RDATA",
+          "RLAST",
+          "RUSER",
+          "RVALID",
+          "RREADY"
+        ],
+        "signals_ace_added": [
+          {
+            "name": "RRESP",
+            "width": "4",
+            "semantics": "Extended; [2]=PassDirty, [3]=IsShared."
+          }
+        ]
+      }
+    ],
+    "ace_snoop_channels_new": [
+      {
+        "name": "AC",
+        "full_name": "Snoop Address Channel",
+        "direction": "Interconnect -> Master (cached)",
+        "signals": [
+          {
+            "name": "ACVALID",
+            "width": "1",
+            "direction": "Interconnect",
+            "semantics": "Snoop address valid."
+          },
+          {
+            "name": "ACREADY",
+            "width": "1",
+            "direction": "Master",
+            "semantics": "Master accepts snoop."
+          },
+          {
+            "name": "ACADDR",
+            "width": "ADDR_WIDTH",
+            "direction": "Interconnect",
+            "semantics": "Snoop address."
+          },
+          {
+            "name": "ACSNOOP",
+            "width": "4",
+            "direction": "Interconnect",
+            "semantics": "Snoop type."
+          },
+          {
+            "name": "ACPROT",
+            "width": "3",
+            "direction": "Interconnect",
+            "semantics": "Snoop protection."
+          }
+        ]
+      },
+      {
+        "name": "CR",
+        "full_name": "Snoop Response Channel",
+        "direction": "Master (cached) -> Interconnect",
+        "signals": [
+          {
+            "name": "CRVALID",
+            "width": "1",
+            "direction": "Master",
+            "semantics": "Snoop response valid."
+          },
+          {
+            "name": "CRREADY",
+            "width": "1",
+            "direction": "Interconnect",
+            "semantics": "Accept snoop response."
+          },
+          {
+            "name": "CRRESP",
+            "width": "5",
+            "direction": "Master",
+            "semantics": "DataTransfer/Error/PassDirty/IsShared/WasUnique."
+          }
+        ]
+      },
+      {
+        "name": "CD",
+        "full_name": "Snoop Data Channel",
+        "direction": "Master (cached) -> Interconnect",
+        "signals": [
+          {
+            "name": "CDVALID",
+            "width": "1",
+            "direction": "Master",
+            "semantics": "Snoop data valid."
+          },
+          {
+            "name": "CDREADY",
+            "width": "1",
+            "direction": "Interconnect",
+            "semantics": "Accept snoop data."
+          },
+          {
+            "name": "CDDATA",
+            "width": "CD_DATA_WIDTH",
+            "direction": "Master",
+            "semantics": "Snoop data payload."
+          },
+          {
+            "name": "CDLAST",
+            "width": "1",
+            "direction": "Master",
+            "semantics": "Final beat of snoop data burst."
+          }
+        ]
+      }
+    ],
+    "ace_acknowledge_signals": [
+      {
+        "name": "RACK",
+        "width": "1",
+        "direction": "Master -> Interconnect",
+        "semantics": "Single-cycle pulse one ACLK after RLAST handshake."
+      },
+      {
+        "name": "WACK",
+        "width": "1",
+        "direction": "Master -> Interconnect",
+        "semantics": "Single-cycle pulse one ACLK after B handshake."
+      }
+    ],
+    "handshake_pairs_summary": {
+      "AW": "AWVALID/AWREADY",
+      "W": "WVALID/WREADY",
+      "B": "BVALID/BREADY",
+      "AR": "ARVALID/ARREADY",
+      "R": "RVALID/RREADY",
+      "AC": "ACVALID/ACREADY",
+      "CR": "CRVALID/CRREADY",
+      "CD": "CDVALID/CDREADY"
+    },
+    "dependency_graph_ace_snoops": {
+      "rule_1": "Interconnect drives ACVALID independent of ACREADY.",
+      "rule_2": "Master waits for ACVALID+ACREADY before CRVALID.",
+      "rule_3": "Master waits for ACVALID+ACREADY before CDVALID (if DataTransfer=1).",
+      "rule_4": "CRVALID/CDVALID must not depend combinationally on CRREADY/CDREADY.",
+      "rule_5": "Interconnect may wait for CRVALID/CDVALID before completing snoop."
+    },
+    "ordering_rules_ace": {
+      "snoop_ordering": "CR responses follow AC address order.",
+      "RACK_required_before": "Interconnect must observe RACK before dependent snoops.",
+      "WACK_required_before": "Interconnect must observe WACK before dependent snoops.",
+      "same_id_ordering": "Inherited from AXI.",
+      "different_id_ordering": "Inherited from AXI."
+    }
+  },
+  "extraction_status": "EXTRACTED",
+  "schema_version": "v0.1.62",
+  "doc_class": "L17",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l17_channels v0.1.62",
+  "extraction_evidence": {},
+  "extraction_strategy": {
+    "l17_handshake_pairs_v0_1_70": "R27: synthesised 5 handshake_pairs from L17.channels"
+  },
+  "doc_name": "L17_CHANNEL_SIGNAL_CATALOG",
+  "applicability": "APPLICABLE",
+  "ic_class": "bus_interconnect_protocol"
+}

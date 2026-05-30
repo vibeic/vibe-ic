@@ -202,11 +202,82 @@
       "Table A9-2 Slave interface write channel signals and default signal values",
       "Table A9-3 Master interface read channel signals and default signal values",
       "Table A9-4 Slave interface read channel signals and default signal values"
+    ],
+    "ic_name": "AMBA AXI / ACE Protocol Specification",
+    "typical_topologies_inherited": [
+      "Shared address and data buses",
+      "Shared address buses and multiple data buses",
+      "Multilayer, with multiple address and data buses"
+    ],
+    "ace_specific_topology_components": [
+      "Point of Serialization (POS)",
+      "Point of Coherency (PoC)",
+      "Snoop Filter (optional)",
+      "Cached Master Port (full ACE)",
+      "ACE-Lite Master Port (no AC/CR/CD)",
+      "Snoop Distributor",
+      "DVM Distributor"
+    ],
+    "interconnect_role_in_ace_summary": [
+      "Decode (AxDOMAIN+AxSNOOP+AxBAR+AxADDR) -> snoop list.",
+      "Issue AC snoops to targets.",
+      "Collect CR + CD; aggregate.",
+      "Forward response on R / B with extended RRESP / BRESP.",
+      "Wait for RACK / WACK.",
+      "Handle barrier transactions.",
+      "Distribute DVM messages."
+    ],
+    "id_handling_inherited": "Inherited from AXI4: interconnect appends master-port bits.",
+    "interconnect_ordering_requirements_ace": [
+      "Inherited AXI same-ID ordering.",
+      "Snoop ordering on CR per master.",
+      "RACK/WACK gating before dependent snoops.",
+      "Barriers block reordering within named domain.",
+      "DVM: DVMComplete after all DVMMessage targets respond."
+    ],
+    "default_signal_values_for_ace_additions": {
+      "ARDOMAIN_default_for_legacy_axi_masters": "0b00 (Non-shareable)",
+      "ARSNOOP_default_for_non_coherent_master": "0b0000 (ReadNoSnoop when ARDOMAIN=Non-shareable/System).",
+      "ARBAR_default": "0b00 (Normal access, not a barrier).",
+      "AWDOMAIN_default": "0b00 (Non-shareable)",
+      "AWSNOOP_default": "0b000 (WriteNoSnoop when AWDOMAIN=Non-shareable/System).",
+      "AWBAR_default": "0b00 (Normal access).",
+      "RRESP_extended_default": "RRESP[3:2]=00 (UniqueClean — for non-coherent reads).",
+      "BRESP_extended_default": "BRESP[2]=0 (no DataTransfer) for normal AXI writes.",
+      "RACK_WACK_for_axi_only_masters": "Tie LOW or auto-ack at interconnect boundary."
+    },
+    "snoop_filter_optional_requirements": {
+      "purpose": "Reduce snoop traffic.",
+      "required_notifications": [
+        "Evict for Inner/Outer Shareable clean line removal.",
+        "WriteEvict + AWUNIQUE for UniqueClean removal.",
+        "WriteBack/WriteClean with correct AWDOMAIN."
+      ],
+      "without_snoop_filter": "Interconnect must broadcast every snoop to every coherent master."
+    },
+    "memory_vs_peripheral_regions_inherited": {
+      "Memory_location": "Read returns last value written.",
+      "Peripheral_region": "Implementation-defined access method."
+    },
+    "barrier_scope_by_domain": {
+      "Non_shareable_barrier": "Orders only within initiator's Non-shareable domain.",
+      "Inner_Shareable_barrier": "Orders within Inner-shareable domain.",
+      "Outer_Shareable_barrier": "Orders within Outer-shareable domain.",
+      "System_barrier": "Orders across all masters in system."
+    },
+    "dvm_distribution_rules": [
+      "DVMMessage broadcast on AC of DVM-capable masters in named domain.",
+      "Each target invalidates and acks on CR.",
+      "DVMComplete issued after all targets ack; interconnect aggregates.",
+      "DVMMessage = ARSNOOP=0b1111; DVMComplete = ARSNOOP=0b1110."
     ]
   },
   "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",
   "doc_class": "L18",
   "emitted_by": "phase1_protocol_spec_extract.extract_l18_interconnect v0.1.62",
-  "extraction_evidence": {}
+  "extraction_evidence": {},
+  "doc_name": "L18_INTERCONNECT_TOPOLOGY",
+  "applicability": "APPLICABLE",
+  "ic_class": "bus_interconnect_protocol"
 }

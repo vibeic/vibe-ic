@@ -8,7 +8,10 @@
     "die_area_budget_um": null,
     "power_budget_uw": null,
     "sdc_constraints_path": null,
-    "floorplan_hints": []
+    "floorplan_hints": [],
+    "constraints_present": false,
+    "notes": "IHI 0022E is a wire-level / cycle-level bus protocol spec. It defines logical signal semantics and timing rules relative to ACLK only - no PDK-specific SDC, no floorplan / placement constraints, no clock-tree budget. ACE adds three snoop channels (AC/CR/CD) following the same single-clock rule; timing budgets for AC/CR/CD must be planned at integration.",
+    "ic_name": "AMBA AXI / ACE Protocol Specification"
   },
   "extraction_hints": [
     "Look for floorplan, area, power, timing constraints.",

@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "cmd_protocol",
-  "ic_name": "UNKNOWN_IC",
+  "ic_name": "AMBA AXI / ACE Protocol Specification",
   "opcodes": [
     {
       "hex": "<HALLUCINATION_SCRUBBED>",
@@ -861,5 +861,205 @@
     "Address must be aligned to (burst_size * burst_length).",
     "Number of bytes in the exclusive access must equal a single beat or a power-of-two burst.",
     "AxLOCK = Exclusive set on the read and matching write of the pair."
-  ]
+  ],
+  "fields": {
+    "ic_name": "AMBA AXI / ACE Protocol Specification",
+    "rationale": "ACE is not an opcode/byte-oriented command protocol. It extends AXI4 with coherency-specific multi-bit fields on the AR/AW channels and adds three new snoop channels (AC/CR/CD). 'Commands' are encoded as (AxBAR, AxDOMAIN, AxSNOOP) field tuples that select a coherent transaction type.",
+    "axi_channels_inherited": [
+      {
+        "name": "AR (Read Address)",
+        "direction": "Master -> Slave",
+        "ace_added_signals": [
+          "ARDOMAIN[1:0]",
+          "ARSNOOP[3:0]",
+          "ARBAR[1:0]"
+        ]
+      },
+      {
+        "name": "R  (Read Data)",
+        "direction": "Slave -> Master",
+        "ace_added_signals": [
+          "RRESP[3:2] PassDirty/IsShared"
+        ]
+      },
+      {
+        "name": "AW (Write Address)",
+        "direction": "Master -> Slave",
+        "ace_added_signals": [
+          "AWDOMAIN[1:0]",
+          "AWSNOOP[2:0]",
+          "AWBAR[1:0]",
+          "AWUNIQUE (optional)"
+        ]
+      },
+      {
+        "name": "W  (Write Data)",
+        "direction": "Master -> Slave",
+        "ace_added_signals": []
+      },
+      {
+        "name": "B  (Write Response)",
+        "direction": "Slave -> Master",
+        "ace_added_signals": [
+          "BRESP[2] DataTransfer"
+        ]
+      }
+    ],
+    "ace_snoop_channels_new": [
+      {
+        "name": "AC (Snoop Address)",
+        "direction": "Interconnect -> Master (cached)",
+        "signals": [
+          "ACVALID",
+          "ACREADY",
+          "ACADDR",
+          "ACSNOOP[3:0]",
+          "ACPROT[2:0]"
+        ]
+      },
+      {
+        "name": "CR (Snoop Response)",
+        "direction": "Master (cached) -> Interconnect",
+        "signals": [
+          "CRVALID",
+          "CRREADY",
+          "CRRESP[4:0]"
+        ]
+      },
+      {
+        "name": "CD (Snoop Data)",
+        "direction": "Master (cached) -> Interconnect",
+        "signals": [
+          "CDVALID",
+          "CDREADY",
+          "CDDATA",
+          "CDLAST"
+        ]
+      }
+    ],
+    "ace_acknowledge_signals": {
+      "RACK": "Master -> Interconnect; 1 cycle after RLAST+RVALID+RREADY at rising ACLK.",
+      "WACK": "Master -> Interconnect; 1 cycle after BVALID+BREADY at rising ACLK."
+    },
+    "AxDOMAIN_encoding": {
+      "0b00": "Non-shareable",
+      "0b01": "Inner Shareable",
+      "0b10": "Outer Shareable",
+      "0b11": "System"
+    },
+    "AxBAR_encoding": {
+      "AxBAR[0]": "0 = Normal, 1 = Barrier transaction",
+      "AxBAR[1]": "0 = Memory barrier, 1 = Synchronization barrier (when [0]=1)",
+      "barrier_types": {
+        "0b00": "Normal access",
+        "0b01": "Memory Barrier",
+        "0b10": "Normal access",
+        "0b11": "Synchronization Barrier"
+      }
+    },
+    "ARSNOOP_coherent_read_encodings": {
+      "0b0000": "ReadNoSnoop (Non-shareable) / ReadOnce (Shareable)",
+      "0b0001": "ReadShared",
+      "0b0010": "ReadClean",
+      "0b0011": "ReadNotSharedDirty",
+      "0b0111": "ReadUnique",
+      "0b1000": "CleanShared",
+      "0b1001": "CleanInvalid",
+      "0b1011": "CleanUnique",
+      "0b1100": "MakeUnique",
+      "0b1101": "MakeInvalid",
+      "0b1110": "DVM Complete — completion notification of a DVM message sequence",
+      "0b1111": "DVM Message — distributed virtual memory message (TLB inv / BP inv / IC inv / VA sync)"
+    },
+    "RRESP_combined_meaning": {
+      "0b0000": "Clean Unique data — line not dirty, no other copy",
+      "0b0100": "Pass dirty Unique — line dirty, no other copy (receiver responsible for WB)",
+      "0b1000": "Shared Clean — line not dirty, may be shared",
+      "0b1100": "Shared Dirty — line dirty AND may be shared (receiver responsible)"
+    },
+    "ace_sequence_examples": {
+      "ReadShared_to_shared_clean_line": [
+        "Master M0 issues ReadShared (ARDOMAIN=InnerShareable, ARSNOOP=0b0001).",
+        "Interconnect issues snoops on AC channel to other coherent masters (ACSNOOP=ReadShared).",
+        "Other masters respond on CR with CRRESP IsShared/PassDirty as appropriate; CD provides data if cache hit.",
+        "Interconnect returns data on R channel with RRESP[3:2] = IsShared/PassDirty matching cluster state.",
+        "M0 issues RACK after RLAST+RVALID+RREADY.",
+        "Line installed in M0 cache as SharedClean (or SharedDirty / UniqueClean / UniqueDirty per RRESP)."
+      ],
+      "ReadUnique_invalidate_others": [
+        "Master M0 wants exclusive copy: issues ReadUnique.",
+        "Interconnect snoops other caches with ACSNOOP=ReadUnique.",
+        "Snooped caches invalidate their copy; IsShared in CRRESP must be 0.",
+        "If a snooped cache had dirty line, it returns CRRESP with PassDirty=1, DataTransfer=1, and dirty line on CD.",
+        "Interconnect returns line to M0 with RRESP[3]=0 (not shared); M0 installs as UniqueClean or UniqueDirty per RRESP[2].",
+        "M0 issues RACK."
+      ],
+      "MakeUnique_before_full_line_write": [
+        "Master plans to overwrite a full cache line — issues MakeUnique (ARSNOOP=0b1100).",
+        "Interconnect snoops other caches with ACSNOOP=MakeUnique.",
+        "Snooped caches invalidate without returning data.",
+        "Interconnect returns single transfer with RDATA ignored, RLAST=1.",
+        "M0 issues RACK; then writes the new line via WriteBack/WriteClean."
+      ],
+      "CleanInvalid_cache_maintenance": [
+        "Master issues CleanInvalid (ARSNOOP=0b1001) — used by software to flush+invalidate.",
+        "Interconnect snoops with ACSNOOP=CleanInvalid.",
+        "Snooped dirty caches must write back via CD; clean caches optionally write back.",
+        "All snooped caches transition to Invalid; CRRESP IsShared=0.",
+        "Single RDATA transfer (ignored); RLAST=1; M0 issues RACK."
+      ],
+      "WriteBack_evict_dirty_line": [
+        "Cached master decides to evict a UniqueDirty/SharedDirty line.",
+        "Master issues WriteBack (AWSNOOP=0b011, AWDOMAIN appropriate).",
+        "Master sends W data over W channel.",
+        "Slave returns BRESP OKAY; master issues WACK; line removed from cache."
+      ],
+      "DVM_TLB_invalidate": [
+        "Initiator master issues DVMMessage (ARSNOOP=0b1111) with TLB-invalidate payload encoded in ARADDR/ARLEN/ARPROT.",
+        "Interconnect distributes DVM message via AC channel to all targeted masters.",
+        "Each target master invalidates the relevant TLB entries and acknowledges via CRRESP.",
+        "Initiator issues a follow-up DVMComplete (ARSNOOP=0b1110) once all targets have responded."
+      ]
+    },
+    "AWSNOOP_coherent_write_encodings": {
+      "0b000_NS_or_System": "WriteNoSnoop",
+      "0b000_Shareable": "WriteUnique",
+      "0b001": "WriteLineUnique",
+      "0b010": "WriteClean",
+      "0b011": "WriteBack",
+      "0b100": "Evict",
+      "0b101": "WriteEvict (requires AWUNIQUE)"
+    },
+    "RRESP_extension": {
+      "RRESP[1:0]": "AXI baseline: 00 OKAY, 01 EXOKAY, 10 SLVERR, 11 DECERR",
+      "RRESP[2]": "PassDirty",
+      "RRESP[3]": "IsShared"
+    },
+    "BRESP_extension": {
+      "BRESP[1:0]": "AXI baseline: 00 OKAY, 01 EXOKAY, 10 SLVERR, 11 DECERR",
+      "BRESP[2]": "DataTransfer"
+    },
+    "CRRESP_snoop_response_encoding": {
+      "CRRESP[0]": "DataTransfer",
+      "CRRESP[1]": "Error",
+      "CRRESP[2]": "PassDirty",
+      "CRRESP[3]": "IsShared",
+      "CRRESP[4]": "WasUnique"
+    },
+    "ACSNOOP_encoding": "Same encoding as ARSNOOP for the corresponding snoop type. Interconnect uses ACSNOOP to tell the cached master what kind of snoop action to take.",
+    "valid_ready_handshake_rules_ace": [
+      "All AXI + ACE channels use VALID/READY handshake.",
+      "VALID must not depend combinationally on READY.",
+      "AC channel: interconnect drives ACVALID/ACADDR/ACSNOOP/ACPROT; cached master drives ACREADY.",
+      "CR channel: cached master drives CRVALID/CRRESP; interconnect drives CRREADY.",
+      "CD channel: cached master drives CDVALID/CDDATA/CDLAST; interconnect drives CDREADY.",
+      "Master must wait for ACVALID+ACREADY before CRVALID or CDVALID."
+    ],
+    "ace_lite_subset_constraints": [
+      "ACE-Lite master has no AC/CR/CD channels.",
+      "ACE-Lite can issue ReadOnce/ReadNoSnoop and WriteUnique/WriteLineUnique/WriteNoSnoop only.",
+      "ACE-Lite observes RRESP[3:2] but never asserts IsShared/PassDirty.",
+      "Typical users: DMA / GPU / IO bridges."
+    ]
+  }
 }

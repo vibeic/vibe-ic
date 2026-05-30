@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "regmap",
-  "ic_name": "UNKNOWN_IC",
+  "ic_name": "AMBA AXI / ACE Protocol Specification",
   "registers": [],
   "no_registers_in_input": true,
   "otp_layout": null,
@@ -24,5 +24,12 @@
     ]
   },
   "register_map_present": false,
-  "notes": "If a future system-integration L4 is required, the canonical 'address-side fields' to capture would be: AxADDR width (implementation-defined), AxREGION (4 bits, AXI4+), AxQOS (4 bits, AXI4+), Slave_ID_WIDTH = max(master ID_WIDTH) + ceil(log2(num_masters)). Bus-interconnect protocol specification itself has no architectural register map; implementation-side configuration registers (if any) are integration-defined."
+  "notes": "If a future system-integration L4 is required for an ACE-coherent SoC, the canonical 'address-side fields' to capture would be: AxADDR width (implementation-defined), AxDOMAIN (2 bits), AxSNOOP (4 bits for AR, 3 bits for AW), AxBAR (2 bits), AxCACHE (4 bits), AxPROT (3 bits), AxREGION (4 bits); plus snoop-channel: ACADDR (matches AxADDR width), ACSNOOP (4 bits), ACPROT (3 bits).",
+  "base_address": "Defined at SoC level; offsets given relative to module base.",
+  "fields": {
+    "ic_name": "AMBA AXI / ACE Protocol Specification",
+    "register_map_present": false,
+    "rationale": "ACE is a bus/interconnect protocol that extends AXI4 with coherency. There is no MMIO register map in this document. The AW/AR address channels carry an arbitrary slave address (AxADDR) chosen by system integrators, and the spec only defines the *signaling* and the (AxBAR, AxDOMAIN, AxSNOOP) field tuples that encode coherent operations.",
+    "notes": "If a future system-integration L4 is required for an ACE-coherent SoC, the canonical 'address-side fields' to capture would be: AxADDR width (implementation-defined), AxDOMAIN (2 bits), AxSNOOP (4 bits for AR, 3 bits for AW), AxBAR (2 bits), AxCACHE (4 bits), AxPROT (3 bits), AxREGION (4 bits); plus snoop-channel: ACADDR (matches AxADDR width), ACSNOOP (4 bits), ACPROT (3 bits)."
+  }
 }

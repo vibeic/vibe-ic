@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "lab_calibration",
-  "ic_name": "UNKNOWN_IC",
+  "ic_name": "AMBA AXI / ACE Protocol Specification",
   "calibration_targets": [],
   "no_lab_calibration_in_input": true,
   "calibration_steps": [],
@@ -25,5 +25,12 @@
         "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
       }
     ]
-  }
+  },
+  "lab_calibration_present": false,
+  "notes": "Pure digital protocol block; no analog reference / trim / calibration loop. Baud-rate is purely from a digital divider chain of the BusClock.",
+  "fields": {
+    "ic_name": "AMBA AXI / ACE Protocol Specification"
+  },
+  "rationale": "AXI/ACE is a digital bus protocol; no analog calibration.",
+  "evidence": []
 }

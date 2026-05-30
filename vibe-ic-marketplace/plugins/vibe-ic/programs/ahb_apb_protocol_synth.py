@@ -1022,14 +1022,19 @@ def _l8_timing_waveform(gd: Path) -> None:
             "ACCESS -> SETUP on PREADY=1 + back-to-back transfer",
         ],
     })
-    d.setdefault("max_outstanding_rules", {
-        "ahb":
-            "AHB-Lite is single-Manager; one outstanding transfer at a "
-            "time (pipelined address+data).",
-        "apb":
-            "APB has no pipelining; one transfer in flight at a time; "
-            "min 2 PCLK cycles per transfer.",
-    })
+    # v0.1.87 — MERGE (14c3 batch synth pre-fills with AXI-baseline keys;
+    # we need AHB+APB keys ALSO present, not blocked).
+    _mor = d.setdefault("max_outstanding_rules", {})
+    if not isinstance(_mor, dict):
+        _mor = {}
+        d["max_outstanding_rules"] = _mor
+    _mor.setdefault("ahb",
+        "AHB-Lite is single-Manager; only one outstanding transfer at a "
+        "time (no AXI-style outstanding queues). Pipelining means address "
+        "phase of next transfer overlaps data phase of current transfer.")
+    _mor.setdefault("apb",
+        "APB has no pipelining; only one transfer in flight at a time; "
+        "minimum 2 PCLK cycles per transfer.")
     d.setdefault("interconnect_combination_rules", {
         "ahb_HREADY_chain":
             "Multiplexor combines all Subordinate HREADYOUTs into a "
@@ -1265,18 +1270,24 @@ def _l12(gd: Path) -> None:
         "3. Peripheral state after error is implementation-specific.",
         "4. Bridge maps PSLVERR=1 -> HRESP=ERROR (AHB) / RRESP=SLVERR (AXI).",
     ])
-    d.setdefault("ordering_rules_summary", {
-        "ahb_single_manager":
-            "AHB-Lite is single-Manager; one outstanding transfer; "
-            "pipelined address+data.",
-        "ahb_burst_order":
-            "All beats sequential per HBURST encoding.",
-        "ahb_multi_manager":
-            "Multi-Manager AHB requires an interconnect with arbitration "
-            "(see ARM DVI 0045).",
-        "apb_ordering":
-            "APB is single-Manager (bridge); strictly in-order.",
-    })
+    # v0.1.87 — MERGE (14c3 batch pre-fills with AXI-baseline keys).
+    _ors = d.setdefault("ordering_rules_summary", {})
+    if not isinstance(_ors, dict):
+        _ors = {}
+        d["ordering_rules_summary"] = _ors
+    _ors.setdefault("ahb_single_manager",
+        "AHB-Lite is single-Manager; no out-of-order; one outstanding "
+        "transfer at a time (pipelined address + data).")
+    _ors.setdefault("ahb_burst_order",
+        "All beats of a burst are sequential and the address relationship "
+        "(INCR / WRAP) is encoded in HBURST.")
+    _ors.setdefault("ahb_multi_manager",
+        "Multi-Manager AHB requires an interconnect with arbitration; "
+        "arbitration ordering is interconnect-defined (see ARM DVI 0045 "
+        "Multi-layer AHB Technical Overview).")
+    _ors.setdefault("apb_ordering",
+        "APB is single-Manager (the bridge); strictly in-order; one "
+        "transfer at a time.")
     d.setdefault("narrow_transfer_sequence",
         "Both AHB and APB support narrower-than-bus transfers. AHB: "
         "HSIZE + HADDR + (optional) HWSTRB determine active lanes. APB: "
@@ -1673,15 +1684,20 @@ def _l17(gd: Path) -> None:
             "unconditional next PCLK; ACCESS -> ACCESS while PREADY=0; "
             "ACCESS -> IDLE or SETUP on PREADY=1.",
     }
-    f.setdefault("ordering_rules", {
+    # v0.1.87 — FORCE overwrite (14c3 batch synth pre-fills ordering_rules
+    # with AXI-baseline keys; AHB+APB-specific keys must win for ahb_apb).
+    f["ordering_rules"] = {
         "ahb_strict_in_order":
             "AHB-Lite is single-Manager and strictly in-order; one "
             "outstanding transfer with address/data pipelining.",
         "ahb_burst_order":
-            "Beats of a burst in HBURST-defined order.",
+            "Beats of a burst are in HBURST-defined order (incrementing or "
+            "wrapping); all beats use same HSIZE / HWRITE / HPROT / "
+            "HMASTLOCK.",
         "apb_strict_in_order":
-            "APB is single-Manager (bridge); strictly in-order.",
-    })
+            "APB is single-Manager (bridge); strictly in-order; one "
+            "transfer in progress at a time.",
+    }
     d["fields"] = f
     _write(p, d)
 
@@ -1770,11 +1786,19 @@ def _l18(gd: Path) -> None:
         "guaranteed": ["Strict in-order on a single APB bus."],
         "not_guaranteed": ["Ordering across multiple independent APB busses."],
     })
-    f.setdefault("memory_vs_peripheral_regions", {
-        "ahb_memory_subordinate":     "Maps to memory region; handles all bursts/sizes.",
-        "ahb_peripheral_subordinate": "Typically via AHB-to-APB bridge.",
-        "apb_peripheral_region":      "PADDR-mapped peripheral register set; one PSELx per logical peripheral.",
-    })
+    # v0.1.87 — MERGE (14c3 batch / ACE synth may pre-fill with AXI keys).
+    _mvpr = f.setdefault("memory_vs_peripheral_regions", {})
+    if not isinstance(_mvpr, dict):
+        _mvpr = {}
+        f["memory_vs_peripheral_regions"] = _mvpr
+    _mvpr.setdefault("ahb_memory_subordinate",
+        "Maps to a memory region; handles all bursts/sizes correctly.")
+    _mvpr.setdefault("ahb_peripheral_subordinate",
+        "Typically connected via an AHB-to-APB bridge; APB peripheral "
+        "behaviour governed by APB protocol.")
+    _mvpr.setdefault("apb_peripheral_region",
+        "PADDR-mapped peripheral register set; one PSELx per logical "
+        "peripheral.")
     f.setdefault("slave_classification_ahb", {
         "Memory_Subordinate":     "Handles all AHB transaction types.",
         "Peripheral_Subordinate": "Often APB peripheral behind AHB-to-APB bridge.",

@@ -1,0 +1,1159 @@
+     Webinar Topics
+
+    • MIPI Alliance: A Brief Introduction
+         – Peter Lefkin, Managing Director, MIPI Alliance
+
+
+    • MIPI SoundWireSM Overview
+         – Pierre Bossart (Intel Corporation), MIPI LML WG
+           Chair
+
+
+
+
+Page 1                                      © 2015 MIPI Alliance, Inc. All rights reserved.
+       MIPI Alliance:
+A Brief Introduction
+
+
+         Peter B. Lefkin
+      Managing Director
+    MIPI Alliance – Beginning => Today
+
+          Since its inception MIPI Alliance has
+      continued to remain focused and meet the
+      needs of the mobile industry and beyond in
+      the midst of significant change over the 11
+     year lifespan of the organization. It continues
+        to do so with the development of new
+        technologies and evolution of current
+                      specifications.
+
+Page 3                              Copyright © 2015 MIPI Alliance. All rights reserved.
+     About MIPI Alliance
+    • 263 Members (as of 20 Jan 2015)
+    • 45+ specifications and supporting docs
+    • We drive mobile and mobile-influenced
+      interface technology through the
+      development of hardware and software
+      specifications
+    • We work globally and collaboratively with
+      other standards bodies to benefit the mobile
+      ecosystem
+
+Page 4                           Copyright © 2015 MIPI Alliance. All rights reserved.
+     MIPI Alliance Member Ecosystem
+
+
+
+
+Page 5                       Copyright © 2015 MIPI Alliance. All rights reserved.
+     Active MIPI Alliance Working Groups
+• Analog Control Interface    • PHY (C / D / M)
+• Battery Interface           • Reduced Input Output
+• Camera                        (RIO) (New)
+• Debug                       • RF Front-End
+• Display High Speed          • Sensor / I3CSM (New)
+  Synchronous Interface       • Software (New)
+• Low Latency Interface       • Technical Steering Group
+• Low Speed Multipoint Link   • Test
+  (New - SoundWireSM)         • UniProSM
+• Marketing
+
+
+Page 6                                 Copyright © 2015 MIPI Alliance. All rights reserved.
+Page 7   Copyright © 2015 MIPI Alliance. All rights reserved.
+     Recent Announcements
+
+    • 05 Nov 2014 -
+      MIPI Alliance Introduces Sensor Interface
+      Specification for Mobile, Mobile-Influenced
+      and Embedded-Systems Applications
+
+    • 09 Oct 2014 -
+      MIPI Alliance Introduces MIPI SoundWire℠, a
+      Comprehensive Audio Interface for Mobile
+      and Mobile-Influenced Devices
+
+Page 8                               © 2015 MIPI Alliance, Inc. All rights reserved.
+    The Future of MIPI – Beyond Mobile
+    • Mobile influences
+      everything
+
+    • Everything gets faster,
+      smaller and lower power
+         – MIPI will continue to
+           evolve specs to take
+           advantage of the
+           evolution of technology
+           in mobile devices
+
+
+
+
+Page 9                               Copyright © 2015 MIPI Alliance. All rights reserved.
+SoundWireSM Overview Webinar
+
+
+
+                              Pierre Bossart
+                         Intel Corporation
+        on behalf of MIPI Alliance LML WG
+
+
+                             January 21, 2015
+    SoundWire introduction
+    •     Timelines
+           –   Initial discussions in June 2012
+           –   Contributions from ~16 MIPI contributor companies
+           –   V09r04 entered 30-day final Voting Draft review
+           –   V1.0 ratification by MIPI planned for mid-February 2015
+    •     Key features
+           –   Two-pin dual-data rate multi-drop bus for audio applications (1.2 or 1.8V)
+           –   Robustness and Scalability (clock and multiple lanes)
+           –   Low power, low latency, well-bounded (PHY and transport)
+           –    Support for multiple streams, formats (PCM/PDM/DATA), modes (isoc/async/block)
+           –   Embedded control/commands
+           –   In-band interrupts/wakes, support for low-power jack detection
+    • Benefits:
+           –   New use cases not possible with existing interfaces (I2S, SLIMbus®, HDAudio)
+           –   New system topologies across mobile and mobile-influenced industries
+           –   Lower gate count allows for integration in cost-sensitive devices
+
+
+Page 11                                                                  © 2015 MIPI Alliance, Inc. All rights reserved.
+          Example topologies
+          AP	
+  direct-­‐a,ach	
+            Inter-­‐chip	
+  link,	
+  mul9-­‐lane	
+  support	
+  
+
+
+
+
+     Bridges,	
+  inter-­‐chip	
+  link	
+  
+
+
+
+
+Page 12                                                        © 2015 MIPI Alliance, Inc. All rights reserved.
+    Example topologies (2)
+     Func9onal	
+  par99oning	
+     Rou9ng/use	
+  case	
+  par99oning	
+  
+
+
+
+
+Page 13                                         © 2015 MIPI Alliance, Inc. All rights reserved.
+     SoundWire Protocol
+
+ •        Variable-size Frames                 •   Up to 11 Slaves
+           – Reduces overhead                  •   Unified Data Transport
+ •        Two-step synchronization                  – Up to 14 ports, 1..8 channels
+           – Static 8-bit sync word                 – PDM, PCM
+           – Dynamic 4-bit word to remove           – Bit-level interleaving to ensure
+             ghost sync words                         low-latency
+ •        Embedded commands                         – Isoc and async modes
+           – Removes need for I2C/SPI               – Dynamic changes in bandwidth
+           – PING: Status, test support               allocation without audio
+                                                      glitches
+           – READ/WRITE: 8-bit payload
+                                               •   Reconfigurations through
+ •        Bulk protocol to extend
+                                                   synchronized bank switch
+          command bandwidth
+           – Fast device configuration using
+                                               •   Interrupt capabilities
+             up to 20 Mbits/s                       – 32-frame max latency
+
+Page 14                                                         © 2015 MIPI Alliance, Inc. All rights reserved.
+          PHY details
+
+
+
+
+Page 15
+     Device types
+
+ •        Master
+           –   Provides clock and sync pattern on data
+               line
+           –   Handles all bus management, bit
+               allocation
+ •        Slave
+           –   Typically audio peripheral (microphone,
+               codec, amplifier)
+           –   1..11 Slaves connected to Master over
+               multi-drop bus
+           –   Ability to signal Interrupt condition
+           –   Ability to wake-up system
+ •        Monitor
+           –   Test equipment, in snooping/analyzer
+               mode most of the time
+           –   Can temporarily take-over bus and issue
+               read/write commands
+
+
+
+Page 16                                                  © 2015 MIPI Alliance, Inc. All rights reserved.
+    Modified NRZI encoding
+
+
+
+
+ • One bit can be owned by multiple devices.
+ • Modified-NZRI encoding removes drive conflicts
+          – Logic 1 represented as an active change
+          – Logic 0 represented as a passive unchanged level,
+            maintained by a bus-keeper.
+
+
+Page 17                                            © 2015 MIPI Alliance, Inc. All rights reserved.
+    Data handover (1)
+ • DDR transmission
+ • No secondary edge to
+   control handover
+   between adjacent bitSlots
+ • tDZ_Data_Max: worst
+   case (latest) time to
+   become high-impedance
+ • tZD_Data_Min: worst-case
+   (earliest) time to drive.
+ • tDZ_Data_Max <
+   tZD_Data_Min
+ • Margin included to allow
+   devices detecting the
+   clock edge at diﬀerent
+   times.
+
+Page 18                        © 2015 MIPI Alliance, Inc. All rights reserved.
+    Data handover (2)
+
+
+
+
+ • More than one device might drive a particular BitSlot
+ • It is required to momentarily tri-state even in a
+   device that is actively driving two adjacent BitSlots.
+
+
+Page 19                                  © 2015 MIPI Alliance, Inc. All rights reserved.
+     Data handover (3)
+ •        Turn-oﬀ time
+          (tDZ_Data_Max) might be
+          problematic with large-
+          geometry silicon process.
+ •        Explicitly permit a "self-
+          timed" turn-oﬀ that occurs
+          before the clock edge that
+          ends a given BitSlot.
+ •        The tOH_Data_Min
+          parameter ensures that the
+          valid signal is presented for
+          long enough to guarantee
+          that a bus-keeper has
+          snapped to the new value,
+          even when it is at the
+          opposite end of the PCB trace
+          to the device driving the data
+          signal.
+
+
+Page 20                                    © 2015 MIPI Alliance, Inc. All rights reserved.
+   Shared and virtual PHY
+
+
+
+
+ • Shared PHY: module-level integration, pins shared
+ • Virtual PHY: pins not visible externally, SoundWire
+   used within module.
+
+Page 21                                 © 2015 MIPI Alliance, Inc. All rights reserved.
+    Clock
+
+ • Max bus clock frequency of 13MHz for typical
+   geometries
+ • Audio transport most eﬃcient with ‘natural’ clock
+   frequencies, e.g. 9.6, 12, 12.288 MHz.
+ • Can be faster in specific settings
+ – e.g. single Slave close to Master
+ • Clock quality constrained to meet PHY parameters
+ • Jitter needs to be limited for best audio quality
+ • Jitter performance considered a diﬀerentiating feature
+   and system design concern
+ • No requirements on jitter (ppm, ps) in SoundWire spec
+
+
+Page 22                                    © 2015 MIPI Alliance, Inc. All rights reserved.
+    High-PHY
+
+ • Mechanism to go beyond mandatory timings
+ • Requires system-level knowledge on integrated
+   components. All components on High-PHY link need
+   to support same requirements.
+ • Hand-over sequence defined between ‘normal’ and
+   ‘high-PHY’ mode.
+ • Mode identification using one bit of the static sync
+   word.
+
+
+
+Page 23                                © 2015 MIPI Alliance, Inc. All rights reserved.
+    PHY Test modes
+                                Mode	
+       Data	
+  bus-­‐      Clock	
+              Data	
+  
+                                name	
+        keeper	
+          Output	
+             Output	
+  
+
+ • Master pins can be           Normal	
+           x	
+                x	
+                 x	
+  
+                              M_DataOﬀ	
+           x	
+                x	
+          Oﬀ/high-­‐Z	
+  
+   configured in several
+                              M_ClockDa            x	
+            Oﬀ/              Oﬀ/high-­‐Z	
+  
+   test modes                   taOﬀ	
+                           high-­‐Z	
+  
+ • External master or test
+                               M_AllOﬀ	
+     Oﬀ/high-­‐Z	
+        Oﬀ/              Oﬀ/high-­‐Z	
+  
+   equipment can drive                                           high-­‐Z	
+  
+   data and clock instead
+                              M_Keeper       Oﬀ/high-­‐Z	
+            x	
+                 x	
+  
+   of master and replace        Oﬀ	
+  
+   the master bus keeper      M_LowLow	
+           x	
+            Sta9c	
+          Sta9c	
+  Low	
+  
+                                                                   Low	
+  
+ • (‘x’ means functional in
+                              M_LowHig             x	
+            Sta9c	
+         Sta9c	
+  High	
+  
+   table)                        h	
+                               Low	
+  
+
+
+
+
+Page 24                                           © 2015 MIPI Alliance, Inc. All rights reserved.
+          Frame structure
+
+
+
+
+Page 25
+    Frame shapes
+
+ • Columns: 2-4-6-8-10-12-14-16
+ • Rows: 48 to 256. Only selected row
+   values in this range are valid
+ • Control word: first 48 rows of Col0
+ • Payload: PCM, PDM, bulk or raw data
+ • Frame shape determined by
+   command/control bandwidth
+ • Slaves are required to handle
+   pairwise combinations of Rows, Cols
+ • Master will typically only use a few
+   combinations with rows and columns
+   scaled by 2N factors
+
+
+
+
+Page 26                                   © 2015 MIPI Alliance, Inc. All rights reserved.
+    Two-dimensional frame structure
+
+ • Serial transmission but
+   frame defined by 2D
+   pattern (MaxRow, MaxCol)
+ • Low latency streams (1-bit
+   PDM):
+          • Samples evenly distributed in
+            time
+          • ‘vertical stripes’ in bit
+            allocation
+          • No conflicts with command/
+            control or PCM
+ • PCM streams
+          • Can use multiple columns
+            and/or multiple rows
+
+
+
+Page 27                                     © 2015 MIPI Alliance, Inc. All rights reserved.
+    48-bit Control Word
+    •     Interrupt/Wake signal (PREQ)
+    •     Synchronization
+           – Static sync word: 8+1 bits to lock on frame boundaries
+           – Dynamic sync: 4-bit CRC pattern with 15 frame period
+    •     PING command
+           – Slave interrupt and status
+               • Not Attached (not present or operational)
+               • Attached (synchronized with Master and able to handle commands)
+               • Alert (synchronized, at least one Interrupt condition raised)
+           – Multi-stream synchronization
+           – Bus arbitration with Monitor (BREQ, BREL)
+    •     Read/Write commands
+           – 16 bit address, 8 bit payload
+           – Address: single Slave, group of Slaves, broadcast.
+    •     Command status
+    •     Parity check
+
+
+Page 28                                                               © 2015 MIPI Alliance, Inc. All rights reserved.
+    Error handling
+   • Command Failed condition on
+          – Parity Error
+          – Bus Clash
+   • Command_Ignored condition on
+          • Non-existent device (programming error)
+          • Device not attached (lost sync or power)
+          • Register reserved or not implemented
+   • PHY definition leads to infrequent single-bit errors
+          – Command retransmitted or bus reset if errors
+          – Payload not suppressed or retransmitted
+   • No checks for programming errors
+   • No check if value written to a register makes sense
+
+
+Page 29                                           © 2015 MIPI Alliance, Inc. All rights reserved.
+     Parity checks
+ •        Parity bit set by Master or Monitor
+ •        Slaves need to set NAK bit and
+          interrupt condition on parity error
+ •        Parity based on physical level
+           – Use the value read on bus, not
+              the value sent to the bus
+           – Parity will detect some bus
+              conflicts
+ •        Parity calculation window:
+           – BitSlot0[44,1] in previous frame
+              to BitSlot[44,0] in current frame
+           – Error may be reported with a 1-
+              frame delay
+ •        Slaves do not compute parity until
+          they have successfully synchronized
+          to master
+
+
+
+Page 30                                           © 2015 MIPI Alliance, Inc. All rights reserved.
+    Slave registers and banks
+    •     Normative registers: 0x0 - 0xFFF
+           – ~50% used
+    •     Device-class reserved: 0x1000 - 0x17FF
+    •     Implementation-defined:
+           – 0x2000-0xFFFF
+           – 0x10000-0x3FFFFFFF additional space accessible with paging registers
+    •     Register writes take eﬀect at end of frame if command successful
+    •     No action if command failed
+
+    •     Some registers are banked
+           – Software prepares next configuration in ‘shadow’ bank
+           – Software write to SCP_FrameCtrl0-1 to switches bank
+    •     All devices switch banks in synchronized manner
+    •     Impact: frame shape changes, channel activation/deactivation, bitSlot
+          allocation changes
+
+
+
+Page 31                                                        © 2015 MIPI Alliance, Inc. All rights reserved.
+    Interrupt registers
+    • Interrupt status stored in SCP_Intstat registers
+    • Hierarchical representation with cascade
+    • Optimized for simple devices with up to 4 ports
+
+
+
+
+Page 32                                     © 2015 MIPI Alliance, Inc. All rights reserved.
+      Bus set-up and programming sequence
+
+
+
+
+Page 33
+    Programming model
+
+ • SoundWire is a transport protocol mostly
+ • Audio functionality will be configured
+   through implementation-defined registers
+ • First devices likely to use same register map
+   as I2C/SPI devices
+ • Many similarities with existing audio driver
+   models
+
+
+Page 34                             © 2015 MIPI Alliance, Inc. All rights reserved.
+    Slave enumeration value
+    • Hard-coded 48-bit unique value
+          – SoundWire spec version (to handle future revisions, if any)
+          – UniqueID (if there are identical parts on bus)
+             • Value set by implementation-defined mechanism such as pin-
+               strapping
+             • Set by system integrator, not manufacturer
+          – MIPI ManufacturerID
+          – PartID
+          – Class (not defined yet)
+    • 48 bits stored as 6 SCP_Device0-5 registers
+    • Registers read by Master to identify Slave
+    • Enumeration stops when Slave has non-zero Device
+      Number
+
+Page 35                                                © 2015 MIPI Alliance, Inc. All rights reserved.
+     Slave startup sequence
+
+ •        Slave determines the frame format without supervision
+ •        Slave verifies static and dynamic sync pattern for 16 frames
+ •        Slave drives PREQ and/or drives “Attached” status bits for Device Number
+          0
+ •        Master reads 48-bit enumeration value from Slave
+ •        Master assigns non-zero Device Number (1-11) to Slave
+ •        Catch: multiple Slaves can report as attached at same time, solved by
+          hardware arbitration
+
+ •        Enumeration procedure:
+  –Master reads from Device0, SCP_Device_ID0 register
+  –On bus conflict, Slave with highest enumeration value will win arbitration, all other
+   devices back-oﬀ
+  –Master needs to redo enumeration until there are no Device0 reporting as
+   Attached
+
+
+Page 36                                                         © 2015 MIPI Alliance, Inc. All rights reserved.
+    Reset levels
+
+ • Hard-Reset
+    • Power-on or implementation-defined reset
+    • Bus Reset: Master drives 4096 Logic1 transitions
+    • Device Reset: Master writes Reset bit in SCP_Ctrl
+
+ • Soft Reset
+    • Slave detects two sync errors (not necessarily successive)
+
+ • Hard/Soft Reset diﬀerence
+    • Slave maintains Interrupt Status register to allow for debug (look at sync loss cause)
+
+ • After reset
+    • Interrupt masks disabled
+    • Device Number lost, re-enumeration required
+
+
+
+
+Page 37                                                              © 2015 MIPI Alliance, Inc. All rights reserved.
+          Transport
+
+
+
+
+Page 38
+    Data protocols
+
+ • Ports definition:
+          › Source (generate data on bus),
+          › Sink (retrieve data from bus)
+ • Isochronous ‘Normal’ mode for regular audio playback
+ • Asynchronous modes handled with two-bit preamble per sample
+   (RX-Ready, TX-Ready)
+ • Data only transmitted when both RX-Ready and TX-Ready are set
+          › TX-controlled: RX-Ready=1, Source defines when TX-Ready is set
+          › RX-Controlled: TX-Ready=1, Sink defines when RX-Ready is set
+          › Full-Async: both Source and Sink control rate
+ • Usages of async modes
+          › Slave can generate better audio clock than SoundWire clock
+          › 44.1 kHz playback over 48 kHz link
+          › Bursty behavior for always listening and voice calls
+
+
+
+
+Page 39                                                                      © 2015 MIPI Alliance, Inc. All rights reserved.
+    Data transmission
+
+ • Two concepts
+          › Prepare: make sure Slave is ready to render/
+            capture
+          › Activate: transport data on bus
+ • Prepare state machine:
+          › Port can be ready immediately
+          › Port can require time to be ready
+ • Software can unmask an
+   interrupt to be notified when
+   ready
+ • Activate might be configured
+   at any time, but audio might
+   not be valid
+ • Activation typically done with
+   bank switch to avoid bus
+   conflicts between streams
+
+Page 40                                                    © 2015 MIPI Alliance, Inc. All rights reserved.
+       Transport test modes
+   •      Mandatory support in each Port
+   •      Static0: helps detect Bus Clash Errors (another port drives in same bitSlots)
+   •      Static1: helps generate Bus Clash Errors
+   •      PRBS: help detect data integrity
+           –   8-bit LFSR for PRBS
+           –   Generates 255-bit maximal length sequence
+   •      Diﬀerent structure and init value for TX and RX
+           –   Receiver synchronizes in up to 8 bits
+   •      Interrupt can be generated on error
+
+
+
+
+Page 41                                                                         © 2015 MIPI Alliance, Inc. All rights reserved.
+     Transport (1): Sample Interval
+     definition
+ •        Sample Events: instant when data is
+          captured/rendered
+           – word clock / frame sync periodic event
+ •        Sample Interval: Number of bits
+          between successive Samples
+ •        Sample Interval value is updated
+          when Frame Shape or frequency
+          changes
+           – Not necessarily multiple of row size
+           – Not dependent on # of channels
+ •        Audio data does not need to be
+          placed in specific location within
+          Sample Interval
+ •        Bit allocation can change
+          dynamically without impact on
+          capture/rendering
+
+
+
+
+Page 42                                               © 2015 MIPI Alliance, Inc. All rights reserved.
+    Transport (2): Sub-Frame definition
+
+ • Vertical’ partition of
+    Frame
+ • Can also be viewed as
+    temporal aperture
+ • Registers
+ - HStart
+ - HStop
+ - Notional:
+ Hwidth = HStop-Hstart
+
+Page 43                          © 2015 MIPI Alliance, Inc. All rights reserved.
+    Transport (3): Payload Transport
+    Window
+ • Intersection between
+   Transport SubFrame
+   and Payload Data
+   Windows
+
+
+
+
+Page 44                           © 2015 MIPI Alliance, Inc. All rights reserved.
+    Transport (4):
+    Block-Per-Port
+ • Payload Data Windows
+   defined by Sample
+   Interval and Transport
+   SubFrame can be shared
+   between similar streams
+ • Notion of BlockOﬀset
+   from start of Payload
+   Data Window
+ • Block-Per-Port mode: all
+   channels packed as
+   single data chunk, from
+   lowest to highest-
+   numbered channel
+
+Page 45                       © 2015 MIPI Alliance, Inc. All rights reserved.
+    Transport (5):
+    Block-Per-Channel
+ • Channels transmitted in individual
+    chunks within same Sample
+    interval
+ • Initial Block_Oﬀset
+ • Inter-sample Sub-Block_Oﬀset
+ • Benefits of this mode:
+ • Create ‘holes’ in bit allocation to be
+   reclaimed by other streams
+    – Example: 48kHz stereo signal will use
+      same pattern as 96kHz mono signal
+ • No impact on buﬀering or capture/
+   rendering, only a transport-level
+   capability.
+
+
+Page 46                                       © 2015 MIPI Alliance, Inc. All rights reserved.
+    Transport (6): Simplifications
+
+ • Full Data port needs to
+   implement
+          • Hstart, Hstop, SampleInterval,
+            BlockOﬀset, SubBlockOﬀset
+
+ • Simple Data ports only needs
+          • SampleInterval, BlockOﬀset
+
+ • Grouping:
+          • avoid ‘vertical stripes’ for PDM,
+            ability to group up to 4
+            successive samples
+          • Required for PDM
+          • Optional for PCM
+
+
+
+Page 47                                         © 2015 MIPI Alliance, Inc. All rights reserved.
+     Transport (7): multi-lane
+
+ •        Multilane support is completely
+          optional
+ •        Lane 0 is shared between all
+          devices
+           – Common control interface
+           – Col0, Rows0..47 are reserved for
+             Command Word
+ •        Lanes 1..7 may be shared or
+          private to group of devices
+           – For device-to-device lanes, a bus-
+             keeper must be enabled on one of
+             the devices
+ •        No restrictions on Lane 1..7, all
+          bits can be used including Col0
+ •        Dynamic switch between lanes
+          possible for each Port
+
+
+
+Page 48                                           © 2015 MIPI Alliance, Inc. All rights reserved.
+    Transport synchronization capabilities
+
+ • SSP bit in PING frame can be driven at regular intervals
+ • Useful to maintain alignment
+  –Between multiple links with diﬀerent frame rates
+  –Between ports using diﬀerent sampling rates on the same link
+ • Typically large enough to be multiple of all sample intervals
+ • Driven at least once every 100ms
+ • Linked with Sample Events
+    – Used by Slaves to reset SampleInterval counters and resync transport if
+      needed
+ • Defines ‘safe’ time position where bus can be reconfigured (frame
+   shape changes, channel/port enablement, etc)
+ • SSP event can be used to maintain phase coherence between
+   devices.
+
+
+Page 49                                                  © 2015 MIPI Alliance, Inc. All rights reserved.
+    Bulk Transport Protocol (BTP/BRA)
+ • BTP: use transport protocol to access contiguous registers
+          – Dedicated DataPort0 (DP0)
+          – Extends command bandwidth limited by frame rate and 8-bit
+            command bandwidth
+          – Reconfigurations, Firmware download
+ • Header defines command, followed by raw data
+ • CRC protection
+ • Notion of Initiator/Target(s)
+          – Master typically Initiator, Slave is Target
+          – Some specialized Slaves could be Initiator (eg. debug tool)
+ • Protocol is bi-directional by nature
+          – Diﬀerence between DP0 and other DP1-14 ports (which are
+            single direction)
+
+
+Page 50                                                 © 2015 MIPI Alliance, Inc. All rights reserved.
+          Clock Stop
+
+
+
+
+Page 51
+    ClockStop (1)
+    • ‘ClockStopNow’ Command followed by ‘Stopping
+      Frame’ to let Master drive clock and data to Low
+
+
+
+
+Page 52                                  © 2015 MIPI Alliance, Inc. All rights reserved.
+    ClockStop (2)
+    • Wake-ups can be master or Slave initiated
+    • Master can program which Slaves can wake-up
+      bus
+
+    • Master can program two modes in Slave:
+          • ClockStopMode0 (mandatory): Slave will keep the
+            context and restart immediately
+          • ClockStopMode1 (optional): Slave may lose context,
+            go to very low-power mode and will need to be re-
+            enumerated on startup
+    • ClockStopMode1 removes need for extra GPIO for
+      e.g. jack detection
+
+Page 53                                        © 2015 MIPI Alliance, Inc. All rights reserved.
+   Conclusion/Summary
+    • Questions? Please direct to admin@mipi.org
+    • More information:
+          – MIPI LML WG Public Page
+          – MIPI SoundWire Specification Brief
+    • Join the MIPI LML WG
+          – More than 25 companies from across the audio technology
+            ecosystem—including audio peripheral, electronic design
+            automation and silicon vendors as well as OEMs—took
+            part in developing MIPI SoundWire.
+          – Requires MIPI Contributor membership
+          – Telcos every Tuesday at 07:00 GMT
+             • 90-120 minutes depending on the agenda
+          – Three face-to-face sessions with all MIPI WGs at member
+            meeting
+             • Generally meet for 3-4 days
+
+
+Page 54                                                 © 2014 MIPI Alliance, Inc. All rights reserved.
+Backup slides
+    Comparison with other interfaces
+ Other	
+  bus	
+   Pro	
+  SoundWire	
+                                               Con	
+  SoundWire	
+  
+
+ I2S/TDM	
+      Lower	
+  pin	
+  count,	
+  clock	
+  scaling,	
+  dynamic	
+  slot	
+   Slight	
+  command	
+  overhead,	
+  no	
+  
+                mapping,	
+  burst	
+  mode,	
+  command	
+  embedded	
+   ability	
+  to	
+  switch	
+  Master/Slave	
+  
+                with	
+  data	
+  (No	
+  need	
+  for	
+  I2C/SPI),	
+  in-­‐band	
+     roles	
+  for	
+  clock	
+  
+                interrupt	
+  capability	
+  (no	
+  need	
+  for	
+  GPIO),	
+  
+                support	
+  for	
+  PDM	
+  
+ PDM	
+          Clock	
+  scaling,	
+  embedded	
+  command	
+  and	
+                 Overhead	
+  is	
+  70%	
+  for	
+  dual-­‐mic,	
+  
+                control,	
+  interrupt	
+  capability	
+                             less	
+  than	
+  5%	
+  for	
+  single	
+  mic-­‐
+                                                                                  mode.	
+  In	
+  mul9lane	
+  mode	
+  
+                                                                                  power	
+  consump9on	
+  is	
+  lower	
+  
+                                                                                  than	
+  PDM.	
+  
+ HDAudio	
+      Clock	
+  scaling,	
+  lower	
+  pin	
+  count,	
+  support	
+  for	
+   Lower	
+  bandwidth	
+  device	
+  class	
+  
+                PDM,	
+  scales	
+  to	
+  simple	
+  devices	
+                       func9onality	
+  not	
+  yet	
+  
+                                                                                  standardized	
+  
+ SLIMbus	
+      Lower	
+  gate	
+  count	
+  allows	
+  for	
+  integra9on	
+  in	
+   No	
+  clock	
+  and	
+  manager	
+  hand-­‐
+                cost-­‐sensi9ve	
+  devices,	
+  simpler	
+  protocol,	
+  low	
+   over	
+  capabili9es.	
+  Only	
+  Master	
+  
+                latency	
+  PDM	
+  support,	
+  lower	
+  power	
+  with	
+            and	
+  Monitor	
+  can	
+  send	
+  
+                adjustable	
+  Frame	
+  size	
+  and	
+  double-­‐data	
+  rate	
+   messages.	
+  
+Page 56                                                                                    © 2015 MIPI Alliance, Inc. All rights reserved.
+    Stream aggregation
+    • No notion of ‘link’ between Source and Sink
+    • No requirement that Source and Sink port are programmed with
+       same parameters
+    • -> Ability to perform stream aggregation
+    • Examples:
+    • 4 microphones push data on bus, Master retrieves single 4-ch input
+    • Master writes 2-ch data on 4 ports, Slave reads 8-ch data
+    • Only requirements:
+    • Channels enabled on all Devices with common bank switch
+    • Source ports and Sink ports have same SampleInterval
+    • ‘Smart’ bit allocation with no spacing between ports
+    • Limitation: Aggregation is not possible with Async modes (RX/TX-
+       ready are per port)
+
+
+
+Page 57                                            © 2015 MIPI Alliance, Inc. All rights reserved.
+    Monitor arbitration
+    •     BREQ = 0 -> Master owns Command Word
+    •     BREQ =1 -> Monitor requests Command Word ownership
+    •     BREL = 1 -> Master will yield Command Word ownership at end of frame
+
+    •     Notes:
+    •     Monitor will keep Command Word ownership as long as BREQ = 1 and BREL = 1
+    •     Master can reclaim ownership by clearing BREL
+    •     Master always drives static and dynamic bits
+    •     Master does not drive parity bit when Monitor owns bus, but it shall set NAK on
+          parity error
+    •     BREQ=0, BREL=1 is an illegal sequence
+    •     Master is permitted to never release bus ownership (e.g. in a shipping device)
+    •     If Monitor loses sync, command will default to PING with BREQ cleared and Master
+          will reclaim ownership
+
+
+
+
+Page 58                                                         © 2015 MIPI Alliance, Inc. All rights reserved.
+    SoundWire frame overview
+
+
+
+
+Page 59                        © 2015 MIPI Alliance, Inc. All rights reserved.
+         Transport examples (1)
+      • Frame size: 50 rows * 10
+        cols
+      • Frame rate: 48kHz
+      • -> 2 samples per frame
+
+      • Sample Events (Row0,
+        Col0) and (Row 25, Col0)
+
+      • Position of 3 streams is
+        equivalent in terms of
+        capture/rendering
+
+
+
+
+     Page 60
+60
+         Transport examples (2)
+                                   Not	
+  enough	
+  
+                                   space	
+  for	
+  2nd	
+  
+                                     channel	
+  
+      • Frame size: 50 rows * 8
+        cols
+      • Frame rate: 48kHz
+
+      • 192 kHz stream            2nd	
+  channel	
+  of	
+  
+      • -> 4 samples per frame    96kHz	
+  stream	
+  
+                                   pushed	
+  a]er	
+  
+                                  2nd	
+  sample	
+  at	
+  
+      • 96 kHz stream
+                                      192	
+  kHz	
+  
+      • -> 2 samples per frame
+
+      • Using BlockPerChannel
+        mode required for 96kHz
+        stream
+
+
+     Page 61
+61
+         Transport examples (3)
+
+      • Frame Rate: 48kHz
+      • Sample Rate: 32 kHz
+      • 2 sample intervals for 3
+        frames
+      • Samples may be spread
+        across two frames
+      • Not illegal and even
+        required for some
+        combinations of frame/
+        sample rate
+
+     Page 62
+62
+         Transport examples (3)
+
+      • Frame size: 50 rows *
+        10 cols
+      • PDM:
+      • 100x oversampling:
+         – 2 sample intervals/row
+      • 50x oversampling:
+         – 1 sample interval/row
+      • 25x oversampling
+         – 1 sample for every
+           other row
+
+
+
+     Page 63
+63
+         Clock Stop Prepare
+      • Support for stopping of
+        the clock
+      • Same concept as Channel
+        Prepare/Activate
+      • ClockStopPrepare: Slave
+        may need time to enable
+        an alternate clock source
+        or be ready immediately
+
+
+
+
+     Page 64
+64
+

@@ -45,6 +45,7 @@
     ]
   },
   "class_path": "digital_arithmetic_primitive",
+  "anti_deadlock_rule": "Inside the slave, VALID for an outgoing channel must not be combinationally dependent on the READY of the same channel; this prevents combinational deadlock.",
   "ahb_fsm_hints": {
     "per_transfer_phases": [
       "ADDRESS_PHASE (one HCLK cycle, extended by previous data phase).",
@@ -141,10 +142,6 @@
       "cond": "PREADY=1 + back-to-back transfer"
     }
   ],
-  "anti_deadlock_rule": {
-    "ahb": "No combinational path from any HREADY back to a Manager output (HSEL/HTRANS); Manager drives address-phase signals from registered state only.",
-    "apb": "Bridge must not feed PREADY combinationally back into PSELx or PENABLE; bridge holds outputs stable while PREADY=LOW."
-  },
   "exit_from_reset": {
     "ahb": "Earliest non-IDLE transfer = first rising HCLK after HRESETn=HIGH; integrators typically initialize HTRANS=IDLE during reset.",
     "apb": "Bus enters IDLE (PSELx=0, PENABLE=0) on PRESETn=LOW."

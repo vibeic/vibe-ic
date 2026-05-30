@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "datasheet",
-  "ic_name": "UNKNOWN_IC",
+  "ic_name": "AMBA AXI / ACE Protocol Specification",
   "no_ic_name_in_input": false,
   "package_info": null,
   "no_package_in_input": true,
@@ -479,7 +479,7 @@
   },
   "tapeout_metadata": null,
   "no_tapeout_metadata_in_input": true,
-  "endianness": "big-endian; byte invariant; little-endian",
+  "endianness": "byte-invariant; both little-endian and big-endian components can coexist in a single memory space",
   "endianness_evidence": [
     {
       "file": "input/docs/IHI0022H_amba_axi_protocol_spec.pdf",
@@ -3701,20 +3701,10 @@
       "source": "IHI0022H_amba_axi_protocol_spec.pdf"
     }
   ],
-  "purpose": "the AMBA protocols for AXI and ACE.",
-  "package_info_present": false,
-  "vendor": "Arm Limited",
+  "purpose": "Defines the AMBA AXI/ACE on-chip bus protocols for high-performance, high-frequency master-slave communication, suitable for high-bandwidth low-latency designs as well as coherent multi-master systems with caches.",
+  "vendor": "Arm Limited, Company 02557590 registered in England, 110 Fulbourn Road, Cambridge, England CB1 9NJ",
+  "intended_audience": "Hardware and software engineers familiar with AMBA AXI3/AXI4 who design coherent multi-master systems, processor clusters, accelerators, or IO bridges.",
   "confidentiality": "Non-Confidential",
-  "burst_boundary_rule": "must not cross a 4KB address boundary.",
-  "max_burst_length": {
-    "AXI3": 16,
-    "AXI4_INCR": 256,
-    "AXI4_FIXED_WRAP": 16
-  },
-  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
-  "electrical_specs_present": false,
-  "intended_audience": "This specification is written for hardware and software engineers who want to become familiar with AMBA and",
-  "copyright": "Copyright © 2003-2020 Arm Limited",
   "supported_data_bus_widths_bits": [
     8,
     16,
@@ -3725,9 +3715,19 @@
     512,
     1024
   ],
-  "document_id": "ARM IHI 0022H",
   "issuer": "Arm Limited",
+  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
   "electrical_specs_rationale": "Protocol spec defines only logical signal semantics (synchronous, sampled on rising clock edge). Electrical levels are per-implementation.",
+  "document_id": "ARM IHI 0022H (ID040120)",
+  "package_info_present": false,
+  "electrical_specs_present": false,
+  "burst_boundary_rule": "A burst must not cross a 4KB address boundary (inherited from AXI).",
+  "max_burst_length": {
+    "AXI3": 16,
+    "AXI4_INCR": 256,
+    "AXI4_FIXED_WRAP": 16
+  },
+  "copyright": "Copyright © 2003-2020 Arm Limited",
   "five_channels": [
     {
       "name": "AW",
@@ -3815,5 +3815,162 @@
     "Shared address and data buses",
     "Shared address buses and multiple data buses",
     "Multilayer, with multiple address and data buses"
-  ]
+  ],
+  "fields": {
+    "ic_name": "AMBA AXI / ACE Protocol Specification",
+    "document_id": "ARM IHI 0022H (ID040120)",
+    "issuer": "Arm Limited",
+    "copyright": "Copyright (c) 2003-2020 Arm Limited or its affiliates",
+    "confidentiality": "Non-Confidential",
+    "issue": "H",
+    "protocol_variants_described": [
+      "AXI3 (AMBA 3)",
+      "AXI4 (AMBA 4)",
+      "AXI4-Lite (AMBA 4)",
+      "AXI5 (AMBA 5)",
+      "AXI5-Lite (AMBA 5)",
+      "ACE (AMBA 4)",
+      "ACE-Lite (AMBA 4)"
+    ],
+    "purpose": "Defines the AMBA AXI/ACE on-chip bus protocols for high-performance, high-frequency master-slave communication, suitable for high-bandwidth low-latency designs as well as coherent multi-master systems with caches.",
+    "key_features_axi_baseline": [
+      "Separate address/control and data phases",
+      "Unaligned data transfers via byte strobes",
+      "Burst-based transactions with only start address issued",
+      "Separate read and write data channels (low-cost DMA)",
+      "Multiple outstanding addresses",
+      "Out-of-order transaction completion",
+      "Easy register stage addition for timing closure",
+      "Backward compatible with AHB and APB"
+    ],
+    "key_features_ace_extensions": [
+      "Hardware cache-coherency via snoop transactions",
+      "Three new snoop channels: AC (Snoop Address), CR (Snoop Response), CD (Snoop Data)",
+      "5-state cache-line coherency model: UC/UD/SC/SD/I",
+      "AxDOMAIN[1:0] — Non-shareable / Inner / Outer / System shareability domains",
+      "AxSNOOP — encodes coherent transaction types",
+      "AxBAR — barrier transaction encoding",
+      "Extended RRESP[3:0] — PassDirty + IsShared bits",
+      "Extended BRESP[2] — DataTransfer for pass-dirty",
+      "RACK / WACK acknowledge signals",
+      "Distributed Virtual Memory (DVM) for TLB / BP / IC invalidate",
+      "ACE-Lite subset for non-cached masters"
+    ],
+    "new_signals_added_by_ace": {
+      "read_address_channel_AR": [
+        "ARDOMAIN[1:0]",
+        "ARSNOOP[3:0]",
+        "ARBAR[1:0]"
+      ],
+      "write_address_channel_AW": [
+        "AWDOMAIN[1:0]",
+        "AWSNOOP[2:0]",
+        "AWBAR[1:0]",
+        "AWUNIQUE (optional)"
+      ],
+      "read_data_channel_R": [
+        "RRESP[3:2] PassDirty/IsShared"
+      ],
+      "write_response_channel_B": [
+        "BRESP[2] DataTransfer"
+      ],
+      "snoop_address_channel_AC": [
+        "ACVALID",
+        "ACREADY",
+        "ACADDR",
+        "ACSNOOP[3:0]",
+        "ACPROT[2:0]"
+      ],
+      "snoop_response_channel_CR": [
+        "CRVALID",
+        "CRREADY",
+        "CRRESP[4:0]"
+      ],
+      "snoop_data_channel_CD": [
+        "CDVALID",
+        "CDREADY",
+        "CDDATA",
+        "CDLAST"
+      ],
+      "acknowledge_signals": [
+        "RACK (master->interconnect)",
+        "WACK (master->interconnect)"
+      ]
+    },
+    "cache_line_states_5state": {
+      "UC_UniqueClean": "Only this cache holds a copy; same as main memory.",
+      "UD_UniqueDirty": "Only this cache holds a copy; differs from memory; this cache owns write-back.",
+      "SC_SharedClean": "Other caches may hold copy; same as main memory.",
+      "SD_SharedDirty": "Other caches may hold copy; differs from memory; this cache owns write-back.",
+      "I_Invalid": "This cache does not hold a valid copy."
+    },
+    "five_axi_channels": [
+      {
+        "name": "AR (Read Address)",
+        "direction": "Master -> Slave"
+      },
+      {
+        "name": "R  (Read Data)",
+        "direction": "Slave -> Master"
+      },
+      {
+        "name": "AW (Write Address)",
+        "direction": "Master -> Slave"
+      },
+      {
+        "name": "W  (Write Data)",
+        "direction": "Master -> Slave"
+      },
+      {
+        "name": "B  (Write Response)",
+        "direction": "Slave -> Master"
+      }
+    ],
+    "three_ace_snoop_channels": [
+      {
+        "name": "AC (Snoop Address)",
+        "direction": "Interconnect -> Master (cached)"
+      },
+      {
+        "name": "CR (Snoop Response)",
+        "direction": "Master (cached) -> Interconnect"
+      },
+      {
+        "name": "CD (Snoop Data)",
+        "direction": "Master (cached) -> Interconnect"
+      }
+    ],
+    "supported_data_bus_widths_bits": [
+      8,
+      16,
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "snoop_data_bus_widths_bits": [
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024
+    ],
+    "endianness": "byte-invariant; both little-endian and big-endian components can coexist in a single memory space",
+    "max_burst_length": {
+      "AXI3": 16,
+      "AXI4_INCR": 256,
+      "AXI4_FIXED_WRAP": 16,
+      "ACE_cache_line": "implementation-defined cache-line burst"
+    },
+    "burst_boundary_rule": "A burst must not cross a 4KB address boundary (inherited from AXI).",
+    "intended_audience": "Hardware and software engineers familiar with AMBA AXI3/AXI4 who design coherent multi-master systems, processor clusters, accelerators, or IO bridges.",
+    "vendor": "Arm Limited, Company 02557590 registered in England, 110 Fulbourn Road, Cambridge, England CB1 9NJ",
+    "package_info_present": false,
+    "package_info_rationale": "AXI/ACE is a bus protocol specification, not a packaged IC. No package/pinout/electrical-DC data exists in this document.",
+    "electrical_specs_present": false,
+    "electrical_specs_rationale": "Protocol spec defines only logical signal semantics. No voltage/current/IO-standard information."
+  }
 }

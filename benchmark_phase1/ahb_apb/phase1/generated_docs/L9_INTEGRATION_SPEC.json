@@ -141,6 +141,12 @@
     }
   ],
   "class_path": "digital_arithmetic_primitive",
+  "interconnect_id_handling": {
+    "id_widening": "When a master is connected to an interconnect, the interconnect appends additional bits to the master's xID to distinguish requests from different masters at the slave-side port.",
+    "id_collision_avoidance": "The slave-side ID_WIDTH must accommodate the maximum of (master-side ID_WIDTH + log2(number_of_masters)).",
+    "id_routing": "For read data, interconnect uses the appended bits of RID to determine which master port the data is destined for. Interconnect removes these bits before passing RID back to the originating master."
+  },
+  "default_signal_values_when_omitted": "Refer to Tables A9-1..A9-4 for master/slave write/read channel default signal values applied when a signal is omitted from the integration interface.",
   "interconnect_topology_options_ahb": [
     "Single-Manager AHB-Lite: one decoder + one multiplexor (Figure 1-1).",
     "Multi-Manager / multi-layer AHB: requires interconnect with arbitration (DVI 0045)."

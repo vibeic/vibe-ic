@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "otp_content",
-  "ic_name": "UNKNOWN_IC",
+  "ic_name": "AMBA AXI / ACE Protocol Specification",
   "depth": null,
   "width_bits": null,
   "content_hex": null,
@@ -658,5 +658,12 @@
       }
     ]
   },
-  "no_otp_fsm_in_input": true
+  "no_otp_fsm_in_input": true,
+  "otp_present": false,
+  "notes": "No OTP / fuse / configuration-ROM content in the serial-peripheral protocol block guide. All configuration is via the run-time register file.",
+  "fields": {
+    "ic_name": "AMBA AXI / ACE Protocol Specification"
+  },
+  "rationale": "ACE is a bus/interconnect protocol; no OTP/fuse content.",
+  "evidence": []
 }

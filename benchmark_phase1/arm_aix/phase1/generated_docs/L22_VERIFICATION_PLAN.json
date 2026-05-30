@@ -6,7 +6,64 @@
   "fields": {
     "coverage_goals": [],
     "formal_properties": [],
-    "regression_matrix": {}
+    "regression_matrix": {},
+    "verification_plan_present": "implicit",
+    "verification_categories_derived_from_spec": [
+      "Register access (read/write to all register fields; reserved bits behavior)",
+      "Master mode transmission across (clock polarity, clock phase, bit order) combinations",
+      "Slave mode reception across (clock polarity, clock phase, bit order) combinations",
+      "Baud rate divisor sweep",
+      "Mode fault / collision detection + auto-recovery + flag",
+      "Bidirectional mode (where supported)",
+      "Wait/stop mode behavior",
+      "Reset behavior verification",
+      "Receive overrun (flag-serviced-too-late)",
+      "Back-to-back transfers"
+    ],
+    "notes": "IHI 0022E does not provide a formal verification plan; categories derived from Chapters C3 (Channel Signaling), C4 (Coherent Transactions), C5 (Snoop Transactions), C8 (Barrier Transactions), C9 (RACK/WACK), C12 (DVM).",
+    "ic_name": "AMBA AXI / ACE Protocol Specification",
+    "verification_categories_derived_axi_baseline": [
+      "Reset behavior (ARESETn).",
+      "VALID/READY handshake compliance.",
+      "Burst type INCR/WRAP/FIXED + AxSIZE coverage.",
+      "4KB boundary enforcement.",
+      "Same-ID in-order; diff-ID out-of-order.",
+      "Exclusive access (EXOKAY/OKAY).",
+      "Error responses (SLVERR/DECERR).",
+      "Default-signal substitution."
+    ],
+    "verification_categories_derived_ace": [
+      "AxDOMAIN encoding coverage.",
+      "ARSNOOP encoding coverage (12 valid encodings).",
+      "AWSNOOP encoding coverage (7 valid encodings).",
+      "AxBAR barrier coverage across all 4 domains.",
+      "Reserved AxSNOOP rejected.",
+      "Illegal (AxDOMAIN, AxSNOOP, AxBAR) tuples rejected.",
+      "Snoop channel handshake (AC/CR/CD).",
+      "Snoop ordering.",
+      "5-state cache-line transitions.",
+      "CRRESP correctness (DataTransfer/Error/PassDirty/IsShared/WasUnique).",
+      "Illegal CRRESP combinations.",
+      "RACK/WACK timing.",
+      "Snoop data bus width variation.",
+      "CD burst length 1/2/4/8/16.",
+      "DVMMessage + DVMComplete handshake.",
+      "Barrier transaction effect.",
+      "ACE-Lite subset enforcement.",
+      "AXI4 master on ACE interconnect at Non-shareable.",
+      "Snoop filter consistency (Evict/WriteEvict).",
+      "Multi-master stress.",
+      "Single-writer-eventually invariant."
+    ],
+    "interoperability_test_matrix": [
+      "Full ACE master + ACE interconnect.",
+      "ACE-Lite master + ACE interconnect.",
+      "AXI4 master + ACE interconnect at Non-shareable.",
+      "Mixed cluster: ACE + ACE-Lite + AXI4 + DVM in one interconnect.",
+      "Snoop data bus narrower than RDATA/WDATA.",
+      "Multi-domain barriers (Inner/Outer/System).",
+      "Snoop filter ON vs OFF."
+    ]
   },
   "extraction_hints": [
     "Look for coverage targets, vplan, regression policy.",

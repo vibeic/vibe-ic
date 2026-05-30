@@ -1201,11 +1201,139 @@
         "line": 11586,
         "scope": "general"
       }
+    ],
+    "ic_name": "AMBA AXI / ACE Protocol Specification",
+    "properties_axi_baseline_inherited": [
+      {
+        "id": "p_valid_stable_until_handshake",
+        "scope": "all_5_axi_channels + 3_ace_snoop_channels",
+        "english_form": "VALID must remain HIGH until handshake.",
+        "citation": "A3.2.1 / C3.7"
+      },
+      {
+        "id": "p_valid_not_dependent_on_ready",
+        "scope": "all_channels",
+        "english_form": "VALID must not be combinationally dependent on READY.",
+        "citation": "A3.3.1 / C3.9"
+      },
+      {
+        "id": "p_4kb_boundary_inherited",
+        "scope": "AR_channel, AW_channel",
+        "english_form": "A burst must not cross a 4KB address boundary.",
+        "citation": "A3.4.1"
+      }
+    ],
+    "properties_ace_extensions": [
+      {
+        "id": "p_ace_axdomain_legal",
+        "scope": "AR_channel, AW_channel",
+        "english_form": "AxDOMAIN must be one of 0b00/0b01/0b10/0b11.",
+        "citation": "C3.1.1 Table C3-2"
+      },
+      {
+        "id": "p_ace_arsnoop_legal_with_arbar_domain",
+        "scope": "AR_channel",
+        "english_form": "ARSNOOP must match permitted (ARBAR[0], ARDOMAIN, ARSNOOP) tuples (Table C3-7).",
+        "citation": "C3.1.3 Table C3-7"
+      },
+      {
+        "id": "p_ace_awsnoop_legal_with_awbar_domain",
+        "scope": "AW_channel",
+        "english_form": "AWSNOOP must match permitted (AWBAR[0], AWDOMAIN, AWSNOOP) tuples (Table C3-8).",
+        "citation": "C3.1.3 Table C3-8"
+      },
+      {
+        "id": "p_ace_rresp_constant_per_burst",
+        "scope": "R_channel",
+        "english_form": "RRESP[3:2] constant across all beats of a burst.",
+        "citation": "C3.2.1"
+      },
+      {
+        "id": "p_ace_rresp_must_be_low_for_noncoherent",
+        "scope": "R_channel",
+        "english_form": "RRESP[3:2]=0 for ReadNoSnoop / Barrier / DVM.",
+        "citation": "C3.2.1"
+      },
+      {
+        "id": "p_ace_isshared_illegal_for_unique_invalidations",
+        "scope": "CR_channel",
+        "english_form": "CRRESP[3] IsShared=0 for ReadUnique / CleanInvalid / MakeInvalid.",
+        "citation": "C3.7"
+      },
+      {
+        "id": "p_ace_passdirty_requires_datatransfer",
+        "scope": "CR_channel",
+        "english_form": "PassDirty=1 implies DataTransfer=1.",
+        "citation": "C3.7"
+      },
+      {
+        "id": "p_ace_snoop_dep_ac_before_cr",
+        "scope": "CR_channel",
+        "english_form": "Master waits for ACVALID+ACREADY before asserting CRVALID.",
+        "citation": "C3.9 Figure C3-1"
+      },
+      {
+        "id": "p_ace_snoop_dep_ac_before_cd",
+        "scope": "CD_channel",
+        "english_form": "Master waits for ACVALID+ACREADY before asserting CDVALID.",
+        "citation": "C3.9 Figure C3-1"
+      },
+      {
+        "id": "p_ace_snoop_response_ordered",
+        "scope": "AC_channel + CR_channel",
+        "english_form": "CR responses follow AC address order.",
+        "citation": "C3.7"
+      },
+      {
+        "id": "p_ace_rack_one_cycle_after_rlast",
+        "scope": "Acknowledge",
+        "english_form": "RACK single-cycle pulse one ACLK after RLAST+RVALID+RREADY.",
+        "citation": "C3.5 / C9"
+      },
+      {
+        "id": "p_ace_wack_one_cycle_after_b_handshake",
+        "scope": "Acknowledge",
+        "english_form": "WACK single-cycle pulse one ACLK after BVALID+BREADY.",
+        "citation": "C3.5 / C9"
+      },
+      {
+        "id": "p_ace_state_table_transitions",
+        "scope": "Cache_line_FSM",
+        "english_form": "Cache-line transitions per Table C5-4.",
+        "citation": "C5.2"
+      },
+      {
+        "id": "p_ace_cd_burst_length",
+        "scope": "CD_channel",
+        "english_form": "CD burst length must be 1/2/4/8/16; full cache-line on full CDDATA width.",
+        "citation": "C3.8"
+      },
+      {
+        "id": "p_ace_writeevict_requires_awunique",
+        "scope": "AW_channel",
+        "english_form": "WriteEvict (AWSNOOP=0b101) requires AWUNIQUE.",
+        "citation": "C3.1.3"
+      },
+      {
+        "id": "p_ace_lite_no_snoop_channels",
+        "scope": "ACE-Lite_master",
+        "english_form": "ACE-Lite masters must not implement AC/CR/CD.",
+        "citation": "C1"
+      },
+      {
+        "id": "p_ace_dvmcomplete_after_dvmmessage",
+        "scope": "AR_channel + DVM",
+        "english_form": "DVMComplete after all DVMMessage targets respond.",
+        "citation": "C12"
+      }
     ]
   },
   "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",
   "doc_class": "L16",
   "emitted_by": "phase1_protocol_spec_extract.extract_l16_compliance v0.1.62",
-  "extraction_evidence": {}
+  "extraction_evidence": {},
+  "doc_name": "L16_COMPLIANCE_PROPERTIES",
+  "applicability": "APPLICABLE",
+  "ic_class": "bus_interconnect_protocol"
 }

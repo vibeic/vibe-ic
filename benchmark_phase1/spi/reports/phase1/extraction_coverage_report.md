@@ -5,7 +5,7 @@
 - **overall.pct = 100.0%**
 - status: **PASS** (target ≥80%)
 - curated: **116/116 = 100.0%**
-- hands_on: **118/118 = 100.0%**
+- hands_on: **116/116 = 100.0%**
 
 ## Per-L-doc
 

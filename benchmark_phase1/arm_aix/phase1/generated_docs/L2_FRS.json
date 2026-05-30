@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "frs",
-  "ic_name": "UNKNOWN_IC",
+  "ic_name": "AMBA AXI / ACE Protocol Specification",
   "frs_sections": [
     {
       "section": "16",
@@ -454,20 +454,29 @@
   ],
   "no_frs_sections_in_input": false,
   "protocol_overview": {
-    "half_duplex": false,
-    "wire_count": "5 independent channels, each with VALID/READY pair",
-    "byte_order": null,
-    "wake_required_pre_command": null,
-    "evidence": "interface keyword match (i2c/spi/uart/...)",
+    "axi_channel_count": 5,
+    "ace_snoop_channel_count": 3,
+    "ace_lite_snoop_channel_count": 0,
     "burst_based": true,
-    "multiple_outstanding": true,
     "out_of_order_completion": true,
+    "multiple_outstanding": true,
+    "cache_coherency_model": "MOESI-derivative 5-state UC/UD/SC/SD/I",
+    "shareability_domains": [
+      "Non-shareable",
+      "Inner Shareable",
+      "Outer Shareable",
+      "System"
+    ],
+    "snoop_protocol": "Address-based on AC channel; response on CR; optional data on CD",
+    "dvm_supported": true,
+    "barriers_supported": true,
+    "endianness": "byte-invariant",
     "atomicity_modes": [
       "Normal",
       "Exclusive",
       "Locked (AXI3 only)"
     ],
-    "endianness": "Byte-invariant; supports both little- and big-endian data structures in the same memory."
+    "wire_count": "5 independent channels, each with VALID/READY pair"
   },
   "no_protocol_overview_in_input": false,
   "compliance_requirements": [],
@@ -2305,5 +2314,182 @@
     "Address decode failure (no slave at address) returns DECERR",
     "Slave-side internal error returns SLVERR",
     "Exclusive monitor lost returns OKAY (not EXOKAY) for the exclusive write"
-  ]
+  ],
+  "fields": {
+    "ic_name": "AMBA AXI / ACE Protocol Specification",
+    "functional_requirements_axi_baseline_inherited": [
+      {
+        "id": "FR-HANDSHAKE-01",
+        "text": "All five AXI transaction channels + three ACE snoop channels use the same VALID/READY handshake.",
+        "source": "A3.2.1 / C3.6 / C3.7 / C3.8"
+      },
+      {
+        "id": "FR-CLOCK-01",
+        "text": "Single ACLK per interface; rising-edge sampled.",
+        "source": "A3.1.1"
+      },
+      {
+        "id": "FR-RESET-01",
+        "text": "ARESETn active-LOW; async assert, sync deassert.",
+        "source": "A3.1.2"
+      },
+      {
+        "id": "FR-4KB-BOUNDARY",
+        "text": "A burst must not cross a 4KB address boundary.",
+        "source": "A3.4.1"
+      }
+    ],
+    "functional_requirements_ace_extensions": [
+      {
+        "id": "FR-ACE-DOMAIN-01",
+        "text": "Every AR/AW must drive ARDOMAIN/AWDOMAIN selecting Non-shareable / Inner / Outer / System.",
+        "source": "C3.1.1"
+      },
+      {
+        "id": "FR-ACE-DOMAIN-03",
+        "text": "A System-domain memory location cannot be held in any cache.",
+        "source": "C3.1.1"
+      },
+      {
+        "id": "FR-ACE-SNOOP-01",
+        "text": "Coherent transactions use ARSNOOP[3:0] / AWSNOOP[2:0]. Permitted encodings depend on ARBAR[0] + AxDOMAIN (Tables C3-7, C3-8).",
+        "source": "C3.1.3"
+      },
+      {
+        "id": "FR-ACE-SNOOP-02",
+        "text": "ReadShared may return shared/unique copy; ReadClean must not return dirty; ReadNotSharedDirty forbids SharedDirty; ReadUnique invalidates others; CleanUnique cleans local+invalidates others; MakeUnique invalidates others without data.",
+        "source": "C4 Coherent transactions"
+      },
+      {
+        "id": "FR-ACE-SNOOP-03",
+        "text": "Cache-maintenance: CleanShared (write-back + retain Shared), CleanInvalid (write-back + invalidate), MakeInvalid (invalidate without write-back).",
+        "source": "C4 Cache maintenance"
+      },
+      {
+        "id": "FR-ACE-SNOOP-04",
+        "text": "Memory-update writes: WriteBack (dirty + invalidate locally), WriteClean (dirty + retain Clean), Evict (cache-line removal notification), WriteEvict (optional, requires AWUNIQUE).",
+        "source": "C3.1.3 / C4"
+      },
+      {
+        "id": "FR-ACE-SNOOP-05",
+        "text": "Coherent writes for non-cached or ACE-Lite masters: WriteUnique (partial) and WriteLineUnique (full line).",
+        "source": "C4 WriteUnique"
+      },
+      {
+        "id": "FR-ACE-BAR-01",
+        "text": "AxBAR[0]=1 indicates a barrier transaction; AxBAR[1] encodes Memory vs Synchronization barrier.",
+        "source": "C3.1.2 / C8"
+      },
+      {
+        "id": "FR-ACE-BAR-02",
+        "text": "Barrier transactions can have any AxDOMAIN; choice of domain selects barrier scope.",
+        "source": "C3.1.2 / C8"
+      },
+      {
+        "id": "FR-ACE-DVM-01",
+        "text": "DVM messages use ARSNOOP=0b1110 (DVMComplete) and 0b1111 (DVMMessage) — TLB / branch-predictor / I-cache invalidate, virtual-address sync.",
+        "source": "C3.1.3 / C12"
+      },
+      {
+        "id": "FR-ACE-RRESP-01",
+        "text": "RRESP extended to [3:0]: [2]=PassDirty (dirty wrt memory), [3]=IsShared (another cache may hold copy).",
+        "source": "C3.2.1"
+      },
+      {
+        "id": "FR-ACE-RRESP-02",
+        "text": "RRESP[3:2] constant for all beats of a single burst.",
+        "source": "C3.2.1"
+      },
+      {
+        "id": "FR-ACE-RRESP-03",
+        "text": "RRESP[3:2] must be 0 for ReadNoSnoop, Barrier, DVM transactions.",
+        "source": "C3.2.1"
+      },
+      {
+        "id": "FR-ACE-BRESP-01",
+        "text": "BRESP extended to [2:0]: [2]=DataTransfer (for WriteUnique/WriteLineUnique pass-dirty completion).",
+        "source": "C3.4"
+      },
+      {
+        "id": "FR-ACE-SNOOP-CH-01",
+        "text": "AC channel: interconnect drives ACADDR/ACSNOOP/ACPROT/ACVALID; master drives ACREADY.",
+        "source": "C3.6"
+      },
+      {
+        "id": "FR-ACE-SNOOP-CH-02",
+        "text": "CR channel: master drives CRRESP[4:0] (DataTransfer/Error/PassDirty/IsShared/WasUnique) + CRVALID; interconnect drives CRREADY.",
+        "source": "C3.7"
+      },
+      {
+        "id": "FR-ACE-SNOOP-CH-03",
+        "text": "CD channel: master drives CDDATA/CDLAST/CDVALID; interconnect drives CDREADY. CD bus width may differ from RDATA/WDATA.",
+        "source": "C3.8"
+      },
+      {
+        "id": "FR-ACE-CHANDEP-01",
+        "text": "Master must wait for ACVALID+ACREADY before asserting CRVALID. Master must wait for ACVALID+ACREADY before asserting CDVALID.",
+        "source": "C3.9 / Figure C3-1"
+      },
+      {
+        "id": "FR-ACE-ACK-01",
+        "text": "RACK pulsed one ACLK after RLAST+RVALID+RREADY; WACK pulsed one ACLK after BVALID+BREADY. Single-cycle pulses.",
+        "source": "C3.5 / C9"
+      },
+      {
+        "id": "FR-ACE-STATES-01",
+        "text": "Cache-line uses 5-state model UC/UD/SC/SD/I (Table C5-4).",
+        "source": "C5.2"
+      },
+      {
+        "id": "FR-ACE-INVALIDATE",
+        "text": "Snoops that invalidate (ReadUnique/CleanInvalid/MakeInvalid) require CRRESP IsShared=0.",
+        "source": "C5.2"
+      },
+      {
+        "id": "FR-ACE-PASSDIRTY-01",
+        "text": "Dirty->Clean transition requires CRRESP PassDirty=1. Dirty->Invalid (not via MakeInvalid) requires PassDirty=1.",
+        "source": "C5.2"
+      },
+      {
+        "id": "FR-ACE-DATATRANSFER-RULE",
+        "text": "PassDirty=1 with DataTransfer=0 is illegal. IsShared=1 for ReadUnique/CleanInvalid/MakeInvalid is illegal.",
+        "source": "C3.7 / Table C3-23"
+      },
+      {
+        "id": "FR-ACE-LITE-01",
+        "text": "ACE-Lite has no AC/CR/CD channels; restricted to ReadOnce/ReadNoSnoop/WriteUnique/WriteLineUnique/WriteNoSnoop/Barrier.",
+        "source": "C1 (ACE-Lite description)"
+      }
+    ],
+    "error_response_conditions": [
+      "Inherited AXI: FIFO/buffer overrun, unsupported transfer size, write to read-only, slave timeout, disabled function.",
+      "ACE-specific: CRRESP[1] Error — snoop failure in cached master.",
+      "Illegal AxDOMAIN/AxSNOOP/AxBAR combinations — must be detected as protocol violation."
+    ],
+    "protocol_overview": {
+      "axi_channel_count": 5,
+      "ace_snoop_channel_count": 3,
+      "ace_lite_snoop_channel_count": 0,
+      "burst_based": true,
+      "out_of_order_completion": true,
+      "multiple_outstanding": true,
+      "cache_coherency_model": "MOESI-derivative 5-state UC/UD/SC/SD/I",
+      "shareability_domains": [
+        "Non-shareable",
+        "Inner Shareable",
+        "Outer Shareable",
+        "System"
+      ],
+      "snoop_protocol": "Address-based on AC channel; response on CR; optional data on CD",
+      "dvm_supported": true,
+      "barriers_supported": true,
+      "endianness": "byte-invariant",
+      "atomicity_modes": [
+        "Normal",
+        "Exclusive",
+        "Locked (AXI3 only)"
+      ],
+      "wire_count": "5 independent channels, each with VALID/READY pair"
+    }
+  }
 }
