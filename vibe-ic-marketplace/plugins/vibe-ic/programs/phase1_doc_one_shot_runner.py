@@ -50965,6 +50965,71 @@ def main() -> int:
                 except Exception as _ucie_err:
                     print(f"      UCIe synth FAILED (fail-open): {_ucie_err}",
                           file=sys.stderr)
+            # =====================================================================
+            # v0.1.92 — Tier-E new protocol classes (FlexRay / DisplayPort /
+            # JESD204B-C / SMBus-PMBus). _spi_blob is the input_doc-AUGMENTED text.
+            # Each detector is CONTENT-ONLY (no filename reads) and lives in its own
+            # <proto>_protocol_synth module (regression-tested in
+            # tests/test_tier_e_protocol_detect.py). Sibling MUTEXes:
+            #   FlexRay ⟂ CAN/CAN-FD/LIN (dual-channel + static/dynamic segment +
+            #     macrotick/microtick; defers to a CAN-primary arbitration doc)
+            #   DisplayPort ⟂ HDMI(TMDS)/MIPI-DSI(D-PHY) (Main Link + AUX + DPCD)
+            #   JESD204 = own data-converter domain (ILAS + multiframe + subclass)
+            #   SMBus/PMBus ⟂ plain-I2C (requires PEC/SMBALERT/ARP/PMBus command
+            #     vocabulary; force-assigns all keys, runs last)
+            # =====================================================================
+            try:
+                from flexray_protocol_synth import (
+                    is_flexray as _det_flexray,
+                    apply_flexray_synth as _apply_flexray,
+                )
+                _is_flexray = _det_flexray(_spi_blob)
+                if _is_flexray:
+                    _apply_flexray(_gd_r55, _is_flexray,
+                                   "FlexRay Communications System (Bosch v2.1A / ISO 17458)")
+                    print(f"      → FlexRay synth applied (is_flexray={_is_flexray})")
+            except Exception as _flexray_err:
+                print(f"      FlexRay synth FAILED (fail-open): {_flexray_err}",
+                      file=sys.stderr)
+            try:
+                from displayport_protocol_synth import (
+                    is_displayport as _det_dp,
+                    apply_displayport_synth as _apply_dp,
+                )
+                _is_displayport = _det_dp(_spi_blob)
+                if _is_displayport:
+                    _apply_dp(_gd_r55, _is_displayport,
+                              "DisplayPort (VESA DP 1.4a/2.0/2.1)")
+                    print(f"      → DisplayPort synth applied (is_displayport={_is_displayport})")
+            except Exception as _dp_err:
+                print(f"      DisplayPort synth FAILED (fail-open): {_dp_err}",
+                      file=sys.stderr)
+            try:
+                from jesd204_protocol_synth import (
+                    is_jesd204 as _det_jesd,
+                    apply_jesd204_synth as _apply_jesd,
+                )
+                _is_jesd204 = _det_jesd(_spi_blob)
+                if _is_jesd204:
+                    _apply_jesd(_gd_r55, _is_jesd204,
+                                "JESD204 Serial Interface for Data Converters (JESD204B/C)")
+                    print(f"      → JESD204 synth applied (is_jesd204={_is_jesd204})")
+            except Exception as _jesd_err:
+                print(f"      JESD204 synth FAILED (fail-open): {_jesd_err}",
+                      file=sys.stderr)
+            try:
+                from smbus_pmbus_protocol_synth import (
+                    is_smbus_pmbus as _det_smb,
+                    apply_smbus_pmbus_synth as _apply_smb,
+                )
+                _is_smbus_pmbus = _det_smb(_spi_blob)
+                if _is_smbus_pmbus:
+                    _apply_smb(_gd_r55, _is_smbus_pmbus,
+                               "System Management Bus (SMBus 3.1) + Power Management Bus (PMBus 1.3)")
+                    print(f"      → SMBus/PMBus synth applied (is_smbus_pmbus={_is_smbus_pmbus})")
+            except Exception as _smb_err:
+                print(f"      SMBus/PMBus synth FAILED (fail-open): {_smb_err}",
+                      file=sys.stderr)
     except Exception as _r55_err:
         print(f"      R53/R54/R55 synth FAILED (fail-open): {_r55_err}",
               file=sys.stderr)

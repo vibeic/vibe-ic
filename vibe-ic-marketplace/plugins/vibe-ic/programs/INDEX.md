@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 497
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 497)
+- **Total programs (excluding helpers / shims):** 501
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 501)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 488 |
+| `any` | 492 |
 
 ## Alphabetical listing
 
@@ -144,6 +144,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dispatcher_awake_gate_check` | any | v0.114 | v0.114 (BACKLOG-v7 P2.2). |
 | `dispatcher_response_size_table_audit` | any | v0.114 | v0.114 (BACKLOG-v7 P2.1). |
 | `dispatcher_tx_arm_order_check` | any | — | TX handshake arm-before-data race. |
+| `displayport_protocol_synth` | any | v0.1.91 | VESA DisplayPort (DP) protocol synth helper. |
 | `doc_consistency_no_unresolved_conflicts_check` | any | Wave 37 | Wave 37 / A4 |
 | `doc_extract` | any | — | Convert vendor docs (.doc/.docx/.pdf/.pptx/.xlsx/.txt) to |
 | `drc_fix_planner` | any | v0.1.50 | DRC fix-planner (Pattern-B → program). |
@@ -166,6 +167,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `final_report_generate` | any | — | generate canonical, chip-AGNOSTIC final |
 | `final_test_attestation_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
 | `fix_fault_cut_names` | any | v0.63 | Rewrite Fault-cut netlist so escaped identifiers with embedded dots |
+| `flexray_protocol_synth` | any | — | FlexRay Communications System protocol synth helper (protocol #49). |
 | `flow_compliance_check` | any | Wave 91 | Strict Vibe-IC phase 2+3 gate (40 main-track |
 | `flow_stage_check` | any | — | wrapper for signoff_audit --mode flow. |
 | `foundry_handoff_pack_gen` | any | — | emit Step 35 foundry handoff package skeleton. |
@@ -235,6 +237,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ir_drop_report_check` | any | — | wrapper for eda_report_audit --mode ir_drop. |
 | `ir_drop_triage_classify` | any | v0.1.50 | IR-drop triage classifier (Pattern-B → program). |
 | `isolation_cell_required_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
+| `jesd204_protocol_synth` | any | v0.1.91 | JESD204B / JESD204C converter-to-logic serial-interface protocol synth. |
 | `json_schema_check` | any | — | Deterministic JSON schema key checker. |
 | `jtag_protocol_synth` | any | — | IEEE 1149.1 JTAG TAP controller deterministic |
 | `klayout_deck_mode_check` | any | v0.112 | BACKLOG-v10 P0.1 enforcement loop. |
@@ -444,6 +447,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `signoff_waiver_md_emit` | any | v0.1.49 | Submitter-facing waiver Markdown emitter. |
 | `single_bus_driver_check` | any | Wave 10 | structural-RTL gate that catches the |
 | `slave_tx_no_device_break_check` | any | Wave 25 | Wave 25/34 silent-bug gate. |
+| `smbus_pmbus_protocol_synth` | any | v0.1.91 | System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3) |
 | `soundwire_protocol_synth` | any | v0.1.84 | MIPI SoundWire-class protocol synth helper. |
 | `source_chip_agnostic_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `spare_cell_coverage_check` | any | — | Design-for-ECO READINESS gate (Step 18). |
@@ -569,7 +573,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (488 programs)
+### `any` (492 programs)
 
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
 - `agent_report_presence_check` — verify the project ships a structured
@@ -685,6 +689,7 @@ _(no programs in this group)_
 - `dispatcher_awake_gate_check` — v0.114 (BACKLOG-v7 P2.2).  _[v0.114]_
 - `dispatcher_response_size_table_audit` — v0.114 (BACKLOG-v7 P2.1).  _[v0.114]_
 - `dispatcher_tx_arm_order_check` — TX handshake arm-before-data race.
+- `displayport_protocol_synth` — VESA DisplayPort (DP) protocol synth helper.  _[v0.1.91]_
 - `doc_consistency_no_unresolved_conflicts_check` — Wave 37 / A4  _[Wave 37]_
 - `doc_extract` — Convert vendor docs (.doc/.docx/.pdf/.pptx/.xlsx/.txt) to
 - `drc_fix_planner` — DRC fix-planner (Pattern-B → program).  _[v0.1.50]_
@@ -707,6 +712,7 @@ _(no programs in this group)_
 - `final_report_generate` — generate canonical, chip-AGNOSTIC final
 - `final_test_attestation_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
 - `fix_fault_cut_names` — Rewrite Fault-cut netlist so escaped identifiers with embedded dots  _[v0.63]_
+- `flexray_protocol_synth` — FlexRay Communications System protocol synth helper (protocol #49).
 - `flow_compliance_check` — Strict Vibe-IC phase 2+3 gate (40 main-track  _[Wave 91]_
 - `flow_stage_check` — wrapper for signoff_audit --mode flow.
 - `foundry_handoff_pack_gen` — emit Step 35 foundry handoff package skeleton.
@@ -776,6 +782,7 @@ _(no programs in this group)_
 - `ir_drop_report_check` — wrapper for eda_report_audit --mode ir_drop.
 - `ir_drop_triage_classify` — IR-drop triage classifier (Pattern-B → program).  _[v0.1.50]_
 - `isolation_cell_required_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
+- `jesd204_protocol_synth` — JESD204B / JESD204C converter-to-logic serial-interface protocol synth.  _[v0.1.91]_
 - `json_schema_check` — Deterministic JSON schema key checker.
 - `jtag_protocol_synth` — IEEE 1149.1 JTAG TAP controller deterministic
 - `klayout_deck_mode_check` — BACKLOG-v10 P0.1 enforcement loop.  _[v0.112]_
@@ -982,6 +989,7 @@ _(no programs in this group)_
 - `signoff_waiver_md_emit` — Submitter-facing waiver Markdown emitter.  _[v0.1.49]_
 - `single_bus_driver_check` — structural-RTL gate that catches the  _[Wave 10]_
 - `slave_tx_no_device_break_check` — Wave 25/34 silent-bug gate.  _[Wave 25]_
+- `smbus_pmbus_protocol_synth` — System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3)  _[v0.1.91]_
 - `soundwire_protocol_synth` — MIPI SoundWire-class protocol synth helper.  _[v0.1.84]_
 - `source_chip_agnostic_check` — anti-fabrication gate (v1.6.38).
 - `spare_cell_coverage_check` — Design-for-ECO READINESS gate (Step 18).
