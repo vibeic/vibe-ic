@@ -795,6 +795,646 @@
       "source_doc": "SD_simplified.pdf",
       "kind": "time",
       "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "208MHz",
+      "value": "208",
+      "unit": "MHz",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "3.6V",
+      "value": "3.6",
+      "unit": "V",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1.95V",
+      "value": "1.95",
+      "unit": "V",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "3.3V",
+      "value": "3.3",
+      "unit": "V",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "25MHz",
+      "value": "25",
+      "unit": "MHz",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "50MHz",
+      "value": "50",
+      "unit": "MHz",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1.8V",
+      "value": "1.8",
+      "unit": "V",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100MHz",
+      "value": "100",
+      "unit": "MHz",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "26MHz",
+      "value": "26",
+      "unit": "MHz",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "52MHz",
+      "value": "52",
+      "unit": "MHz",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2.7V",
+      "value": "2.7",
+      "unit": "V",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1.70V",
+      "value": "1.70",
+      "unit": "V",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "0.36W",
+      "value": "0.36",
+      "unit": "W",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "power",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100mA",
+      "value": "100",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "200us",
+      "value": "200",
+      "unit": "us",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1.80W",
+      "value": "1.80",
+      "unit": "W",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "power",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2.88W",
+      "value": "2.88",
+      "unit": "W",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "power",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "0.72W",
+      "value": "0.72",
+      "unit": "W",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "power",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "0.54W",
+      "value": "0.54",
+      "unit": "W",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "power",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "150mA",
+      "value": "150",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "150ms",
+      "value": "150",
+      "unit": "ms",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "250ms",
+      "value": "250",
+      "unit": "ms",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100ms",
+      "value": "100",
+      "unit": "ms",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2.16W",
+      "value": "2.16",
+      "unit": "W",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "power",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "200mA",
+      "value": "200",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1.08W",
+      "value": "1.08",
+      "unit": "W",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "power",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "300mA",
+      "value": "300",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1.44W",
+      "value": "1.44",
+      "unit": "W",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "power",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "400mA",
+      "value": "400",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "600mA",
+      "value": "600",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "800mA",
+      "value": "800",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1mA",
+      "value": "1",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "3.6mW",
+      "value": "3.6",
+      "unit": "mW",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "power",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2mA",
+      "value": "2",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "7.2mW",
+      "value": "7.2",
+      "unit": "mW",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "power",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "3mA",
+      "value": "3",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "10.8mW",
+      "value": "10.8",
+      "unit": "mW",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "power",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "535mA",
+      "value": "535",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "235926mW",
+      "value": "235926",
+      "unit": "mW",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "power",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "50ms",
+      "value": "50",
+      "unit": "ms",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "500ms",
+      "value": "500",
+      "unit": "ms",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "750ms",
+      "value": "750",
+      "unit": "ms",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "20MHz",
+      "value": "20",
+      "unit": "MHz",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "40MHz",
+      "value": "40",
+      "unit": "MHz",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "10ms",
+      "value": "10",
+      "unit": "ms",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "80MHz",
+      "value": "80",
+      "unit": "MHz",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "90MHz",
+      "value": "90",
+      "unit": "MHz",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "45MHz",
+      "value": "45",
+      "unit": "MHz",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "35MHz",
+      "value": "35",
+      "unit": "MHz",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "20ms",
+      "value": "20",
+      "unit": "ms",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "800ms",
+      "value": "800",
+      "unit": "ms",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "38MHz",
+      "value": "38",
+      "unit": "MHz",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "47MHz",
+      "value": "47",
+      "unit": "MHz",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "frequency",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1ns",
+      "value": "1",
+      "unit": "ns",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "10ns",
+      "value": "10",
+      "unit": "ns",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100ns",
+      "value": "100",
+      "unit": "ns",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1µs",
+      "value": "1",
+      "unit": "µs",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "10µs",
+      "value": "10",
+      "unit": "µs",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "100µs",
+      "value": "100",
+      "unit": "µs",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "1ms",
+      "value": "1",
+      "unit": "ms",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "0.5mA",
+      "value": "0.5",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "5mA",
+      "value": "5",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "10mA",
+      "value": "10",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "25mA",
+      "value": "25",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "35mA",
+      "value": "35",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "60mA",
+      "value": "60",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "45mA",
+      "value": "45",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "80mA",
+      "value": "80",
+      "unit": "mA",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "current",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "0.5V",
+      "value": "0.5",
+      "unit": "V",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "0.1ms",
+      "value": "0.1",
+      "unit": "ms",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "35ms",
+      "value": "35",
+      "unit": "ms",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "0.2V",
+      "value": "0.2",
+      "unit": "V",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "voltage",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "5ns",
+      "value": "5",
+      "unit": "ns",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "14ns",
+      "value": "14",
+      "unit": "ns",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "0ns",
+      "value": "0",
+      "unit": "ns",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "7ns",
+      "value": "7",
+      "unit": "ns",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "3ns",
+      "value": "3",
+      "unit": "ns",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "6ns",
+      "value": "6",
+      "unit": "ns",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2ns",
+      "value": "2",
+      "unit": "ns",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
+    },
+    {
+      "literal": "2.5ns",
+      "value": "2.5",
+      "unit": "ns",
+      "source_doc": "SD_simplified.pdf",
+      "kind": "time",
+      "source": "phase1_auto_extraction"
     }
   ],
   "width_parameters": {

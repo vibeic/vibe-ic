@@ -1,0 +1,107 @@
+{
+  "_comment": "Auto-discovered extraction patterns (Wave 6 LL-38). Review and promote curated entries to extraction_patterns.json.",
+  "ARM_AHB_Lite.txt": [
+    {
+      "literal": "@a",
+      "label": "auto-discovered (decimal_addr)"
+    },
+    {
+      "literal": "HADDR[0]",
+      "label": "auto-discovered (bracket_kv)"
+    },
+    {
+      "literal": "HPROT[2]",
+      "label": "auto-discovered (bracket_kv)"
+    },
+    {
+      "literal": "HPROT[4]",
+      "label": "auto-discovered (bracket_kv)"
+    },
+    {
+      "literal": "HPROT[6]",
+      "label": "auto-discovered (bracket_kv)"
+    },
+    {
+      "literal": "HADDR[2]",
+      "label": "auto-discovered (bracket_kv)"
+    },
+    {
+      "literal": "Figure 5",
+      "label": "auto-discovered (section_ref)"
+    },
+    {
+      "literal": "Table 6",
+      "label": "auto-discovered (section_ref)"
+    },
+    {
+      "literal": "Figure 6",
+      "label": "auto-discovered (section_ref)"
+    },
+    {
+      "literal": "Table 11",
+      "label": "auto-discovered (section_ref)"
+    },
+    {
+      "literal": "Figure 12",
+      "label": "auto-discovered (section_ref)"
+    },
+    {
+      "literal": "Table 12",
+      "label": "auto-discovered (section_ref)"
+    },
+    {
+      "literal": "0x34, 0x38",
+      "label": "auto-discovered (golden_crc_vector)"
+    },
+    {
+      "literal": "0xC0 resp",
+      "label": "auto-discovered (opcode_packet)"
+    }
+  ],
+  "ARM_APB.txt": [
+    {
+      "literal": "@a",
+      "label": "auto-discovered (decimal_addr)"
+    },
+    {
+      "literal": "PSTRB[3]",
+      "label": "auto-discovered (bracket_kv)"
+    },
+    {
+      "literal": "PSTRB[2]",
+      "label": "auto-discovered (bracket_kv)"
+    },
+    {
+      "literal": "PSTRB[1]",
+      "label": "auto-discovered (bracket_kv)"
+    },
+    {
+      "literal": "PSTRB[0]",
+      "label": "auto-discovered (bracket_kv)"
+    },
+    {
+      "literal": "RRESP[1]",
+      "label": "auto-discovered (bracket_kv)"
+    },
+    {
+      "literal": "BRESP[1]",
+      "label": "auto-discovered (bracket_kv)"
+    },
+    {
+      "literal": "HRESP[0]",
+      "label": "auto-discovered (bracket_kv)"
+    },
+    {
+      "literal": "PPROT[0]",
+      "label": "auto-discovered (bracket_kv)"
+    },
+    {
+      "literal": "PPROT[1]",
+      "label": "auto-discovered (bracket_kv)"
+    },
+    {
+      "literal": "PPROT[2]",
+      "label": "auto-discovered (bracket_kv)"
+    }
+  ]
+}

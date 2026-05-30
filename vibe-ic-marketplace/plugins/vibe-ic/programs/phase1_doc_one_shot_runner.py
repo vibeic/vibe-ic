@@ -49989,6 +49989,113 @@ def main() -> int:
                 except Exception as _sdmmc_err:
                     print(f"      SD/MMC synth FAILED (fail-open): {_sdmmc_err}",
                           file=sys.stderr)
+            # v0.1.85 — AMBA AHB-Lite + APB structural sub-detector.
+            _is_ahb_apb = (
+                ("HCLK" in _spi_blob and "HADDR" in _spi_blob
+                    and "HTRANS" in _spi_blob and "HREADY" in _spi_blob)
+                or ("PCLK" in _spi_blob and "PADDR" in _spi_blob
+                    and "PSEL" in _spi_blob and "PENABLE" in _spi_blob)
+                or ("AMBA" in _spi_blob and "AHB" in _spi_blob
+                    and "APB" in _spi_blob)
+                or ("AHB-Lite" in _spi_blob and "ARM" in _spi_blob))
+            if _is_ahb_apb:
+                _ahb_apb_ic_name = "AMBA AHB + APB (ARM IHI 0033C + IHI 0024C)"
+                try:
+                    from ahb_apb_protocol_synth import apply_ahb_apb_synth as _apply_ahb_apb
+                    _apply_ahb_apb(_gd_r55, _is_ahb_apb, _ahb_apb_ic_name)
+                    print(f"      → R86/R87/R88 AHB+APB synth applied (is_ahb_apb={_is_ahb_apb})")
+                except Exception as _ahb_apb_err:
+                    print(f"      AHB+APB synth FAILED (fail-open): {_ahb_apb_err}",
+                          file=sys.stderr)
+            # v0.1.85 — DDR3 SDRAM structural sub-detector.
+            _is_ddr = (
+                ("ACTIVATE" in _spi_blob and "PRECHARGE" in _spi_blob
+                    and "tRCD" in _spi_blob and "tRP" in _spi_blob)
+                or ("DDR3" in _spi_blob and "SDRAM" in _spi_blob
+                    and ("mode register" in _spi_blob.lower()
+                         or "MR0" in _spi_blob))
+                or ("DDR" in _spi_blob and "JEDEC" in _spi_blob
+                    and ("JESD79" in _spi_blob or "DDR3" in _spi_blob)))
+            if _is_ddr:
+                _ddr_ic_name = "DDR3 SDRAM (JEDEC JESD79-3C)"
+                try:
+                    from ddr_protocol_synth import apply_ddr_synth as _apply_ddr
+                    _apply_ddr(_gd_r55, _is_ddr, _ddr_ic_name)
+                    print(f"      → R89/R90/R91 DDR3 synth applied (is_ddr={_is_ddr})")
+                except Exception as _ddr_err:
+                    print(f"      DDR3 synth FAILED (fail-open): {_ddr_err}",
+                          file=sys.stderr)
+            # v0.1.85 — IEEE 802.3 Ethernet structural sub-detector.
+            _is_ethernet = (
+                ("MII" in _spi_blob and "MDIO" in _spi_blob
+                    and "PHY" in _spi_blob)
+                or ("802.3" in _spi_blob and "MAC" in _spi_blob
+                    and "frame" in _spi_blob.lower())
+                or ("Ethernet" in _spi_blob
+                    and ("preamble" in _spi_blob.lower()
+                         or "SFD" in _spi_blob)))
+            if _is_ethernet:
+                _ethernet_ic_name = "IEEE 802.3 Ethernet MAC + PHY (Clauses 4 / 22 / 35 / 45)"
+                try:
+                    from ethernet_protocol_synth import apply_ethernet_synth as _apply_ethernet
+                    _apply_ethernet(_gd_r55, _is_ethernet, _ethernet_ic_name)
+                    print(f"      → R92/R93/R94 Ethernet synth applied (is_ethernet={_is_ethernet})")
+                except Exception as _ethernet_err:
+                    print(f"      Ethernet synth FAILED (fail-open): {_ethernet_err}",
+                          file=sys.stderr)
+            # v0.1.85 — NVM Express (NVMe) structural sub-detector.
+            _is_nvme = (
+                ("Submission Queue" in _spi_blob
+                    and "Completion Queue" in _spi_blob
+                    and "doorbell" in _spi_blob.lower())
+                or ("NVMe" in _spi_blob and "Admin Command" in _spi_blob
+                    and "I/O Command" in _spi_blob)
+                or ("NVM Express" in _spi_blob
+                    and ("controller register" in _spi_blob.lower()
+                         or "BAR0" in _spi_blob)))
+            if _is_nvme:
+                _nvme_ic_name = "NVM Express (NVMe) Base Specification Rev 1.4"
+                try:
+                    from nvme_protocol_synth import apply_nvme_synth as _apply_nvme
+                    _apply_nvme(_gd_r55, _is_nvme, _nvme_ic_name)
+                    print(f"      → R95/R96/R97 NVMe synth applied (is_nvme={_is_nvme})")
+                except Exception as _nvme_err:
+                    print(f"      NVMe synth FAILED (fail-open): {_nvme_err}",
+                          file=sys.stderr)
+            # v0.1.85 — MIPI I3C Basic structural sub-detector.
+            _is_i3c = (
+                ("I3C" in _spi_blob and "Dynamic Address" in _spi_blob
+                    and "IBI" in _spi_blob)
+                or ("I3C Basic" in _spi_blob and "CCC" in _spi_blob)
+                or ("I3C" in _spi_blob and "HDR-DDR" in _spi_blob
+                    and "Hot-Join" in _spi_blob)
+                or ("ENTDAA" in _spi_blob and "CCC" in _spi_blob))
+            if _is_i3c:
+                _i3c_ic_name = "MIPI I3C Basic Specification v1.0"
+                try:
+                    from i3c_protocol_synth import apply_i3c_synth as _apply_i3c
+                    _apply_i3c(_gd_r55, _is_i3c, _i3c_ic_name)
+                    print(f"      → R98/R99/R100 I3C synth applied (is_i3c={_is_i3c})")
+                except Exception as _i3c_err:
+                    print(f"      I3C synth FAILED (fail-open): {_i3c_err}",
+                          file=sys.stderr)
+            # v0.1.85 — Serial ATA AHCI structural sub-detector.
+            _is_sata = (
+                ("COMRESET" in _spi_blob and "COMINIT" in _spi_blob
+                    and "COMWAKE" in _spi_blob)
+                or ("SATA" in _spi_blob and "FIS" in _spi_blob
+                    and "AHCI" in _spi_blob)
+                or ("Serial ATA" in _spi_blob
+                    and ("ALIGN" in _spi_blob or "primitive" in _spi_blob.lower())))
+            if _is_sata:
+                _sata_ic_name = "Serial ATA AHCI 1.3.1"
+                try:
+                    from sata_protocol_synth import apply_sata_synth as _apply_sata
+                    _apply_sata(_gd_r55, _is_sata, _sata_ic_name)
+                    print(f"      → R101/R102/R103 SATA synth applied (is_sata={_is_sata})")
+                except Exception as _sata_err:
+                    print(f"      SATA synth FAILED (fail-open): {_sata_err}",
+                          file=sys.stderr)
     except Exception as _r55_err:
         print(f"      R53/R54/R55 synth FAILED (fail-open): {_r55_err}",
               file=sys.stderr)

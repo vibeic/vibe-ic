@@ -42,8 +42,7 @@
         "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
       }
     ],
-    "l8_protocol_widths_v0_1_65": "R19 extractor: width_parameters=51",
-    "l8_encoding_mirror_v0_1_72": "R41: mirrored 3 L15 encoding tables into L8 canonical concept slots"
+    "l8_protocol_widths_v0_1_65": "R19 extractor: width_parameters=51"
   },
   "extraction_evidence": {
     "input/docs/IHI0022H_amba_axi_protocol_spec.pdf": []
@@ -957,36 +956,6 @@
       "source": "A3.4.4"
     }
   },
-  "burst_size_encoding_AxSIZE_to_bytes": {
-    "0b000": 1,
-    "0b001": 2,
-    "0b010": 4,
-    "0b011": 8,
-    "0b100": 16,
-    "0b101": 32,
-    "0b110": 64,
-    "0b111": 128
-  },
-  "burst_type_encoding_AxBURST": {
-    "0b00": "FIXED",
-    "0b01": "INCR",
-    "0b10": "WRAP",
-    "0b11": "Reserved"
-  },
-  "protection_encoding_AxPROT": {
-    "AxPROT[0]": {
-      "0": "Unprivileged",
-      "1": "Privileged"
-    },
-    "AxPROT[1]": {
-      "0": "Secure",
-      "1": "Non-secure"
-    },
-    "AxPROT[2]": {
-      "0": "Data",
-      "1": "Instruction"
-    }
-  },
   "burst_length_formula": {
     "AXI3": "Burst_Length = AxLEN[3:0] + 1   (range 1..16)",
     "AXI4": "Burst_Length = AxLEN[7:0] + 1   (INCR: 1..256; FIXED/WRAP: 1..16)",
@@ -1036,6 +1005,20 @@
       "1": "Write-Allocate"
     },
     "AXI4_rename": "AxCACHE[1] is renamed 'Modifiable' in AXI4 (functionality unchanged)."
+  },
+  "protection_encoding_AxPROT": {
+    "AxPROT[0]": {
+      "0": "Unprivileged",
+      "1": "Privileged"
+    },
+    "AxPROT[1]": {
+      "0": "Secure",
+      "1": "Non-secure"
+    },
+    "AxPROT[2]": {
+      "0": "Data",
+      "1": "Instruction"
+    }
   },
   "burst_address_pseudocode": {
     "Start_Address": "AxADDR",
