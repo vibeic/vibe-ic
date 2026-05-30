@@ -16,6 +16,6 @@
       "ace_idle": "No outstanding coherent or snoop traffic; snoop channels' VALIDs LOW; clock gating allowed.",
       "ace_q_channel_intent": "Q-Channel (separate AMBA Low Power Interface, ARM IHI 0068) is typically layered on top of ACE for power-down handshakes; that's outside IHI 0022E scope."
     },
-    "notes": "Power-domain partitioning, voltage-domain crossings, power-gate sequencing, isolation cells, retention registers are deferred to SoC integration (UPF / CPF). Neither IHI 0033C nor IHI 0024C defines a power-intent layer. APB's two-cycle minimum + lack of pipelining are intentional power optimizations."
+    "notes": "Power-domain partitioning, voltage-domain crossings, power-gate sequencing, isolation, retention, and Q-Channel low-power handshakes are deferred to SoC integration (UPF/CPF) and other AMBA documents. ACE coherency requires powered-down masters to drop out of the shareability domain cleanly."
   }
 }

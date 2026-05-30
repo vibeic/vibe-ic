@@ -1,0 +1,502 @@
+LPDDR
+Low-Power Double Data Rate (LPDDR) is a type of synchronous dynamic random-access memory (SDRAM)
+designed to use less power than conventional memory. It is commonly used in smartphones, tablet computers, and
+laptops, where reducing power consumption is important for battery life. For this reason, earlier versions of the
+technology were also known as Mobile DDR.
+
+LPDDR differs from standard DDR SDRAM in both design and features, with changes that make it more suitable
+for mobile devices. Unlike DDR, which is typically installed in removable modules, LPDDR is usually soldered
+directly onto the device's motherboard to conserve space and improve efficiency. Although LPDDR uses a
+generational naming convention similar to that of DDR memory (such as LPDDR4 and DDR4), the two follow
+separate development standards, and the version numbers do not indicate that they share the same technologies.[1]
+                                                                                                                        Mobile DDR: Samsung K4X2G323PD-
+The LPDDR standard is developed and maintained by the JEDEC Solid State Technology Association.
+                                                                                                                        8GD8
+
+
+
+Bus width
+In contrast with standard SDRAM, used in stationary devices and laptops and usually connected over a 64-bit wide memory bus, LPDDR also permits 16- or
+32-bit wide channels.[2]
+
+The "E" and "X" versions mark enhanced versions of the specifications. They formalize overclocking the memory array by usually 33%.
+
+As with standard SDRAM, most generations double the internal fetch size and external transfer speed, DDR4 and LPDDR5 being the exceptions.
+
+
+
+Generations
+
+                                 Comparison of LPDDR SDRAM generations
+
+                                  Chip                                  Bus
+ Gene-    Release                                                                               Voltage
+ ration    year     Clock rate    Cycle time    Pre-   Clock rate   Transfer rate   Bandwidth     (V)
+                      (MHz)          (ns)      fetch     (MHz)         (MT/s)         (MB/s)
+
+   1                   200                                200           400           1 600
+           2006                                 2n                                                1.8
+   1E                  266                                266           533           2 132
+
+   2                   200                                400           800           3 200       1.2
+           2009                                 4n
+   2E                  266                                533           1067          4 268       1.8
+
+   3                   200                                800           1600          4 800       1.2
+           2012                                 8n
+   3E                  266                               1067           2133          8 532       1.8
+
+                                                                                                  1.1
+   4       2014        200                               1600           3200         12 800
+                                                                                                  1.8
+
+                                                                                                  0.6
+   4X      2017        266                               2133           4267         17 068       1.1
+                                                                                                  1.8
+
+                                               16n                                                0.5
+   5       2019        400                               3200           6400         25 600
+                                                                                                 1.05
+   5X      2021        666                               5333          10667         42 668       1.8
+
+                                                                                                  0.5
+   6       2025        900                               7200          14400         57 600       1.0
+                                                                                                  1.8
+
+
+
+LPDDR(1)
+The original low-power DDR (sometimes retroactively called LPDDR1), released in 2006 is a slightly modified form of DDR SDRAM, with several changes
+to reduce overall power consumption.
+
+Most significantly, the supply voltage is reduced from 2.5 to 1.8 V. Additional savings come from temperature-compensated refresh (DRAM requires refresh
+less often at low temperatures), partial array self refresh, and a "deep power down" mode which sacrifices all memory contents. Additionally, chips are smaller,
+using less board space than their non-mobile equivalents. Samsung and Micron are two of the main providers of this technology, which is used in tablet and
+phone devices such as the iPhone 3GS, original iPad, Samsung Galaxy Tab 7.0 and Motorola Droid X.[3]
+LPDDR2
+In 2009, the standards group JEDEC published JESD209-2, which defined a more dramatically revised low-power
+DDR interface.[4][5] It is not compatible with either DDR1 or DDR2 SDRAM, but can accommodate any one of:
+
+    LPDDR2-S2: 2n prefetch memory (like DDR1),
+    LPDDR2-S4: 4n prefetch memory (like DDR2), or
+    LPDDR2-N: Non-volatile (NAND flash) memory.
+Low-power states are similar to basic LPDDR, with some additional partial array refresh options.
+
+Timing parameters are specified for LPDDR-200 to LPDDR-1066 (clock frequencies of 100 to 533 MHz).
+
+Working at 1.2 V, LPDDR2 multiplexes the control and address lines onto a 10-bit double data rate CA bus. The
+commands are similar to those of normal SDRAM, except for the reassignment of the precharge and burst terminate
+opcodes:
+                                                                                                                          Samsung K4P4G154EC-FGC1 4 Gbit
+                                                                                                                          LPDDR2 chip
+
+
+                                                                                   LPDDR2/LPDDR3 command encoding[4]
+
+                                                                           ↗ Rising clock ↗                                                             ↘ Falling
+               Operation                      CA0     CA1     CA2     CA3     CA4     CA5       CA6   CA7   CA8     CA9       CA0     CA1       CA2    CA3   CA4
+                                             (RAS)    (CAS)   (WE)                                                            (RAS)   (CAS)     (WE)
+
+              No operation                     H        H       H                                                                     —
+          Precharge all banks                  H        H       L      H       H                                                                —
+          Precharge one bank                   H        H       L      H       L            —         BA0   BA1     BA2                                           —
+      Preactive (LPDDR2-N only)                H        H       L      H      A30     A31       A32   BA0   BA1     BA2       A20     A21       A22    A23   A24
+            Burst terminate                    H        H       L      L                                                                    —
+      Read (AP=auto-precharge)                 H        L       H      reserved        C1       C2    BA0   BA1     BA2        AP      C3       C4     C5    C6
+      Write (AP=auto-precharge)                H        L       L      reserved        C1       C2    BA0   BA1     BA2        AP      C3       C4     C5    C6
+    Activate (R0–14=Row address)               L        H      R8      R9     R10     R11       R12   BA0   BA1     BA2        R0      R1       R2     R3    R4
+       Activate (LPDDR2-N only)                L        H     A15     A16     A17     A18       A19   BA0   BA1     BA2        A5      A6       A7     A8    A9
+ Refresh all banks (LPDDR2-Sx only)            L        L       H      H                                                                    —
+ Refresh one bank (round-robin addr.)          L        L       H      L                                                                    —
+  Mode register read (MA0–7=addr.)             L        L       L      H      MA0     MA1       MA2   MA3   MA4     MA5       MA6     MA7
+   Mode register write (OP0–7=data)            L        L       L      L      MA0     MA1       MA2   MA3   MA4     MA5       MA6     MA7       OP0    OP1   OP2
+
+Column address bit C0 is never transferred, and is assumed to be zero. Burst transfers thus always begin at even addresses.
+
+LPDDR2 also has an active-low chip select (when high, everything is a NOP) and clock enable CKE signal, which operate like SDRAM. Also like SDRAM,
+the command sent on the cycle that CKE is first dropped selects the power-down state:
+
+    If the chip is active, it freezes in place.
+    If the command is a NOP (CS low or CA0–2 = HHH), the chip idles.
+    If the command is a refresh command (CA0–2 = LLH), the chip enters the self-refresh state.
+    If the command is a burst terminate (CA0–2 = HHL), the chip enters the deep power-down state. (A full reset sequence is required when
+    leaving.)
+The mode registers have been greatly expanded compared to conventional SDRAM, with an 8-bit address space, and the ability to read them back. Although
+smaller than a serial presence detect EEPROM, enough information is included to eliminate the need for one.
+
+S2 devices smaller than 4 Gbit, and S4 devices smaller than 1 Gbit have only four banks. They ignore the BA2 signal, and do not support per-bank refresh.
+
+Non-volatile memory devices do not use the refresh commands, and reassign the precharge command to transfer address bits A20 and up. The low-order bits
+(A19 and down) are transferred by a following Activate command. This transfers the selected row from the memory array to one of 4 or 8 (selected by the BA
+bits) row data buffers, where they can be read by a Read command. Unlike DRAM, the bank address bits are not part of the memory address; any address can
+be transferred to any row data buffer. A row data buffer may be from 32 to 4096 bytes long, depending on the type of memory. Rows larger than 32 bytes ignore
+some of the low-order address bits in the Activate command. Rows smaller than 4096 bytes ignore some of the high-order address bits in the Read command.
+
+Non-volatile memory does not support the Write command to row data buffers. Rather, a series of control registers in a special address region support Read and
+Write commands, which can be used to erase and program the memory array.
+
+
+LPDDR3
+In May 2012, JEDEC published the JESD209-3 Low Power Memory Device Standard.[6][7][8] In comparison to LPDDR2, LPDDR3 offers a higher data rate,
+greater bandwidth and power efficiency, and higher memory density. LPDDR3 achieves a data rate of 1600 MT/s and utilizes key new technologies: write-
+leveling and command/address training,[9] optional on-die termination (ODT), and low-I/O capacitance. LPDDR3 supports both package-on-package (PoP) and
+discrete packaging types.
+The command encoding is identical to LPDDR2, using a 10-bit double data rate CA bus.[7] However, the standard only specifies 8n-prefetch DRAM, and does
+not include the flash memory commands.
+
+Products using LPDDR3 include the 2013 MacBook Air, iPhone 5S, iPhone 6, Nexus 10, Samsung Galaxy S4 (GT-I9500) and Microsoft Surface Pro 3 and
+4.[10] LPDDR3 went mainstream in 2013, running at 800 MHz DDR (1600 MT/s), offering bandwidth comparable to PC3-12800 notebook memory in 2011
+(12.8 GB/s of bandwidth).[11] To achieve this bandwidth, the controller must implement dual-channel memory. For example, this is the case for the Exynos 5
+Dual[12] and the 5 Octa.[13]
+
+
+LPDDR3E
+An "enhanced" version of the specification called LPDDR3E increases the data rate to 2133 MT/s. Samsung Electronics introduced the first 4 gigabit 20 nm-
+class LPDDR3 modules capable of transmitting data at up to 2,133 MT/s, more than double the performance of the older LPDDR2 which is only capable of
+800 MT/s.[14] Various SoCs from various manufacturers also natively support 800 MHz LPDDR3 RAM. Such include the Snapdragon 600 and 800 from
+Qualcomm[15] as well as some SoCs from the Exynos and Allwinner series.
+
+
+LPDDR4
+On 14 March 2012, JEDEC hosted a conference to explore how future mobile device requirements will drive upcoming standards like LPDDR4.[16] On 30
+December 2013, Samsung announced that it had developed the first 20 nm-class 8 gigabit (1 GB) LPDDR4 capable of transmitting data at 3,200 MT/s, thus
+providing 50 percent higher performance than the fastest LPDDR3 and consuming around 40 percent less energy at 1.1 volts.[17][18]
+
+On 25 August 2014, JEDEC published the JESD209-4 LPDDR4 Low Power Memory Device Standard.[19][20]
+
+Significant changes include:
+
+    Doubling of the interface speed, and numerous consequent electrical changes, including changing the I/O standard to low-voltage swing-
+    terminated logic (LVSTL)
+    Doubling of the internal prefetch size, and minimum transfer size
+    Change from a 10-bit DDR command/address bus to a 6-bit SDR bus
+    Change from one 32-bit wide bus to two independent 16-bit wide buses
+    Self-refresh is enabled by dedicated commands, rather than being controlled by the CKE line
+The standard defines SDRAM packages containing two independent 16-bit access channels, each connected to up to two dies per package. Each channel is 16
+data bits wide, has its own control/address pins, and allows access to 8 banks of DRAM. Thus, the package may be connected in three ways:
+
+    Data lines and control connected in parallel to a 16-bit data bus, and only chip selects connected independently per channel.
+    To two halves of a 32-bit wide data bus, and the control lines in parallel, including chip select.
+    To two independent 16-bit wide data buses
+Each die provides 4, 6, 8, 12, or 16 gigabits of memory, half to each channel. Thus, each bank is one sixteenth the device size. This is organized into the
+appropriate number (16 K to 64 K) of 16384-bit (2048-byte) rows. Extension to 24 and 32 gigabits is planned, but it is not yet decided if this will be done by
+increasing the number of rows, their width, or the number of banks.
+
+Larger packages providing double width (four channels) and up to four dies per pair of channels (8 dies total per package) are also defined.
+
+Data is accessed in bursts of either 16 or 32 transfers (256 or 512 bits, 32 or 64 bytes, 8 or 16 cycles DDR). Bursts must begin on 64-bit boundaries.
+
+Since the clock frequency is higher and the minimum burst length longer than earlier standards, control signals can be more highly multiplexed without the
+command/address bus becoming a bottleneck. LPDDR4 multiplexes the control and address lines onto a 6-bit single data rate CA bus. Commands require 2
+clock cycles, and operations encoding an address (e.g., activate row, read or write column) require two commands. For example, to request a read from an idle
+chip requires four commands taking 8 clock cycles: Activate-1, Activate-2, Read, CAS-2.
+
+The chip select line (CS) is active-high. The first cycle of a command is identified by chip select being high; it is low during the second cycle.
+                                           LPDDR4 command encoding[20]: 151
+            First cycle (CS high)                    Second cycle (CS low)
+                                                                                                  Operation
+ CA5       CA4   CA3   CA2     CA1   CA0     CA5    CA4    CA3       CA2   CA1   CA0
+
+  L         L     L      L      L     L                          —                       No operation
+
+  H         L     L      L      L     L        0    OP4    OP3       OP2   OP1    1      Multi-purpose command
+  AB       H      L      L      L     L              —               BA2   BA1   BA0     Precharge (AB: all banks)
+
+  AB        L     H      L      L     L              —               BA2   BA1   BA0     Refresh (AB: all banks)
+
+  —        H      H      L      L     L                          —                       Self-refresh entry
+  BL        L     L      H      L     L       AP     C9     —        BA2   BA1   BA0     Write-1 (+CAS-2)
+
+  —        H      L      H      L     L                          —                       Self-refresh exit
+
+  0         L     H      H      L     L       AP     C9     —        BA2   BA1   BA0     Masked write-1 (+CAS-2)
+  —        H      H      H      L     L                          —                                 Reserved
+
+  BL        L     L      L      H     L       AP     C9     —        BA2   BA1   BA0     Read-1 (+CAS-2)
+
+  C8       H      L      L      H     L       C7     C6     C5       C4    C3    C2      CAS-2
+       —          H      L      H     L                          —                                 Reserved
+
+ OP7        L     L      H      H     L      MA5    MA4    MA3       MA2   MA1   MA0     Mode register write-1 and -2
+ OP6       H      L      H      H     L      OP5    OP4    OP3       OP2   OP1   OP0     MA: address, OP: data
+
+  —         L     H      H      H     L      MA5    MA4    MA3       MA2   MA1   MA0     Mode register read (+CAS-2)
+
+  —        H      H      H      H     L                          —                                 Reserved
+
+ R15       R14   R13    R12     L    H       R11    R10    R16       BA2   BA1   BA0
+                                                                                         Activate-1 and -2
+  R9       R8    R7     R6      H    H        R5     R4     R3       R2    R1    R0
+
+The CAS-2 command is used as the second half of all commands that perform a transfer across the data bus, and provides low-order column address bits:
+
+    Read commands must begin on a column address which is a multiple of 4; there is no provision for communicating a non-zero C0 or C1
+    address bit to the memory.
+    Write commands must begin on a column address which is a multiple of 16; C2 and C3 must be zero for a write command.
+    Mode register read and some multi-purpose commands must also be followed by a CAS-2 command, however all the column bits must be
+    zero (low).
+The burst length can be configured to be 16, 32, or dynamically selectable by the BL bit of read and write operations.
+
+One DMI (data mask/invert) signal is associated with each 8 data lines, and can be used to minimize the number of bits driven high during data transfers. When
+high, the other 8 bits are complemented by both transmitter and receiver. If a byte contains five or more 1 bits, the DMI signal can be driven high, along with
+three or fewer data lines. As signal lines are terminated low, this reduces power consumption.
+
+(An alternative usage, where DMI is used to limit the number of data lines which toggle on each transfer to at most 4, minimises crosstalk. This may be used by
+the memory controller during writes, but is not supported by the memory devices.)
+
+Data bus inversion can be separately enabled for reads and writes. For masked writes (which have a separate command code), the operation of the DMI signal
+depends on whether write inversion is enabled.
+
+    If DBI on writes is disabled, a high level on DMI indicates that the corresponding data byte is to be ignored and not written
+    If DBI on writes is enabled, a low level on DMI, combined with a data byte with 5 or more bits set, indicates a data byte to be ignored and not
+    written.
+LPDDR4 also includes a mechanism for "targeted row refresh" to avoid corruption due to "row hammer" on adjacent rows. A special sequence of three
+activate/precharge sequences specifies the row which was activated more often than a device-specified threshold (200,000 to 700,000 per refresh cycle).
+Internally, the device refreshes physically adjacent rows rather than the one specified in the activate command.[21][20]: 153–54
+
+
+LPDDR4X
+Samsung Semiconductor proposed an LPDDR4 variant that it called LPDDR4X.[22]: 11 LPDDR4X is identical to LPDDR4 except additional power is saved by
+reducing the I/O voltage (Vddq) from 1.1 V to 0.6 V. On 9 January 2017, SK Hynix announced 8 and 16 GB LPDDR4X packages.[23][24] JEDEC published the
+LPDDR4X standard on 8 March 2017.[25] Aside from the lower voltage, additional improvements include a single-channel die option for smaller applications,
+new MCP, PoP and IoT packages, and additional definition and timing improvements for the highest 4266 MT/s speed grade.
+
+
+LPDDR5
+On 19 February 2019, JEDEC published the JESD209-5, Standard for Low Power Double Data Rate 5 (LPDDR5).[26]
+
+Samsung announced it had working prototype LPDDR5 chips in July 2018. LPDDR5 introduces the following changes:[27]
+
+    Data transfer rate is increased to 6400 Mbit/s per pin
+    Differential clocks are used (3200 MHz, DDR)
+    Prefetch is not doubled again, but remains 16n
+    The number of banks is increased to 16, divided into four DDR4-like bank groups
+    Power-saving improvements:[26]
+       Data-Copy and Write-X (all one or all zero) commands to decrease data transfer
+       Dynamic frequency and voltage scaling
+   A new clocking architecture, where commands use a quarter-speed master clock (CK), while data is transferred using full-speed Write Clock
+   (WCK) & Read Strobe (RDQS) signals which are enabled only when necessary[26]
+   One set of full-speed clocks per byte (vs. per 16 bits in LPDDR4)
+   Elimination of the Clock Enable (CKE) pin; instead low-power mode is entered by a command over the CA bus, and lasts until the chip select
+   signal next goes high
+AMD Van Gogh, Intel Tiger Lake, Apple silicon (M1 Pro, M1 Max, M1 Ultra, M2 and A16 Bionic), Huawei Kirin 9000 and Snapdragon 888 memory
+controllers support LPDDR5.
+
+The doubling of the transfer rate, and the quarter-speed master clock, results in a master clock which is half the frequency of a similar LPDDR4 clock. The
+command (CA) bus is widened to 7 bits, and commands are transferred at double data rate, so commands end up being sent at the same rate as LPDDR4.
+
+                                                LPDDR5 command encoding[28][29]
+               ↗ Rising clock ↗                                       ↘ Falling clock ↘
+                                                                                                               Operation
+ CA6    CA5    CA4    CA3   CA2    CA1    CA0       CA6    CA5        CA4    CA3    CA2   CA1   CA0
+
+  L      L      L      L      L     L      L                                 —                         No operation
+  H      L      L      L      L     L      L                                 —                         Power-down entry
+
+  L      H      L      L      L     L      L                                —L—                        Read FIFO
+
+  H      H      L      L      L     L      L                                —L—                        Write FIFO
+  L      L      H      L      L     L      L                                 —                                 Reserved
+
+  H      L      H      L      L     L      L                                —L—                        Read DQ Calibration
+
+ OP7     H      H      L      L     L      L        OP6    OP5        OP4    OP3    OP2   OP1   OP0    Multi-purpose command
+ OP7     L      L      H      L     L      L        OP6    OP5        OP4    OP3    OP2   OP1   OP0    Mode register write 2
+
+  L      H      L      H      L     L      L                                 —                         Self-refresh exit
+
+  H      H      L      H      L     L      L        PD     DSE                       —                 Self-refresh entry
+  L      L      H      H      L     L      L        MA6    MA5        MA4    MA3    MA2   MA1   MA0    Mode register read
+
+  H      L      H      H      L     L      L        MA6    MA5        MA4    MA3    MA2   MA1   MA0    Mode register write 1
+
+  L      H      H      H      L     L      L        AB     SB1        SB0    RFM    BG0   BA1   BA0    Refresh
+  H      H      H      H      L     L      L        AB            —          BG1    BG0   BA1   BA0    Precharge
+
+  C5     C4     C3     L      H     L      L        AP      C2         C1    BG1    BG0   BA1   BA0    Write 32
+
+ WS_    WS_    WS_                                 WXSB
+                       H      H     L      L               WXSA       WRX    DC3    DC2   DC1   DC0    Column address select
+ FS     RD     WR                                   /B3
+  C5     C4     C3    C0      L     H      L        AP      C2         C1    BG1    BG0   BA1   BA0    Masked Write
+
+  C5     C4     C3    C0      H     H      L        AP      C2         C1    BG1    BG0   BA1   BA0    Write
+
+  C5     C4     C3    C0      L     L      H        AP      C2         C1    BG1    BG0   BA1   BA0    Read
+  C5     C4     C3    C0      H     L      H        AP      C2         C1    BG1    BG0   BA1   BA0    Read 32
+
+ R10     R9     R8    R7      L     H      H        R6      R5         R4     R3     R2   R1    R0     Activate 2
+
+ R17    R16    R15    R14     H     H      H        R13    R12        R11    BG1    BG0   BA1   BA0    Activate 1
+
+
+   Bn = Burst address bit
+   Cn = Column address bit
+   Rn = Row address bit
+   BAn = Bank address bit
+   BGn = Bank group address bit
+   AB = All banks (ignore BG & BA)
+   AP = Auto-precharge
+
+   MAn = Mode register address bit
+   OPn = Operation, or mode register data
+   WS_xx = WCK synchronization
+   WRX = Write X; do not transfer data, but fill with all-zero or all-one
+   WXSA, WXSB = Write X select, value to be written
+   PD = Power down
+   DSE = Deep sleep enable
+
+
+Compared to earlier standards, the nomenclature for column addresses has changed. Both LPDDR4 and LPDDR5 allow up to 10 bits of column address, but the
+names are different. LPDDR4's C0–C9 are renamed B0–B3 and C0–C5. As with LPDDR4, writes must start at a multiple-of-16 address with B0–B3 zero, but
+reads may request a burst be transferred in a different order by specifying a non-zero value for B3.
+
+As with LPDDR4, to read some data requires 4 commands: two activate commands to select a row, then a CAS and a read command to select a column. Unlike
+LPDDR4, the CAS command comes before the read or write command. In fact, it is something of a misnomer, in that it does not select a column at all. Instead,
+its primary function is to prepare the DRAM to synchronize with the imminent start of the high-speed WCK clock. The WS_FS, WS_RD and WS_WR bits
+select various timings, with the _RD and _WR options optimized for an immediately following read or write command, while the _FS option starts the clock
+immediately, and may be followed by multiple reads or writes, accessing multiple banks.
+
+CAS also specifies the "write X" option. If the WRX bit is set, writes do not transfer data, but rather fill the burst with all-zeros or all-ones, under the control of
+the WXS (write-X select) bit. This takes the same amount of time, but saves energy.
+
+In addition to the usual bursts of 16, there are commands for performing double-length bursts of 32. Reads (but not writes) may specify a starting position
+within the 32-word aligned burst using the C0 and B3 bits.
+
+
+LPDDR5X
+On 28 July 2021, JEDEC published the JESD209-5B, Standard for Low Power Double Data Rate 5/5X (LPDDR5/5X)[30] with the following changes:
+
+    Speed extension up to 8533 Mbit/s
+    Signal integrity improvements with tx/rx equalization
+    Reliability improvements via the new Adaptive Refresh Management feature
+On 9 November 2021, Samsung announced that the company had developed the industry's first LPDDR5X DRAM. Samsung's implementation involves 16-
+gigabit (2 Go) dies, on a 14 nm process node, with modules with up to 32 dies (64 GB) in a single package. According to the company, the new modules would
+use 20% less power than LPDDR5.[31] According to Andrei Frumusanu of AnandTech, LPDDR5X in SoCs and other products was expected for the 2023
+generation of devices.[32]
+
+On 19 November 2021, Micron announced that Mediatek has validated its LPDDR5X DRAM for Mediatek's Dimensity 9000 5G SoC.[33]
+
+On 25 January 2023 SK Hynix announced "Low Power Double Data Rate 5 Turbo" (LPDDR5T) chips with a bandwidth of 9.6 Gbit/s.[34] It operates in the
+ultra-low voltage range of 1.01–1.12 V set by JEDEC. It has been incorporated into the LPDDR5X standard as LPDDR5X-9600 making "LPDDR5T" a brand
+name.[35] MediaTek Dimensity 9300 and Qualcomm Snapdragon 8 Gen 3 support LPDDR5T.
+
+On 17 April 2024 Samsung Electronics announced LPDDR5X-10700 with 25% higher bandwidth, 30% higher capacity and 25% improved power efficiency
+than previous LPDDR5X generations. This is achieved through a new 12 nm process that allows the chips to be more efficient while also being small enough to
+fit capacities of up to 32 GB in a single package.[36]
+
+On 16 July 2024 Samsung has completed validation of the industry's fastest LPDDR5X DRAM, capable of operating at speeds up to 10.7 Gbit/s, for use in
+MediaTek's upcoming flagship Dimensity 9400 SoC.[1]
+
+
+LPDDR6
+On 9 July 2025, JEDEC published the JESD209-6, standard for Low Power Double Data Rate 6 (LPDDR6)[37] with the following changes:
+
+    Speed extension to 10.6–14.4 Gbit/s/pin
+    CA bus further narrowed to 4 bits
+    Data bus width of 12 bits per channel
+    Bursts of 24 transfers × 12 pins = 288 bits:
+        256 data bits, plus
+        16 tag/ECC bits stored by array, plus
+        16 bits for data bus inversion or link ECC, not stored.
+    CAMM2[38]
+
+
+References
+ 1. "When is LPDDR3 not LPDDR3? When it's DDR3L..." (https://blogs.                   6. JEDEC publishes LPDDR3 standard for low-power memory chips
+    synopsys.com/committedtomemory/2014/01/10/when-is-lpddr3-not-                        (https://www.electroiq.com/articles/sst/2012/05/jedec-publishes-lpdd
+    lpddr3-when-its-ddr3l/) Committed to Memory blog. Retrieved                          r3-standard-for-low-power-memory-chips.html) Archived (https://we
+    16 July 2021.                                                                        b.archive.org/web/20120520044744/http://www.electroiq.com/article
+ 2. "LPDDR" (https://web.archive.org/web/20120305050353/http://proc                      s/sst/2012/05/jedec-publishes-lpddr3-standard-for-low-power-memo
+    essors.wiki.ti.com/index.php/LPDDR). Processors wiki. Texas                          ry-chips.html) 20 May 2012 at the Wayback Machine, Solid State
+    Instruments. Archived from the original (http://processors.wiki.ti.co                Technology magazine
+    m/index.php/LPDDR) on 5 March 2012. Retrieved 10 March 2015.                      7. JESD209-3 LPDDR3 Low Power Memory Device Standard (http://w
+ 3. Samsung Galaxy Tab (https://archive.today/20120718024811/http://                     ww.jedec.org/sites/default/files/docs/JESD209-3.pdf), JEDEC Solid
+    www.anandtech.com/show/4062/samsung-galaxy-tab-the-anandtec                          State Technology Association
+    h-review), AnandTech (review), 23 December 2010, via Archive                      8. "JEDEC Announces Publication of LPDDR3 Standard for Low
+    today.                                                                               Power Memory Devices" (http://www.jedec.org/news/pressreleases/
+ 4. JEDEC Standard: Low Power Double Data Rate 2 (LPDDR2) (htt                           jedec-announces-publication-lpddr3-standard-low-power-memory-d
+    p://www.jedec.org/sites/default/files/docs/JESD209-2B.pdf) (PDF),                    evices). jedec.org. Retrieved 10 March 2015.
+    JEDEC Solid State Technology Association, February 2010,                          9. Want a quick and dirty overview of the new JEDEC LPDDR3 spec?
+    retrieved 30 December 2010                                                           EETimes serves it up (http://denalimemoryreport.com/2012/06/13/w
+ 5. "JEDEC Announces Publication of LPDDR2 Standard for Low                              ant-a-quick-and-dirty-overview-of-the-new-jedec-lpddr3-spec-eetim
+    Power Memory Devices" (https://www.jedec.org/news/pressrelease                       es-serves-it-up/) Archived (https://web.archive.org/web/2013072811
+    s/jedec-announces-publication-lpddr2-standard-low-power-memory-                      0139/http://denalimemoryreport.com/2012/06/13/want-a-quick-and-
+    devices). Press release. 2 April 2009. Retrieved 28 November                         dirty-overview-of-the-new-jedec-lpddr3-spec-eetimes-serves-it-up/)
+    2021.                                                                                2013-07-28 at the Wayback Machine, Denali Memory Report
+10. Inside the Samsung Galaxy S4 (http://www.chipworks.com/blog/rec                  25. "JEDEC Updates Standards for Low Power Memory Devices" (http
+    entteardowns/2013/04/25/inside-the-samsung-galaxy-s4) Archived                       s://www.jedec.org/news/pressreleases/jedec-updates-standards-lo
+    (https://web.archive.org/web/20130429232326/http://www.chipwork                      w-power-memory-devices-0). JEDEC. Retrieved 28 July 2017.
+    s.com/blog/recentteardowns/2013/04/25/inside-the-samsung-galaxy                  26. "JEDEC Updates Standard for Low Power Memory Devices:
+    -s4/) 2013-04-29 at the Wayback Machine, Chipworks                                   LPDDR5" (https://www.jedec.org/news/pressreleases/jedec-update
+11. Samsung LPDDR3 High-Performance Memory Enables Amazing                               s-standard-low-power-memory-devices-lpddr5). jedec.org.
+    Mobile Devices in 2013, 2014 (http://www.brightsideofnews.com/ne                     Retrieved 19 February 2019.
+    ws/2012/6/27/samsung-lpddr3-high-performance-memory-enables-                     27. Smith, Ryan (16 July 2018). "Samsung Announces First LPDDR5
+    amazing-mobile-devices-in-20132c-2014.aspx) - Bright Side of                         DRAM Chip, Targets 6.4Gbps Data Rates & 30% Reduced Power"
+    News                                                                                 (https://web.archive.org/web/20180717021648/https://www.anandte
+12. "Samsung Exynos" (http://www.samsung.com/global/business/semi                        ch.com/show/13084/samsung-announces-first-lpddr5-64gbps-data-
+    conductor/minisite/Exynos/products5dual.html). samsung.com.                          rates). AnandTech. Archived from the original (https://www.anandte
+    Retrieved 10 March 2015.                                                             ch.com/show/13084/samsung-announces-first-lpddr5-64gbps-data-
+13. Samsung reveals eight-core mobile processor (http://www.eetimes.                     rates) on 17 July 2018.
+    com/document.asp?doc_id=1280297) on EEtimes                             28. "LPDDR5/5X            协议解读（三）   WCK operation" (https://zhuanlan.zhih
+14. Now Producing Four Gigabit LPDDR3 Mobile DRAM, Using 20nm-                  u.com/p/578803845), Zhihu (in Chinese and English), 19 December
+    class* Process Technology (http://www.businesswire.com/news/ho              2022, retrieved 4 November 2023
+    me/20130429006782/en/Samsung-Producing-Gigabit-LPDDR3-Mo                29. Chang, Alex (Yeongkee) (October 2019), "Commands & New
+    bile-DRAM-20nm-classSamsung), Businesswire                                  Features" (https://picture.iczhiku.com/resource/eetop/sHKLhyJrzAT
+15. Snapdragon 800 Series and 600 Processors Unveiled (http://www.q             LaBmm.pdf) (PDF), LPDDR5 Workshop, retrieved 4 November
+    ualcomm.com/media/blog/2013/01/07/snapdragon-800-series-and-                2023
+    600-processors-unveiled), Qualcomm                                      30. "JEDEC Publishes New and Updated Standards for Low Power
+16. "JEDEC to Focus on Mobile Technology in Upcoming Conference"                Memory Devices Used in 5G and AI Applications" (https://www.jede
+    (http://www.jedec.org/news/pressreleases/jedec-focus-mobile-techn           c.org/news/pressreleases/jedec-publishes-new-and-updated-standa
+    ology-upcoming-conference). jedec.org. Retrieved 10 March 2015.             rds-low-power-memory-devices-used-5g-and-ai). jedec.org.
+17. "Samsung Develops Industry's First 8Gb LPDDR4 Mobile DRAM"                  Retrieved 28 July 2021.
+    (https://web.archive.org/web/20141001025158/http://global.samsun        31. "Samsung Develops Industry's First LPDDR5X DRAM" (https://new
+    gtomorrow.com/?p=31752). Samsung Tomorrow (Official Blog).                  s.samsung.com/global/samsung-develops-industrys-first-lpddr5x-dr
+    Samsung Electronics. Archived from the original (http://global.sams         am). Samsung.com. 9 November 2021. Retrieved 9 November
+    ungtomorrow.com/?p=31752) on 1 October 2014. Retrieved                      2021.
+    10 March 2015.                                                          32. Frumusanu, Andrei (9 November 2021). "Samsung Announces First
+18. Article title (https://web.archive.org/web/20181222182350/http://ww         LPDDR5X at 8.5Gbps" (https://web.archive.org/web/202111091039
+    w.softnology.biz/pdf/JESD79-4_DDR4_SDRAM.pdf) JESD79 DDR4                   28/https://www.anandtech.com/show/17058/samsung-announces-lp
+    SDRAM Standard                                                              ddr5x-at-85gbps). Anandtech. Archived from the original (https://ww
+19. 'JEDEC Releases LPDDR4 Standard for Low Power Memory                        w.anandtech.com/show/17058/samsung-announces-lpddr5x-at-85g
+    Devices' (http://www.jedec.org/news/pressreleases/jedec-releases-l          bps) on 9 November 2021. Retrieved 9 November 2021.
+    pddr4-standard-low-power-memory-devices), JEDEC Solid State             33. "Micron and MediaTek First to Validate LPDDR5X" (https://investor
+    Technology Association.                                                     s.micron.com/news-releases/news-release-details/micron-and-medi
+20. JEDEC Standard: Low Power Double Data Rate 4 (LPDDR4) (htt                  atek-first-validate-lpddr5x). Micron Technology.
+    p://www.jedec.org/sites/default/files/docs/JESD209-4.pdf) (PDF),        34. "SK hynix Develops World's Fastest Mobile DRAM LPDDR5T" (http
+    JEDEC Solid State Technology Association, August 2014, retrieved            s://news.skhynix.com/sk-hynix-develops-worlds-fastest-mobile-dra
+    25 December 2014 Username and password "cypherpunks" will                   m-lpddr5t/). 24 January 2023. Retrieved 12 June 2023.
+    allow download.                                                         35. Hung, Vuong. "Jedec Memory for Automotive LPDDRx & UFS" (http
+21. "Row hammer refresh command" (https://patents.google.com/paten              s://www.jedec.org/sites/default/files/FINAL_Hung_Vuong_Automotiv
+    t/US20140059287). Patents. US20140059287. Retrieved 10 March                e_forum-memory%20technologies.pdf) (PDF). Jedec. p. 4.
+    2015.                                                                       Retrieved 18 April 2024.
+22. Reza, Ashiq (16 September 2016). "Memory Need" Gives Birth To           36. "Samsung Develops Industry's Fastest 10.7Gbps LPDDR5X
+    "New Memory" (https://3gltesummit.qualcomm.com/sites/default/file           DRAM, Optimized for AI Applications" (https://news.samsung.com/g
+    s/pdf/3GLTE2015_Samsung-AReza_Memory2.pdf) (PDF).                           lobal/samsung-develops-industrys-fastest-10-7gbps-lpddr5x-dram-o
+    Qualcomm 3G LTE Summit. Hong Kong.                                          ptimized-for-ai-applications). Newsroom. Samsung. 17 April 2024.
+23. Shilov, Anton. "SK Hynix Announces 8 GB LPDDR4X-4266 DRAM                   Retrieved 18 April 2024.
+    Packages" (https://web.archive.org/web/20170112044928/http://ww         37. "JEDEC® Releases New LPDDR6 Standard to Enhance Mobile
+    w.anandtech.com/show/11021/sk-hynix-announces-8-gb-lpddr4x42                and AI Memory Performance | JEDEC" (https://www.jedec.org/new
+    66-dram-packages). Archived from the original (http://www.anandte           s/pressreleases/jedec%C2%AE-releases-new-lpddr6-standard-enh
+    ch.com/show/11021/sk-hynix-announces-8-gb-lpddr4x4266-dram-p                ance-mobile-and-ai-memory-performance). www.jedec.org.
+    ackages) on 12 January 2017. Retrieved 28 July 2017.                        Retrieved 25 December 2025.
+24. "SK 하이닉스 세계 최대 용량의 초저전력 모바일 램 출시             D          " (https://web. 38. "JEDEC Unveils Plans for DDR5 MRDIMM and LPDDR6 CAMM
+                                                                                Standards to Propel High-Performance Computing and AI" (https://
+    archive.org/web/20190113060939/http://blog.skhynix.com/2006).
+    Skhynix (in Korean). Archived from the original (http://blog.skhynix.c      www.jedec.org/news/pressreleases/jedec-unveils-plans-ddr5-mrdim
+    om/2006) on 13 January 2019. Retrieved 28 July 2017.                        m-and-lpddr6-camm-standards-propel-high-performance) (Press
+                                                                                release). JEDEC. 22 July 2024.
+
+
+External links
+    Micron (https://www.micron.com/products/memory/dram-components/lpddr)
+    Samsung (https://semiconductor.samsung.com/dram/lpddr/)
+    Elpida (https://web.archive.org/web/20110829044651/http://www.elpida.com/en/products/mobile.html)
+    Nanya (http://www.nanya.com/PageEdition1.aspx?Menu_ID=138&lan=en-us&def=230&isPrint=&KeyWords=) Archived (https://web.archive.or
+    g/web/20141021194351/http://www.nanya.com/PageEdition1.aspx?Menu_ID=138&lan=en-us&def=230&isPrint=&KeyWords=) 21 October
+    2014 at the Wayback Machine
+    JEDEC pages: LOW POWER DOUBLE DATA RATE 3 SDRAM (LPDDR3) (http://www.jedec.org/standards-documents/docs/jesd209-3c)
+
+
+Retrieved from "https://en.wikipedia.org/w/index.php?title=LPDDR&oldid=1355040525"
+

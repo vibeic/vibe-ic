@@ -8,6 +8,7 @@
     "formal_properties": [],
     "regression_matrix": {},
     "verification_plan_present": true,
+    "notes": "Verification flow: (1) APRD bring-up enumeration, (2) ESM walk Init→PreOp→SafeOp→Op, (3) cyclic exchange with WKC monitoring, (4) ETG CTT, (5) interoperability against reference MainDevice, (6) DC jitter characterization, (7) optional FSoE certification.",
     "verification_categories_derived_from_spec": [
       {
         "category": "Frame structure",
@@ -90,7 +91,6 @@
         ]
       }
     ],
-    "notes": "Verification flow: (1) APRD bring-up enumeration, (2) ESM walk Init→PreOp→SafeOp→Op, (3) cyclic exchange with WKC monitoring, (4) ETG CTT, (5) interoperability against reference MainDevice, (6) DC jitter characterization, (7) optional FSoE certification.",
     "ic_name": "EtherCAT (IEC 61158 Type 12)",
     "verification_tools": [
       "ETG Conformance Test Tool (CTT)",

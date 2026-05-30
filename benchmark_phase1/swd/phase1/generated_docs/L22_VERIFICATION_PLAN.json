@@ -8,6 +8,7 @@
     "formal_properties": [],
     "regression_matrix": {},
     "verification_plan_present": "implicit — ARM IHI 0031C defines architectural rules, 46-bit transaction format, mandatory DP/AP register sets, sticky-error and posted-read semantics, line-reset, and SWJ-DP mode-switching.",
+    "notes": "ARM does not publish an official ADIv5 compliance testbench, but open-source projects (pyOCD, probe-rs, OpenOCD) plus commercial Arm DesignVerify DAP IP testbenches cover the categories above. Most common compliance failures historically: (1) DPIDR bit 0 not RAO, (2) SWJ-DP selection sequence endianness, (3) MEM-AP TAR not wrapping at 4 KB, (4) posted-read off-by-one.",
     "verification_categories_derived_from_spec": [
       "Line reset conformance — ≥ 50-cycle SWDIO=HIGH from each reachable internal state.",
       "IDCODE/DPIDR readback — valid DPIDR with bit 0 = 1.",
@@ -49,52 +50,7 @@
       "Concurrent CPU activity — SWD MEM-AP non-interference.",
       "Power-gate isolation — FAULT until CSYSPWRUPACK=1."
     ],
-    "notes": "ARM does not publish an official ADIv5 compliance testbench, but open-source projects (pyOCD, probe-rs, OpenOCD) plus commercial Arm DesignVerify DAP IP testbenches cover the categories above. Most common compliance failures historically: (1) DPIDR bit 0 not RAO, (2) SWJ-DP selection sequence endianness, (3) MEM-AP TAR not wrapping at 4 KB, (4) posted-read off-by-one.",
-    "ic_name": "ARM Serial Wire Debug (SWD) — ADIv5 (ARM IHI 0031C)",
-    "verification_categories_derived_from_spec_ahb": [
-      "Reset behavior (HRESETn).",
-      "Single NONSEQ + IDLE.",
-      "Incrementing bursts INCR4/8/16 + undefined INCR.",
-      "Wrapping bursts WRAP4/8/16 with all HSIZE values.",
-      "1KB burst boundary enforcement.",
-      "IDLE / BUSY zero-wait OKAY.",
-      "BUSY mid-burst.",
-      "Subordinate-driven wait states.",
-      "Address-phase constraints during waited transfers.",
-      "Two-cycle ERROR response.",
-      "Locked sequence (HMASTLOCK).",
-      "HPROT 4-bit + 7-bit memory-type encoding.",
-      "Default Subordinate ERROR.",
-      "AHB5 Secure transfers (HNONSEC).",
-      "AHB5 Exclusive transfers (HEXCL/HMASTER/HEXOKAY).",
-      "AHB5 Write strobes HWSTRB.",
-      "AHB5 User signaling HxUSER (point-to-point).",
-      "AHB5 Interface protection using parity.",
-      "Multi-Manager arbitration (multi-layer AHB)."
-    ],
-    "verification_categories_derived_from_spec_apb": [
-      "Reset behavior (PRESETn).",
-      "Write/read transfers with no wait.",
-      "Write/read transfers with wait states (PREADY=0).",
-      "Failing write/read with PSLVERR=1.",
-      "PSLVERR valid-window enforcement.",
-      "PSLVERR-optional peripheral.",
-      "Fixed-2-cycle peripheral (PREADY tied HIGH).",
-      "PSEL mutual exclusion.",
-      "APB4 PSTRB sparse-write byte-lane coverage.",
-      "APB4 PSTRB=all-zero on reads.",
-      "APB4 PPROT encoding + constancy.",
-      "AHB-to-APB bridge: PSLVERR -> HRESP=ERROR.",
-      "AXI-to-APB bridge: PSLVERR -> RRESP/BRESP=SLVERR."
-    ],
-    "interoperability_test_matrix": [
-      "AHB-Lite Manager + AHB5 Subordinate (defaults).",
-      "AHB5 Manager + AHB-Lite Subordinate.",
-      "Write_Strobes mismatch: HWSTRB tied HIGH at Subordinate.",
-      "APB2 peripheral on APB3/APB4 bridge.",
-      "APB3 peripheral on APB4 bridge.",
-      "End-to-end AXI Manager -> AHB Subordinate -> APB peripheral."
-    ]
+    "ic_name": "ARM Serial Wire Debug (SWD) — ADIv5 (ARM IHI 0031C)"
   },
   "extraction_hints": [
     "Look for coverage targets, vplan, regression policy.",

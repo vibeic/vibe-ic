@@ -8,6 +8,7 @@
     "formal_properties": [],
     "regression_matrix": {},
     "verification_plan_present": "implicit",
+    "notes": "MIPI I3C Basic v1.0 does not ship with a formal verification plan or testbench; the categories above are derived from Tables 2, 3, 4, 9, 10, 11, 12, 15, 52, 53, 57-59 and Sections 5.1.x. Concrete I3C controller IP vendors typically build a UVM testbench based on these categories plus the Annex C FSMs and Annex D typical communication examples.",
     "verification_categories_derived_from_spec": [
       "START / STOP / Repeated START condition generation + detection (I3C timing per Tables 58/59)",
       "Address Header 7-bit + RnW + ACK/NACK handshake (arbitrable vs Push-Pull post-Sr)",
@@ -40,7 +41,6 @@
       "Legacy I2C interop: Fm + Fm+ compliance via Table 57; no Slave SCL stretching",
       "VIL ≤ 0.3 VDD / VIH ≥ 0.7 VDD threshold compliance per Section 6.1"
     ],
-    "notes": "MIPI I3C Basic v1.0 does not ship with a formal verification plan or testbench; the categories above are derived from Tables 2, 3, 4, 9, 10, 11, 12, 15, 52, 53, 57-59 and Sections 5.1.x. Concrete I3C controller IP vendors typically build a UVM testbench based on these categories plus the Annex C FSMs and Annex D typical communication examples.",
     "ic_name": "MIPI I3C Basic Specification v1.0",
     "annex_c_normative_fsm_coverage": [
       "I3C Main Master FSM (Figure 57)",

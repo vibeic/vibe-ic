@@ -363,15 +363,6 @@
       "Upper_Byte_Lane_first": "Aligned_Address + (Number_Bytes - 1) - INT(Start_Address / Data_Bus_Bytes) * Data_Bus_Bytes"
     },
     "ic_name": "AMBA AXI / ACE Protocol Specification (ARM IHI 0022E)",
-    "ahb_burst_address_equations": {
-      "Number_Bytes_per_beat": "2 ^ HSIZE",
-      "Burst_Length_beats": "1 (SINGLE) / undefined (INCR) / 4 / 8 / 16",
-      "Aligned_Address": "Manager must align HADDR to (1 << HSIZE) bytes for each transfer in a burst.",
-      "INCR_address_n": "HADDR_(n+1) = HADDR_n + Number_Bytes",
-      "WRAP_boundary": "Wrap boundary = Burst_Length_beats * Number_Bytes",
-      "WRAP_address_n": "HADDR_(n+1) = (HADDR_n + Number_Bytes) modulo Wrap_boundary (mod within the (start_address & ~(Wrap_boundary-1))..+Wrap_boundary range)",
-      "INCR_1KB_rule": "Incrementing burst must not cross a 1KB address boundary."
-    },
     "axi_baseline_inherited_tables": [
       "Table A3-2 Burst size encoding",
       "Table A3-3 Burst type encoding",

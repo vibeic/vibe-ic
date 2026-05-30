@@ -12,7 +12,6 @@ module soundwire (
     input  VDD,  // Supply voltage (1.2 V or 1.8 V typical) for SoundWire I/O drivers.
     input  GND,  // Common ground reference for all devices on the bus.
     input  Bus_Keeper,  // Required active circuit (typically on Master) that weakly holds the last driven level on SoundWire_Data; can be disabled via M_KeeperOff PHY Test Mode for replacement by external test equipment.
-    input  clk,  // System clock (auto-added by scaffold)
     input  rst_n  // Active-low reset (auto-added)
 );
 

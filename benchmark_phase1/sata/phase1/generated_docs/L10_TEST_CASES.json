@@ -142,15 +142,10 @@
   "class_path": "digital_cmd_driven",
   "test_cases_present": "partial - the AHCI 1.3.1 specification defines normative register behavior, FIS handling, state machine arcs, and software programming rules that map directly to compliance test scenarios; SATA-IO maintains a separate AHCI Interoperability Compliance Suite and the Serial ATA Interoperability Program test plan, which are out of scope of this register-level specification document.",
   "derived_compliance_test_categories": [
-    "Reset behavior: enable bit cleared; transmit-empty flag set; receive-flag cleared after reset.",
-    "Master mode transmission: write to data register + clock-cycle delay + N edges + receive-flag set.",
-    "Slave mode transmission: select line goes LOW + N edges from master + receive-flag set after last edge.",
-    "Mode fault / collision detection.",
-    "All clock polarity/phase combinations.",
-    "MSB-first vs LSB-first byte ordering.",
-    "Bidirectional mode (single data pin).",
-    "Receive overrun (flag-serviced-too-late).",
-    "Baud rate divisor sweep.",
-    "Wait/Stop mode behavior."
+    "Reset behavior verification.",
+    "Register access (read/write to all fields; reserved-bit behavior).",
+    "Nominal transfer / transaction across the protocol's operating modes.",
+    "Error and fault condition handling.",
+    "Back-to-back / sustained operation."
   ]
 }

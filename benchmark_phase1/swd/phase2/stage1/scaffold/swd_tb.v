@@ -7,23 +7,13 @@
 
 module swd_tb;
 
-    wire SWCLK; // inout
-    wire SWDIO; // inout
-    wire nTRST; // inout
-    wire SWO; // inout
-    reg  VDD_IO_per_target;
-    reg  GND;
     reg  clk;
+    reg  rst_n;
 
     // DUT instance
     swd u_dut (
-        .SWCLK(SWCLK),
-        .SWDIO(SWDIO),
-        .nTRST(nTRST),
-        .SWO(SWO),
-        .VDD_IO_per_target(VDD_IO_per_target),
-        .GND(GND),
-        .clk(clk)
+        .clk(clk),
+        .rst_n(rst_n)
     );
 
     // Clock generation — defaults to 100 MHz; override per protocol.
@@ -34,8 +24,10 @@ module swd_tb;
     initial begin
         $dumpfile("swd_tb.vcd");
         $dumpvars(0, swd_tb);
-        VDD_IO_per_target = 1'b0;
-        GND = 1'b0;
+        rst_n = 1'b0;
+        rst_n = 1'b0;
+        #30;
+        rst_n = 1'b1;
         // TODO — protocol stimulus + assertions per L10 test cases.
         #1000;
         $finish;

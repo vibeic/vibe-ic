@@ -14,14 +14,14 @@ module modbus_server_top_fsm (
     localparam [4:0] S_USED = 5'd0;
     localparam [4:0] S_READ = 5'd1;
     localparam [4:0] S_WRITE = 5'd2;
-    localparam [4:0] S_OUTPUT = 5'd3;
+    localparam [4:0] S_OUTPUT_SIG = 5'd3;
     localparam [4:0] S_EITHER = 5'd4;
     localparam [4:0] S_REQUEST = 5'd5;
     localparam [4:0] S_REMOTE = 5'd6;
     localparam [4:0] S_DEVICE = 5'd7;
-    localparam [4:0] S_RETURN = 5'd8;
+    localparam [4:0] S_RETURN_SIG = 5'd8;
     localparam [4:0] S_IDENTICAL = 5'd9;
-    localparam [4:0] S_FORCE = 5'd10;
+    localparam [4:0] S_FORCE_SIG = 5'd10;
     localparam [4:0] S_COILS = 5'd11;
     localparam [4:0] S_SPECIFIC = 5'd12;
     localparam [4:0] S_PERFORM = 5'd13;

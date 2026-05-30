@@ -54,8 +54,7 @@ module SUCH_ARM_TECHNOLOGY (
     input  rresp,
     input  rlast,
     input  rvalid,
-    output rready,
-    input  clk  // System clock (auto-added by scaffold)
+    output rready
 );
 
     // -----------------------------------------------------------

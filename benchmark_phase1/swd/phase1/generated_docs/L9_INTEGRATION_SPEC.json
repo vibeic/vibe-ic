@@ -289,53 +289,5 @@
     "ADIv6 (IHI 0074, 2019+) successor — SWD preserved.",
     "SWD and JTAG-DP share the same DP register model.",
     "CoreSight ROM Tables per IHI 0029."
-  ],
-  "interconnect_topology_options_ahb": [
-    "Single-Manager AHB-Lite: one decoder + one multiplexor (Figure 1-1).",
-    "Multi-Manager / multi-layer AHB: requires interconnect with arbitration (DVI 0045)."
-  ],
-  "interconnect_topology_options_apb": [
-    "Single APB bridge (Manager) + multiple APB peripherals (Subordinates).",
-    "Single Manager bus only; APB has no multi-Manager arbitration."
-  ],
-  "interconnect_rules_ahb": [
-    "Decoder monitors HADDR during the address phase, asserts HSELx during the data phase.",
-    "Minimum decode granularity = 1KB.",
-    "Multiplexor routes HRDATA / HRESP / HREADYOUT / HEXOKAY from selected Subordinate back to Manager.",
-    "Default Subordinate ERROR for NONSEQ/SEQ at unmapped addresses, zero-wait OKAY for IDLE/BUSY.",
-    "HREADY computed by combining all Subordinate HREADYOUTs.",
-    "Generic interconnect may offer AHB / AXI / APB interfaces alongside."
-  ],
-  "interconnect_rules_apb": [
-    "AHB-to-APB bridge: AHB Subordinate + APB Manager; PSLVERR -> HRESP=ERROR.",
-    "AXI-to-APB bridge: PSLVERR -> RRESP/BRESP = SLVERR.",
-    "Per-PSELx address decode in the bridge; only one PSELx asserted per transfer.",
-    "Optional PSLVERR per Subordinate; tied LOW at bridge if not implemented."
-  ],
-  "default_signal_values_when_omitted_ahb": "AHB Section 3.5 (Write strobes interoperability) — Subordinate treats absent HWSTRB as all-HIGH. Other optional signals (HBURST=0 width, HPROT=0 width, HMASTER=0 width) handled by receiver-side defaults.",
-  "default_signal_values_when_omitted_apb": "APB Table 2-1 footnotes — if a Subordinate does not implement PSLVERR, the AHB-to-APB bridge ties the PSLVERR input LOW.",
-  "slave_classification_ahb": {
-    "memory_slave_general": "Subordinate that maps to an address region and handles all memory accesses.",
-    "peripheral_slave_via_apb_bridge": "AHB-to-APB bridge presents a single AHB Subordinate that fans out to APB peripherals."
-  },
-  "apb_peripheral_classification": [
-    "PSLVERR-supporting peripheral",
-    "Non-PSLVERR-supporting peripheral (PSLVERR input tied LOW)",
-    "Fixed-2-cycle peripheral (PREADY tied HIGH)",
-    "Variable-latency peripheral (drives PREADY=LOW for wait states)"
-  ],
-  "ahb_to_apb_bridge_role": "Connects the high-performance AHB to lower-bandwidth APB peripherals. Appears as an AHB Subordinate and the APB Manager. Typically inserts AHB wait states while completing the multi-cycle APB transfer. APB PSLVERR maps to AHB HRESP=ERROR.",
-  "interface_categories_ahb": [
-    "Manager interface (drives address+control+write data).",
-    "Subordinate interface (drives read data + HREADYOUT + HRESP + HEXOKAY).",
-    "Decoder (HSELx generation).",
-    "Multiplexor (HRDATA + HRESP + HREADYOUT + HEXOKAY selection)."
-  ],
-  "interface_categories_apb": [
-    "APB Manager (bridge): drives PADDR + PWRITE + PSELx + PENABLE + PWDATA + PSTRB + PPROT.",
-    "APB Subordinate (peripheral): drives PRDATA + PREADY + PSLVERR."
-  ],
-  "register_slice_insertion_rule_ahb": "AHB does not have AXI's register-slice-anywhere property because of strict 1-cycle address phase + HREADY chain. Register-slice insertion typically requires an AHB-to-AHB bridge.",
-  "register_slice_insertion_rule_apb": "Not specified; APB is a low-cost two-phase bus and register-slice insertion is rare.",
-  "ahb_to_axi_bridge_summary": "AHB-Lite Subordinate to AXI Manager (rare direction): protocol mismatch - AHB has no AxLEN equivalent for SEQ-only bursts; bridge typically maps each AHB beat to a single-beat AXI transaction. The reverse direction (AXI Manager to AHB Subordinate) is more common and uses an AXI-to-AHB-Lite bridge."
+  ]
 }

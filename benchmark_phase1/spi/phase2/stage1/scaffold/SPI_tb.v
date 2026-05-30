@@ -13,7 +13,6 @@ module SPI_tb;
     reg  SS;
     reg  BusClock;
     reg  Reset;
-    reg  clk;
 
     // DUT instance
     SPI u_dut (
@@ -22,8 +21,7 @@ module SPI_tb;
         .SCK(SCK),
         .SS(SS),
         .BusClock(BusClock),
-        .Reset(Reset),
-        .clk(clk)
+        .Reset(Reset)
     );
 
     // Clock generation — defaults to 100 MHz; override per protocol.
@@ -37,7 +35,6 @@ module SPI_tb;
         MISO = 1'b0;
         SS = 1'b0;
         Reset = 1'b0;
-        clk = 1'b0;
         Reset = 1'b1;
         #30;
         Reset = 1'b0;

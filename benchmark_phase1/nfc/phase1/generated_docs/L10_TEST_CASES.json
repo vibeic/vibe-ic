@@ -34,15 +34,10 @@
   "extraction_evidence": {},
   "test_cases_present": "partial - AN10833 plus ISO/IEC 14443-1/2/3/4 define functional commands, register layouts, anti-collision flow, and timing tables that map directly to compliance test scenarios. ISO 10373-6 is the normative compliance test framework and is out of scope of this application note.",
   "derived_compliance_test_categories": [
-    "Reset behavior: enable bit cleared; transmit-empty flag set; receive-flag cleared after reset.",
-    "Master mode transmission: write to data register + clock-cycle delay + N edges + receive-flag set.",
-    "Slave mode transmission: select line goes LOW + N edges from master + receive-flag set after last edge.",
-    "Mode fault / collision detection.",
-    "All clock polarity/phase combinations.",
-    "MSB-first vs LSB-first byte ordering.",
-    "Bidirectional mode (single data pin).",
-    "Receive overrun (flag-serviced-too-late).",
-    "Baud rate divisor sweep.",
-    "Wait/Stop mode behavior."
+    "Reset behavior verification.",
+    "Register access (read/write to all fields; reserved-bit behavior).",
+    "Nominal transfer / transaction across the protocol's operating modes.",
+    "Error and fault condition handling.",
+    "Back-to-back / sustained operation."
   ]
 }

@@ -8,19 +8,14 @@
     "formal_properties": [],
     "regression_matrix": {},
     "verification_plan_present": "implicit",
+    "notes": "ONFI 4.1 does not include a normative verification plan. Categories above are derived from Sections 2-7 + Appendices. The founding vendors maintain internal qualification suites not part of the public specification.",
     "verification_categories_derived_from_spec": [
-      "Register access (read/write to all register fields; reserved bits behavior)",
-      "Master mode transmission across (clock polarity, clock phase, bit order) combinations",
-      "Slave mode reception across (clock polarity, clock phase, bit order) combinations",
-      "Baud rate divisor sweep",
-      "Mode fault / collision detection + auto-recovery + flag",
-      "Bidirectional mode (where supported)",
-      "Wait/stop mode behavior",
+      "Register access (read/write to all register fields; reserved-bit behavior)",
+      "Nominal transfer / transaction across the protocol's operating modes",
+      "Error and fault condition detection and handling",
       "Reset behavior verification",
-      "Receive overrun (flag-serviced-too-late)",
-      "Back-to-back transfers"
-    ],
-    "notes": "ONFI 4.1 does not include a normative verification plan. Categories above are derived from Sections 2-7 + Appendices. The founding vendors maintain internal qualification suites not part of the public specification."
+      "Back-to-back / sustained operation"
+    ]
   },
   "extraction_hints": [
     "Look for coverage targets, vplan, regression policy.",

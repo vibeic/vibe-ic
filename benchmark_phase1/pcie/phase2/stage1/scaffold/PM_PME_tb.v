@@ -14,7 +14,6 @@ module PM_PME_tb;
     reg  REFCLK;
     reg  PERST;
     reg  WAKE;
-    reg  clk;
 
     // DUT instance
     PM_PME u_dut (
@@ -24,8 +23,7 @@ module PM_PME_tb;
         .RXn(RXn),
         .REFCLK(REFCLK),
         .PERST(PERST),
-        .WAKE(WAKE),
-        .clk(clk)
+        .WAKE(WAKE)
     );
 
     // Clock generation — defaults to 100 MHz; override per protocol.
@@ -40,7 +38,6 @@ module PM_PME_tb;
         RXn = 1'b0;
         PERST = 1'b0;
         WAKE = 1'b0;
-        clk = 1'b0;
         PERST = 1'b1;
         #30;
         PERST = 1'b0;

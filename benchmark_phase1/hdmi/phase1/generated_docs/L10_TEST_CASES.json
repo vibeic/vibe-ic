@@ -51,15 +51,10 @@
   "class_path": "serial_peripheral_protocol",
   "test_cases_present": "partial — the TFP410 datasheet defines explicit DC + AC electrical characteristics, input setup/hold timing, output rise/fall + skew + jitter, plus I2C register-access behaviour. These map to DVI/HDMI Compliance Test Specification categories.",
   "derived_compliance_test_categories": [
-    "Reset behavior: enable bit cleared; transmit-empty flag set; receive-flag cleared after reset.",
-    "Master mode transmission: write to data register + clock-cycle delay + N edges + receive-flag set.",
-    "Slave mode transmission: select line goes LOW + N edges from master + receive-flag set after last edge.",
-    "Mode fault / collision detection.",
-    "All clock polarity/phase combinations.",
-    "MSB-first vs LSB-first byte ordering.",
-    "Bidirectional mode (single data pin).",
-    "Receive overrun (flag-serviced-too-late).",
-    "Baud rate divisor sweep.",
-    "Wait/Stop mode behavior."
+    "Reset behavior verification.",
+    "Register access (read/write to all fields; reserved-bit behavior).",
+    "Nominal transfer / transaction across the protocol's operating modes.",
+    "Error and fault condition handling.",
+    "Back-to-back / sustained operation."
   ]
 }

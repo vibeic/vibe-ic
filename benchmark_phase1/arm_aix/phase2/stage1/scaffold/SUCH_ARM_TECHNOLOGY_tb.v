@@ -56,7 +56,6 @@ module SUCH_ARM_TECHNOLOGY_tb;
     reg  rlast;
     reg  rvalid;
     wire rready;
-    reg  clk;
 
     // DUT instance
     SUCH_ARM_TECHNOLOGY u_dut (
@@ -108,8 +107,7 @@ module SUCH_ARM_TECHNOLOGY_tb;
         .rresp(rresp),
         .rlast(rlast),
         .rvalid(rvalid),
-        .rready(rready),
-        .clk(clk)
+        .rready(rready)
     );
 
     // Clock generation — defaults to 100 MHz; override per protocol.
@@ -133,7 +131,6 @@ module SUCH_ARM_TECHNOLOGY_tb;
         rresp = 1'b0;
         rlast = 1'b0;
         rvalid = 1'b0;
-        clk = 1'b0;
         ARESETn = 1'b0;
         #30;
         ARESETn = 1'b1;

@@ -12,23 +12,6 @@
   "register_map_present": false,
   "notes": "If a future system-integration L4 is required for an ACE-coherent SoC, the canonical 'address-side fields' to capture would be: AxADDR width (implementation-defined), AxDOMAIN (2 bits), AxSNOOP (4 bits for AR, 3 bits for AW), AxBAR (2 bits), AxCACHE (4 bits), AxPROT (3 bits), AxREGION (4 bits); plus snoop-channel: ACADDR (matches AxADDR width), ACSNOOP (4 bits), ACPROT (3 bits).",
   "base_address": "Defined at SoC level; offsets given relative to module base.",
-  "rationale": "ACE is a bus/interconnect protocol that extends AXI4 with coherency. There is no MMIO register map in this document. The AW/AR address channels carry an arbitrary slave address (AxADDR) chosen by system integrators, and the spec only defines the *signaling* and the (AxBAR, AxDOMAIN, AxSNOOP) field tuples that encode coherent operations.",
-  "address_side_field_widths": {
-    "AHB_HADDR_width_bits": {
-      "recommended_range": [
-        10,
-        64
-      ],
-      "default": 32,
-      "note": "In Issues A and B the address width was fixed at 32. Recommended range in Issue C is 10..64."
-    },
-    "AHB_minimum_subordinate_decode_granularity": "1KB",
-    "APB_PADDR_width_bits": {
-      "max": 32,
-      "note": "Can be up to 32 bits wide; driven by the bridge."
-    },
-    "APB_minimum_subordinate_decode_granularity": "Implementation-defined; one PSELx per peripheral slot."
-  },
   "fields": {
     "ic_name": "AMBA AXI / ACE Protocol Specification (ARM IHI 0022E)",
     "register_map_present": false,

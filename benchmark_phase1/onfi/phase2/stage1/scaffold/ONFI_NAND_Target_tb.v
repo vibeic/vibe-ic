@@ -23,7 +23,6 @@ module ONFI_NAND_Target_tb;
     wire ZQ; // inout
     wire ENi; // inout
     wire ENo; // inout
-    reg  clk;
     reg  rst_n;
 
     // DUT instance
@@ -44,13 +43,10 @@ module ONFI_NAND_Target_tb;
         .ZQ(ZQ),
         .ENi(ENi),
         .ENo(ENo),
-        .clk(clk),
         .rst_n(rst_n)
     );
 
     // Clock generation — defaults to 100 MHz; override per protocol.
-    initial clk = 1'b0;
-    always #5 clk = ~clk;
 
     // Reset + waveform + minimal scenario
     initial begin

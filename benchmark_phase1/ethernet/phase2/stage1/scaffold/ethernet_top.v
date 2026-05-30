@@ -23,8 +23,7 @@ module ethernet (
     inout  MDI_pair_s,  // Line-coded signal to the network medium per PMD class (Manchester / MLT-3 / NRZI / PAM5 / 8B/10B-NRZ / PAM4).
     input  RESET,  // PHY hardware reset (active LOW); equivalent to BMCR bit 0.15.
     input  INT,  // Optional open-drain interrupt — Link Status change, AutoNeg Complete, Remote Fault, etc.
-    input  VDD_GND,  // Power. Clause 22.5: 5 V ±5 % @ ≤ 750 mA; modern silicon uses 3.3 / 2.5 / 1.8 V I/O.
-    input  clk  // System clock (auto-added by scaffold)
+    input  VDD_GND  // Power. Clause 22.5: 5 V ±5 % @ ≤ 750 mA; modern silicon uses 3.3 / 2.5 / 1.8 V I/O.
 );
 
     // -----------------------------------------------------------

@@ -22,7 +22,6 @@ module ONFI_NAND_Target (
     inout  ZQ,  // ZQ Calibration reference; tied to Vss via RZQ.
     inout  ENi,  // Enumeration input (CE_n pin reduction).
     inout  ENo,  // Enumeration output (CE_n pin reduction).
-    input  clk,  // System clock (auto-added by scaffold)
     input  rst_n  // Active-low reset (auto-added)
 );
 

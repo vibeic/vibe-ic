@@ -1,0 +1,58 @@
+{
+  "doc_id": "L19",
+  "doc_name": "L19_CONSTRAINTS_PDK",
+  "applicability": "APPLICABLE",
+  "ic_class": "digital_arithmetic_primitive",
+  "fields": {
+    "pdk_target": null,
+    "die_area_budget_um": null,
+    "power_budget_uw": null,
+    "sdc_constraints_path": null,
+    "floorplan_hints": [],
+    "constraints_present": false,
+    "notes": "JESD220 (with the referenced MIPI M-PHY 5.0 and UniPro v2.0 specs) defines the interface electricals (differential signaling levels, eye masks, jitter, equalization per HS-Gear) but no internal PDK / floorplan / SDC content. A UFS host controller IP and the UniPro+M-PHY hard-macro ship with their own SDC/UPF/DFT collateral at the SoC integration level.",
+    "pcb_constraints": {
+      "differential_pair_impedance_ohm": 100,
+      "differential_pair_impedance_tolerance_pct": 10,
+      "intra_pair_skew_ps_max": 5,
+      "inter_pair_skew_ps_max": 100,
+      "max_trace_length_cm_at_low_rate": 30,
+      "max_trace_length_cm_at_high_rate": 10,
+      "AC_coupling": "NOT used — D-PHY is DC-coupled differential",
+      "common_mode_choke": "Not recommended; degrades HS eye",
+      "ESD_protection_class": "HBM 2 kV minimum (Class 2); diodes placed close to connector"
+    },
+    "pad_constraints": {
+      "HS_termination_internal_ohm": 100,
+      "HS_swing_diff_mV_target": [
+        100,
+        200
+      ],
+      "LP_swing_V_target": 1.2,
+      "ESD_clamp_present": true,
+      "shared_HS_LP_pad": "Same Dp/Dn pair carries both modes; lane-state controller arbitrates"
+    },
+    "sdc_floorplan_hints": {
+      "Clock_Lane_PLL_placement": "Close to source pads; minimize jitter.",
+      "Per_lane_delay_line_placement": "Close to receiver pads; programmable for deskew.",
+      "Sync_hunter_placement": "Receiver-side; pipelined to meet Clock-Lane DDR rate."
+    },
+    "ic_name": "Universal Flash Storage (JEDEC JESD220, UFS 4.0)",
+    "host_pcb_constraints_summary": [
+      "Impedance-controlled, length-matched differential routing for the M-PHY lane pairs (DOUT/DIN); critical at HS-Gear 4 (11.6 Gbit/s) and HS-Gear 5 (23.2 Gbit/s).",
+      "Differential termination per the MIPI M-PHY 5.0 electrical specification; AC coupling where required.",
+      "Clean reference clock (REF_CLK) with low jitter to seed the device PLL; frequency per bRefClkFreq.",
+      "Separate, well-regulated VCC (NAND), VCCQ (logic), VCCQ2 (interface) rails with proper decoupling near the device.",
+      "Minimized via stubs and controlled crosstalk between lanes at HS-Gear 5 to preserve eye opening.",
+      "ESD protection appropriate to the package (BGA eUFS or card edge)."
+    ],
+    "device_internal_constraints": "Device-internal PDK / floorplan / NAND-array layout constraints are vendor-specific and intentionally out of scope of the JESD220 interface definition. Device electrical signoff is at the M-PHY differential lane pads and the REF_CLK/RESET_n CMOS pads."
+  },
+  "extraction_hints": [
+    "Look for floorplan, area, power, timing constraints.",
+    "Capture PDK target if stated."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+  "extraction_evidence": {}
+}

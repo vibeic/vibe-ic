@@ -8,6 +8,7 @@
     "formal_properties": [],
     "regression_matrix": {},
     "verification_plan_present": "implicit",
+    "notes": "Spec does not include a formal verification plan; categories above are derived from the spec's functional and waveform descriptions.",
     "verification_categories_derived_from_spec": [
       "Register access (read/write to all register fields; reserved bits behavior)",
       "Master mode transmission across (clock polarity, clock phase, bit order) combinations",
@@ -19,8 +20,7 @@
       "Reset behavior verification",
       "Receive overrun (flag-serviced-too-late)",
       "Back-to-back transfers"
-    ],
-    "notes": "Spec does not include a formal verification plan; categories above are derived from the spec's functional and waveform descriptions."
+    ]
   },
   "extraction_hints": [
     "Look for coverage targets, vplan, regression policy.",

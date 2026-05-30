@@ -73,54 +73,6 @@
     ],
     "version_naming_history_note": "AXI specification versions v1.0 and v2.0 (used in Issues B and C) have been discontinued to avoid confusion with AXI3 / AXI4. Issue E.a was originally published before Issue F; AXI5 introduced in Issue G (2021).",
     "ic_name": "AMBA AXI / ACE Protocol Specification (ARM IHI 0022E)",
-    "spec_version_ahb": "AMBA AHB Protocol Specification ARM IHI 0033C (15 September 2021)",
-    "spec_version_apb": "AMBA APB Protocol Specification ARM IHI 0024C (13 April 2010) v2.0",
-    "versions_ahb": [
-      {
-        "release_date": "06 June 2006",
-        "issue": "A",
-        "change": "First release for v1.0 (AHB-Lite)."
-      },
-      {
-        "release_date": "25 June 2015",
-        "issue": "B.a",
-        "change": "Update for AMBA 5 AHB Protocol Specification (Confidential)."
-      },
-      {
-        "release_date": "30 October 2015",
-        "issue": "B.b",
-        "change": "Confidential to Non-Confidential Release."
-      },
-      {
-        "release_date": "15 September 2021",
-        "issue": "C",
-        "change": "Signal width properties; Write strobes; User signaling update; Signal validity rules; Interface protection using parity. Regularized terminology to Manager / Subordinate."
-      }
-    ],
-    "versions_apb": [
-      {
-        "release_date": "25 September 2003",
-        "issue": "A",
-        "change": "First release for APB v1.0 (APB2)."
-      },
-      {
-        "release_date": "17 August 2004",
-        "issue": "B",
-        "change": "Second release for APB v1.0 — adds PREADY, PSLVERR (APB3)."
-      },
-      {
-        "release_date": "13 April 2010",
-        "issue": "C",
-        "change": "First release for APB v2.0 — adds PPROT and PSTRB (APB4)."
-      }
-    ],
-    "version_naming_history_note_ahb": "AHB-Lite (single-Manager) first defined in Issue A (2006). Issue B introduced AHB5 = AHB-Lite + optional Secure / Exclusive / Extended memory / User / Parity features. Issue C (2021) regularized Master/Slave to Manager/Subordinate.",
-    "version_naming_history_note_apb": "APB2 (AMBA 2) defined original two-phase interface. APB3 (2004) added PREADY + PSLVERR. APB4 (2010) added PPROT + PSTRB. APB Rev E (1998) is obsolete.",
-    "interoperability_summary": [
-      "AHB-Lite Manager interfaces a wider AHB5 Subordinate by leaving the AHB5-specific signal inputs at safe defaults (HEXCL=0, HNONSEC=0, HWSTRB=all-ones).",
-      "APB4 Manager interfaces an APB3 Subordinate by tying off PPROT + PSTRB at the Subordinate input (or the bridge does not generate them).",
-      "An AHB5 Subordinate interfaces an AHB-Lite Manager by treating absent optional signals as their defaults."
-    ],
     "ace_lifecycle": {
       "introduced_in_issue": "D (2011-10-28 baseline, 2011-06-03 beta D-2c)",
       "current_issue_in_this_doc": "E (2013-02-22)",

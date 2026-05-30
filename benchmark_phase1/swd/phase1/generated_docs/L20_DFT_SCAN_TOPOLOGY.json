@@ -44,7 +44,6 @@
       "HSDL (Hierarchical Scan Description Language) — extends BSDL with hierarchical board-of-boards descriptions.",
       "SVF (Serial Vector Format) — vendor-neutral test-vector format with TAP-FSM-aware commands (TLR / RTI / SIR / SDR / RUNTEST / PAUSE / ...)."
     ],
-    "ahb5_parity_only_diagnostic": "The closest protocol-defined fault-detection feature is AHB5's optional Interface protection using parity (Chapter 12 — HADDRCHK / HCTRLCHK / HWDATACHK / HRDATACHK / HRESPCHK / HREADYCHK). This is functional fault detection, not DFT.",
     "debug_access_architecture_topology": {
       "description": "Host → SW-DP → DP register set → AP bus (up to 256 APs) → MEM-AP (CSW+TAR+DRW) → SoC system bus → memory-mapped resources.",
       "key_components_reached": [

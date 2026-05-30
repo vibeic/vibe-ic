@@ -12,8 +12,7 @@ module PM_PME (
     input  RXn,  // Negative line of the differential receive pair.
     input  REFCLK,  // Positive line of 100 MHz reference clock differential pair; SSC-tolerant; common or separate clock topology.
     input  PERST,  // Fundamental Reset; active LOW; asserted while main power is unstable.
-    input  WAKE,  // Pulled LOW by any device that wants to resume from L2 / L3.
-    input  clk  // System clock (auto-added by scaffold)
+    input  WAKE  // Pulled LOW by any device that wants to resume from L2 / L3.
 );
 
     // -----------------------------------------------------------

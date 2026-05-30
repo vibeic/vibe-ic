@@ -455,46 +455,6 @@
     "ABORT.DAPABORT — abort an in-flight AP transaction."
   ],
   "notes": "ADIv5 SWD is fundamentally different from JTAG boundary-scan: SWD does NOT implement boundary-scan cells, does NOT test board interconnect, and does NOT enable EXTEST/INTEST. The MEM-AP layer is what makes SWD universally useful — it lets the debug host pretend to be a bus master on the SoC's system bus, so it can read/write any memory or memory-mapped register including the CPU's own debug-control registers.",
-  "rationale": "Neither AHB IHI 0033C nor APB IHI 0024C defines a JTAG / scan / BIST / MBIST / debug architecture. There is no dedicated debug interface in either protocol. Debug visibility, if any, must be added by the integrator (e.g. ARM CoreSight components) outside these specs.",
-  "spec_provided_observability_ahb": [
-    {
-      "name": "HRESP error response",
-      "purpose": "Two-cycle ERROR observable by Manager and monitoring logic."
-    },
-    {
-      "name": "HEXOKAY (AHB5)",
-      "purpose": "Indicates success / failure of Exclusive Transfer."
-    },
-    {
-      "name": "User signaling HxUSER (AHB5)",
-      "purpose": "Implementation-defined extras for debug / trace / functional augmentation."
-    },
-    {
-      "name": "Interface protection using parity (AHB5)",
-      "purpose": "Single-bit fault detection on each interface."
-    },
-    {
-      "name": "Default Subordinate ERROR for unmapped addresses",
-      "purpose": "DECERR-equivalent detection of out-of-map accesses."
-    }
-  ],
-  "spec_provided_observability_apb": [
-    {
-      "name": "PSLVERR (APB3+)",
-      "purpose": "Failure indicator at end of transfer; mapped to AHB HRESP=ERROR / AXI RRESP=SLVERR by an upstream bridge."
-    }
-  ],
-  "ahb_optional_features_per_property": {
-    "Write_Strobes": "Adds HWSTRB to the interface for sparse-write support",
-    "Secure_Transfers": "Adds HNONSEC; supports Secure / Non-secure distinction",
-    "Exclusive_Transfers": "Adds HEXCL + HMASTER + HEXOKAY; supports Exclusive Access Monitor",
-    "Extended_Memory_Types": "Widens HPROT to 7 bits for extended memory-type encoding",
-    "User_Request_Width": "HAUSER width on the address channel (issuer-defined)",
-    "User_Data_Width": "HWUSER / HRUSER widths on the data channels",
-    "User_Response_Width": "HBUSER width on the response channel",
-    "Parity_Property": "Enables interface protection using parity check signals"
-  },
-  "ahb_recommendations_on_user_signals": "Spec recommends User signals are used only for point-to-point Manager-Subordinate communication; they are not propagated by generic interconnect components and present an interoperability risk if used elsewhere.",
   "applications_supported_by_swd_adiv5": [
     "Cortex-M MCU in-system debug.",
     "Cortex-M flash programming via MEM-AP.",

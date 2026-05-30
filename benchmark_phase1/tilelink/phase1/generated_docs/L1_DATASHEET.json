@@ -484,11 +484,11 @@
   ],
   "copyright": "Copyright c 2018, SiFive Inc.",
   "vendor": "",
-  "electrical_specs_present": false,
-  "electrical_specs_rationale": "Protocol spec defines only logical signal semantics (synchronous, sampled on rising clock edge). Electrical levels are per-implementation.",
-  "purpose": "TileLink is a chip-scale interconnect standard providing multiple masters with coherent memory-",
-  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
   "package_info_present": false,
+  "electrical_specs_rationale": "Protocol spec defines only logical signal semantics (synchronous, sampled on rising clock edge). Electrical levels are per-implementation.",
+  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
+  "purpose": "TileLink is a chip-scale interconnect standard providing multiple masters with coherent memory-",
+  "electrical_specs_present": false,
   "extraction_strategy": {
     "l1_protocol_metadata_v0_1_68": "R23+R44: overlaid 8 extractor keys + sibling-L-doc synth"
   },

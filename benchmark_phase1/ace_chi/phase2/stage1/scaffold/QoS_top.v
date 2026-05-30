@@ -12,8 +12,7 @@ module QoS (
     inout  AR,
     inout  R,
     input  ACLK,
-    input  ARESETn,
-    input  clk  // System clock (auto-added by scaffold)
+    input  ARESETn
 );
 
     // -----------------------------------------------------------

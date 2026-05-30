@@ -17,14 +17,7 @@
         "change": "Final        Third issue, for ADIv5.0 to ADIv5.2."
       }
     ],
-    "deprecated_features": [
-      {
-        "feature": "Master/Slave terminology (AHB)",
-        "deprecated_in_version": "AHB Issue C (2021)",
-        "rationale": "Regularized to Manager / Subordinate for inclusive language. Issue A/B used Master/Slave.",
-        "supports_through": "Backward compatible at signal level; terminology change only."
-      }
-    ],
+    "deprecated_features": [],
     "backward_compat_traps": [
       {
         "trap_name": "dpidr_lsb_must_be_RAO",
@@ -103,54 +96,6 @@
       }
     ],
     "version_naming_history_note": "SWD is the 2-pin variant of the ARM Debug Interface defined by ADIv5 (ARM IHI 0031C, first released 2006). CoreSight is the umbrella debug-IP family. ADIv6 (Arm IHI 0074) is the named successor.",
-    "spec_version_ahb": "AMBA AHB Protocol Specification ARM IHI 0033C (15 September 2021)",
-    "spec_version_apb": "AMBA APB Protocol Specification ARM IHI 0024C (13 April 2010) v2.0",
-    "versions_ahb": [
-      {
-        "release_date": "06 June 2006",
-        "issue": "A",
-        "change": "First release for v1.0 (AHB-Lite)."
-      },
-      {
-        "release_date": "25 June 2015",
-        "issue": "B.a",
-        "change": "Update for AMBA 5 AHB Protocol Specification (Confidential)."
-      },
-      {
-        "release_date": "30 October 2015",
-        "issue": "B.b",
-        "change": "Confidential to Non-Confidential Release."
-      },
-      {
-        "release_date": "15 September 2021",
-        "issue": "C",
-        "change": "Signal width properties; Write strobes; User signaling update; Signal validity rules; Interface protection using parity. Regularized terminology to Manager / Subordinate."
-      }
-    ],
-    "versions_apb": [
-      {
-        "release_date": "25 September 2003",
-        "issue": "A",
-        "change": "First release for APB v1.0 (APB2)."
-      },
-      {
-        "release_date": "17 August 2004",
-        "issue": "B",
-        "change": "Second release for APB v1.0 — adds PREADY, PSLVERR (APB3)."
-      },
-      {
-        "release_date": "13 April 2010",
-        "issue": "C",
-        "change": "First release for APB v2.0 — adds PPROT and PSTRB (APB4)."
-      }
-    ],
-    "version_naming_history_note_ahb": "AHB-Lite (single-Manager) first defined in Issue A (2006). Issue B introduced AHB5 = AHB-Lite + optional Secure / Exclusive / Extended memory / User / Parity features. Issue C (2021) regularized Master/Slave to Manager/Subordinate.",
-    "version_naming_history_note_apb": "APB2 (AMBA 2) defined original two-phase interface. APB3 (2004) added PREADY + PSLVERR. APB4 (2010) added PPROT + PSTRB. APB Rev E (1998) is obsolete.",
-    "interoperability_summary": [
-      "AHB-Lite Manager interfaces a wider AHB5 Subordinate by leaving the AHB5-specific signal inputs at safe defaults (HEXCL=0, HNONSEC=0, HWSTRB=all-ones).",
-      "APB4 Manager interfaces an APB3 Subordinate by tying off PPROT + PSTRB at the Subordinate input (or the bridge does not generate them).",
-      "An AHB5 Subordinate interfaces an AHB-Lite Manager by treating absent optional signals as their defaults."
-    ],
     "post_adiv5_evolution_industry_note": [
       "ARM IHI 0074 — ADIv6 (2019+).",
       "ARM IHI 0029 — CoreSight Architecture Specification.",

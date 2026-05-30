@@ -14,7 +14,6 @@ module QoS_tb;
     wire R; // inout
     reg  ACLK;
     reg  ARESETn;
-    reg  clk;
 
     // DUT instance
     QoS u_dut (
@@ -24,8 +23,7 @@ module QoS_tb;
         .AR(AR),
         .R(R),
         .ACLK(ACLK),
-        .ARESETn(ARESETn),
-        .clk(clk)
+        .ARESETn(ARESETn)
     );
 
     // Clock generation — defaults to 100 MHz; override per protocol.
@@ -37,7 +35,6 @@ module QoS_tb;
         $dumpfile("QoS_tb.vcd");
         $dumpvars(0, QoS_tb);
         ARESETn = 1'b0;
-        clk = 1'b0;
         ARESETn = 1'b0;
         #30;
         ARESETn = 1'b1;

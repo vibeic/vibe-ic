@@ -1,0 +1,156 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_debug",
+  "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
+  "test_scenarios": [],
+  "test_modes": [
+    {
+      "name": "Compliance Pattern",
+      "purpose": "LTSSM Polling.Compliance sub-state transmits a defined compliance pattern for electrical characterization."
+    },
+    {
+      "name": "Loopback",
+      "purpose": "Loopback Master transmits a known pattern; Loopback Slave retransmits it back. Used for receiver-eye testing."
+    },
+    {
+      "name": "Hot Reset",
+      "purpose": "Triggers Link re-training via a TS1 with the Hot Reset bit set."
+    },
+    {
+      "name": "Disable Link",
+      "purpose": "Force the Link into Electrical Idle for power / characterization."
+    }
+  ],
+  "no_test_modes_in_input": true,
+  "debug_observability": [],
+  "no_debug_observability_in_input": true,
+  "debug_registers": [],
+  "debug_parameters": [],
+  "no_debug_parameters_in_input": true,
+  "formal_interfaces": [],
+  "no_formal_interfaces_in_input": true,
+  "verification_strategy": [],
+  "no_verification_strategy_in_input": true,
+  "engineer_mode_unlock_sequence": null,
+  "no_engineer_mode_unlock_in_input": true,
+  "vsuite_per_kw_cap_skipped_v1_6_373": 0,
+  "extraction_evidence": {},
+  "class_path": "digital_cmd_driven",
+  "test_debug_architecture_present": true,
+  "test_debug_features": [
+    "BYPASS — 1-bit short-cut between TDI and TDO; used to shorten the daisy chain when only some devices are being tested.",
+    "EXTEST — output BSCs drive board interconnect; input BSCs observe board interconnect; enables open / short / solder-joint / etch testing.",
+    "SAMPLE/PRELOAD — snapshot of device I/O pin activity during normal operation (SAMPLE) and pre-load of BSR-drive values before EXTEST (PRELOAD).",
+    "INTEST (optional) — in-system functional test of one device's internal logic via BSR-applied stimulus.",
+    "IDCODE / USERCODE (optional) — 32-bit device fingerprint readback through the Device Identification register; lets the tester verify device presence + revision + customer-programmed user code.",
+    "RUNBIST (optional) — TAP-initiated built-in self-test; result read back via a result register.",
+    "CLAMP (optional) — drives outputs from pre-loaded BSR while only the Bypass register is in the shift path; useful when isolating a faulty driver during long bypass-only shifts.",
+    "HIGHZ (optional) — places all outputs in high-impedance; helps board-level diagnosis by removing a device's drivers from the bus.",
+    "Boundary-Scan Description Language (BSDL) — VHDL-subset description of a device's pin assignments, BSR cell types, and IR opcodes; consumed by test-generation tools.",
+    "Hierarchical Scan Description Language (HSDL) — extends BSDL with hierarchical scan-path descriptions for boards-of-boards.",
+    "Serial Vector Format (SVF) — vendor-neutral file format for JTAG test vectors; defines a set of TAP-FSM-aware commands (TLR / RTI / SIR / SDR / RUNTEST / PAUSE / ...)."
+  ],
+  "applications_supported_by_jtag_primer": [
+    "Board-etch and solder-joint testing (interconnect open/short).",
+    "Cluster testing of non-boundary-scan ICs surrounded by boundary-scan devices.",
+    "Board-edge connector testing.",
+    "ASIC verification (in-system functional check via INTEST).",
+    "Embedded-memory testing (RAM/ROM accessed through the surrounding BS device's BSR).",
+    "Backplane multidrop test environment (ring / star configurations).",
+    "Embedded applications: device programming + system-level debug + maintenance.",
+    "Boundary-scan test flow (automated functional verification + interactive fault isolation)."
+  ],
+  "spec_provided_observability": [
+    {
+      "name": "Lane Margining at the Receiver",
+      "purpose": "Gen5-mandatory in-system signal-integrity diagnostic: steps the receiver sampling point in time (left/right) and optionally voltage (up/down) while in L0 (no traffic interruption) and reports the error rate per lane."
+    },
+    {
+      "name": "Equalization phase status",
+      "purpose": "Link Status 2 Register exposes the current EQ phase / de-emphasis; the Secondary PCIe Extended Capability holds per-lane Transmitter Preset + Receiver Preset Hint."
+    },
+    {
+      "name": "TDO scan output",
+      "purpose": "Primary observation point; carries the shift output of the selected IR or DR each TCK in ShiftIR/ShiftDR."
+    },
+    {
+      "name": "IR capture pattern (b...b01)",
+      "purpose": "Built-in sanity check: tester loads IDCODE-or-BYPASS, then shifts in CaptureIR pattern, verifies LSBs '01' on TDO to confirm the IR is alive."
+    },
+    {
+      "name": "IDCODE register",
+      "purpose": "32-bit device fingerprint readback (when implemented); identifies the device in each slot of the chain."
+    },
+    {
+      "name": "BSR (SAMPLE)",
+      "purpose": "Snapshot of all device boundary pins during normal operation; lets the tester observe in-system pin activity without disturbing the device."
+    },
+    {
+      "name": "BSR (EXTEST input cells)",
+      "purpose": "Observe board-level interconnect: input cells capture the value at the device pin (driven by board / upstream device's EXTEST output)."
+    },
+    {
+      "name": "RUNBIST result register",
+      "purpose": "Reports BIST PASS/FAIL after the BIST completes in RunTestIdle (when RUNBIST is supported)."
+    }
+  ],
+  "spec_provided_controllability": [
+    "BSR (EXTEST output cells) drives each output pin from a tester-shifted value — direct control of every output without using functional inputs.",
+    "BSR (INTEST input cells) drives the device's internal logic with tester-shifted stimulus — slow ATE-style functional test.",
+    "HIGHZ removes the device's drivers from board buses for fault isolation.",
+    "CLAMP holds the output pins at the pre-loaded BSR values during long bypass-only shifts."
+  ],
+  "fault_models_detected_by_jtag": [
+    "Stuck-at-0 / stuck-at-1 on board interconnect.",
+    "Open net / broken trace.",
+    "Short to ground / short to VDD.",
+    "Short between adjacent nets.",
+    "Missing component (drives default to pull-up/pull-down → detected by EXTEST).",
+    "Wrong component (IDCODE mismatch).",
+    "Wrong orientation (BSR pin mapping mismatches at IDCODE-compare time)."
+  ],
+  "notes": "PCI Express 5.0 adds Lane Margining at the Receiver as a mandatory protocol-level observability feature plus the per-lane equalization preset registers needed for the four-phase enhanced EQ. The in-band error framework (CRC + Sequence Number + replay + AER) is carried forward from base PCIe. JTAG / scan / BIST remain integrator-side at the SoC.",
+  "error_detection_mechanisms": [
+    "Header ECC (Hamming 8,4) single-bit-correct / double-bit-detect on every packet header.",
+    "Payload CRC-16 (poly 0x1021, init 0xFFFF, MSB-first) on every Long-Packet payload.",
+    "Sync-pattern miss-lock — receiver fails to find 8'b00011101 within HS-Zero window; entire burst lost.",
+    "T-HS-* timing violation — per-lane bit errors; usually surface as ECC / CRC failures.",
+    "Lane-skew exceeded — multi-lane payload de-interleave misalignment; ECC / CRC failures.",
+    "LP-Contention — both endpoints assert mutually exclusive LP states.",
+    "False EoT (End-of-Transmission) — HS-Trail violated or missing LP-11 return."
+  ],
+  "interrupt_or_event_sources": [
+    {
+      "event": "FS detected",
+      "trigger": "Short Packet DT=0x00 received with valid ECC."
+    },
+    {
+      "event": "FE detected",
+      "trigger": "Short Packet DT=0x01 received with valid ECC."
+    },
+    {
+      "event": "LS / LE detected",
+      "trigger": "Short Packet DT=0x02 / 0x03 (optional)."
+    },
+    {
+      "event": "ECC corrected",
+      "trigger": "1-bit error in header ECC was corrected."
+    },
+    {
+      "event": "ECC double-bit error",
+      "trigger": "2-bit error in header ECC was detected; packet dropped."
+    },
+    {
+      "event": "CRC mismatch",
+      "trigger": "Long-Packet payload CRC-16 mismatch."
+    },
+    {
+      "event": "Sync miss-lock",
+      "trigger": "Receiver did not find Sync within HS-Zero window."
+    },
+    {
+      "event": "ULPS entry / exit",
+      "trigger": "Source / sink escape commands; bus enters / exits Ultra-Low Power State."
+    }
+  ]
+}

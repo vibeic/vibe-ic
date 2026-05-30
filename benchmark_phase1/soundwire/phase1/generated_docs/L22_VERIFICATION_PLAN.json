@@ -8,19 +8,14 @@
     "formal_properties": [],
     "regression_matrix": {},
     "verification_plan_present": "partial — the public webinar enumerates the spec-mandated test surfaces (PHY Test Modes per Master pin table, Transport Test Modes Static0/Static1/PRBS per Port, normative CP_SM and CSP_SM state machines, enumeration arbitration, ClockStop modes, Monitor BREQ/BREL arbitration) that any compliant SoundWire IP must verify; the formal compliance test suite is defined in the gated v1.0 spec.",
-    "verification_categories_derived_from_spec": [
-      "Register access (read/write to all register fields; reserved bits behavior)",
-      "Master mode transmission across (clock polarity, clock phase, bit order) combinations",
-      "Slave mode reception across (clock polarity, clock phase, bit order) combinations",
-      "Baud rate divisor sweep",
-      "Mode fault / collision detection + auto-recovery + flag",
-      "Bidirectional mode (where supported)",
-      "Wait/stop mode behavior",
-      "Reset behavior verification",
-      "Receive overrun (flag-serviced-too-late)",
-      "Back-to-back transfers"
-    ],
     "notes": "Spec does not include a formal verification plan; categories above are derived from the spec's functional and waveform descriptions.",
+    "verification_categories_derived_from_spec": [
+      "Register access (read/write to all register fields; reserved-bit behavior)",
+      "Nominal transfer / transaction across the protocol's operating modes",
+      "Error and fault condition detection and handling",
+      "Reset behavior verification",
+      "Back-to-back / sustained operation"
+    ],
     "ic_name": "MIPI SoundWire (Overview)",
     "verification_categories": [
       {

@@ -1,0 +1,497 @@
+{
+  "schema_version": 2,
+  "doc_class": "cmd_protocol",
+  "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
+  "opcodes": [],
+  "no_opcodes_in_input": false,
+  "placeholder_opcode_count": 0,
+  "no_opcode_names_in_input": false,
+  "crc_parameters": null,
+  "no_crc_parameters_in_input": true,
+  "verdict_byte_offset": null,
+  "verdict_byte_hex": null,
+  "no_verdict_byte_in_input": true,
+  "addr_max": null,
+  "len_max": null,
+  "payload_semantics": "see opcodes[].response_payload_template",
+  "no_payload_semantics_in_input": false,
+  "opcode_synthesis_skipped_reason": null,
+  "extraction_evidence": {
+    "input/docs/pcie_gen5_spec.pdf": [
+      {
+        "literal": "0x11 WAKE",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x12 CLKREQ",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x14 HSO",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x15 HSO",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x17 PRSNT2",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x19 HSO",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x20 HSO",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x23 HSO",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x24 HSO",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x27 HSO",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x28 HSO",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x30 PWRBRK",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x33 HSO",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x34 HSO",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x37 HSO",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x38 HSO",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x41 HSO",
+        "label": "opcode declaration"
+      },
+      {
+        "literal": "0x42 HSO",
+        "label": "opcode declaration"
+      }
+    ]
+  },
+  "extraction_strategy": {
+    "hallucination_scrub_v0_1_60": [
+      {
+        "l_doc": "L3_CMD_PROTOCOL",
+        "pattern_name": "opcode_from_two_digit_decimal_page_number",
+        "path": "opcodes[4].hex",
+        "old_value": "0x17",
+        "new_value": "<HALLUCINATION_SCRUBBED>",
+        "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
+      },
+      {
+        "l_doc": "L3_CMD_PROTOCOL",
+        "pattern_name": "opcode_from_two_digit_decimal_page_number",
+        "path": "opcodes[7].hex",
+        "old_value": "0x23",
+        "new_value": "<HALLUCINATION_SCRUBBED>",
+        "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
+      },
+      {
+        "l_doc": "L3_CMD_PROTOCOL",
+        "pattern_name": "opcode_from_two_digit_decimal_page_number",
+        "path": "opcodes[8].hex",
+        "old_value": "0x24",
+        "new_value": "<HALLUCINATION_SCRUBBED>",
+        "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
+      },
+      {
+        "l_doc": "L3_CMD_PROTOCOL",
+        "pattern_name": "opcode_from_two_digit_decimal_page_number",
+        "path": "opcodes[20].hex",
+        "old_value": "0x48",
+        "new_value": "<HALLUCINATION_SCRUBBED>",
+        "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
+      }
+    ]
+  },
+  "class_path": "digital_cmd_driven",
+  "protocol_type": "Split-transaction packet protocol with three nested packet classes: TLPs carried inside Data Link Layer wrappers (Sequence Number + LCRC), framed at the Physical Layer into 128b/130b blocks (2-bit sync header + 128-bit scrambled payload) and transmitted at 32 GT/s NRZ. Packet/transaction semantics are the same as base PCIe; the physical layer is upgraded to 32 GT/s with enhanced equalization, precoding, retimers, and Lane Margining.",
+  "instructions_mandatory": [
+    {
+      "name": "BYPASS",
+      "opcode_convention": "All-1s (e.g. 11 for 2-bit IR, 1111 for 4-bit IR)",
+      "selected_data_register": "Bypass (1 bit)",
+      "description": "Connects TDI to TDO through the 1-bit Bypass register, adding only one TCK delay to the daisy chain. Used to shorten the chain when only some devices are being tested."
+    },
+    {
+      "name": "SAMPLE/PRELOAD",
+      "opcode_convention": "Implementation-defined",
+      "selected_data_register": "Boundary-Scan Register (BSR)",
+      "description": "SAMPLE: in CaptureDR, the input BSCs capture the current value on their associated input pins and the output BSCs capture the value being driven on their output pins — a snapshot of pin activity during normal device operation. PRELOAD: in UpdateDR, the BSR contents are latched into the parallel-hold cells of the BSR so that EXTEST can begin driving the pre-loaded values without first-cycle indeterminate output."
+    },
+    {
+      "name": "EXTEST",
+      "opcode_convention": "All-0s by IEEE 1149.1 convention",
+      "selected_data_register": "Boundary-Scan Register (BSR)",
+      "description": "External test. Output BSCs drive their associated output pins from the BSR-shifted values; input BSCs observe the values at their associated input pins (which therefore reflect the board-level interconnect or upstream device's output). Used for board-etch / solder-joint / interconnect testing."
+    }
+  ],
+  "instructions_optional": [
+    {
+      "name": "INTEST",
+      "selected_data_register": "Boundary-Scan Register (BSR)",
+      "description": "Internal test. The BSR drives the device's internal logic with shifted-in stimulus (BSR acts like a slow ATE pin set on the input side) and captures the internal-logic response on the output BSCs. Allows in-system functional testing of an IC's core logic."
+    },
+    {
+      "name": "RUNBIST",
+      "selected_data_register": "Implementation-defined (typically a result register)",
+      "description": "Run Built-In Self-Test. The TAP controller transitions into RunTestIdle, which the device interprets as 'run the BIST'. The BIST completion / result is read back via the selected register."
+    },
+    {
+      "name": "CLAMP",
+      "selected_data_register": "Bypass (1 bit)",
+      "description": "Drives the output pins from the pre-loaded BSR contents (set up via SAMPLE/PRELOAD) while the bypass register sits between TDI and TDO. Used to hold output values constant while a long bypass-only shift happens."
+    },
+    {
+      "name": "HIGHZ",
+      "selected_data_register": "Bypass (1 bit)",
+      "description": "Places all output pins in the high-impedance state. Useful for board-level fault isolation — disable the device's outputs to remove driver-conflict suspects."
+    },
+    {
+      "name": "IDCODE",
+      "selected_data_register": "Device Identification Register (32 bits)",
+      "description": "Selects the 32-bit Device Identification register for shifting on TDO. The register contains version[31:28] / part-number[27:12] / manufacturer-id[11:1] / 1[0]. When a Device ID register is implemented, IDCODE is the post-reset default instruction."
+    },
+    {
+      "name": "USERCODE",
+      "selected_data_register": "Device Identification Register (32 bits)",
+      "description": "Selects the Device ID register but loads it with a user-programmable 32-bit user code (e.g. FPGA configuration version, customer revision)."
+    }
+  ],
+  "post_reset_default_instruction": "IDCODE if a Device Identification Register is implemented; otherwise BYPASS.",
+  "data_register_catalog": [
+    {
+      "name": "Bypass",
+      "width_bits": 1,
+      "scope": "Mandatory",
+      "purpose": "Single-bit TDI→TDO short-cut for BYPASS / CLAMP / HIGHZ instructions."
+    },
+    {
+      "name": "Boundary-Scan Register",
+      "width_bits": "1 BSC per external I/O pin",
+      "scope": "Mandatory",
+      "purpose": "Observation + drive of every device boundary pin for SAMPLE/PRELOAD / EXTEST / INTEST."
+    },
+    {
+      "name": "Device Identification",
+      "width_bits": 32,
+      "scope": "Optional (mandatory if IDCODE / USERCODE implemented)",
+      "purpose": "32-bit device fingerprint: version[31:28] / part-number[27:12] / manufacturer-id[11:1] / 1[0]."
+    },
+    {
+      "name": "User-defined Data Register(s)",
+      "width_bits": "implementation-defined",
+      "scope": "Optional",
+      "purpose": "Vendor-specific test / debug / programming registers (e.g. SRAM scan, configuration shift, internal scan)."
+    }
+  ],
+  "channels": [
+    {
+      "name": "TXp/TXn",
+      "direction": "transmit (per Lane, per direction)",
+      "description": "Differential transmit pair. AC-coupled, NRZ, 128b/130b-encoded, 32 GT/s per Lane at Gen5. Four-phase enhanced equalization with preset hints; optional transmitter precoding."
+    },
+    {
+      "name": "RXp/RXn",
+      "direction": "receive (per Lane, per direction)",
+      "description": "Differential receive pair. Supports mandatory Lane Margining at the Receiver (time/voltage eye-margin probing in L0)."
+    },
+    {
+      "name": "REFCLK+/REFCLK-",
+      "direction": "common reference clock",
+      "description": "100 MHz reference; SSC-tolerant; Common Clock or Separate Reference (SRIS)."
+    },
+    {
+      "name": "PERST#",
+      "direction": "system → device",
+      "description": "Fundamental Reset. Active LOW."
+    },
+    {
+      "name": "WAKE#",
+      "direction": "device → system (open-drain)",
+      "description": "Open-drain WAKE; pulled LOW to resume from L2/L3."
+    }
+  ],
+  "valid_ready_handshake_rules": [
+    "Flow control is credit-based per Virtual Channel (six credit types) — unchanged from base PCIe.",
+    "Data Link Layer guarantees TLP delivery via ACK/NAK + replay.",
+    "On LCRC or block-framing error, receiver Naks; transmitter replays from the Retry Buffer.",
+    "Link training/equalization uses TS1/TS2 carrying the Data Rate Identifier; the 32.0 GT/s bit selects Gen5.",
+    "Enhanced equalization (Phase 0-3) exchanges transmitter coefficient/preset requests between partners and through retimers.",
+    "Alternate Protocol Negotiation (modified TS1/TS2) agrees on an alternate protocol (e.g. CXL) over the PCIe 5.0 PHY."
+  ],
+  "burst_based": false,
+  "byte_oriented": false,
+  "bit_oriented": true,
+  "frame_format": {
+    "block_framing": "128b/130b: 2-bit sync header (01b = Ordered Set Block, 10b = Data Block) + 128-bit scrambled payload. TLP/DLLP bytes carried inside Data Blocks; STP/SDP/END framing tokens are byte values inside the Data Block (not 8b/10b K-codes).",
+    "ordered_sets": "TS1 / TS2 (carry the Data Rate Identifier incl. the 32.0 GT/s bit and Alternate Protocol Negotiation), SKP (clock-tolerance / margining control), EIOS / EIEOS / FTS.",
+    "note": "Gen5 uses Gen3-style 130-bit block framing; NOT the 8b/10b K-code framing of Gen1/Gen2 and NOT Flit framing (a Gen6 feature)."
+  },
+  "packet_classes": [
+    {
+      "class": "Long Packet",
+      "purpose": "Carries image-data payload (RAW/YUV/RGB/generic). Has header + payload + CRC-16 footer.",
+      "header_layout": "DI (1 byte) + WC[15:0] Word Count (2 bytes) + ECC (1 byte) — total 32 bits.",
+      "payload_layout": "WC bytes of image data, byte-interleaved across N Data Lanes when N > 1.",
+      "footer_layout": "16-bit CRC-16 over payload bytes only (polynomial 0x1021, init 0xFFFF, MSB-first)."
+    },
+    {
+      "class": "Short Packet",
+      "purpose": "Frame / line synchronization markers and generic short signaling. No payload, no footer.",
+      "header_layout": "DI (1 byte) + Data[15:0] (2 bytes; e.g. frame number for FS) + ECC (1 byte) — total 32 bits.",
+      "members": [
+        "FS (Frame Start, DT=0x00)",
+        "FE (Frame End, DT=0x01)",
+        "LS (Line Start, DT=0x02)",
+        "LE (Line End, DT=0x03)",
+        "Generic Short Packet 0x08..0x0F (vendor-defined)"
+      ]
+    }
+  ],
+  "data_identifier_byte": {
+    "width_bits": 8,
+    "structure": "DI = { VC[1:0] : DT[5:0] } in v1.1 (4 VCs); DI = { VC[3:0] (split across reserved bits) : DT[5:0] } in v1.2+ (16 VCs via VC extension).",
+    "VC_field_bits": [
+      7,
+      6
+    ],
+    "DT_field_bits": [
+      5,
+      0
+    ],
+    "VC_count_v1_1": 4,
+    "VC_count_v1_2_plus": 16
+  },
+  "data_types_enum": {
+    "synchronization_short_packets": [
+      {
+        "DT_hex": "0x00",
+        "name": "Frame Start (FS)",
+        "category": "Short Sync"
+      },
+      {
+        "DT_hex": "0x01",
+        "name": "Frame End (FE)",
+        "category": "Short Sync"
+      },
+      {
+        "DT_hex": "0x02",
+        "name": "Line Start (LS)",
+        "category": "Short Sync (optional)"
+      },
+      {
+        "DT_hex": "0x03",
+        "name": "Line End (LE)",
+        "category": "Short Sync (optional)"
+      }
+    ],
+    "generic_short_packets": "DT 0x08..0x0F reserved for generic short packets (vendor-defined Data[15:0]).",
+    "yuv_formats": [
+      {
+        "DT_hex": "0x18",
+        "name": "YUV420 8-bit"
+      },
+      {
+        "DT_hex": "0x19",
+        "name": "YUV420 10-bit"
+      },
+      {
+        "DT_hex": "0x1A",
+        "name": "YUV420 8-bit Legacy"
+      },
+      {
+        "DT_hex": "0x1C",
+        "name": "YUV420 8-bit CSPS"
+      },
+      {
+        "DT_hex": "0x1D",
+        "name": "YUV420 10-bit CSPS"
+      },
+      {
+        "DT_hex": "0x1E",
+        "name": "YUV422 8-bit"
+      },
+      {
+        "DT_hex": "0x1F",
+        "name": "YUV422 10-bit"
+      }
+    ],
+    "rgb_formats": [
+      {
+        "DT_hex": "0x20",
+        "name": "RGB444"
+      },
+      {
+        "DT_hex": "0x21",
+        "name": "RGB555"
+      },
+      {
+        "DT_hex": "0x22",
+        "name": "RGB565"
+      },
+      {
+        "DT_hex": "0x23",
+        "name": "RGB666"
+      },
+      {
+        "DT_hex": "0x24",
+        "name": "RGB888"
+      }
+    ],
+    "raw_formats": [
+      {
+        "DT_hex": "0x28",
+        "name": "RAW6"
+      },
+      {
+        "DT_hex": "0x29",
+        "name": "RAW7"
+      },
+      {
+        "DT_hex": "0x2A",
+        "name": "RAW8"
+      },
+      {
+        "DT_hex": "0x2B",
+        "name": "RAW10"
+      },
+      {
+        "DT_hex": "0x2C",
+        "name": "RAW12"
+      },
+      {
+        "DT_hex": "0x2D",
+        "name": "RAW14"
+      }
+    ],
+    "generic_long_packets": "DT 0x30..0x37 reserved for user-defined 8-bit data (long packets)."
+  },
+  "header_ecc_field": {
+    "width_bits": 8,
+    "structure": "Extended Hamming(8,4): 6 parity bits over 24 data bits (DI + WC[7:0] + WC[15:8]) + 2 extra bits for double-bit detect.",
+    "correction_capability": "1-bit error — corrected automatically.",
+    "detection_capability": "2-bit error — detected; packet discarded."
+  },
+  "payload_crc_field": {
+    "width_bits": 16,
+    "polynomial_hex": "0x1021",
+    "polynomial_equation": "x^16 + x^12 + x^5 + 1",
+    "initial_value_hex": "0xFFFF",
+    "shift_direction": "MSB-first",
+    "covers": "Long Packet payload bytes only (does NOT cover header)."
+  },
+  "transaction_phases": [
+    "HS Entry — source drives LP-11 → LP-01 → LP-00 → HS-0 → Sync pattern 8'b00011101.",
+    "Packet Stream — one or more Long / Short Packets back-to-back on HS payload (header → payload → footer per Long Packet).",
+    "HS Exit — HS-Trail → LP-11 (Stop state).",
+    "Optional Escape — LP-11 → LP-10 → LP-00 → escape-pattern for ULPS / Trigger / Reset."
+  ],
+  "addressing": {
+    "memory_address_width_bits_32DW_header": 32,
+    "memory_address_width_bits_64DW_header": 64,
+    "configuration_address_format": "Bus(8) + Device(5) + Function(3) + Extended Register Number(4) + Register Number(6)",
+    "requester_id_width_bits": 16,
+    "completer_id_width_bits": 16,
+    "tag_width_bits": 8,
+    "sequence_number_width_bits": 12
+  },
+  "tlp_header_format": {
+    "fmt_field_width_bits": 3,
+    "type_field_width_bits": 5,
+    "Fmt_encoding": {
+      "000": "3 DW header, no data",
+      "001": "4 DW header, no data",
+      "010": "3 DW header, with data",
+      "011": "4 DW header, with data",
+      "100": "TLP Prefix"
+    },
+    "common_first_DW_fields": [
+      "Fmt[2:0]",
+      "Type[4:0]",
+      "TC[2:0]",
+      "TD (TLP Digest present)",
+      "EP (Error / Poisoned)",
+      "Attr[2:0]",
+      "Length[9:0]"
+    ],
+    "note": "The 3-bit Fmt field (with the TLP-Prefix encoding) is the post-Gen2 header form retained at Gen5; transaction semantics are unchanged from base PCIe."
+  },
+  "transaction_classes_split": [
+    {
+      "class": "Posted",
+      "transactions": [
+        "Memory Write",
+        "Message",
+        "Message with Data"
+      ],
+      "completion": "no Completion expected"
+    },
+    {
+      "class": "Non-Posted",
+      "transactions": [
+        "Memory Read",
+        "I/O Read",
+        "I/O Write",
+        "Configuration Read",
+        "Configuration Write",
+        "Memory Read Lock"
+      ],
+      "completion": "single or multiple Completions returned"
+    },
+    {
+      "class": "Completion",
+      "transactions": [
+        "Cpl",
+        "CplD",
+        "CplLk",
+        "CplDLk"
+      ],
+      "completion": "response to a Non-Posted Request"
+    }
+  ],
+  "physical_layer_block_format": {
+    "encoding": "128b/130b",
+    "block_size_bits": 130,
+    "sync_header_bits": 2,
+    "sync_header_values": {
+      "01b": "Ordered Set Block",
+      "10b": "Data Block"
+    },
+    "payload_bits": 128,
+    "modulation": "NRZ (two-level)",
+    "line_rate_GT_s": 32.0,
+    "scrambling": "Per-lane LFSR scrambling of the 128-bit payload (sync header not scrambled).",
+    "precoding": "Optional transmitter precoding to limit DFE burst-error propagation at 32 GT/s.",
+    "note": "Gen5 retains the 130-bit block framing of Gen3/Gen4; Flit-mode framing is a PCIe 6.0 feature."
+  },
+  "alternate_protocol_negotiation": {
+    "mechanism": "Advertised during link training via modified TS1/TS2 ordered sets.",
+    "purpose": "Agree to run an alternate protocol over the PCIe 5.0 physical layer instead of (or alongside) base PCIe.",
+    "primary_consumer": "Compute Express Link (CXL 1.1 / 2.0) — enters CXL.io / CXL.cache / CXL.mem at 32 GT/s."
+  }
+}

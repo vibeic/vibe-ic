@@ -8,7 +8,9 @@
     "die_area_budget_um": null,
     "power_budget_uw": null,
     "sdc_constraints_path": null,
-    "floorplan_hints": []
+    "floorplan_hints": [],
+    "constraints_present": false,
+    "notes": "Block-level peripheral spec does not include PDK / timing constraints; these are deferred to the SoC integration spec."
   },
   "extraction_hints": [
     "Look for floorplan, area, power, timing constraints.",

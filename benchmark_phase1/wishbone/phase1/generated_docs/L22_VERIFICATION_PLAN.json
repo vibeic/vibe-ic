@@ -8,19 +8,14 @@
     "formal_properties": [],
     "regression_matrix": {},
     "verification_plan_present": "implicit",
-    "verification_categories_derived_from_spec": [
-      "Register access (read/write to all register fields; reserved bits behavior)",
-      "Master mode transmission across (clock polarity, clock phase, bit order) combinations",
-      "Slave mode reception across (clock polarity, clock phase, bit order) combinations",
-      "Baud rate divisor sweep",
-      "Mode fault / collision detection + auto-recovery + flag",
-      "Bidirectional mode (where supported)",
-      "Wait/stop mode behavior",
-      "Reset behavior verification",
-      "Receive overrun (flag-serviced-too-late)",
-      "Back-to-back transfers"
-    ],
     "notes": "Wishbone B4 does NOT provide a formal verification plan. The categories above are derived from Chapter 3 (Bus Cycles), Chapter 4 (Registered Feedback Bus Cycles), Chapter 5 (Interfacing standard and pipelined peripherals), and Chapter 6 (Timing) of the spec, together with the RULEs scattered throughout.",
+    "verification_categories_derived_from_spec": [
+      "Register access (read/write to all register fields; reserved-bit behavior)",
+      "Nominal transfer / transaction across the protocol's operating modes",
+      "Error and fault condition detection and handling",
+      "Reset behavior verification",
+      "Back-to-back / sustained operation"
+    ],
     "ic_name": "Wishbone B4 (OpenCores SoC Interconnection Architecture)",
     "interoperability_test_matrix": [
       "Classic MASTER + Classic SLAVE (baseline B.3 / B.4).",

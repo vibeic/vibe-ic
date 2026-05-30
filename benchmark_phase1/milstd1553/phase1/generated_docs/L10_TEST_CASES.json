@@ -9,15 +9,10 @@
   "extraction_evidence": {},
   "test_cases_present": "partial - the spec defines mandatory protocol behaviors (word framing, sync polarity, parity, message formats, RT response timing) that map directly to compliance test scenarios; the SAE AS-1A Avionic Networks Subcommittee publishes the formal RT Validation Test Plan (AS4111) and RT Production Test Plan (AS4112).",
   "derived_compliance_test_categories": [
-    "Reset behavior: enable bit cleared; transmit-empty flag set; receive-flag cleared after reset.",
-    "Master mode transmission: write to data register + clock-cycle delay + N edges + receive-flag set.",
-    "Slave mode transmission: select line goes LOW + N edges from master + receive-flag set after last edge.",
-    "Mode fault / collision detection.",
-    "All clock polarity/phase combinations.",
-    "MSB-first vs LSB-first byte ordering.",
-    "Bidirectional mode (single data pin).",
-    "Receive overrun (flag-serviced-too-late).",
-    "Baud rate divisor sweep.",
-    "Wait/Stop mode behavior."
+    "Reset behavior verification.",
+    "Register access (read/write to all fields; reserved-bit behavior).",
+    "Nominal transfer / transaction across the protocol's operating modes.",
+    "Error and fault condition handling.",
+    "Back-to-back / sustained operation."
   ]
 }

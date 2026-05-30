@@ -25,7 +25,6 @@ module ethernet_tb;
     reg  RESET;
     reg  INT;
     reg  VDD_GND;
-    reg  clk;
 
     // DUT instance
     ethernet u_dut (
@@ -46,8 +45,7 @@ module ethernet_tb;
         .MDI_pair_s(MDI_pair_s),
         .RESET(RESET),
         .INT(INT),
-        .VDD_GND(VDD_GND),
-        .clk(clk)
+        .VDD_GND(VDD_GND)
     );
 
     // Clock generation — defaults to 100 MHz; override per protocol.
@@ -73,7 +71,6 @@ module ethernet_tb;
         RESET = 1'b0;
         INT = 1'b0;
         VDD_GND = 1'b0;
-        clk = 1'b0;
         RESET = 1'b1;
         #30;
         RESET = 1'b0;

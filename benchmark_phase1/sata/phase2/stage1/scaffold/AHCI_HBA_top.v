@@ -15,8 +15,7 @@ module AHCI_HBA (
     input  PERST_PCIe_Fundamental_Reset,  // PCIe-style HBA reset.
     input  REFCLK_PHY,  // Reference clock for SATA PHYs.
     input  GHC_IE_software,  // Global Interrupt Enable.
-    input  GHC_HR_software,  // HBA Reset.
-    input  clk  // System clock (auto-added by scaffold)
+    input  GHC_HR_software  // HBA Reset.
 );
 
     // -----------------------------------------------------------

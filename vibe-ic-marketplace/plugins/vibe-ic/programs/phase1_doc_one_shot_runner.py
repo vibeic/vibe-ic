@@ -49847,9 +49847,14 @@ def main() -> int:
         # detector classifies AMBA AXI/ACE/AHB/APB as bus_interconnect_protocol
         # (rightly so); the universal R46-R52 synth runs there but Tier-2
         # protocol-specific synths (ACE / AHB+APB) were gated out before.
+        # v0.1.89 — also fire for pure_analog. The USB4 spec (SerDes-heavy
+        # 40 Gbps PHY) classifies as pure_analog under detect_ic_class, but is a
+        # genuine protocol. As with every other class here, the INLINE structural
+        # sub-detector is the real gate — a true analog IC matches no protocol
+        # wire-signature, so broadening the class set cannot cause a false fire.
         if _ic_r55 in ("serial_peripheral_protocol", "digital_cmd_driven",
                        "digital_arithmetic_primitive",
-                       "bus_interconnect_protocol", "unknown"):
+                       "bus_interconnect_protocol", "pure_analog", "unknown"):
             _gd_r55 = _pl.generated_docs_dir(project)
             _spi_blob = ""
             for _n in ("L1_DATASHEET.json", "L2_FRS.json"):
@@ -50078,33 +50083,33 @@ def main() -> int:
                 except Exception as _sdmmc_err:
                     print(f"      SD/MMC synth FAILED (fail-open): {_sdmmc_err}",
                           file=sys.stderr)
-            # v0.1.85 — AMBA AHB-Lite + APB structural sub-detector.
-            # v0.1.86 — negatively gate against the AMBA AXI input filename
-            # because R50 plants "AMBA AHB" / "AHB" / "APB" mentions in L1/L2
-            # for any AXI-derived spec (AXI release_history mentions all the
-            # AMBA family members), and the bare-keyword AMBA+AHB+APB OR
-            # branch then falsely fires AHB+APB synth on the AXI spec.
-            # Filename check is stable because input/docs/ is on-disk before
-            # phase1 starts; AXI source is `IHI0022*_amba_axi_protocol_spec`.
-            _ahb_apb_axi_block = False
-            _input_docs_ahb = project / "input" / "docs"
-            if _input_docs_ahb.is_dir():
-                for _f in _input_docs_ahb.iterdir():
-                    _fn = _f.name.lower()
-                    if ("amba_axi" in _fn
-                            or "axi_protocol_spec" in _fn
-                            or "ihi0022" in _fn):
-                        _ahb_apb_axi_block = True
-                        break
-            _is_ahb_apb = (not _ahb_apb_axi_block) and (
-                ("HCLK" in _spi_blob and "HADDR" in _spi_blob
-                    and "HTRANS" in _spi_blob and "HREADY" in _spi_blob)
-                or ("PCLK" in _spi_blob and "PADDR" in _spi_blob
-                    and "PSEL" in _spi_blob and "PENABLE" in _spi_blob)
-                or ("AMBA" in _spi_blob and "AHB" in _spi_blob
-                    and "APB" in _spi_blob
-                    and "AHB-Lite" not in _spi_blob)
-                or ("AHB-Lite" in _spi_blob and "ARM" in _spi_blob))
+            # v0.1.89 — structural-only AHB+APB detector (code-review H1/M1/M2/M3).
+            # PRIOR (v0.1.86) version read input/docs FILENAMES to negatively gate
+            # against the AXI spec — a general-not-keyword doctrine violation. It also
+            # carried bare-keyword OR branches ("AMBA"+"AHB"+"APB" / "AHB-Lite"+"ARM")
+            # that mis-fired: the AXI spec (arm_aix/ace_chi, IHI0022) and the ADIv5
+            # debug spec (swd, IHI0031 — which defines AHB-AP/APB-AP access ports)
+            # BOTH mention AHB/APB signal names. The review found the synth injecting
+            # 147 phantom AHB keys into SWD's docs (masked by SWD's force-overwrite).
+            # Fix: disambiguate purely from CONTENT. The ARM AHB-Lite+APB spec is the
+            # only one whose PRIMARY subject is AHB/APB; AXI specs carry AXI-primary
+            # signals (ARVALID/AWVALID/ARLEN…) and the ADIv5 spec carries SWD-primary
+            # signals (SWDIO/ADIv5). Require those ABSENT + an AHB or APB wire-signal
+            # quad present. No filename / folder-name read anywhere.
+            _axi_primary = (
+                "ARVALID" in _spi_blob or "AWVALID" in _spi_blob
+                or "ARLEN" in _spi_blob or "AWLEN" in _spi_blob
+                or "ARBURST" in _spi_blob or "RVALID" in _spi_blob
+                or "WVALID" in _spi_blob or "BVALID" in _spi_blob)
+            _swd_primary = (
+                ("SWDIO" in _spi_blob and "SWCLK" in _spi_blob)
+                or "ADIv5" in _spi_blob or "IHI0031" in _spi_blob)
+            _is_ahb_apb = (
+                (not _axi_primary) and (not _swd_primary) and (
+                    ("HCLK" in _spi_blob and "HADDR" in _spi_blob
+                        and "HTRANS" in _spi_blob and "HREADY" in _spi_blob)
+                    or ("PCLK" in _spi_blob and "PADDR" in _spi_blob
+                        and "PSEL" in _spi_blob and "PENABLE" in _spi_blob)))
             if _is_ahb_apb:
                 _ahb_apb_ic_name = "AMBA AHB + APB (ARM IHI 0033C + IHI 0024C)"
                 try:
@@ -50134,7 +50139,36 @@ def main() -> int:
                     or "Flash array" in _spi_blob
                     or "page program" in _spi_blob.lower()
                     or "block erase" in _spi_blob.lower())))
-            _is_ddr = (not _has_nand_flash_signature) and (
+            # v0.1.89 — DDR3 detector hardened against LPDDR5 false-positive
+            # (sibling-mutex, DDR3 side). An LPDDR5 (JESD209-5) spec
+            # legitimately contains the substrings "DDR3"/"DDR4" (it
+            # describes DDR4-style bank groups and compares against DDR3),
+            # "SDRAM", "mode register", "DDR" and "JEDEC" — which would trip
+            # the DDR3 cluster branches below. A TRUE DDR3 SDRAM spec NEVER
+            # carries the LPDDR5 version-specific structural tokens WCK
+            # (a separate full-speed Write Clock that DDR3 lacks) nor the
+            # JESD209-5 document number nor the "LPDDR5" generation name.
+            # If the doc carries any of those, the DDR3 detector defers to
+            # the LPDDR5 detector. General — keys off the version-specific
+            # structural token (WCK) and spec-id, not a benchmark name.
+            _has_lpddr5_signature = (
+                "LPDDR5" in _spi_blob
+                or "JESD209-5" in _spi_blob
+                or ("WCK" in _spi_blob
+                    and "bank group" in _spi_blob.lower()
+                    and "low-power" in _spi_blob.lower()))
+            # v0.1.89 — DDR3 detector hardened against HBM3 false-positive
+            # (sibling-mutex, DDR3 side). An HBM3 (JESD238) stacked-DRAM spec
+            # legitimately carries "DDR"/"DDR3"/"SDRAM"/"JEDEC" in comparative
+            # sections but never the HBM3 generation name, JESD238 doc number,
+            # nor the "High Bandwidth Memory" token of a true DDR3 spec.
+            _has_hbm3_signature = (
+                "HBM3" in _spi_blob
+                or "JESD238" in _spi_blob
+                or "High Bandwidth Memory" in _spi_blob)
+            _is_ddr = (not _has_nand_flash_signature) \
+                and (not _has_lpddr5_signature) \
+                and (not _has_hbm3_signature) and (
                 ("ACTIVATE" in _spi_blob and "PRECHARGE" in _spi_blob
                     and "tRCD" in _spi_blob and "tRP" in _spi_blob)
                 or ("DDR3" in _spi_blob and "SDRAM" in _spi_blob
@@ -50151,6 +50185,173 @@ def main() -> int:
                 except Exception as _ddr_err:
                     print(f"      DDR3 synth FAILED (fail-open): {_ddr_err}",
                           file=sys.stderr)
+            # v0.1.89 — LPDDR5 SDRAM (JEDEC JESD209-5) structural sub-detector.
+            # General: keys off the canonical protocol NAME / spec-id read
+            # from L1/L2 CONTENT (_spi_blob) plus the version-specific WCK
+            # structural token. NEVER reads input-doc filenames or the
+            # benchmark folder name. SIBLING MUTEX (LPDDR5 side): a pure DDR3
+            # spec ("DDR3"/"JESD79-3" present, no LPDDR5 marker) does NOT
+            # trigger LPDDR5 — it defers to the DDR3 detector above.
+            _has_ddr3_only_signature = (
+                ("DDR3" in _spi_blob or "JESD79-3" in _spi_blob)
+                and not ("LPDDR5" in _spi_blob or "JESD209-5" in _spi_blob
+                         or "WCK" in _spi_blob))
+            _is_lpddr5 = (not _has_ddr3_only_signature) and (
+                ("LPDDR5" in _spi_blob)
+                or ("JESD209-5" in _spi_blob)
+                or ("WCK" in _spi_blob
+                    and "bank group" in _spi_blob.lower()
+                    and "low-power" in _spi_blob.lower()))
+            if _is_lpddr5:
+                _lpddr5_ic_name = "LPDDR5 SDRAM (JEDEC JESD209-5)"
+                try:
+                    from lpddr5_protocol_synth import apply_lpddr5_synth as _apply_lpddr5
+                    _apply_lpddr5(_gd_r55, _is_lpddr5, _lpddr5_ic_name)
+                    print(f"      → LPDDR5 synth applied (is_lpddr5={_is_lpddr5})")
+                except Exception as _lpddr5_err:
+                    print(f"      LPDDR5 synth FAILED (fail-open): {_lpddr5_err}",
+                          file=sys.stderr)
+            # =====================================================================
+            # v0.1.89 — Tier-C modern-protocol detectors (USB4 / PCIe5 / CXL /
+            # UFS / HBM3). All CONTENT-based + canonical-name + version-specific
+            # structural tokens; NO filename / folder-name reads (code-review
+            # H1 doctrine). Each runs AFTER its sibling's detector earlier in
+            # this block, so the sibling synth (usb / pcie / sdmmc / ddr) fires
+            # first and the more-specific Tier-C synth force-overrides — genuine
+            # protocol layering. Each carries a sibling MUTEX so it cannot fire
+            # on the OLDER protocol's benchmark.
+            # Modern specs put their version-distinguishing tokens (e.g. "32 GT/s",
+            # USB4 "tunnel") in the body, which the extractor keeps in input_doc/
+            # but does not always lift into L1/L2. So — like the Tier-3 block — the
+            # Tier-C detectors read an input_doc-AUGMENTED blob (content only, never
+            # filenames). _spi_blob is rebound for the Tier-C predicates then
+            # RESTORED, so later detectors are unaffected.
+            # =====================================================================
+            _tc_blob_saved = _spi_blob
+            _tc_aug = _spi_blob
+            try:
+                _input_doc_dir_tc = _pl.input_doc_dir(project)
+                if _input_doc_dir_tc.is_dir():
+                    for _idoc_tc in _input_doc_dir_tc.iterdir():
+                        if _idoc_tc.is_file() and _idoc_tc.suffix.lower() in (
+                                ".txt", ".md", ".json"):
+                            try:
+                                _tc_aug += "\n" + _idoc_tc.read_text(errors="ignore")
+                            except Exception:
+                                continue
+            except Exception:
+                pass
+            _spi_blob = _tc_aug
+            # USB4 — version token "USB4" + a USB4-PRIMARY structural feature
+            # (router topology / 40 Gbps / Connection Manager). v0.1.89 code-review
+            # M1: the weak standalone "tunnel" clause was dropped — a PCIe-5.0 spec
+            # says "tunneled over USB4" as an incidental cross-reference, which the
+            # old clause mis-fired on (injecting USB4 packet/tunnel keys into the
+            # PCIe5 L-docs). Added a sibling MUTEX `"32 GT/s" not in blob`: USB4 is a
+            # 40-Gbps (20 Gbps/lane) link and NEVER describes itself as "32 GT/s"
+            # (the PCIe-Gen5 per-lane rate), so a PCIe-5.0 doc cannot trip USB4.
+            _is_usb4 = (
+                ("32 GT/s" not in _spi_blob)
+                and "USB4" in _spi_blob and (
+                    "router" in _spi_blob.lower()
+                    or "40 Gbps" in _spi_blob
+                    or "Connection Manager" in _spi_blob))
+            if _is_usb4:
+                try:
+                    from usb4_protocol_synth import apply_usb4_synth as _apply_usb4
+                    _apply_usb4(_gd_r55, _is_usb4,
+                                "USB4 (USB Implementers Forum, Intel Thunderbolt 3 base)")
+                    print(f"      → USB4 synth applied (is_usb4={_is_usb4})")
+                except Exception as _usb4_err:
+                    print(f"      USB4 synth FAILED (fail-open): {_usb4_err}",
+                          file=sys.stderr)
+            # PCIe 5.0 (Gen5) vs CXL: both cross-reference (CXL rides the PCIe5/6
+            # PHY; a PCIe5 spec lists CXL as an Alternate Protocol), so CXL.* and
+            # "Compute Express Link" appear in BOTH docs. The clean structural
+            # disambiguator is the Gen5 PHY-LAYER electrical signature — retimer /
+            # lane-margining / TX-equalization — which a PCIe5 spec dwells on and a
+            # CXL-architecture spec does NOT (measured: retimer/equalization = 0 in
+            # the CXL doc). PCIe5 fires on the Gen5 rate token AND a Gen5 PHY token.
+            # The PCIe 1.0 benchmark (2.5 GT/s, no retimers/eq) never matches.
+            _pcie5_phy = (
+                "retimer" in _spi_blob.lower()
+                or "lane margining" in _spi_blob.lower()
+                or "equalization" in _spi_blob.lower())
+            _is_pcie_gen5 = (
+                _pcie5_phy and (
+                    ("32 GT/s" in _spi_blob and "PCI Express" in _spi_blob)
+                    or ("PCIe 5.0" in _spi_blob)
+                    or ("PCI Express Base 5" in _spi_blob)))
+            if _is_pcie_gen5:
+                try:
+                    from pcie_gen5_protocol_synth import apply_pcie_gen5_synth as _apply_pcie5
+                    _apply_pcie5(_gd_r55, _is_pcie_gen5,
+                                 "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)")
+                    print(f"      → PCIe5 synth applied (is_pcie_gen5={_is_pcie_gen5})")
+                except Exception as _pcie5_err:
+                    print(f"      PCIe5 synth FAILED (fail-open): {_pcie5_err}",
+                          file=sys.stderr)
+            # CXL — the three CXL sub-protocols are the canonical signature. A
+            # PCIe5 spec lists CXL as an Alternate Protocol so it ALSO carries
+            # CXL.* tokens; the mutex (CXL side) is the absence of the Gen5
+            # PHY-layer electrical signature (_pcie5_phy) — a CXL-architecture
+            # doc dwells on CXL.io/cache/mem + Flex Bus + Type-3 devices, not on
+            # retimer/lane-margining/equalization. So CXL fires on its sub-
+            # protocols only when the doc is NOT a PCIe5 PHY-electrical spec.
+            _is_cxl = (
+                (not _pcie5_phy) and (
+                    "Compute Express Link" in _spi_blob
+                    or ("CXL.io" in _spi_blob and "CXL.mem" in _spi_blob)
+                    or ("CXL.cache" in _spi_blob and "CXL.mem" in _spi_blob)))
+            if _is_cxl:
+                try:
+                    from cxl_protocol_synth import apply_cxl_synth as _apply_cxl
+                    _apply_cxl(_gd_r55, _is_cxl,
+                               "Compute Express Link (CXL) 3.0 (CXL Consortium)")
+                    print(f"      → CXL synth applied (is_cxl={_is_cxl})")
+                except Exception as _cxl_err:
+                    print(f"      CXL synth FAILED (fail-open): {_cxl_err}",
+                          file=sys.stderr)
+            # UFS — UniPro / UPIU / M-PHY are unique to UFS; the SD/MMC benchmark
+            # lacks all of them, so no mutex needed.
+            _is_ufs = (
+                ("UFS" in _spi_blob and "UniPro" in _spi_blob)
+                or ("UPIU" in _spi_blob)
+                or ("Universal Flash Storage" in _spi_blob)
+                or ("UFS" in _spi_blob and "M-PHY" in _spi_blob
+                    and "JESD220" in _spi_blob))
+            if _is_ufs:
+                try:
+                    from ufs_protocol_synth import apply_ufs_synth as _apply_ufs
+                    _apply_ufs(_gd_r55, _is_ufs,
+                               "Universal Flash Storage (JEDEC JESD220, UFS 4.0)")
+                    print(f"      → UFS synth applied (is_ufs={_is_ufs})")
+                except Exception as _ufs_err:
+                    print(f"      UFS synth FAILED (fail-open): {_ufs_err}",
+                          file=sys.stderr)
+            # HBM3 — stacked-DRAM generation token. The DDR3 detector above now
+            # mutexes against HBM3, so DDR3 will not fire on an HBM3 doc; the
+            # DDR3 benchmark lacks "HBM3"/"High Bandwidth Memory", so HBM3 never
+            # fires there.
+            _is_hbm3 = (
+                "HBM3" in _spi_blob
+                or ("High Bandwidth Memory" in _spi_blob and (
+                    "pseudo channel" in _spi_blob.lower()
+                    or "1024-bit" in _spi_blob
+                    or "JESD238" in _spi_blob
+                    or "TSV" in _spi_blob)))
+            if _is_hbm3:
+                try:
+                    from hbm3_protocol_synth import apply_hbm3_synth as _apply_hbm3
+                    _apply_hbm3(_gd_r55, _is_hbm3,
+                                "High Bandwidth Memory 3 (JEDEC JESD238)")
+                    print(f"      → HBM3 synth applied (is_hbm3={_is_hbm3})")
+                except Exception as _hbm3_err:
+                    print(f"      HBM3 synth FAILED (fail-open): {_hbm3_err}",
+                          file=sys.stderr)
+            # Restore the un-augmented blob so later (Tier-2/Tier-3) detectors
+            # see exactly what they saw before this Tier-C block.
+            _spi_blob = _tc_blob_saved
             # v0.1.85 — IEEE 802.3 Ethernet structural sub-detector.
             _is_ethernet = (
                 ("MII" in _spi_blob and "MDIO" in _spi_blob
@@ -50644,6 +50845,64 @@ def main() -> int:
                           file=sys.stderr)
     except Exception as _r55b_err:
         print(f"      Tier-2 bus_interconnect synth FAILED (fail-open): {_r55b_err}",
+              file=sys.stderr)
+
+    # [14e3/15] Universal packet/PDU-protocol L10↔L3 opcode consistency sweep.
+    #
+    # gen_l10_test_cases (step [11/15]) stamps one synthetic `send_<name>`
+    # happy/no_wake test_case PER entry in L3.opcodes, each carrying an
+    # `opcode_hex` literal. For a genuine byte-opcode command-driven IC
+    # (SPI / UART / a half-duplex AID chip) that is correct and is required
+    # by the l10_test_cases_cover_l3_constraints gate. For a packet/PDU
+    # protocol (BLE / USB / PCIe / JTAG / SD-MMC / …) the spec has NO flat
+    # byte-opcode command table — the `opcode_hex` tokens were prose-scraped
+    # bare-hex (`_V1_6_245_BARE_OPCODE_PAT`) over-firing on a large spec, so
+    # the fabricated `send_<x>` vectors are HALLUCINATED (the parity heuristic
+    # flags any L10 `opcode_hex` the spec never declared).
+    #
+    # A protocol synth that recognises a packet protocol clears L3.opcodes to
+    # `[]` to declare "no flat opcode model" (e.g. BLE/JTAG _l3). This sweep
+    # generalises the per-protocol L10 strip that ble/jtag/sdmmc each open-code
+    # into ONE universal rule: whenever L3.opcodes is empty, L10 must carry no
+    # `opcode_hex`-bearing test_case (they cannot have a real source). Keyed
+    # PURELY on the structural fact `L3.opcodes == []` — never on protocol or
+    # folder name. A genuine command IC keeps a non-empty L3.opcodes and is
+    # left untouched, so its required per-opcode coverage is preserved.
+    print(f"[14e3/15] L10↔L3 packet-protocol opcode consistency sweep ...")
+    try:
+        _gd_sweep = _pl.generated_docs_dir(project)
+        _l3p_sweep = _gd_sweep / "L3_CMD_PROTOCOL.json"
+        _l10p_sweep = _gd_sweep / "L10_TEST_CASES.json"
+        if _l3p_sweep.is_file() and _l10p_sweep.is_file():
+            _l3_sweep = json.loads(_l3p_sweep.read_text())
+            _l3_ops_sweep = _l3_sweep.get("opcodes")
+            # Empty/absent L3.opcodes == no flat byte-opcode command table.
+            if not _l3_ops_sweep:
+                _l10_sweep = json.loads(_l10p_sweep.read_text())
+                _tc_sweep = _l10_sweep.get("test_cases")
+                if isinstance(_tc_sweep, list):
+                    _kept_sweep = [
+                        _x for _x in _tc_sweep
+                        if not (isinstance(_x, dict) and "opcode_hex" in _x)
+                    ]
+                    if len(_kept_sweep) != len(_tc_sweep):
+                        _l10_sweep["test_cases"] = _kept_sweep
+                        _l10p_sweep.write_text(
+                            json.dumps(_l10_sweep, indent=2,
+                                       ensure_ascii=False) + "\n")
+                        print(f"      → stripped "
+                              f"{len(_tc_sweep) - len(_kept_sweep)} "
+                              f"opcode_hex test_case(s) (L3.opcodes empty → "
+                              f"packet/PDU protocol)")
+                    else:
+                        print(f"      → L10 already consistent "
+                              f"(no opcode_hex test_cases)")
+            else:
+                print(f"      → L3.opcodes non-empty "
+                      f"({len(_l3_ops_sweep)}) — genuine command IC, "
+                      f"L10 left intact")
+    except Exception as _sweep_err:
+        print(f"      L10↔L3 sweep FAILED (fail-open): {_sweep_err}",
               file=sys.stderr)
 
     # Step 15: coverage report (runs AFTER backfill AND canonical seed so the

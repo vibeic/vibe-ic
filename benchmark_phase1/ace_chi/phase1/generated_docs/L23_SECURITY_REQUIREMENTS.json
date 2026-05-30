@@ -12,55 +12,6 @@
     "security_requirements_present": "partial",
     "notes": "Security in AMBA AXI/ACE is limited to signaling primitives (AxPROT / ACPROT / Exclusive Access / Lock + shareability-domain partitioning) - not cryptographic primitives. ACE's coherency protocol assumes trusted cached masters within a domain. End-to-end confidentiality/integrity must be provided by upper layers (TrustZone, MMU/SMMU, crypto IP, secure boot).",
     "ic_name": "AMBA AXI / ACE Protocol Specification (ARM IHI 0022E)",
-    "ahb_security_features": [
-      {
-        "name": "HPROT[1] Privileged",
-        "purpose": "Privilege-level signaling for access control at the bus layer."
-      },
-      {
-        "name": "HNONSEC (AHB5)",
-        "purpose": "Secure/Non-secure transfer indicator; address-phase, burst-constant."
-      },
-      {
-        "name": "HEXCL + HMASTER + HEXOKAY (AHB5)",
-        "purpose": "Exclusive Access mechanism for concurrency-safe RMW primitives."
-      },
-      {
-        "name": "HMASTLOCK",
-        "purpose": "Locked-sequence indicator for atomic operations in multi-Manager configurations."
-      },
-      {
-        "name": "AHB5 Interface protection via parity (Chapter 12)",
-        "purpose": "Single-bit fault detection on each interface."
-      }
-    ],
-    "apb_security_features": [
-      {
-        "name": "PPROT[0] Normal/Privileged (APB4)",
-        "purpose": "Privilege-level signaling."
-      },
-      {
-        "name": "PPROT[1] Secure/Non-secure (APB4)",
-        "purpose": "TrustZone-like secure/non-secure distinction (HIGH=Non-secure)."
-      },
-      {
-        "name": "PPROT[2] Data/Instruction (APB4)",
-        "purpose": "Data vs instruction hint."
-      }
-    ],
-    "what_is_NOT_in_the_specs": [
-      "No confidentiality / encryption at the protocol layer.",
-      "No data-integrity / authentication (no MAC, no HMAC).",
-      "No replay protection.",
-      "No anti-rollback mechanism.",
-      "No attestation features.",
-      "No key-storage / key-derivation features."
-    ],
-    "secure_integration_responsibilities": [
-      "TrustZone partitioning via HNONSEC / PPROT[1] routed to Subordinate-side filters.",
-      "Master Security Wrappers enforce HNONSEC + HMASTER per Manager port.",
-      "PPROT[1] HIGH=Non-secure convention must be mirrored end-to-end."
-    ],
     "axi_baseline_security_inherited": [
       {
         "name": "AxPROT[0] Privileged",
@@ -105,6 +56,14 @@
       "No attestation.",
       "No key-storage / key-derivation.",
       "No protection against malicious cached masters violating coherency."
+    ],
+    "secure_integration_responsibilities": [
+      "TrustZone partitioning via AxPROT[1] / ACPROT[1].",
+      "Shareability-domain partitioning for security (Secure-only domain).",
+      "DVM scope enforcement.",
+      "Snoop-data path filtering for cross-security snoops.",
+      "WriteBack/WriteClean of Secure lines must not be observable on Non-secure paths.",
+      "ACE-Lite IO masters must use correct AxPROT and AxDOMAIN."
     ]
   }
 }

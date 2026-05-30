@@ -53,6 +53,39 @@ def test_sanitize_id_empty_fallback():
 
 
 # ---------------------------------------------------------------------------
+# _sanitize_id — Verilog reserved-word escaping (H3 / M5)
+# ---------------------------------------------------------------------------
+
+def test_sanitize_id_escapes_reserved_words():
+    # A signal literally named "reg" / "input" etc. must not stay a bare
+    # keyword — otherwise the emitted Verilog is uncompilable.
+    for kw in ("reg", "input", "output", "module", "wire", "begin", "end",
+               "case", "wait", "logic", "always", "assign"):
+        out = scaf._sanitize_id(kw)
+        assert out.lower() not in scaf.VERILOG_RESERVED, (
+            f"{kw!r} sanitized to bare keyword {out!r}")
+        assert out == kw + "_sig"
+
+
+def test_sanitize_id_reserved_case_insensitive():
+    # Mixed/upper case keywords still collide and must be escaped.
+    assert scaf._sanitize_id("REG").lower() not in scaf.VERILOG_RESERVED
+    assert scaf._sanitize_id("Input").lower() not in scaf.VERILOG_RESERVED
+
+
+def test_sanitize_id_non_reserved_unchanged():
+    # A non-keyword that merely contains a keyword substring is left alone.
+    assert scaf._sanitize_id("register_file") == "register_file"
+    assert scaf._sanitize_id("input_data") == "input_data"
+
+
+def test_top_module_name_reserved_escaped():
+    out = scaf.derive_top_module_name({"ic_name": "module"}, {}, None)
+    assert out.lower() not in scaf.VERILOG_RESERVED
+    assert out == "module_sig"
+
+
+# ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
 
@@ -141,6 +174,55 @@ def test_signals_clk_rst_auto_added_when_missing():
     names = [s["name"] for s in sigs]
     assert "clk" in names or any("clk" in n.lower() for n in names)
     assert "rst_n" in names or any("rst" in n.lower() for n in names)
+
+
+def test_signals_no_dup_clk_for_busclock():
+    """M2: a real clock named 'BusClock' (SPI/S12SPIV4) must be recognised by
+    the auto-add guard so NO spurious second 'clk' port is appended."""
+    l17 = {"channels": [
+        {"name": "BusClock", "direction_master": "input", "purpose": "bus clk"},
+        {"name": "MOSI", "direction_master": "output"},
+    ]}
+    sigs = scaf.derive_signals(l17, {})
+    names = [s["name"] for s in sigs]
+    # exactly one clock signal — BusClock — and no auto-added "clk"
+    clock_sigs = [n for n in names if scaf._is_clock_name(n)]
+    assert clock_sigs == ["BusClock"], clock_sigs
+    assert "clk" not in names
+
+
+def test_signals_no_dup_clk_for_pclk():
+    """M2: a real clock named 'PCLK' (AHB/APB) must also be recognised — the
+    old startswith('clk') guard missed it and appended a dead 'clk'."""
+    l17 = {"channels": [
+        {"name": "PCLK", "direction_master": "input", "purpose": "APB clk"},
+        {"name": "PRESETn", "direction_master": "input", "purpose": "APB rst"},
+    ]}
+    sigs = scaf.derive_signals(l17, {})
+    names = [s["name"] for s in sigs]
+    clock_sigs = [n for n in names if scaf._is_clock_name(n)]
+    assert clock_sigs == ["PCLK"], clock_sigs
+    assert "clk" not in names
+    # PRESETn already a reset → no spurious "rst_n" appended
+    assert "rst_n" not in names
+
+
+def test_detect_rst_active_high_names():
+    """M3: names that merely end/start with 'n' must infer ACTIVE-HIGH."""
+    for name in ("reset_in", "reset", "rst"):
+        sigs = [{"name": name, "direction": "input", "width": 1, "comment": ""}]
+        rst, active_low = scaf._detect_rst_port(sigs)
+        assert rst == name
+        assert active_low is False, f"{name} should be active-high"
+
+
+def test_detect_rst_active_low_names():
+    """M3: canonical active-low forms must infer ACTIVE-LOW."""
+    for name in ("rst_n", "resetn", "PRESETn", "aresetn"):
+        sigs = [{"name": name, "direction": "input", "width": 1, "comment": ""}]
+        rst, active_low = scaf._detect_rst_port(sigs)
+        assert rst == name
+        assert active_low is True, f"{name} should be active-low"
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +330,161 @@ def test_emit_tb_v_has_dumpvars():
 
 
 # ---------------------------------------------------------------------------
+# derive_clock_period_ns (L8)
+# ---------------------------------------------------------------------------
+
+def test_clock_period_from_explicit_clock_mhz():
+    period, note = scaf.derive_clock_period_ns({"clock_mhz": 100})
+    assert period == 10.0  # 100 MHz -> 10 ns
+    assert "clock_mhz" in note
+
+
+def test_clock_period_default_when_absent():
+    period, note = scaf.derive_clock_period_ns({})
+    assert period == 10.0
+    assert "default" in note
+
+
+def test_clock_period_from_frequency_literal_max():
+    l8 = {"auto_discovered_literals": [
+        {"kind": "frequency", "value": "25", "unit": "MHz"},
+        {"kind": "frequency", "value": "12.5", "unit": "MHz"},
+    ]}
+    period, _ = scaf.derive_clock_period_ns(l8)
+    assert period == 40.0  # 25 MHz (the max) -> 40 ns
+
+
+def test_clock_period_ignores_subhz_baud_literals():
+    # 44.1 kHz is a payload rate, not a core clock — should be ignored,
+    # falling back to the default period.
+    l8 = {"auto_discovered_literals": [
+        {"kind": "frequency", "value": "44.1", "unit": "kHz"},
+    ]}
+    period, note = scaf.derive_clock_period_ns(l8)
+    assert period == 10.0
+    assert "default" in note
+
+
+def test_clock_period_clamped_for_ghz():
+    period, _ = scaf.derive_clock_period_ns({"clock_mhz": 5000})  # 5 GHz
+    assert period >= 1.0
+
+
+# ---------------------------------------------------------------------------
+# cocotb emitters
+# ---------------------------------------------------------------------------
+
+def test_emit_cocotb_test_basic_structure():
+    sigs = [
+        {"name": "clk", "direction": "input", "width": 1, "comment": ""},
+        {"name": "rst_n", "direction": "input", "width": 1, "comment": ""},
+        {"name": "q", "direction": "output", "width": 1, "comment": ""},
+    ]
+    py = scaf.emit_cocotb_test("dut", sigs, {"clock_mhz": 100}, ["cat A"])
+    assert "import cocotb" in py
+    assert "@cocotb.test()" in py
+    assert "Clock(dut.clk" in py
+    assert "dut.rst_n.value = 0" in py  # active-low asserted then released
+    assert "dut.rst_n.value = 1" in py
+    assert "TODO" in py
+    assert "cat A" in py  # compliance category surfaced as comment
+
+
+def test_emit_cocotb_test_active_high_reset():
+    sigs = [
+        {"name": "clk", "direction": "input", "width": 1, "comment": ""},
+        {"name": "reset", "direction": "input", "width": 1, "comment": ""},
+    ]
+    py = scaf.emit_cocotb_test("dut", sigs, {}, [])
+    # active-high reset: assert 1, release 0
+    assert "dut.reset.value = 1" in py
+    assert "dut.reset.value = 0" in py
+
+
+def test_emit_cocotb_test_is_valid_python(tmp_path: Path):
+    import py_compile
+    sigs = [
+        {"name": "clk", "direction": "input", "width": 1, "comment": ""},
+        {"name": "rst_n", "direction": "input", "width": 1, "comment": ""},
+    ]
+    py = scaf.emit_cocotb_test("dut", sigs, {}, ["cat A", "cat B"])
+    f = tmp_path / "dut_cocotb_test.py"
+    f.write_text(py)
+    py_compile.compile(str(f), doraise=True)
+
+
+def test_emit_cocotb_makefile_fields():
+    mk = scaf.emit_cocotb_makefile("spi_master")
+    assert "TOPLEVEL_LANG ?= verilog" in mk
+    assert "VERILOG_SOURCES = $(PWD)/spi_master_top.v" in mk
+    assert "TOPLEVEL = spi_master" in mk
+    assert "MODULE   = spi_master_cocotb_test" in mk
+    assert "SIM ?= icarus" in mk
+
+
+# ---------------------------------------------------------------------------
+# SoC integration wrapper
+# ---------------------------------------------------------------------------
+
+def test_emit_soc_wrap_apb_bus_present():
+    sigs = [
+        {"name": "clk", "direction": "input", "width": 1, "comment": ""},
+        {"name": "rst_n", "direction": "input", "width": 1, "comment": ""},
+        {"name": "sclk", "direction": "output", "width": 1, "comment": ""},
+    ]
+    v = scaf.emit_soc_wrap_v("dut", sigs, [])
+    for p in ("PCLK", "PRESETn", "PADDR", "PSEL", "PENABLE", "PWRITE",
+              "PWDATA", "PRDATA", "PREADY"):
+        assert p in v, f"missing APB signal {p}"
+    assert "module dut_soc_wrap" in v
+    assert "endmodule" in v
+    # native port re-exposed
+    assert "sclk" in v
+
+
+def test_emit_soc_wrap_with_regs_decode_stub():
+    sigs = [
+        {"name": "clk", "direction": "input", "width": 1, "comment": ""},
+        {"name": "rst_n", "direction": "input", "width": 1, "comment": ""},
+    ]
+    regs = [
+        {"name": "CTRL", "offset": "0x00", "width": 8, "access": "rw",
+         "fields": []},
+        {"name": "STATUS", "offset": "0x04", "width": 8, "access": "ro",
+         "fields": []},
+    ]
+    v = scaf.emit_soc_wrap_v("dut", sigs, regs)
+    assert "register-file decode stub" in v
+    assert "CTRL" in v
+    assert "STATUS" in v
+    # no read-only ID register path when regs exist
+    assert "WRAP_ID" not in v
+
+
+def test_emit_soc_wrap_no_regs_id_register():
+    sigs = [
+        {"name": "clk", "direction": "input", "width": 1, "comment": ""},
+        {"name": "rst_n", "direction": "input", "width": 1, "comment": ""},
+    ]
+    v = scaf.emit_soc_wrap_v("dut", sigs, [])
+    assert "WRAP_ID" in v
+    assert "read-only ID register" in v
+
+
+def test_emit_soc_wrap_instantiates_block():
+    sigs = [
+        {"name": "clk", "direction": "input", "width": 1, "comment": ""},
+        {"name": "rst_n", "direction": "input", "width": 1, "comment": ""},
+        {"name": "din", "direction": "input", "width": 8, "comment": ""},
+    ]
+    v = scaf.emit_soc_wrap_v("mychip", sigs, [])
+    assert "mychip u_mychip" in v
+    assert ".clk(PCLK)" in v
+    assert ".rst_n(PRESETn)" in v
+    assert ".din(din)" in v
+
+
+# ---------------------------------------------------------------------------
 # End-to-end emit_scaffold on a synthesized project (no benchmark dependency)
 # ---------------------------------------------------------------------------
 
@@ -275,6 +512,25 @@ def _make_synth_project(tmp: Path) -> Path:
     return tmp
 
 
+def _make_keyword_project(tmp: Path) -> Path:
+    """Fixture whose L1 ic_name and an L17 channel are Verilog keywords.
+
+    Exercises the H3/M5 reserved-word escaping end to end.
+    """
+    gd = tmp / "phase1" / "generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    (gd / "L1_DATASHEET.json").write_text(json.dumps({"ic_name": "module"}))
+    (gd / "L17_CHANNEL_SIGNAL_CATALOG.json").write_text(json.dumps({
+        "channels": [
+            {"name": "reg", "direction_master": "input",
+             "purpose": "a channel literally named reg"},
+            {"name": "wire", "direction_master": "output",
+             "purpose": "a channel literally named wire"},
+        ],
+    }))
+    return tmp
+
+
 def test_emit_scaffold_e2e(tmp_path: Path):
     proj = _make_synth_project(tmp_path)
     report = scaf.emit_scaffold(proj)
@@ -286,7 +542,53 @@ def test_emit_scaffold_e2e(tmp_path: Path):
     assert (out_dir / "test_proto_tb.v").is_file()
     assert (out_dir / "test_proto_fsm.v").is_file()
     assert (out_dir / "test_proto_regs.v").is_file()
+    assert (out_dir / "test_proto_soc_wrap.v").is_file()
+    assert (out_dir / "test_proto_cocotb_test.py").is_file()
+    assert (out_dir / "Makefile").is_file()
     assert (out_dir / "compliance_vectors.txt").is_file()
+    # New report keys
+    assert report["clock_period_ns"] == 10.0
+    assert report["has_register_file"] is True
+
+
+def test_emit_scaffold_skip_cocotb_and_soc(tmp_path: Path):
+    proj = _make_synth_project(tmp_path)
+    scaf.emit_scaffold(proj, skip_cocotb=True, skip_soc=True)
+    out_dir = proj / "phase2" / "stage1" / "scaffold"
+    assert not (out_dir / "test_proto_cocotb_test.py").is_file()
+    assert not (out_dir / "Makefile").is_file()
+    assert not (out_dir / "test_proto_soc_wrap.v").is_file()
+
+
+def test_keyword_sanitize_not_bare_keyword():
+    # (a) _sanitize_id("reg") is not a bare keyword.
+    assert scaf._sanitize_id("reg").lower() not in scaf.VERILOG_RESERVED
+
+
+@pytest.mark.skipif(subprocess.run(["which", "iverilog"],
+                                   capture_output=True).returncode != 0,
+                    reason="iverilog not installed")
+def test_keyword_project_iverilog_compiles(tmp_path: Path):
+    # (b) emitted top.v + soc_wrap.v + tb.v still iverilog-compile when the
+    # ic_name and channels are Verilog keywords.
+    proj = _make_keyword_project(tmp_path)
+    report = scaf.emit_scaffold(proj)
+    assert report["status"] == "ok"
+    top = report["top_module"]
+    assert top.lower() not in scaf.VERILOG_RESERVED
+    out_dir = proj / "phase2" / "stage1" / "scaffold"
+    srcs = [
+        str(out_dir / f"{top}_top.v"),
+        str(out_dir / f"{top}_soc_wrap.v"),
+        str(out_dir / f"{top}_tb.v"),
+    ]
+    out_obj = tmp_path / "kw.out"
+    r = subprocess.run(
+        ["iverilog", "-g2012", "-o", str(out_obj), *srcs],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, f"iverilog stderr: {r.stderr}"
+    assert out_obj.is_file()
 
 
 def test_emit_scaffold_skip_tb(tmp_path: Path):
@@ -314,11 +616,14 @@ def test_emit_scaffold_iverilog_compiles(tmp_path: Path):
     out_dir = proj / "phase2" / "stage1" / "scaffold"
     top_v = out_dir / f"{report['top_module']}_top.v"
     tb_v = out_dir / f"{report['top_module']}_tb.v"
+    soc_v = out_dir / f"{report['top_module']}_soc_wrap.v"
     assert top_v.is_file()
     assert tb_v.is_file()
+    assert soc_v.is_file()
     out_obj = tmp_path / "iv.out"
     r = subprocess.run(
-        ["iverilog", "-g2012", "-o", str(out_obj), str(top_v), str(tb_v)],
+        ["iverilog", "-g2012", "-o", str(out_obj),
+         str(top_v), str(soc_v), str(tb_v)],
         capture_output=True, text=True,
     )
     assert r.returncode == 0, f"iverilog stderr: {r.stderr}"

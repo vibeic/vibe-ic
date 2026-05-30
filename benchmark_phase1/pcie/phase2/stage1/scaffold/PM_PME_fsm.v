@@ -25,7 +25,7 @@ module PM_PME_fsm (
     localparam [4:0] S_PERFORM = 5'd11;
     localparam [4:0] S_ENTRY = 5'd12;
     localparam [4:0] S_DL_INACTIVE = 5'd13;
-    localparam [4:0] S_DEFAULT = 5'd14;
+    localparam [4:0] S_DEFAULT_SIG = 5'd14;
     localparam [4:0] S_ENTRANCE = 5'd15;
     localparam [4:0] S_DL_INIT = 5'd16;
     localparam [4:0] S_TRANSITION = 5'd17;
@@ -35,7 +35,7 @@ module PM_PME_fsm (
     localparam [4:0] S_MEANS = 5'd21;
     localparam [4:0] S_SEND = 5'd22;
     localparam [4:0] S_EXIT = 5'd23;
-    localparam [4:0] S_CONFIG = 5'd24;
+    localparam [4:0] S_CONFIG_SIG = 5'd24;
     localparam [4:0] S_NUMBERS = 5'd25;
     localparam [4:0] S_CONTROL = 5'd26;
     localparam [4:0] S_PRIOR = 5'd27;

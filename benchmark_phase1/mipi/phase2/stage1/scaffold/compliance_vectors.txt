@@ -1,16 +1,11 @@
 # Auto-generated compliance vector catalog.
 # One requirement per line; format: <source-L-doc>: <description>
 
-L10: Reset behavior: enable bit cleared; transmit-empty flag set; receive-flag cleared after reset.
-L10: Master mode transmission: write to data register + clock-cycle delay + N edges + receive-flag set.
-L10: Slave mode transmission: select line goes LOW + N edges from master + receive-flag set after last edge.
-L10: Mode fault / collision detection.
-L10: All clock polarity/phase combinations.
-L10: MSB-first vs LSB-first byte ordering.
-L10: Bidirectional mode (single data pin).
-L10: Receive overrun (flag-serviced-too-late).
-L10: Baud rate divisor sweep.
-L10: Wait/Stop mode behavior.
+L10: Reset behavior verification.
+L10: Register access (read/write to all fields; reserved-bit behavior).
+L10: Nominal transfer / transaction across the protocol's operating modes.
+L10: Error and fault condition handling.
+L10: Back-to-back / sustained operation.
 L16: Exactly 1 Clock Lane (differential pair) + 1..4 Data Lanes (differential pairs).
 L16: HS mode swing: 100-200 mV differential; 100 Ω termination at sink.
 L16: LP mode swing: 1.2 V single-ended CMOS; unterminated.

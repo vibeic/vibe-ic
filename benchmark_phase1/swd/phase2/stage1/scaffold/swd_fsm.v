@@ -14,7 +14,7 @@ module swd_fsm (
     localparam [4:0] S_CAPTURE = 5'd0;
     localparam [4:0] S_SHIFT = 5'd1;
     localparam [4:0] S_CONNECTION = 5'd2;
-    localparam [4:0] S_INTERFACE = 5'd3;
+    localparam [4:0] S_INTERFACE_SIG = 5'd3;
     localparam [4:0] S_REFERRING = 5'd4;
     localparam [4:0] S_DBGTAPSM = 5'd5;
     localparam [4:0] S_POSSIBLE = 5'd6;

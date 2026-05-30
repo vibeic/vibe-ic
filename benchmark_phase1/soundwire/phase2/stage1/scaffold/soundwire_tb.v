@@ -13,7 +13,6 @@ module soundwire_tb;
     reg  VDD;
     reg  GND;
     reg  Bus_Keeper;
-    reg  clk;
     reg  rst_n;
 
     // DUT instance
@@ -24,7 +23,6 @@ module soundwire_tb;
         .VDD(VDD),
         .GND(GND),
         .Bus_Keeper(Bus_Keeper),
-        .clk(clk),
         .rst_n(rst_n)
     );
 
@@ -40,7 +38,6 @@ module soundwire_tb;
         VDD = 1'b0;
         GND = 1'b0;
         Bus_Keeper = 1'b0;
-        clk = 1'b0;
         rst_n = 1'b0;
         rst_n = 1'b0;
         #30;

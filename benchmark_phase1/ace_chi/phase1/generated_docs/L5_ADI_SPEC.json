@@ -13,11 +13,6 @@
   },
   "analog_digital_interface_present": false,
   "signaling_summary": "Pure digital protocol: synchronous CMOS single-ended signals; rising-edge sampling on ACLK; no analog content.",
-  "additional_reading_referenced": [
-    "ARM AMBA APB Protocol Specification (ARM IHI 0024)",
-    "ARM AMBA AXI and ACE Protocol Specification (ARM IHI 0022)",
-    "Multi-layer AHB Technical Overview (ARM DVI 0045)"
-  ],
   "fields": {
     "ic_name": "AMBA AXI / ACE Protocol Specification (ARM IHI 0022E)",
     "analog_digital_interface_present": false,

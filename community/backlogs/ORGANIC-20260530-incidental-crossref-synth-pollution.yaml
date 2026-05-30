@@ -1,0 +1,30 @@
+id: ORGANIC-20260530-incidental-crossref-synth-pollution
+type: code-quality
+severity: low
+component: phase1_doc_one_shot_runner.py (protocol detectors) + *_protocol_synth.py
+submitted_at: 2026-05-30
+pattern: >
+  A protocol detector fires when its wire-level signature appears ANYWHERE in the
+  spec text, even as an incidental cross-reference rather than the doc's PRIMARY
+  subject. Examples found in the v0.1.89 modern-protocol review:
+   - usb4 detector fired on the PCIe-5.0 spec ("tunneled over USB4") — FIXED v0.1.89
+     by a "32 GT/s" mutex + dropping the weak standalone "tunnel" clause.
+   - JTAG + MIPI synths STILL fire on the pcie_gen5 spec (a PCIe card carries a JTAG
+     TAP for boundary scan; the spec mentions MIPI). They plant additive JTAG-TAP /
+     MIPI keys into pcie_gen5's L3/L6/L12. The pcie_gen5 synth (running last) force-
+     overwrites the value-bearing keys, so PARITY IS 0, but the additive keys remain
+     in SHAPE_MISMATCH (excluded from the gated total per R28).
+  This is a pre-existing systemic property of EVERY benchmark whose spec mentions a
+  sub-feature protocol (JTAG/MIPI/I2C/SPI debug sidebands). It does not move the
+  parity number and does not corrupt value-keys (the most-specific synth overrides
+  those), but it leaves cross-protocol keys in the deliverable L-docs.
+suggested_fix: >
+  Two options, neither blocking: (a) add a PRIMARY-SUBJECT weighting to detectors
+  (fire only when the protocol's tokens DOMINATE, e.g. appear in L1.ic_name / the
+  title, not merely in the body) — general but a larger change; or (b) have each
+  protocol synth defensively .pop() the known sub-feature keys (JTAG TAP FSM, MIPI
+  packet tables) the way lpddr5 pops DDR3-only keys and usb4 pops USB-2.0 keys.
+  Tracked as low because parity = 0 and no value-key is corrupted.
+session_context: >
+  Found by the v0.1.89 C/D adversarial code-review workflow (finding M1, verified).
+  usb4 instance fixed; JTAG/MIPI-on-pcie_gen5 instance documented here.

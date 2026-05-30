@@ -23,7 +23,7 @@ module SD_Memory_Card_fsm (
     localparam [4:0] S_HOST = 5'd9;
     localparam [4:0] S_RESERVE = 5'd10;
     localparam [4:0] S_REFER = 5'd11;
-    localparam [4:0] S_TABLE = 5'd12;
+    localparam [4:0] S_TABLE_SIG = 5'd12;
     localparam [4:0] S_RESPOND = 5'd13;
     localparam [4:0] S_IDENTIFICATION = 5'd14;
     localparam [4:0] S_SENT = 5'd15;
@@ -31,11 +31,11 @@ module SD_Memory_Card_fsm (
     localparam [4:0] S_ASSIGNED = 5'd17;
     localparam [4:0] S_COMMAND = 5'd18;
     localparam [4:0] S_SWITCH = 5'd19;
-    localparam [4:0] S_RETURN = 5'd20;
+    localparam [4:0] S_RETURN_SIG = 5'd20;
     localparam [4:0] S_USED = 5'd21;
     localparam [4:0] S_VERIFY = 5'd22;
-    localparam [4:0] S_FORCE = 5'd23;
-    localparam [4:0] S_TRAN = 5'd24;
+    localparam [4:0] S_FORCE_SIG = 5'd23;
+    localparam [4:0] S_TRAN_SIG = 5'd24;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin

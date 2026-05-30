@@ -17,7 +17,6 @@ module AHCI_HBA_tb;
     reg  REFCLK_PHY;
     reg  GHC_IE_software;
     reg  GHC_HR_software;
-    reg  clk;
 
     // DUT instance
     AHCI_HBA u_dut (
@@ -30,8 +29,7 @@ module AHCI_HBA_tb;
         .PERST_PCIe_Fundamental_Reset(PERST_PCIe_Fundamental_Reset),
         .REFCLK_PHY(REFCLK_PHY),
         .GHC_IE_software(GHC_IE_software),
-        .GHC_HR_software(GHC_HR_software),
-        .clk(clk)
+        .GHC_HR_software(GHC_HR_software)
     );
 
     // Clock generation — defaults to 100 MHz; override per protocol.
@@ -51,7 +49,6 @@ module AHCI_HBA_tb;
         PERST_PCIe_Fundamental_Reset = 1'b0;
         GHC_IE_software = 1'b0;
         GHC_HR_software = 1'b0;
-        clk = 1'b0;
         PERST_PCIe_Fundamental_Reset = 1'b0;
         #30;
         PERST_PCIe_Fundamental_Reset = 1'b1;

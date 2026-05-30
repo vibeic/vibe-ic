@@ -68,10 +68,26 @@ def detect_ddr3_signature(text: str) -> bool:
     SDRAM spec that uses ACTIVATE + PRECHARGE + tRCD + tRP without the
     string 'DDR3' will trigger via the 'classic SDRAM command +
     timing' cluster.
+
+    v0.1.89 — SIBLING MUTEX (DDR3 side, vs LPDDR5): an LPDDR5 (JESD209-5)
+    spec legitimately mentions 'DDR3'/'DDR4' (DDR4-style bank groups +
+    comparison), 'SDRAM', 'mode register', 'DDR' and 'JEDEC', which would
+    otherwise trip the DDR3 clusters. A TRUE DDR3 spec NEVER carries the
+    LPDDR5 version-specific structural tokens WCK (a separate full-speed
+    Write Clock that DDR3 lacks) nor the JESD209-5 spec-id nor the
+    'LPDDR5' generation name. If any of those is present, defer to the
+    LPDDR5 detector. General — keys off the version-specific token, not a
+    benchmark name.
     """
     if not text:
         return False
     t = text.lower()
+
+    # LPDDR5 mutex: defer to the LPDDR5 detector if the version-specific
+    # LPDDR5 tokens are present.
+    if ("lpddr5" in t or "jesd209-5" in t
+            or ("wck" in t and "bank group" in t and "low-power" in t)):
+        return False
 
     # Cluster A: DDR3 generation + SDRAM + mode register
     a = sum(1 for k in (

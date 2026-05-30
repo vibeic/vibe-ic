@@ -396,23 +396,6 @@
   "register_map_kind": "Two-layer register architecture: DP layer (Debug Port, accessed directly via SWD transactions with APnDP=0) + AP layer (Access Port, accessed with APnDP=1; up to 256 APs selected via SELECT.APSEL[7:0], each exposing a 64-byte register window banked via SELECT.APBANKSEL[7:4]).",
   "register_count": 12,
   "selection_rule": "DP registers are at A[3:2] = 0x0/0x4/0x8/0xC selected via APnDP=0. Higher-bank DP registers (TARGETID/DLPIDR/EVENTSTAT) are reached by writing SELECT.DPBANKSEL first. AP registers are at A[3:2] = 0x0/0x4/0x8/0xC selected via APnDP=1; the high 4 bits of the AP register offset come from SELECT.APBANKSEL; the AP index comes from SELECT.APSEL. AP IDR (0xFC) and BASE (0xF8) are at fixed high banks.",
-  "rationale": "AHB and APB are bus / interconnect protocols, not peripherals with a control register file. There is no MMIO register map in these documents. AHB carries the integrator-defined slave address on HADDR; APB carries it on PADDR. Concrete AHB/APB peripheral IP blocks define their own register file at the SoC integration level — outside these protocol specs.",
-  "address_side_field_widths": {
-    "AHB_HADDR_width_bits": {
-      "recommended_range": [
-        10,
-        64
-      ],
-      "default": 32,
-      "note": "In Issues A and B the address width was fixed at 32. Recommended range in Issue C is 10..64."
-    },
-    "AHB_minimum_subordinate_decode_granularity": "1KB",
-    "APB_PADDR_width_bits": {
-      "max": 32,
-      "note": "Can be up to 32 bits wide; driven by the bridge."
-    },
-    "APB_minimum_subordinate_decode_granularity": "Implementation-defined; one PSELx per peripheral slot."
-  },
   "ap_class_codes_table": {
     "0x0": "JTAG-AP — forwards transactions to a downstream JTAG TAP",
     "0x1": "AMBA AHB3 MEM-AP",

@@ -11,8 +11,7 @@ module SPI (
     output SCK,  // Serial clock; 16 edges per 8-bit transfer; idle polarity per CPOL.
     input  SS,  // Slave-Select; LOW = selected; HIGH = deselected (slave output tri-stated and SCK input ignored).
     input  BusClock,  // MCU bus clock; source for baud-rate generator.
-    input  Reset,  // MCU system reset; resets all SPI registers.
-    input  clk  // System clock (auto-added by scaffold)
+    input  Reset  // MCU system reset; resets all SPI registers.
 );
 
     // -----------------------------------------------------------

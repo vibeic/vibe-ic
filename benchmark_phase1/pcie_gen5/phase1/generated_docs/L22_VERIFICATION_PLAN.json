@@ -1,0 +1,40 @@
+{
+  "doc_id": "L22",
+  "doc_name": "L22_VERIFICATION_PLAN",
+  "applicability": "APPLICABLE",
+  "ic_class": "digital_cmd_driven",
+  "fields": {
+    "coverage_goals": [],
+    "formal_properties": [],
+    "regression_matrix": {},
+    "verification_plan_present": "implicit",
+    "notes": "PCI Express 5.0 does not include a formal verification testbench. Categories are derived from the carried-forward TL/DLL/PHY/LTSSM plus the Gen5-specific additions (32 GT/s signaling, four-phase enhanced equalization, precoding, retimers, mandatory Lane Margining, Alternate Protocol Negotiation). The PCI-SIG Compliance Program supplies the formal compliance suite.",
+    "verification_categories_derived_from_spec": [
+      "Data-rate negotiation — train at 2.5 GT/s then change to 32 GT/s via Recovery; Data Rate Identifier (32.0 GT/s bit) in TS1/TS2.",
+      "Backward-compatibility — negotiate to the highest common rate.",
+      "Four-phase enhanced equalization — Phase 0-3 → open eye at 32 GT/s.",
+      "Transmitter preset hints — request/adopt presets P0-P10.",
+      "Precoding — optional enable/disable; reduced DFE burst-error propagation at 32 GT/s.",
+      "Retimer coverage — equalize + sustain 32 GT/s through 0, 1, and 2 retimers.",
+      "Lane Margining at the Receiver — time + optional voltage margining in L0; error-count reporting.",
+      "128b/130b block lock — sync-header parsing, scrambler lock, block-lock-loss recovery.",
+      "Alternate Protocol Negotiation — modified TS1/TS2 agree to run CXL over the PCIe 5.0 PHY.",
+      "LTSSM completeness incl. Recovery.Equalization and L1.1/L1.2.",
+      "TLP roundtrip at 32 GT/s; ACK/NAK; REPLAY_NUM rollover → Recovery.",
+      "Flow Control init + UpdateFC; VC0 mandatory; MPS 128..4096 B.",
+      "ECRC (optional); Completion Timeout; UR / CA / CRS.",
+      "AER classes; Switch forwarding; Configuration enumeration.",
+      "Power management L0/L0s/L1/L2; Hot Reset.",
+      "x16 bandwidth ~63 GB/s per direction; width negotiation x1..x32."
+    ],
+    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
+  },
+  "extraction_hints": [
+    "Look for coverage targets, vplan, regression policy.",
+    "Capture per-feature coverage goals."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+  "extraction_evidence": {},
+  "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
+}

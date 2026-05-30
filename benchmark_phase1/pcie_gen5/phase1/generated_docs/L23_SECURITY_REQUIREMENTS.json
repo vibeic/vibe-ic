@@ -1,0 +1,65 @@
+{
+  "doc_id": "L23",
+  "doc_name": "L23_SECURITY_REQUIREMENTS",
+  "applicability": "APPLICABLE",
+  "ic_class": "digital_cmd_driven",
+  "fields": {
+    "key_handling": {},
+    "attack_surface": [],
+    "side_channel_mitigation": [],
+    "secure_boot": false,
+    "security_requirements_present": false,
+    "notes": "PCI Express 5.0 base transactions are in plaintext on the Link; CRC + ECRC provide anti-corruption only. Cryptographic security (IDE link encryption, CMA/SPDM attestation) is provided by separate ECNs layered above the base PCIe 5.0 data path. The mandatory Lane Margining feature is a signal-integrity diagnostic, not a security feature.",
+    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
+    "industrial_security_extensions_layered_on_jtag": [
+      "IEEE 1149.1-2013 + IEEE 1687-2014 — added PDL (Procedural Description Language) which can carry vendor-defined authentication challenges before access to selected instruments.",
+      "ARM CoreSight DAP authentication interface — debug-port locking via an external authentication signal (e.g. DBGEN / NIDEN / SPIDEN / SPNIDEN).",
+      "FPGA vendor JTAG security — Intel/Altera and AMD/Xilinx parts add BSDL-undocumented vendor instructions for bitstream encryption-key handling + secure-boot enrolment + fuse-burn-only debug disable.",
+      "Smartcard / secure-element JTAG fuses — single-use fuses that permanently disable the TAP (or restrict it to BYPASS-only) post-production.",
+      "IEEE 1149.7 cJTAG — 2-pin compact JTAG with built-in star topology; can carry encrypted instrument access on top of the standard TAP."
+    ],
+    "threat_model_for_open_jtag": [
+      "An attacker with physical board access can connect a JTAG tester and read out IDCODE / scan boundary pins / drive internal scan paths.",
+      "Vendor-specific user-defined data registers may expose internal memory (e.g. SRAM-scan, flash-programming) — a chain-of-custody concern post-production.",
+      "Bus-monitoring on the TAP can recover proprietary BSDL extensions reverse-engineerable from observed shift patterns."
+    ],
+    "common_production_mitigations": [
+      "Burn a JTAG-disable fuse at post-production test (the TAP responds only to TestLogicReset + BYPASS thereafter; or the TAP is completely disabled).",
+      "Gate the TAP behind a vendor-specific authentication state (e.g. ARM CoreSight DBGEN, FPGA secure-key challenge).",
+      "Remove the JTAG header from production boards (so attackers must solder probes onto fine-pitch test pads).",
+      "Use cJTAG (1149.7) for production debug; the compact 2-pin star topology is less convenient for casual probing."
+    ],
+    "anti_corruption_mechanisms": [
+      "Header ECC: extended Hamming(8,4); single-bit-correct, double-bit-detect over DI + WC.",
+      "Payload CRC-16: polynomial 0x1021, init 0xFFFF, MSB-first; reports payload corruption (no retry).",
+      "Sync-pattern lock: receiver only consumes payload after matching 8'b00011101.",
+      "Scrambling (CSI-2 v2.x optional): EMI-reduction scrambler over payload bytes — NOT cryptographic."
+    ],
+    "anti_corruption_features": [
+      "16-bit LCRC at the Data Link Layer protects each TLP across the Link (catches all 1-bit + 2-bit errors and most burst errors).",
+      "16-bit CRC at the Data Link Layer protects each DLLP.",
+      "32-bit ECRC (optional) at the Transaction Layer provides end-to-end TLP integrity (detects corruption at intermediate Switches that the per-Link LCRC cannot).",
+      "8b/10b running-disparity rule + invalid-symbol detection catches PHY-level bit errors before the DLL layer sees them.",
+      "ACK / NAK + Retry Buffer guarantees in-order delivery despite single-bit transient errors.",
+      "Sequence Number monotonicity detection rejects duplicate or out-of-order packets.",
+      "Lane Margining at the Receiver provides in-system signal-integrity diagnostics (margin health), reducing silent data-corruption risk at 32 GT/s."
+    ],
+    "anti_tampering_features": [],
+    "confidentiality_features": [],
+    "authentication_features": [],
+    "future_security_pointers": [
+      "PCI Express Integrity & Data Encryption (IDE) — AES-GCM link encryption + integrity; a separate ECN layered on PCIe 5.0+.",
+      "Component Measurement and Authentication (CMA) / SPDM — device attestation, layered above the base protocol.",
+      "Compute Express Link (CXL), running on the PCIe 5.0 PHY via Alternate Protocol Negotiation, adds CXL.io/CXL.cache/CXL.mem with its own CXL IDE link security.",
+      "Access Control Services (ACS) and SR-IOV — peer-to-peer routing restriction / VM isolation; NOT cryptographic."
+    ]
+  },
+  "extraction_hints": [
+    "Look for key-management, side-channel, secure-boot sections.",
+    "Capture attack surface enumeration."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+  "extraction_evidence": {},
+  "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
+}
