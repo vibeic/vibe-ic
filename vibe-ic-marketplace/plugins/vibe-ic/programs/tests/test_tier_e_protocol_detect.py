@@ -37,9 +37,11 @@ DETS = {
 # Derived-sibling cross-fires that are CORRECT base-on-derived detection, handled by
 # force-overwrite ordering (the derived synth runs last). eDP (v0.1.94) extends
 # DisplayPort, so is_displayport legitimately fires on the edp benchmark — same doctrine
-# as I3C-extends-I2C / NVMe-on-PCIe. Mirrors KNOWN_DERIVED_SIBLING_CROSS_FIRES in
-# test_protocol_detector_no_misfire.py.
-_DERIVED_SIBLING_ALLOW = {("displayport", "edp")}
+# as I3C-extends-I2C / NVMe-on-PCIe.
+# CANONICAL SOURCE: protocol_detector_lib.DERIVED_SIBLING_CROSS_FIRES (v0.1.95).
+from protocol_detector_lib import (  # noqa: E402
+    DERIVED_SIBLING_CROSS_FIRES as _DERIVED_SIBLING_ALLOW,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 BP = REPO_ROOT / "benchmark_phase1"

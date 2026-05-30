@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 530
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 530)
+- **Total programs (excluding helpers / shims):** 531
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 531)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 521 |
+| `any` | 522 |
 
 ## Alphabetical listing
 
@@ -395,6 +395,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `profinet_protocol_synth` | any | — | PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper. |
 | `project_outputs_in_tree_check` | any | — | project_outputs_in_tree_check.py |
 | `protocol_delimiter_consistency_check` | any | v0.99 | Verify the RTL FSM that validates |
+| `protocol_detector_lib` | any | v0.1.95 | Canonical helpers for Phase-1 protocol-class detectors (captured v0.1.95). |
 | `protocol_fsm_topology_check` | any | v0.116 | BACKLOG-v11 P0.1. |
 | `protocol_gap_check` | any | — | Generate inter-unit gap assertions for any serial protocol. |
 | `protocol_ip_simulation_required_check` | any | v0.116 | BACKLOG-v11 P2.1. |
@@ -602,7 +603,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (521 programs)
+### `any` (522 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -968,6 +969,7 @@ _(no programs in this group)_
 - `profinet_protocol_synth` — PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper.
 - `project_outputs_in_tree_check` — project_outputs_in_tree_check.py
 - `protocol_delimiter_consistency_check` — Verify the RTL FSM that validates  _[v0.99]_
+- `protocol_detector_lib` — Canonical helpers for Phase-1 protocol-class detectors (captured v0.1.95).  _[v0.1.95]_
 - `protocol_fsm_topology_check` — BACKLOG-v11 P0.1.  _[v0.116]_
 - `protocol_gap_check` — Generate inter-unit gap assertions for any serial protocol.
 - `protocol_ip_simulation_required_check` — BACKLOG-v11 P2.1.  _[v0.116]_

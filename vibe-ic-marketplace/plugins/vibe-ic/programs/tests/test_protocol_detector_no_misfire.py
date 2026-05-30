@@ -69,16 +69,12 @@ DETECTORS = _discover_detectors()
 # content-only detector LEGITIMATELY fires on the derived benchmark; the runner
 # resolves this by running the derived synth AFTER the parent synth and
 # force-overwriting (the cross-protocol force-overwrite doctrine — cf.
-# NVMe-on-PCIe, I3C-extends-I2C, SAS⟂SATA, QSPI⟂SPI). These (parent_stem,
-# derived_benchmark) pairs are EXPECTED and not real mis-fires.
-#   ("displayport", "edp"): eDP is the EMBEDDED variant of DisplayPort — it
-#     reuses the Main Link + AUX + DPCD + CR/EQ base, so is_displayport fires on
-#     the eDP doc. is_edp REQUIRES the eDP-exclusive PSR/RFB + backlight-over-AUX
-#     + ASSR + Fast-Link-Training structure that external DisplayPort lacks, and
-#     the runner runs apply_edp_synth AFTER apply_displayport_synth.
-KNOWN_DERIVED_SIBLING_CROSS_FIRES = {
-    ("displayport", "edp"),
-}
+# NVMe-on-PCIe, I3C-extends-I2C, SAS⟂SATA, QSPI⟂SPI).
+# CANONICAL SOURCE: protocol_detector_lib.DERIVED_SIBLING_CROSS_FIRES (v0.1.95)
+# — do not duplicate; the Tier-E guard imports the same set.
+from protocol_detector_lib import (  # noqa: E402
+    DERIVED_SIBLING_CROSS_FIRES as KNOWN_DERIVED_SIBLING_CROSS_FIRES,
+)
 
 
 def test_at_least_the_known_module_level_detectors_are_discovered():
