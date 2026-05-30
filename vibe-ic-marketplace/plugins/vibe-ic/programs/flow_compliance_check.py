@@ -131,6 +131,15 @@ PROGRAMS_DIR = Path(__file__).parent
 # never on step id, so it remains chip-AGNOSTIC.
 INFORMATIONAL_GATES: frozenset[str] = frozenset({
     "bit_level_full_stack_tb_check",
+    # v0.1.89 — periodic_timer_vs_rx_activity_check emits WARN-severity
+    # findings only (`[WARN] periodic_timer_no_rx_reset`); it's a heuristic
+    # ("is this counter a protocol rx-timer that should reset on activity?")
+    # that false-positives on legitimate free-running counters — e.g. a reused
+    # CPU core's program-counter / cycle-timer (SERV `o_cnt`). A WARN heuristic
+    # is a coverage signal, not a deployment blocker, so (like
+    # bit_level_full_stack_tb_check) it is reported per-step but EXCLUDED from
+    # the strict-structural FAIL count. Keyed on gate name; chip-AGNOSTIC.
+    "periodic_timer_vs_rx_activity_check",
 })
 
 
