@@ -1,6 +1,5 @@
 {
   "fields": {
-    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
     "must_have_properties": [
       "Per-lane 32 GT/s (32.0 GT/s) NRZ signaling (Gen5).",
       "128b/130b block encoding (2-bit sync header + 128-bit scrambled payload) carried forward from Gen3/Gen4.",
@@ -58,6 +57,7 @@
     ],
     "reset_behavior_compliance": "PERST# deassertion triggers LTSSM entry to Detect; the link reaches L0 first at 2.5 GT/s then re-enters Recovery to negotiate and equalize 32 GT/s. Hot Reset (TS1 with Hot Reset bit) returns the downstream device to Detect, after which it re-trains and re-equalizes at the negotiated rate.",
     "min_link_constraint": "Every Link must support at least x1 width at Gen 1 (2.5 GT/s) and must successfully train from Detect to L0 within the LTSSM-defined symbol time budgets.",
+    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
     "gen5_distinguishers": "PCIe 5.0 is identified by ALL of: 32 GT/s line rate, NRZ modulation, 128b/130b encoding, mandatory Lane Margining at the Receiver, up to two retimers, four-phase enhanced equalization with preset hints, optional precoding, and Alternate Protocol Negotiation for CXL. PCIe 1.0 by contrast runs at 2.5 GT/s with 8b/10b, no retimers, no lane margining, and no precoding."
   },
   "extraction_status": "EXTRACTED",

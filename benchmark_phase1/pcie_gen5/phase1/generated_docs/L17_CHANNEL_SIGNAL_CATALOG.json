@@ -140,38 +140,6 @@
       "common_rule": "Each Lane is autonomous at the bit level (CDR + 128b/130b block lock + scrambler + elastic buffer) at 32 GT/s. Lanes cooperate at de-skew + striping. TX and RX directions are independent (dual-simplex). The LTSSM coordinates both directions; Recovery.Equalization runs the four-phase enhanced EQ (incl. retimers) before sustaining 32 GT/s.",
       "data_dependency": "TLP transmission requires: (1) sufficient Flow Control credits, (2) DL_Active, (3) LTSSM L0 at the trained rate (32 GT/s after successful equalization). Sustaining 32 GT/s requires a converged Phase 0-3 equalization. Lane Margining requires L0 and does not interrupt traffic."
     },
-    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
-    "boundary_scan_cell_catalog": [
-      {
-        "cell_type": "Input cell",
-        "associated_pin": "Each external input pin",
-        "purpose": "Capture pin value in CaptureDR (observability); also receives functional path value when test logic is disabled."
-      },
-      {
-        "cell_type": "Output cell",
-        "associated_pin": "Each external output pin",
-        "purpose": "Drive pin from BSR in EXTEST UpdateDR (controllability); capture driven value in CaptureDR for SAMPLE."
-      },
-      {
-        "cell_type": "Bidirectional cell",
-        "associated_pin": "Each external bidir pin",
-        "purpose": "Combination of input + output cell; direction selected by an associated control cell."
-      },
-      {
-        "cell_type": "Control cell",
-        "associated_pin": "Drives the OE / direction of an associated bidir cell",
-        "purpose": "Allows EXTEST/INTEST to control the direction of bidirectional pins; not a separate physical pin."
-      }
-    ],
-    "ordering_rules": {
-      "shift_bit_order": "LSB first on TDI and TDO.",
-      "ir_capture_pattern": "CaptureIR loads b...b01 (LSB pair '01').",
-      "daisy_chain_bit_order": "First bit out of the tester (TDI) is the bit destined for the device farthest from the tester; last bit out is the bit destined for the first device (closest to the tester's TDI). Tester software is responsible for the per-device bit ordering.",
-      "tx_rx_simultaneity": "Dual-simplex: TX and RX transmit independently and simultaneously.",
-      "bit_order_on_wire": "Serial NRZ; 128b/130b block boundaries delimited by the 2-bit sync header.",
-      "byte_order_within_field": "Little-endian for multi-byte fields within TLP headers.",
-      "lane_striping": "Multi-Lane Links stripe successive bytes round-robin starting at Lane 0."
-    },
     "logical_signaling_levels": [
       {
         "name": "Active TX symbol stream",
@@ -224,7 +192,18 @@
         ],
         "count": 10
       }
-    ]
+    ],
+    "ordering_rules": {
+      "bit_order_within_byte": "LSB-first on the wire (bit 0 first, bit 7 last).",
+      "byte_order_within_header": "DI (byte 0) → WC[7:0] (byte 1) → WC[15:8] (byte 2) → ECC (byte 3); little-endian over the wire.",
+      "byte_order_within_crc": "CRC[7:0] first, then CRC[15:8] appended; CRC computed MSB-first over payload.",
+      "multilane_byte_order": "byte k → lane (k mod N); Sync byte replicated on every active lane.",
+      "tx_rx_simultaneity": "Dual-simplex: TX and RX transmit independently and simultaneously.",
+      "bit_order_on_wire": "Serial NRZ; 128b/130b block boundaries delimited by the 2-bit sync header.",
+      "byte_order_within_field": "Little-endian for multi-byte fields within TLP headers.",
+      "lane_striping": "Multi-Lane Links stripe successive bytes round-robin starting at Lane 0."
+    },
+    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
   },
   "extraction_status": "EXTRACTION_FOUND_NOTHING",
   "schema_version": "v0.1.62",

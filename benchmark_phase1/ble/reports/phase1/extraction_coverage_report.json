@@ -2,25 +2,25 @@
   "overall": {
     "denominator": 3219,
     "total": 4500,
-    "numerator": 3219,
-    "pct": 100.0,
+    "numerator": 2198,
+    "pct": 68.3,
     "target_pct": 80.0,
-    "status": "PASS"
+    "status": "FAIL"
   },
   "curated": {
     "denominator": 3219,
-    "numerator": 3219,
-    "pct": 100.0
+    "numerator": 2198,
+    "pct": 68.3
   },
   "hands_on": {
-    "denominator": 3260,
-    "numerator": 3260,
-    "pct": 100.0
+    "denominator": 3257,
+    "numerator": 2236,
+    "pct": 68.7
   },
   "per_l_doc": [
     {
       "name": "L1_DATASHEET",
-      "evidence_count": 12,
+      "evidence_count": 6,
       "todo_count": 0
     },
     {
@@ -30,7 +30,7 @@
     },
     {
       "name": "L3_CMD_PROTOCOL",
-      "evidence_count": 20,
+      "evidence_count": 2,
       "todo_count": 0
     },
     {
@@ -45,7 +45,7 @@
     },
     {
       "name": "L6_CONTROL_LOGIC",
-      "evidence_count": 17,
+      "evidence_count": 6,
       "todo_count": 0
     },
     {
@@ -60,12 +60,12 @@
     },
     {
       "name": "L9_INTEGRATION_SPEC",
-      "evidence_count": 2,
+      "evidence_count": 0,
       "todo_count": 0
     },
     {
       "name": "L10_TEST_CASES",
-      "evidence_count": 24,
+      "evidence_count": 0,
       "todo_count": 0
     },
     {
@@ -75,7 +75,7 @@
     },
     {
       "name": "L12_BEHAVIORAL_SEQUENCES",
-      "evidence_count": 16,
+      "evidence_count": 0,
       "todo_count": 0
     },
     {

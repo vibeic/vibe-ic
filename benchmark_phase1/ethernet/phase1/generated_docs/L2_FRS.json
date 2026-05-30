@@ -505,38 +505,6 @@
   ],
   "timing_parameters": [
     {
-      "name": "toff_ms",
-      "value": 400,
-      "unit": "ms",
-      "evidence": "input/docs/Ethernet_Spec.pdf",
-      "raw": "toff = 400 ms",
-      "extraction_strategy": "frs_doc_timing_literal"
-    },
-    {
-      "name": "time_ms",
-      "value": 50,
-      "unit": "ms",
-      "evidence": "input/docs/Ethernet_Spec.pdf",
-      "raw": "time: 50.0 ms",
-      "extraction_strategy": "frs_doc_timing_literal"
-    },
-    {
-      "name": "tCL1_ms",
-      "value": 50,
-      "unit": "ms",
-      "evidence": "input/docs/Ethernet_Spec.pdf",
-      "raw": "TCL1=50 ms",
-      "extraction_strategy": "frs_doc_timing_literal"
-    },
-    {
-      "name": "tINRUSH_ms",
-      "value": 50,
-      "unit": "ms",
-      "evidence": "input/docs/Ethernet_Spec.pdf",
-      "raw": "TINRUSH=50ms",
-      "extraction_strategy": "frs_doc_timing_literal"
-    },
-    {
       "name": "symbol",
       "parameter": "symbol",
       "value": 40,
@@ -577,46 +545,6 @@
       "extraction_strategy": "bullet_kv_pair_spec"
     },
     {
-      "name": "T2",
-      "parameter": "T2",
-      "value": 400,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/Ethernet_Spec.pdf",
-      "raw": "T2=400 ms max            T3=tx+500 ms max",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "T1",
-      "parameter": "T1",
-      "value": 300,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/Ethernet_Spec.pdf",
-      "raw": "T1=300 ms min",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "TCL1",
-      "parameter": "TCL1",
-      "value": 50,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/Ethernet_Spec.pdf",
-      "raw": "- TCL1 = 50ms",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "TINRUSH",
-      "parameter": "TINRUSH",
-      "value": 50,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/Ethernet_Spec.pdf",
-      "raw": "TINRUSH=50ms max",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
       "name": "operating_frequency",
       "parameter": "operating_frequency",
       "value": 16,
@@ -643,16 +571,6 @@
       "unit": "MHz",
       "evidence": "input/docs/Ethernet_Spec.pdf",
       "raw": "peak\n10.1 MHz",
-      "extraction_strategy": "prose_freq_promotion_verb_form_v1_6_570",
-      "low_confidence": true
-    },
-    {
-      "name": "operating_frequency",
-      "parameter": "operating_frequency",
-      "value": 0.1,
-      "unit": "MHz",
-      "evidence": "input/docs/Ethernet_Spec.pdf",
-      "raw": "up to 100 kHz",
       "extraction_strategy": "prose_freq_promotion_verb_form_v1_6_570",
       "low_confidence": true
     },

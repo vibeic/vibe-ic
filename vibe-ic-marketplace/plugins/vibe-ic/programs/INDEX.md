@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 465
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 465)
+- **Total programs (excluding helpers / shims):** 497
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 497)
 
 ### Per-class applicability counts
 
@@ -19,12 +19,13 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 456 |
+| `any` | 488 |
 
 ## Alphabetical listing
 
 | Program | Applicable classes | Wave | Title |
 |---|---|---|---|
+| `ace_protocol_synth` | any | — | AMBA AXI/ACE coherency-extension protocol synth helper. |
 | `agent_report_presence_check` | any | — | verify the project ships a structured |
 | `agent_report_sha256_attestation_check` | any | — | verify the project's |
 | `agentic_jsonl_to_shape_d` | any | v0.1.59 | generic agentic-JSONL → Shape-D project-dir extractor. |
@@ -57,6 +58,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_pre_vs_post_layout_check` | any | — | deterministic gate for pre/post-layout comparison |
 | `analog_real_corner_sweep` | any | — | v1.6.207 (ORGANIC-20260512). |
 | `arbiter_starvation_check` | any | v0.116 | BACKLOG-v11 P0.6. |
+| `arinc429_protocol_synth` | any | v0.1.83 | ARINC 429 (Mark 33 DITS) protocol synth helper. |
 | `arith_ss_corner_risk_check` | any | — | slow-corner arithmetic-architecture advisor. |
 | `assertion_covers_l3_constraints_check` | any | Wave 39 | Wave 39 / D3 |
 | `assertion_property_check` | any | — | Deterministic compliance check for assertion-gen. |
@@ -72,6 +74,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `bit_level_full_stack_tb_check` | any | v0.52 | v0.52 plugin gate |
 | `bit_level_full_stack_tb_oracle_check` | any | Wave 12 | v0.119.44 (Wave 12) plugin gate. |
 | `bitwidth_consistency_check` | any | — | flag Verilog bit-selects that exceed the |
+| `ble_protocol_synth` | any | v0.1.84 | Bluetooth Low Energy 5.2-class protocol synth helper. |
 | `bram_init_file_actually_loaded_check` | any | Wave 16 | Wave 16 CRITICAL gate. |
 | `bram_init_portable_compat_check` | any | v0.116 | BACKLOG-v11 P1.2. |
 | `bram_pdob_combinational_check` | any | v0.116 | BACKLOG-v11 P1.3 (WARNING-class). |
@@ -82,6 +85,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `bus_turnaround_consumes_spec_constant_check` | any | v0.106 | R1 deterministic gate |
 | `byte_assembler_explicit_9bit_reject_check` | aid_class_half_duplex | Wave 37 | Wave 37 (v0.119.69). |
 | `can_protocol_synth` | any | v0.1.81 | CAN-class protocol synth helper. |
+| `canfd_protocol_synth` | any | v0.1.84 | CAN-FD-class protocol synth helper. |
 | `canonical_path_symlink_forbid_check` | any | — | generalised symlink ban for |
 | `caravel_integration_runner` | any | v0.1.51 | Caravel chipignite integration runner (B2 from spm pilot). |
 | `caravel_wrapper_emit` | any | v0.1.51 | Caravel user_project_wrapper emitter (B3 from spm pilot). |
@@ -125,6 +129,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cross_constant_invariant_check` | any | — | Verify named timing/protocol constants |
 | `cross_module_1cycle_handshake_check` | any | v0.116 | BACKLOG-v11 P0.3. |
 | `crypto_arch_extractor` | any | — | Extract crypto architecture parameters from README/text docs. |
+| `cxl_protocol_synth` | any | v0.1.89 | Compute Express Link (CXL) cache-coherent interconnect synth helper. |
+| `dali_protocol_synth` | any | v0.1.84 | DALI-class protocol synth helper. |
 | `ddr_protocol_synth` | any | v0.1.84 | DDR (DDR3 SDRAM)-class protocol synth helper. |
 | `dead_timing_constant_warn` | any | — | R4 cheap WARN gate |
 | `debug_first_pass` | any | — | single dispatcher for debug-skill deterministic first-pass. |
@@ -149,6 +155,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `em_report_check` | any | — | wrapper for eda_report_audit --mode em. |
 | `emitter_failure_mode_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `enhancement_emit` | any | v0.1.35 | driver for the benchmark-enhancement-capture skill. |
+| `ethercat_protocol_synth` | any | v0.1.84 | EtherCAT-class protocol synth helper. |
+| `ethernet_800g_protocol_synth` | any | v0.1.89 | IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper. |
 | `ethernet_protocol_synth` | any | v0.1.84 | IEEE 802.3 Ethernet-class protocol synth helper. |
 | `extraction_coverage_check` | any | Wave 23 | gate (LL-38) verifies input/docs/ |
 | `extraction_coverage_denominator_audit` | any | Wave 31 | gate (Wave 31, v0.119.63). |
@@ -203,6 +211,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `half_duplex_wrapper_open_drain_check` | any | — | structural-RTL gate that |
 | `handshake_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
 | `hardware_pass_attestation_check` | any | v0.50 | v0.50 plugin gate (third layer) |
+| `hbm3_protocol_synth` | any | v0.1.89 | HBM3-class protocol synth helper. |
+| `hdlc_protocol_synth` | any | v0.1.84 | HDLC / SDLC-class protocol synth helper. |
+| `hdmi_protocol_synth` | any | v0.1.84 | HDMI / DVI TMDS protocol synth helper. |
 | `hold_fix_planner` | any | v0.1.50 | Hold-fix planner (Pattern-B → program). |
 | `host_soft_reset_unwake_path_check` | any | — | Verify that any soft-reset / abort |
 | `hw_acceptance_test_passed_check` | any | v0.119.15 | final-step gate for the closed |
@@ -256,8 +267,10 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `layer_extension_presence_check` | any | v0.50 | v0.50 plugin gate |
 | `level_shifter_required_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
+| `lin_protocol_synth` | any | v0.1.84 | LIN-class protocol synth helper. |
 | `literal_verdict_keyword_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `llm_semantic_confirm` | any | — | LLM double-confirm for program-extracted SEMANTIC fields. |
+| `lpddr5_protocol_synth` | any | v0.1.89 | LPDDR5 SDRAM (JEDEC JESD209-5)-class protocol synth helper. |
 | `lvs_netgen_setup_emit` | any | v0.1.49 | Netgen supplementary LVS setup-file generator. |
 | `lvs_report_check` | any | — | wrapper for eda_report_audit --mode lvs. |
 | `lvs_triage_classify` | any | v0.1.50 | LVS triage classifier (Pattern-B → program). |
@@ -271,19 +284,25 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `metal_fill_density_check` | any | — | Verify metal fill was inserted and density is within bounds. |
 | `migrate_to_canonical_taxonomy` | any | — | one-shot migration tool that moves |
 | `migrate_to_layout_p` | any | — | pre-v2 → Layout P project migration. |
+| `milstd1553_protocol_synth` | any | v0.1.83 | MIL-STD-1553B protocol synth helper. |
+| `mipi_dsi_protocol_synth` | any | v0.1.84 | MIPI DSI v1.01.00 protocol synth helper. |
 | `mipi_protocol_synth` | any | v0.1.84 | MIPI D-PHY / CSI-2 protocol synth helper. |
 | `mixed_signal_cosim_check` | any | — | deterministic gate for mixed-signal co-simulation |
 | `mixed_signal_interface_si_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
 | `mixed_signal_merge_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
 | `mixed_signal_signoff_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
+| `modbus_protocol_synth` | any | v0.1.84 | Modbus-class protocol synth helper. |
 | `module_port_audit` | any | v0.36 | Deterministic port-name mismatch detector for multi-module |
 | `mpw_precheck_cleanup` | any | v0.1.51 | mpw_precheck cleanup automator (B4 from spm pilot). |
 | `nba_addr_read_race_check` | any | — | FSM consuming addressed data without pipelining. |
 | `nba_shift_register_same_cycle_read_check` | any | Wave 12 | v0.119.44 (Wave 12) plugin gate. |
+| `nfc_protocol_synth` | any | v0.1.84 | NFC / ISO 14443 contactless-protocol synth helper. |
 | `no_protocol_consistency_check` | any | v0.56 | v0.56 plugin gate |
+| `nvlink_protocol_synth` | any | v0.1.89 | NVIDIA NVLink (high-speed GPU / die-to-die interconnect) protocol synth helper. |
 | `nvme_protocol_synth` | any | v0.1.84 | NVM Express (NVMe) Base storage-protocol synth helper. |
 | `oe_pattern_check` | any | — | Analyze output-enable (OE) patterns for tristate bus drivers. |
 | `onewire_protocol_synth` | any | v0.1.84 | 1-Wire-class protocol synth helper. |
+| `onfi_protocol_synth` | any | v0.1.84 | ONFI NAND-Flash protocol synth helper. |
 | `opcode_dispatch_completeness_check` | any | Wave 13 | v0.119.45 (Wave 13) gate. |
 | `openroad_tcl_deprecation_check` | any | v0.69 | Recursively scan a plugin tree for |
 | `oracle_dump_required_check` | any | — | Category-B workflow gate. |
@@ -300,6 +319,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `packet_length_check_present` | any | — | Static audit for packet-length sanity |
 | `pad_drive_high_active_check` | any | v0.114 | v0.114 (BACKLOG-v6 P1). |
 | `payload_bit_position_check` | any | — | Cross-reference spec doc bit-layout |
+| `pcie_gen5_protocol_synth` | any | v0.1.89 | PCI Express 5.0 (Gen5) protocol synth helper. |
 | `pcie_protocol_synth` | any | v0.1.84 | PCI Express-class protocol synth helper. |
 | `pdk_analog_completeness_check` | any | — | pdk_analog_completeness_check.py |
 | `pdk_consistency_check` | any | — | Deterministic PDK-netlist consistency checker. |
@@ -332,6 +352,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase23_completion_self_audit_check` | any | v0.109 | v0.109 mandatory self-audit gate. |
 | `phase23_one_shot_runner` | any | — | Phase 2 + Phase 3 chain. |
 | `phase2_one_shot_runner` | any | Wave 45 | Phase 2 main impl (L1-L13 → RTL → SOF → <half-duplex-tester>). |
+| `phase2_scaffold_gen` | any | v0.1.88 | Phase 1 L docs → Phase 2 Verilog scaffolding. |
 | `phase2_verify_aggregate` | any | v0.1.50 | Phase 2 output verification aggregator (Pattern-C → program). |
 | `phase3_backend_step` | any | — | single dispatcher for Phase 3 backend per-step entries. |
 | `phase3_one_shot_runner` | any | — | single-call orchestrator for Phase 3 (synth → GDS). |
@@ -382,6 +403,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rig_topology_disclosure_check` | any | — | verify hardware rig topology is declared. |
 | `rig_topology_image_extracted_check` | any | v0.119.32 | gate (LL-35). |
 | `rom_init_lint` | any | — | Detect Quartus-unsafe ROM initialization patterns. |
+| `rs485_protocol_synth` | any | v0.1.84 | RS-485-class protocol synth helper. |
 | `rsp_example_otp_consistency_check` | any | — | L3 response examples must match L11 OTP content. |
 | `rtl_bug_report_schema_check` | any | v0.54 | v0.54 plugin gate |
 | `rtl_hygiene_lint` | any | v0.1.10 | General-purpose RTL hygiene checker. |
@@ -422,9 +444,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `signoff_waiver_md_emit` | any | v0.1.49 | Submitter-facing waiver Markdown emitter. |
 | `single_bus_driver_check` | any | Wave 10 | structural-RTL gate that catches the |
 | `slave_tx_no_device_break_check` | any | Wave 25 | Wave 25/34 silent-bug gate. |
+| `soundwire_protocol_synth` | any | v0.1.84 | MIPI SoundWire-class protocol synth helper. |
 | `source_chip_agnostic_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `spare_cell_coverage_check` | any | — | Design-for-ECO READINESS gate (Step 18). |
 | `spare_cell_preservation_check` | any | — | Design-for-ECO PRESERVATION gate. |
+| `spdif_protocol_synth` | any | v0.1.84 | S/PDIF-class protocol synth helper. |
 | `spec_conformance_check` | any | — | Spec↔RTL contract-conformance gate. |
 | `spec_response_delay_check` | any | — | Response path must honour spec-declared |
 | `spec_rtl_port_fidelity_check` | any | — | spec↔RTL port-fidelity + garbled-port lint. |
@@ -441,6 +465,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `step_internal_fail_bubble_up_check` | any | — | anti-fabrication gate (v1.6.44). |
 | `sustained_vs_edge_check` | any | — | Flag RTL using edge-detect when spec calls for sustained. |
 | `sv_compat_check` | any | — | Check if Verilog files require the -sv flag for Yosys synthesis. |
+| `swd_protocol_synth` | any | — | ARM Serial Wire Debug (SWD) / ADIv5 deterministic |
 | `synth_netlist_check` | any | — | Deterministic synthesis netlist validation checker. |
 | `synth_wrapper_check` | any | — | Deterministic compliance check for synth-wrapper-gen. |
 | `synth_wrapper_gen` | any | — | auto-generate synthesis wrapper for inout-port designs. |
@@ -452,9 +477,12 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tester_oracle_health_check` | any | v0.45 | Prove the tester works before iterating RTL. |
 | `tester_verdict_frame_decode` | any | — | T1 composability fix |
 | `threshold_range_contiguity_check` | any | — | Discrete classification ranges must be contiguous. |
+| `tier_d_interconnect_detect` | any | v0.1.90 | Tier-D advanced-interconnect detection predicates (v0.1.90). |
+| `tilelink_protocol_synth` | any | v0.1.84 | TileLink-class protocol synth helper. |
 | `timer_freeze_after_state_check` | any | — | Static heuristic for the |
 | `toggle_divider_hierarchical_clock_check` | any | v0.119.30 | gate (LL-31) extending |
 | `top_level_outputs_in_canonical_check` | any | — | enforce that the project root |
+| `tpm_protocol_synth` | any | v0.1.84 | TPM 2.0 trusted-platform-module protocol synth helper. |
 | `trailing_delimiter_completeness_check` | any | v0.99 | Verify each cmd packet stimulus |
 | `transient_signal_latch_check` | any | — | Flag 1-cycle pulses read by multi-cycle FSMs without latching. |
 | `tristate_active_drive_check` | any | — | P1.1 deterministic gate |
@@ -468,8 +496,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tx_phy_bit_cell_total_consumed_check` | any | Wave 15 | Wave 15 silent-bug gate |
 | `tx_timing_use_max_of_range_check` | any | — | structural-RTL gate that catches |
 | `uart_protocol_synth` | any | v0.1.80 | UART-class protocol synth helper. |
+| `ucie_protocol_synth` | any | v0.1.89 | Universal Chiplet Interconnect Express (UCIe 1.1) protocol synth helper. |
+| `ufs_protocol_synth` | any | v0.1.89 | UFS (Universal Flash Storage) protocol synth helper. |
 | `upf_syntax_check` | any | — | upf_syntax_check.py -- Deterministic UPF file syntax checker. |
 | `url_oracle_guard` | any | — | RTL-as-oracle prohibition for cited-URL handling. |
+| `usb4_protocol_synth` | any | v0.1.89 | USB4 protocol synth helper. |
 | `usb_protocol_synth` | any | v0.1.82 | USB-class protocol synth helper. |
 | `vector_op_rtl_gen` | any | v0.1.8 | deterministic vector-operation → RTL generator. |
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that |
@@ -487,6 +518,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `wake_pulse_implementation_check` | any | Wave 9 | LL-11 / Wake-pulse value gate. |
 | `wake_pulse_width_matches_measurement_check` | any | Wave 18 | Wave 18 silent-bug gate. |
 | `warn_acceptance_policy_check` | any | — | O3: Enforce that every WARN finding from |
+| `wishbone_protocol_synth` | any | v0.1.85 | Wishbone B4 protocol synth helper. |
 | `xlsx_extract` | any | — | Extract tables from .xlsx spec documents into JSON. |
 | `yosys_hilomap_required_check` | any | — | Assert a Yosys .ys script's commands occur |
 | `yosys_script_template_check` | any | — | Audit a Yosys .ys script for the three |
@@ -537,8 +569,9 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (456 programs)
+### `any` (488 programs)
 
+- `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
 - `agentic_jsonl_to_shape_d` — generic agentic-JSONL → Shape-D project-dir extractor.  _[v0.1.59]_
@@ -570,6 +603,7 @@ _(no programs in this group)_
 - `analog_pre_vs_post_layout_check` — deterministic gate for pre/post-layout comparison
 - `analog_real_corner_sweep` — v1.6.207 (ORGANIC-20260512).
 - `arbiter_starvation_check` — BACKLOG-v11 P0.6.  _[v0.116]_
+- `arinc429_protocol_synth` — ARINC 429 (Mark 33 DITS) protocol synth helper.  _[v0.1.83]_
 - `arith_ss_corner_risk_check` — slow-corner arithmetic-architecture advisor.
 - `assertion_covers_l3_constraints_check` — Wave 39 / D3  _[Wave 39]_
 - `assertion_property_check` — Deterministic compliance check for assertion-gen.
@@ -585,6 +619,7 @@ _(no programs in this group)_
 - `bit_level_full_stack_tb_check` — v0.52 plugin gate  _[v0.52]_
 - `bit_level_full_stack_tb_oracle_check` — v0.119.44 (Wave 12) plugin gate.  _[Wave 12]_
 - `bitwidth_consistency_check` — flag Verilog bit-selects that exceed the
+- `ble_protocol_synth` — Bluetooth Low Energy 5.2-class protocol synth helper.  _[v0.1.84]_
 - `bram_init_file_actually_loaded_check` — Wave 16 CRITICAL gate.  _[Wave 16]_
 - `bram_init_portable_compat_check` — BACKLOG-v11 P1.2.  _[v0.116]_
 - `bram_pdob_combinational_check` — BACKLOG-v11 P1.3 (WARNING-class).  _[v0.116]_
@@ -594,6 +629,7 @@ _(no programs in this group)_
 - `bringup_plan_gen` — emit bring-up plan from L13_LAB_CALIBRATION.
 - `bus_turnaround_consumes_spec_constant_check` — R1 deterministic gate  _[v0.106]_
 - `can_protocol_synth` — CAN-class protocol synth helper.  _[v0.1.81]_
+- `canfd_protocol_synth` — CAN-FD-class protocol synth helper.  _[v0.1.84]_
 - `canonical_path_symlink_forbid_check` — generalised symlink ban for
 - `caravel_integration_runner` — Caravel chipignite integration runner (B2 from spm pilot).  _[v0.1.51]_
 - `caravel_wrapper_emit` — Caravel user_project_wrapper emitter (B3 from spm pilot).  _[v0.1.51]_
@@ -635,6 +671,8 @@ _(no programs in this group)_
 - `cross_constant_invariant_check` — Verify named timing/protocol constants
 - `cross_module_1cycle_handshake_check` — BACKLOG-v11 P0.3.  _[v0.116]_
 - `crypto_arch_extractor` — Extract crypto architecture parameters from README/text docs.
+- `cxl_protocol_synth` — Compute Express Link (CXL) cache-coherent interconnect synth helper.  _[v0.1.89]_
+- `dali_protocol_synth` — DALI-class protocol synth helper.  _[v0.1.84]_
 - `ddr_protocol_synth` — DDR (DDR3 SDRAM)-class protocol synth helper.  _[v0.1.84]_
 - `dead_timing_constant_warn` — R4 cheap WARN gate
 - `debug_first_pass` — single dispatcher for debug-skill deterministic first-pass.
@@ -658,6 +696,8 @@ _(no programs in this group)_
 - `em_report_check` — wrapper for eda_report_audit --mode em.
 - `emitter_failure_mode_check` — anti-fabrication gate (v1.6.38).
 - `enhancement_emit` — driver for the benchmark-enhancement-capture skill.  _[v0.1.35]_
+- `ethercat_protocol_synth` — EtherCAT-class protocol synth helper.  _[v0.1.84]_
+- `ethernet_800g_protocol_synth` — IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper.  _[v0.1.89]_
 - `ethernet_protocol_synth` — IEEE 802.3 Ethernet-class protocol synth helper.  _[v0.1.84]_
 - `extraction_coverage_check` — gate (LL-38) verifies input/docs/  _[Wave 23]_
 - `extraction_coverage_denominator_audit` — gate (Wave 31, v0.119.63).  _[Wave 31]_
@@ -712,6 +752,9 @@ _(no programs in this group)_
 - `half_duplex_wrapper_open_drain_check` — structural-RTL gate that
 - `handshake_check` — deterministic compliance check derived from <chip-class> v040 debug.
 - `hardware_pass_attestation_check` — v0.50 plugin gate (third layer)  _[v0.50]_
+- `hbm3_protocol_synth` — HBM3-class protocol synth helper.  _[v0.1.89]_
+- `hdlc_protocol_synth` — HDLC / SDLC-class protocol synth helper.  _[v0.1.84]_
+- `hdmi_protocol_synth` — HDMI / DVI TMDS protocol synth helper.  _[v0.1.84]_
 - `hold_fix_planner` — Hold-fix planner (Pattern-B → program).  _[v0.1.50]_
 - `host_soft_reset_unwake_path_check` — Verify that any soft-reset / abort
 - `hw_acceptance_test_passed_check` — final-step gate for the closed  _[v0.119.15]_
@@ -764,8 +807,10 @@ _(no programs in this group)_
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `layer_extension_presence_check` — v0.50 plugin gate  _[v0.50]_
 - `level_shifter_required_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
+- `lin_protocol_synth` — LIN-class protocol synth helper.  _[v0.1.84]_
 - `literal_verdict_keyword_check` — anti-fabrication gate (v1.6.38).
 - `llm_semantic_confirm` — LLM double-confirm for program-extracted SEMANTIC fields.
+- `lpddr5_protocol_synth` — LPDDR5 SDRAM (JEDEC JESD209-5)-class protocol synth helper.  _[v0.1.89]_
 - `lvs_netgen_setup_emit` — Netgen supplementary LVS setup-file generator.  _[v0.1.49]_
 - `lvs_report_check` — wrapper for eda_report_audit --mode lvs.
 - `lvs_triage_classify` — LVS triage classifier (Pattern-B → program).  _[v0.1.50]_
@@ -779,19 +824,25 @@ _(no programs in this group)_
 - `metal_fill_density_check` — Verify metal fill was inserted and density is within bounds.
 - `migrate_to_canonical_taxonomy` — one-shot migration tool that moves
 - `migrate_to_layout_p` — pre-v2 → Layout P project migration.
+- `milstd1553_protocol_synth` — MIL-STD-1553B protocol synth helper.  _[v0.1.83]_
+- `mipi_dsi_protocol_synth` — MIPI DSI v1.01.00 protocol synth helper.  _[v0.1.84]_
 - `mipi_protocol_synth` — MIPI D-PHY / CSI-2 protocol synth helper.  _[v0.1.84]_
 - `mixed_signal_cosim_check` — deterministic gate for mixed-signal co-simulation
 - `mixed_signal_interface_si_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
 - `mixed_signal_merge_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
 - `mixed_signal_signoff_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
+- `modbus_protocol_synth` — Modbus-class protocol synth helper.  _[v0.1.84]_
 - `module_port_audit` — Deterministic port-name mismatch detector for multi-module  _[v0.36]_
 - `mpw_precheck_cleanup` — mpw_precheck cleanup automator (B4 from spm pilot).  _[v0.1.51]_
 - `nba_addr_read_race_check` — FSM consuming addressed data without pipelining.
 - `nba_shift_register_same_cycle_read_check` — v0.119.44 (Wave 12) plugin gate.  _[Wave 12]_
+- `nfc_protocol_synth` — NFC / ISO 14443 contactless-protocol synth helper.  _[v0.1.84]_
 - `no_protocol_consistency_check` — v0.56 plugin gate  _[v0.56]_
+- `nvlink_protocol_synth` — NVIDIA NVLink (high-speed GPU / die-to-die interconnect) protocol synth helper.  _[v0.1.89]_
 - `nvme_protocol_synth` — NVM Express (NVMe) Base storage-protocol synth helper.  _[v0.1.84]_
 - `oe_pattern_check` — Analyze output-enable (OE) patterns for tristate bus drivers.
 - `onewire_protocol_synth` — 1-Wire-class protocol synth helper.  _[v0.1.84]_
+- `onfi_protocol_synth` — ONFI NAND-Flash protocol synth helper.  _[v0.1.84]_
 - `opcode_dispatch_completeness_check` — v0.119.45 (Wave 13) gate.  _[Wave 13]_
 - `openroad_tcl_deprecation_check` — Recursively scan a plugin tree for  _[v0.69]_
 - `oracle_dump_required_check` — Category-B workflow gate.
@@ -808,6 +859,7 @@ _(no programs in this group)_
 - `packet_length_check_present` — Static audit for packet-length sanity
 - `pad_drive_high_active_check` — v0.114 (BACKLOG-v6 P1).  _[v0.114]_
 - `payload_bit_position_check` — Cross-reference spec doc bit-layout
+- `pcie_gen5_protocol_synth` — PCI Express 5.0 (Gen5) protocol synth helper.  _[v0.1.89]_
 - `pcie_protocol_synth` — PCI Express-class protocol synth helper.  _[v0.1.84]_
 - `pdk_analog_completeness_check` — pdk_analog_completeness_check.py
 - `pdk_consistency_check` — Deterministic PDK-netlist consistency checker.
@@ -840,6 +892,7 @@ _(no programs in this group)_
 - `phase23_completion_self_audit_check` — v0.109 mandatory self-audit gate.  _[v0.109]_
 - `phase23_one_shot_runner` — Phase 2 + Phase 3 chain.
 - `phase2_one_shot_runner` — Phase 2 main impl (L1-L13 → RTL → SOF → <half-duplex-tester>).  _[Wave 45]_
+- `phase2_scaffold_gen` — Phase 1 L docs → Phase 2 Verilog scaffolding.  _[v0.1.88]_
 - `phase2_verify_aggregate` — Phase 2 output verification aggregator (Pattern-C → program).  _[v0.1.50]_
 - `phase3_backend_step` — single dispatcher for Phase 3 backend per-step entries.
 - `phase3_one_shot_runner` — single-call orchestrator for Phase 3 (synth → GDS).
@@ -889,6 +942,7 @@ _(no programs in this group)_
 - `rig_topology_disclosure_check` — verify hardware rig topology is declared.
 - `rig_topology_image_extracted_check` — gate (LL-35).  _[v0.119.32]_
 - `rom_init_lint` — Detect Quartus-unsafe ROM initialization patterns.
+- `rs485_protocol_synth` — RS-485-class protocol synth helper.  _[v0.1.84]_
 - `rsp_example_otp_consistency_check` — L3 response examples must match L11 OTP content.
 - `rtl_bug_report_schema_check` — v0.54 plugin gate  _[v0.54]_
 - `rtl_hygiene_lint` — General-purpose RTL hygiene checker.  _[v0.1.10]_
@@ -928,9 +982,11 @@ _(no programs in this group)_
 - `signoff_waiver_md_emit` — Submitter-facing waiver Markdown emitter.  _[v0.1.49]_
 - `single_bus_driver_check` — structural-RTL gate that catches the  _[Wave 10]_
 - `slave_tx_no_device_break_check` — Wave 25/34 silent-bug gate.  _[Wave 25]_
+- `soundwire_protocol_synth` — MIPI SoundWire-class protocol synth helper.  _[v0.1.84]_
 - `source_chip_agnostic_check` — anti-fabrication gate (v1.6.38).
 - `spare_cell_coverage_check` — Design-for-ECO READINESS gate (Step 18).
 - `spare_cell_preservation_check` — Design-for-ECO PRESERVATION gate.
+- `spdif_protocol_synth` — S/PDIF-class protocol synth helper.  _[v0.1.84]_
 - `spec_conformance_check` — Spec↔RTL contract-conformance gate.
 - `spec_response_delay_check` — Response path must honour spec-declared
 - `spec_rtl_port_fidelity_check` — spec↔RTL port-fidelity + garbled-port lint.
@@ -947,6 +1003,7 @@ _(no programs in this group)_
 - `step_internal_fail_bubble_up_check` — anti-fabrication gate (v1.6.44).
 - `sustained_vs_edge_check` — Flag RTL using edge-detect when spec calls for sustained.
 - `sv_compat_check` — Check if Verilog files require the -sv flag for Yosys synthesis.
+- `swd_protocol_synth` — ARM Serial Wire Debug (SWD) / ADIv5 deterministic
 - `synth_netlist_check` — Deterministic synthesis netlist validation checker.
 - `synth_wrapper_check` — Deterministic compliance check for synth-wrapper-gen.
 - `synth_wrapper_gen` — auto-generate synthesis wrapper for inout-port designs.
@@ -958,9 +1015,12 @@ _(no programs in this group)_
 - `tester_oracle_health_check` — Prove the tester works before iterating RTL.  _[v0.45]_
 - `tester_verdict_frame_decode` — T1 composability fix
 - `threshold_range_contiguity_check` — Discrete classification ranges must be contiguous.
+- `tier_d_interconnect_detect` — Tier-D advanced-interconnect detection predicates (v0.1.90).  _[v0.1.90]_
+- `tilelink_protocol_synth` — TileLink-class protocol synth helper.  _[v0.1.84]_
 - `timer_freeze_after_state_check` — Static heuristic for the
 - `toggle_divider_hierarchical_clock_check` — gate (LL-31) extending  _[v0.119.30]_
 - `top_level_outputs_in_canonical_check` — enforce that the project root
+- `tpm_protocol_synth` — TPM 2.0 trusted-platform-module protocol synth helper.  _[v0.1.84]_
 - `trailing_delimiter_completeness_check` — Verify each cmd packet stimulus  _[v0.99]_
 - `transient_signal_latch_check` — Flag 1-cycle pulses read by multi-cycle FSMs without latching.
 - `tristate_active_drive_check` — P1.1 deterministic gate
@@ -974,8 +1034,11 @@ _(no programs in this group)_
 - `tx_phy_bit_cell_total_consumed_check` — Wave 15 silent-bug gate  _[Wave 15]_
 - `tx_timing_use_max_of_range_check` — structural-RTL gate that catches
 - `uart_protocol_synth` — UART-class protocol synth helper.  _[v0.1.80]_
+- `ucie_protocol_synth` — Universal Chiplet Interconnect Express (UCIe 1.1) protocol synth helper.  _[v0.1.89]_
+- `ufs_protocol_synth` — UFS (Universal Flash Storage) protocol synth helper.  _[v0.1.89]_
 - `upf_syntax_check` — upf_syntax_check.py -- Deterministic UPF file syntax checker.
 - `url_oracle_guard` — RTL-as-oracle prohibition for cited-URL handling.
+- `usb4_protocol_synth` — USB4 protocol synth helper.  _[v0.1.89]_
 - `usb_protocol_synth` — USB-class protocol synth helper.  _[v0.1.82]_
 - `vector_op_rtl_gen` — deterministic vector-operation → RTL generator.  _[v0.1.8]_
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that  _[v0.119.30]_
@@ -992,6 +1055,7 @@ _(no programs in this group)_
 - `wake_pulse_implementation_check` — LL-11 / Wake-pulse value gate.  _[Wave 9]_
 - `wake_pulse_width_matches_measurement_check` — Wave 18 silent-bug gate.  _[Wave 18]_
 - `warn_acceptance_policy_check` — O3: Enforce that every WARN finding from
+- `wishbone_protocol_synth` — Wishbone B4 protocol synth helper.  _[v0.1.85]_
 - `xlsx_extract` — Extract tables from .xlsx spec documents into JSON.
 - `yosys_hilomap_required_check` — Assert a Yosys .ys script's commands occur
 - `yosys_script_template_check` — Audit a Yosys .ys script for the three

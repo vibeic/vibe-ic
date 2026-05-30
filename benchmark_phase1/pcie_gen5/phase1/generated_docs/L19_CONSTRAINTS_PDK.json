@@ -11,25 +11,6 @@
     "floorplan_hints": [],
     "constraints_present": false,
     "notes": "PCI Express 5.0 is a protocol spec; it does not impose PDK-specific SDC / floorplan constraints. The Base Spec specifies 32 GT/s NRZ eye masks, the four-phase enhanced equalization procedure, the up-to-two-retimer channel model, and mandatory Lane Margining. SoC integration constraints (clock-tree budget, PHY characterization, retimer placement) live in the SoC integration spec.",
-    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
-    "typical_per_device_constraints": [
-      "TAP pins (TCK, TMS, TDI, TDO, optional TRST) shall be dedicated test pins, not shared with functional logic.",
-      "Per-device TCK max frequency: implementation-defined; chip-class typical 10-50 MHz; backplane / long-chain typical 1-10 MHz.",
-      "Per-device tSU(TMS) / tH(TMS) / tSU(TDI) / tH(TDI) / tPD(TDO) timing parameters specified in the device datasheet.",
-      "TDO output drive strength must be sufficient to drive the next device's TDI input + interconnect capacitance.",
-      "ESD protection on TAP pins per pin-class HBM / CDM / MM requirements (e.g. ±2 kV HBM minimum).",
-      "Slew-rate control on TDO drivers reduces reflections on long chains and backplanes."
-    ],
-    "typical_per_board_constraints": [
-      "TMS routed as a controlled-impedance trace to minimize skew across the chain.",
-      "TCK distributed via a low-skew clock tree or balanced star topology when the chain is large.",
-      "Pull-up resistors on TMS (e.g. 10 kΩ) and TDI (e.g. 10 kΩ) to keep them HIGH when the tester is absent — TMS HIGH defaults toward TestLogicReset; TDI HIGH shifts BYPASS opcode all-1s.",
-      "Pull-up on TRST (if implemented) so the TAP can run when the tester is present.",
-      "Termination on TCK and TDO if rise/fall times approach board-trace propagation delay.",
-      "Level translators between devices with different VDD-IO voltages along the chain.",
-      "Connector pin allocation for the JTAG bus on the board's test connector (e.g. ARM 20-pin, Xilinx 14-pin, TI MSP430 14-pin formats)."
-    ],
-    "process_technology_independence": "IEEE 1149.1 is process-independent. Any logic-process technology that can implement flip-flops and gates can implement the 16-state FSM + IR + Bypass + BSR.",
     "pcb_constraints": {
       "differential_pair_impedance_ohm": 100,
       "differential_pair_impedance_tolerance_pct": 10,
@@ -72,7 +53,8 @@
       "precoding": "Optional transmitter precoding at 32 GT/s.",
       "lane_margining": "Mandatory Lane Margining at the Receiver.",
       "channel_loss_note": "32 GT/s is loss-limited; long channels typically require one or two retimers."
-    }
+    },
+    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
   },
   "extraction_hints": [
     "Look for floorplan, area, power, timing constraints.",

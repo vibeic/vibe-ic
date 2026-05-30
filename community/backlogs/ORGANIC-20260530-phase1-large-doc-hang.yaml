@@ -1,0 +1,36 @@
+id: ORGANIC-20260530-phase1-large-doc-hang
+type: performance
+severity: medium
+status: RESOLVED
+resolved_at: 2026-05-31
+resolved_in: v0.1.91
+component: phase1_doc_one_shot_runner.py (text extraction + L10 opcode scrape)
+submitted_at: 2026-05-30
+pattern: >
+  On a pathologically-large input doc (the BLE benchmark's Bluetooth Core Spec v5.2
+  is a 30 MB PDF → 7.76 MB extracted text), phase1 HANGS at the L10 step: the bare-hex
+  opcode scrape + per-opcode test-case generation over multi-MB text becomes effectively
+  non-terminating (frozen >1 h at 10/24 L-docs on an idle box). Other 47 benchmarks use
+  KB–MB docs and complete in seconds–minutes.
+workaround_applied: >
+  v0.1.90 trims the BLE extracted input_doc to a focused 1.2 MB LE/GAP/GATT excerpt and
+  runs with --skip-text-extract; ble then completes in <5 min at 0 gated. The trimmed
+  excerpt still grounds the full BLE gold (ic_name + LL FSM + all L-docs match).
+suggested_fix: >
+  Add a general guard in the runner: cap the extracted-text size fed to the O(n) /
+  per-opcode steps (e.g. process the first N MB, or skip the bare-hex opcode scrape when
+  the text exceeds a threshold — packet protocols set L3.opcodes=[] anyway). This makes
+  phase1 robust to any large input doc, not just ble.
+session_context: >
+  Surfaced during the v0.1.90 ble re-sync (the v0.1.89 'H2 re-sync' had silently not
+  finished before commit, leaving stale ble docs at gated=176 / ic_name="ble").
+resolution: >
+  v0.1.91 ships the GENERAL fix (suggested_fix realised): _cap_extracted_for_scan()
+  with _LARGE_DOC_SCAN_CAP_BYTES = 2 MB caps the extracted text fed to the O(items x
+  text-length) per-item scans (the real hot path was _v1_6_482_lift_reset_value_from_
+  prose_around_registers / _extract_bullet_kv_specs / _is_real_fsm_state doing per-item
+  full-text regex, NOT the opcode scrape as first hypothesised). Identity passthrough for
+  the 47 docs <= cap. The v0.1.90 1.2 MB trim workaround is REVERTED: ble now runs the
+  FULL 7.76 MB extracted doc and completes at 0 gated in ~229 s (3.8 min). 7 cap-behaviour
+  regression tests added in tests/test_phase1_large_doc_and_mipi_guard.py. 48-protocol
+  parity regression all-0; 2306 pytest pass.

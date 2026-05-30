@@ -488,6 +488,11 @@ def _l3(gd: Path) -> None:
     # burst length field) and uses TLP-header addressing — direct-assign
     # the PCI-SIG Base Spec Rev 5.0 (post-Gen2) TLP header form here.
     d["burst_based"] = False
+    # v0.1.90 — PCIe is a packet/serial protocol, NOT byte-oriented. The JTAG
+    # synth used to set byte_oriented=False on this doc (incidental boundary-scan
+    # mention); now that the JTAG primary-subject guard suppresses JTAG here, the
+    # PCIe5 synth (which runs last) must set it itself.
+    d["byte_oriented"] = False
     d["tlp_header_format"] = {
         "fmt_field_width_bits": 3,
         "type_field_width_bits": 5,

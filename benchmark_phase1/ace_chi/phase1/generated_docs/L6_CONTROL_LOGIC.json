@@ -49,13 +49,27 @@
       }
     ]
   },
-  "read_transaction_fsm_master": [
-    "Drive ARADDR + AR* fields; assert ARVALID.",
-    "Wait for ARREADY handshake.",
-    "Sample RDATA + RRESP per beat when RVALID HIGH.",
-    "Assert RREADY each beat until RLAST observed."
-  ],
-  "exit_from_reset": "earliest point after reset that a master is permitted to begin driving ARVALID, AWVALID, or WVALID HIGH is at a rising ACLK edge after ARESETn is HIGH.",
+  "fsm_hints": {
+    "per_channel_states": [
+      "IDLE      (VALID=0)",
+      "VALID     (VALID=1, READY=0; data held)",
+      "HANDSHAKE (VALID=1, READY=1; transfer occurs)"
+    ],
+    "rule": "Source MUST NOT wait for READY before asserting VALID. Destination MAY wait for VALID before asserting READY. Once VALID is asserted it must remain asserted until the handshake cycle (rising ACLK with both VALID and READY HIGH)."
+  },
+  "channel_dependency_rules_AXI3_write": {
+    "BVALID_dependency": [
+      "WVALID",
+      "WREADY",
+      "WLAST"
+    ]
+  },
+  "channel_dependency_rules_read": {
+    "RVALID_dependency": [
+      "ARVALID",
+      "ARREADY"
+    ]
+  },
   "channel_dependency_rules_AXI4_AXI5_write": {
     "BVALID_dependency": [
       "AWVALID",
@@ -66,34 +80,6 @@
     ],
     "note": "AXI4/AXI5 add an additional slave dependency on AW handshake before BVALID, so slaves take fewer buffering decisions independent of the address."
   },
-  "channel_dependency_rules_read": {
-    "RVALID_dependency": [
-      "ARVALID",
-      "ARREADY"
-    ]
-  },
-  "default_ready_state_recommendation": {
-    "AWREADY": "Default HIGH recommended (slave must accept any valid address in one cycle).",
-    "WREADY": "May default HIGH only if slave can always accept write data in one cycle.",
-    "BREADY": "May default HIGH only if master can always accept a write response in one cycle.",
-    "ARREADY": "Default HIGH recommended (same reasoning).",
-    "RREADY": "May default HIGH only if master can accept read data immediately at start of read."
-  },
-  "channel_dependency_rules_AXI3_write": {
-    "BVALID_dependency": [
-      "WVALID",
-      "WREADY",
-      "WLAST"
-    ]
-  },
-  "fsm_hints": {
-    "per_channel_states": [
-      "IDLE      (VALID=0)",
-      "VALID     (VALID=1, READY=0; data held)",
-      "HANDSHAKE (VALID=1, READY=1; transfer occurs)"
-    ],
-    "rule": "Source MUST NOT wait for READY before asserting VALID. Destination MAY wait for VALID before asserting READY. Once VALID is asserted it must remain asserted until the handshake cycle (rising ACLK with both VALID and READY HIGH)."
-  },
   "write_transaction_fsm_master": [
     "Drive AWADDR + AW* fields; assert AWVALID.",
     "Drive WDATA + WSTRB + WLAST per beat; assert WVALID.",
@@ -101,6 +87,20 @@
     "Wait for BVALID; sample BRESP.",
     "Assert BREADY to complete write response."
   ],
+  "read_transaction_fsm_master": [
+    "Drive ARADDR + AR* fields; assert ARVALID.",
+    "Wait for ARREADY handshake.",
+    "Sample RDATA + RRESP per beat when RVALID HIGH.",
+    "Assert RREADY each beat until RLAST observed."
+  ],
+  "exit_from_reset": "earliest point after reset that a master is permitted to begin driving ARVALID, AWVALID, or WVALID HIGH is at a rising ACLK edge after ARESETn is HIGH.",
+  "default_ready_state_recommendation": {
+    "AWREADY": "Default HIGH recommended (slave must accept any valid address in one cycle).",
+    "WREADY": "May default HIGH only if slave can always accept write data in one cycle.",
+    "BREADY": "May default HIGH only if master can always accept a write response in one cycle.",
+    "ARREADY": "Default HIGH recommended (same reasoning).",
+    "RREADY": "May default HIGH only if master can accept read data immediately at start of read."
+  },
   "extraction_strategy": {
     "l6_control_logic_v0_1_72": "R42: overlaid 8 L6 concepts (paragraph + L17-channel-synth)"
   },

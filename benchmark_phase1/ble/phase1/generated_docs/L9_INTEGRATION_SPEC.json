@@ -9,29 +9,10 @@
   "top_ports": [],
   "top_module_pins": [],
   "no_integration_in_input": true,
-  "submodules": [
-    {
-      "name": "_Size",
-      "instances": 1,
-      "type": "submodule (prose extraction)",
-      "evidence": {
-        "file": "input/docs/BLE_Spec.pdf"
-      }
-    }
-  ],
-  "no_submodules_in_input": false,
+  "submodules": [],
+  "no_submodules_in_input": true,
   "sim_only_modules": [],
   "fsm_states": [
-    {
-      "name": "S_TO_M_PHY",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf"
-    },
-    {
-      "name": "WAIT_DISCONNECT",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose transition v1.6.484)"
-    },
     {
       "name": "ENHANCEMENTS",
       "transitions": [],
@@ -66,121 +47,6 @@
       "name": "SUPPORT",
       "transitions": [],
       "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ALLOCATED",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "IDENTIFY",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ZERO",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "TRANSACTION",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SUCCEED",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CLARIFY",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CORRESPONDS",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "REQUESTED",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "FINALLY",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "MOVE",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CHANNEL",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ANOTHER",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "RELATE",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CORRECTLY",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SPECIFICATIONS",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "THEIR",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "BELONGING",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "RELATED",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CONFIGURATION",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "NECESSARY",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SEND",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DIRECTLY",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "APPLY",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
     }
   ],
   "no_fsm_states_in_input": false,
@@ -188,23 +54,13 @@
   "no_pipeline_stages_in_input": true,
   "internal_wires": [],
   "no_internal_wires_in_input": true,
-  "expected_verdict_byte_hex": "0xF2",
-  "expected_verdict_byte_offset": 6,
-  "expected_verdict_byte_extraction_strategy": "aid_class_default_pass_byte",
-  "expected_verdict_byte_offset_low_confidence": true,
-  "expected_verdict_byte_hex_low_confidence": true,
+  "expected_verdict_byte_hex": null,
+  "expected_verdict_byte_offset": null,
+  "expected_verdict_byte_extraction_strategy": null,
+  "expected_verdict_byte_offset_low_confidence": false,
+  "expected_verdict_byte_hex_low_confidence": false,
   "cpu_interrupts": [],
   "no_cpu_interrupts_in_input": true,
-  "reset_domains": [
-    {
-      "name": "reset_n",
-      "polarity": "active_low",
-      "sync": "unknown",
-      "scan_prefixed": false,
-      "direction_prefix": null,
-      "extraction_strategy": "l9_port_reset_shape_v1_6_369"
-    }
-  ],
   "memories": [],
   "memory_candidates": [
     {
@@ -232,41 +88,8 @@
   ],
   "no_memory_candidates_in_input": false,
   "no_memories_in_input": false,
-  "memory_map": [
-    {
-      "base": "0x0020",
-      "end": "0x003e",
-      "size_bytes": 31,
-      "region_name": "Assigned Numbers                                             LE-U",
-      "extraction_strategy": "memory_map_md_pipe_table_v1_6_509",
-      "evidence_file": "input/docs/BLE_Spec.pdf"
-    },
-    {
-      "base": "0x0040",
-      "end": "0x007f",
-      "size_bytes": 64,
-      "region_name": "Dynamically allocated         Communicated using the         LE-U",
-      "extraction_strategy": "memory_map_md_pipe_table_v1_6_509",
-      "evidence_file": "input/docs/BLE_Spec.pdf"
-    },
-    {
-      "base": "0x0001",
-      "end": "0x3fff",
-      "size_bytes": 16383,
-      "region_name": "Valid maximum window size (frames) for",
-      "extraction_strategy": "memory_map_md_pipe_table_v1_6_509",
-      "evidence_file": "input/docs/BLE_Spec.pdf"
-    },
-    {
-      "base": "0x0100",
-      "end": "0x01ff",
-      "size_bytes": 256,
-      "region_name": "or a range specified in another specification as being used for",
-      "extraction_strategy": "memory_map_md_pipe_table_v1_6_509",
-      "evidence_file": "input/docs/BLE_Spec.pdf"
-    }
-  ],
-  "no_memory_map_in_input": false,
+  "memory_map": [],
+  "no_memory_map_in_input": true,
   "no_instantiation_template_in_input": true,
   "top_module_pins_evidence": {
     "reason": "no_module_declaration_in_input_docs",
@@ -274,16 +97,6 @@
     "extraction_strategy_marker": "fallback_explicit_v1_6_581"
   },
   "extraction_evidence": {
-    "derived_from_L2.protocol_overview": [
-      {
-        "literal": "half_duplex/single_wire/wire_count=1",
-        "label": "verdict_byte_offset defaulted to 6 (AID-class half-duplex single-wire convention) — L3 did not extract an offset"
-      },
-      {
-        "literal": "half_duplex/single_wire/wire_count=1",
-        "label": "expected_verdict_byte_hex defaulted to AID-class protocol PASS sentinel (canonical 0xF2 at byte_offset 6); L3 did not extract a verdict-byte literal — low_confidence"
-      }
-    ],
     "derived_from_L3": []
   },
   "clock_domains": [
@@ -307,20 +120,6 @@
       "low_mhz": 0.0032,
       "high_mhz": 2483.5,
       "merged_extractor_count_v1_6_397": 2
-    },
-    {
-      "name": "Note",
-      "freq_mhz": 2400.0,
-      "source": "BLE_Spec.pdf",
-      "reset_strategy": "unspecified",
-      "domain": "EXTRACTED",
-      "extraction_strategy": "named_mode_clock_voltage_triplet",
-      "low_confidence": true,
-      "freq_hz": 2400000000,
-      "period_ns": 0.416667,
-      "domain_kind": "secondary",
-      "role": "derived",
-      "source_pin": "Note"
     }
   ],
   "interface_type": "can",
@@ -340,7 +139,7 @@
       "matched_token": "CAN\n"
     }
   ],
-  "class_path": "digital_cmd_driven",
+  "class_path": "digital_arithmetic_primitive",
   "module_role": "Wireless personal-area-network protocol stack specification. Defines the full BLE stack (Volume 6 LE Controller PHY + Link Layer + Direct Test Mode; Volume 3 Host = L2CAP, ATT, GATT, SMP, GAP) plus the Host Controller Interface (Volume 4 Part E) that bridges Controller and Host. SoC-internal hardware register map of a BLE controller is NOT specified — that is vendor-specific.",
   "integration_overview": {
     "host_bus_side": "8-bit data bus + 3 address pins + 3 chip-select pins + RD/WR strobes + optional ADS latch + INTR + DDIS bus-direction signal.",

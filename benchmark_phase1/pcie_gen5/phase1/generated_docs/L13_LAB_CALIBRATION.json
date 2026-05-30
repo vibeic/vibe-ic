@@ -17,14 +17,6 @@
   "class_path": "digital_cmd_driven",
   "lab_calibration_present": false,
   "notes": "PCI Express 5.0 mandates Lane Margining at the Receiver — a protocol-level, in-system eye-margin probe that runs in L0 without interrupting traffic. External compliance testing follows the PCI-SIG Compliance Program. PHY transceivers implement closed-loop adaptive CTLE/DFE + CDR + impedance trim per-implementation.",
-  "board_bring_up_characterizations_typical": [
-    "TCK frequency sweep — sweep from 1 MHz up to the slowest device's max TCK; identify the safe operating frequency on the assembled board.",
-    "Signal integrity on long chains — measure TDI/TDO/TMS/TCK edges at the end of the chain; verify rise/fall times meet each device's tSU/tH.",
-    "Pull-up sizing on TMS/TDI/TRST — verify pull-up holds TMS HIGH (default toward TestLogicReset) and TDI HIGH (default BYPASS) when the tester is absent.",
-    "TDO 3-state transition timing — measure TDO leaving 3-state on entering ShiftIR/ShiftDR and re-entering 3-state on exiting.",
-    "Backplane multidrop signal characterization — verify ring / star / ASP-enabled chains keep signal margins.",
-    "TRST minimum pulse width — verify the board-level TRST glitch filter (if any) does not mask short TRST pulses."
-  ],
   "calibration_categories": [
     {
       "name": "Eye diagram (HS pair)",

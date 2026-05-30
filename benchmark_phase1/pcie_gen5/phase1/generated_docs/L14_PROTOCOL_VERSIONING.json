@@ -34,22 +34,12 @@
         "trap": "A device advertising Alternate Protocol but implementing only base PCIe must reject the negotiation cleanly."
       }
     ],
-    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
     "spec_version": "PCI Express Base Specification Revision 5.0 (2019)",
     "previous_versions": [
       "PCI Express Base Specification 1.0 (2002) — 2.5 GT/s, 8b/10b",
       "PCI Express Base Specification 2.0 (2007) — 5 GT/s, 8b/10b",
       "PCI Express Base Specification 3.0 (2010) — 8 GT/s, 128b/130b",
       "PCI Express Base Specification 4.0 (2017) — 16 GT/s, 128b/130b, up to two retimers"
-    ],
-    "post_primer_evolution_industry_note": [
-      "IEEE Std 1149.1-2001 — major revision; mandatory IDCODE (when Device ID register is present), tightened BSDL, post-1990 cleanup.",
-      "IEEE Std 1149.1-2013 — further revision; programmable test access (PDL), BSDL packaging, ICL/PDL Tcl-bindings via IEEE 1687 IJTAG.",
-      "IEEE Std 1149.4 — Mixed-Signal Test Bus (analog boundary scan, layered on 1149.1).",
-      "IEEE Std 1149.6 — Advanced I/O test (AC-coupled and differential pin testing).",
-      "IEEE Std 1149.7 — Compact JTAG (cJTAG); 2-pin reduction of 1149.1.",
-      "IEEE Std 1687-2014 — Internal JTAG (IJTAG); standardized hierarchical instrument access on top of 1149.1.",
-      "ARM JTAG-DP / SWD — ARM CoreSight debug access port; layered on 1149.1 (or 2-pin Serial Wire Debug)."
     ],
     "key_changes": [
       {
@@ -71,7 +61,8 @@
         "encoding": "PAM4 + FEC + Flit",
         "summary": "Doubles to 128 GT/s; FLIT-based mandatory."
       }
-    ]
+    ],
+    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
   },
   "extraction_status": "EXTRACTION_FOUND_NOTHING",
   "schema_version": "v0.1.62",

@@ -1,26 +1,26 @@
 # Extraction coverage report
 
 - denominator (unique literals in input_doc/): **3219**
-- numerator (cited in L*.json extraction_evidence): **3219**
-- **overall.pct = 100.0%**
-- status: **PASS** (target ≥80%)
-- curated: **3219/3219 = 100.0%**
-- hands_on: **3260/3260 = 100.0%**
+- numerator (cited in L*.json extraction_evidence): **2198**
+- **overall.pct = 68.3%**
+- status: **FAIL** (target ≥80%)
+- curated: **2198/3219 = 68.3%**
+- hands_on: **2236/3257 = 68.7%**
 
 ## Per-L-doc
 
-- L1_DATASHEET: evidence=12 todo=0
+- L1_DATASHEET: evidence=6 todo=0
 - L2_FRS: evidence=24 todo=0
-- L3_CMD_PROTOCOL: evidence=20 todo=0
+- L3_CMD_PROTOCOL: evidence=2 todo=0
 - L4_REGMAP: evidence=0 todo=0
 - L5_ADI_SPEC: evidence=0 todo=0
-- L6_CONTROL_LOGIC: evidence=17 todo=0
+- L6_CONTROL_LOGIC: evidence=6 todo=0
 - L7_TEST_DEBUG: evidence=0 todo=0
 - L8_RTL_CONSTANTS: evidence=1 todo=0
-- L9_INTEGRATION_SPEC: evidence=2 todo=0
-- L10_TEST_CASES: evidence=24 todo=0
+- L9_INTEGRATION_SPEC: evidence=0 todo=0
+- L10_TEST_CASES: evidence=0 todo=0
 - L11_OTP_CONTENT: evidence=0 todo=0
-- L12_BEHAVIORAL_SEQUENCES: evidence=16 todo=0
+- L12_BEHAVIORAL_SEQUENCES: evidence=0 todo=0
 - L13_LAB_CALIBRATION: evidence=0 todo=0
 - L8_TIMING_WAVEFORM: evidence=0 todo=0
 - L14_PROTOCOL_VERSIONING: evidence=0 todo=0

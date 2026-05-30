@@ -2,25 +2,25 @@
   "overall": {
     "denominator": 1599,
     "total": 1879,
-    "numerator": 1599,
-    "pct": 100.0,
+    "numerator": 1557,
+    "pct": 97.4,
     "target_pct": 80.0,
     "status": "PASS"
   },
   "curated": {
     "denominator": 1599,
-    "numerator": 1599,
-    "pct": 100.0
+    "numerator": 1557,
+    "pct": 97.4
   },
   "hands_on": {
     "denominator": 1646,
-    "numerator": 1646,
-    "pct": 100.0
+    "numerator": 1604,
+    "pct": 97.4
   },
   "per_l_doc": [
     {
       "name": "L1_DATASHEET",
-      "evidence_count": 21,
+      "evidence_count": 12,
       "todo_count": 0
     },
     {

@@ -807,6 +807,23 @@ def apply_pcie_synth(generated_docs_dir: Path, is_pcie: bool,
             "Space, Chapter 6 power management) that map to a formal "
             "PCI-SIG Compliance Program, but the spec itself does not "
             "include a testbench.")
+        # v0.1.90 — FORCE-clear hallucinated per-opcode `test_cases` +
+        # `extraction_evidence`, mirroring jtag_protocol_synth (which carries
+        # the same fix). The upstream `gen_l10_test_cases` in
+        # phase1_doc_one_shot_runner.py scans L3.opcodes and stamps a
+        # happy-path + pre-wake-false case per opcode with an `opcode_hex`
+        # field. PCIe is a LAYERED PACKET protocol (TLP / DLLP / LTSSM ordered
+        # sets), NOT byte-opcode-driven — those auto-stamped `opcode_hex: 0x11`
+        # entries are hallucinations flagged by l_doc_parity_diff's
+        # HALLUCINATION_HEURISTICS. They were previously masked because a PCIe
+        # card carries a JTAG TAP and the (now primary-subject-gated) JTAG
+        # synth happened to clear L10 first; the v0.1.90 primary-subject guard
+        # correctly stops JTAG firing on a PCIe doc, exposing this latent gap.
+        # Chip-AGNOSTIC doctrine (per jtag_protocol_synth): every
+        # protocol-specific synth that is NOT byte-opcode-driven must clear
+        # gen_l10_test_cases output.
+        d["test_cases"] = []
+        d["extraction_evidence"] = {}
         d.setdefault("derived_compliance_test_categories", [
             "LTSSM bring-up: Detect → Polling (TS1 exchange) → Configuration (Link width + Lane number negotiation) → L0.",
             "Receiver detection on TX termination via differential-detect circuit.",

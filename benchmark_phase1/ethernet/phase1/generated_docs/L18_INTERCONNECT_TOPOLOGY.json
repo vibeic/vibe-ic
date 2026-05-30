@@ -16,9 +16,7 @@
       "are": "SLAVE.) Bit 10.15 of",
       "manually": "become the MAS-",
       "register": "a 1. A PHY",
-      "ter": "1. When the jitter",
-      "ifHighSpeed": "zero",
-      "when": "true"
+      "ter": "1. When the jitter"
     },
     "typical_topologies": [
       "STA and a single PHY, the signal’s path is a point-to-point transmission path. When a signal goes between",

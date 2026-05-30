@@ -63,27 +63,6 @@
     "type": "Layered, point-to-point, dual-simplex, differentially-signaled, packet-based serial I/O interconnect operating at 32 GT/s per lane (Gen5).",
     "duplex": "dual-simplex (independent TX + RX differential pairs per Lane; both directions transmit simultaneously and continuously)",
     "synchronous": true,
-    "wire_names_mandatory": [
-      "TCK",
-      "TMS",
-      "TDI",
-      "TDO"
-    ],
-    "wire_names_optional": [
-      "TRST"
-    ],
-    "wire_count_mandatory": 4,
-    "wire_count_with_trst": 5,
-    "fsm_state_count": 16,
-    "instruction_register_min_width_bits": 2,
-    "data_registers": [
-      "Bypass (1 bit, mandatory)",
-      "Boundary-Scan Register (BSR, one cell per external I/O, mandatory)",
-      "Device Identification Register (32 bits, optional)",
-      "User-defined Data Registers (optional)"
-    ],
-    "controller_role": "Tester / test controller drives TCK + TMS + TDI; sequences the TAP FSM through the desired Capture/Shift/Update path.",
-    "target_role": "Each IEEE 1149.1-compatible device contains its own TAP controller; samples TMS on the rising edge of TCK and updates its FSM accordingly. TDO is driven on the falling edge of TCK.",
     "wire_names": [
       "CLK_P / CLK_N (Clock Lane differential pair)",
       "DAT0_P / DAT0_N (Data Lane 0 differential pair)",
@@ -91,6 +70,8 @@
     ],
     "dual_mode_signaling": "HS (high-speed terminated differential 100-200 mV) + LP (low-power single-ended 1.2 V CMOS); share same wires.",
     "DDR_clock": "Both edges of Clock Lane latch one bit per Data Lane; Data-rate = 2 × Clock-Lane-frequency.",
+    "controller_role": "Source (image sensor / display panel side) drives all HS payload; both ends can initiate LP escape.",
+    "target_role": "Sink (application processor) receives HS payload, decodes CSI-2 packets, may participate in LP escape (e.g. acknowledge ULPS exit).",
     "synchronous_serial": false,
     "embedded_clock": true,
     "encoding": "128b/130b (carried forward from Gen3/Gen4): a 130-bit block carries a 2-bit sync header + 128 bits of scrambled payload (~1.54% overhead). Replaces the 8b/10b of Gen1/Gen2.",
@@ -816,16 +797,20 @@
   ],
   "configurations": [
     {
-      "name": "Single-device JTAG",
-      "description": "One TAP-equipped device on the board; tester drives TCK/TMS/TDI; reads TDO directly."
+      "name": "1 Data Lane",
+      "description": "Smallest config: 1 Clock Lane + 1 Data Lane. Single byte stream."
     },
     {
-      "name": "Daisy-chain JTAG",
-      "description": "Multiple TAP-equipped devices wired TDO→TDI in series; one shared TCK + one shared TMS for the whole chain. Total scan length = sum of selected register widths in each device."
+      "name": "2 Data Lanes",
+      "description": "1 Clock Lane + 2 Data Lanes interleaved byte 0/byte 1."
     },
     {
-      "name": "Backplane multidrop",
-      "description": "Boards with a JTAG ring or star configuration, possibly using Addressable Scan Ports (ASPs) to select which board(s) participate in a given scan."
+      "name": "3 Data Lanes",
+      "description": "1 Clock Lane + 3 Data Lanes (less common)."
+    },
+    {
+      "name": "4 Data Lanes",
+      "description": "Maximum: 1 Clock Lane + 4 Data Lanes; 4 × per-lane bandwidth."
     }
   ],
   "error_response_conditions": [

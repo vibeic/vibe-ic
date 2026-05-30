@@ -42,23 +42,9 @@
       "period_ns": 0.402658,
       "domain_kind": "primary",
       "source_pin": "clk"
-    },
-    {
-      "name": "Note",
-      "freq_mhz": 2400.0,
-      "source": "BLE_Spec.pdf",
-      "reset_strategy": "unspecified",
-      "domain": "EXTRACTED",
-      "extraction_strategy": "named_mode_clock_voltage_triplet",
-      "low_confidence": true,
-      "freq_hz": 2400000000,
-      "period_ns": 0.416667,
-      "domain_kind": "secondary",
-      "role": "derived",
-      "source_pin": "Note"
     }
   ],
-  "class_path": "digital_cmd_driven",
+  "class_path": "digital_arithmetic_primitive",
   "clock_mhz": 2400.0,
   "clock_and_reset_waveform": {
     "XIN": "External clock input; ≤ 24.0 MHz; drives baud rate generator.",

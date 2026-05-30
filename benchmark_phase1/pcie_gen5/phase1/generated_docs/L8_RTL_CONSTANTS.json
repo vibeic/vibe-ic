@@ -150,25 +150,6 @@
     }
   ],
   "width_parameters": {
-    "MANDATORY_PIN_COUNT": 4,
-    "OPTIONAL_PIN_COUNT": 1,
-    "EXTERNAL_PIN_COUNT_TOTAL": 5,
-    "TAP_FSM_STATE_COUNT": 16,
-    "TAP_FSM_STATE_ENCODING_BITS": 4,
-    "IR_MIN_WIDTH_BITS": 2,
-    "IR_TYPICAL_WIDTH_BITS_EXAMPLES": [
-      2,
-      3,
-      4,
-      5,
-      6,
-      8,
-      10
-    ],
-    "BYPASS_WIDTH_BITS": 1,
-    "IDCODE_WIDTH_BITS": 32,
-    "BSR_BSC_COUNT": "Implementation-defined: 1 BSC per external I/O pin (sum of input cells + output cells + bidir cells + control cells)",
-    "BIT_ORDER_IN_SHIFT": "LSB first",
     "CLOCK_LANE_PAIRS": 1,
     "DATA_LANE_PAIRS_MIN": 1,
     "DATA_LANE_PAIRS_MAX": 4,
@@ -260,132 +241,44 @@
     "TX_PRESET_RANGE": "P0-P10",
     "LANE_MARGINING_AT_RECEIVER": "mandatory"
   },
-  "tap_state_names_in_canonical_order": [
-    "TestLogicReset",
-    "RunTestIdle",
-    "SelectDRScan",
-    "CaptureDR",
-    "ShiftDR",
-    "Exit1DR",
-    "PauseDR",
-    "Exit2DR",
-    "UpdateDR",
-    "SelectIRScan",
-    "CaptureIR",
-    "ShiftIR",
-    "Exit1IR",
-    "PauseIR",
-    "Exit2IR",
-    "UpdateIR"
-  ],
-  "tap_state_transition_table_tms_driven": {
-    "header": [
-      "current_state",
-      "next_state_if_TMS=0",
-      "next_state_if_TMS=1"
-    ],
-    "rows": [
-      [
-        "TestLogicReset",
-        "RunTestIdle",
-        "TestLogicReset"
-      ],
-      [
-        "RunTestIdle",
-        "RunTestIdle",
-        "SelectDRScan"
-      ],
-      [
-        "SelectDRScan",
-        "CaptureDR",
-        "SelectIRScan"
-      ],
-      [
-        "CaptureDR",
-        "ShiftDR",
-        "Exit1DR"
-      ],
-      [
-        "ShiftDR",
-        "ShiftDR",
-        "Exit1DR"
-      ],
-      [
-        "Exit1DR",
-        "PauseDR",
-        "UpdateDR"
-      ],
-      [
-        "PauseDR",
-        "PauseDR",
-        "Exit2DR"
-      ],
-      [
-        "Exit2DR",
-        "ShiftDR",
-        "UpdateDR"
-      ],
-      [
-        "UpdateDR",
-        "RunTestIdle",
-        "SelectDRScan"
-      ],
-      [
-        "SelectIRScan",
-        "CaptureIR",
-        "TestLogicReset"
-      ],
-      [
-        "CaptureIR",
-        "ShiftIR",
-        "Exit1IR"
-      ],
-      [
-        "ShiftIR",
-        "ShiftIR",
-        "Exit1IR"
-      ],
-      [
-        "Exit1IR",
-        "PauseIR",
-        "UpdateIR"
-      ],
-      [
-        "PauseIR",
-        "PauseIR",
-        "Exit2IR"
-      ],
-      [
-        "Exit2IR",
-        "ShiftIR",
-        "UpdateIR"
-      ],
-      [
-        "UpdateIR",
-        "RunTestIdle",
-        "SelectDRScan"
-      ]
-    ]
-  },
   "voltage_levels": {
-    "VDD_at_TAP_pins": "Per-device VDD-IO; not specified by IEEE 1149.1.",
-    "signaling": "Digital CMOS / TTL — per-device datasheet."
+    "HS_differential_swing_mV_min": 100,
+    "HS_differential_swing_mV_max": 200,
+    "HS_termination_ohm": 100,
+    "LP_swing_V": 1.2,
+    "LP_termination": "unterminated"
+  },
+  "data_rate_constants": {
+    "HS_min_Mbps_per_lane": 80,
+    "HS_max_Mbps_per_lane_v1_0": 1000,
+    "HS_max_Mbps_per_lane_v1_1": 1500,
+    "HS_max_Mbps_per_lane_v1_2": 2500,
+    "LP_max_Mbps_per_lane": 10
   },
   "key_constants_for_RTL_authoring": {
-    "tap_power_on_default_state": "TestLogicReset",
-    "tap_unconditional_reset_rule": "TMS=1 for 5 consecutive TCK rising edges → TestLogicReset",
-    "asynchronous_reset_optional": "TRST=LOW → TestLogicReset (independent of TCK / TMS)",
-    "tms_sample_edge": "TCK rising edge",
-    "tdi_sample_edge": "TCK rising edge",
-    "tdo_drive_edge": "TCK falling edge",
-    "tdo_3state_in_non_shift_states": true,
-    "shift_bit_order": "LSB first",
-    "ir_capture_lsb_pair": "01 (spec-mandated for IR liveness check)",
-    "bypass_capture_value": 0,
-    "device_id_lsb_one": 1,
-    "post_reset_default_instruction": "IDCODE if Device ID register implemented else BYPASS",
-    "bypass_opcode_convention": "all-1s (so pulled-up TDI defaults to BYPASS, not to a board-driving instruction)",
-    "extest_opcode_convention": "all-0s (by IEEE 1149.1 convention)",
+    "SYNC_PATTERN_8bit_value": "8'b00011101",
+    "SYNC_PATTERN_on_the_wire_LSB_first": "10111000",
+    "SYNC_PATTERN_hex": "0x1D",
+    "ECC_polynomial_class": "Extended Hamming(8,4) — single-bit correct, double-bit detect.",
+    "ECC_data_bits_protected": 24,
+    "ECC_parity_bits": 6,
+    "ECC_extension_bits": 2,
+    "CRC_polynomial": "x^16 + x^12 + x^5 + 1",
+    "CRC_polynomial_hex": "0x1021",
+    "CRC_initial_value_hex": "0xFFFF",
+    "CRC_shift_direction": "MSB-first",
+    "CRC_covers": "Long Packet payload bytes only (not header).",
+    "multilane_byte_interleave_rule": "byte N → lane (N mod N_data_lanes); byte 0 → lane 0; byte 1 → lane 1; ...",
+    "DDR_clock_lane": true,
+    "data_rate_to_clock_rate_ratio": 2,
+    "is_packet_based": true,
+    "is_streaming": true,
+    "burst_based": true,
+    "byte_oriented": true,
+    "no_handshake_no_retry": true,
+    "is_source_synchronous": true,
+    "data_lane_LSB_first_within_byte": true,
+    "header_byte_order": "DI (byte 0), WC[7:0] (byte 1), WC[15:8] (byte 2), ECC (byte 3); little-endian over the wire.",
     "is_serial": true,
     "is_differential": true,
     "is_dual_simplex": true,
@@ -401,42 +294,6 @@
     "retimers_max_per_link": 2,
     "lane_margining_mandatory": true
   },
-  "mandatory_instructions": [
-    "BYPASS",
-    "EXTEST",
-    "SAMPLE/PRELOAD"
-  ],
-  "optional_instructions": [
-    "INTEST",
-    "RUNBIST",
-    "CLAMP",
-    "HIGHZ",
-    "IDCODE",
-    "USERCODE"
-  ],
-  "data_register_widths": {
-    "Bypass_bits": 1,
-    "BSR_bits": "implementation-defined (1 BSC per external I/O pin)",
-    "IDCODE_bits": 32,
-    "User_DRs": "implementation-defined"
-  },
-  "device_id_field_layout": {
-    "version_bits": "31:28",
-    "part_number_bits": "27:12",
-    "manufacturer_id_bits": "11:1",
-    "lsb_one_bit": "0"
-  },
-  "default_signal_values_when_idle": {
-    "TX_in_Electrical_Idle": "Output driven to common-mode; no block stream.",
-    "TX_in_L0_no_packet": "Continuously transmit scrambled Logical Idle in 128b/130b Data Blocks; SKP ordered sets for clock-tolerance + margining control."
-  },
-  "data_rate_constants": {
-    "HS_min_Mbps_per_lane": 80,
-    "HS_max_Mbps_per_lane_v1_0": 1000,
-    "HS_max_Mbps_per_lane_v1_1": 1500,
-    "HS_max_Mbps_per_lane_v1_2": 2500,
-    "LP_max_Mbps_per_lane": 10
-  },
   "named_timing_parameters_D_PHY": {
     "T_LPX_ns_typ": "50 (min) — LP transmit length",
     "T_HS_PREPARE_ns": "40 + 4 × UI .. 85 + 6 × UI — HS driver prepare time",
@@ -447,6 +304,10 @@
     "T_CLK_PRE_ns_min": "8 × UI — Clock Lane HS active before Data Lane HS",
     "T_CLK_POST_ns_min": "60 + 52 × UI — Clock Lane HS active after last Data-Lane bit",
     "UI_definition": "Unit Interval = 1 / (2 × Clock-Lane-Hz) = 1 / data-rate-per-lane"
+  },
+  "default_signal_values_when_idle": {
+    "TX_in_Electrical_Idle": "Output driven to common-mode; no block stream.",
+    "TX_in_L0_no_packet": "Continuously transmit scrambled Logical Idle in 128b/130b Data Blocks; SKP ordered sets for clock-tolerance + margining control."
   },
   "special_symbols_8b10b": {
     "COM": {

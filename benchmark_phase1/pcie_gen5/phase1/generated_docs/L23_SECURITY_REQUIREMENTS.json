@@ -10,25 +10,6 @@
     "secure_boot": false,
     "security_requirements_present": false,
     "notes": "PCI Express 5.0 base transactions are in plaintext on the Link; CRC + ECRC provide anti-corruption only. Cryptographic security (IDE link encryption, CMA/SPDM attestation) is provided by separate ECNs layered above the base PCIe 5.0 data path. The mandatory Lane Margining feature is a signal-integrity diagnostic, not a security feature.",
-    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
-    "industrial_security_extensions_layered_on_jtag": [
-      "IEEE 1149.1-2013 + IEEE 1687-2014 — added PDL (Procedural Description Language) which can carry vendor-defined authentication challenges before access to selected instruments.",
-      "ARM CoreSight DAP authentication interface — debug-port locking via an external authentication signal (e.g. DBGEN / NIDEN / SPIDEN / SPNIDEN).",
-      "FPGA vendor JTAG security — Intel/Altera and AMD/Xilinx parts add BSDL-undocumented vendor instructions for bitstream encryption-key handling + secure-boot enrolment + fuse-burn-only debug disable.",
-      "Smartcard / secure-element JTAG fuses — single-use fuses that permanently disable the TAP (or restrict it to BYPASS-only) post-production.",
-      "IEEE 1149.7 cJTAG — 2-pin compact JTAG with built-in star topology; can carry encrypted instrument access on top of the standard TAP."
-    ],
-    "threat_model_for_open_jtag": [
-      "An attacker with physical board access can connect a JTAG tester and read out IDCODE / scan boundary pins / drive internal scan paths.",
-      "Vendor-specific user-defined data registers may expose internal memory (e.g. SRAM-scan, flash-programming) — a chain-of-custody concern post-production.",
-      "Bus-monitoring on the TAP can recover proprietary BSDL extensions reverse-engineerable from observed shift patterns."
-    ],
-    "common_production_mitigations": [
-      "Burn a JTAG-disable fuse at post-production test (the TAP responds only to TestLogicReset + BYPASS thereafter; or the TAP is completely disabled).",
-      "Gate the TAP behind a vendor-specific authentication state (e.g. ARM CoreSight DBGEN, FPGA secure-key challenge).",
-      "Remove the JTAG header from production boards (so attackers must solder probes onto fine-pitch test pads).",
-      "Use cJTAG (1149.7) for production debug; the compact 2-pin star topology is less convenient for casual probing."
-    ],
     "anti_corruption_mechanisms": [
       "Header ECC: extended Hamming(8,4); single-bit-correct, double-bit-detect over DI + WC.",
       "Payload CRC-16: polynomial 0x1021, init 0xFFFF, MSB-first; reports payload corruption (no retry).",
@@ -52,7 +33,8 @@
       "Component Measurement and Authentication (CMA) / SPDM — device attestation, layered above the base protocol.",
       "Compute Express Link (CXL), running on the PCIe 5.0 PHY via Alternate Protocol Negotiation, adds CXL.io/CXL.cache/CXL.mem with its own CXL IDE link security.",
       "Access Control Services (ACS) and SR-IOV — peer-to-peer routing restriction / VM isolation; NOT cryptographic."
-    ]
+    ],
+    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
   },
   "extraction_hints": [
     "Look for key-management, side-channel, secure-boot sections.",

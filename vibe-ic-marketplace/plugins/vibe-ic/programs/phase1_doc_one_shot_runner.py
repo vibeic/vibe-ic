@@ -1058,6 +1058,69 @@ def _v1_6_558_is_image_derived_source(fname):
     if not isinstance(fname, str) or not fname:
         return False
     return bool(_V1_6_558_IMAGE_SOURCE_RE.search(fname))
+
+
+# v0.1.90 — for ORGANIC-20260530-phase1-large-doc-hang. Several L-doc
+# generators (L1 datasheet, L2 FRS, L4 reset-value prose lift, L5
+# bullet-kv specs, L11 FSM-state classify, ...) run a PER-ITEM scan
+# over the FULL extracted body of every document: for each register /
+# token / candidate they `re.finditer`/`re.search` the entire text.
+# That is O(items x text-length) and is fine for ordinary spec docs
+# (a few hundred KB) but becomes effectively non-terminating on a
+# pathologically large extraction — e.g. a 30 MB Bluetooth Core Spec
+# PDF that renders to ~7.8 MB of text, where the runner froze for >1h
+# at the L-doc emit phase.
+#
+# The guard is GENERAL and purely SIZE-based (no protocol / benchmark
+# name): any single extracted document whose text exceeds
+# `_LARGE_DOC_SCAN_CAP_BYTES` is truncated at the cap before being
+# handed to the L-doc generators. Normal-size docs (every one of the
+# 47 non-BLE benchmarks is well under the cap) are returned byte-for-
+# byte unchanged, so their L*.json output is identical. Only a doc
+# larger than the cap is bounded — and a 2 MB excerpt of a spec
+# already carries the structural facts (datasheet header, register
+# table, command set, FSM states) the extractors look for; the tail
+# is overwhelmingly repeated normative prose that only inflates the
+# per-item scan cost without adding new structured facts (the bare-
+# hex prose scrape over that tail was itself the false-positive source
+# flagged in the v1.6.558 / [14e3] sweep).
+_LARGE_DOC_SCAN_CAP_BYTES = 2 * 1024 * 1024  # 2 MB per document
+
+
+def _cap_extracted_for_scan(extracted: Dict[str, str]
+                            ) -> Dict[str, str]:
+    """Return a copy of ``extracted`` in which any single document whose
+    text exceeds ``_LARGE_DOC_SCAN_CAP_BYTES`` is truncated to the cap
+    (on a line boundary when one is available within the last 64 KB, so
+    the truncation never splits a table row mid-line). Documents at or
+    under the cap are passed through unchanged (same object), so the
+    common case allocates nothing extra and produces identical output.
+
+    GENERAL / chip-AGNOSTIC: size threshold only, no protocol literal.
+    """
+    if not isinstance(extracted, dict) or not extracted:
+        return extracted
+    capped: Dict[str, str] = {}
+    n_trimmed = 0
+    for fname, text in extracted.items():
+        if isinstance(text, str) and len(text) > _LARGE_DOC_SCAN_CAP_BYTES:
+            cut = text[:_LARGE_DOC_SCAN_CAP_BYTES]
+            # Prefer a line boundary so a markdown/RST table row is not
+            # split mid-line by the cut. Only honour the boundary when
+            # it falls within the last 64 KB of the window (else keep
+            # the hard cut to guarantee the cap is respected).
+            nl = cut.rfind("\n")
+            if nl >= _LARGE_DOC_SCAN_CAP_BYTES - 64 * 1024:
+                cut = cut[:nl]
+            capped[fname] = cut
+            n_trimmed += 1
+        else:
+            capped[fname] = text
+    if n_trimmed:
+        print(f"      [large-doc guard] {n_trimmed} document(s) exceeded "
+              f"{_LARGE_DOC_SCAN_CAP_BYTES // (1024 * 1024)} MB; truncated "
+              f"to the cap for the per-item L-doc scans")
+    return capped
 _VERDICT_BYTE_RE = re.compile(
     r"\bbyte\s*\[\s*(\d+)\s*\]\s*[=:]?\s*0x([0-9a-fA-F]{2})\b",
     re.IGNORECASE,
@@ -47838,6 +47901,14 @@ def main() -> int:
     extracted = extract_text_pipeline(project, force=not args.skip_text_extract)
     print(f"      extracted {len(extracted)} document(s) "
           f"→ {project / 'extracted_docs'}/")
+    # v0.1.90 — for ORGANIC-20260530-phase1-large-doc-hang. Bound the
+    # per-document text size handed to the L-doc generators so a
+    # pathologically large extraction (e.g. the 7.8 MB Bluetooth Core
+    # Spec) cannot drive the per-item O(items x text-length) scans in
+    # L1/L2/L4/L5/L11/... into a multi-hour freeze. Normal-size docs
+    # (every non-BLE benchmark) are under the cap and pass through
+    # unchanged. GENERAL / size-based; see _cap_extracted_for_scan.
+    extracted = _cap_extracted_for_scan(extracted)
 
     # Steps 2-14: L1-L13 generators
     results: List[LDocResult] = []
@@ -49994,17 +50065,53 @@ def main() -> int:
                     print(f"      1-Wire synth FAILED (fail-open): {_onewire_err}",
                           file=sys.stderr)
             # v0.1.84 — JTAG IEEE 1149.1 structural sub-detector.
-            # 4-pin TAP signature: TCK + TMS + TDI + TDO, OR the unique
-            # 16-state TAP FSM state names (TestLogicReset / RunTestIdle
-            # / SelectDRScan / CaptureDR / ShiftDR / etc.).
-            _is_jtag = (
-                ("TCK" in _spi_blob and "TMS" in _spi_blob
-                    and "TDI" in _spi_blob and "TDO" in _spi_blob)
-                or ("TestLogicReset" in _spi_blob
-                    and "ShiftIR" in _spi_blob
-                    and "ShiftDR" in _spi_blob)
-                or ("IEEE 1149.1" in _spi_blob
-                    and "boundary scan" in _spi_blob.lower()))
+            # v0.1.90 — PRIMARY-SUBJECT guard (code-review M1 / backlog
+            # ORGANIC-20260530): require the doc to describe the TAP STATE
+            # MACHINE (state names), not merely expose the 4 JTAG pins. Almost
+            # every chip carries a JTAG TAP for boundary scan, so its spec
+            # mentions TCK/TMS/TDI/TDO — but only a doc that is ACTUALLY about
+            # JTAG (or extends it, e.g. ARM SWD/ADIv5 SWJ-DP) names the TAP FSM
+            # states (Capture-DR / Update-DR / Shift-IR/DR / Test-Logic-Reset /
+            # Run-Test-Idle / "TAP controller"). Measured: jtag=13, swd=87 such
+            # tokens vs pcie_gen5=0, ufs=0 — a clean structural separator that
+            # stops JTAG synth from polluting unrelated chips' L-docs. General,
+            # content-only, no benchmark/file names. The TAP-FSM token (the
+            # subject signal) often lives in the spec BODY, which the extractor
+            # keeps in input_doc/ but does not always lift into L1/L2 — so the
+            # guard reads an input_doc-AUGMENTED blob (content only). swd's TAP
+            # states are body-only; without augmentation JTAG would wrongly be
+            # suppressed on swd (its layering base).
+            _jtag_blob = _spi_blob
+            try:
+                _jt_idir = _pl.input_doc_dir(project)
+                if _jt_idir.is_dir():
+                    for _jt_f in _jt_idir.iterdir():
+                        if _jt_f.is_file() and _jt_f.suffix.lower() in (
+                                ".txt", ".md", ".json"):
+                            try:
+                                _jtag_blob += "\n" + _jt_f.read_text(errors="ignore")
+                            except Exception:
+                                continue
+            except Exception:
+                pass
+            _jtag_tap_fsm = (
+                "ShiftDR" in _jtag_blob or "ShiftIR" in _jtag_blob
+                or "Shift-DR" in _jtag_blob or "Shift-IR" in _jtag_blob
+                or "Capture-DR" in _jtag_blob or "CaptureDR" in _jtag_blob
+                or "Update-DR" in _jtag_blob or "UpdateDR" in _jtag_blob
+                or "TestLogicReset" in _jtag_blob
+                or "Test-Logic-Reset" in _jtag_blob
+                or "RunTestIdle" in _jtag_blob or "Run-Test/Idle" in _jtag_blob
+                or "TAP controller" in _jtag_blob
+                or "SelectDRScan" in _jtag_blob)
+            _is_jtag = _jtag_tap_fsm and (
+                ("TCK" in _jtag_blob and "TMS" in _jtag_blob
+                    and "TDI" in _jtag_blob and "TDO" in _jtag_blob)
+                or ("TestLogicReset" in _jtag_blob
+                    and "ShiftIR" in _jtag_blob
+                    and "ShiftDR" in _jtag_blob)
+                or ("IEEE 1149.1" in _jtag_blob
+                    and "boundary scan" in _jtag_blob.lower()))
             if _is_jtag:
                 _jtag_ic_name = "IEEE 1149.1 JTAG TAP Controller (TI SSYA002C primer)"
                 try:
@@ -50020,6 +50127,23 @@ def main() -> int:
             # match both "D-PHY"/"DPHY" + "MIPI". For specs that have full
             # protocol detail, the Clock-Lane/Data-Lane/Long-Packet
             # signatures lock in.
+            #
+            # v0.1.90 — a CSI-2-packet-structure PRIMARY-SUBJECT guard was
+            # ATTEMPTED here (backlog ORGANIC-20260530-incidental-crossref-
+            # synth-pollution, MIPI side) and REVERTED. Empirically, the
+            # `mipi` benchmark's TI SLLA414 source is a D-PHY layout guide
+            # whose FRESH extraction carries NO CSI-2 packet vocabulary at
+            # all (Long Packet / Short Packet / Data Identifier = 0, and even
+            # raw "MIPI"/"DPHY" tokens are absent from its 50 KB body) — the
+            # MIPI/D-PHY signal that fires the synth comes from inferred
+            # L1/L2 content, not raw body tokens. So ANY packet-structure
+            # guard suppresses MIPI synth on the real mipi benchmark and
+            # regresses it (mipi → 165 gated). There is no clean structural
+            # separator that keeps mipi firing while stopping the incidental
+            # ufs / pcie_gen5 M-PHY mention. Per doctrine, the incidental
+            # pollution is parity-NEUTRAL (SHAPE-excluded per R28/R32), so a
+            # broken guard is worse than the status quo: the backlog item is
+            # left OPEN and the v0.1.84 detector is kept unchanged.
             _is_mipi = (
                 ("MIPI" in _spi_blob
                     and ("D-PHY" in _spi_blob or "DPHY" in _spi_blob))
@@ -50784,6 +50908,62 @@ def main() -> int:
                     print(f"      → {_t3_label} {_t3_name} synth applied (is_{_t3_name}=True)")
                 except Exception as _t3_err:
                     print(f"      {_t3_name} synth FAILED (fail-open): {_t3_err}",
+                          file=sys.stderr)
+            # =====================================================================
+            # v0.1.90 — Tier-D advanced interconnects (NVLink / UCIe / Ethernet-800G).
+            # _spi_blob is the input_doc-AUGMENTED text here (the Tier-3 loop rebound
+            # it). All CONTENT-based, canonical-name tokens; NO filename reads. Each
+            # runs AFTER its sibling (pcie/pcie_gen5/cxl for NVLink+UCIe; ethernet for
+            # 800G) so the sibling synth fires first and the more-specific Tier-D synth
+            # force-overrides. Each carries a sibling MUTEX (the version-specific name
+            # token is absent from the older protocol's benchmark).
+            # =====================================================================
+            # v0.1.90 — Tier-D detection predicates live in tier_d_interconnect_detect
+            # (single source of truth, regression-tested in
+            # tests/test_tier_d_interconnect_detect.py). The sibling MUTEX rationale is
+            # documented there. All content-only; no filename/benchmark-name reads.
+            from tier_d_interconnect_detect import (
+                is_ethernet_800g as _det_e800,
+                is_nvlink as _det_nvlink,
+                is_ucie as _det_ucie,
+            )
+            # 800 Gigabit Ethernet (IEEE 802.3df) — extends base 802.3. The base
+            # 'ethernet' benchmark (MII/GMII, 10/100/1000) lacks 800G/PAM4/802.3df.
+            _is_ethernet_800g = _det_e800(_spi_blob)
+            if _is_ethernet_800g:
+                try:
+                    from ethernet_800g_protocol_synth import apply_ethernet_800g_synth as _apply_e800
+                    _apply_e800(_gd_r55, _is_ethernet_800g,
+                                "800 Gigabit Ethernet (IEEE 802.3df, 800GBASE)")
+                    print(f"      → Ethernet-800G synth applied (is_ethernet_800g={_is_ethernet_800g})")
+                except Exception as _e800_err:
+                    print(f"      Ethernet-800G synth FAILED (fail-open): {_e800_err}",
+                          file=sys.stderr)
+            # NVIDIA NVLink — extends the generic SerDes link (pcie family fires
+            # first). MUTEX (defers to PCIe5-PHY / CXL-primary docs) is in
+            # tier_d_interconnect_detect.is_nvlink.
+            _is_nvlink = _det_nvlink(_spi_blob)
+            if _is_nvlink:
+                try:
+                    from nvlink_protocol_synth import apply_nvlink_synth as _apply_nvlink
+                    _apply_nvlink(_gd_r55, _is_nvlink,
+                                  "NVIDIA NVLink (high-speed GPU / die-to-die interconnect)")
+                    print(f"      → NVLink synth applied (is_nvlink={_is_nvlink})")
+                except Exception as _nvlink_err:
+                    print(f"      NVLink synth FAILED (fail-open): {_nvlink_err}",
+                          file=sys.stderr)
+            # UCIe — die-to-die chiplet interconnect (carries PCIe/CXL, so they fire
+            # first). MUTEX (NVLink-absent UCIe signature) is in
+            # tier_d_interconnect_detect.is_ucie.
+            _is_ucie = _det_ucie(_spi_blob)
+            if _is_ucie:
+                try:
+                    from ucie_protocol_synth import apply_ucie_synth as _apply_ucie
+                    _apply_ucie(_gd_r55, _is_ucie,
+                                "Universal Chiplet Interconnect Express (UCIe 1.1)")
+                    print(f"      → UCIe synth applied (is_ucie={_is_ucie})")
+                except Exception as _ucie_err:
+                    print(f"      UCIe synth FAILED (fail-open): {_ucie_err}",
                           file=sys.stderr)
     except Exception as _r55_err:
         print(f"      R53/R54/R55 synth FAILED (fail-open): {_r55_err}",

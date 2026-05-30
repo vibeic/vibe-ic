@@ -2,7 +2,382 @@
   "schema_version": 2,
   "doc_class": "cmd_protocol",
   "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
-  "opcodes": [],
+  "opcodes": [
+    {
+      "hex": "0x11",
+      "name": "WAKE",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x12",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x12",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x12",
+      "name": "CLKREQ",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x13",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x13",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x14",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x15",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x15",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x15",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x16",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x16",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "<HALLUCINATION_SCRUBBED>",
+      "name": "PRSNT2",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x18",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x18",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x19",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x1A",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x1A",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x20",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x21",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x21",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "<HALLUCINATION_SCRUBBED>",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x24",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x24",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "<HALLUCINATION_SCRUBBED>",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x25",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x25",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x27",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x28",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x28",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x28",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x29",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x29",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x30",
+      "name": "PWRBRK",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x31",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x31",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x33",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x34",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x34",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x34",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x35",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x35",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x37",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x38",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x38",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x38",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x39",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x39",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x41",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x42",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x42",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x42",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x43",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x43",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x45",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x46",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x46",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x46",
+      "name": "HSO",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x47",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x47",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "<HALLUCINATION_SCRUBBED>",
+      "name": "PRSNT2",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x49",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x49",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    },
+    {
+      "hex": "0x10",
+      "name": "GB",
+      "rx_len": "var",
+      "tx_len": "var",
+      "response_opcode_hex": "0x11",
+      "pre_wake_allowed": false,
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "response_payload_template": [
+        {
+          "byte_offset": 0,
+          "value": "0x11",
+          "description": "response opcode echo"
+        }
+      ],
+      "argument_constraints": []
+    }
+  ],
   "no_opcodes_in_input": false,
   "placeholder_opcode_count": 0,
   "no_opcode_names_in_input": false,
@@ -130,85 +505,6 @@
   },
   "class_path": "digital_cmd_driven",
   "protocol_type": "Split-transaction packet protocol with three nested packet classes: TLPs carried inside Data Link Layer wrappers (Sequence Number + LCRC), framed at the Physical Layer into 128b/130b blocks (2-bit sync header + 128-bit scrambled payload) and transmitted at 32 GT/s NRZ. Packet/transaction semantics are the same as base PCIe; the physical layer is upgraded to 32 GT/s with enhanced equalization, precoding, retimers, and Lane Margining.",
-  "instructions_mandatory": [
-    {
-      "name": "BYPASS",
-      "opcode_convention": "All-1s (e.g. 11 for 2-bit IR, 1111 for 4-bit IR)",
-      "selected_data_register": "Bypass (1 bit)",
-      "description": "Connects TDI to TDO through the 1-bit Bypass register, adding only one TCK delay to the daisy chain. Used to shorten the chain when only some devices are being tested."
-    },
-    {
-      "name": "SAMPLE/PRELOAD",
-      "opcode_convention": "Implementation-defined",
-      "selected_data_register": "Boundary-Scan Register (BSR)",
-      "description": "SAMPLE: in CaptureDR, the input BSCs capture the current value on their associated input pins and the output BSCs capture the value being driven on their output pins — a snapshot of pin activity during normal device operation. PRELOAD: in UpdateDR, the BSR contents are latched into the parallel-hold cells of the BSR so that EXTEST can begin driving the pre-loaded values without first-cycle indeterminate output."
-    },
-    {
-      "name": "EXTEST",
-      "opcode_convention": "All-0s by IEEE 1149.1 convention",
-      "selected_data_register": "Boundary-Scan Register (BSR)",
-      "description": "External test. Output BSCs drive their associated output pins from the BSR-shifted values; input BSCs observe the values at their associated input pins (which therefore reflect the board-level interconnect or upstream device's output). Used for board-etch / solder-joint / interconnect testing."
-    }
-  ],
-  "instructions_optional": [
-    {
-      "name": "INTEST",
-      "selected_data_register": "Boundary-Scan Register (BSR)",
-      "description": "Internal test. The BSR drives the device's internal logic with shifted-in stimulus (BSR acts like a slow ATE pin set on the input side) and captures the internal-logic response on the output BSCs. Allows in-system functional testing of an IC's core logic."
-    },
-    {
-      "name": "RUNBIST",
-      "selected_data_register": "Implementation-defined (typically a result register)",
-      "description": "Run Built-In Self-Test. The TAP controller transitions into RunTestIdle, which the device interprets as 'run the BIST'. The BIST completion / result is read back via the selected register."
-    },
-    {
-      "name": "CLAMP",
-      "selected_data_register": "Bypass (1 bit)",
-      "description": "Drives the output pins from the pre-loaded BSR contents (set up via SAMPLE/PRELOAD) while the bypass register sits between TDI and TDO. Used to hold output values constant while a long bypass-only shift happens."
-    },
-    {
-      "name": "HIGHZ",
-      "selected_data_register": "Bypass (1 bit)",
-      "description": "Places all output pins in the high-impedance state. Useful for board-level fault isolation — disable the device's outputs to remove driver-conflict suspects."
-    },
-    {
-      "name": "IDCODE",
-      "selected_data_register": "Device Identification Register (32 bits)",
-      "description": "Selects the 32-bit Device Identification register for shifting on TDO. The register contains version[31:28] / part-number[27:12] / manufacturer-id[11:1] / 1[0]. When a Device ID register is implemented, IDCODE is the post-reset default instruction."
-    },
-    {
-      "name": "USERCODE",
-      "selected_data_register": "Device Identification Register (32 bits)",
-      "description": "Selects the Device ID register but loads it with a user-programmable 32-bit user code (e.g. FPGA configuration version, customer revision)."
-    }
-  ],
-  "post_reset_default_instruction": "IDCODE if a Device Identification Register is implemented; otherwise BYPASS.",
-  "data_register_catalog": [
-    {
-      "name": "Bypass",
-      "width_bits": 1,
-      "scope": "Mandatory",
-      "purpose": "Single-bit TDI→TDO short-cut for BYPASS / CLAMP / HIGHZ instructions."
-    },
-    {
-      "name": "Boundary-Scan Register",
-      "width_bits": "1 BSC per external I/O pin",
-      "scope": "Mandatory",
-      "purpose": "Observation + drive of every device boundary pin for SAMPLE/PRELOAD / EXTEST / INTEST."
-    },
-    {
-      "name": "Device Identification",
-      "width_bits": 32,
-      "scope": "Optional (mandatory if IDCODE / USERCODE implemented)",
-      "purpose": "32-bit device fingerprint: version[31:28] / part-number[27:12] / manufacturer-id[11:1] / 1[0]."
-    },
-    {
-      "name": "User-defined Data Register(s)",
-      "width_bits": "implementation-defined",
-      "scope": "Optional",
-      "purpose": "Vendor-specific test / debug / programming registers (e.g. SRAM scan, configuration shift, internal scan)."
-    }
-  ],
   "channels": [
     {
       "name": "TXp/TXn",
@@ -236,22 +532,6 @@
       "description": "Open-drain WAKE; pulled LOW to resume from L2/L3."
     }
   ],
-  "valid_ready_handshake_rules": [
-    "Flow control is credit-based per Virtual Channel (six credit types) — unchanged from base PCIe.",
-    "Data Link Layer guarantees TLP delivery via ACK/NAK + replay.",
-    "On LCRC or block-framing error, receiver Naks; transmitter replays from the Retry Buffer.",
-    "Link training/equalization uses TS1/TS2 carrying the Data Rate Identifier; the 32.0 GT/s bit selects Gen5.",
-    "Enhanced equalization (Phase 0-3) exchanges transmitter coefficient/preset requests between partners and through retimers.",
-    "Alternate Protocol Negotiation (modified TS1/TS2) agrees on an alternate protocol (e.g. CXL) over the PCIe 5.0 PHY."
-  ],
-  "burst_based": false,
-  "byte_oriented": false,
-  "bit_oriented": true,
-  "frame_format": {
-    "block_framing": "128b/130b: 2-bit sync header (01b = Ordered Set Block, 10b = Data Block) + 128-bit scrambled payload. TLP/DLLP bytes carried inside Data Blocks; STP/SDP/END framing tokens are byte values inside the Data Block (not 8b/10b K-codes).",
-    "ordered_sets": "TS1 / TS2 (carry the Data Rate Identifier incl. the 32.0 GT/s bit and Alternate Protocol Negotiation), SKP (clock-tolerance / margining control), EIOS / EIEOS / FTS.",
-    "note": "Gen5 uses Gen3-style 130-bit block framing; NOT the 8b/10b K-code framing of Gen1/Gen2 and NOT Flit framing (a Gen6 feature)."
-  },
   "packet_classes": [
     {
       "class": "Long Packet",
@@ -420,6 +700,16 @@
     "tag_width_bits": 8,
     "sequence_number_width_bits": 12
   },
+  "valid_ready_handshake_rules": [
+    "Flow control is credit-based per Virtual Channel (six credit types) — unchanged from base PCIe.",
+    "Data Link Layer guarantees TLP delivery via ACK/NAK + replay.",
+    "On LCRC or block-framing error, receiver Naks; transmitter replays from the Retry Buffer.",
+    "Link training/equalization uses TS1/TS2 carrying the Data Rate Identifier; the 32.0 GT/s bit selects Gen5.",
+    "Enhanced equalization (Phase 0-3) exchanges transmitter coefficient/preset requests between partners and through retimers.",
+    "Alternate Protocol Negotiation (modified TS1/TS2) agrees on an alternate protocol (e.g. CXL) over the PCIe 5.0 PHY."
+  ],
+  "burst_based": false,
+  "byte_oriented": false,
   "tlp_header_format": {
     "fmt_field_width_bits": 3,
     "type_field_width_bits": 5,
@@ -474,6 +764,11 @@
       "completion": "response to a Non-Posted Request"
     }
   ],
+  "frame_format": {
+    "block_framing": "128b/130b: 2-bit sync header (01b = Ordered Set Block, 10b = Data Block) + 128-bit scrambled payload. TLP/DLLP bytes carried inside Data Blocks; STP/SDP/END framing tokens are byte values inside the Data Block (not 8b/10b K-codes).",
+    "ordered_sets": "TS1 / TS2 (carry the Data Rate Identifier incl. the 32.0 GT/s bit and Alternate Protocol Negotiation), SKP (clock-tolerance / margining control), EIOS / EIEOS / FTS.",
+    "note": "Gen5 uses Gen3-style 130-bit block framing; NOT the 8b/10b K-code framing of Gen1/Gen2 and NOT Flit framing (a Gen6 feature)."
+  },
   "physical_layer_block_format": {
     "encoding": "128b/130b",
     "block_size_bits": 130,

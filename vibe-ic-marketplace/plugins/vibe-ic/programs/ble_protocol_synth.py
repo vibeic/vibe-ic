@@ -508,7 +508,10 @@ def apply_ble_synth(generated_docs_dir: Path, is_ble: bool,
         fh.setdefault("peripheral_role", "Advertises in Advertising state; accepts CONNECT_IND from an Initiator. Once in Connection state, listens at each anchor for the Central's PDU and responds. May reject parameter updates by issuing LL_REJECT_IND or LL_REJECT_EXT_IND.")
         fh.setdefault("advertiser_role", "Broadcaster — transmits advertising PDUs without expectation of a response (ADV_NONCONN_IND / ADV_SCAN_IND); cycles through channels 37/38/39 per advertising event.")
         fh.setdefault("scanner_role",  "Observer — passive scan listens for broadcast packets; active scan additionally sends SCAN_REQ to elicit a SCAN_RSP carrying extra data.")
-        fh.setdefault("rule",          "The Link Layer FSM is one-of-six (Standby / Advertising / Scanning / Initiating / Connection / Synchronization); state transitions are triggered by HCI commands (LE Set Advertising Enable / LE Set Scan Enable / LE Create Connection / LE Periodic Advertising Create Sync / LE Set Extended Advertising Enable / LE Disconnect) and by Link-Layer procedures (CONNECT_IND received, supervision timeout).")
+        # v0.1.90 — force-overwrite (not setdefault): the USB synth fires first
+        # on the BLE doc (LL framing resembles Token/Data/Handshake) and leaves a
+        # USB DATA-toggle "rule"; BLE's LL FSM is the correct one-of-six.
+        fh["rule"] =                   "The Link Layer FSM is one-of-six (Standby / Advertising / Scanning / Initiating / Connection / Synchronization); state transitions are triggered by HCI commands (LE Set Advertising Enable / LE Set Scan Enable / LE Create Connection / LE Periodic Advertising Create Sync / LE Set Extended Advertising Enable / LE Disconnect) and by Link-Layer procedures (CONNECT_IND received, supervision timeout)."
         # Force-overwrite anti_deadlock_rule + exit_from_reset_or_poweron —
         # UART R59 populated these with UART-specific text.
         _force(d, "anti_deadlock_rule",

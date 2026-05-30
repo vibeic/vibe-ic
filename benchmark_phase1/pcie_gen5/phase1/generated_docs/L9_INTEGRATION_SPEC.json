@@ -209,13 +209,12 @@
   "class_path": "digital_cmd_driven",
   "module_role": "Wire-level + transaction-level + software-interface specification for a fifth-generation (32 GT/s) point-to-point, layered, differential serial I/O interconnect. Functionally the same protocol as base PCIe, with the physical layer upgraded to 32 GT/s NRZ with 128b/130b encoding, four-phase enhanced equalization, optional precoding, up to two retimers per link, and mandatory Lane Margining at the Receiver.",
   "integration_overview": {
-    "wire_count_mandatory": 4,
-    "wire_count_with_trst": 5,
-    "wire_directions": "TCK + TMS: tester → all devices (bussed); TDI: tester → first device → daisy chain; TDO: last device → tester (via TDO→TDI hops between devices); TRST: tester → all devices (bussed, optional).",
-    "no_chip_select": "There is no per-device chip select; selection is done by sequencing the FSM into the proper Scan path. To target only one device in a chain, the tester loads BYPASS into all other devices first.",
-    "no_addressing_at_protocol_layer": "Devices are not addressable per se; their position in the daisy chain is their address. Backplane multidrop adds Addressable Scan Ports (ASPs) on top to make boards selectively participate.",
-    "test_logic_independent_of_functional_logic": "All TAP pins are dedicated to test (not shared with normal functional pins). TestLogicReset disables all test logic so the device runs normally.",
-    "no_handshake": "Synchronous shift driven by the tester's TCK; tester is fully in control.",
+    "wire_count": "2 + 2 × N_data_lanes (N=1..4); plus a sideband I2C for sensor control.",
+    "wire_directions": "Clock Lane + Data Lanes: source → sink during HS; bidirectional during LP escape. Sideband I2C: bidirectional.",
+    "no_chip_select": "No CS line; point-to-point pair is the only addressing.",
+    "no_addressing": "No device address on CSI-2; Virtual Channel (VC) field on each packet provides 4 / 16 logical streams over one physical bus.",
+    "controller_choices": "Source (sensor / display TX) is always the HS-payload driver; sink only receives HS and may drive LP for escape acknowledgment.",
+    "handshake_at_protocol_layer": "None — CSI-2 has no ACK / NAK / retry. ECC corrects 1-bit header errors; CRC reports payload errors; upper layer decides.",
     "gen5_line_rate_GT_s": 32.0,
     "modulation": "NRZ",
     "encoding": "128b/130b",
@@ -247,24 +246,16 @@
     "refclk_freq_MHz": 100
   },
   "interface_categories": [
-    "Tester / test controller (drives TCK + TMS + TDI; reads TDO; optionally drives TRST).",
-    "Daisy-chained boundary-scan devices (each implements its own TAP + IR + Bypass + BSR; optional Device ID register).",
-    "Backplane Addressable Scan Port (optional, IEEE 1149.1-style extension for ring / star backplanes — covered in primer Chapter 7).",
-    "Embedded controller / on-board JTAG bridge (for in-system programming + embedded debug)."
+    "Source D-PHY transmitter (HS driver + LP driver + lane controller + Clock-Lane DDR generator)",
+    "Sink D-PHY receiver (HS receiver with 100 Ω termination + LP receiver + sync-pattern hunter + clock recovery)",
+    "Source CSI-2 protocol packetizer (header builder + ECC computer + payload serializer + CRC computer)",
+    "Sink CSI-2 protocol depacketizer (header parser + ECC verify + payload de-serializer + CRC verify + VC demux)",
+    "Sideband I2C controller (for sensor register access — gain, exposure, ROI, ...)"
   ],
   "interconnect_topologies_supported": [
-    "Single device — tester directly accesses one TAP.",
-    "Linear daisy chain — TDO_n → TDI_(n+1); shared TCK + TMS + (optional TRST).",
-    "Backplane ring — boards arranged in a ring; one ring connector at one end of the backplane.",
-    "Backplane star — boards arranged in parallel chains via a star configuration on the backplane.",
-    "Backplane with Addressable Scan Ports (ASP) — boards can be enabled / disabled in the chain dynamically."
+    "Point-to-point only — 1 source ↔ 1 sink per physical interface.",
+    "Multi-stream via Virtual Channels (one physical bus carries up to 4 / 16 independent logical streams)."
   ],
-  "daisy_chain_rules": {
-    "TDO_to_TDI_handoff": "TDO of device N is wired directly to TDI of device N+1.",
-    "shared_TCK_TMS": "TCK and TMS are bussed to all devices; FSMs in all devices step in lockstep.",
-    "total_scan_length": "Sum of the widths of the selected register in each device. To shift a single DR through one device, all other devices must be in BYPASS (1 bit each).",
-    "instruction_loading": "To load distinct instructions into different devices, the tester scans a concatenated IR with each device's IR opcode in the correct slot."
-  },
   "default_signal_values_when_omitted": "TX defaults to Electrical Idle outside L0/L0s; in L0 with no TLP/DLLP queued, TX emits scrambled Logical Idle in 128b/130b Data Blocks. PERST# is asserted (LOW) while system power is unstable.",
   "soc_dependent_items": [
     "PCIe 5.0 PHY transceiver (32 GT/s NRZ SerDes with CTLE + DFE + four-phase enhanced TX equalization + optional precoding + Lane Margining at the Receiver).",
@@ -277,20 +268,6 @@
     "DMA engine wiring for Memory Read / Write TLPs at 32 GT/s.",
     "Power-management policy (D0..D3 mapped to L0..L2)."
   ],
-  "low_power_modes": {
-    "L0": "Active — full operation at the trained rate (up to 32 GT/s).",
-    "L0s": "Standby per direction; sub-µs exit via FTS.",
-    "L1": "Link inactive but trained; exit through Recovery.",
-    "L2": "Deep sleep; REFCLK off; Beacon required to wake.",
-    "L3": "Main power off."
-  },
-  "compatibility_notes": [
-    "IEEE 1149.1-1990 is the base standard.",
-    "IEEE 1149.1a-1993 / IEEE 1149.1b-1994 amendments — clarifications + BSDL.",
-    "BSDL files are the integration-time contract describing a device's pin assignments and BSR cell types.",
-    "HSDL and SVF standardize vector exchange between EDA tools.",
-    "JTAG bus may be reused at runtime for emulation / programming / configuration (e.g. ARM JTAG-DP, Altera/Xilinx FPGA configuration)."
-  ],
   "pcb_integration_constraints": {
     "differential_pair_impedance_ohm": 100,
     "intra_pair_skew_ps_max": 5,
@@ -298,6 +275,13 @@
     "max_trace_length_cm": "≤ 30 (depends on data rate; shorter at 1.5+ Gbps).",
     "AC_coupling": "NOT used — D-PHY is DC-coupled differential.",
     "ESD_protection_class": "Class 2 minimum (HBM 2 kV)."
+  },
+  "low_power_modes": {
+    "L0": "Active — full operation at the trained rate (up to 32 GT/s).",
+    "L0s": "Standby per direction; sub-µs exit via FTS.",
+    "L1": "Link inactive but trained; exit through Recovery.",
+    "L2": "Deep sleep; REFCLK off; Beacon required to wake.",
+    "L3": "Main power off."
   },
   "typical_use_cases": [
     "Mobile-phone main + front camera (single CSI-2 interface to ISP).",

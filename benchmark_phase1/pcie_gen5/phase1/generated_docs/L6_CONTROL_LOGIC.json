@@ -35,202 +35,6 @@
     "input/docs/pcie_gen5_spec.pdf": []
   },
   "class_path": "digital_cmd_driven",
-  "fsm_summary": "16-state Moore machine. TMS is sampled on the rising edge of TCK; the next state depends only on the current state and the latched TMS. TDO is driven combinationally from the selected register output and is updated on the falling edge of TCK; TDO is 3-state active only in ShiftIR and ShiftDR.",
-  "fsm_states_tap_controller": [
-    {
-      "name": "TestLogicReset",
-      "kind": "stable",
-      "description": "All test logic disabled; device runs normally. Entry loads IDCODE (if implemented) else BYPASS into the current-instruction latch. Reached unconditionally by TMS=1 for ≥ 5 TCKs or asynchronously by TRST=LOW."
-    },
-    {
-      "name": "RunTestIdle",
-      "kind": "stable",
-      "description": "Test logic is enabled and idle; instruction-dependent — e.g. during RUNBIST the device runs its self-test in this state."
-    },
-    {
-      "name": "SelectDRScan",
-      "kind": "transient (1 TCK)",
-      "description": "Branch state: TMS=0 → CaptureDR; TMS=1 → SelectIRScan."
-    },
-    {
-      "name": "CaptureDR",
-      "kind": "transient",
-      "description": "On the rising edge of TCK, parallel-load the DR selected by the current instruction (e.g. capture input pins into BSR; load IDCODE into Device ID register; load 0 into Bypass)."
-    },
-    {
-      "name": "ShiftDR",
-      "kind": "stable while TMS=0",
-      "description": "Shift the selected DR one bit per TCK rising edge: TDI → LSB of DR; previous MSB → TDO on falling edge."
-    },
-    {
-      "name": "Exit1DR",
-      "kind": "transient (1 TCK)",
-      "description": "Branch: TMS=0 → PauseDR; TMS=1 → UpdateDR."
-    },
-    {
-      "name": "PauseDR",
-      "kind": "stable while TMS=0",
-      "description": "Temporarily halt shifting (e.g. for tester to refill its vector buffer) without losing register contents."
-    },
-    {
-      "name": "Exit2DR",
-      "kind": "transient (1 TCK)",
-      "description": "Branch: TMS=0 → ShiftDR (resume); TMS=1 → UpdateDR."
-    },
-    {
-      "name": "UpdateDR",
-      "kind": "transient (1 TCK)",
-      "description": "On the falling edge of TCK, parallel-latch the shifted DR contents into the device's effective state (e.g. drive output pins in EXTEST; commit configuration write)."
-    },
-    {
-      "name": "SelectIRScan",
-      "kind": "transient (1 TCK)",
-      "description": "Branch: TMS=0 → CaptureIR; TMS=1 → TestLogicReset."
-    },
-    {
-      "name": "CaptureIR",
-      "kind": "transient",
-      "description": "On the rising edge of TCK, parallel-load the IR with the spec-mandated pattern b...b01 (LSB pair must be '01' so tester can verify IR liveness)."
-    },
-    {
-      "name": "ShiftIR",
-      "kind": "stable while TMS=0",
-      "description": "Shift the IR one bit per TCK rising edge: TDI → LSB of IR; previous MSB → TDO on falling edge."
-    },
-    {
-      "name": "Exit1IR",
-      "kind": "transient (1 TCK)",
-      "description": "Branch: TMS=0 → PauseIR; TMS=1 → UpdateIR."
-    },
-    {
-      "name": "PauseIR",
-      "kind": "stable while TMS=0",
-      "description": "Temporarily halt IR shifting; IR contents preserved."
-    },
-    {
-      "name": "Exit2IR",
-      "kind": "transient (1 TCK)",
-      "description": "Branch: TMS=0 → ShiftIR (resume); TMS=1 → UpdateIR."
-    },
-    {
-      "name": "UpdateIR",
-      "kind": "transient (1 TCK)",
-      "description": "On the falling edge of TCK, parallel-latch the shifted IR into the current-instruction latch, switching the active instruction."
-    }
-  ],
-  "fsm_transition_table_tms_driven": {
-    "header": [
-      "current_state",
-      "next_state_if_TMS=0",
-      "next_state_if_TMS=1"
-    ],
-    "rows": [
-      [
-        "TestLogicReset",
-        "RunTestIdle",
-        "TestLogicReset"
-      ],
-      [
-        "RunTestIdle",
-        "RunTestIdle",
-        "SelectDRScan"
-      ],
-      [
-        "SelectDRScan",
-        "CaptureDR",
-        "SelectIRScan"
-      ],
-      [
-        "CaptureDR",
-        "ShiftDR",
-        "Exit1DR"
-      ],
-      [
-        "ShiftDR",
-        "ShiftDR",
-        "Exit1DR"
-      ],
-      [
-        "Exit1DR",
-        "PauseDR",
-        "UpdateDR"
-      ],
-      [
-        "PauseDR",
-        "PauseDR",
-        "Exit2DR"
-      ],
-      [
-        "Exit2DR",
-        "ShiftDR",
-        "UpdateDR"
-      ],
-      [
-        "UpdateDR",
-        "RunTestIdle",
-        "SelectDRScan"
-      ],
-      [
-        "SelectIRScan",
-        "CaptureIR",
-        "TestLogicReset"
-      ],
-      [
-        "CaptureIR",
-        "ShiftIR",
-        "Exit1IR"
-      ],
-      [
-        "ShiftIR",
-        "ShiftIR",
-        "Exit1IR"
-      ],
-      [
-        "Exit1IR",
-        "PauseIR",
-        "UpdateIR"
-      ],
-      [
-        "PauseIR",
-        "PauseIR",
-        "Exit2IR"
-      ],
-      [
-        "Exit2IR",
-        "ShiftIR",
-        "UpdateIR"
-      ],
-      [
-        "UpdateIR",
-        "RunTestIdle",
-        "SelectDRScan"
-      ]
-    ],
-    "notes": "16 entries × 2 next-states. Sampled on TCK rising edge."
-  },
-  "fsm_hints": {
-    "trigger": "PERST# deassertion triggers Detect; TS1/TS2 with the Data Rate Identifier (32.0 GT/s bit) selects Gen5; Recovery.Equalization runs the Phase 0-3 enhanced equalization before sustaining 32 GT/s.",
-    "rule": "Each transmitted TLP is added to the Retry Buffer; freed when an Ack for that-or-later Sequence arrives; NAK / REPLAY_TIMER triggers replay.",
-    "abort": "REPLAY_NUM threshold crossing or failed equalization at 32 GT/s declares the rate/link unrecoverable; the link falls back via Recovery to a lower data rate."
-  },
-  "anti_deadlock_rule": "Credit-based flow control (six credit types PH/PD/NPH/NPD/CplH/CplD) eliminates retries due to receiver buffer overflow; Completion credits are infinite at the Root Complex side to avoid deadlock with Non-Posted Requests. Unchanged from base PCIe.",
-  "exit_from_reset_or_poweron": "PERST# deassertion → LTSSM Detect → Polling → Configuration → L0 (initially at 2.5 GT/s for backward-compatible bring-up). The link then enters Recovery to negotiate the highest common rate; if both ends advertise 32.0 GT/s, Recovery.Equalization runs the four-phase enhanced equalization (with preset hints and any retimers) before settling at 32 GT/s in L0. Flow Control init unblocks the Transaction Layer.",
-  "default_ready_state_recommendation": {
-    "TX_idle": "Electrical Idle when no symbols to send and not in L0.",
-    "TX_L0": "Continuously transmit scrambled Logical Idle in 128b/130b Data Blocks when in L0 with no TLP/DLLP pending; SKP ordered sets inserted for clock-tolerance and margining control.",
-    "RX_idle": "Receiver decoders idle (or low-power) when in L0s/L1/L2; wake on FTS / Recovery / Beacon."
-  },
-  "configurations": [
-    {
-      "name": "Self-contained TAP",
-      "description": "Single device with its own TAP controller; tester drives TCK/TMS/TDI; reads TDO."
-    },
-    {
-      "name": "Daisy-chained TAPs",
-      "description": "Several devices share TCK + TMS; their TDI/TDO are wired tail-to-head."
-    }
-  ],
-  "timing_dependency_rule": "Each Lane runs its own 32 GT/s symbol clock recovered locally (NRZ, 31.25 ps UI). Multi-Lane Links require a de-skew elastic buffer; the Physical Layer inserts SKP ordered sets to absorb ±300 ppm clock-tolerance and to carry margining control. Up to two retimers per link each add latency and participate in equalization.",
   "fsm_states_transmitter": [
     {
       "name": "TX_LP11_STOP",
@@ -315,6 +119,18 @@
       "description": "Detect LP-11 → LP-10 → LP-00 → LP-00 escape pattern; decode escape command."
     }
   ],
+  "fsm_hints": {
+    "trigger": "PERST# deassertion triggers Detect; TS1/TS2 with the Data Rate Identifier (32.0 GT/s bit) selects Gen5; Recovery.Equalization runs the Phase 0-3 enhanced equalization before sustaining 32 GT/s.",
+    "rule": "Each transmitted TLP is added to the Retry Buffer; freed when an Ack for that-or-later Sequence arrives; NAK / REPLAY_TIMER triggers replay.",
+    "abort": "REPLAY_NUM threshold crossing or failed equalization at 32 GT/s declares the rate/link unrecoverable; the link falls back via Recovery to a lower data rate."
+  },
+  "anti_deadlock_rule": "Credit-based flow control (six credit types PH/PD/NPH/NPD/CplH/CplD) eliminates retries due to receiver buffer overflow; Completion credits are infinite at the Root Complex side to avoid deadlock with Non-Posted Requests. Unchanged from base PCIe.",
+  "exit_from_reset_or_poweron": "PERST# deassertion → LTSSM Detect → Polling → Configuration → L0 (initially at 2.5 GT/s for backward-compatible bring-up). The link then enters Recovery to negotiate the highest common rate; if both ends advertise 32.0 GT/s, Recovery.Equalization runs the four-phase enhanced equalization (with preset hints and any retimers) before settling at 32 GT/s in L0. Flow Control init unblocks the Transaction Layer.",
+  "default_ready_state_recommendation": {
+    "TX_idle": "Electrical Idle when no symbols to send and not in L0.",
+    "TX_L0": "Continuously transmit scrambled Logical Idle in 128b/130b Data Blocks when in L0 with no TLP/DLLP pending; SKP ordered sets inserted for clock-tolerance and margining control.",
+    "RX_idle": "Receiver decoders idle (or low-power) when in L0s/L1/L2; wake on FTS / Recovery / Beacon."
+  },
   "lane_states_table": [
     {
       "state": "LP-00",
@@ -353,6 +169,17 @@
       "meaning": "HS differential one (payload bit '1')"
     }
   ],
+  "configurations": [
+    {
+      "name": "Continuous Clock Mode",
+      "description": "Clock Lane stays in HS forever; Data Lanes alternate HS/LP per frame."
+    },
+    {
+      "name": "Non-Continuous Clock Mode",
+      "description": "Clock Lane returns to LP-11 between bursts; saves power."
+    }
+  ],
+  "timing_dependency_rule": "Each Lane runs its own 32 GT/s symbol clock recovered locally (NRZ, 31.25 ps UI). Multi-Lane Links require a de-skew elastic buffer; the Physical Layer inserts SKP ordered sets to absorb ±300 ppm clock-tolerance and to carry margining control. Up to two retimers per link each add latency and participate in equalization.",
   "fsm_states_ltssm": [
     {
       "name": "Detect",

@@ -5,19 +5,6 @@
   "reject_rules": [],
   "fsm_states": [
     {
-      "name": "S_TO_M_PHY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf"
-    },
-    {
-      "name": "WAIT_DISCONNECT",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose transition v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
       "name": "ENHANCEMENTS",
       "transitions": [],
       "actions": [],
@@ -65,167 +52,6 @@
       "actions": [],
       "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
       "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ALLOCATED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "IDENTIFY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ZERO",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "TRANSACTION",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SUCCEED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "CLARIFY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "CORRESPONDS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "REQUESTED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "FINALLY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "MOVE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "CHANNEL",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ANOTHER",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "RELATE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "CORRECTLY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SPECIFICATIONS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "THEIR",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "BELONGING",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "RELATED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "CONFIGURATION",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "NECESSARY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SEND",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "DIRECTLY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "APPLY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
     }
   ],
   "pipeline_stages": [],
@@ -233,11 +59,6 @@
   "no_fsm_states_in_input": false,
   "no_fsm_in_input": false,
   "fsm_tokens": [
-    {
-      "name": "S_TO_M_PHY",
-      "type": "state",
-      "source": "BLE_Spec.pdf"
-    },
     {
       "name": "Packet_Boundary_Flag",
       "type": "flag",
@@ -250,46 +71,6 @@
     },
     {
       "name": "Key_Flag",
-      "type": "flag",
-      "source": "BLE_Spec.pdf"
-    },
-    {
-      "name": "Packet_Status_Flag",
-      "type": "flag",
-      "source": "BLE_Spec.pdf"
-    },
-    {
-      "name": "Broadcast_Flag",
-      "type": "flag",
-      "source": "BLE_Spec.pdf"
-    },
-    {
-      "name": "PB_Flag",
-      "type": "flag",
-      "source": "BLE_Spec.pdf"
-    },
-    {
-      "name": "TS_Flag",
-      "type": "flag",
-      "source": "BLE_Spec.pdf"
-    },
-    {
-      "name": "Clock_Offset_Valid_Flag",
-      "type": "flag",
-      "source": "BLE_Spec.pdf"
-    },
-    {
-      "name": "Auto_Accept_Flag",
-      "type": "flag",
-      "source": "BLE_Spec.pdf"
-    },
-    {
-      "name": "Accept_Flag",
-      "type": "flag",
-      "source": "BLE_Spec.pdf"
-    },
-    {
-      "name": "Transmit_Power_Level_Flag",
       "type": "flag",
       "source": "BLE_Spec.pdf"
     },
@@ -307,24 +88,10 @@
       "name": "FIFO",
       "type": "structure",
       "source": "BLE_Spec.pdf"
-    },
-    {
-      "name": "Timer",
-      "type": "structure",
-      "source": "BLE_Spec.pdf"
-    },
-    {
-      "name": "Queue",
-      "type": "structure",
-      "source": "BLE_Spec.pdf"
     }
   ],
   "extraction_evidence": {
     "input/docs/BLE_Spec.pdf": [
-      {
-        "literal": "S_TO_M_PHY",
-        "label": "FSM state token"
-      },
       {
         "literal": "Packet_Boundary_Flag",
         "label": "FSM flag token"
@@ -338,38 +105,6 @@
         "label": "FSM flag token"
       },
       {
-        "literal": "Packet_Status_Flag",
-        "label": "FSM flag token"
-      },
-      {
-        "literal": "Broadcast_Flag",
-        "label": "FSM flag token"
-      },
-      {
-        "literal": "PB_Flag",
-        "label": "FSM flag token"
-      },
-      {
-        "literal": "TS_Flag",
-        "label": "FSM flag token"
-      },
-      {
-        "literal": "Clock_Offset_Valid_Flag",
-        "label": "FSM flag token"
-      },
-      {
-        "literal": "Auto_Accept_Flag",
-        "label": "FSM flag token"
-      },
-      {
-        "literal": "Accept_Flag",
-        "label": "FSM flag token"
-      },
-      {
-        "literal": "Transmit_Power_Level_Flag",
-        "label": "FSM flag token"
-      },
-      {
         "literal": "Buffer",
         "label": "FSM structure token"
       },
@@ -380,18 +115,10 @@
       {
         "literal": "FIFO",
         "label": "FSM structure token"
-      },
-      {
-        "literal": "Timer",
-        "label": "FSM structure token"
-      },
-      {
-        "literal": "Queue",
-        "label": "FSM structure token"
       }
     ]
   },
-  "class_path": "digital_cmd_driven",
+  "class_path": "digital_arithmetic_primitive",
   "fsm_states_transmitter": [
     {
       "name": "TX_IDLE",

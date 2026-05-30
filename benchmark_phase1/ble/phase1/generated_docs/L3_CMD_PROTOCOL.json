@@ -3,7 +3,7 @@
   "doc_class": "cmd_protocol",
   "ic_name": "Bluetooth Low Energy 5.2 (Bluetooth Core Specification)",
   "opcodes": [],
-  "no_opcodes_in_input": false,
+  "no_opcodes_in_input": true,
   "placeholder_opcode_count": 0,
   "no_opcode_names_in_input": false,
   "crc_parameters": {
@@ -24,81 +24,9 @@
   "len_max": null,
   "payload_semantics": "........................................................................ 479",
   "no_payload_semantics_in_input": false,
-  "opcode_synthesis_skipped_reason": null,
+  "opcode_synthesis_skipped_reason": "L2.protocol_overview.half_duplex is not True and no explicit opcode/command-table heading was found in input/docs/. Free-form hex bytes in prose, SVG labels, or PDF text do not constitute opcode evidence.",
   "extraction_evidence": {
     "input/docs/BLE_Spec.pdf": [
-      {
-        "literal": "0x06 PIN",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x1B SCO",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x1C SCO",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x1D SCO",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x22 LMP",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x23 LMP",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x24 LMP",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x3F MAC",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x01 L2CAP_COMMAND_RE",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x02 L2CAP_CONNECTION",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x03 L2CAP_CONNECTION",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x04 L2CAP_CONFIGURAT",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x05 L2CAP_CONFIGURAT",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x07 L2CAP_DISCONNECT",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x08 L2CAP_ECHO_REQ",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x09 L2CAP_ECHO_RSP",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x0A L2CAP_INFORMATIO",
-        "label": "opcode declaration"
-      },
-      {
-        "literal": "0x0B L2CAP_INFORMATIO",
-        "label": "opcode declaration"
-      },
       {
         "literal": "0xBA",
         "label": "CRC init"
@@ -109,43 +37,7 @@
       }
     ]
   },
-  "extraction_strategy": {
-    "hallucination_scrub_v0_1_60": [
-      {
-        "l_doc": "L3_CMD_PROTOCOL",
-        "pattern_name": "opcode_from_two_digit_decimal_page_number",
-        "path": "opcodes[5].hex",
-        "old_value": "0x23",
-        "new_value": "<HALLUCINATION_SCRUBBED>",
-        "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
-      },
-      {
-        "l_doc": "L3_CMD_PROTOCOL",
-        "pattern_name": "opcode_from_two_digit_decimal_page_number",
-        "path": "opcodes[6].hex",
-        "old_value": "0x24",
-        "new_value": "<HALLUCINATION_SCRUBBED>",
-        "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
-      },
-      {
-        "l_doc": "L3_CMD_PROTOCOL",
-        "pattern_name": "opcode_from_two_digit_decimal_page_number",
-        "path": "opcodes[28].hex",
-        "old_value": "0x16",
-        "new_value": "<HALLUCINATION_SCRUBBED>",
-        "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
-      },
-      {
-        "l_doc": "L3_CMD_PROTOCOL",
-        "pattern_name": "opcode_from_two_digit_decimal_page_number",
-        "path": "opcodes[29].hex",
-        "old_value": "0x17",
-        "new_value": "<HALLUCINATION_SCRUBBED>",
-        "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
-      }
-    ]
-  },
-  "class_path": "digital_cmd_driven",
+  "class_path": "digital_arithmetic_primitive",
   "protocol_type": "Packet-based wireless protocol; Link-Layer state machine drives advertising / scanning / initiating / connection phases; connections are Central-polled with master-driven scheduling.",
   "host_bus_interface": {
     "data_bus_width_bits": 8,

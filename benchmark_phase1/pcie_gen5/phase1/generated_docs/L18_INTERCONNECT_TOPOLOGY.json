@@ -15,7 +15,6 @@
       "description": "Interconnect may append bits to AxID to identify the originating master; slave-side ID_WIDTH > master-side ID_WIDTH",
       "compliance_note": "Returning ID is the WIDER value; routing strips appended bits before returning to the master"
     },
-    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
     "topology_type": "Tree-shaped 'hierarchy' rooted at a Root Complex, with optional Switches and Bridges; leaf nodes are Endpoints. Every PCIe Link is point-to-point and dual-simplex. At 32 GT/s the channel is loss-limited, so up to two protocol-aware retimers may be inserted per link. An Alternate Protocol (e.g. CXL) may be negotiated over the PCIe 5.0 PHY.",
     "supported_topologies": [
       {
@@ -74,29 +73,29 @@
     },
     "memory_vs_peripheral_regions": "Four address spaces: Memory (primary data path / DMA), I/O (legacy), Configuration (per-device control plane, 256 B + 4 KB extended incl. Lane Margining capability), Message (replaces sideband signals).",
     "device_classification": {
-      "test_controller": "Tester / ATE / embedded JTAG bridge — drives the 4-pin TAP from outside.",
-      "scannable_ic": "IEEE 1149.1-compatible IC with full TAP + BSR + IR.",
-      "non_scannable_ic": "IC without a TAP; cluster-tested through surrounding scannable ICs (Chapter 7).",
-      "addressable_scan_port": "Backplane-level component for boards-of-boards scan architectures.",
+      "image_sensor": "Source; drives Clock Lane + Data Lane HS payload.",
+      "display_panel": "Source (when using DSI which shares D-PHY); drives Clock + Data HS payload toward the panel.",
+      "application_processor": "Sink; integrates CSI-2 RX + DSI TX subsystems.",
+      "ISP / image processor": "Sink; consumes CSI-2 packets; may include de-Bayer, color, etc.",
+      "MIPI bridge / serializer": "Both source and sink; converts MIPI-CSI-2 to other formats (e.g. GMSL, FPD-Link).",
       "root_complex": "Connects CPU + memory to PCIe; one per hierarchy; up to 32 GT/s.",
       "switch": "Aggregates N downstream ports into one upstream port.",
       "pci_express_endpoint": "Modern Endpoint; up to 32 GT/s.",
       "retimer": "Protocol-aware repeater (up to two per link) for 32 GT/s reach extension.",
       "cxl_device": "Coherent accelerator / memory expander running CXL over the PCIe 5.0 PHY via Alternate Protocol Negotiation."
     },
-    "default_signal_values_evidence_tables": [
-      "Figure 2-1 — Boundary-Scan Testing Using the IEEE Std 1149.1 Bus",
-      "Figure 3-2 — Boundary-Scan Architecture",
-      "Figure 3-3 — TAP Controller State Diagram",
-      "Figure 7-13 — Backplane Ring Configuration",
-      "Figure 7-14 — Backplane Star Configuration",
-      "Figure 7-15 — Backplane With ASP-Equipped Boards"
-    ],
     "max_link_length": {
       "PCB_trace_cm_at_400Mbps": 30,
       "PCB_trace_cm_at_1500Mbps": 10,
       "FFC_cable_cm_typical": 20
-    }
+    },
+    "default_signal_values_evidence_tables": [
+      "Section 5 — D-PHY Lane Configuration",
+      "Section 6 — CSI-2 Packet Layer",
+      "Section 7 — Virtual Channel Multiplexing",
+      "Section 8 — Frame / Line Sync Sequence"
+    ],
+    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
   },
   "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",

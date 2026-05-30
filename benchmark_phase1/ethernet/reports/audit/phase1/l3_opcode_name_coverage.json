@@ -1,8 +1,8 @@
 {
   "gate": "l3_opcode_name_coverage_check",
   "verdict": "PASS",
-  "reason": "0/32 opcode(s) carry placeholder names (threshold 0%).",
-  "total": 32,
+  "reason": "0/30 opcode(s) carry placeholder names (threshold 0%).",
+  "total": 30,
   "placeholders": 0,
   "placeholder_ratio": 0.0,
   "threshold": 0.0,

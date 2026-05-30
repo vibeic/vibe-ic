@@ -19,46 +19,6 @@
   "no_otp_fsm_in_input": true,
   "otp_present": false,
   "notes": "PCI Express 5.0 does not specify OTP / fuse content as a protocol concept. Vendor ID / Device ID / Revision ID / Class Code are burned so Configuration Reads return correct identifiers after PERST# deassertion. For Gen5, the supported-link-speeds advertisement (with the 32.0 GT/s bit) and per-lane equalization preset capabilities are hardware-determined; default EQ presets and Lane Margining capabilities may be factory-fixed in the PHY.",
-  "device_identification_register_content": {
-    "width_bits": 32,
-    "access": "Read-only via IDCODE instruction; parallel-loaded with the hard-wired value in CaptureDR; shifted out on TDO in ShiftDR.",
-    "field_map": [
-      {
-        "bits": "31:28",
-        "name": "version",
-        "width_bits": 4,
-        "description": "Silicon revision identifier; mask-set-time fixed.",
-        "writability": "ROM (mask-set time)"
-      },
-      {
-        "bits": "27:12",
-        "name": "part_number",
-        "width_bits": 16,
-        "description": "Manufacturer-assigned part number.",
-        "writability": "ROM (mask-set time)"
-      },
-      {
-        "bits": "11:1",
-        "name": "manufacturer_id",
-        "width_bits": 11,
-        "description": "JEDEC-assigned manufacturer identification code.",
-        "writability": "ROM (mask-set time)"
-      },
-      {
-        "bits": "0",
-        "name": "lsb_one",
-        "width_bits": 1,
-        "description": "Hard-wired to 1.",
-        "writability": "ROM (always 1)"
-      }
-    ]
-  },
-  "usercode_register_content": {
-    "applicable_when": "USERCODE optional instruction is implemented.",
-    "width_bits": 32,
-    "access": "Read-only via USERCODE instruction; shares the Device Identification register but loads a user-programmed value (e.g. FPGA bitstream version, customer revision).",
-    "writability": "Vendor-defined; in CPLD / FPGA parts the USERCODE register is loaded at configuration time from the bitstream, so it is functionally programmable (not strictly OTP) for those devices."
-  },
   "otp_equivalent_factory_burned_fields": [
     {
       "field": "Vendor ID",

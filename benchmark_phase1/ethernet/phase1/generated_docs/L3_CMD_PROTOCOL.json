@@ -512,40 +512,6 @@
         }
       ],
       "argument_constraints": []
-    },
-    {
-      "hex": "0xAA",
-      "name": "CC",
-      "rx_len": "var",
-      "tx_len": "var",
-      "response_opcode_hex": "0xAB",
-      "pre_wake_allowed": false,
-      "evidence": "input/docs/Ethernet_Spec.pdf",
-      "response_payload_template": [
-        {
-          "byte_offset": 0,
-          "value": "0xAB",
-          "description": "response opcode echo"
-        }
-      ],
-      "argument_constraints": []
-    },
-    {
-      "hex": "0xCC",
-      "name": "DD",
-      "rx_len": "var",
-      "tx_len": "var",
-      "response_opcode_hex": "0xCD",
-      "pre_wake_allowed": false,
-      "evidence": "input/docs/Ethernet_Spec.pdf",
-      "response_payload_template": [
-        {
-          "byte_offset": 0,
-          "value": "0xCD",
-          "description": "response opcode echo"
-        }
-      ],
-      "argument_constraints": []
     }
   ],
   "no_opcodes_in_input": false,

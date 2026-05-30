@@ -454,11 +454,11 @@
   ],
   "no_frs_sections_in_input": false,
   "protocol_overview": {
-    "half_duplex": true,
+    "half_duplex": false,
     "wire_count": 4,
     "byte_order": "LSB-first",
     "wake_required_pre_command": null,
-    "evidence": "half-duplex/single-wire/1-wire keyword match",
+    "evidence": "interface keyword match (i2c/spi/uart/...)",
     "type": "Wireless personal-area-network protocol over 2.4 GHz ISM band; packet-based; master-polled connections with periodic advertising broadcasts.",
     "duplex": "half-duplex (TX and RX time-multiplexed within each connection event)",
     "synchronous": false,
@@ -545,276 +545,6 @@
   ],
   "timing_parameters": [
     {
-      "name": "troller                               Note",
-      "parameter": "troller                               Note",
-      "value": 500,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "troller                               Note: 500 ms is the default value for the “processing” time",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Range",
-      "parameter": "Time Range",
-      "value": 100,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Range: 100 ms to 32 seconds",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Default",
-      "parameter": "Time Default",
-      "value": 2.56,
-      "unit": "s",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Default: 2.56 s",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Range",
-      "parameter": "Time Range",
-      "value": 10.625,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Range: 10.625 ms to 2560 ms",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Default",
-      "parameter": "Time Default",
-      "value": 11.25,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Default: 11.25 ms",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Range",
-      "parameter": "Time Range",
-      "value": 0.625,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Range: 0.625 ms to 40.9 s",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Default",
-      "parameter": "Time Default",
-      "value": 5.12,
-      "unit": "s",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Default: 5.12 s",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Range",
-      "parameter": "Time Range",
-      "value": 11.25,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Range: 11.25 ms to 2560 ms",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Default",
-      "parameter": "Time Default",
-      "value": 1.28,
-      "unit": "s",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Default: 1.28 s",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Range",
-      "parameter": "Time Range",
-      "value": 20,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Range: 20 ms to 40.9 s",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Default",
-      "parameter": "Time Default",
-      "value": 80,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Default: 80 ms",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Range",
-      "parameter": "Time Range",
-      "value": 1.25,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Range: 1.25 ms to 23.3 hours",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Default",
-      "parameter": "Time Default",
-      "value": 120,
-      "unit": "s",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Default: 120 s",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Range",
-      "parameter": "Time Range",
-      "value": 10,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Range: 10 ms to 655,350 ms",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Default",
-      "parameter": "Time Default",
-      "value": 0,
-      "unit": "s",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Default: 0 s",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Range",
-      "parameter": "Time Range",
-      "value": 0,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Range: 0 ms to 40.9 s",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Range",
-      "parameter": "Time Range",
-      "value": 0,
-      "unit": "s",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Range: 0 s to 40.9 s",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Range",
-      "parameter": "Range",
-      "value": 11.25,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Range: 11.25 ms to 2560 ms; only even values are valid",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Range",
-      "parameter": "Range",
-      "value": 10.625,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Range: 10.625 ms to 2560 ms",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Link_Supervision_Timeout",
-      "parameter": "Link_Supervision_Timeout",
-      "value": 20,
-      "unit": "s",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Link_Supervision_Timeout = 20 s",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Range",
-      "parameter": "Time Range",
-      "value": 2.5,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Range: 2.5 ms to 40.9 s.",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Range",
-      "parameter": "Time Range",
-      "value": 7.5,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Range: 7.5 ms to 4000 ms.",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Range",
-      "parameter": "Time Range",
-      "value": 5,
-      "unit": "ms",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Range: 5 ms to 4 s.",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Frequency Range",
-      "parameter": "Frequency Range",
-      "value": 2402,
-      "unit": "MHz",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Frequency Range: 2402 MHz to 2480 MHz",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time range",
-      "parameter": "Time range",
-      "value": 1,
-      "unit": "s",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time range: 1 s to 1 hour",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "Time Range",
-      "parameter": "Time Range",
-      "value": 1.28,
-      "unit": "s",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "Time Range: 1.28 s to 83,884.8 s",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "name": "U",
-      "parameter": "U",
-      "value": 30,
-      "unit": "µs",
-      "condition": null,
-      "evidence": "input/docs/BLE_Spec.pdf",
-      "raw": "U = 30 µs or 300 µs depending on the value of the Offset Units field of the",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
       "name": "operating_frequency",
       "parameter": "operating_frequency",
       "value": 0.5,
@@ -838,9 +568,6 @@
   "fmax_mhz": 0.5,
   "fmax_mhz_extraction_strategy": "max_of_operating_frequency_v1_6_570",
   "no_fmax_mhz_in_input": false,
-  "extraction_strategy": {
-    "frs_repo_meta_skipped_v1_6_392": 1
-  },
   "extraction_evidence": {
     "input/docs/BLE_Spec.pdf": [
       {
@@ -941,7 +668,7 @@
       }
     ]
   },
-  "class_path": "digital_cmd_driven",
+  "class_path": "digital_arithmetic_primitive",
   "auto_cited_sections": [
     {
       "file_ref": "phase1/input_doc/BLE_Spec.txt:1",
