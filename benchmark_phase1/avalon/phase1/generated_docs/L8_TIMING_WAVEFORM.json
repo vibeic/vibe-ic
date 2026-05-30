@@ -1,0 +1,90 @@
+{
+  "schema_version": "1",
+  "doc_class": "timing_waveform",
+  "ic_name": "Avalon Interface (Intel/Altera FPGA-SoC Interconnect, MNL-AVABUSREF)",
+  "timing_windows": [],
+  "timing_constants": [],
+  "waveforms": [],
+  "extraction_evidence": {},
+  "clock_and_reset_waveform": {
+    "ACLK": "Single rising-edge clock per AXI interface.",
+    "ARESETn": "Active LOW. Async assert; sync deassert. After ARESETn=HIGH, earliest rising ACLK edge that the master may drive VALID HIGH is one cycle later (see Figure A3-1 'Exit from reset').",
+    "reference_figure": "Figure A3-1 Exit from reset"
+  },
+  "handshake_waveforms": [
+    {
+      "case": "VALID before READY",
+      "sequence": "Source asserts VALID; destination later asserts READY; transfer on next ACLK rising edge."
+    },
+    {
+      "case": "READY before VALID",
+      "sequence": "Destination asserts READY; source later asserts VALID; transfer on next ACLK rising edge."
+    },
+    {
+      "case": "Concurrent VALID + READY",
+      "sequence": "Both asserted in same cycle; transfer occurs on that rising ACLK edge."
+    }
+  ],
+  "channel_dependency_diagrams": {
+    "read_AXI_all_versions": {
+      "arrows": [
+        "ARVALID -> ARREADY (single-handed)",
+        "ARREADY -> RVALID",
+        "RVALID -> RREADY",
+        "RREADY -> next ARVALID (master can issue more)"
+      ],
+      "figure": "A3-5"
+    },
+    "write_AXI3": {
+      "arrows": [
+        "AWVALID -> AWREADY",
+        "WVALID -> WREADY",
+        "WLAST + WREADY -> BVALID",
+        "BVALID -> BREADY"
+      ],
+      "figure": "A3-6",
+      "note": "AXI3 BVALID depends only on W handshake + WLAST, NOT on AW handshake."
+    },
+    "write_AXI4_AXI5": {
+      "arrows": [
+        "AWVALID + AWREADY",
+        "WVALID + WREADY",
+        "AW handshake + WLAST -> BVALID",
+        "BVALID -> BREADY"
+      ],
+      "figure": "A3-7",
+      "note": "AXI4/AXI5 add an additional slave dependency on AW handshake before BVALID, so slaves never need to buffer write data without the address."
+    }
+  },
+  "max_outstanding_rules": {
+    "same_ID_ordering": "All transactions with the same AXI ID must remain in order (request order = response order).",
+    "different_ID_reordering": "Transactions with different IDs may be reordered by the interconnect or slave.",
+    "different_ID_ordering": "No ordering constraint between different IDs.",
+    "implementation_defined_max": "Maximum outstanding transactions is implementation-defined per master+ID pair.",
+    "no_outstanding_count_in_spec": "Spec defines no maximum number of outstanding transactions; an implementation-defined value.",
+    "read_response_ordering": "Read data for the same ARID is returned in order.",
+    "read_reordering_depth": "Implementation-defined; describes how many outstanding read transactions with different ARIDs may be in flight before the master needs to stall."
+  },
+  "narrow_transfer_waveforms": "Narrow-bus transfers (transfer width < bus width) use the address+size pair to determine byte lanes per beat; refer to spec figure for example with 5-beat 8-bit incrementing burst on a 32-bit data bus.",
+  "write_response_dependency_rules": [
+    "AXI3: BVALID may be asserted as soon as W handshake completes + WLAST=1, even before AW handshake.",
+    "AXI4/AXI5: BVALID may only be asserted after BOTH (AW handshake AND W handshake with WLAST=1) complete.",
+    "Same-ID write transactions: BRESP must follow same-AWID order of acceptance."
+  ],
+  "mm_read_waveform": {
+    "fixed_latency": "Host drives address+read; transfer accepted when waitrequest is low; readdata valid readLatency cycles later.",
+    "variable_latency": "Host drives address+read; agent returns each readdata word with readdatavalid asserted; multiple reads may be in flight.",
+    "wait_states": "Agent holds waitrequest high to stall; host holds address/read stable until waitrequest is low."
+  },
+  "mm_write_waveform": {
+    "single": "Host drives address+write+writedata+byteenable; accepted when waitrequest is low.",
+    "burst": "Host drives burstcount+beginbursttransfer then writedata on each cycle waitrequest is low until burstcount words sent."
+  },
+  "st_waveform": {
+    "handshake": "A beat transfers when valid and ready are honored per readyLatency (readyLatency=0: both asserted same cycle; readyLatency=N: valid allowed if ready was high N cycles earlier).",
+    "packet": "startofpacket on the first beat, endofpacket on the last beat, empty marks unused symbols on the final beat.",
+    "backpressure": "Sink deasserts ready to stall the source."
+  },
+  "clocking_note": "All Avalon transfers are synchronous to the interface's Avalon Clock; there is no forwarded or embedded clock and no line code. Cross-domain connections use Platform-Designer clock-crossing bridges.",
+  "general_timing_rule": "Avalon-MM command acceptance is gated by waitrequest; read-data timing is governed by readLatency (fixed) or readdatavalid (variable). Avalon-ST beat timing is governed by valid/ready and readyLatency. All signals are sampled on the interface clock edge."
+}

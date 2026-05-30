@@ -1,0 +1,42 @@
+type: enhancement
+severity: P3
+component: program:phase1_doc_one_shot_runner.py + programs/tests/test_protocol_detector_no_misfire.py
+plugin_version: "0.1.93"
+
+title: >-
+  Lift the ~47 inline protocol detectors out of phase1_doc_one_shot_runner.py into importable is_<proto>(blob) predicates so the universal no-misfire guard covers all ~57 protocols (not just the 9 module-level ones)
+
+pattern: |
+  The v0.1.93 universal detector guard (programs/tests/test_protocol_detector_no_misfire.py)
+  auto-discovers every module-level is_<stem> exported by <stem>_protocol_synth.py and
+  asserts only-own-fires across all benchmarks. But only the 9 newest protocols
+  (Tier-E flexray/displayport/jesd204/smbus_pmbus + Tier-F sas/avalon/hyperbus/
+  qspi_ospi/mipi_spmi_rffe) export a module-level detector. The other ~47 protocols
+  (spi/i2c/uart/can/usb/pcie/ddr/...) keep their detector logic INLINE in
+  phase1_doc_one_shot_runner.py (e.g. the `_is_wishbone = ("Wishbone" in _spi_blob and
+  "CYC" ...)` style branches), so they are NOT importable and the universal no-misfire
+  guard cannot cover them.
+
+  This matters because the masking risk the guard defends against (a name-token detector
+  over-firing on a foreign doc that merely lists the protocol in the runner's generic bus
+  vocabulary / L9 interface_types — exactly what bit is_avalon on ethercat/hdlc/modbus in
+  v0.1.93) is NOT specific to the new protocols. Any of the 47 inline detectors could have
+  the same latent over-fire, undetected.
+
+suggested_fix: |
+  Refactor each inline protocol detector in phase1_doc_one_shot_runner.py into a
+  module-level `def is_<proto>(blob: str) -> bool:` in the corresponding
+  <proto>_protocol_synth.py (or a shared <family>_detect.py like tier_d_interconnect_detect.py),
+  and have the runner import + call it (the wiring pattern Tier-D/E/F already use). Then the
+  universal guard auto-covers all ~57. Do it incrementally, one family at a time, re-running
+  test_protocol_detector_no_misfire.py after each batch — if lifting a detector surfaces a
+  pre-existing over-fire, that is a real latent bug to fix, not a test to relax. Behaviour must
+  stay byte-identical for the in-tree benchmarks (the refactor is mechanical: move the boolean
+  expression, keep the exact tokens).
+
+id: "ORGANIC-20260531-inline-protocol-detectors-not-importable"
+submitted_at: "2026-05-31T00:00:00+08:00"
+session_context: >-
+  Filed during the v0.1.92/v0.1.93 Tier-E/F protocol sweeps' enhancement-capture pass.
+  The universal no-misfire guard was shipped (Bucket A) but honestly covers only the 9
+  module-level detectors; this backlog tracks extending it to full coverage.

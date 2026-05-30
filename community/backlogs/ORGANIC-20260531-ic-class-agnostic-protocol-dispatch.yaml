@@ -1,0 +1,41 @@
+type: enhancement
+severity: P3
+component: program:phase1_doc_one_shot_runner.py (protocol-synth dispatch [14e/15], [14e2/15])
+
+plugin_version: "0.1.93"
+
+title: >-
+  Make Phase-1 protocol-synth dispatch ic_class-agnostic (or assert every registered protocol synth is reachable) so detect_ic_class classification cannot silently skip a protocol's synth
+
+pattern: |
+  Protocol synths are dispatched from blocks gated by detect_ic_class: the R55 block
+  [14e/15] handles serial/digital classes, and a separate [14e2/15] block handles only
+  `bus_interconnect_protocol` (TileLink/Wishbone). In v0.1.93, Avalon was first wired ONLY
+  into the [14e2/15] block — but Avalon classifies as `digital_arithmetic_primitive` (same as
+  Wishbone, which is why Wishbone ALSO has a second wiring inside R55). So the [14e2/15] gate
+  never entered for the avalon benchmark, the Avalon synth never ran, and end-to-end parity was
+  303 gated with NO "synth applied" line. It was only caught because the author checked the
+  end-to-end runner output for the "Avalon synth applied" log line.
+
+  The hazard: which dispatch block reaches a protocol depends on a classification that the
+  protocol author may not anticipate, and a mis-routed synth fails SILENTLY (the detector is
+  content-self-gating, so a 0-gated standalone test passes while the runner skips it).
+
+suggested_fix: |
+  Option A (preferred): run every protocol detector's `is_<proto>(blob)` regardless of
+  ic_class — the detectors are content-only and self-gating (each carries its own mutex), so
+  the ic_class gate adds no safety, only a silent-skip hazard. Collect all registered
+  (is_<proto>, apply_<proto>_synth) pairs into one list and evaluate them in one unconditional
+  post-L-doc loop (ordering preserved for the force-overwrite/derived-protocol cases).
+  Option B (lighter): keep the gates but add a startup assertion / test that every
+  <proto>_protocol_synth.py with a module-level is_<proto> is reachable from at least one
+  dispatch block for the ic_class its own benchmark classifies as.
+  Either way, add a regression test that runs each protocol's benchmark end-to-end and asserts
+  its "synth applied" line fires (not just 0-gated parity).
+
+id: "ORGANIC-20260531-ic-class-agnostic-protocol-dispatch"
+submitted_at: "2026-05-31T00:00:00+08:00"
+session_context: >-
+  Filed during the v0.1.92/v0.1.93 Tier-E/F enhancement-capture pass, from the Avalon
+  digital_arithmetic_primitive routing surprise (worked around by wiring Avalon into BOTH the
+  R55 and [14e2/15] blocks). Companion to ORGANIC-20260531-inline-protocol-detectors-not-importable.

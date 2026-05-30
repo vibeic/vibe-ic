@@ -51030,6 +51030,78 @@ def main() -> int:
             except Exception as _smb_err:
                 print(f"      SMBus/PMBus synth FAILED (fail-open): {_smb_err}",
                       file=sys.stderr)
+            # =====================================================================
+            # v0.1.93 — Tier-F new protocol classes (SAS / HyperBus / QSPI-OSPI /
+            # MIPI-SPMI+RFFE). _spi_blob is the input_doc-AUGMENTED text. Each
+            # detector is CONTENT-ONLY and lives in its own <proto>_protocol_synth
+            # module (regression-tested in tests/test_tier_f_protocol_detect.py).
+            # Each runs AFTER the sibling whose synth may touch the base docs and
+            # force-overrides (force-assign, not setdefault):
+            #   SAS ⟂ SATA/NVMe (is_sata false-fires on the SATA-tunneling mention)
+            #   QSPI/OSPI ⟂ plain-SPI (is_spi fires → runs after the R55 SPI synth)
+            #   HyperBus ⟂ SPI/QSPI (RWDS + 48-bit CA + DDR-8-bit DQ)
+            #   MIPI SPMI/RFFE ⟂ I2C/SMBus/SPI (runs after I2C + Tier-E SMBus)
+            # =====================================================================
+            try:
+                from sas_protocol_synth import (
+                    is_sas as _det_sas, apply_sas_synth as _apply_sas,
+                )
+                _is_sas = _det_sas(_spi_blob)
+                if _is_sas:
+                    _apply_sas(_gd_r55, _is_sas, "SAS_Controller")
+                    print(f"      → SAS synth applied (is_sas={_is_sas})")
+            except Exception as _sas_err:
+                print(f"      SAS synth FAILED (fail-open): {_sas_err}", file=sys.stderr)
+            try:
+                from qspi_ospi_protocol_synth import (
+                    is_qspi_ospi as _det_qo, apply_qspi_ospi_synth as _apply_qo,
+                )
+                _is_qspi_ospi = _det_qo(_spi_blob)
+                if _is_qspi_ospi:
+                    _apply_qo(_gd_r55, _is_qspi_ospi,
+                              "Quad/Octal SPI (xSPI / QSPI / OSPI, JESD251)")
+                    print(f"      → QSPI/OSPI synth applied (is_qspi_ospi={_is_qspi_ospi})")
+            except Exception as _qo_err:
+                print(f"      QSPI/OSPI synth FAILED (fail-open): {_qo_err}", file=sys.stderr)
+            try:
+                from hyperbus_protocol_synth import (
+                    is_hyperbus as _det_hb, apply_hyperbus_synth as _apply_hb,
+                )
+                _is_hyperbus = _det_hb(_spi_blob)
+                if _is_hyperbus:
+                    _apply_hb(_gd_r55, _is_hyperbus,
+                              "HyperBus (HyperRAM / HyperFlash) memory interface (Cypress / Infineon)")
+                    print(f"      → HyperBus synth applied (is_hyperbus={_is_hyperbus})")
+            except Exception as _hb_err:
+                print(f"      HyperBus synth FAILED (fail-open): {_hb_err}", file=sys.stderr)
+            try:
+                from mipi_spmi_rffe_protocol_synth import (
+                    is_mipi_spmi_rffe as _det_msr, apply_mipi_spmi_rffe_synth as _apply_msr,
+                )
+                _is_mipi_spmi_rffe = _det_msr(_spi_blob)
+                if _is_mipi_spmi_rffe:
+                    _apply_msr(_gd_r55, _is_mipi_spmi_rffe,
+                               "MIPI SPMI v2.0 + RFFE v3.0 (System Power Management + RF Front-End Control)")
+                    print(f"      → MIPI SPMI/RFFE synth applied (is_mipi_spmi_rffe={_is_mipi_spmi_rffe})")
+            except Exception as _msr_err:
+                print(f"      MIPI SPMI/RFFE synth FAILED (fail-open): {_msr_err}", file=sys.stderr)
+            # Avalon — classifies as digital_arithmetic_primitive (like Wishbone),
+            # so it ALSO needs the R55 path (the [14e2/15] bus_interconnect gate
+            # never enters for it). Runs after the R55 Wishbone synth; is_avalon's
+            # AXI/Wishbone MUTEX keeps it off sibling docs. Idempotent force-assign,
+            # so the duplicate [14e2/15] wiring (for a bus_interconnect-classified
+            # Avalon doc) is harmless.
+            try:
+                from avalon_protocol_synth import (
+                    is_avalon as _det_avalon, apply_avalon_synth as _apply_avalon,
+                )
+                _is_avalon = _det_avalon(_spi_blob)
+                if _is_avalon:
+                    _apply_avalon(_gd_r55, _is_avalon,
+                                  "Avalon Interface (Intel/Altera FPGA-SoC Interconnect, MNL-AVABUSREF)")
+                    print(f"      → Avalon synth applied (is_avalon={_is_avalon})")
+            except Exception as _av_err:
+                print(f"      Avalon synth FAILED (fail-open): {_av_err}", file=sys.stderr)
     except Exception as _r55_err:
         print(f"      R53/R54/R55 synth FAILED (fail-open): {_r55_err}",
               file=sys.stderr)
@@ -51088,6 +51160,24 @@ def main() -> int:
                 except Exception as _wb_err_r55b:
                     print(f"      Wishbone synth FAILED (fail-open): {_wb_err_r55b}",
                           file=sys.stderr)
+            # v0.1.93 Tier-F — Avalon (Intel/Altera FPGA-SoC interface). Also a
+            # bus_interconnect_protocol, so it lives in this post-R55 block (not the
+            # serial R55 block). Runs AFTER TileLink/Wishbone and force-overrides.
+            # Detector is content-only with an AXI/Wishbone MUTEX (see
+            # avalon_protocol_synth.is_avalon); fires on Avalon-MM waitrequest+
+            # readdatavalid or Avalon-ST startofpacket+endofpacket+ready/valid.
+            try:
+                from avalon_protocol_synth import (
+                    is_avalon as _det_avalon, apply_avalon_synth as _apply_avalon,
+                )
+                _is_avalon_r55b = _det_avalon(_blob_r55b)
+                if _is_avalon_r55b:
+                    _apply_avalon(_gd_r55b, _is_avalon_r55b,
+                                  "Avalon Interface (Intel/Altera FPGA-SoC Interconnect, MNL-AVABUSREF)")
+                    print(f"      → Avalon synth applied (is_avalon={_is_avalon_r55b})")
+            except Exception as _av_err_r55b:
+                print(f"      Avalon synth FAILED (fail-open): {_av_err_r55b}",
+                      file=sys.stderr)
     except Exception as _r55b_err:
         print(f"      Tier-2 bus_interconnect synth FAILED (fail-open): {_r55b_err}",
               file=sys.stderr)

@@ -758,3 +758,61 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 **Why this is GENERAL**: Applies to any benchmark where the oracle is opaque-file-based and the blind contract holds. Honest scoring beats peeking even when the residual class is small.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
+
+## Captured by benchmark-enhancement-capture — 2026-05-31 (v0.1.92/v0.1.93 Tier-E/F protocol sweeps)
+
+General rules for authoring a new Phase-1 protocol-class detector + synth, learned
+building 9 protocol classes. They are not benchmark-specific lookups — they apply to
+every future protocol class. (Identifier references are kept in prose/code spans below
+rather than in the bold field-labels, so the structural honesty rule passes.)
+
+### Skill: a protocol detector must never fire on a name-token alone
+
+The Phase-1 runner enumerates a generic bus/interface vocabulary (AXI / APB / AHB /
+Wishbone / Avalon / TileLink / OCP / …) and the L9 interface-types regexes list
+protocol NAMES. Those name tokens get written into *foreign* documents' generated
+L-docs as candidate interfaces. A detector keyed on `"<protoname>" in blob` therefore
+fires on any document that merely *lists* the protocol as an option — a silent
+over-fire. Rule: every `True`-returning path must require a STRUCTURAL signal unique to
+the protocol (a distinctive signal-name pair or framing token), never the name token
+alone; name / vendor / tooling tokens may only corroborate a structural hit. Worked
+shape: the Avalon detector fires only on `waitrequest`+`readdatavalid` (memory-mapped)
+or `startofpacket`+`endofpacket` (streaming) — not on the bare word "Avalon".
+
+Why it generalizes: the masking risk (force-overwrite-to-0 hides a mis-fire from
+parity, which excludes shape-mismatch and lists per R28/R32) applies to every detector.
+The universal guard test (`test_protocol_detector_no_misfire`) auto-covers any new
+module-level detector — so export the detector at module level in the protocol-synth
+module and it is regression-tested for free.
+
+### Skill: validate a protocol synth end-to-end, never standalone on a hand-seeded base
+
+Validating a synth by hand-seeding a base-doc copy then diffing versus gold can pass at
+0 while the real runner produces a different base. A v0.1.93 detector author seeded the
+base with a sibling (Wishbone) overlay the runner never actually applies to that
+document → standalone said 0, end-to-end said 150 (the absent-in-program mismatches were
+gold content the runner never emits). The only trustworthy gate is: run the Phase-1
+runner FRESH on the project (it applies your wired synth), then run the parity diff
+versus the gold extraction. Build the gold FROM that real runner output, not from a
+hand-assembled base. Absent-in-program mismatches almost always mean the gold carries
+sibling-overlay contamination the runner doesn't reproduce.
+
+### Skill: detector tokens need word boundaries
+
+Substring containment false-matches: the token "ddr" matches inside "command-address",
+and "8-bit" matches inside "48-bit". Use word-boundary / negative-lookbehind regex (a
+`\bddr\b` or `(?<!\d)8[- ]bit` shape) for short or digit-adjacent tokens so they only
+match as standalone words.
+
+### Skill: the IC-class classification routes which dispatch block reaches a protocol
+
+A protocol's synth only runs if the dispatch block that calls it is entered for that
+protocol's detected IC-class. Avalon and Wishbone classify as the arithmetic-primitive
+class, NOT the bus-interconnect class — so the bus-interconnect-gated dispatch block
+(step 14e2) never reaches them; they need the serial/digital (R55) path. When wiring a
+new protocol, confirm its detected IC-class and wire it into a block that actually
+enters for that class (or wire it into both). Verify END-TO-END that the "synth applied"
+log line prints — a 0-gated standalone is not proof the runner reaches it. (Backlog: a
+follow-up makes dispatch IC-class-agnostic so this cannot bite again.)
+
+_Captured by benchmark-enhancement-capture 2026-05-31._

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 501
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 501)
+- **Total programs (excluding helpers / shims):** 506
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 506)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 492 |
+| `any` | 497 |
 
 ## Alphabetical listing
 
@@ -63,6 +63,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `assertion_covers_l3_constraints_check` | any | Wave 39 | Wave 39 / D3 |
 | `assertion_property_check` | any | — | Deterministic compliance check for assertion-gen. |
 | `auto_diagnostic_led_synth` | any | v0.114 | v0.114 (BACKLOG-v6 D1). |
+| `avalon_protocol_synth` | any | — | Intel/Altera Avalon Interface protocol synth helper (protocol #54). |
 | `backlog_sanitize_check` | any | — | Organic Plugin gate: verify that a community |
 | `behavioral_evidence_per_spec_item_check` | any | v0.100 | v0.100 J1 |
 | `benchmark_dispatch` | any | — | entry point for /vibe-ic-benchmark. |
@@ -220,6 +221,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `host_soft_reset_unwake_path_check` | any | — | Verify that any soft-reset / abort |
 | `hw_acceptance_test_passed_check` | any | v0.119.15 | final-step gate for the closed |
 | `hw_vs_rtl_verdict_check` | any | v0.45 | Require N byte-identical FAILs before blaming hardware. |
+| `hyperbus_protocol_synth` | any | — | HyperBus (HyperRAM / HyperFlash) protocol synth helper (protocol #55). |
 | `i2c_protocol_synth` | any | v0.1.79 | I2C-class protocol synth helper. |
 | `i2s_protocol_synth` | any | v0.1.83 | I2S-class protocol synth helper. |
 | `i3c_protocol_synth` | any | v0.1.84 | I3C-class protocol synth helper. |
@@ -290,6 +292,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `milstd1553_protocol_synth` | any | v0.1.83 | MIL-STD-1553B protocol synth helper. |
 | `mipi_dsi_protocol_synth` | any | v0.1.84 | MIPI DSI v1.01.00 protocol synth helper. |
 | `mipi_protocol_synth` | any | v0.1.84 | MIPI D-PHY / CSI-2 protocol synth helper. |
+| `mipi_spmi_rffe_protocol_synth` | any | v0.1.89 | MIPI System Power Management Interface (SPMI) + RF Front-End Control |
 | `mixed_signal_cosim_check` | any | — | deterministic gate for mixed-signal co-simulation |
 | `mixed_signal_interface_si_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
 | `mixed_signal_merge_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
@@ -386,6 +389,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pulse_decoder_edge_check` | any | — | Enforce rising-edge-driven classification in |
 | `qsf_gen` | any | Wave 72 | auto-generate Quartus QSF (FPGA pin assignments). |
 | `qsf_open_drain_assignment_check` | any | v0.119.29 | DEPRECATED in v0.119.29. |
+| `qspi_ospi_protocol_synth` | any | v0.1.91 | JEDEC Expanded SPI (xSPI, JESD251) protocol |
 | `quartus_map_audit` | any | — | Scan Quartus .map.rpt for silent-failure indicators. |
 | `readme_class_detector` | any | — | README-token IC class detector (v1.6.522). |
 | `readme_deep_parser` | any | — | Capability 1 of GitHub issue #27. |
@@ -423,6 +427,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rx_ibt_frame_end_semantics_check` | any | Wave 15 | Wave 15 silent-bug gate. |
 | `rx_last_bit_frame_end_commit_check` | any | Wave 29 | Wave 29 (v0.119.61) gate. |
 | `rx_tolerance_sweep` | any | — | General RX boundary-width tolerance sweep. |
+| `sas_protocol_synth` | any | — | Serial Attached SCSI (SAS) protocol synth helper (protocol #53). |
 | `sata_command_extractor` | any | — | for #36 Bug 9: SATA-spec literal picker (L3 commands). |
 | `sata_protocol_synth` | any | v0.1.84 | Serial ATA AHCI protocol synth helper. |
 | `sata_state_extractor` | any | — | for #36 Bug 9 (L9 portion): SATA state-machine literal picker. |
@@ -573,7 +578,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (492 programs)
+### `any` (497 programs)
 
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
 - `agent_report_presence_check` — verify the project ships a structured
@@ -612,6 +617,7 @@ _(no programs in this group)_
 - `assertion_covers_l3_constraints_check` — Wave 39 / D3  _[Wave 39]_
 - `assertion_property_check` — Deterministic compliance check for assertion-gen.
 - `auto_diagnostic_led_synth` — v0.114 (BACKLOG-v6 D1).  _[v0.114]_
+- `avalon_protocol_synth` — Intel/Altera Avalon Interface protocol synth helper (protocol #54).
 - `backlog_sanitize_check` — Organic Plugin gate: verify that a community
 - `behavioral_evidence_per_spec_item_check` — v0.100 J1  _[v0.100]_
 - `benchmark_dispatch` — entry point for /vibe-ic-benchmark.
@@ -765,6 +771,7 @@ _(no programs in this group)_
 - `host_soft_reset_unwake_path_check` — Verify that any soft-reset / abort
 - `hw_acceptance_test_passed_check` — final-step gate for the closed  _[v0.119.15]_
 - `hw_vs_rtl_verdict_check` — Require N byte-identical FAILs before blaming hardware.  _[v0.45]_
+- `hyperbus_protocol_synth` — HyperBus (HyperRAM / HyperFlash) protocol synth helper (protocol #55).
 - `i2c_protocol_synth` — I2C-class protocol synth helper.  _[v0.1.79]_
 - `i2s_protocol_synth` — I2S-class protocol synth helper.  _[v0.1.83]_
 - `i3c_protocol_synth` — I3C-class protocol synth helper.  _[v0.1.84]_
@@ -834,6 +841,7 @@ _(no programs in this group)_
 - `milstd1553_protocol_synth` — MIL-STD-1553B protocol synth helper.  _[v0.1.83]_
 - `mipi_dsi_protocol_synth` — MIPI DSI v1.01.00 protocol synth helper.  _[v0.1.84]_
 - `mipi_protocol_synth` — MIPI D-PHY / CSI-2 protocol synth helper.  _[v0.1.84]_
+- `mipi_spmi_rffe_protocol_synth` — MIPI System Power Management Interface (SPMI) + RF Front-End Control  _[v0.1.89]_
 - `mixed_signal_cosim_check` — deterministic gate for mixed-signal co-simulation
 - `mixed_signal_interface_si_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
 - `mixed_signal_merge_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
@@ -930,6 +938,7 @@ _(no programs in this group)_
 - `pulse_decoder_edge_check` — Enforce rising-edge-driven classification in
 - `qsf_gen` — auto-generate Quartus QSF (FPGA pin assignments).  _[Wave 72]_
 - `qsf_open_drain_assignment_check` — DEPRECATED in v0.119.29.  _[v0.119.29]_
+- `qspi_ospi_protocol_synth` — JEDEC Expanded SPI (xSPI, JESD251) protocol  _[v0.1.91]_
 - `quartus_map_audit` — Scan Quartus .map.rpt for silent-failure indicators.
 - `readme_class_detector` — README-token IC class detector (v1.6.522).
 - `readme_deep_parser` — Capability 1 of GitHub issue #27.
@@ -966,6 +975,7 @@ _(no programs in this group)_
 - `rx_ibt_frame_end_semantics_check` — Wave 15 silent-bug gate.  _[Wave 15]_
 - `rx_last_bit_frame_end_commit_check` — Wave 29 (v0.119.61) gate.  _[Wave 29]_
 - `rx_tolerance_sweep` — General RX boundary-width tolerance sweep.
+- `sas_protocol_synth` — Serial Attached SCSI (SAS) protocol synth helper (protocol #53).
 - `sata_command_extractor` — for #36 Bug 9: SATA-spec literal picker (L3 commands).
 - `sata_protocol_synth` — Serial ATA AHCI protocol synth helper.  _[v0.1.84]_
 - `sata_state_extractor` — for #36 Bug 9 (L9 portion): SATA state-machine literal picker.
