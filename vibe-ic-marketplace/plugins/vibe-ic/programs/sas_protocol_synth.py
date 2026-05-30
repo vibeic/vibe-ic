@@ -160,6 +160,21 @@ def is_sas(blob: str) -> bool:
     if sata_primary:
         return False
 
+    # Fibre-Channel-primary doc: FC is also a SCSI transport and a comprehensive
+    # FC spec's generated L-docs enumerate SAS-adjacent storage terms (ssp/smp/
+    # expander/sas address), but the doc is anchored by the FC fabric signature
+    # (Fibre Channel + N_Port/F_Port + FLOGI/PLOGI + the FC-2 frame header
+    # R_CTL/D_ID/S_ID). A real SAS doc carries none of those. Defer.
+    fc_primary = (
+        "fibre channel" in low
+        and ("n_port" in low or "f_port" in low)
+        and ("flogi" in low or "plogi" in low)
+        and ("r_ctl" in low and "d_id" in low and "s_id" in low)
+        and not name_token
+    )
+    if fc_primary:
+        return False
+
     return bool(
         sas_structure
         or (name_token and transport_triple and expander)

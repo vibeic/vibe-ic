@@ -198,6 +198,17 @@ def is_avalon(blob: str) -> bool:
     if axi_primary or wishbone_primary:
         return False
 
+    # OCP-primary / AXI4-Stream-primary: these SoC-bus specs name Avalon's
+    # signals in a comparison section (OCP mentions waitrequest/readdatavalid;
+    # AXI4-Stream mentions startofpacket/endofpacket), tripping the hard
+    # structure above. Defer on their OWN socket/stream signal signature, which
+    # a real Avalon doc never carries: OCP = MCmd + SCmdAccept; AXI4-Stream =
+    # the T-prefixed handshake TVALID + TREADY + TLAST.
+    ocp_primary = ("mcmd" in low and "scmdaccept" in low)
+    axi_stream_primary = ("tvalid" in low and "tready" in low and "tlast" in low)
+    if ocp_primary or axi_stream_primary:
+        return False
+
     return True
 
 

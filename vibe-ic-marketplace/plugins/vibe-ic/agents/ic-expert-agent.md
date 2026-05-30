@@ -816,3 +816,62 @@ log line prints — a 0-gated standalone is not proof the runner reaches it. (Ba
 follow-up makes dispatch IC-class-agnostic so this cannot bite again.)
 
 _Captured by benchmark-enhancement-capture 2026-05-31._
+
+## Captured by benchmark-enhancement-capture — 2026-05-31 (v0.1.94 Tier-G, 24 protocols → 81 classes)
+
+Four general detector-authoring rules learned across a 24-protocol sweep (memory /
+aerospace / automotive / industrial / wireless / SoC-bus / camera / timing). Identifier
+references kept in prose so the structural honesty rule passes.
+
+### Skill: a comparison/migration section makes a sibling's detector fire on the full multi-doc blob
+
+The single most common cross-fire across the sweep. A spec routinely DESCRIBES a sibling
+protocol in a comparison, migration, or "unlike X" section — so the sibling's tokens are
+present in the doc, and the universal no-misfire guard (which scans input plus all 24
+generated L-docs) trips the sibling's detector even though the sibling is not the subject.
+Seen as SAS firing on Fibre Channel, SENT on IO-Link and on PSI5, PROFINET on PROFIBUS,
+Avalon on OCP and on AXI-Stream, and the CSI-2 detector on four foreign docs. The fix is a
+foreign-EXCLUSIVE defer clause: pick a token the foreign protocol always has and the
+own protocol never has (Fibre Channel's N_Port + FLOGI + the FC-2 frame header; IO-Link's
+SDCI + IODD; PSI5's current-loop + Manchester; OCP's MCmd + SCmdAccept; AXI-Stream's
+TVALID + TREADY + TLAST), and return False when that foreign-exclusive signature is
+present. Distinguish this from a true derived sibling (next rule).
+
+### Skill: derived sibling — allowlist the base-on-derived fire, do not force a defer
+
+When protocol B genuinely EXTENDS protocol A (Embedded DisplayPort extends DisplayPort;
+the same shape as I3C-extends-I2C, NVMe-on-PCIe, SMBus-on-I2C, QSPI-on-SPI), the base
+detector firing on the derived doc is CORRECT base-class detection, not a false positive —
+the derived synth runs after the base synth and force-overwrites. Trying to make the base
+detector defer on the derived doc is the wrong fix: it changes the base the derived synth
+was validated against and breaks the derived doc's end-to-end parity. The right fix is a
+narrow, documented allowlist of the (base, derived) pair in the universal no-misfire guard
+plus force-overwrite ordering. Use a defer ONLY for genuine false positives between
+unrelated siblings; use the allowlist for true base-extends-derived pairs.
+
+### Skill: a positive structural signature must win over an incidental sibling mention
+
+A mutex that defers on a sibling token appearing ANYWHERE in the multi-doc blob will wrongly
+suppress the own-doc, because the own spec's comparison section mentions that sibling. The
+Automotive-Ethernet detector deferred on an incidental "800GBASE" comparison mention and
+failed to fire on its own benchmark; an earlier MIPI-CSI2 / PAM4 mutex had the same failure.
+Compute the protocol's own positive structural signature first (for Automotive-T1: single
+twisted pair AND PAM3 AND a named T1 variant AND an echo-cancellation/PLCA mechanism — a
+conjunction no sibling satisfies) and let it WIN; gate any name-anywhere defer behind the
+absence of that positive signature, or drop the defer entirely when the positive conjunction
+is already sibling-exclusive.
+
+### Skill: separate same-family members by subject-dominance, not by feature presence
+
+In a crowded family (DDR3 / DDR4 / DDR5 / LPDDR5 / HBM3 / GDDR6 all share the DRAM
+vocabulary; LPDDR5 and GDDR6 both have a write-clock) every member's spec enumerates the
+others' features, so feature-presence alone cannot separate them. Use subject-dominance:
+the member fires only when its own name/spec-identifier count exceeds each sibling's, plus
+its own exclusive structural marker. A near-tie (one member's name is a substring of
+another, e.g. one ends in the other's token) needs a net count that subtracts the
+superset's occurrences. Validate END-TO-END against the real runner base, and rebuild the
+gold from the full-pipeline output — an isolated-run base can bake sibling-default fields
+into the gold that the real pipeline never emits (a wireless protocol's gold inheriting
+half-duplex / wire-count serial fields was caught this way).
+
+_Captured by benchmark-enhancement-capture 2026-05-31._

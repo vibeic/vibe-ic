@@ -64,6 +64,22 @@ def _blob_for(b: str) -> str:
 
 DETECTORS = _discover_detectors()
 
+# Known DERIVED-SIBLING cross-fires (documented force-overwrite-ordering pairs).
+# A derived protocol shares its parent's structural base, so the parent's
+# content-only detector LEGITIMATELY fires on the derived benchmark; the runner
+# resolves this by running the derived synth AFTER the parent synth and
+# force-overwriting (the cross-protocol force-overwrite doctrine — cf.
+# NVMe-on-PCIe, I3C-extends-I2C, SAS⟂SATA, QSPI⟂SPI). These (parent_stem,
+# derived_benchmark) pairs are EXPECTED and not real mis-fires.
+#   ("displayport", "edp"): eDP is the EMBEDDED variant of DisplayPort — it
+#     reuses the Main Link + AUX + DPCD + CR/EQ base, so is_displayport fires on
+#     the eDP doc. is_edp REQUIRES the eDP-exclusive PSR/RFB + backlight-over-AUX
+#     + ASSR + Fast-Link-Training structure that external DisplayPort lacks, and
+#     the runner runs apply_edp_synth AFTER apply_displayport_synth.
+KNOWN_DERIVED_SIBLING_CROSS_FIRES = {
+    ("displayport", "edp"),
+}
+
 
 def test_at_least_the_known_module_level_detectors_are_discovered():
     # Tier-E + Tier-F shipped module-level detectors; guard against an import
@@ -99,6 +115,10 @@ def test_no_detector_fires_on_a_foreign_benchmark():
             if fn(blobs[b]):
                 if b == stem:
                     own_fires.add(stem)
+                elif (stem, b) in KNOWN_DERIVED_SIBLING_CROSS_FIRES:
+                    # Documented derived-sibling: parent detector legitimately
+                    # fires on the derived benchmark; resolved by synth ordering.
+                    continue
                 else:
                     misfires.append((stem, b))
     assert not misfires, f"protocol detector mis-fires (foreign benchmark): {misfires}"

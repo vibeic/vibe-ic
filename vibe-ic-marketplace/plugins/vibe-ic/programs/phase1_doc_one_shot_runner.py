@@ -50207,6 +50207,34 @@ def main() -> int:
                 except Exception as _sdmmc_err:
                     print(f"      SD/MMC synth FAILED (fail-open): {_sdmmc_err}",
                           file=sys.stderr)
+            # eMMC (JEDEC JESD84-B51 / eMMC 5.1) structural sub-detector.
+            # eMMC DERIVES FROM the MMC/SD command protocol (CLK/CMD/DAT +
+            # OCR/CID/CSD + device states) but is an EMBEDDED managed-NAND
+            # device. The MUTEX vs `_is_sdmmc` above lives entirely inside the
+            # `is_emmc` predicate (CONTENT-ONLY): it requires >=2 eMMC-only
+            # structural features (8-bit DAT bus / Data Strobe / RST_n /
+            # EXT_CSD / Boot+RPMB partitions / HS400 / CMDQ / FFU / HPI / BKOPS)
+            # and DEFERS on an SD-primary removable-card doc (ACMD41 / "SD
+            # Card" / SDIO / card-detect) without the eMMC family anchor. This
+            # block runs AFTER the SD/MMC synth and the emmc synth FORCE-
+            # OVERWRITES every SD/MMC key with the eMMC-canonical value (the
+            # cross-protocol force-overwrite doctrine), so even if `_is_sdmmc`
+            # ever co-fired its output cannot leak through. Empirically
+            # `_is_sdmmc` does NOT fire on the emmc benchmark (no ACMD41 / "SD
+            # Card" / "SD Memory Card" / "MultiMediaCard" in the L1+L2 blob).
+            try:
+                from emmc_protocol_synth import (
+                    is_emmc as _is_emmc_fn,
+                    apply_emmc_synth as _apply_emmc)
+                _is_emmc = _is_emmc_fn(_spi_blob)
+                if _is_emmc:
+                    _emmc_ic_name = (
+                        "Embedded MultiMediaCard (eMMC 5.1, JEDEC JESD84-B51)")
+                    _apply_emmc(_gd_r55, _is_emmc, _emmc_ic_name)
+                    print(f"      → eMMC synth applied (is_emmc={_is_emmc})")
+            except Exception as _emmc_err:
+                print(f"      eMMC synth FAILED (fail-open): {_emmc_err}",
+                      file=sys.stderr)
             # v0.1.89 — structural-only AHB+APB detector (code-review H1/M1/M2/M3).
             # PRIOR (v0.1.86) version read input/docs FILENAMES to negatively gate
             # against the AXI spec — a general-not-keyword doctrine violation. It also
@@ -50473,6 +50501,56 @@ def main() -> int:
                 except Exception as _hbm3_err:
                     print(f"      HBM3 synth FAILED (fail-open): {_hbm3_err}",
                           file=sys.stderr)
+            # GDDR6 (JESD250) graphics SGRAM. The detector is CONTENT-ONLY and
+            # lives module-level in gddr6_protocol_synth.is_gddr6 (sibling MUTEX
+            # against DDR3/4/5 + LPDDR5 + HBM3 documented there). GDDR6 shares the
+            # DRAM vocabulary with all of them and shares WCK with LPDDR5, so the
+            # detector keys on the GDDR6-only structure (JESD250 / graphics SGRAM
+            # / two-independent-16-bit-channel / EDC read+write CRC pins / CABI).
+            # It runs AFTER the LPDDR5 + HBM3 detectors above (both legitimately
+            # mention "WCK"/"High Bandwidth Memory" in a GDDR6 spec's positioning
+            # section and may have fired) so the more-specific GDDR6 synth
+            # force-overrides — the documented cross-protocol force-overwrite
+            # path. Reads the input_doc-AUGMENTED _spi_blob (content only).
+            try:
+                from gddr6_protocol_synth import (
+                    is_gddr6 as _det_gddr6,
+                    apply_gddr6_synth as _apply_gddr6,
+                )
+                _is_gddr6 = _det_gddr6(_spi_blob)
+                if _is_gddr6:
+                    _apply_gddr6(_gd_r55, _is_gddr6,
+                                 "GDDR6 SGRAM (JEDEC JESD250)")
+                    print(f"      → GDDR6 synth applied (is_gddr6={_is_gddr6})")
+            except Exception as _gddr6_err:
+                print(f"      GDDR6 synth FAILED (fail-open): {_gddr6_err}",
+                      file=sys.stderr)
+            # v0.1.94 Tier-G memory family — DDR4 (JESD79-4) and DDR5 (JESD79-5).
+            # Both CONTENT-ONLY module-level detectors (ddr4_protocol_synth.is_ddr4 /
+            # ddr5_protocol_synth.is_ddr5) with name-dominance + structural MUTEXes
+            # documented there. They run AFTER DDR3/LPDDR5/HBM3 (which legitimately
+            # appear in a DDR4/DDR5 spec's comparison section and may have fired) and
+            # force-override. DDR4 and DDR5 mutually defer by subject-dominance.
+            try:
+                from ddr4_protocol_synth import (
+                    is_ddr4 as _det_ddr4, apply_ddr4_synth as _apply_ddr4,
+                )
+                _is_ddr4 = _det_ddr4(_spi_blob)
+                if _is_ddr4:
+                    _apply_ddr4(_gd_r55, _is_ddr4, "DDR4 SDRAM (JEDEC JESD79-4)")
+                    print(f"      → DDR4 synth applied (is_ddr4={_is_ddr4})")
+            except Exception as _ddr4_err:
+                print(f"      DDR4 synth FAILED (fail-open): {_ddr4_err}", file=sys.stderr)
+            try:
+                from ddr5_protocol_synth import (
+                    is_ddr5 as _det_ddr5, apply_ddr5_synth as _apply_ddr5,
+                )
+                _is_ddr5 = _det_ddr5(_spi_blob)
+                if _is_ddr5:
+                    _apply_ddr5(_gd_r55, _is_ddr5, "DDR5 SDRAM (JEDEC JESD79-5)")
+                    print(f"      → DDR5 synth applied (is_ddr5={_is_ddr5})")
+            except Exception as _ddr5_err:
+                print(f"      DDR5 synth FAILED (fail-open): {_ddr5_err}", file=sys.stderr)
             # Restore the un-augmented blob so later (Tier-2/Tier-3) detectors
             # see exactly what they saw before this Tier-C block.
             _spi_blob = _tc_blob_saved
@@ -51052,6 +51130,117 @@ def main() -> int:
                     print(f"      → SAS synth applied (is_sas={_is_sas})")
             except Exception as _sas_err:
                 print(f"      SAS synth FAILED (fail-open): {_sas_err}", file=sys.stderr)
+            # SpaceWire (ECSS-E-ST-50-12C) — spacecraft-onboard serial link /
+            # network (LVDS + Data-Strobe encoding; FCT/EOP/EEP/ESC characters;
+            # ErrorReset..Run exchange FSM; credit-based flow control; wormhole
+            # routing). Its own aerospace domain — no sibling synth touches the
+            # base docs, so it runs standalone. Detector is content-only with a
+            # structural signature (DS-encoding + FCT/EOP/EEP + exchange FSM +
+            # LVDS) and a 1553 / ARINC-429 / Ethernet MUTEX (see
+            # spacewire_protocol_synth.is_spacewire); NO filename/benchmark reads.
+            try:
+                from spacewire_protocol_synth import (
+                    is_spacewire as _det_sw, apply_spacewire_synth as _apply_sw,
+                )
+                _is_spacewire = _det_sw(_spi_blob)
+                if _is_spacewire:
+                    _apply_sw(_gd_r55, _is_spacewire,
+                              "SpaceWire_Link_Router (ECSS-E-ST-50-12C)")
+                    print(f"      → SpaceWire synth applied (is_spacewire={_is_spacewire})")
+            except Exception as _sw_err:
+                print(f"      SpaceWire synth FAILED (fail-open): {_sw_err}", file=sys.stderr)
+            # SENT (SAE J2716, Single Edge Nibble Transmission) — single-wire
+            # automotive sensor interface. The detector is CONTENT-ONLY and
+            # lives in sent_protocol_synth (module-level is_sent). It keys on
+            # the SENT structural signature (nibble pulses + tick unit time +
+            # 56-tick synchronization/calibration pulse + 4-bit CRC nibble +
+            # SAE J2716, NOT the bare English word "sent") with a LIN/DALI/UART/
+            # PWM MUTEX, so it cannot false-fire on the single-wire siblings.
+            try:
+                from sent_protocol_synth import (
+                    is_sent as _det_sent, apply_sent_synth as _apply_sent,
+                )
+                _is_sent = _det_sent(_spi_blob)
+                if _is_sent:
+                    _apply_sent(_gd_r55, _is_sent,
+                                "Single Edge Nibble Transmission (SENT, SAE J2716)")
+                    print(f"      → SENT synth applied (is_sent={_is_sent})")
+            except Exception as _sent_err:
+                print(f"      SENT synth FAILED (fail-open): {_sent_err}", file=sys.stderr)
+            # =====================================================================
+            # v0.1.94 Tier-G Wave 2 — CoreSight / InfiniBand / FibreChannel /
+            # PROFIBUS / PROFINET / IO-Link. All CONTENT-ONLY module-level detectors
+            # (regression-tested via test_protocol_detector_no_misfire). Each runs
+            # AFTER the sibling whose synth may touch the base + force-overrides:
+            #   CoreSight ⟂ JTAG/SWD (is_swd fires → run after; keys on trace arch)
+            #   IO-Link ⟂ UART/SENT (is_uart+is_sent fire → run after SENT above)
+            #   PROFINET ⟂ Ethernet/EtherCAT (is_ethernet fires → run after)
+            #   InfiniBand ⟂ Ethernet/FibreChannel ; FibreChannel ⟂ SAS/SATA/Ethernet
+            #   PROFIBUS ⟂ Modbus/RS-485/EtherCAT
+            # =====================================================================
+            try:
+                from coresight_protocol_synth import (
+                    is_coresight as _det_cs, apply_coresight_synth as _apply_cs,
+                )
+                _is_coresight = _det_cs(_spi_blob)
+                if _is_coresight:
+                    _apply_cs(_gd_r55, _is_coresight,
+                              "ARM CoreSight On-Chip Debug and Trace Architecture")
+                    print(f"      → CoreSight synth applied (is_coresight={_is_coresight})")
+            except Exception as _cs_err:
+                print(f"      CoreSight synth FAILED (fail-open): {_cs_err}", file=sys.stderr)
+            try:
+                from infiniband_protocol_synth import (
+                    is_infiniband as _det_ib, apply_infiniband_synth as _apply_ib,
+                )
+                _is_infiniband = _det_ib(_spi_blob)
+                if _is_infiniband:
+                    _apply_ib(_gd_r55, _is_infiniband, "InfiniBand Architecture (IBTA)")
+                    print(f"      → InfiniBand synth applied (is_infiniband={_is_infiniband})")
+            except Exception as _ib_err:
+                print(f"      InfiniBand synth FAILED (fail-open): {_ib_err}", file=sys.stderr)
+            try:
+                from fibre_channel_protocol_synth import (
+                    is_fibre_channel as _det_fc, apply_fibre_channel_synth as _apply_fc,
+                )
+                _is_fibre_channel = _det_fc(_spi_blob)
+                if _is_fibre_channel:
+                    _apply_fc(_gd_r55, _is_fibre_channel, "FibreChannel_Controller")
+                    print(f"      → FibreChannel synth applied (is_fibre_channel={_is_fibre_channel})")
+            except Exception as _fc_err:
+                print(f"      FibreChannel synth FAILED (fail-open): {_fc_err}", file=sys.stderr)
+            try:
+                from profibus_protocol_synth import (
+                    is_profibus as _det_pb, apply_profibus_synth as _apply_pb,
+                )
+                _is_profibus = _det_pb(_spi_blob)
+                if _is_profibus:
+                    _apply_pb(_gd_r55, _is_profibus,
+                              "PROFIBUS-DP (IEC 61158 Type 3 / IEC 61784-1 CPF 3)")
+                    print(f"      → PROFIBUS synth applied (is_profibus={_is_profibus})")
+            except Exception as _pb_err:
+                print(f"      PROFIBUS synth FAILED (fail-open): {_pb_err}", file=sys.stderr)
+            try:
+                from profinet_protocol_synth import (
+                    is_profinet as _det_pn, apply_profinet_synth as _apply_pn,
+                )
+                _is_profinet = _det_pn(_spi_blob)
+                if _is_profinet:
+                    _apply_pn(_gd_r55, _is_profinet,
+                              "PROFINET IO Controller/Device (IEC 61158 Type 10)")
+                    print(f"      → PROFINET synth applied (is_profinet={_is_profinet})")
+            except Exception as _pn_err:
+                print(f"      PROFINET synth FAILED (fail-open): {_pn_err}", file=sys.stderr)
+            try:
+                from io_link_protocol_synth import (
+                    is_io_link as _det_iol, apply_io_link_synth as _apply_iol,
+                )
+                _is_io_link = _det_iol(_spi_blob)
+                if _is_io_link:
+                    _apply_iol(_gd_r55, _is_io_link, "IO-Link Interface (SDCI, IEC 61131-9)")
+                    print(f"      → IO-Link synth applied (is_io_link={_is_io_link})")
+            except Exception as _iol_err:
+                print(f"      IO-Link synth FAILED (fail-open): {_iol_err}", file=sys.stderr)
             try:
                 from qspi_ospi_protocol_synth import (
                     is_qspi_ospi as _det_qo, apply_qspi_ospi_synth as _apply_qo,
@@ -51102,6 +51291,67 @@ def main() -> int:
                     print(f"      → Avalon synth applied (is_avalon={_is_avalon})")
             except Exception as _av_err:
                 print(f"      Avalon synth FAILED (fail-open): {_av_err}", file=sys.stderr)
+            # =====================================================================
+            # v0.1.94 Tier-G Wave 3 — CANopen / Zigbee / LoRa / OCP / AXI-Stream /
+            # MIPI-CSI2. CONTENT-ONLY module-level detectors. Placed at the end of
+            # the serial Tier region so each runs AFTER the sibling whose synth may
+            # touch the base + force-overrides:
+            #   CANopen ⟂ CAN/CAN-FD (app layer; OD+PDO/SDO/NMT+COB-ID)
+            #   Zigbee ⟂ BLE/NFC ; LoRa ⟂ BLE/NFC/Zigbee
+            #   OCP / AXI-Stream ⟂ AXI-MM/AHB/Wishbone/Avalon (both run after Avalon)
+            #   MIPI-CSI2 ⟂ MIPI-DSI/generic-MIPI (mipi+mipi_dsi fire → run after)
+            # =====================================================================
+            for _wave3_name, _wave3_ic in (
+                ("canopen", "CANopen (CiA 301)"),
+                ("zigbee", "IEEE 802.15.4 + Zigbee LR-WPAN SoC"),
+                ("lora", "LoRaWAN_Modem"),
+                ("ocp", "OCP-IP Open Core Protocol Specification"),
+                ("axi_stream",
+                 "AMBA AXI4-Stream Protocol (ARM IHI 0051, Single Unidirectional Stream Channel)"),
+                ("mipi_csi2", "MIPI CSI-2 (Camera Serial Interface 2, MIPI Alliance)"),
+            ):
+                try:
+                    _w3_mod = __import__(f"{_wave3_name}_protocol_synth")
+                    _w3_det = getattr(_w3_mod, f"is_{_wave3_name}")
+                    _w3_apply = getattr(_w3_mod, f"apply_{_wave3_name}_synth")
+                    _w3_fire = _w3_det(_spi_blob)
+                    if _w3_fire:
+                        _w3_apply(_gd_r55, _w3_fire, _wave3_ic)
+                        print(f"      → {_wave3_name} synth applied (is_{_wave3_name}=True)")
+                except Exception as _w3_err:
+                    print(f"      {_wave3_name} synth FAILED (fail-open): {_w3_err}",
+                          file=sys.stderr)
+            # =====================================================================
+            # v0.1.94 Tier-G Wave 4 — eDP / AFDX / PSI5 / Automotive-Ethernet /
+            # A2B / IEEE-1588-PTP. CONTENT-ONLY module-level detectors. Placed at
+            # the very end of the serial Tier region so each runs AFTER the sibling
+            # whose synth may touch the base + force-overrides:
+            #   eDP ⟂ DisplayPort (derived; is_displayport fires → run after)
+            #   AFDX / Automotive-Ethernet / PTP ⟂ Ethernet (is_ethernet fires → after)
+            #   A2B ⟂ I2S/SoundWire/SPDIF/I2C (tunnels them → run after)
+            #   PSI5 ⟂ SENT/LIN/DALI (automotive sensor)
+            # =====================================================================
+            for _wave4_name, _wave4_ic in (
+                ("edp", "Embedded DisplayPort (eDP 1.4b/1.5)"),
+                ("afdx", "AFDX End System / Switch (ARINC 664 Part 7)"),
+                ("psi5", "Peripheral Sensor Interface 5 (PSI5)"),
+                ("automotive_ethernet",
+                 "Automotive Ethernet (single-pair, 100BASE-T1 / 1000BASE-T1 / 10BASE-T1S / 10BASE-T1L; IEEE 802.3bw / 802.3bp / 802.3cg)"),
+                ("a2b", "A2B_Transceiver"),
+                ("ptp",
+                 "IEEE 1588 Precision Time Protocol (PTP) Clock Synchronization Engine (PTPv2 / IEEE 802.1AS)"),
+            ):
+                try:
+                    _w4_mod = __import__(f"{_wave4_name}_protocol_synth")
+                    _w4_det = getattr(_w4_mod, f"is_{_wave4_name}")
+                    _w4_apply = getattr(_w4_mod, f"apply_{_wave4_name}_synth")
+                    _w4_fire = _w4_det(_spi_blob)
+                    if _w4_fire:
+                        _w4_apply(_gd_r55, _w4_fire, _wave4_ic)
+                        print(f"      → {_wave4_name} synth applied (is_{_wave4_name}=True)")
+                except Exception as _w4_err:
+                    print(f"      {_wave4_name} synth FAILED (fail-open): {_w4_err}",
+                          file=sys.stderr)
     except Exception as _r55_err:
         print(f"      R53/R54/R55 synth FAILED (fail-open): {_r55_err}",
               file=sys.stderr)

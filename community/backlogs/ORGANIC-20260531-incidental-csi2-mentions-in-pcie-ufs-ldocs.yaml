@@ -1,0 +1,37 @@
+type: data-quality
+severity: P4
+component: benchmark_phase1/pcie_gen5 + benchmark_phase1/ufs (phase1/generated_docs L18/L20/L2)
+plugin_version: "0.1.94"
+
+title: >-
+  pcie_gen5 and ufs generated L-docs carry incidental MIPI-CSI-2 example text ("ISP consumes CSI-2 packets", "CSI-2 RX IP cores") that is not part of those protocols' subject
+
+pattern: |
+  While adding the MIPI CSI-2 protocol class (v0.1.94 Tier-G Wave 3), the universal
+  no-misfire sweep flagged is_mipi_csi2 firing on pcie_gen5 and ufs. Investigation
+  showed these two benchmarks are CORRECTLY their own protocols (pcie_gen5 L1 ic_name
+  = "PCI Express 5.0", all 24 docs PCIe; ufs L1 = "Universal Flash Storage") — but
+  ~10 of their generated L-docs contain INCIDENTAL, illustrative MIPI-CSI-2 mentions
+  in deep fields (e.g. L18 INTERCONNECT_TOPOLOGY "ISP / image processor: consumes
+  CSI-2 packets", L20 DFT "Some commercial CSI-2 RX IP cores (e.g. Synopsys, Cadence)",
+  L2 "decodes CSI-2 packets"). These were committed in a prior session (v0.1.90-era);
+  the input_doc does NOT contain them. They are example/vendor-context text, not a
+  correctness bug for pcie_gen5/ufs (parity vs their own gold is still 0), but they
+  pollute the full-content blob and tripped the loose CSI-2 detector.
+
+suggested_fix: |
+  Two independent actions:
+  1. (done in v0.1.94) Tighten is_mipi_csi2 to require CSI-2 PRIMACY (dominant subject)
+     + explicit pcie/ufs/dsi/generic-mipi foreign-primary defers, so incidental CSI-2
+     example text in a foreign doc cannot trip it. Pinned by test_protocol_detector_no_misfire.
+  2. (this backlog) Regenerate pcie_gen5 and ufs L18/L20/L2 so their illustrative
+     "sink/source IP" examples do not name a specific unrelated protocol (MIPI CSI-2),
+     or use a neutral placeholder. Low priority — purely cosmetic doc-quality; does not
+     affect pcie_gen5/ufs own-parity. Verify with the universal no-misfire sweep after.
+
+id: "ORGANIC-20260531-incidental-csi2-mentions-in-pcie-ufs-ldocs"
+submitted_at: "2026-05-31T00:00:00+08:00"
+session_context: >-
+  Surfaced by the v0.1.94 Tier-G Wave 3 universal no-misfire sweep. Companion to the
+  v0.1.92/v0.1.93 detector-authoring captures: tokens scattered across a 24-doc blob
+  trip a loose detector even when the protocol is not the subject (v0.1.89 KEY LESSON).

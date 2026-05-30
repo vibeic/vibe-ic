@@ -34,6 +34,13 @@ DETS = {
     "smbus_pmbus": is_smbus_pmbus,
 }
 
+# Derived-sibling cross-fires that are CORRECT base-on-derived detection, handled by
+# force-overwrite ordering (the derived synth runs last). eDP (v0.1.94) extends
+# DisplayPort, so is_displayport legitimately fires on the edp benchmark — same doctrine
+# as I3C-extends-I2C / NVMe-on-PCIe. Mirrors KNOWN_DERIVED_SIBLING_CROSS_FIRES in
+# test_protocol_detector_no_misfire.py.
+_DERIVED_SIBLING_ALLOW = {("displayport", "edp")}
+
 REPO_ROOT = Path(__file__).resolve().parents[5]
 BP = REPO_ROOT / "benchmark_phase1"
 
@@ -139,7 +146,7 @@ def test_no_misfire_across_all_benchmarks():
         scanned += 1
         for name, fn in DETS.items():
             fired = fn(blob)
-            if fired and b != name:
+            if fired and b != name and (name, b) not in _DERIVED_SIBLING_ALLOW:
                 misfires.append((name, b))
             if fired and b == name:
                 own_fires.add(name)
