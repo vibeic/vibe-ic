@@ -14,7 +14,7 @@
   "no_l13_test_cases_in_input": true,
   "trim_loop": [],
   "extraction_evidence": {},
-  "lab_calibration_present": false,
+  "lab_calibration_present": "partial",
   "notes": "AN148 itself is an application note (calibration guide for system designers), not a device datasheet. The 'lab calibration' content of AN148 is precisely the methodology for tuning pull-up resistor, slew rate, sample time, R-C filter, and impedance matching to match a given network's weight and radius. Concrete 1-Wire slave devices (DS18B20 temperature sensor, DS2438 battery monitor) may have separate on-chip analog calibration / trim that is per-device, not part of the AN148 protocol layer.",
   "characterization_targets": [
     {

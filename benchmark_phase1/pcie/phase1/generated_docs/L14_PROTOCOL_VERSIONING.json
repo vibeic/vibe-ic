@@ -92,29 +92,7 @@
         "summary": "Doubles to 128 GT/s; new channel-loss budget; FLIT-based mandatory."
       }
     ],
-    "version_naming_history_note": "PCI-SIG (PCI Special Interest Group) maintains the spec. PCI Express Rev 1.0 was finalized April 29, 2002 by the Promoter Group. Subsequent revisions retain '8b/10b' through Gen 2, then switch to 128b/130b at Gen 3 and PAM4 + FEC at Gen 6. The PCI Express Card Electromechanical Specification is a separate companion document covering connectors and add-in cards.",
-    "lineage_above": [
-      {
-        "name": "EIA RS-422",
-        "year": "1975",
-        "summary": "Balanced point-to-point or multi-receiver one-driver electrical standard; ±2 V driver into 100-ohm load; ±200 mV receiver. RS-485 generalizes RS-422 to multi-driver multipoint."
-      },
-      {
-        "name": "EIA RS-423",
-        "year": "1975",
-        "summary": "Single-ended counterpart; lower noise immunity; less common."
-      },
-      {
-        "name": "EIA RS-485",
-        "year": "1983",
-        "summary": "Multi-master / multi-drop generalization of RS-422 with -7 V to +12 V common-mode, 32-UL standard limit, 200 mV receiver threshold."
-      },
-      {
-        "name": "TIA-485-A",
-        "year": "1998",
-        "summary": "Renaming under the TIA umbrella after EIA reorganization."
-      }
-    ]
+    "version_naming_history_note": "PCI-SIG (PCI Special Interest Group) maintains the spec. PCI Express Rev 1.0 was finalized April 29, 2002 by the Promoter Group. Subsequent revisions retain '8b/10b' through Gen 2, then switch to 128b/130b at Gen 3 and PAM4 + FEC at Gen 6. The PCI Express Card Electromechanical Specification is a separate companion document covering connectors and add-in cards."
   },
   "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",

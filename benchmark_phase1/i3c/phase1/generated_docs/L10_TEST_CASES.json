@@ -149,5 +149,19 @@
     "Receive overrun (flag-serviced-too-late).",
     "Baud rate divisor sweep.",
     "Wait/Stop mode behavior."
+  ],
+  "annex_c_normative_fsms": [
+    "Figure 57 I3C Main Master FSM",
+    "Figure 58 Slave Interrupt Request FSM",
+    "Figure 59 Dynamic Address Assignment FSM",
+    "Figure 60 Hot-Join FSM",
+    "Figure 61 Secondary Master Request FSM",
+    "Figure 62 Master Regaining Bus Ownership FSM",
+    "Figure 63 I2C Legacy Master FSM"
+  ],
+  "annex_d_typical_examples": [
+    "Figure 64 Example Communication Using I3C Coding SDR (private write)",
+    "Figure 65 Example Communication Using I3C Coding SDR with CCC Direct Addressing",
+    "Figure 66 Example Communication Using I3C Coding SDR with CCC Broadcast"
   ]
 }

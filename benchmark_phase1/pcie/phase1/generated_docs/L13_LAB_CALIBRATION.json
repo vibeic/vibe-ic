@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "lab_calibration",
-  "ic_name": "TIA/EIA-485 (RS-485 via TI SLLA272C Design Guide)",
+  "ic_name": "PCI Express Base Specification Rev 1.0",
   "calibration_targets": [],
   "no_lab_calibration_in_input": true,
   "calibration_steps": [],
@@ -15,7 +15,7 @@
   "trim_loop": [],
   "extraction_evidence": {},
   "lab_calibration_present": false,
-  "notes": "RS-485 transceivers are stateless analog parts; no chip-level calibration / trim loop is defined by the standard. System-level engineering parameters (termination resistor tolerance ≤ 1 %, failsafe resistor selection per eq. 2 of SLLA272D, common-mode envelope, stub length per L_stub ≤ tr × v × c / 10, minimum node spacing per d > C_L / (5.25 × C')) substitute for calibration at the link level. Test equipment of choice is an oscilloscope with differential probe, a TDR for impedance/stub assessment, and a noise generator + GPD source for common-mode robustness.",
+  "notes": "PCI Express Rev 1.0 itself does NOT specify an on-chip calibration loop. Compliance testing is done with external equipment (oscilloscope, BERT, protocol analyzer, vector signal generator) per PCI-SIG Compliance Program procedures. PHY transceivers in modern silicon implement closed-loop adaptive equalization + clock recovery + impedance trim — those are per-implementation, not protocol-defined.",
   "lab_measurement_targets_from_spec": [
     {
       "name": "Eye diagram per Lane",

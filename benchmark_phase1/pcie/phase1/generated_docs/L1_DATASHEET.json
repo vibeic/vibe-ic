@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "datasheet",
-  "ic_name": "TIA/EIA-485 (RS-485 via TI SLLA272C Design Guide)",
+  "ic_name": "PCI Express Base Specification Rev 1.0",
   "no_ic_name_in_input": false,
   "package_info": null,
   "no_package_in_input": true,
@@ -4342,27 +4342,5 @@
       "description": "Initial release by PCI-SIG."
     }
   ],
-  "overview": "PCI Express is a third-generation I/O interconnect targeted at re-engineering the PCI/PCI-X parallel bus into a high-bandwidth, low-pin-count point-to-point serial fabric. It preserves the PCI software model (configuration cycles, device hierarchy, plug-and-play) while delivering scalable bandwidth (2.5 GT/s per Lane per direction Gen 1, aggregated across x1..x32 Lanes) over differential signaling with embedded clocking via 8b/10b encoding. The architecture is layered: Transaction Layer produces and consumes Transaction Layer Packets (TLPs); Data Link Layer adds Sequence Numbers + LCRC + ACK/NAK replay; Physical Layer performs 8b/10b encoding + framing + Link Training (LTSSM). Together these layers deliver split-transaction, credit-based-flow-controlled, error-protected, hot-pluggable I/O for clients, servers, and embedded systems.",
-  "document_number": "SLLA272D",
-  "author": "Thomas Kugelstadt",
-  "department": "HPL - Interface",
-  "first_published": "February 2008",
-  "standard_name": "RS-485 (originally TIA/EIA-485, approved 1983 by Electronics Industries Association)",
-  "standard_origin_year": 1983,
-  "standard_owner": "Electronics Industries Association (EIA) / Telecommunications Industry Association (TIA)",
-  "standard_scope": "RS-485 is an electrical-only standard. In contrast to complete interface standards which define functional, mechanical and electrical specifications, RS-485 ONLY defines the electrical characteristics of drivers and receivers used to implement a balanced multipoint transmission line.",
-  "domain_of_application": [
-    "Industrial automation (factory bus, distributed control).",
-    "Medical equipment (instrumentation, patient monitoring).",
-    "Consumer applications (multi-node serial daisy chains).",
-    "Building automation / HVAC.",
-    "Higher-level protocols built ON TOP of RS-485 PHY: DL/T645 (Chinese electronic energy meters), Modbus RTU, Profibus DP, BACnet MS/TP, DMX-512, SCSI-1 (differential), DeviceNet-style fieldbuses."
-  ],
-  "physical_layer_role": "RS-485 is purely a physical-layer (OSI layer 1) electrical standard. It defines driver / receiver electricals (differential output level, input threshold, common-mode range, unit-load definition) and the daisy-chain bus topology. It does NOT define data framing, addressing, CRC or any link-layer protocol — those are layered on top by higher-level standards.",
-  "ti_transceiver_product_examples": [
-    "SN65HVD12 — 1 Mbps signal rate, ~100 ns rise time, ~7 ft max stub.",
-    "SN65LBC184 — 250 kbps signal rate, ~250 ns rise time, ~19 ft max stub.",
-    "SN65HVD3082E — 200 kbps signal rate, ~500 ns rise time, ~38 ft max stub.",
-    "Family features: 1/8-UL low loading, high ESD protection (16 kV to 30 kV), integrated open/short/idle-bus fail-safe, isolated DC/DC + digital isolator versions for galvanic isolation across ground-potential differences."
-  ]
+  "overview": "PCI Express is a third-generation I/O interconnect targeted at re-engineering the PCI/PCI-X parallel bus into a high-bandwidth, low-pin-count point-to-point serial fabric. It preserves the PCI software model (configuration cycles, device hierarchy, plug-and-play) while delivering scalable bandwidth (2.5 GT/s per Lane per direction Gen 1, aggregated across x1..x32 Lanes) over differential signaling with embedded clocking via 8b/10b encoding. The architecture is layered: Transaction Layer produces and consumes Transaction Layer Packets (TLPs); Data Link Layer adds Sequence Numbers + LCRC + ACK/NAK replay; Physical Layer performs 8b/10b encoding + framing + Link Training (LTSSM). Together these layers deliver split-transaction, credit-based-flow-controlled, error-protected, hot-pluggable I/O for clients, servers, and embedded systems."
 }

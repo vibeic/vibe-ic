@@ -239,7 +239,12 @@ def apply_milstd1553_synth(generated_docs_dir: Path, is_milstd1553: bool,
         d = _read(p)
         d.setdefault("protocol_type",
             "Command/response time-division multiplex serial bus. The Bus Controller (BC) issues a Command Word (BC → RT); the addressed Remote Terminal (RT) responds with a Status Word (RT → BC) and optionally Data Words.")
-        d.setdefault("opcodes", [
+        # Force overwrite when opcodes is missing/None/[] — the L3 base
+        # extractor (gen_l3_cmd_protocol) pre-fills opcodes=[] when its
+        # parser finds no opcode evidence in the raw spec; setdefault would
+        # be a no-op against an existing empty list.
+        if _empty(d.get("opcodes")):
+            d["opcodes"] = [
             {"code": "00000", "mnemonic": "DYNAMIC_BUS_CONTROL",          "description": "Mode Code: requests handoff of bus control to the addressed RT (target acknowledges by setting Dynamic Bus Acceptance bit).", "has_data_word": False},
             {"code": "00001", "mnemonic": "SYNCHRONIZE_NO_DATA",          "description": "Mode Code: forces the addressed RT to synchronize to the BC (no data word).", "has_data_word": False},
             {"code": "00010", "mnemonic": "TRANSMIT_STATUS_WORD",         "description": "Mode Code: re-issue last Status Word (Mode Code 00010, mandatory).", "has_data_word": False},
@@ -255,7 +260,7 @@ def apply_milstd1553_synth(generated_docs_dir: Path, is_milstd1553: bool,
             {"code": "10011", "mnemonic": "TRANSMIT_BIT_WORD",            "description": "Mode Code with Data: RT sends its Built-In-Test (BIT) word (mandatory).", "has_data_word": True},
             {"code": "10100", "mnemonic": "SELECTED_TRANSMITTER_SHUTDOWN","description": "Mode Code with Data: shut down a specifically-selected transmitter (data word identifies which).", "has_data_word": True},
             {"code": "10101", "mnemonic": "OVERRIDE_SELECTED_TRANSMITTER_SHUTDOWN","description": "Mode Code with Data: re-enable specifically-selected transmitter.", "has_data_word": True},
-        ])
+            ]
         d.setdefault("channels", [
             {"name": "Bus A (primary)",     "direction": "BC↔RT differential twinax (half-duplex)",
              "description": "Primary 78 Ω twinax bus carrying Manchester II 1 Mbit/s; selected by BC for each message; transformer-coupled stubs."},
@@ -346,7 +351,11 @@ def apply_milstd1553_synth(generated_docs_dir: Path, is_milstd1553: bool,
     p = gd / "L5_ADI_SPEC.json"
     if p.is_file():
         d = _read(p)
-        d.setdefault("analog_digital_interface_present", True)
+        # Force True (overwrite): SPI-class _apply_universal runs FIRST and
+        # sets this to False; 1553 explicitly defines analog signalling
+        # (differential Manchester II on transformer-coupled 78Ω twinax)
+        # so we must override the universal-class default.
+        d["analog_digital_interface_present"] = True
         d["signaling_summary"] = (
             "MIL-STD-1553B defines the analog signalling explicitly so "
             "that any conformant transmitter / receiver can interoperate "
@@ -709,6 +718,52 @@ def apply_milstd1553_synth(generated_docs_dir: Path, is_milstd1553: bool,
             "wake_up":            "Not applicable. Integrators implement subsystem-level power management outside 1553.",
             "transmitter_shutdown_mode_code": "Mode Code 00100 (Transmitter Shutdown) effectively powers down a redundant transmitter; override via 00101.",
         })
+        _write(p, d)
+
+    # L10 test cases
+    p = gd / "L10_TEST_CASES.json"
+    if p.is_file():
+        d = _read(p)
+        # Force overwrite (not setdefault): SPI-class _apply_universal runs
+        # FIRST and pre-sets a generic "spec provides functional description"
+        # string; 1553 has explicit mandatory behaviours + AS4111/AS4112
+        # industry test plans, so we override with the 1553-specific text.
+        d["test_cases_present"] = (
+            "partial - the spec defines mandatory protocol behaviors "
+            "(word framing, sync polarity, parity, message formats, RT "
+            "response timing) that map directly to compliance test "
+            "scenarios; the SAE AS-1A Avionic Networks Subcommittee "
+            "publishes the formal RT Validation Test Plan (AS4111) and "
+            "RT Production Test Plan (AS4112).")
+        if _empty(d.get("derived_compliance_test_categories")):
+            d["derived_compliance_test_categories"] = [
+                "Command Word with each valid Word Count (1..32; 0 encodes 32) — verify RT receives / transmits exactly the expected count.",
+                "Status Word RT-address echo verification — ensure response carries the same RT address as the Command Word.",
+                "Each of the 6 BC↔RT message formats: Controller-to-RT, RT-to-Controller, RT-to-RT, Mode Without Data, Mode With Data (Transmit), Mode With Data (Receive).",
+                "Each of the 4 broadcast formats: Controller-to-RT(s), RT-to-RT(s), Mode Without Data (Broadcast), Mode With Data (Broadcast) — verify NO Status Word response from broadcast targets.",
+                "All 10 standard Mode Codes (00000..01000 + 10000..10011 + 10100..10101) — verify expected RT response per spec.",
+                "Mandatory Mode Codes Transmit Status Word (00010), Transmit Last Command (10010), Transmit BIT Word (10011) — verify implementation.",
+                "Sync polarity discrimination — verify RT distinguishes Command/Status sync (HL) from Data sync (LH).",
+                "Odd parity verification — inject even-parity corrupted words; RT must detect and set MESSAGE ERROR.",
+                "Manchester encoding error injection — missing mid-bit transition; RT must reject the word.",
+                "Word count mismatch injection — send fewer or more Data Words than declared; RT must flag MESSAGE ERROR.",
+                "Illegal command — send RT a command for a subaddress / Mode Code it does not implement; RT must set MESSAGE ERROR + must NOT transmit data.",
+                "RT response timing window — verify RT begins Status Word transmission within 4-12 µs after the last command word.",
+                "BC no-response timeout — verify BC declares no-response after 14 µs of bus quiet.",
+                "Inter-message gap — verify BC respects ≥ 4 µs minimum gap.",
+                "Dual-redundant retry — inject Bus A fault; verify BC immediately retries on Bus B.",
+                "Dynamic Bus Control handoff (Mode Code 00000) — verify backup BC sets Dynamic Bus Acceptance.",
+                "Service Request → Vector Word — RT sets Service Request bit in Status; BC responds with Transmit Vector Word (10000) Mode Code.",
+                "Busy bit — RT signals Busy; verify BC accepts and retries later.",
+                "Subsystem Flag — RT's subsystem-driven fault signal correctly propagates.",
+                "Terminal Flag inhibit / override — verify Mode Codes 00110 / 00111 mask / unmask Terminal Flag bit.",
+                "Transmitter Shutdown / Override — verify Mode Codes 00100 / 00101 disable / re-enable the redundant transmitter.",
+                "Reset Remote Terminal — verify Mode Code 01000 returns RT to initialized state.",
+                "Power-on Built-In-Test → BIT word return on Mode Code 10011.",
+                "RT supersede — issue a new Command/Status sync during an RT's response; RT must abort its own transmission.",
+                "Cable propagation delay — verify protocol behavior at maximum cable length (100 ft typical, ~160 ns end-to-end).",
+                "Industry test plans: SAE AS4111 (RT Validation), AS4112 (RT Production), ISO STANAG 3838 conformance suite.",
+            ]
         _write(p, d)
 
     # L11 OTP
@@ -1273,7 +1328,12 @@ def apply_milstd1553_synth(generated_docs_dir: Path, is_milstd1553: bool,
     if p.is_file():
         d = _read(p)
         f = d.get("fields") or {}
-        f.setdefault("verification_plan_present", "explicit")
+        # Force overwrite (not setdefault): SPI-class _apply_universal runs
+        # FIRST and sets verification_plan_present="implicit" + a SPI-flavoured
+        # notes string. 1553 has explicit industry validation plans (AS4111 /
+        # AS4112) maintained by SAE AS-1A, so we override with "explicit" plus
+        # 1553-specific notes.
+        f["verification_plan_present"] = "explicit"
         f.setdefault("industry_validation_plan",
             "SAE AS4111 — RT Validation Test Plan (formerly MIL-HDBK-1553A Section 100, originally MIL-HDBK-1553 Appendix A). Comprehensive design-verification suite for Remote Terminals designed to AS 15531 / MIL-STD-1553B Notice 2.")
         f.setdefault("industry_production_plan",
@@ -1307,8 +1367,16 @@ def apply_milstd1553_synth(generated_docs_dir: Path, is_milstd1553: bool,
                 "Electrical envelope — transmitter 18-27 Vp-p, characteristic impedance 70-85 Ω, isolation transformer 1:1.41 ± 3 %, isolation resistor 0.75×Zo ± 2 % (transformer-coupled) or 55 Ω ± 2 % (direct-coupled).",
                 "Waveform quality per MIL-HDBK-1553A (rise/fall time, overshoot, zero-crossing distortion).",
             ]
-        f.setdefault("notes",
-            "MIL-STD-1553B is paired with the SAE AS4111 RT Validation Test Plan and AS4112 RT Production Test Plan, maintained by the SAE AS-1A Avionic Networks Subcommittee. The above categories are derived from the standard's mandatory behaviors + Notice 2 + AS 15531.")
+        # Force overwrite (not setdefault): SPI-class _apply_universal sets a
+        # SPI-flavoured "Spec does not include a formal verification plan ..."
+        # notes string FIRST; we override with 1553-specific notes pointing
+        # at AS4111 / AS4112 / SAE AS-1A maintenance.
+        f["notes"] = (
+            "MIL-STD-1553B is paired with the SAE AS4111 RT Validation "
+            "Test Plan and AS4112 RT Production Test Plan, maintained by "
+            "the SAE AS-1A Avionic Networks Subcommittee. The above "
+            "categories are derived from the standard's mandatory "
+            "behaviors + Notice 2 + AS 15531.")
         d["fields"] = f
         _write(p, d)
 

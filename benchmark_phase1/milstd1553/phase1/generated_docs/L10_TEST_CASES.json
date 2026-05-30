@@ -7,7 +7,7 @@
   "bring_up_sequence": [],
   "no_bring_up_sequence_in_input": true,
   "extraction_evidence": {},
-  "test_cases_present": "partial - the spec provides functional descriptions and waveform figures that map to compliance test scenarios but does not provide a formal test plan or testbench.",
+  "test_cases_present": "partial - the spec defines mandatory protocol behaviors (word framing, sync polarity, parity, message formats, RT response timing) that map directly to compliance test scenarios; the SAE AS-1A Avionic Networks Subcommittee publishes the formal RT Validation Test Plan (AS4111) and RT Production Test Plan (AS4112).",
   "derived_compliance_test_categories": [
     "Reset behavior: enable bit cleared; transmit-empty flag set; receive-flag cleared after reset.",
     "Master mode transmission: write to data register + clock-cycle delay + N edges + receive-flag set.",

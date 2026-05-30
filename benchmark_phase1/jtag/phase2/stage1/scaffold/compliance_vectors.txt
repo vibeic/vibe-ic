@@ -1,0 +1,26 @@
+# Auto-generated compliance vector catalog.
+# One requirement per line; format: <source-L-doc>: <description>
+
+L10: Reset behavior: enable bit cleared; transmit-empty flag set; receive-flag cleared after reset.
+L10: Master mode transmission: write to data register + clock-cycle delay + N edges + receive-flag set.
+L10: Slave mode transmission: select line goes LOW + N edges from master + receive-flag set after last edge.
+L10: Mode fault / collision detection.
+L10: All clock polarity/phase combinations.
+L10: MSB-first vs LSB-first byte ordering.
+L10: Bidirectional mode (single data pin).
+L10: Receive overrun (flag-serviced-too-late).
+L10: Baud rate divisor sweep.
+L10: Wait/Stop mode behavior.
+L16: Four mandatory dedicated TAP pins: TCK, TMS, TDI, TDO.
+L16: 16-state TAP controller FSM exactly per IEEE 1149.1 Figure 3-3 transition diagram.
+L16: TMS and TDI sampled on the rising edge of TCK; TDO updated on the falling edge of TCK.
+L16: Mandatory instructions implemented: BYPASS, EXTEST, SAMPLE/PRELOAD.
+L16: Bypass register exactly 1 bit wide; loads 0 in CaptureDR.
+L16: Boundary-Scan Register (BSR) with one boundary-scan cell (BSC) per external I/O pin.
+L16: Instruction Register (IR) ≥ 2 bits wide; CaptureIR loads b...b01 (LSB pair '01').
+L16: BYPASS opcode is all-1s (e.g. 11, 1111) — reserved so pulled-up TDI defaults to BYPASS.
+L16: TestLogicReset disables all test logic so the device runs normally.
+L16: TMS=1 for 5 consecutive TCK rising edges unconditionally reaches TestLogicReset from any state.
+L16: Post-reset default instruction = IDCODE (if Device ID register implemented) else BYPASS.
+L16: TDO is 3-state, active only in ShiftIR and ShiftDR.
+L16: Daisy-chain support: TDO_n → TDI_(n+1); shared TCK + TMS in parallel.

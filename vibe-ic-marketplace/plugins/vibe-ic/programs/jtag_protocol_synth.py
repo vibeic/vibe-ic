@@ -299,6 +299,14 @@ def _l3(gd: Path, ic_name: Optional[str]) -> None:
     if not p.is_file():
         return
     d = _read(p)
+    # FORCE-clear hallucinated `opcodes`: see _l10 long comment. The
+    # bare-hex opcode regex picks up `D0 A0` / `D1 A1` schematic pin
+    # labels in the TI SSYA002C primer as if they were byte-opcodes.
+    # JTAG instructions live in `instructions_mandatory` /
+    # `instructions_optional` (set below) with implementation-defined
+    # opcode widths and the all-1s / all-0s conventions; they are NOT
+    # 2-hex-digit byte opcodes. Clear the upstream hallucinations.
+    d["opcodes"] = []
     d.setdefault("protocol_type",
         "TAP-FSM-driven serial scan protocol. The current 'command' is the value held in the Instruction Register (IR); switching commands requires sequencing through SelectIRScan → CaptureIR → ShiftIR → Exit1IR → UpdateIR. Data registers are selected implicitly by the current instruction.")
     if _empty(d.get("instructions_mandatory")):
@@ -403,10 +411,26 @@ def _l4(gd: Path, ic_name: Optional[str]) -> None:
         return
     d = _read(p)
     d["register_map_present"] = True
-    d.setdefault("register_map_kind",
-        "shift-register catalog (not memory-mapped). Registers are selected implicitly by the current Instruction Register value and are accessed by shifting bit-serially via TDI/TDO in ShiftIR / ShiftDR states.")
-    d.setdefault("base_address",
-        "Not applicable — JTAG registers are not memory-mapped. They are addressed via the Instruction Register value while the TAP FSM is in the appropriate Shift state.")
+    # FORCE hard-assign register_map_kind + base_address: the upstream
+    # `_apply_universal` in spi_protocol_synth.py runs unconditionally for
+    # every serial_peripheral / digital_cmd / digital_arithmetic /
+    # bus_interconnect / unknown ic_class (whether or not is_spi=True) and
+    # seeds the SPI-flavored generic "Defined at SoC level; offsets given
+    # relative to module base." for `base_address`. JTAG is NOT
+    # memory-mapped — registers are selected by IR value, not address —
+    # so the SPI universal default is wrong here. setdefault is too late;
+    # we must hard-assign to overwrite. Chip-AGNOSTIC pattern: each
+    # protocol-specific synth that sits behind apply_universal must
+    # hard-assign the L4 fields that apply_universal seeded.
+    d["register_map_kind"] = (
+        "shift-register catalog (not memory-mapped). Registers are "
+        "selected implicitly by the current Instruction Register value "
+        "and are accessed by shifting bit-serially via TDI/TDO in "
+        "ShiftIR / ShiftDR states.")
+    d["base_address"] = (
+        "Not applicable — JTAG registers are not memory-mapped. They "
+        "are addressed via the Instruction Register value while the "
+        "TAP FSM is in the appropriate Shift state.")
     d.setdefault("register_count", 4)
     regs = [
         {
@@ -839,8 +863,38 @@ def _l10(gd: Path, ic_name: Optional[str]) -> None:
     if not p.is_file():
         return
     d = _read(p)
-    d.setdefault("test_cases_present",
-        "partial — the primer defines the architectural rules, FSM transition table, mandatory / optional instructions, and a Suggested Design-for-Test Flow (Chapter 6) + Applications chapter (Chapter 7) but does not provide a formal test bench. The categories below are the spec-derived compliance test scenarios.")
+    # FORCE hard-assign test_cases_present: the upstream `_apply_universal`
+    # in spi_protocol_synth.py runs unconditionally for every
+    # serial_peripheral / digital_cmd / digital_arithmetic /
+    # bus_interconnect / unknown ic_class and seeds the SPI-flavored
+    # "partial - the spec provides functional descriptions ..." string.
+    # JTAG is a TAP-FSM protocol with a Design-for-Test Flow + Applications
+    # chapter; the SPI default is wrong here. setdefault is too late;
+    # we must hard-assign to overwrite. Same pattern as _l4 above.
+    d["test_cases_present"] = (
+        "partial — the primer defines the architectural rules, FSM "
+        "transition table, mandatory / optional instructions, and a "
+        "Suggested Design-for-Test Flow (Chapter 6) + Applications "
+        "chapter (Chapter 7) but does not provide a formal test bench. "
+        "The categories below are the spec-derived compliance test "
+        "scenarios.")
+    # FORCE-clear hallucinated per-opcode `test_cases` + `extraction_evidence`:
+    # the upstream `gen_l10_test_cases` in phase1_doc_one_shot_runner.py
+    # scans L3.opcodes and stamps one happy-path + one pre-wake-false case
+    # per opcode. For JTAG, L3.opcodes is populated by the bare-hex
+    # opcode regex `_V1_6_245_BARE_OPCODE_PAT` matching `D0 A0` style
+    # schematic pin labels in the TI SSYA002C primer (D0..D7 / A0..A7 are
+    # data/address bus signal names, NOT JTAG instructions). The
+    # resulting `0xD0 / name=A0` opcode_hex entries are hallucinations
+    # picked up by l_doc_parity_diff's HALLUCINATION_HEURISTICS. JTAG is
+    # NOT byte-opcode-driven — instructions are loaded by IR scan with
+    # implementation-defined opcode widths (see
+    # instructions_mandatory / instructions_optional in L3). Clear both
+    # the auto-stamped cases and their evidence trail. Chip-AGNOSTIC
+    # pattern: every protocol-specific synth that is not
+    # byte-opcode-driven must clear gen_l10_test_cases output.
+    d["test_cases"] = []
+    d["extraction_evidence"] = {}
     if _empty(d.get("derived_compliance_test_categories")):
         d["derived_compliance_test_categories"] = [
             "TestLogicReset entry — TMS=1 × 5 TCKs from each of the 16 FSM states reaches TestLogicReset.",

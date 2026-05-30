@@ -175,7 +175,7 @@
   "no_frs_sections_in_input": false,
   "protocol_overview": {
     "half_duplex": false,
-    "wire_count": 2,
+    "wire_count": "2 + 2 × N_data_lanes (N = 1..4)",
     "byte_order": null,
     "wake_required_pre_command": null,
     "evidence": "interface keyword match (i2c/spi/uart/...)",

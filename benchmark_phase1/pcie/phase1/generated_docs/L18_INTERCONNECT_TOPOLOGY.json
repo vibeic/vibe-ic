@@ -90,18 +90,7 @@
       "Figure 1-3 Logical Block Diagram of a Switch",
       "Figure 1-6 Advanced Peer-to-Peer Communication",
       "Section 1.3 PCI Express Fabric Topology"
-    ],
-    "slave_classification": {
-      "polled_target": "Modbus RTU style — master polls each slave address; slave responds within a deadline.",
-      "interrupt_target": "Slave Triggers polled by master scanning interrupt-status registers in upper protocol.",
-      "broadcast_target": "Address 0 in Modbus RTU broadcasts to all slaves (no response)."
-    },
-    "isolation_topology": {
-      "low_GPD": "Single shared ground via twisted-pair cable; works for benchtop / single-rack systems.",
-      "moderate_GPD": "Resistor-bonded ground separation (100-ohm bonding resistors); reduces loop current but residual noise sensitivity.",
-      "high_GPD": "Full galvanic isolation — digital isolator on data + isolated DC/DC on supply at each remote node; multi-kilovolt GPD tolerance."
-    },
-    "repeater_extension": "Long RS-485 buses are partitioned by RS-485 repeaters that act as termination and active re-drivers; each repeater segment respects the standard 32-UL / 1200 m / stub-length budget independently."
+    ]
   },
   "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",

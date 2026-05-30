@@ -7,7 +7,7 @@
     "coverage_goals": [],
     "formal_properties": [],
     "regression_matrix": {},
-    "verification_plan_present": "implicit",
+    "verification_plan_present": "explicit",
     "verification_categories_derived_from_spec": [
       "Register access (read/write to all register fields; reserved bits behavior)",
       "Master mode transmission across (clock polarity, clock phase, bit order) combinations",
@@ -20,7 +20,7 @@
       "Receive overrun (flag-serviced-too-late)",
       "Back-to-back transfers"
     ],
-    "notes": "Spec does not include a formal verification plan; categories above are derived from the spec's functional and waveform descriptions.",
+    "notes": "MIL-STD-1553B is paired with the SAE AS4111 RT Validation Test Plan and AS4112 RT Production Test Plan, maintained by the SAE AS-1A Avionic Networks Subcommittee. The above categories are derived from the standard's mandatory behaviors + Notice 2 + AS 15531.",
     "industry_validation_plan": "SAE AS4111 — RT Validation Test Plan (formerly MIL-HDBK-1553A Section 100, originally MIL-HDBK-1553 Appendix A). Comprehensive design-verification suite for Remote Terminals designed to AS 15531 / MIL-STD-1553B Notice 2.",
     "industry_production_plan": "SAE AS4112 — RT Production Test Plan. Simplified subset of AS4111 intended for in-line production testing of Remote Terminals."
   },

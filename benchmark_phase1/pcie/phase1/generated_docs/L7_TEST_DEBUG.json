@@ -1,9 +1,26 @@
 {
   "schema_version": 2,
   "doc_class": "test_debug",
-  "ic_name": "TIA/EIA-485 (RS-485 via TI SLLA272C Design Guide)",
+  "ic_name": "PCI Express Base Specification Rev 1.0",
   "test_scenarios": [],
-  "test_modes": [],
+  "test_modes": [
+    {
+      "name": "Compliance Pattern",
+      "purpose": "LTSSM Polling.Compliance sub-state transmits a defined compliance pattern for electrical characterization."
+    },
+    {
+      "name": "Loopback",
+      "purpose": "Loopback Master transmits a known pattern; Loopback Slave retransmits it back. Used for receiver-eye testing."
+    },
+    {
+      "name": "Hot Reset",
+      "purpose": "Triggers Link re-training via a TS1 with the Hot Reset bit set."
+    },
+    {
+      "name": "Disable Link",
+      "purpose": "Force the Link into Electrical Idle for power / characterization."
+    }
+  ],
   "no_test_modes_in_input": true,
   "debug_observability": [],
   "no_debug_observability_in_input": true,
@@ -89,14 +106,5 @@
       "trigger": "Endpoint generates PM_PME Message; routed up to RC."
     }
   ],
-  "notes": "PCI Express Rev 1.0 specifies a comprehensive in-band error-detection framework (CRC + Sequence Number + replay) and explicit AER (Advanced Error Reporting) extended capability for fine-grained error logging + signaling. JTAG / scan / BIST are NOT specified at the protocol level — those are integrator-side concerns at the SoC.",
-  "test_debug_features": [
-    "Internal node loopback — drive DE=1 + RE#=0 on a single isolated node to TX+RX through itself (without other drivers active).",
-    "Bus contention detection — capture V_AB at the loopback receiver while transmitting; mismatch between TX D and RX R indicates external bus contention.",
-    "Failsafe verification — disable all drivers and confirm receiver R stays HIGH (mark) via internal or external failsafe biasing.",
-    "Termination integrity check — measure DC resistance between A and B with all drivers tri-stated; should equal R_T / 2 = 60 ohm for 120-ohm-terminated bus.",
-    "Stub-reflection inspection — single-shot scope capture of the rising edge; visible reflections indicate too-long stubs (L_stub > tr × v × c / 10)."
-  ],
-  "interrupt_sources": [],
-  "interrupt_request": "RS-485 has no protocol-level interrupt. Transceiver-level fault outputs (overheating, bus-fault) are vendor-specific and not part of the standard."
+  "notes": "PCI Express Rev 1.0 specifies a comprehensive in-band error-detection framework (CRC + Sequence Number + replay) and explicit AER (Advanced Error Reporting) extended capability for fine-grained error logging + signaling. JTAG / scan / BIST are NOT specified at the protocol level — those are integrator-side concerns at the SoC."
 }

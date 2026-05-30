@@ -16,7 +16,7 @@
   "fsm_state_catalogue": [],
   "extraction_evidence": {},
   "no_otp_fsm_in_input": true,
-  "otp_present": false,
+  "otp_present": true,
   "notes": "OTP at the 1-Wire protocol layer is exactly the 64-bit ROM ID. Per-slave function-command memories (DS18B20 9-byte scratchpad, EEPROM scratchpad/storage, configuration registers, alarm thresholds) are separate from the ROM ID and are defined per slave datasheet — they are NOT part of AN148's protocol layer. Some slaves (e.g. iButton 1-Wire EEPROMs, DS28E25 SHA-256 auth devices) layer per-device OTP / EEPROM mechanisms ON TOP of the wire-level 1-Wire protocol.",
   "otp_role": "Each 1-Wire slave device contains a factory-burned, immutable 64-bit ROM ID — a per-device serial number that is the protocol-level identity used for addressing on the multi-drop bus. AN148 itself does not specify the OTP mechanism (laser fuse, mask ROM, EEPROM); each slave family chooses an implementation. From the bus perspective, every slave has a permanent, unique 64-bit identifier readable via the Read ROM (0x33) or Search ROM (0xF0) commands.",
   "rom_id_layout": {

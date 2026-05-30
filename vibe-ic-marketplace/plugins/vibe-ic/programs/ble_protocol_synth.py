@@ -203,6 +203,12 @@ def apply_ble_synth(generated_docs_dir: Path, is_ble: bool,
     p = gd / "L3_CMD_PROTOCOL.json"
     if p.is_file():
         d = _read(p)
+        # Clear flat L3.opcodes — BLE has structured LL_Control opcodes +
+        # ATT opcodes catalogued elsewhere, not a flat byte-opcode table.
+        # The downstream gen_l10 step uses L3.opcodes to synthesize fake
+        # send_<X> test_cases that get flagged as HALLUCINATED. Same fix
+        # as JTAG v0.1.88.
+        d["opcodes"] = []
         # Force-overwrite protocol_type: UART R59 / USB R65 / RS-485 R137 /
         # HDLC R158 already populated this with their own protocol identity.
         _force(d, "protocol_type",
@@ -934,6 +940,10 @@ def apply_ble_synth(generated_docs_dir: Path, is_ble: bool,
     p = gd / "L10_TEST_CASES.json"
     if p.is_file():
         d = _read(p)
+        # Clear gen_l10's per-opcode test_cases — BLE is packet-based, not
+        # byte-opcode-driven (same fix as JTAG/HDLC v0.1.88).
+        d["test_cases"] = []
+        d["extraction_evidence"] = {}
         d["test_cases_present"] = (
             "partial - the spec defines compliance behaviors that map to "
             "formal qualification (Bluetooth SIG Profile Tuning Suite, PTS) "

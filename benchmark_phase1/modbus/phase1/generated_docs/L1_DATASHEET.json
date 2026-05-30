@@ -936,5 +936,6 @@
     "Renewable energy: inverter / battery-management-system data acquisition",
     "Process control: chemical / oil-gas / water-treatment plant device polling",
     "Variable-frequency drive (VFD) configuration and run-time monitoring"
-  ]
+  ],
+  "transaction_summary": "A client builds the request ADU = optional-address + Function Code + Data + optional-CRC/LRC, sends it to the server. The server validates the function code (else exception 0x01), validates the data address (else 0x02), validates the data value (else 0x03), executes the function (else 0x04), and replies — either a normal response (echoes the function code with response data) or an exception response (function code | 0x80 + exception code)."
 }

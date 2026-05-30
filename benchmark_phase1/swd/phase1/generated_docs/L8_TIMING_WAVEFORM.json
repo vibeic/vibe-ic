@@ -72,10 +72,10 @@
     "notes": "ADIv5 does not specify absolute values; per-device datasheets do."
   },
   "voltage_levels": {
-    "VIH_min": "Per-device (typically 0.7 × VDD-IO).",
-    "VIL_max": "Per-device (typically 0.3 × VDD-IO).",
-    "VOH_min": "Per-device.",
-    "VOL_max": "Per-device."
+    "VIH_min": "Per-device datasheet (typically 0.7 × VDD-IO).",
+    "VIL_max": "Per-device datasheet (typically 0.3 × VDD-IO).",
+    "VOH_min": "Per-device datasheet.",
+    "VOL_max": "Per-device datasheet."
   },
   "clock_and_reset_waveform_ahb": {
     "HCLK": "Single rising-edge clock per AHB interface.",

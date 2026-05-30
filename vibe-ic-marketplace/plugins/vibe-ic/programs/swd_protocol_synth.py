@@ -1079,10 +1079,10 @@ def _l8_timing(gd: Path, ic_name: Optional[str]) -> None:
         "notes": "ADIv5 does not specify absolute values; per-device datasheets do.",
     }
     d["voltage_levels"] = {
-        "VIH_min": "Per-device (typically 0.7 × VDD-IO).",
-        "VIL_max": "Per-device (typically 0.3 × VDD-IO).",
-        "VOH_min": "Per-device.",
-        "VOL_max": "Per-device.",
+        "VIH_min": "Per-device datasheet (typically 0.7 × VDD-IO).",
+        "VIL_max": "Per-device datasheet (typically 0.3 × VDD-IO).",
+        "VOH_min": "Per-device datasheet.",
+        "VOL_max": "Per-device datasheet.",
     }
     _write(p, d)
 
@@ -1264,9 +1264,22 @@ def _l11(gd: Path, ic_name: Optional[str]) -> None:
         "applicable_when": "Each AP implements its own 32-bit IDR (offset 0xFC).",
         "width_bits": 32,
         "access": "Read-only.",
+        "field_map": [
+            {"bits": "3:0",   "name": "Type",     "width_bits": 4, "description": "AP type code (0=JTAG-AP, 1=AHB3-AP, 2=APB2/3-AP, 4=AXI3/4-AP, etc.)."},
+            {"bits": "7:4",   "name": "Variant",  "width_bits": 4, "description": "AP variant."},
+            {"bits": "16:13", "name": "Class",    "width_bits": 4, "description": "AP class (8 = MEM-AP)."},
+            {"bits": "23:17", "name": "JEP106",   "width_bits": 7, "description": "JEP106 designer."},
+            {"bits": "31:28", "name": "Revision", "width_bits": 4, "description": "AP revision."},
+        ],
     }
     # Drop JTAG usercode_register_content if it was set with JTAG-shaped data.
     d.pop("usercode_register_content", None)
+    d["usercode_or_user_otp_content"] = {
+        "applicable_when": "Vendor-specific. Some SoCs implement a USERCODE-like 32-bit register reachable via a vendor-specific MEM-AP system-bus address. ADIv5 does not standardize this.",
+        "width_bits": 32,
+        "access": "Vendor-defined.",
+        "writability": "Vendor-defined; sometimes loaded from on-chip fuses at boot.",
+    }
     d["vendor_jtag_swd_disable_fuses"] = {
         "applicable_when": "Many production SoCs implement a one-way fuse (ST RDP, Nordic APPROTECT, NXP DCFG, ESP32 JTAG_DISABLE).",
         "common_behaviors": [
@@ -1566,6 +1579,32 @@ def _l15(gd: Path, ic_name: Optional[str]) -> None:
             ["0x8", "AMBA APB4/5 MEM-AP"],
         ],
     }
+    f["ap_class_codes_table"] = {
+        "header_columns": ["Class Code", "AP Class"],
+        "rows": [
+            ["0x0", "Undefined / Unimplemented"],
+            ["0x8", "MEM-AP class"],
+        ],
+    }
+    f["csw_addrinc_table"] = {
+        "header_columns": ["CSW.AddrInc[5:4]", "Mode", "Description"],
+        "rows": [
+            ["00", "Off",      "TAR not modified after DRW transfer"],
+            ["01", "Single",   "TAR += transfer size (1/2/4/8/16) after each DRW transfer"],
+            ["10", "Packed",   "Multiple sub-word transfers per DRW; TAR auto-increments per sub-word"],
+            ["11", "Reserved", "—"],
+        ],
+    }
+    f["csw_size_table"] = {
+        "header_columns": ["CSW.Size[2:0]", "Size", "Description"],
+        "rows": [
+            ["000", "Byte",        "8-bit transfers"],
+            ["001", "Halfword",    "16-bit transfers"],
+            ["010", "Word",        "32-bit transfers (default)"],
+            ["011", "Double-word", "64-bit transfers (requires CFG.LargeData)"],
+            ["100", "128-bit",     "128-bit transfers (requires CFG.LargeData)"],
+        ],
+    }
     f["swj_dp_selection_sequences_table"] = {
         "header_columns": ["Mode Switch", "16-bit Pattern (LSB first on SWDIO/TMS)", "Hex Value"],
         "rows": [
@@ -1799,7 +1838,7 @@ def _l18(gd: Path, ic_name: Optional[str]) -> None:
     )
     f["ordering_guarantees"] = {
         "bit_order_within_a_phase":   "LSB first on SWDIO.",
-        "transaction_order":          "Strict sequential.",
+        "transaction_order":          "Strict sequential — each 46-bit transaction completes before the next begins. Posted reads pipeline the data return, but the wire-level ordering of transactions is strict.",
         "posted_read_pipelining":     "Read N's data appears with the ACK of transaction N+1 (or RDBUFF).",
         "ap_register_atomicity":      "Each AP register access is atomic from the host's POV.",
     }

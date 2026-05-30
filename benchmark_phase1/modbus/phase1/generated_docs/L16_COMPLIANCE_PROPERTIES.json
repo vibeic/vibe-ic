@@ -137,7 +137,8 @@
         "protocol_id": 0,
         "reserved_port": 502,
         "no_modbus_crc": true,
-        "broadcast_concept": "Not applicable"
+        "broadcast_concept": "Not applicable",
+        "concurrent_transactions_per_socket": "Limited only by Transaction-ID field width (65536 values)"
       }
     },
     "reset_behavior_compliance": "On power-up/reset, server's diagnostic counters and Comm Event Counter/Log shall be cleared to 0; four data tables hold implementation-defined power-on defaults; server enters WAIT_FOR_MB_INDICATION state."

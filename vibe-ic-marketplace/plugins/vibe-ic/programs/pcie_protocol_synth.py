@@ -531,12 +531,13 @@ def apply_pcie_synth(generated_docs_dir: Path, is_pcie: bool,
             "Completion Timeout — Non-Posted Request did not get a Completion within the timeout window.",
             "Unsupported Request (UR), Completer Abort (CA), Configuration Retry Status (CRS) — abnormal Completion Status codes.",
         ])
-        d.setdefault("test_modes", [
-            {"name": "Compliance Pattern",  "purpose": "LTSSM Polling.Compliance sub-state transmits a defined compliance pattern for electrical characterization."},
-            {"name": "Loopback",            "purpose": "Loopback Master transmits a known pattern; Loopback Slave retransmits it back. Used for receiver-eye testing."},
-            {"name": "Hot Reset",           "purpose": "Triggers Link re-training via a TS1 with the Hot Reset bit set."},
-            {"name": "Disable Link",        "purpose": "Force the Link into Electrical Idle for power / characterization."},
-        ])
+        if _empty(d.get("test_modes")):  # force when upstream emits None/[]/empty
+            d["test_modes"] = [
+                {"name": "Compliance Pattern",  "purpose": "LTSSM Polling.Compliance sub-state transmits a defined compliance pattern for electrical characterization."},
+                {"name": "Loopback",            "purpose": "Loopback Master transmits a known pattern; Loopback Slave retransmits it back. Used for receiver-eye testing."},
+                {"name": "Hot Reset",           "purpose": "Triggers Link re-training via a TS1 with the Hot Reset bit set."},
+                {"name": "Disable Link",        "purpose": "Force the Link into Electrical Idle for power / characterization."},
+            ]
         d.setdefault("interrupt_or_event_sources", [
             {"event": "Hot-plug Card-Present change",   "trigger": "Card insertion / removal sensed by slot circuitry."},
             {"event": "Link Up / Link Down",            "trigger": "LTSSM enters / exits L0."},

@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "otp_content",
-  "ic_name": "TIA/EIA-485 (RS-485 via TI SLLA272C Design Guide)",
+  "ic_name": "PCI Express Base Specification Rev 1.0",
   "depth": null,
   "width_bits": null,
   "content_hex": null,
@@ -17,7 +17,7 @@
   "extraction_evidence": {},
   "no_otp_fsm_in_input": true,
   "otp_present": false,
-  "notes": "RS-485 is a wire-level electrical standard; no OTP / fuse / configuration ROM at the protocol layer. Concrete RS-485 transceiver chips are stateless analog parts with no programmable bits. Higher-level controller IP (UART with RS-485 wrapper) may have configuration bits at the SoC integration level, but these are not OTP-defined by RS-485.",
+  "notes": "PCI Express Rev 1.0 does not specify OTP / fuse content as a protocol concept. Practically, every PCIe silicon device must burn Vendor ID + Device ID + Revision ID + Class Code into ROM / OTP / metal-mask so that Configuration Reads to offsets 00h-0Bh return the correct identifiers immediately after PERST# deassertion (before any software-programmed register has been written). The optional Device Serial Number Capability (Section 5.12) is also typically OTP-equivalent.",
   "otp_equivalent_factory_burned_fields": [
     {
       "field": "Vendor ID",

@@ -292,10 +292,16 @@ def apply_arinc429_synth(generated_docs_dir: Path, is_arinc429: bool,
         _write(p, d)
 
     # L5 ADI_SPEC — overwrite signaling
+    # v0.1.88: force-overwrite analog_digital_interface_present (was setdefault,
+    # but earlier serial_peripheral_protocol class synth — SPI _apply_universal —
+    # runs UNCONDITIONALLY and stamps False on this key via setdefault, so a
+    # later setdefault here no-ops. ARINC 429 IS analog (balanced differential
+    # BPRZ on 78 Ω shielded twisted-pair at ±10 V); the value must be True for
+    # every spec that exhibits the ARINC 429 structural signature.
     p = gd / "L5_ADI_SPEC.json"
     if p.is_file():
         d = _read(p)
-        d.setdefault("analog_digital_interface_present", True)
+        d["analog_digital_interface_present"] = True
         d["signaling_summary"] = (
             "ARINC 429 defines a balanced differential bipolar return-to-"
             "zero (BPRZ / BRZ) signaling scheme on a shielded 78 Ω "
@@ -602,13 +608,27 @@ def apply_arinc429_synth(generated_docs_dir: Path, is_arinc429: bool,
         _write(p, d)
 
     # L10 TEST_CASES
+    # v0.1.88: force-overwrite both test_cases_present AND
+    # derived_compliance_test_categories (was setdefault / _empty-guarded).
+    # The SPI class-universal `_apply_universal` runs UNCONDITIONALLY before
+    # the Tier-3 dispatch and hard-sets `test_cases_present` to the SPI
+    # wording (`d["test_cases_present"] = ...` — not setdefault) plus a
+    # SPI-flavored compliance category list (clock-polarity/phase, slave-
+    # select, baud-rate-divisor — none of which apply to ARINC 429's
+    # broadcast BRZ wire-level protocol). Force-overwrite makes the
+    # ARINC 429 wording win, and force-overwrites the category list with
+    # ARINC-429-canonical scenarios (32-bit word + Label + SDI + SSM + BRZ
+    # + parity + NULL inter-word gap) instead of the leaked SPI defaults.
     p = gd / "L10_TEST_CASES.json"
     if p.is_file():
         d = _read(p)
-        d.setdefault("test_cases_present",
-            "partial - ARINC 429 defines mandatory wire-level behaviors (32-bit word format, BRZ encoding, odd parity, ≥ 4-bit-time NULL gap, SSM matrix per encoding) that map directly to compliance test scenarios but does not provide a formal testbench.")
-        if _empty(d.get("derived_compliance_test_categories")):
-            d["derived_compliance_test_categories"] = [
+        d["test_cases_present"] = (
+            "partial - ARINC 429 defines mandatory wire-level behaviors "
+            "(32-bit word format, BRZ encoding, odd parity, ≥ 4-bit-time "
+            "NULL gap, SSM matrix per encoding) that map directly to "
+            "compliance test scenarios but does not provide a formal "
+            "testbench.")
+        d["derived_compliance_test_categories"] = [
                 "32-bit DATA WORD with each of the three data encodings (BNR, BCD, Discrete) and mixed encodings within the data field.",
                 "Bit transmission order: Bit 1 first → Bit 32 last on the wire; Label field MSB-first within bits 1-8.",
                 "BRZ waveform per bit: first-half HI (or LO) + second-half NULL; verify mid-bit return-to-zero edge.",

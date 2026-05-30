@@ -1,7 +1,393 @@
 {
   "schema_version": 2,
   "doc_class": "test_cases",
-  "ic_name": "Bluetooth Low Energy 5.2 (Bluetooth Core Specification)",
+  "ic_name": "ble",
+  "test_cases": [
+    {
+      "name": "send_pin_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x06",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x06",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_pin_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x06 immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x06",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_sco_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x1B",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x1B",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_sco_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x1B immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x1B",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_sco_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x1C",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x1C",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_sco_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x1C immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x1C",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_sco_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x1D",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x1D",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_sco_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x1D immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x1D",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_lmp_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x22",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x22",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_lmp_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x22 immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x22",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_lmp_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends <HALLUCINATION_SCRUBBED>",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_lmp_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends <HALLUCINATION_SCRUBBED> immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_lmp_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends <HALLUCINATION_SCRUBBED>",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_lmp_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends <HALLUCINATION_SCRUBBED> immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_mac_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x3F",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x3F",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_mac_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x3F immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x3F",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_command_re_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x01",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x01",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_command_re_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x01 immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x01",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_connection_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x02",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x02",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_connection_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x02 immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x02",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_connection_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x03",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x03",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_connection_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x03 immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x03",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_configurat_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x04",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x04",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_configurat_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x04 immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x04",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_configurat_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x05",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x05",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_configurat_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x05 immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x05",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_disconnect_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x07",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x07",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_disconnect_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x07 immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x07",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_echo_req_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x08",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x08",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_echo_req_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x08 immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x08",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_echo_rsp_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x09",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x09",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_echo_rsp_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x09 immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x09",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_informatio_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x0A",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x0A",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_informatio_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x0A immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x0A",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_informatio_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x0B",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x0B",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_informatio_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x0B immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x0B",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_create_cha_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x0C",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x0C",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_create_cha_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x0C immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x0C",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_create_cha_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x0D",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x0D",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_create_cha_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x0D immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x0D",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_move_chann_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x0E",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x0E",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_move_chann_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x0E immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x0E",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_move_chann_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x0F",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x0F",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_move_chann_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x0F immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x0F",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_move_chann_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x10",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x10",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_move_chann_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x10 immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x10",
+      "evidence": "L3.pre_wake_allowed"
+    },
+    {
+      "name": "send_l2cap_move_chann_happy",
+      "kind": "happy_path",
+      "stimulus": "host sends 0x11",
+      "expected": "DUT replies per response_payload_template",
+      "opcode_hex": "0x11",
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "send_l2cap_move_chann_no_wake",
+      "kind": "pre_wake_false",
+      "stimulus": "host sends 0x11 immediately after POR (no preceding wake pulse)",
+      "expected": "DUT silent (no response frame)",
+      "opcode_hex": "0x11",
+      "evidence": "L3.pre_wake_allowed"
+    }
+  ],
   "no_test_cases_in_input": false,
   "bring_up_sequence": [
     {
@@ -233,19 +619,5 @@
         "label": "opcode → happy + negative test-cases"
       }
     ]
-  },
-  "class_path": "digital_cmd_driven",
-  "test_cases_present": "partial - the spec defines compliance behaviors that map to formal qualification (Bluetooth SIG Profile Tuning Suite, PTS) plus Direct Test Mode (Vol 6 Part F) for production RF tests, but the spec itself does not include a testbench.",
-  "derived_compliance_test_categories": [
-    "Reset behavior: enable bit cleared; transmit-empty flag set; receive-flag cleared after reset.",
-    "Master mode transmission: write to data register + clock-cycle delay + N edges + receive-flag set.",
-    "Slave mode transmission: select line goes LOW + N edges from master + receive-flag set after last edge.",
-    "Mode fault / collision detection.",
-    "All clock polarity/phase combinations.",
-    "MSB-first vs LSB-first byte ordering.",
-    "Bidirectional mode (single data pin).",
-    "Receive overrun (flag-serviced-too-late).",
-    "Baud rate divisor sweep.",
-    "Wait/Stop mode behavior."
-  ]
+  }
 }

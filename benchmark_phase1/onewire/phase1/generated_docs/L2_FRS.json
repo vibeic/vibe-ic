@@ -63,7 +63,7 @@
   "no_frs_sections_in_input": false,
   "protocol_overview": {
     "half_duplex": false,
-    "wire_count": 1,
+    "wire_count": 2,
     "byte_order": null,
     "wake_required_pre_command": null,
     "evidence": "half-duplex/single-wire/1-wire keyword match",

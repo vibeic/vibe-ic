@@ -169,7 +169,7 @@ def _l2(gd: Path) -> None:
             "DQ (data line; carries both clock + data via time slots)",
             "GND",
         ])
-        po.setdefault("wire_count", 2)
+        po["wire_count"] = 2  # force-overwrite (universal synth sets 1)
         po.setdefault("drive_type",
             "open-drain wired-AND; HIGH = released (pulled up to VDD by Rp)")
         po.setdefault("multi_drop", True)
@@ -666,7 +666,7 @@ def _l11(gd: Path) -> None:
     if not p.is_file():
         return
     d = _read(p)
-    d.setdefault("otp_present", True)
+    d["otp_present"] = True  # force-overwrite (universal synth sets False)
     d.setdefault("otp_role",
         "Each 1-Wire slave device contains a factory-burned, immutable 64-bit ROM ID — a per-device serial number that is the protocol-level identity used for addressing on the multi-drop bus. AN148 itself does not specify the OTP mechanism (laser fuse, mask ROM, EEPROM); each slave family chooses an implementation. From the bus perspective, every slave has a permanent, unique 64-bit identifier readable via the Read ROM (0x33) or Search ROM (0xF0) commands.")
     d.setdefault("rom_id_layout", {
@@ -754,7 +754,7 @@ def _l13(gd: Path) -> None:
     if not p.is_file():
         return
     d = _read(p)
-    d.setdefault("lab_calibration_present", "partial")
+    d["lab_calibration_present"] = "partial"  # force-overwrite
     d.setdefault("characterization_targets", [
         {"name": "Network capacitance",
          "purpose": "Total capacitance of cable + slave devices + ESD protection sets the rise time on Write-1 / Read slots. Characterize by measuring the time constant of the released-line waveform under known Rp.",

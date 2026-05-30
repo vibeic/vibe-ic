@@ -137,7 +137,12 @@ def _l2(gd: Path, ic_name: str) -> None:
         "DAT0_P / DAT0_N (Data Lane 0 differential pair)",
         "DAT1.. (optional additional Data Lanes)",
     ])
-    po.setdefault("wire_count", "2 + 2 × N_data_lanes (N = 1..4)")
+    # FORCE-OVERWRITE: the runner's broad keyword heuristic at
+    # phase1_doc_one_shot_runner.py L17918 pre-sets wire_count=2 (default
+    # for non-SPI serial); MIPI's structural detector is more specific
+    # (Clock Lane pair + N Data Lane pairs, N=1..4) so overwrite here.
+    # Mirrors HDMI synth pattern (hdmi_protocol_synth.py L290).
+    po["wire_count"] = "2 + 2 × N_data_lanes (N = 1..4)"
     po.setdefault("dual_mode_signaling",
                   "HS (high-speed terminated differential 100-200 mV) + LP (low-power single-ended 1.2 V CMOS); share same wires.")
     po.setdefault("DDR_clock",
@@ -325,8 +330,13 @@ def _l5(gd: Path, ic_name: str) -> None:
         return
     d = _read(p)
     d["analog_digital_interface_present"] = True
-    d.setdefault("signaling_summary",
-                 "D-PHY is a dual-mode analog/mixed-signal physical layer. HS (High-Speed) mode: terminated 100 Ω differential signaling, 100-200 mV differential swing on top of a common-mode voltage (~200 mV); sub-LVDS class; both ends terminate so the receiver sees a clean eye at multi-gigabit rates. LP (Low-Power) mode: 1.2 V CMOS single-ended swing, unterminated, ≤ 10 Mbps; uses standard CMOS rail-to-rail drivers. The same two wires (Dp/Dn) carry both modes — the HS driver is current-mode while the LP driver is voltage-mode, and they are arbitrated by the lane-state controller. DC-coupled (no AC-coupling capacitors are used on D-PHY). Termination: 100 Ω differential across Dp/Dn at the sink end during HS; high-impedance during LP.")
+    # FORCE-OVERWRITE: the SPI-class `_apply_universal` helper in
+    # spi_protocol_synth.py L63 fires before structural sub-detection
+    # refines the ic_class, pre-emitting a "Pure digital ..." string.
+    # MIPI D-PHY is firmly mixed-signal (dual-mode HS + LP); the MIPI
+    # structural detector knows better, so overwrite unconditionally.
+    d["signaling_summary"] = (
+        "D-PHY is a dual-mode analog/mixed-signal physical layer. HS (High-Speed) mode: terminated 100 Ω differential signaling, 100-200 mV differential swing on top of a common-mode voltage (~200 mV); sub-LVDS class; both ends terminate so the receiver sees a clean eye at multi-gigabit rates. LP (Low-Power) mode: 1.2 V CMOS single-ended swing, unterminated, ≤ 10 Mbps; uses standard CMOS rail-to-rail drivers. The same two wires (Dp/Dn) carry both modes — the HS driver is current-mode while the LP driver is voltage-mode, and they are arbitrated by the lane-state controller. DC-coupled (no AC-coupling capacitors are used on D-PHY). Termination: 100 Ω differential across Dp/Dn at the sink end during HS; high-impedance during LP.")
     d.setdefault("voltage_levels", {
         "HS_differential_swing_mV": [100, 200],
         "HS_common_mode_V_typ": 0.2,

@@ -978,9 +978,7 @@
     ],
     "min_link_constraint": "Every Link must support at least x1 width at Gen 1 (2.5 GT/s) and must successfully train from Detect to L0 within the LTSSM-defined symbol time budgets.",
     "reset_behavior_compliance": "PERST# deassertion triggers LTSSM entry to Detect; all per-Link state machines (DLL, TL) wait for L0 + Flow Control init. Hot Reset (TS1 with Hot Reset bit) returns the downstream device to Detect without de-asserting PERST#.",
-    "8b10b_running_disparity_rule": "Each transmitted symbol must obey the IBM 8b/10b running-disparity rule. Receivers must validate running disparity and flag violations as Receiver Errors.",
-    "max_data_rate_constraint": "Standard: 10 Mbps at 40 ft. Modern transceivers: up to 40 Mbps at short stubs.",
-    "max_cable_length_constraint": "4000 ft (1200 m) at 100 kbps with 22 AWG 120-ohm UTP. Rule of thumb: length [m] × data_rate [bps] < 10^7."
+    "8b10b_running_disparity_rule": "Each transmitted symbol must obey the IBM 8b/10b running-disparity rule. Receivers must validate running disparity and flag violations as Receiver Errors."
   },
   "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",

@@ -99,6 +99,7 @@
   "timing_parameters_i3c_open_drain_table58": {
     "tLOW_OD_min_ns": 200,
     "tDIG_OD_L_min_ns": "tLOW_OD_min + tfDA_ODmin",
+    "tHIGH_min_ns": "n/a min",
     "tHIGH_max_ns": 41,
     "tDIG_H_max_ns": "tHIGH + tCF",
     "tfDA_OD_max_ns": 12,

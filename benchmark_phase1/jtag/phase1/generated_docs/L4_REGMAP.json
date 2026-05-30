@@ -69,7 +69,7 @@
   "extraction_evidence": {},
   "class_path": "digital_cmd_driven",
   "register_map_present": true,
-  "base_address": "Defined at SoC level; offsets given relative to module base.",
+  "base_address": "Not applicable — JTAG registers are not memory-mapped. They are addressed via the Instruction Register value while the TAP FSM is in the appropriate Shift state.",
   "notes": "Per IEEE 1149.1, the IR is the only register parallel-latched in UpdateIR; the Bypass register is parallel-loaded with 0 in CaptureDR; the BSR's CaptureDR behavior depends on the cell type (input cells capture pin value, output cells capture driven value); the Device Identification register is parallel-loaded with the hard-wired ID in CaptureDR.",
   "register_map_kind": "shift-register catalog (not memory-mapped). Registers are selected implicitly by the current Instruction Register value and are accessed by shifting bit-serially via TDI/TDO in ShiftIR / ShiftDR states.",
   "register_count": 4,

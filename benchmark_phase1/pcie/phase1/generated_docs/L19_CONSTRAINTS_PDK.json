@@ -10,7 +10,7 @@
     "sdc_constraints_path": null,
     "floorplan_hints": [],
     "constraints_present": false,
-    "notes": "RS-485 is a wire-level electrical standard; no PDK / SDC / floorplan constraints at the protocol layer. Per-transceiver fabrication constraints (BCD process, output stage current limit, ESD diode stacks) live in the vendor's PDK and not in TIA/EIA-485 nor in SLLA272D. Higher-level controller integration (UART block with RS-485 wrapper) carries its own SDC at the SoC integration level.",
+    "notes": "PCI Express Rev 1.0 is a wire-level + transaction-level + software-interface protocol spec; it does not impose PDK-specific SDC / floorplan constraints. The Base Spec DOES specify analog compliance windows (Tables 4-4 + 4-5; Figures 4-32, 4-33, 4-34) and PCB-level guidance on differential impedance, AC coupling, and channel-loss budgets. SoC integration constraints (clock-tree budget, PHY characterization, pad type selection) live in the SoC integration spec, not in the Base Spec. Companion mechanical/connector constraints live in the PCI Express Card Electromechanical Specification.",
     "electrical_channel_constraints": {
       "differential_impedance_ohm": 100,
       "single_ended_impedance_ohm": 50,

@@ -1,0 +1,48 @@
+# Auto-generated compliance vector catalog.
+# One requirement per line; format: <source-L-doc>: <description>
+
+L10: Line reset — drive ≥ 50 SWCLK cycles with SWDIO=HIGH from each state; verify SW-DP returns to Idle.
+L10: IDCODE/DPIDR readback — verify ACK=OK + 32-bit DPIDR with bit 0 = 1.
+L10: Request packet parity — corrupted-parity Request shall be ignored or set WDATAERR.
+L10: Request Start/Stop/Park — verify Start=0, Stop=1, Park=0 each ignored.
+L10: ACK code validation — verify only OK=001 / WAIT=010 / FAULT=100.
+L10: Data parity on read — verify the 33rd bit = even parity of 32 data bits.
+L10: Data parity on write — bad parity → WDATAERR → FAULT → clear via ABORT.WDERRCLR.
+L10: Turnaround — verify 1-cycle default and 4-cycle max.
+L10: ABORT register — verify each clear bit clears its CTRL/STAT counterpart.
+L10: SELECT register — verify APSEL + APBANKSEL + DPBANKSEL route to correct AP/bank.
+L10: RDBUFF — verify posted-read recovery.
+L10: AP IDR readback — for each implemented AP, verify non-zero IDR.
+L10: AP BASE readback — verify ROM Table base address + Present bit.
+L10: MEM-AP TAR + DRW round-trip — write to RAM, read back, verify match.
+L10: MEM-AP auto-increment Single — verify TAR += transfer size after each DRW.
+L10: MEM-AP auto-increment Packed — multiple sub-word per DRW.
+L10: MEM-AP 4K wrap-around — verify auto-increment wraps within 4 KB.
+L10: WAIT retry — verify host can retry until OK.
+L10: FAULT recovery — read CTRL/STAT, write ABORT, retry.
+L10: Sticky overrun — many posted reads → STICKYORUN set; clear via ABORT.ORUNERRCLR.
+L10: SWJ-DP JTAG-to-SWD selection — shift 0xE79E → SWD mode.
+L10: SWJ-DP SWD-to-JTAG selection — shift 0xE73C → JTAG mode.
+L10: Multi-drop SWD — TARGETSEL with matching TPARTNO+TINSTANCE addresses correct target.
+L10: CDBGPWRUPREQ / CSYSPWRUPREQ — verify ack handshake.
+L10: DAPABORT — verify in-flight AP transaction cancelled.
+L10: DHCSR halt — write C_HALT=1 → CPU halts (S_HALT=1).
+L10: DHCSR step — verify single-step.
+L10: CoreSight ROM Table walk — host enumerates all components.
+L10: Cortex-M debug entry — halt before first user-code instruction (DEMCR.VC_CORERESET).
+L16: Two mandatory dedicated pins: SWCLK (host-driven) and SWDIO (bidirectional).
+L16: Every transaction is exactly 46 bits: Request + Turnaround + ACK + Data + Parity + Turnaround.
+L16: Request packet: Start=1, Stop=0, Park=1; Parity even over APnDP+RnW+A[2:3].
+L16: ACK encoding: OK=001, WAIT=010, FAULT=100 (one-hot only).
+L16: Data: 32 bits LSB first + 33rd parity bit (even parity).
+L16: DPIDR register at A[3:2]=0x0 read; bit 0 hard-wired to 1 (RAO).
+L16: ABORT register at A[3:2]=0x0 write; supports DAPABORT + STKCMPCLR + STKERRCLR + WDERRCLR + ORUNERRCLR.
+L16: CTRL/STAT register at A[3:2]=0x4.
+L16: SELECT register at A[3:2]=0x8 write; APSEL + APBANKSEL + DPBANKSEL fields.
+L16: RDBUFF register at A[3:2]=0xC read.
+L16: Up to 256 APs addressable via SELECT.APSEL.
+L16: MEM-AP register catalog: CSW, TAR, DRW, CFG, BASE, IDR at minimum.
+L16: MEM-AP IDR.Class = 8.
+L16: Line reset = ≥ 50 consecutive SWCLK cycles with SWDIO=HIGH.
+L16: Post-reset host first transaction is IDCODE/DPIDR read.
+L16: Posted reads: data of read N returned with ACK of read N+1; final via DP.RDBUFF.

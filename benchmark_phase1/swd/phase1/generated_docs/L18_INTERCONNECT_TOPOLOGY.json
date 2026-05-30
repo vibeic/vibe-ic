@@ -81,7 +81,7 @@
     "interconnect_role": "There is NO daisy chain at the SWD wire layer (unlike JTAG). SWD is point-to-point (or multi-drop in ADIv5.2). On the target side, the DAP fans transactions to up to 256 APs over an internal AP bus.",
     "ordering_guarantees": {
       "bit_order_within_a_phase": "LSB first on SWDIO.",
-      "transaction_order": "Strict sequential.",
+      "transaction_order": "Strict sequential — each 46-bit transaction completes before the next begins. Posted reads pipeline the data return, but the wire-level ordering of transactions is strict.",
       "posted_read_pipelining": "Read N's data appears with the ACK of transaction N+1 (or RDBUFF).",
       "ap_register_atomicity": "Each AP register access is atomic from the host's POV."
     },

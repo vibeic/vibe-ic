@@ -229,7 +229,7 @@
     "User_Defined_range_2": "100..110",
     "Reserved_range": "Annex A — FC 9, 10, 13, 14, 41, 42, 90, 91, 125..127; FC 8 sub 19, 21..65535; FC 43 sub-MEI 0..12, 15..255",
     "Exception_response_range": "128..255",
-    "Invalid_code": "0"
+    "Invalid_code": "0 (not valid)"
   },
   "exception_codes": [
     {

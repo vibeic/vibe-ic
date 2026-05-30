@@ -20,7 +20,7 @@
       "Receive overrun (flag-serviced-too-late)",
       "Back-to-back transfers"
     ],
-    "notes": "RS-485 is an electrical-only standard; verification is split into (a) chip-level transceiver electrical conformance per the TIA/EIA-485-A specification points and (b) system-level cable / termination / isolation / noise tests per the engineering practices summarized in SLLA272D. Higher-level link-layer compliance (Modbus RTU CRC, DL/T645 BCC) is verified separately by industry test suites (e.g. Modbus Conformance Test Tool)."
+    "notes": "Spec does not include a formal verification plan; categories above are derived from the spec's functional and waveform descriptions."
   },
   "extraction_hints": [
     "Look for coverage targets, vplan, regression policy.",

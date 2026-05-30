@@ -2189,8 +2189,8 @@
     "Display Data Channel (DDC)",
     "Advanced Telecom Computing Architecture (ATCA)"
   ],
-  "overview": "The I2C-bus is a de facto world standard, implemented in over 1000 different ICs from more than 50 companies. It is a simple bidirectional 2-wire serial bus for efficient inter-IC control.",
-  "release_history_note": "Originally Philips Semiconductors (now NXP). Revision history per document footer; Rev. 6 dated 4 April 2014; previous versions span 1982-2007 (v1.0..v3.0).",
+  "overview": "MIPI I3C Basic v1.0 is a feature-reduced, royalty-free subset of the full MIPI I3C v1.0 specification (with selected I3C v1.1 elements), targeted at mobile-sensor interconnect. It preserves I2C backward compatibility while adding Push-Pull 12.5 MHz SDR, Dynamic Address Assignment, In-Band Interrupts, Hot-Join, and Common Command Codes — at much lower energy per bit than I2C and with greater than 10x speed.",
+  "release_history_note": "I3C Basic v1.0 initial board-adopted release: 8 October 2018. Subset of MIPI I3C v1.0 (31 December 2016) + selected I3C v1.1 features (Direct Read/Write CCCs, GETMXDS refinement, SETAASA, low-voltage / high-capacitive-load IO). Members can later upgrade to full I3C v1.x.",
   "scope_in": [
     "I3C interface protocols and commands leveraged for I3C Basic.",
     "Electrical specifications: DC I/O characteristics, AC timing, voltage levels.",

@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "cmd_protocol",
-  "ic_name": "TIA/EIA-485 (RS-485 via TI SLLA272C Design Guide)",
+  "ic_name": "PCI Express Base Specification Rev 1.0",
   "opcodes": [],
   "no_opcodes_in_input": true,
   "placeholder_opcode_count": 0,
@@ -174,90 +174,5 @@
     "tlp_framing": "STP (K27.7) + Sequence Number (12b) + 2 Reserved + TLP header + optional data payload + 16-bit LCRC + END (K29.7) — or EDB (K30.7) for nullified TLP.",
     "dllp_framing": "SDP (K28.2) + DLLP type + DLLP-specific fields + 16-bit CRC + END (K29.7).",
     "ordered_sets": "Special non-DLLP/non-TLP symbol sequences started by COM (K28.5): TS1 / TS2 for Link Training, SKP for clock-tolerance compensation, EIOS / EIEOS / FTS for electrical idle and exit."
-  },
-  "channels_2_wire_half_duplex": [
-    {
-      "name": "A",
-      "direction": "bidirectional (open-drain / tri-state)",
-      "description": "Non-inverting differential bus line. When the active driver transmits a logical '1' (mark), A is the more positive of the pair."
-    },
-    {
-      "name": "B",
-      "direction": "bidirectional (open-drain / tri-state)",
-      "description": "Inverting differential bus line. When the active driver transmits a logical '1' (mark), B is the more negative of the pair."
-    },
-    {
-      "name": "GND-ref",
-      "direction": "shared",
-      "description": "Common ground reference between nodes; in long links with ground-potential differences, isolation is required."
-    }
-  ],
-  "channels_4_wire_full_duplex": [
-    {
-      "name": "Y",
-      "direction": "master-to-slaves TX +",
-      "description": "Non-inverting transmit pair line out of the master driver."
-    },
-    {
-      "name": "Z",
-      "direction": "master-to-slaves TX -",
-      "description": "Inverting transmit pair line out of the master driver."
-    },
-    {
-      "name": "A",
-      "direction": "slaves-to-master RX +",
-      "description": "Non-inverting receive pair line into the master receiver (and into each slave transmitter for upstream)."
-    },
-    {
-      "name": "B",
-      "direction": "slaves-to-master RX -",
-      "description": "Inverting receive pair line into the master receiver."
-    }
-  ],
-  "transceiver_digital_pins": [
-    {
-      "name": "D / DI",
-      "direction": "input",
-      "description": "Driver input from the host UART (TXD). Determines A/B differential polarity when driver is enabled."
-    },
-    {
-      "name": "DE",
-      "direction": "input",
-      "description": "Driver Enable, active HIGH. When DE=1 the transceiver drives A/B; when DE=0 the driver outputs are high-impedance (tri-stated)."
-    },
-    {
-      "name": "RE#",
-      "direction": "input",
-      "description": "Receiver Enable, active LOW. When RE#=0 the receiver output R is driven; when RE#=1 R is high-impedance."
-    },
-    {
-      "name": "R / RO",
-      "direction": "output",
-      "description": "Receiver output to the host UART (RXD). Reflects the logical bus state when receiver enabled."
-    }
-  ],
-  "differential_bit_encoding": {
-    "header": [
-      "Logical state",
-      "Differential V_AB = V_A - V_B",
-      "Bus condition"
-    ],
-    "rows": [
-      [
-        "mark (logical 1, idle)",
-        "V_AB > +200 mV",
-        "Failsafe-biased direction; receiver R = HIGH"
-      ],
-      [
-        "space (logical 0)",
-        "V_AB < -200 mV",
-        "Receiver R = LOW"
-      ],
-      [
-        "indeterminate / LOS",
-        "|V_AB| < 200 mV",
-        "Receiver R = undetermined unless fail-safe biasing forces a determined state"
-      ]
-    ]
   }
 }

@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "regmap",
-  "ic_name": "TIA/EIA-485 (RS-485 via TI SLLA272C Design Guide)",
+  "ic_name": "PCI Express Base Specification Rev 1.0",
   "registers": [],
   "no_registers_in_input": true,
   "otp_layout": null,
@@ -13,7 +13,7 @@
   },
   "register_map_present": false,
   "base_address": "Defined at SoC level; offsets given relative to module base.",
-  "notes": "RS-485 is a wire-level electrical standard and not a peripheral block guide. There is no architectural register map at the protocol layer — drivers and receivers are stateless analog transceivers. Concrete RS-485 transceiver chips (e.g. TI SN65HVDxx, SN65LBC184, MAX485) and embedded RS-485 controller IP (e.g. NXP iMX UART with RS-485 mode, Synopsys DesignWare UART with RS-485 wrapper) define their own register file (typically: UART config + DE/RE# polarity + half/full-duplex mode + driver-enable timer) at the SoC integration level. RS-485 itself does not.",
+  "notes": "PCI Express does not have a flat protocol-level register map. Instead, each PCI Express device exposes a per-device Configuration Space — 256 bytes of PCI 2.3-compatible Configuration Space PLUS up to 4096 bytes of PCI Express Extended Configuration Space. Standard register layouts (Type 0 header, Type 1 header, Capability Structures including PCI Express Capability, Power Management, MSI, Virtual Channel, Advanced Error Reporting, Device Serial Number, Power Budgeting) are defined in chapter 5 of the spec.",
   "configuration_space_overview": {
     "pci_compatible_size_bytes": 256,
     "pcie_extended_size_bytes": 4096,

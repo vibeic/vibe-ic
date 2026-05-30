@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "frs",
-  "ic_name": "TIA/EIA-485 (RS-485 via TI SLLA272C Design Guide)",
+  "ic_name": "PCI Express Base Specification Rev 1.0",
   "frs_sections": [
     {
       "section": "1",
@@ -500,14 +500,7 @@
       4096
     ],
     "virtual_channels_max": 8,
-    "traffic_classes_max": 8,
-    "synchronous": false,
-    "physical_signaling": "Differential pair — non-inverting line A and inverting line B; differential voltage Vab = Va - Vb encodes the bit. |Vab| > +200 mV at receiver = mark; Vab < -200 mV = space.",
-    "bus_topology": "Daisy-chain / party-line / linear bus. Drivers, receivers and transceivers connect to a single main cable trunk via short network stubs.",
-    "addressing": "RS-485 itself has no addressing; higher-level protocols (Modbus RTU, DL/T645, BACnet MS/TP, …) carry addresses on top of the byte stream.",
-    "multimaster": true,
-    "multidrop": true,
-    "bus_value_idle_recommendation": "Determined by external or internal fail-safe biasing — typically pulls A high and B low so |Vab| > 200 mV in the marking direction when no driver is active."
+    "traffic_classes_max": 8
   },
   "no_protocol_overview_in_input": false,
   "compliance_requirements": [
@@ -6752,6 +6745,5 @@
     "Completer Abort (CA) / Configuration Request Retry Status (CRS) — Completer-level abnormal conditions, reported in Completion Status.",
     "ECRC mismatch (optional) — Transaction Layer Digest does not match recomputed CRC; reported via Advanced Error Reporting.",
     "Flow control credit underflow — Transmitter must NOT send a packet without sufficient credit; underflow is a fatal protocol error."
-  ],
-  "external_signal_wire_count": "2 (lines A, B) in half-duplex; 4 (TX-A, TX-B, RX-A, RX-B) in full-duplex. Plus driver-side DE / RE# direction-control digital pins per transceiver."
+  ]
 }

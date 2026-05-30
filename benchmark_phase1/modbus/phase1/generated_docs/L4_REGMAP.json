@@ -64,7 +64,7 @@
   },
   "class_path": "digital_arithmetic_primitive",
   "register_map_present": true,
-  "base_address": "Defined at SoC level; offsets given relative to module base.",
+  "base_address": "Not applicable in the same sense as a memory-mapped peripheral. MODBUS organizes server-side state as four logical tables (Discrete Inputs, Coils, Input Registers, Holding Registers), each independently addressed 0..65535 in the PDU. The user-visible numbering of each item is PDU_address + 1.",
   "notes": "MODBUS is a protocol, not a chip; the 'register map' describes the canonical fields that appear on the wire (in the ADU/PDU framing) and the four logical data-table address spaces the server exposes to the client.",
   "register_count": "Up to 65536 per table × 4 tables = 262144 logical items; actual deployment is application-defined and almost always a small subset.",
   "data_tables": [

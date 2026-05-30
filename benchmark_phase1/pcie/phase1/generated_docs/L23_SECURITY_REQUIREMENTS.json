@@ -9,7 +9,7 @@
     "side_channel_mitigation": [],
     "secure_boot": false,
     "security_requirements_present": false,
-    "notes": "RS-485 (originally 1983; SLLA272D revised 2021) is an electrical-only standard and defines no confidentiality / integrity / authentication features. All bus traffic is in plaintext and visible to every node on the bus. Built-in robustness primitives (differential signaling, common-mode rejection, ESD protection) protect against accidental noise and electrical hazards, not against intentional tampering. Modern industrial security on RS-485-based fieldbuses (Modbus RTU with encrypted tunnel, BACnet/SC, secure DL/T645) is layered ON TOP of the PHY — not part of the RS-485 standard itself.",
+    "notes": "PCI Express Rev 1.0 (2002) is a wire-level + transaction-level + software-interface specification with NO native confidentiality / integrity / authentication features. CRC + ECRC provide anti-corruption protection only. TLP payloads are in plaintext on the Link. Modern PCIe security extensions (IDE, CMA/SPDM, ACS, SR-IOV) are layered above the Base Spec and were added in much later revisions; they are NOT part of Rev 1.0.",
     "anti_corruption_features": [
       "16-bit LCRC at the Data Link Layer protects each TLP across the Link (catches all 1-bit + 2-bit errors and most burst errors).",
       "16-bit CRC at the Data Link Layer protects each DLLP.",

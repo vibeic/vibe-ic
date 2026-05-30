@@ -605,6 +605,85 @@
         ]
       ]
     },
+    "ap_class_codes_table": {
+      "header_columns": [
+        "Class Code",
+        "AP Class"
+      ],
+      "rows": [
+        [
+          "0x0",
+          "Undefined / Unimplemented"
+        ],
+        [
+          "0x8",
+          "MEM-AP class"
+        ]
+      ]
+    },
+    "csw_addrinc_table": {
+      "header_columns": [
+        "CSW.AddrInc[5:4]",
+        "Mode",
+        "Description"
+      ],
+      "rows": [
+        [
+          "00",
+          "Off",
+          "TAR not modified after DRW transfer"
+        ],
+        [
+          "01",
+          "Single",
+          "TAR += transfer size (1/2/4/8/16) after each DRW transfer"
+        ],
+        [
+          "10",
+          "Packed",
+          "Multiple sub-word transfers per DRW; TAR auto-increments per sub-word"
+        ],
+        [
+          "11",
+          "Reserved",
+          "—"
+        ]
+      ]
+    },
+    "csw_size_table": {
+      "header_columns": [
+        "CSW.Size[2:0]",
+        "Size",
+        "Description"
+      ],
+      "rows": [
+        [
+          "000",
+          "Byte",
+          "8-bit transfers"
+        ],
+        [
+          "001",
+          "Halfword",
+          "16-bit transfers"
+        ],
+        [
+          "010",
+          "Word",
+          "32-bit transfers (default)"
+        ],
+        [
+          "011",
+          "Double-word",
+          "64-bit transfers (requires CFG.LargeData)"
+        ],
+        [
+          "100",
+          "128-bit",
+          "128-bit transfers (requires CFG.LargeData)"
+        ]
+      ]
+    },
     "swj_dp_selection_sequences_table": {
       "header_columns": [
         "Mode Switch",

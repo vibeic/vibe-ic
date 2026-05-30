@@ -120,7 +120,45 @@
   "ap_idr_register_content": {
     "applicable_when": "Each AP implements its own 32-bit IDR (offset 0xFC).",
     "width_bits": 32,
-    "access": "Read-only."
+    "access": "Read-only.",
+    "field_map": [
+      {
+        "bits": "3:0",
+        "name": "Type",
+        "width_bits": 4,
+        "description": "AP type code (0=JTAG-AP, 1=AHB3-AP, 2=APB2/3-AP, 4=AXI3/4-AP, etc.)."
+      },
+      {
+        "bits": "7:4",
+        "name": "Variant",
+        "width_bits": 4,
+        "description": "AP variant."
+      },
+      {
+        "bits": "16:13",
+        "name": "Class",
+        "width_bits": 4,
+        "description": "AP class (8 = MEM-AP)."
+      },
+      {
+        "bits": "23:17",
+        "name": "JEP106",
+        "width_bits": 7,
+        "description": "JEP106 designer."
+      },
+      {
+        "bits": "31:28",
+        "name": "Revision",
+        "width_bits": 4,
+        "description": "AP revision."
+      }
+    ]
+  },
+  "usercode_or_user_otp_content": {
+    "applicable_when": "Vendor-specific. Some SoCs implement a USERCODE-like 32-bit register reachable via a vendor-specific MEM-AP system-bus address. ADIv5 does not standardize this.",
+    "width_bits": 32,
+    "access": "Vendor-defined.",
+    "writability": "Vendor-defined; sometimes loaded from on-chip fuses at boot."
   },
   "vendor_jtag_swd_disable_fuses": {
     "applicable_when": "Many production SoCs implement a one-way fuse (ST RDP, Nordic APPROTECT, NXP DCFG, ESP32 JTAG_DISABLE).",

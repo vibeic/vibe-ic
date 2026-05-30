@@ -210,6 +210,13 @@ def apply_modbus_synth(generated_docs_dir: Path, is_modbus: bool,
             "Process control: chemical / oil-gas / water-treatment plant device polling",
             "Variable-frequency drive (VFD) configuration and run-time monitoring",
         ])
+        d.setdefault("transaction_summary",
+            "A client builds the request ADU = optional-address + Function Code + Data + "
+            "optional-CRC/LRC, sends it to the server. The server validates the function code "
+            "(else exception 0x01), validates the data address (else 0x02), validates the data "
+            "value (else 0x03), executes the function (else 0x04), and replies — either a normal "
+            "response (echoes the function code with response data) or an exception response "
+            "(function code | 0x80 + exception code).")
         _write(p, d)
 
     # ---------------- L2 FRS ----------------
@@ -362,7 +369,7 @@ def apply_modbus_synth(generated_docs_dir: Path, is_modbus: bool,
             "User_Defined_range_2":     "100..110",
             "Reserved_range":           "Annex A — FC 9, 10, 13, 14, 41, 42, 90, 91, 125..127; FC 8 sub 19, 21..65535; FC 43 sub-MEI 0..12, 15..255",
             "Exception_response_range": "128..255",
-            "Invalid_code":             "0",
+            "Invalid_code":             "0 (not valid)",
         })
         d.setdefault("exception_codes", [
             {"code_hex": "0x01", "name": "ILLEGAL FUNCTION",                            "meaning": "FC not implemented or server not in a state to process it."},
@@ -441,10 +448,15 @@ def apply_modbus_synth(generated_docs_dir: Path, is_modbus: bool,
     if p.is_file():
         d = _read(p)
         d["register_map_present"] = True
-        d.setdefault("base_address",
+        # Force-override: serial-peripheral universal synth (SPI) writes a
+        # generic "Defined at SoC level" default before the Modbus structural
+        # detector fires. Modbus is a protocol, not a memory-mapped device,
+        # so direct-assign the protocol-accurate value.
+        d["base_address"] = (
             "Not applicable in the same sense as a memory-mapped peripheral. MODBUS organizes "
-            "server-side state as four logical tables, each independently addressed 0..65535 in "
-            "the PDU. User-visible numbering = PDU_address + 1.")
+            "server-side state as four logical tables (Discrete Inputs, Coils, Input Registers, "
+            "Holding Registers), each independently addressed 0..65535 in the PDU. The user-visible "
+            "numbering of each item is PDU_address + 1.")
         d.setdefault("register_count",
             "Up to 65536 per table × 4 tables = 262144 logical items; actual deployment is "
             "application-defined and almost always a small subset.")
@@ -763,7 +775,7 @@ def apply_modbus_synth(generated_docs_dir: Path, is_modbus: bool,
             "wire_polarity":   "Idle line = mark (HIGH); start bit = space (LOW).",
         })
         d.setdefault("ascii_frame_waveform", {
-            "start_of_frame":  "':' (0x3A).",
+            "start_of_frame":  "':' (0x3A) — single ASCII character. Receiver finds frame start by scanning for ':' on the line.",
             "address":         "2 ASCII-hex characters (1 binary byte).",
             "function_code":   "2 ASCII-hex characters.",
             "data":            "2N ASCII-hex characters.",
@@ -787,7 +799,7 @@ def apply_modbus_synth(generated_docs_dir: Path, is_modbus: bool,
         })
         d.setdefault("crc_lrc_computation_timing", {
             "rtu_crc_throughput":   "1 byte / 8 cycles bit-serial, or 1 byte / 1 cycle table-based.",
-            "ascii_lrc_throughput": "Trivial 8-bit accumulator.",
+            "ascii_lrc_throughput": "Two's-complement of the byte-wise sum of Address + Function + Data; trivially computed as a running 8-bit accumulator.",
         })
         d.setdefault("absolute_max_ratings", {
             "n_a_at_protocol_layer": "MODBUS is OSI level 7; absolute maxima belong to the chosen physical layer.",
@@ -855,6 +867,66 @@ def apply_modbus_synth(generated_docs_dir: Path, is_modbus: bool,
             "Reserved function codes (Annex A) shall not be implemented by interoperable devices.",
             "Some vendors encode 32-bit float/integer across two consecutive holding registers; word order is vendor-specific.",
         ])
+        _write(p, d)
+
+    # ---------------- L10 test cases (overwrite SPI-universal generic) ----------------
+    # Doctrine: serial-peripheral universal synth (SPI) writes a generic
+    # test_cases_present + SPI-flavored derived_compliance_test_categories
+    # before the Modbus structural detector fires. Modbus is a protocol with
+    # its own per-function-code state diagrams and validation gates, so
+    # direct-assign the protocol-accurate values.
+    p = gd / "L10_TEST_CASES.json"
+    if p.is_file():
+        d = _read(p)
+        d["test_cases_present"] = (
+            "partial - the spec provides per-function-code state diagrams (Figures 11..14 etc.), "
+            "normal/error response tables, and example request/response byte traces, but no formal "
+            "compliance testbench. The cases below are derived from the validation gates in Figure 9 "
+            "(Define MODBUS Transaction state diagram) plus the per-function-code state diagrams "
+            "in Section 6.")
+        d["derived_compliance_test_categories"] = [
+            "PDU minimum case — Function Code only (e.g. FC 0x07 Read Exception Status with no data).",
+            "PDU maximum size — request whose Data portion fills 252 bytes (FC 0x10 Write Multiple Registers with quantity 123 ≈ 246 data bytes).",
+            "RTU ADU maximum size — 256 bytes total including 1-byte address + 253-byte PDU + 2-byte CRC.",
+            "TCP ADU maximum size — 260 bytes total including 7-byte MBAP + 253-byte PDU.",
+            "Big-endian byte order — write a 16-bit register to 0x1234 and verify the first byte on the wire is 0x12.",
+            "PDU vs user address offset — FC 0x03 reading user-register-1 must use Starting Address = 0x0000 in the PDU.",
+            "FC 0x01 Read Coils — request quantity at boundary (1 and 2000); verify byte_count = ceil(quantity/8); verify LSB of first byte = first coil.",
+            "FC 0x02 Read Discrete Inputs — same shape as FC 1; ensure separate data-table backing.",
+            "FC 0x03 Read Holding Registers — quantity at boundary (1 and 125); verify byte_count = 2*quantity, big-endian per register.",
+            "FC 0x04 Read Input Registers — same shape as FC 3.",
+            "FC 0x05 Write Single Coil — Output Value 0xFF00 (ON) and 0x0000 (OFF) accepted; any other value → exception 0x03 ILLEGAL DATA VALUE.",
+            "FC 0x06 Write Single Register — register value 0x0000..0xFFFF; response echoes request.",
+            "FC 0x0F Write Multiple Coils — quantity boundary (1 and 1968); byte_count = ceil(quantity/8); response echoes Starting Address + Quantity.",
+            "FC 0x10 Write Multiple Registers — quantity boundary (1 and 123); byte_count = 2*quantity; response echoes Starting Address + Quantity.",
+            "FC 0x16 Mask Write Register — verify Result = (Current AND AND_Mask) OR (OR_Mask AND (NOT AND_Mask)). Example from spec: Current 0x0012, AND 0x00F2, OR 0x0025 → Result 0x0017.",
+            "FC 0x17 Read/Write Multiple Registers — atomic combined transaction; read up to 125 + write up to 121 in single PDU.",
+            "FC 0x18 Read FIFO Queue — fifo_count ≤ 31; byte_count ≤ 64.",
+            "FC 0x14 Read File Record — multi-sub-request PDU; each sub-request specifies File Number / Record Number / Record Length.",
+            "FC 0x15 Write File Record — multi-sub-request PDU; response echoes the request.",
+            "FC 0x07 Read Exception Status — single-byte response; LSB = lowest-numbered output.",
+            "FC 0x08 Diagnostics sub 0 Return Query Data — echoes the data field.",
+            "FC 0x08 Diagnostics sub 0x0004 Force Listen Only Mode — server enters silent state; can only be exited via sub 0x0001 Restart Communications Option.",
+            "FC 0x0B Get Comm Event Counter — Event Count increments only on successful (non-exception) responses.",
+            "FC 0x0C Get Comm Event Log — events buffer length ≤ 64; Byte Count = events count + 6.",
+            "FC 0x11 Report Server ID — Run Indicator Status 0xFF = ON, 0x00 = OFF.",
+            "FC 0x2B Encapsulated Interface — MEI Type 14 Read Device Identification with Read Device ID code 01 (Basic), 02 (Regular), 03 (Extended), 04 (One specific identification object).",
+            "Exception 0x01 ILLEGAL FUNCTION — send an undefined function code (e.g. FC 0x0A); expect (FC | 0x80) + 0x01.",
+            "Exception 0x02 ILLEGAL DATA ADDRESS — FC 0x03 with Starting Address = 0x0030 + Quantity = 0x0005 on a server that has only 99 registers (0..98); expect (0x83, 0x02).",
+            "Exception 0x03 ILLEGAL DATA VALUE — FC 0x01 with Quantity = 0x07D1 (= 2001) or FC 0x05 with Output Value 0x1234; expect (0x81 / 0x85, 0x03).",
+            "Exception 0x04 SERVER DEVICE FAILURE — simulate an internal failure during execution.",
+            "Exception 0x05 ACKNOWLEDGE — long-running programming command; client must not time out.",
+            "Exception 0x06 SERVER DEVICE BUSY — second long-running command issued; expect 0x06 then retry.",
+            "Exception 0x08 MEMORY PARITY ERROR — corrupt the reference-type-6 file area; FC 0x14 / 0x15 should return 0x94 / 0x95 + 0x08.",
+            "Exception 0x0A / 0x0B — gateway scenarios: misconfigured sub-network and unresponsive target device.",
+            "RTU broadcast — Address 0 + FC 0x06 or 0x10; verify server processes the request but emits no response.",
+            "RTU CRC error — flip one bit of the request; verify the server emits no response and the Bus Communication Error Count increments.",
+            "ASCII LRC error — flip one ASCII-hex character; verify silent discard + counter increment.",
+            "ASCII inter-character timing — long pauses inside a frame are tolerated; only ':' starts a new frame, only CR LF ends one.",
+            "TCP Transaction ID — issue two concurrent requests with different Transaction IDs; verify responses carry the matching IDs.",
+            "TCP malformed Length — MBAP.Length != 1 + len(PDU); verify connection-level error handling.",
+            "TCP Protocol ID != 0 — verify rejection.",
+        ]
         _write(p, d)
 
     # ---------------- L11 OTP ----------------
@@ -1216,7 +1288,7 @@ def apply_modbus_synth(generated_docs_dir: Path, is_modbus: bool,
             {"mode": "Serial framing error",                 "trigger": "Parity/framing/CRC/LRC mismatch → silent discard; client timeout."},
             {"mode": "TCP framing error",                    "trigger": "MBAP.Protocol_ID != 0 or Length mismatch → connection-level error."},
         ])
-        f.setdefault("transport_constraints", {
+        tc = f.setdefault("transport_constraints", {
             "modbus_rtu": {
                 "adu_max_bytes": 256,
                 "framing":       "T3.5 silent-line end-of-frame",
@@ -1240,6 +1312,14 @@ def apply_modbus_synth(generated_docs_dir: Path, is_modbus: bool,
                 "broadcast_concept": "Not applicable",
             },
         })
+        # Nested setdefaults — fill in any inner subkey added in a later
+        # round even when the outer transport_constraints dict was already
+        # populated by an earlier extractor pass.
+        if isinstance(tc, dict):
+            mt = tc.setdefault("modbus_tcp", {})
+            if isinstance(mt, dict):
+                mt.setdefault("concurrent_transactions_per_socket",
+                    "Limited only by Transaction-ID field width (65536 values)")
         f.setdefault("reset_behavior_compliance",
             "On power-up/reset, server's diagnostic counters and Comm Event Counter/Log shall be "
             "cleared to 0; four data tables hold implementation-defined power-on defaults; server "

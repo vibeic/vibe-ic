@@ -105,12 +105,7 @@
       "Vaux_support": "Optional auxiliary power rail supplied to devices for PME / WAKE# generation while main power is off (L2/L3, D3cold).",
       "Vaux_usage_hint": "Required for any device that must generate a wake event from D3cold."
     },
-    "notes": "PCI Express explicitly specifies a comprehensive Link Power Management framework: ASPM (HW-driven L0s + L1) for autonomous power saving during idle, plus software-driven L1/L2/L3 transitions for OS / firmware control. Coordination with the legacy PCI Power Management Capability (D0..D3) is mandatory — see Section 6.3 PCI-PM Software Compatible Mechanisms.",
-    "isolation_supply_partitioning": {
-      "robust_long_distance_topology": "Per-node isolated DC/DC converter feeds the local transceiver bus-side supply; digital isolator separates data signals across the isolation barrier; supplies up to 150 Mbps modern isolation devices, 3 V to 5 V regulated outputs.",
-      "single_ground_reference": "When multiple isolated transceivers share a bus, one non-isolated transceiver provides the single-ground reference for the entire bus (Figure 11-3 of SLLA272D)."
-    },
-    "esd_protection_examples": "Modern TI RS-485 transceivers integrate IEC 61000-4-2 / HBM ESD protection from 16 kV to 30 kV on bus pins."
+    "notes": "PCI Express explicitly specifies a comprehensive Link Power Management framework: ASPM (HW-driven L0s + L1) for autonomous power saving during idle, plus software-driven L1/L2/L3 transitions for OS / firmware control. Coordination with the legacy PCI Power Management Capability (D0..D3) is mandatory — see Section 6.3 PCI-PM Software Compatible Mechanisms."
   },
   "extraction_hints": [
     "Look for power-domain partitioning, supply nets.",

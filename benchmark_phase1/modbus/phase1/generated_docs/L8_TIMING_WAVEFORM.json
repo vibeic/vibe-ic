@@ -19,7 +19,7 @@
     "wire_polarity": "Idle line = mark (HIGH); start bit = space (LOW)."
   },
   "ascii_frame_waveform": {
-    "start_of_frame": "':' (0x3A).",
+    "start_of_frame": "':' (0x3A) — single ASCII character. Receiver finds frame start by scanning for ':' on the line.",
     "address": "2 ASCII-hex characters (1 binary byte).",
     "function_code": "2 ASCII-hex characters.",
     "data": "2N ASCII-hex characters.",
@@ -43,7 +43,7 @@
   },
   "crc_lrc_computation_timing": {
     "rtu_crc_throughput": "1 byte / 8 cycles bit-serial, or 1 byte / 1 cycle table-based.",
-    "ascii_lrc_throughput": "Trivial 8-bit accumulator."
+    "ascii_lrc_throughput": "Two's-complement of the byte-wise sum of Address + Function + Data; trivially computed as a running 8-bit accumulator."
   },
   "absolute_max_ratings": {
     "n_a_at_protocol_layer": "MODBUS is OSI level 7; absolute maxima belong to the chosen physical layer."

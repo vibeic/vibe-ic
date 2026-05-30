@@ -9,7 +9,7 @@
     "bist_mbist": [],
     "jtag_tap": null,
     "dft_present": "partial",
-    "notes": "RS-485 does not specify DFT / scan / BIST — it is purely an electrical interface standard. Each RS-485 transceiver chip applies its own analog-DFT (driver current limit ATPG, receiver threshold trim, ESD protection verification) at the silicon level. System-level diagnostics rely on differential bus probing (scope), TDR for stub assessment, and higher-level protocol CRC/BCC for application-layer error detection. SoC-integrated UART blocks with RS-485 wrappers add standard scan insertion at the integrator level.",
+    "notes": "PCI Express Rev 1.0 does NOT specify JTAG / scan-chain / BIST at the protocol level. Compliance testing is performed via in-protocol Loopback + Polling.Compliance modes plus external instruments per the PCI-SIG Compliance Program. SoC-integrated PCIe controllers typically add standard scan + JTAG at the integrator level.",
     "in_band_test_facilities": [
       {
         "name": "Polling.Compliance pattern",

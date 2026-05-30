@@ -3,7 +3,24 @@
   "doc_class": "test_debug",
   "ic_name": "NVM Express (NVMe) Base Specification Rev 1.4",
   "test_scenarios": [],
-  "test_modes": [],
+  "test_modes": [
+    {
+      "name": "Compliance Pattern",
+      "purpose": "LTSSM Polling.Compliance sub-state transmits a defined compliance pattern for electrical characterization."
+    },
+    {
+      "name": "Loopback",
+      "purpose": "Loopback Master transmits a known pattern; Loopback Slave retransmits it back. Used for receiver-eye testing."
+    },
+    {
+      "name": "Hot Reset",
+      "purpose": "Triggers Link re-training via a TS1 with the Hot Reset bit set."
+    },
+    {
+      "name": "Disable Link",
+      "purpose": "Force the Link into Electrical Idle for power / characterization."
+    }
+  ],
   "no_test_modes_in_input": true,
   "debug_observability": [],
   "no_debug_observability_in_input": true,

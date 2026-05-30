@@ -2,7 +2,98 @@
   "schema_version": 2,
   "doc_class": "cmd_protocol",
   "ic_name": "MIL-STD-1553B (Military Data Bus)",
-  "opcodes": [],
+  "opcodes": [
+    {
+      "code": "00000",
+      "mnemonic": "DYNAMIC_BUS_CONTROL",
+      "description": "Mode Code: requests handoff of bus control to the addressed RT (target acknowledges by setting Dynamic Bus Acceptance bit).",
+      "has_data_word": false
+    },
+    {
+      "code": "00001",
+      "mnemonic": "SYNCHRONIZE_NO_DATA",
+      "description": "Mode Code: forces the addressed RT to synchronize to the BC (no data word).",
+      "has_data_word": false
+    },
+    {
+      "code": "00010",
+      "mnemonic": "TRANSMIT_STATUS_WORD",
+      "description": "Mode Code: re-issue last Status Word (Mode Code 00010, mandatory).",
+      "has_data_word": false
+    },
+    {
+      "code": "00011",
+      "mnemonic": "INITIATE_SELF_TEST",
+      "description": "Mode Code: command the RT to initiate its built-in self test (BIT).",
+      "has_data_word": false
+    },
+    {
+      "code": "00100",
+      "mnemonic": "TRANSMITTER_SHUTDOWN",
+      "description": "Mode Code: shut down the redundant bus transmitter on the addressed RT (used for fault containment).",
+      "has_data_word": false
+    },
+    {
+      "code": "00101",
+      "mnemonic": "OVERRIDE_TRANSMITTER_SHUTDOWN",
+      "description": "Mode Code: re-enable the previously-shut-down transmitter.",
+      "has_data_word": false
+    },
+    {
+      "code": "00110",
+      "mnemonic": "INHIBIT_TERMINAL_FLAG_BIT",
+      "description": "Mode Code: mask the Terminal Flag bit in the Status Word.",
+      "has_data_word": false
+    },
+    {
+      "code": "00111",
+      "mnemonic": "OVERRIDE_INHIBIT_TERMINAL_FLAG",
+      "description": "Mode Code: un-mask the Terminal Flag bit in the Status Word.",
+      "has_data_word": false
+    },
+    {
+      "code": "01000",
+      "mnemonic": "RESET_REMOTE_TERMINAL",
+      "description": "Mode Code: force the addressed RT to reset its state.",
+      "has_data_word": false
+    },
+    {
+      "code": "10000",
+      "mnemonic": "TRANSMIT_VECTOR_WORD",
+      "description": "Mode Code with Data: RT sends a 16-bit Vector Word (acyclic service-request data).",
+      "has_data_word": true
+    },
+    {
+      "code": "10001",
+      "mnemonic": "SYNCHRONIZE_WITH_DATA_WORD",
+      "description": "Mode Code with Data: BC sends a data word for synchronization use.",
+      "has_data_word": true
+    },
+    {
+      "code": "10010",
+      "mnemonic": "TRANSMIT_LAST_COMMAND",
+      "description": "Mode Code with Data: RT echoes the last Command Word it received (mandatory).",
+      "has_data_word": true
+    },
+    {
+      "code": "10011",
+      "mnemonic": "TRANSMIT_BIT_WORD",
+      "description": "Mode Code with Data: RT sends its Built-In-Test (BIT) word (mandatory).",
+      "has_data_word": true
+    },
+    {
+      "code": "10100",
+      "mnemonic": "SELECTED_TRANSMITTER_SHUTDOWN",
+      "description": "Mode Code with Data: shut down a specifically-selected transmitter (data word identifies which).",
+      "has_data_word": true
+    },
+    {
+      "code": "10101",
+      "mnemonic": "OVERRIDE_SELECTED_TRANSMITTER_SHUTDOWN",
+      "description": "Mode Code with Data: re-enable specifically-selected transmitter.",
+      "has_data_word": true
+    }
+  ],
   "no_opcodes_in_input": true,
   "placeholder_opcode_count": 0,
   "no_opcode_names_in_input": false,
