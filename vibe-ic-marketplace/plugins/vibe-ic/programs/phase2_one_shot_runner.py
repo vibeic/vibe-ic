@@ -1965,9 +1965,35 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                          "(replaces missing wrapper invocation)"),
             }
             prov_path = project / "provenance.jsonl"
-            with prov_path.open("a") as f:
-                f.write(json.dumps(prov_record,
-                                    ensure_ascii=False) + "\n")
+            # v0.1.87 — SUPERSEDE prior entries that declare the same output
+            # paths instead of blind-appending. Append-only provenance
+            # accumulated stale entries across re-runs (each synth pass logs
+            # the netlist hash at that moment); when the netlist is later
+            # regenerated, the old entries' declared-hash != on-disk and
+            # provenance_output_hash_completeness_check FAILs with
+            # HASH_MISMATCH / HASH_INCONSISTENT. Keep entries for OTHER outputs
+            # / tools (e.g. phase3 openroad GDS) untouched. Chip-AGNOSTIC.
+            _new_paths = set(prov_outputs.keys())
+            _kept: List[str] = []
+            if prov_path.is_file():
+                for _ln in prov_path.read_text(
+                        errors="replace").splitlines():
+                    _ln = _ln.strip()
+                    if not _ln:
+                        continue
+                    try:
+                        _pe = json.loads(_ln)
+                    except ValueError:
+                        _kept.append(_ln)
+                        continue
+                    _pe_outs = (set((_pe.get("outputs") or {}).keys())
+                                if isinstance(_pe.get("outputs"), dict)
+                                else set())
+                    if _pe_outs & _new_paths:
+                        continue  # superseded by this fresh synth pass
+                    _kept.append(json.dumps(_pe, ensure_ascii=False))
+            _kept.append(json.dumps(prov_record, ensure_ascii=False))
+            prov_path.write_text("\n".join(_kept) + "\n")
         except (OSError, ValueError) as exc:
             # Provenance write failure must not block synth PASS;
             # provenance_check will catch the gap in its own step.
