@@ -6,6 +6,12 @@
   "no_behavioral_sequences_in_input": true,
   "no_calibration": false,
   "extraction_evidence": {},
+  "byte_invariance_sequence": "Big-endian and little-endian elements can coexist in one memory; any byte transfer to address X always references the same physical byte regardless of the bus data width or the producer's byte order.",
+  "early_response_rules": {
+    "early_read_response": "Intermediate can respond with locally-cached read data when consistent.",
+    "early_write_response": "Intermediate can send early B-response for Bufferable writes with no downstream observers."
+  },
+  "narrow_transfer_sequence": "When transfer width is narrower than data bus, the address+size determine which byte lanes carry valid data per beat; unused lanes are don't-care (write) or ignored (read).",
   "exclusive_read_modify_write_sequence": [
     "1. Master issues exclusive read: ARLOCK = Exclusive at address X with ARID=I.",
     "2. Slave returns RDATA with RRESP = EXOKAY (exclusive monitor set).",
@@ -21,7 +27,12 @@
     "5. Slave drives BID, BRESP; asserts BVALID.",
     "6. Master asserts BREADY to acknowledge write response."
   ],
-  "narrow_transfer_sequence": "When transfer width is narrower than data bus, the address+size determine which byte lanes carry valid data per beat; unused lanes are don't-care (write) or ignored (read).",
+  "typical_read_sequence_AXI4": [
+    "1. Master drives ARID, ARADDR, ARLEN, ARSIZE, ARBURST, ARLOCK, ARCACHE, ARPROT.",
+    "2. Master asserts ARVALID; slave asserts ARREADY when ready.",
+    "3. Slave drives RID, RDATA, RRESP per beat; asserts RLAST on final beat.",
+    "4. Master asserts RREADY each beat; transfer completes per beat."
+  ],
   "ordering_rules_summary": {
     "same_master_same_ID_same_location": "Strictly ordered (W1 before W2; W1 before R1).",
     "same_master_same_ID_different_locations": "Strictly ordered (in-order completion).",
@@ -43,17 +54,6 @@
     "3. Interconnect arbitrates exclusively for the master until LOCK released.",
     "4. Master clears AxLOCK after the locked transaction sequence completes."
   ],
-  "early_response_rules": {
-    "early_read_response": "Intermediate can respond with locally-cached read data when consistent.",
-    "early_write_response": "Intermediate can send early B-response for Bufferable writes with no downstream observers."
-  },
-  "typical_read_sequence_AXI4": [
-    "1. Master drives ARID, ARADDR, ARLEN, ARSIZE, ARBURST, ARLOCK, ARCACHE, ARPROT.",
-    "2. Master asserts ARVALID; slave asserts ARREADY when ready.",
-    "3. Slave drives RID, RDATA, RRESP per beat; asserts RLAST on final beat.",
-    "4. Master asserts RREADY each beat; transfer completes per beat."
-  ],
-  "byte_invariance_sequence": "Big-endian and little-endian elements can coexist in one memory; any byte transfer to address X always references the same physical byte regardless of the bus data width or the producer's byte order.",
   "extraction_strategy": {
     "l12_behavioral_sequences_v0_1_73": "R43: overlaid 8 L12 sequences"
   },

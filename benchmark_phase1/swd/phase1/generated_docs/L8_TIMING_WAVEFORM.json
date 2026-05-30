@@ -264,8 +264,8 @@
     ]
   },
   "max_outstanding_rules": {
-    "ahb": "AHB-Lite is single-Manager; one outstanding transfer at a time (pipelined address+data).",
-    "apb": "APB has no pipelining; one transfer in flight at a time; min 2 PCLK cycles per transfer."
+    "ahb": "AHB-Lite is single-Manager; only one outstanding transfer at a time (no AXI-style outstanding queues). Pipelining means address phase of next transfer overlaps data phase of current transfer.",
+    "apb": "APB has no pipelining; only one transfer in flight at a time; minimum 2 PCLK cycles per transfer."
   },
   "interconnect_combination_rules": {
     "ahb_HREADY_chain": "Multiplexor combines all Subordinate HREADYOUTs into a single global HREADY broadcast (Figure 4-2). HRDATA / HRESP / HEXOKAY mux'd by decoder HSEL.",

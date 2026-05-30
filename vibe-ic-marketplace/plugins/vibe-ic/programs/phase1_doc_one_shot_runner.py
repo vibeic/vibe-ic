@@ -50238,13 +50238,19 @@ def main() -> int:
                 except Exception as _canfd_err:
                     print(f"      CAN-FD synth FAILED (fail-open): {_canfd_err}",
                           file=sys.stderr)
-            # v0.1.86 Tier 2 — LIN bus 2.2A.
+            # v0.1.86 Tier 2 — LIN bus 2.2A. Tightened v0.1.87 to require
+            # "LIN bus" / "Local Interconnect Network" / "LIN Consortium"
+            # name disambiguator. Prevents false-fire on SATA spec which
+            # contains BREAK + SYNC + PID (PID = Port ID, not LIN PID).
             _is_lin = (
-                ("LIN" in _spi_blob and "BREAK" in _spi_blob.upper()
-                    and "SYNC" in _spi_blob.upper() and "PID" in _spi_blob)
-                or ("LIN bus" in _spi_blob and "master" in _spi_blob.lower()
-                    and "schedule" in _spi_blob.lower())
-                or ("Local Interconnect Network" in _spi_blob))
+                ("LIN bus" in _spi_blob
+                 or "Local Interconnect Network" in _spi_blob
+                 or "LIN Consortium" in _spi_blob
+                 or "LIN 2." in _spi_blob)
+                and (("BREAK" in _spi_blob.upper()
+                      and "SYNC" in _spi_blob.upper())
+                     or ("master" in _spi_blob.lower()
+                         and "schedule" in _spi_blob.lower())))
             if _is_lin:
                 _lin_ic_name = "LIN bus 2.2A (Local Interconnect Network, LIN Consortium)"
                 try:
@@ -50437,6 +50443,146 @@ def main() -> int:
                     print(f"      → R134/R135/R136 SoundWire synth applied (is_soundwire={_is_soundwire})")
                 except Exception as _sw_err:
                     print(f"      SoundWire synth FAILED (fail-open): {_sw_err}",
+                          file=sys.stderr)
+            # v0.1.87 Tier 3 — 10 niche protocols (RS-485 / ARINC 429 /
+            # EtherCAT / TPM / NFC / DALI / SPDIF / HDLC / BLE / 1553B).
+            # v0.1.84 — Tier-3 detectors must consult input_doc text too,
+            # because earlier protocol synths (e.g. Ethernet for EtherCAT,
+            # USB for I3C-USB-PD-style overlays) may have force-overwritten
+            # L1+L2 JSON with the parent protocol's identity, stripping the
+            # niche-protocol structural tokens (FMMU / SyncManager /
+            # SubDevice / 0x88A4 / datagram for EtherCAT; analogous tokens
+            # for other Tier-3 protocols). Augmenting _spi_blob with
+            # input_doc text restores those tokens. General — applies to
+            # any spec that exhibits the structural signature, regardless
+            # of which parent protocol synth fired first.
+            _t3_blob = _spi_blob
+            try:
+                _input_doc_dir = _pl.input_doc_dir(project)
+                if _input_doc_dir.is_dir():
+                    for _idoc in _input_doc_dir.iterdir():
+                        if _idoc.is_file() and _idoc.suffix.lower() in (
+                                ".txt", ".md", ".json"):
+                            try:
+                                _t3_blob += "\n" + _idoc.read_text(
+                                    errors="ignore")
+                            except Exception:
+                                continue
+            except Exception:
+                pass
+            # Rebind _spi_blob inside the Tier-3 detector tuple so all
+            # detector predicates see the input_doc-augmented text.
+            _spi_blob = _t3_blob
+            for _t3 in (
+                ("rs485",
+                 # v0.1.87 tightened: require RS-485-specific context
+                 # (TI SLLA272 mention, "RS-485 transceiver" compound,
+                 # 120 Ω termination, or SLLA272 title). Prevents
+                 # false-fire on LIN/CAN/etc specs that merely COMPARE
+                 # themselves to RS-485.
+                 ("TI SLLA272" in _spi_blob)
+                 or ("RS-485 Design Guide" in _spi_blob)
+                 or ("SLLA272" in _spi_blob and "RS-485" in _spi_blob)
+                 or ("RS-485 transceiver" in _spi_blob
+                     and ("120 Ω" in _spi_blob or "120 ohm" in _spi_blob.lower()
+                          or "32 unit load" in _spi_blob.lower()
+                          or "TIA/EIA-485" in _spi_blob
+                          or "TIA-485" in _spi_blob)),
+                 "TIA/EIA-485 (RS-485 via TI SLLA272C Design Guide)",
+                 "R137/R138/R139"),
+                ("arinc429",
+                 ("ARINC 429" in _spi_blob and "Label" in _spi_blob
+                  and ("SSM" in _spi_blob or "Sign/Status" in _spi_blob))
+                 or ("Mark 33" in _spi_blob and "DITS" in _spi_blob)
+                 or ("avionics" in _spi_blob.lower()
+                     and "32-bit word" in _spi_blob and "Label" in _spi_blob),
+                 "ARINC 429 (Mark 33 DITS)",
+                 "R140/R141/R142"),
+                ("ethercat",
+                 ("EtherCAT" in _spi_blob and "ESC" in _spi_blob
+                  and "slave" in _spi_blob.lower())
+                 or ("EtherCAT" in _spi_blob and "FMMU" in _spi_blob
+                     and "SyncManager" in _spi_blob)
+                 or ("0x88A4" in _spi_blob and "EtherCAT" in _spi_blob)
+                 or ("EtherCAT" in _spi_blob and "datagram" in _spi_blob.lower()),
+                 "EtherCAT (IEC 61158 Type 12)",
+                 "R143/R144/R145"),
+                ("tpm",
+                 ("TPM 2.0" in _spi_blob and "PCR" in _spi_blob
+                  and "commandCode" in _spi_blob)
+                 or ("TPM" in _spi_blob and "TCG" in _spi_blob
+                     and "PCR" in _spi_blob and "hierarchy" in _spi_blob.lower())
+                 or ("Trusted Platform Module" in _spi_blob
+                     and "TPM2_" in _spi_blob),
+                 "TPM 2.0 Library Part 1: Architecture (TCG)",
+                 "R146/R147/R148"),
+                ("nfc",
+                 ("NFC" in _spi_blob and "ISO 14443" in _spi_blob
+                  and "UID" in _spi_blob)
+                 or ("MIFARE" in _spi_blob and "13.56" in _spi_blob
+                     and "SAK" in _spi_blob)
+                 or ("PCD" in _spi_blob and "PICC" in _spi_blob
+                     and "ATQA" in _spi_blob),
+                 "NFC / ISO 14443 (NXP AN10833 MIFARE family — subset)",
+                 "R149/R150/R151"),
+                ("dali",
+                 ("DALI" in _spi_blob and "IEC 62386" in _spi_blob
+                  and "lighting" in _spi_blob.lower())
+                 or ("DALI" in _spi_blob and "control gear" in _spi_blob.lower()
+                     and "control device" in _spi_blob.lower())
+                 or ("DALI" in _spi_blob and "forward frame" in _spi_blob.lower()
+                     and "backward frame" in _spi_blob.lower()),
+                 "DALI (Digital Addressable Lighting Interface, IEC 62386 via TI SLAA422A)",
+                 "R152/R153/R154"),
+                ("spdif",
+                 ("SPDIF" in _spi_blob.upper() and "biphase" in _spi_blob.lower()
+                  and "subframe" in _spi_blob.lower()
+                  and "preamble" in _spi_blob.lower())
+                 or ("IEC 60958" in _spi_blob and "audio" in _spi_blob.lower())
+                 or ("S/PDIF" in _spi_blob and "Toslink" in _spi_blob),
+                 "S/PDIF (IEC 60958 Digital Audio Interface)",
+                 "R155/R156/R157"),
+                ("hdlc",
+                 ("HDLC" in _spi_blob and "I-frame" in _spi_blob
+                  and "S-frame" in _spi_blob and "U-frame" in _spi_blob)
+                 or ("HDLC" in _spi_blob and "flag" in _spi_blob.lower()
+                     and "0x7E" in _spi_blob and "bit stuffing" in _spi_blob.lower())
+                 or ("HDLC" in _spi_blob and "SDLC" in _spi_blob
+                     and "SABM" in _spi_blob),
+                 "HDLC / SDLC (ISO/IEC 13239)",
+                 "R158/R159/R160"),
+                ("ble",
+                 ("Bluetooth Low Energy" in _spi_blob
+                  and "advertising" in _spi_blob.lower()
+                  and "connection" in _spi_blob.lower())
+                 or ("BLE" in _spi_blob and "GAP" in _spi_blob
+                     and "GATT" in _spi_blob)
+                 or ("Bluetooth" in _spi_blob and "LE" in _spi_blob
+                     and "2.4 GHz" in _spi_blob and "40 channels" in _spi_blob),
+                 "Bluetooth Low Energy 5.2 (Bluetooth Core Specification)",
+                 "R161/R162/R163"),
+                ("milstd1553",
+                 ("MIL-STD-1553" in _spi_blob
+                  and "Bus Controller" in _spi_blob
+                  and "Remote Terminal" in _spi_blob)
+                 or ("1553" in _spi_blob and "Manchester" in _spi_blob
+                     and "Bus Controller" in _spi_blob)
+                 or ("MIL-STD-1553" in _spi_blob
+                     and "Command Word" in _spi_blob
+                     and "Status Word" in _spi_blob),
+                 "MIL-STD-1553B (Military Data Bus)",
+                 "R164/R165/R166"),
+            ):
+                _t3_name, _t3_match, _t3_ic_name, _t3_label = _t3
+                if not _t3_match:
+                    continue
+                try:
+                    _t3_mod = __import__(f"{_t3_name}_protocol_synth")
+                    _t3_fn = getattr(_t3_mod, f"apply_{_t3_name}_synth")
+                    _t3_fn(_gd_r55, True, _t3_ic_name)
+                    print(f"      → {_t3_label} {_t3_name} synth applied (is_{_t3_name}=True)")
+                except Exception as _t3_err:
+                    print(f"      {_t3_name} synth FAILED (fail-open): {_t3_err}",
                           file=sys.stderr)
     except Exception as _r55_err:
         print(f"      R53/R54/R55 synth FAILED (fail-open): {_r55_err}",

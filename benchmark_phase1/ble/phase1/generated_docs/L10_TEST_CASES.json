@@ -1,0 +1,251 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_cases",
+  "ic_name": "Bluetooth Low Energy 5.2 (Bluetooth Core Specification)",
+  "no_test_cases_in_input": false,
+  "bring_up_sequence": [
+    {
+      "step": 1,
+      "description": "Introduction .................................................................................... 1758",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 2,
+      "description": "Goals ............................................................................................... 1759",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 3,
+      "description": "Hardware goals ..................................................................... 1759",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 4,
+      "description": "Software goals ....................................................................... 1759",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 5,
+      "description": "Configuration goals................................................................ 1760",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 6,
+      "description": "Configuration for multiple Controllers .................................... 1760",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 7,
+      "description": "Physical interface documents ...................................................... 1761",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 8,
+      "description": "Communication.............................................................................. 1762",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 9,
+      "description": "Overview................................................................................ 1762",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 10,
+      "description": "General ........................................................................................... 1769",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 11,
+      "description": "Overview ......................................................................................... 1770",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 12,
+      "description": "Slip layer ......................................................................................... 1771",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 13,
+      "description": "Encoding a packet ................................................................. 1771",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 14,
+      "description": "Decoding a packet ................................................................. 1771",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 15,
+      "description": "Packet header ................................................................................ 1773",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    },
+    {
+      "step": 16,
+      "description": "Sequence Number................................................................. 1773",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/BLE_Spec.pdf"
+    }
+  ],
+  "no_bring_up_sequence_in_input": false,
+  "extraction_evidence": {
+    "derived_from_L3": [
+      {
+        "literal": "0x06 PIN",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x1B SCO",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x1C SCO",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x1D SCO",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x22 LMP",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "<HALLUCINATION_SCRUBBED> LMP",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "<HALLUCINATION_SCRUBBED> LMP",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x3F MAC",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x01 L2CAP_COMMAND_RE",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x02 L2CAP_CONNECTION",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x03 L2CAP_CONNECTION",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x04 L2CAP_CONFIGURAT",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x05 L2CAP_CONFIGURAT",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x07 L2CAP_DISCONNECT",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x08 L2CAP_ECHO_REQ",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x09 L2CAP_ECHO_RSP",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x0A L2CAP_INFORMATIO",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x0B L2CAP_INFORMATIO",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x0C L2CAP_CREATE_CHA",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x0D L2CAP_CREATE_CHA",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x0E L2CAP_MOVE_CHANN",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x0F L2CAP_MOVE_CHANN",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x10 L2CAP_MOVE_CHANN",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x11 L2CAP_MOVE_CHANN",
+        "label": "opcode → happy + negative test-cases"
+      }
+    ]
+  },
+  "class_path": "digital_cmd_driven",
+  "test_cases_present": "partial - the spec defines compliance behaviors that map to formal qualification (Bluetooth SIG Profile Tuning Suite, PTS) plus Direct Test Mode (Vol 6 Part F) for production RF tests, but the spec itself does not include a testbench.",
+  "derived_compliance_test_categories": [
+    "Reset behavior: enable bit cleared; transmit-empty flag set; receive-flag cleared after reset.",
+    "Master mode transmission: write to data register + clock-cycle delay + N edges + receive-flag set.",
+    "Slave mode transmission: select line goes LOW + N edges from master + receive-flag set after last edge.",
+    "Mode fault / collision detection.",
+    "All clock polarity/phase combinations.",
+    "MSB-first vs LSB-first byte ordering.",
+    "Bidirectional mode (single data pin).",
+    "Receive overrun (flag-serviced-too-late).",
+    "Baud rate divisor sweep.",
+    "Wait/Stop mode behavior."
+  ]
+}

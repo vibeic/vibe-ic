@@ -93,10 +93,10 @@
     "4. Bridge maps PSLVERR=1 -> HRESP=ERROR (AHB) / RRESP=SLVERR (AXI)."
   ],
   "ordering_rules_summary": {
-    "ahb_single_manager": "AHB-Lite is single-Manager; one outstanding transfer; pipelined address+data.",
-    "ahb_burst_order": "All beats sequential per HBURST encoding.",
-    "ahb_multi_manager": "Multi-Manager AHB requires an interconnect with arbitration (see ARM DVI 0045).",
-    "apb_ordering": "APB is single-Manager (bridge); strictly in-order."
+    "ahb_single_manager": "AHB-Lite is single-Manager; no out-of-order; one outstanding transfer at a time (pipelined address + data).",
+    "ahb_burst_order": "All beats of a burst are sequential and the address relationship (INCR / WRAP) is encoded in HBURST.",
+    "ahb_multi_manager": "Multi-Manager AHB requires an interconnect with arbitration; arbitration ordering is interconnect-defined (see ARM DVI 0045 Multi-layer AHB Technical Overview).",
+    "apb_ordering": "APB is single-Manager (the bridge); strictly in-order; one transfer at a time."
   },
   "narrow_transfer_sequence": "Both AHB and APB support narrower-than-bus transfers. AHB: HSIZE + HADDR + (optional) HWSTRB determine active lanes. APB: PSTRB explicitly indicates active lanes on writes.",
   "early_burst_termination_ahb": "Fixed-length AHB bursts must terminate with SEQ. The only early-termination paths are (a) Subordinate ERROR response with Manager driving HTRANS=IDLE, or (b) multi-layer interconnect terminating the burst.",

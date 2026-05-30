@@ -3701,10 +3701,17 @@
       "source": "IHI0022H_amba_axi_protocol_spec.pdf"
     }
   ],
+  "package_info_present": false,
+  "document_id": "ARM IHI 0022H (ID040120)",
   "purpose": "Defines the AMBA AXI/ACE on-chip bus protocols for high-performance, high-frequency master-slave communication, suitable for high-bandwidth low-latency designs as well as coherent multi-master systems with caches.",
-  "vendor": "Arm Limited, Company 02557590 registered in England, 110 Fulbourn Road, Cambridge, England CB1 9NJ",
-  "intended_audience": "Hardware and software engineers familiar with AMBA AXI3/AXI4 who design coherent multi-master systems, processor clusters, accelerators, or IO bridges.",
   "confidentiality": "Non-Confidential",
+  "electrical_specs_present": false,
+  "max_burst_length": {
+    "AXI3": 16,
+    "AXI4_INCR": 256,
+    "AXI4_FIXED_WRAP": 16
+  },
+  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
   "supported_data_bus_widths_bits": [
     8,
     16,
@@ -3715,18 +3722,11 @@
     512,
     1024
   ],
-  "issuer": "Arm Limited",
-  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
-  "electrical_specs_rationale": "Protocol spec defines only logical signal semantics (synchronous, sampled on rising clock edge). Electrical levels are per-implementation.",
-  "document_id": "ARM IHI 0022H (ID040120)",
-  "package_info_present": false,
-  "electrical_specs_present": false,
   "burst_boundary_rule": "A burst must not cross a 4KB address boundary (inherited from AXI).",
-  "max_burst_length": {
-    "AXI3": 16,
-    "AXI4_INCR": 256,
-    "AXI4_FIXED_WRAP": 16
-  },
+  "intended_audience": "Hardware and software engineers familiar with AMBA AXI3/AXI4 who design coherent multi-master systems, processor clusters, accelerators, or IO bridges.",
+  "vendor": "Arm Limited, Company 02557590 registered in England, 110 Fulbourn Road, Cambridge, England CB1 9NJ",
+  "electrical_specs_rationale": "Protocol spec defines only logical signal semantics (synchronous, sampled on rising clock edge). Electrical levels are per-implementation.",
+  "issuer": "Arm Limited",
   "copyright": "Copyright © 2003-2020 Arm Limited",
   "five_channels": [
     {

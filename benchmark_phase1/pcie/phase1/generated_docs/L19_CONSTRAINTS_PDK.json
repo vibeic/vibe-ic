@@ -1,0 +1,39 @@
+{
+  "doc_id": "L19",
+  "doc_name": "L19_CONSTRAINTS_PDK",
+  "applicability": "APPLICABLE",
+  "ic_class": "unknown",
+  "fields": {
+    "pdk_target": null,
+    "die_area_budget_um": null,
+    "power_budget_uw": null,
+    "sdc_constraints_path": null,
+    "floorplan_hints": [],
+    "constraints_present": false,
+    "notes": "RS-485 is a wire-level electrical standard; no PDK / SDC / floorplan constraints at the protocol layer. Per-transceiver fabrication constraints (BCD process, output stage current limit, ESD diode stacks) live in the vendor's PDK and not in TIA/EIA-485 nor in SLLA272D. Higher-level controller integration (UART block with RS-485 wrapper) carries its own SDC at the SoC integration level.",
+    "electrical_channel_constraints": {
+      "differential_impedance_ohm": 100,
+      "single_ended_impedance_ohm": 50,
+      "ac_coupling_required": true,
+      "ac_coupling_cap_typical_nF": {
+        "low": 75,
+        "high": 200
+      },
+      "tx_de_emphasis_dB": -3.5,
+      "tx_common_mode_V": 0.5,
+      "max_intra_pair_skew_mils_gen1": 5,
+      "max_inter_pair_skew_mils_gen1": 25,
+      "refclk_freq_MHz": 100,
+      "refclk_ssc_max_percent": 0.5,
+      "clock_tolerance_ppm": 300,
+      "esd_class_recommended": "≥ Class 2 on TX / RX pads (per industry practice; not specified in Rev 1.0)"
+    }
+  },
+  "extraction_hints": [
+    "Look for floorplan, area, power, timing constraints.",
+    "Capture PDK target if stated."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+  "extraction_evidence": {}
+}

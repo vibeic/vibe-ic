@@ -1,0 +1,2743 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "Bluetooth Low Energy 5.2 (Bluetooth Core Specification)",
+  "analog_blocks_detected": false,
+  "analog_blocks": [],
+  "no_analog": true,
+  "external_components": [],
+  "electrical_specs": [
+    {
+      "param": "RF CHANNELS A RELAXED INTERFERENCE REQUIREMENT C/I",
+      "parameter": "RF channels a relaxed interference requirement C/I",
+      "value": "-17",
+      "unit": "dB",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "RF channels a relaxed interference requirement C/I = -17 dB shall be met.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "FREQUENCIES A RELAXED INTERFERENCE REQUIREMENT C/I",
+      "parameter": "frequencies a relaxed interference requirement C/I",
+      "value": "-15",
+      "unit": "dB",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "frequencies a relaxed interference requirement C/I = -15 dB for π/4-DQPSK",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "WORST-CASE VALUES (DRIFT",
+      "parameter": "worst-case values (drift",
+      "value": "250",
+      "unit": "ppm",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "worst-case values (drift = 250 ppm and jitter = 10 µs) shall be used.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TROLLER                               NOTE",
+      "parameter": "troller                               Note",
+      "value": "500",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "troller                               Note: 500 ms is the default value for the “processing” time",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME RANGE",
+      "parameter": "Time Range",
+      "value": "100",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 100 ms to 32 seconds",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "WRITE)",
+      "parameter": "Write)",
+      "value": "0",
+      "unit": "A",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "- Write):                       0A 03 00 00",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "RA",
+      "parameter": "ra",
+      "value": "0",
+      "unit": "x",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "ra = 0x 00 00 00 00 00 00 00 00 00 00 00 00 00 02 00 f1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME DEFAULT",
+      "parameter": "Time Default",
+      "value": "2.56",
+      "unit": "s",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Default: 2.56 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME RANGE",
+      "parameter": "Time Range",
+      "value": "10.625",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 10.625 ms to 2560 ms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME DEFAULT",
+      "parameter": "Time Default",
+      "value": "11.25",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Default: 11.25 ms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME RANGE",
+      "parameter": "Time Range",
+      "value": "0.625",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 0.625 ms to 40.9 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME DEFAULT",
+      "parameter": "Time Default",
+      "value": "5.12",
+      "unit": "s",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Default: 5.12 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME RANGE",
+      "parameter": "Time Range",
+      "value": "11.25",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 11.25 ms to 2560 ms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME DEFAULT",
+      "parameter": "Time Default",
+      "value": "1.28",
+      "unit": "s",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Default: 1.28 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME RANGE",
+      "parameter": "Time Range",
+      "value": "20",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 20 ms to 40.9 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME DEFAULT",
+      "parameter": "Time Default",
+      "value": "80",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Default: 80 ms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME RANGE",
+      "parameter": "Time Range",
+      "value": "1.25",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 1.25 ms to 23.3 hours",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME DEFAULT",
+      "parameter": "Time Default",
+      "value": "120",
+      "unit": "s",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Default: 120 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME RANGE",
+      "parameter": "Time Range",
+      "value": "10",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 10 ms to 655,350 ms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME DEFAULT",
+      "parameter": "Time Default",
+      "value": "0",
+      "unit": "s",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Default: 0 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME RANGE",
+      "parameter": "Time Range",
+      "value": "0",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 0 ms to 40.9 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME RANGE",
+      "parameter": "Time Range",
+      "value": "0",
+      "unit": "s",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 0 s to 40.9 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "RANGE",
+      "parameter": "Range",
+      "value": "11.25",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Range: 11.25 ms to 2560 ms; only even values are valid",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "RANGE",
+      "parameter": "Range",
+      "value": "10.625",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Range: 10.625 ms to 2560 ms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "LINK_SUPERVISION_TIMEOUT",
+      "parameter": "Link_Supervision_Timeout",
+      "value": "20",
+      "unit": "s",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Link_Supervision_Timeout = 20 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME RANGE",
+      "parameter": "Time Range",
+      "value": "2.5",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 2.5 ms to 40.9 s.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME RANGE",
+      "parameter": "Time Range",
+      "value": "7.5",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 7.5 ms to 4000 ms.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME RANGE",
+      "parameter": "Time Range",
+      "value": "5",
+      "unit": "ms",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 5 ms to 4 s.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "ACCURACY",
+      "parameter": "Accuracy",
+      "value": "±4",
+      "unit": "dB",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Accuracy: ±4 dB",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "FREQUENCY RANGE",
+      "parameter": "Frequency Range",
+      "value": "2402",
+      "unit": "MHz",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Frequency Range: 2402 MHz to 2480 MHz",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME RANGE",
+      "parameter": "Time range",
+      "value": "1",
+      "unit": "s",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time range: 1 s to 1 hour",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "TIME RANGE",
+      "parameter": "Time Range",
+      "value": "1.28",
+      "unit": "s",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 1.28 s to 83,884.8 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "UNITS",
+      "parameter": "Units",
+      "value": "0.1",
+      "unit": "dB",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Units: 0.1 dB",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "U",
+      "parameter": "U",
+      "value": "30",
+      "unit": "µs",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "U = 30 µs or 300 µs depending on the value of the Offset Units field of the",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "ENCRYPTED",
+      "parameter": "Encrypted",
+      "value": "7",
+      "unit": "A",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "Encrypted: 7A 70 D6 64 15 22 6D F2 6B 17 83 9A 06 04 05 59 6B D6",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "CL",
+      "parameter": "CL",
+      "value": "15",
+      "unit": "pF",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "CL = 15 pF",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    }
+  ],
+  "design_parameters": [
+    {
+      "parameter": "Covered Core Package Version",
+      "value": "5.2",
+      "source": "BLE_Spec.pdf",
+      "raw": "Covered Core Package Version: 5.2",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "LE Coded             1 Msym/s                       S",
+      "value": "8",
+      "source": "BLE_Spec.pdf",
+      "raw": "LE Coded             1 Msym/s                       S=8                    125 kb/s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "modulation   S",
+      "value": "8",
+      "source": "BLE_Spec.pdf",
+      "raw": "modulation   S=8",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "LE 1M                LE Coded S",
+      "value": "8",
+      "source": "BLE_Spec.pdf",
+      "raw": "LE 1M                LE Coded S=8      LE 1M               LE Coded S=8",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "LE 1M                            LE Coded S",
+      "value": "8",
+      "source": "BLE_Spec.pdf",
+      "raw": "LE 1M                            LE Coded S=8",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "V5A",
+      "value": "802.11",
+      "source": "BLE_Spec.pdf",
+      "raw": "V5A: 802.11 Protocol Adaptation                                 6421, 7036",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "ISO/IEC 9834.8",
+      "value": "2014.",
+      "source": "BLE_Spec.pdf",
+      "raw": "ISO/IEC 9834.8:2014.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "bit period product BT",
+      "value": "0.5.",
+      "source": "BLE_Spec.pdf",
+      "raw": "bit period product BT=0.5. The Modulation index shall be between 0.28 and",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "valued signal points. M",
+      "value": "4",
+      "source": "BLE_Spec.pdf",
+      "raw": "valued signal points. M=4 applies for 2 Mb/s and M=8 applies for 3 Mb/s. Gray",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "alternatives (n",
+      "value": "3,",
+      "source": "BLE_Spec.pdf",
+      "raw": "alternatives (n=3, 4, or 5).",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bit Rate",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Bit Rate = 1 Mb/s ±1 ppm",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Symbol Rate",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Symbol Rate = 1 Msym/s ± 1 ppm",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "time_base_offset                 slave_offset",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "time_base_offset                 slave_offset = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "maximum value X",
+      "value": "2500",
+      "source": "BLE_Spec.pdf",
+      "raw": "maximum value X=2500 µs, or even at f(k), f(k+6),...f(k+6i) which gives a",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "maximum value X",
+      "value": "3750",
+      "source": "BLE_Spec.pdf",
+      "raw": "maximum value X=3750 µs. The RX hop frequencies used shall correspond to",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "a 3-bit parameter X",
+      "value": "3",
+      "source": "BLE_Spec.pdf",
+      "raw": "- a 3-bit parameter X=3 is sent as:",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "b 0 b 1 b 2",
+      "value": "110",
+      "source": "BLE_Spec.pdf",
+      "raw": "b 0 b 1 b 2 = 110",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "expurgated code guarantees large Hamming distance ( d min",
+      "value": "14",
+      "source": "BLE_Spec.pdf",
+      "raw": "expurgated code guarantees large Hamming distance ( d min = 14 ) between",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "g(D)",
+      "value": "260534236651,",
+      "source": "BLE_Spec.pdf",
+      "raw": "g(D) = 260534236651,                                             (EQ 9)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "h(D)",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "h(D) = 1 + D + D 3 + D 4 + D 6 shall be used. The LFSR and its starting state are",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "continue-fragment indications (LLID",
+      "value": "10",
+      "source": "BLE_Spec.pdf",
+      "raw": "continue-fragment indications (LLID=10 and LLID=01) also retain their",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "length",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "length=0 and LLID=01. The payload flow bit has its own meaning for each",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "ASB-U             Always set FLOW",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "ASB-U             Always set FLOW=1 on transmission and ignore the bit",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PBD               Always set FLOW",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "PBD               Always set FLOW=0 on transmission and ignore the bit",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Position",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Position:            0         1      2     3    4          5        6         7",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "LLID",
+      "value": "10",
+      "source": "BLE_Spec.pdf",
+      "raw": "LLID = 10 in the payload header for the next L2CAP message. This informs the",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "so NBC",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "so NBC=1 means that each broadcast packet should be sent only once but may",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "TeSCO",
+      "value": "6",
+      "source": "BLE_Spec.pdf",
+      "raw": "TeSCO=6 slots, which would correspond to a 64 kb/s synchronous link.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "clk_adj_instant",
+      "value": "12",
+      "source": "BLE_Spec.pdf",
+      "raw": "clk_adj_instant = 12",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Nsniff attempt",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Nsniff attempt =0 shall not be used.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Let sgn(x)",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Let sgn(x) = 1 for x ≥ 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "name offset",
+      "value": "0.",
+      "source": "BLE_Spec.pdf",
+      "raw": "- name offset=0.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 27",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Bits 27:1 of the Bluetooth",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "sniff_subrating   4         u_int32   slots      Bits 27",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "sniff_subrating   4         u_int32   slots      Bits 27:1 of the master",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "EV4",
+      "value": "16",
+      "source": "BLE_Spec.pdf",
+      "raw": "EV4: 16",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "EV3",
+      "value": "6",
+      "source": "BLE_Spec.pdf",
+      "raw": "EV3: 6",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "EV5",
+      "value": "16",
+      "source": "BLE_Spec.pdf",
+      "raw": "EV5: 16",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 2",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "3",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 3",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "4",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 4",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "5",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 5",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "6",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 6",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "7",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 7",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "8",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 8",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "9",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 9",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "10",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 10",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "11",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 11",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "12",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 12",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "13",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 13",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "14",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 14",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "15",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 15",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "16",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 16",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Payload byte length",
+      "value": "00",
+      "source": "BLE_Spec.pdf",
+      "raw": "Payload byte length: 00",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Zero-length ACL-U Continuation",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Zero-length ACL-U Continuation: 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Direction",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Direction: 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Initialization vector",
+      "value": "66778899",
+      "source": "BLE_Spec.pdf",
+      "raw": "Initialization vector: 66778899 aabbccdd",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "LT_ADDR",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "LT_ADDR: 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Packet Type",
+      "value": "3",
+      "source": "BLE_Spec.pdf",
+      "raw": "Packet Type: 3",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "LLID",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "LLID: 2",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "B1",
+      "value": "00190200",
+      "source": "BLE_Spec.pdf",
+      "raw": "B1: 00190200 00000000 00000000 00000000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Payload byte length",
+      "value": "08",
+      "source": "BLE_Spec.pdf",
+      "raw": "Payload byte length: 08",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Direction",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Direction: 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Y0",
+      "value": "31081122",
+      "source": "BLE_Spec.pdf",
+      "raw": "Y0: 31081122 b1cca37a 5f04d238 897b9bc8",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Payload byte length",
+      "value": "11",
+      "source": "BLE_Spec.pdf",
+      "raw": "Payload byte length: 11",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "B3",
+      "value": "05000000",
+      "source": "BLE_Spec.pdf",
+      "raw": "B3: 05000000 00000000 00000000 00000000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Payload byte length",
+      "value": "14",
+      "source": "BLE_Spec.pdf",
+      "raw": "Payload byte length: 14",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Packet Type",
+      "value": "4",
+      "source": "BLE_Spec.pdf",
+      "raw": "Packet Type: 4",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "B1",
+      "value": "00210200",
+      "source": "BLE_Spec.pdf",
+      "raw": "B1: 00210200 00000000 00000000 00000000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Y2",
+      "value": "36154960",
+      "source": "BLE_Spec.pdf",
+      "raw": "Y2: 36154960 3c1fc026 4509902e de57dfc3",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Y0",
+      "value": "55410490",
+      "source": "BLE_Spec.pdf",
+      "raw": "Y0: 55410490 6f3a5827 e5a04a60 7cf19ad5",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Y0",
+      "value": "28015834",
+      "source": "BLE_Spec.pdf",
+      "raw": "Y0: 28015834 f3117a84 904800f7 ebd4b0d4",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Y2",
+      "value": "48461729",
+      "source": "BLE_Spec.pdf",
+      "raw": "Y2: 48461729 ec1c7060 3b0f88ce becef21a",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "B1",
+      "value": "00510200",
+      "source": "BLE_Spec.pdf",
+      "raw": "B1: 00510200 00000000 00000000 00000000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "B4",
+      "value": "42604406",
+      "source": "BLE_Spec.pdf",
+      "raw": "B4: 42604406 543c2f96 60c261c3 1c3d8826",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Y9",
+      "value": "65527777",
+      "source": "BLE_Spec.pdf",
+      "raw": "Y9: 65527777 4efa23ca d5124e05 0597d5ff",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Y0",
+      "value": "34969012",
+      "source": "BLE_Spec.pdf",
+      "raw": "Y0: 34969012 2648722b fb7771dd b1b38b1b",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Y16",
+      "value": "36883866",
+      "source": "BLE_Spec.pdf",
+      "raw": "Y16: 36883866 2f7275ab 6ba45111 2431882d",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "B1",
+      "value": "00790200",
+      "source": "BLE_Spec.pdf",
+      "raw": "B1: 00790200 00000000 00000000 00000000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "B11",
+      "value": "21286421",
+      "source": "BLE_Spec.pdf",
+      "raw": "B11: 21286421 85891af5 bf8ca291 59c30596",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "B46",
+      "value": "49494406",
+      "source": "BLE_Spec.pdf",
+      "raw": "B46: 49494406 fa75e051 c829441b ce7cba98",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "B55",
+      "value": "49127607",
+      "source": "BLE_Spec.pdf",
+      "raw": "B55: 49127607 32973806 95979b3c d75a3f8f",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Y20",
+      "value": "36566635",
+      "source": "BLE_Spec.pdf",
+      "raw": "Y20: 36566635 1c0a0078 9ee4499b d30ac682",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Y32",
+      "value": "39043423",
+      "source": "BLE_Spec.pdf",
+      "raw": "Y32: 39043423 c60f8fd8 2c108055 6f387c76",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Y40",
+      "value": "40842220",
+      "source": "BLE_Spec.pdf",
+      "raw": "Y40: 40842220 827424b0 b2f7d5cf b201b5e4",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "S33",
+      "value": "37946570",
+      "source": "BLE_Spec.pdf",
+      "raw": "S33: 37946570 fcf94220 77cf63da 4781771b",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "S44",
+      "value": "41880777",
+      "source": "BLE_Spec.pdf",
+      "raw": "S44: 41880777 e033c519 79eee51e 14a9246d",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Y1",
+      "value": "31635446",
+      "source": "BLE_Spec.pdf",
+      "raw": "Y1: 31635446 16989968 dbd392df 77ab44b2",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Y34",
+      "value": "63453300",
+      "source": "BLE_Spec.pdf",
+      "raw": "Y34: 63453300 3bc6cc3d 53a36db3 79f2b047",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "S26",
+      "value": "77310821",
+      "source": "BLE_Spec.pdf",
+      "raw": "S26: 77310821 6671e6dc 3a121369 a557aa4f",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Packet Type",
+      "value": "7",
+      "source": "BLE_Spec.pdf",
+      "raw": "Packet Type: 7",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Encrypted payload",
+      "value": "76637937",
+      "source": "BLE_Spec.pdf",
+      "raw": "Encrypted payload: 76637937 69b2ba4c 41704100 d6c4602a",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Offset value",
+      "value": "24",
+      "source": "BLE_Spec.pdf",
+      "raw": "Offset value:   24",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "LT_ADDR",
+      "value": "011",
+      "source": "BLE_Spec.pdf",
+      "raw": "LT_ADDR = 011",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "TYPE",
+      "value": "0100",
+      "source": "BLE_Spec.pdf",
+      "raw": "TYPE = 0100 (DH1)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "FLOW",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "FLOW = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "ARQN",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "ARQN = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "SEQN",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "SEQN = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "payload length",
+      "value": "5",
+      "source": "BLE_Spec.pdf",
+      "raw": "payload length: 5 bytes",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "logical channel",
+      "value": "10",
+      "source": "BLE_Spec.pdf",
+      "raw": "logical channel = 10 (UA/I, Start L2CAP message)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "flow",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "flow = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "data byte 1",
+      "value": "00000001",
+      "source": "BLE_Spec.pdf",
+      "raw": "data byte 1 = 00000001",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "data byte 2",
+      "value": "00000010",
+      "source": "BLE_Spec.pdf",
+      "raw": "data byte 2 = 00000010",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "data byte 3",
+      "value": "00000011",
+      "source": "BLE_Spec.pdf",
+      "raw": "data byte 3 = 00000011",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "data byte 4",
+      "value": "00000100",
+      "source": "BLE_Spec.pdf",
+      "raw": "data byte 4 = 00000100",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "data byte 5",
+      "value": "00000101",
+      "source": "BLE_Spec.pdf",
+      "raw": "data byte 5 = 00000101",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "uap",
+      "value": "01000111",
+      "source": "BLE_Spec.pdf",
+      "raw": "uap = 01000111",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "TYPE",
+      "value": "0011",
+      "source": "BLE_Spec.pdf",
+      "raw": "TYPE = 0011 (DM1)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Public A(y)",
+      "value": "91951218",
+      "source": "BLE_Spec.pdf",
+      "raw": "Public A(y): 91951218 3898dfbe cd52e240 8e43871f d0211091 17bd3ed4 eaf84377 43715d4f",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "output (decimal)",
+      "value": "1377069598",
+      "source": "BLE_Spec.pdf",
+      "raw": "output (decimal):            1377069598",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "output (decimal)",
+      "value": "147680",
+      "source": "BLE_Spec.pdf",
+      "raw": "output (decimal): 147680",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "000000",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     000000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "000001",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     000001",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "000002",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     000002",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "000003",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     000003",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "000100",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     000100",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "000101",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     000101",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "000102",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     000102",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "000103",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     000103",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "010000",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     010000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "010001",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     010001",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "010002",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     010002",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "010003",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     010003",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "010100",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     010100",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "010101",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     010101",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "010102",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     010102",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IOcap",
+      "value": "010103",
+      "source": "BLE_Spec.pdf",
+      "raw": "IOcap:     010103",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "keyID",
+      "value": "38303262",
+      "source": "BLE_Spec.pdf",
+      "raw": "keyID:      38303262 ('802b')",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "rand",
+      "value": "00000000000000000000000000000000",
+      "source": "BLE_Spec.pdf",
+      "raw": "rand      :00000000000000000000000000000000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "address",
+      "value": "000000000000",
+      "source": "BLE_Spec.pdf",
+      "raw": "address :000000000000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "key",
+      "value": "00000000000000000000000000000000",
+      "source": "BLE_Spec.pdf",
+      "raw": "key       :00000000000000000000000000000000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "round   1",
+      "value": "00000000000000000000000000000000",
+      "source": "BLE_Spec.pdf",
+      "raw": "round   1:00000000000000000000000000000000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "16",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length =16 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "15",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length =15 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "14",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length =14 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "13",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length =13 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "12",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length =12 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "11",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length =11 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "10",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length =10 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "9",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length = 9 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "8",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length = 8 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "7",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length = 7 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "6",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length = 6 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "5",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length = 5 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "4",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length = 4 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "3",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length = 3 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length = 2 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PIN length",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "PIN length = 1 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "LT_ADDR",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "LT_ADDR = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "TYPE",
+      "value": "1010",
+      "source": "BLE_Spec.pdf",
+      "raw": "TYPE = 1010 (DM3)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "ARQN",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "ARQN = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "payload length",
+      "value": "28",
+      "source": "BLE_Spec.pdf",
+      "raw": "payload length = 28 bytes",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Connectionless Slave Broadcast interval",
+      "value": "564",
+      "source": "BLE_Spec.pdf",
+      "raw": "Connectionless Slave Broadcast interval = 564 slots",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Connectionless Slave Broadcast LT_ADDR",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Connectionless Slave Broadcast LT_ADDR = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "procedure. Therefore",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "procedure. Therefore:1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L 2",
+      "value": "31",
+      "source": "BLE_Spec.pdf",
+      "raw": "- L 2 = 31",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L 3",
+      "value": "33",
+      "source": "BLE_Spec.pdf",
+      "raw": "- L 3 = 33 ,",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L 4",
+      "value": "39",
+      "source": "BLE_Spec.pdf",
+      "raw": "- L 4 = 39 , with feedback polynomials as specified in Table 4.2. The total",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "i",
+      "value": "1,",
+      "source": "BLE_Spec.pdf",
+      "raw": "- i = 1, …, 4 are taken from the positions 24, 24, 32,",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "xor",
+      "value": "16",
+      "source": "BLE_Spec.pdf",
+      "raw": "xor :16 8-bit xor-ings",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "add",
+      "value": "16",
+      "source": "BLE_Spec.pdf",
+      "raw": "add: 16 8-bit additions mod 256",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "p",
+      "value": "1,",
+      "source": "BLE_Spec.pdf",
+      "raw": "- p = 1, 2, …, 17 , which are the round keys to be used in each round. The",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "r",
+      "value": "1,",
+      "source": "BLE_Spec.pdf",
+      "raw": "- r = 1, 2, …, 8 are denoted K 2r – 1 [ j ] , K 2r [ j ] ,",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "j",
+      "value": "0,",
+      "source": "BLE_Spec.pdf",
+      "raw": "j = 0, 1, …, 15 . After the last round K 17 [ j ] is applied identically to all previous",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PERMUTE",
+      "value": "8",
+      "source": "BLE_Spec.pdf",
+      "raw": "PERMUTE: 8 11 12 15 2 1 6 5 10 9 14 13 0 7 4 3",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "16,",
+      "source": "BLE_Spec.pdf",
+      "raw": "- L = 16,",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "rb",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "- rb=0                        2b. Set rb=rand",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "ra",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "- ra=0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "ra",
+      "value": "0.",
+      "source": "BLE_Spec.pdf",
+      "raw": "ra=0.                                         rb=0.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "p",
+      "value": "6277101735386680763835789423207666416083908700390324961279",
+      "source": "BLE_Spec.pdf",
+      "raw": "p     = 6277101735386680763835789423207666416083908700390324961279",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "r",
+      "value": "6277101735386680763835789423176059013767194773182842284081",
+      "source": "BLE_Spec.pdf",
+      "raw": "r     = 6277101735386680763835789423176059013767194773182842284081",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "b",
+      "value": "64210519",
+      "source": "BLE_Spec.pdf",
+      "raw": "b     = 64210519 e59c80e7 0fa7e9ab 72243049 feb8deec c146b9b1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "p",
+      "value": "11579208921035624876269744694940757353008614341529031419553363",
+      "source": "BLE_Spec.pdf",
+      "raw": "p     = 11579208921035624876269744694940757353008614341529031419553363",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "r",
+      "value": "11579208921035624876269744694940757352999695522413576034242225",
+      "source": "BLE_Spec.pdf",
+      "raw": "r     = 11579208921035624876269744694940757352999695522413576034242225",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bit 0",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Bit 0: 0 (ARQN masked)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bit 1",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Bit 1: 0 (SEQN masked)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bit 7",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Bit 7: 0 (FLOW masked)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bit 2",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Bit 2: 0 (FLOW masked)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Length",
+      "value": "14",
+      "source": "BLE_Spec.pdf",
+      "raw": "Length = 14",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Information Payload",
+      "value": "00",
+      "source": "BLE_Spec.pdf",
+      "raw": "Information Payload = 00 01 02 03 04 05 06 07 08 09 (10 octets, hexadeci-",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Length",
+      "value": "4",
+      "source": "BLE_Spec.pdf",
+      "raw": "Length = 4",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "F",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "F = 0 or 1—the F-bit of a received frame is checked. The F-bit of the received",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Recv ReqSeqAndFbit           F",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Recv ReqSeqAndFbit           F=1                     Process-ReqSeq                     XMIT",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Recv ReqSeqAndFbit           F",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Recv ReqSeqAndFbit           F=0                     Process-ReqSeq                     WAIT_F",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Recv Fbit                    F",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Recv Fbit                    F=1                     Stop-MonitorTimer                  XMIT",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Recv Fbit                    F",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Recv Fbit                    F=0                                                        WAIT_F",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "ISO/IEC 9834-8",
+      "value": "2014.",
+      "source": "BLE_Spec.pdf",
+      "raw": "ISO/IEC 9834-8:2014.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "CN",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "- CN=1 ), ( PostscriptStream ) )",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "CN",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "- CN=2 ), ( PPP ), ( IP ), ( TCP ),",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Discoverability modes",
+      "value": "4.1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Discoverability modes:                                          4.1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Connectability modes",
+      "value": "4.2",
+      "source": "BLE_Spec.pdf",
+      "raw": "Connectability modes:                                           4.2",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bondable modes",
+      "value": "4.3",
+      "source": "BLE_Spec.pdf",
+      "raw": "Bondable modes:                                                 4.3",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Synchronizability modes",
+      "value": "4.4",
+      "source": "BLE_Spec.pdf",
+      "raw": "Synchronizability modes:                                        4.4",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "remote OOB                ping table                   ra",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "remote OOB                ping table                   ra = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Controller ID",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Controller ID=0   Controller Type=0    Additional Controller ID and Type pairs",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "X",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "X = 1 if Authentication Signature Flag of the",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "X",
+      "value": "13",
+      "source": "BLE_Spec.pdf",
+      "raw": "X = 13 if Authentication Signature Flag of the",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "M0",
+      "value": "01000028",
+      "source": "BLE_Spec.pdf",
+      "raw": "M0: 01000028 00180200 03280A03 00002A04",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "M1",
+      "value": "00032802",
+      "source": "BLE_Spec.pdf",
+      "raw": "M1: 00032802 0500012A 06000028 01180700",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "M2",
+      "value": "03282008",
+      "source": "BLE_Spec.pdf",
+      "raw": "M2: 03282008 00052A09 0002290A 0003280A",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "M6",
+      "value": "14000128",
+      "source": "BLE_Spec.pdf",
+      "raw": "M6: 14000128 0F181500 03280216 00192A",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Stop bit",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Stop bit:                  1 stop bit",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Time Range",
+      "value": "11.25",
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 11.25 to 2560 ms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PCM)                                 1",
+      "value": "16",
+      "source": "BLE_Spec.pdf",
+      "raw": "PCM)                                 1: 16 bits",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Time Range",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Time Range: 0 to 40.9 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Range",
+      "value": "1.28",
+      "source": "BLE_Spec.pdf",
+      "raw": "Range: 1.28 to 61.44 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Range",
+      "value": "3.84",
+      "source": "BLE_Spec.pdf",
+      "raw": "Range: 3.84 to 83884.8 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Range",
+      "value": "2.56",
+      "source": "BLE_Spec.pdf",
+      "raw": "Range: 2.56 to 83883.52 s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Invalid Clock Offset",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Invalid Clock Offset = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Valid Clock Offset",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Valid Clock Offset = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Connection_Handle",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "Connection_Handle:                                            2 octets (12 bits meaningful)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Transmit_Bandwidth",
+      "value": "4",
+      "source": "BLE_Spec.pdf",
+      "raw": "Transmit_Bandwidth:                                                                   4 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Receive_Bandwidth",
+      "value": "4",
+      "source": "BLE_Spec.pdf",
+      "raw": "Receive_Bandwidth:                                                                    4 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Max_Latency",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "Max_Latency:                                                                            2 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Voice_Setting",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "Voice_Setting:                                               2 octets (10 bits meaningful)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Retransmission_Effort",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Retransmission_Effort:                                                                    1 octet",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Packet_Type",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "Packet_Type:                                                                            2 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "BD_ADDR",
+      "value": "6",
+      "source": "BLE_Spec.pdf",
+      "raw": "BD_ADDR:                                                                                6 octets",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Voice_Settings",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "Voice_Settings:                                              2 octets (10 bits meaningful)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Reason",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Reason:                                                                                    1 octet",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Input_PCM_Sample_Payload_MSB_Position",
+      "value": "3,",
+      "source": "BLE_Spec.pdf",
+      "raw": "Input_PCM_Sample_Payload_MSB_Position = 3, then each sample is",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Range",
+      "value": "11.25",
+      "source": "BLE_Spec.pdf",
+      "raw": "Range: 11.25 to 2560 ms; only even values are valid",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Range",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Range: 0 to 255",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Valid range",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Valid range: 1 to 32",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Range",
+      "value": "-128",
+      "source": "BLE_Spec.pdf",
+      "raw": "Range: -128 to 127",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Range",
+      "value": "-127",
+      "source": "BLE_Spec.pdf",
+      "raw": "Range: -127 to 20, 127",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Range",
+      "value": "-1270",
+      "source": "BLE_Spec.pdf",
+      "raw": "Range: -1270 to +200",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Units",
+      "value": "0.1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Units: 0.1 dBm",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "anonymous advertising (bit 2",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "anonymous advertising (bit 2 = 0 and bit 5 = 1).",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PART A",
+      "value": "802.11",
+      "source": "BLE_Spec.pdf",
+      "raw": "PART A: 802.11 PROTOCOL",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Modulation index",
+      "value": "0.5",
+      "source": "BLE_Spec.pdf",
+      "raw": "Modulation index = 0.5 ± 1% for standard modulation index, 0.5 ± 0.5% for",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "BT",
+      "value": "0.5",
+      "source": "BLE_Spec.pdf",
+      "raw": "BT = 0.5 ± 1%",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "b0b1b2",
+      "value": "110",
+      "source": "BLE_Spec.pdf",
+      "raw": "b0b1b2 = 110",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "SAA25",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "SAA25 = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "SAA23",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "SAA23 = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "using S",
+      "value": "8",
+      "source": "BLE_Spec.pdf",
+      "raw": "using S=8 coding",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "using S",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "using S=2 coding",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Position 0",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Position 0 = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Position 1",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Position 1 = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Position 2",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Position 2 = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Position 3",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Position 3 = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Position 4",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Position 4 = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Position 5",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Position 5 = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Position 6",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Position 6 = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "G0(x)",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "G0(x) = 1 + x + x2 + x3",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "G1(x)",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "G1(x) = 1 + x2 + x3",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Adv_idx",
+      "value": "37",
+      "source": "BLE_Spec.pdf",
+      "raw": "Adv_idx = 37                   Adv_idx = 38                              Adv_idx = 39",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IRC",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "- IRC = 2",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PTO",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "- PTO = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "IRC",
+      "value": "3",
+      "source": "BLE_Spec.pdf",
+      "raw": "- IRC = 3",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PTO",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "- PTO = 2",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PTO",
+      "value": "4",
+      "source": "BLE_Spec.pdf",
+      "raw": "- PTO = 4",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "previous_event_channel",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "previous_event_channel = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "MD",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "MD = 0                                  MD = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "MD",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "MD = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "FT",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "- FT=1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "FT",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "- FT=2",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "initial hopIncrement",
+      "value": "10",
+      "source": "BLE_Spec.pdf",
+      "raw": "-    initial hopIncrement: 10 (decimal)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Instant",
+      "value": "100",
+      "source": "BLE_Spec.pdf",
+      "raw": "-    Instant: 100 (decimal). Assume that no connection event count wrap-",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "WinOffset",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "- WinOffset: 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "WinOffset",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "- WinOffset: 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "WinOffset",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "- WinOffset: 2",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "WinOffset",
+      "value": "3",
+      "source": "BLE_Spec.pdf",
+      "raw": "- WinOffset: 3",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "WinOffset",
+      "value": "18",
+      "source": "BLE_Spec.pdf",
+      "raw": "- WinOffset: 18",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "WinOffset",
+      "value": "19",
+      "source": "BLE_Spec.pdf",
+      "raw": "- WinOffset: 19",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "WinOffset",
+      "value": "20",
+      "source": "BLE_Spec.pdf",
+      "raw": "- WinOffset: 20",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "WinOffset",
+      "value": "21",
+      "source": "BLE_Spec.pdf",
+      "raw": "- WinOffset: 21",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "B1",
+      "value": "00010300000000000000000000000000",
+      "source": "BLE_Spec.pdf",
+      "raw": "B1 = 00010300000000000000000000000000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "B2",
+      "value": "06000000000000000000000000000000",
+      "source": "BLE_Spec.pdf",
+      "raw": "B2 = 06000000000000000000000000000000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Length",
+      "value": "05",
+      "source": "BLE_Spec.pdf",
+      "raw": "Length: 05",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Clear",
+      "value": "06",
+      "source": "BLE_Spec.pdf",
+      "raw": "Clear:      06",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "B1",
+      "value": "00010200000000000000000000000000",
+      "source": "BLE_Spec.pdf",
+      "raw": "B1 = 00010200000000000000000000000000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "B3",
+      "value": "71313233343536373839300000000000",
+      "source": "BLE_Spec.pdf",
+      "raw": "B3 = 71313233343536373839300000000000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Clear",
+      "value": "17",
+      "source": "BLE_Spec.pdf",
+      "raw": "Clear:     17 00 63 64 65 66 67 68 69 6a 6b 6c 6d 6e 6f 70 71 31",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "B2",
+      "value": "17003736353433323130414243444546",
+      "source": "BLE_Spec.pdf",
+      "raw": "B2 = 17003736353433323130414243444546",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "MIC",
+      "value": "89",
+      "source": "BLE_Spec.pdf",
+      "raw": "MIC: 89 B9 60 88",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PDU",
+      "value": "00",
+      "source": "BLE_Spec.pdf",
+      "raw": "PDU:                       00 03 42 4C 45",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "CRC",
+      "value": "29",
+      "source": "BLE_Spec.pdf",
+      "raw": "CRC:                       29 0A CE",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Input",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Input:      0   1   1   0   1   0   1   1   0   1   1   1   1   1   0   1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "State",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "State:      0   4   6   3   5   2   5   6   3   5   6   7   7   7   3   5",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Output",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Output:     0 0 1 1 0 1 0 1 1 1 0 1 0 0 1 0 0 1 1 1 1 0 1 0 0 1 0 1 1 0 1 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Input",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Input:      1   0                   0   0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "State",
+      "value": "6",
+      "source": "BLE_Spec.pdf",
+      "raw": "State:      6   3                   2   1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "State",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "State:      1   0   0               0   0   0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "State",
+      "value": "5",
+      "source": "BLE_Spec.pdf",
+      "raw": "State:      5   2   1   4   2   5   2   1   0   4   2   5   2   1   0   0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "State",
+      "value": "3",
+      "source": "BLE_Spec.pdf",
+      "raw": "State:      3   1   0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PDU Type",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "PDU Type: 2",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "TxAdd",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "TxAdd: 1 (random)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Channel index",
+      "value": "38",
+      "source": "BLE_Spec.pdf",
+      "raw": "Channel index: 38",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PDU header",
+      "value": "0100",
+      "source": "BLE_Spec.pdf",
+      "raw": "PDU header: 0100 0 0 1 0 10010000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PDU body",
+      "value": "01100101",
+      "source": "BLE_Spec.pdf",
+      "raw": "PDU body: 01100101 10100101 00100101 11000101 01000101 10000011",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "CRC",
+      "value": "10110101",
+      "source": "BLE_Spec.pdf",
+      "raw": "CRC: 10110101 00101101 11010111",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PDU Type",
+      "value": "7",
+      "source": "BLE_Spec.pdf",
+      "raw": "PDU Type: 7",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "ChSel",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "ChSel: 1 (algorithm #2)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "TxAdd",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "TxAdd: 0 (public)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Channel index",
+      "value": "7",
+      "source": "BLE_Spec.pdf",
+      "raw": "Channel index: 7",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PDU header",
+      "value": "1110",
+      "source": "BLE_Spec.pdf",
+      "raw": "PDU header: 1110 0 1 0 0 00001000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Extended header length",
+      "value": "010100",
+      "source": "BLE_Spec.pdf",
+      "raw": "Extended header length: 010100",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "AdvMode",
+      "value": "10",
+      "source": "BLE_Spec.pdf",
+      "raw": "AdvMode: 10",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Flags",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Flags: 1 0 0 1 0 0 1 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "AdvA",
+      "value": "01110101",
+      "source": "BLE_Spec.pdf",
+      "raw": "AdvA: 01110101 10110101 00110101 11010101 01010101 10010101",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "ADI",
+      "value": "001111010101",
+      "source": "BLE_Spec.pdf",
+      "raw": "ADI: 001111010101 0111",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "TxPower",
+      "value": "01101011",
+      "source": "BLE_Spec.pdf",
+      "raw": "TxPower: 01101011",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "AdvData",
+      "value": "10100000",
+      "source": "BLE_Spec.pdf",
+      "raw": "AdvData: 10100000 11100000 10010000 11010000 10110000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PDU",
+      "value": "11100100",
+      "source": "BLE_Spec.pdf",
+      "raw": "PDU: 11100100 00001000 01010010 10010010 01110101 10110101 00110101",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "CRC",
+      "value": "00011011",
+      "source": "BLE_Spec.pdf",
+      "raw": "CRC: 00011011 11000100 01110101",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "NESN",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "NESN: 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "SN",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "SN: 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PDU header",
+      "value": "01",
+      "source": "BLE_Spec.pdf",
+      "raw": "PDU header: 01 1 0 1 0 00 10100000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PDU",
+      "value": "01101000",
+      "source": "BLE_Spec.pdf",
+      "raw": "PDU: 01101000 10100000 10000000 01000000 11000000 00100000 10100000",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "CRC",
+      "value": "10100010",
+      "source": "BLE_Spec.pdf",
+      "raw": "CRC: 10100010 00001011 01001011",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "NESN",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "NESN: 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "SN",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "SN: 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PDU header",
+      "value": "11",
+      "source": "BLE_Spec.pdf",
+      "raw": "PDU header: 11 0 1 1 1 00 00010000 10100 0 01",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PDU",
+      "value": "11011100",
+      "source": "BLE_Spec.pdf",
+      "raw": "PDU: 11011100 00010000 10100001 10000000 11011011 11111111 11111111",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "CRC",
+      "value": "10011100",
+      "source": "BLE_Spec.pdf",
+      "raw": "CRC:    10011100 01000111 00101001",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Response",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Response: 1                                                                        Size: 14 bits",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "RB",
+      "value": "2.5",
+      "source": "BLE_Spec.pdf",
+      "raw": "RB=2.5 kΩ",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/BLE_Spec.pdf": []
+  },
+  "class_path": "digital_cmd_driven",
+  "analog_digital_interface_present": true,
+  "signaling_summary": "Bluetooth Low Energy 5.2 is a wireless 2.4 GHz radio protocol. The analog/RF parameters specified by Vol 6 Part A include: GFSK modulation with bandwidth-time product BT = 0.5; modulation index 0.45..0.55 (LE 1M / LE Coded), 0.45..0.55 (LE 2M with stable modulation index = 0.495..0.505 if SMI feature bit set); 40 RF channels each 2 MHz wide spanning 2.4000-2.4835 GHz; symbol rate 1 Msym/s (LE 1M, LE Coded) or 2 Msym/s (LE 2M); maximum transmit power +20 dBm (Class 1) / +10 dBm (Class 1.5) / +4 dBm (Class 2) / 0 dBm (Class 3); minimum receiver sensitivity ≤ -70 dBm at LE 1M, ≤ -75 dBm at LE 2M, ≤ -75 dBm at LE Coded S=2, ≤ -82 dBm at LE Coded S=8; frequency accuracy ≤ ±50 ppm over voltage / temperature; symbol timing accuracy ≤ ±50 ppm; in-band blocking, image rejection, and out-of-band blocking masks defined in Section 4 of Vol 6 Part A.",
+  "voltage_classes_of_devices": [
+    "Low-power bus-powered: ≤ 100 mA from VBUS (powered before configuration)",
+    "High-power bus-powered: ≤ 100 mA before configuration; up to 500 mA after configuration",
+    "Self-powered: draws power from local supply; ≤ 100 mA from VBUS at power-on for enumeration",
+    "Suspended: ≤ 500 µA per device from VBUS"
+  ],
+  "high_speed_chirp_handshake": "After USB Reset: device may chirp K-state (driver current source) for 1..7 ms; if hub/host responds with chirp K-J-K-J-K-J sequence, the connection negotiates HS mode.",
+  "driver_specifications": {
+    "min_differential_output_loaded": "1.5 V across a 54-ohm test load (two 120-ohm terminations in parallel + 32 unit loads).",
+    "supply": "Single +5 V (most common); 3.3 V variants also widely available.",
+    "test_load": "54 ohm differential (matches worst-case bus loading per spec).",
+    "rise_time_examples_from_TI": [
+      {
+        "part": "SN65HVD12",
+        "rise_time_ns": 100,
+        "signal_rate_kbps": 1000,
+        "max_stub_ft": 7
+      },
+      {
+        "part": "SN65LBC184",
+        "rise_time_ns": 250,
+        "signal_rate_kbps": 250,
+        "max_stub_ft": 19
+      },
+      {
+        "part": "SN65HVD3082E",
+        "rise_time_ns": 500,
+        "signal_rate_kbps": 200,
+        "max_stub_ft": 38
+      }
+    ],
+    "short_circuit_protection": "Required by all compliant drivers; current-limited to prevent damage on bus contention."
+  },
+  "receiver_specifications": {
+    "min_differential_input_sensitivity": "±200 mV across the entire common-mode range.",
+    "common_mode_range": "-7 V to +12 V referenced to receiver ground.",
+    "input_impedance_one_unit_load": "approximately 12 kohm (defines '1 UL').",
+    "fractional_unit_loads": "1/2, 1/4, 1/8 UL devices commonly available — 1/8 UL allows 256 transceivers per bus.",
+    "input_hysteresis": "Manufacturer-defined; small hysteresis prevents noise-induced output chatter near the ±200 mV threshold.",
+    "failsafe": "Modern transceivers integrate open-circuit, short-circuit, and idle-bus failsafe biasing that drives R to a determined HIGH state when V_AB is near zero or the bus is undriven."
+  },
+  "noise_margins": {
+    "transmitter_margin_per_spec": "1.5 V driver minus 200 mV receiver threshold = 1.3 V differential noise margin in normal operation.",
+    "internal_failsafe_worst_case_margin": "approximately 10 mV (drawback of integrated failsafe alone in noisy environments).",
+    "external_failsafe_target_VAB": "200 mV + V_noise to restore robust margin in noisy environments."
+  },
+  "common_mode_range_engineering": {
+    "specified_range_v": [
+      -7,
+      12
+    ],
+    "ground_potential_difference_mitigation": "Use digital isolators + isolated DC/DC across the transceiver supply and signal lines when GPD may approach or exceed ±7 V."
+  },
+  "failsafe_external_biasing": {
+    "purpose": "Generate sufficient differential bus voltage V_AB so that V_AB ≥ 200 mV + V_noise on an idle bus.",
+    "formula_RB": "R_B = V_BUS_min / [V_AB × (1 / 375 + 4 / Z0)]  (eq. 2 in SLLA272D)",
+    "worked_example_5V_supply": "V_BUS_min = 4.75 V (5 V - 5 %); V_AB target = 0.25 V; Z0 = 120 ohm → R_B ≈ 528 ohm. Insert two ~523 ohm resistors in series with the termination R_T to form the divider.",
+    "topology": "Two pull resistors RB at each end of the bus: one from line A to +V_BUS (pull-up), one from line B to GND (pull-down)."
+  },
+  "esd_protection_examples": "Modern TI RS-485 transceivers integrate ESD protection from 16 kV to 30 kV (IEC 61000-4-2 / HBM).",
+  "rf_parameters_summary": {
+    "frequency_band_low_MHz": 2400.0,
+    "frequency_band_high_MHz": 2483.5,
+    "channel_count": 40,
+    "channel_spacing_MHz": 2.0,
+    "channel_0_center_MHz": 2402.0,
+    "channel_36_center_MHz": 2478.0,
+    "primary_adv_channel_37_MHz": 2402,
+    "primary_adv_channel_38_MHz": 2426,
+    "primary_adv_channel_39_MHz": 2480,
+    "symbol_rate_1M_Msym_s": 1.0,
+    "symbol_rate_2M_Msym_s": 2.0,
+    "modulation": "GFSK, BT=0.5",
+    "modulation_index_min": 0.45,
+    "modulation_index_max": 0.55,
+    "frequency_tolerance_ppm": 50,
+    "symbol_timing_tolerance_ppm": 50
+  },
+  "tx_power_classes": [
+    {
+      "class": "Class 1",
+      "max_tx_dBm": 20,
+      "min_tx_dBm": -20,
+      "use_case": "Long-range, high-power applications; +20 dBm only on LE Coded with regulatory compliance."
+    },
+    {
+      "class": "Class 1.5",
+      "max_tx_dBm": 10,
+      "min_tx_dBm": -20,
+      "use_case": "Mid-range power; common in BLE 5 LE Coded use."
+    },
+    {
+      "class": "Class 2",
+      "max_tx_dBm": 4,
+      "min_tx_dBm": -20,
+      "use_case": "Mid-power consumer (smartphones, BLE peripherals)."
+    },
+    {
+      "class": "Class 3",
+      "max_tx_dBm": 0,
+      "min_tx_dBm": -20,
+      "use_case": "Low-power coin-cell devices."
+    }
+  ],
+  "receiver_sensitivity": [
+    {
+      "PHY": "LE 1M",
+      "max_sensitivity_dBm": -70,
+      "BER_pct_target": 0.1,
+      "notes": "30.7% packet error rate at -70 dBm with 37-byte payload."
+    },
+    {
+      "PHY": "LE 2M",
+      "max_sensitivity_dBm": -70,
+      "BER_pct_target": 0.1,
+      "notes": "Same PER target as 1M; lower sensitivity due to higher bandwidth."
+    },
+    {
+      "PHY": "LE Coded S=2",
+      "max_sensitivity_dBm": -75,
+      "BER_pct_target": 0.1,
+      "notes": "FEC + interleaver improve sensitivity ~5 dB over LE 1M."
+    },
+    {
+      "PHY": "LE Coded S=8",
+      "max_sensitivity_dBm": -82,
+      "BER_pct_target": 0.1,
+      "notes": "Up to 12 dB improvement over LE 1M — ~4x range."
+    }
+  ],
+  "voltage_classes": [
+    "VDD_RADIO  — typically 1.8 V or 3.3 V; per-controller-vendor",
+    "VDD_DIGITAL — typically 0.9-1.2 V core supply",
+    "VDD_IO     — 1.8 V / 3.3 V I/O ring",
+    "Coin-cell battery operation common (CR2032 nominal 3.0 V) for low-power Peripherals",
+    "Energy harvesting (NFC / solar / piezo) supported in LE 5.2 LE Audio Hearing Access scenarios"
+  ],
+  "rssi_path_loss_5_2": "BLE 5.2 LE Power Control + Path Loss Monitoring exchange RSSI estimates over LL_POWER_CONTROL_REQ / LL_POWER_CONTROL_RSP / LL_POWER_CHANGE_IND, allowing TX-power adjustment per remote-peer feedback. Path-Loss thresholds (HIGH / MIDDLE / LOW) can be set per zone; controller raises a Path Loss Threshold Event when crossing a zone."
+}

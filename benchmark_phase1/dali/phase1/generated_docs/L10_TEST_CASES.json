@@ -1,0 +1,43 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_cases",
+  "ic_name": "DALI (Digital Addressable Lighting Interface, IEC 62386 via TI SLAA422A)",
+  "no_test_cases_in_input": false,
+  "bring_up_sequence": [
+    {
+      "step": 1,
+      "description": "Timer_A3 Module Example",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/DALI_Spec.pdf"
+    }
+  ],
+  "no_bring_up_sequence_in_input": false,
+  "extraction_evidence": {
+    "derived_from_L3": [
+      {
+        "literal": "0x10 DALI",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x12 DALI",
+        "label": "opcode → happy + negative test-cases"
+      }
+    ]
+  },
+  "class_path": "digital_cmd_driven",
+  "test_cases_present": "partial - SLAA422A provides reference firmware and demonstrates a working DALI control gear on the TPS62260LED-338 EVM, but does not publish a formal IEC 62386-102 conformance testbench. The test cases below are derived from the protocol description (Section 1 of SLAA422A), the supported command set (Tables 3-5), the unsupported set (Table 4), and the per-state-figure of the gear's transaction loop.",
+  "derived_compliance_test_categories": [
+    "Reset behavior: enable bit cleared; transmit-empty flag set; receive-flag cleared after reset.",
+    "Master mode transmission: write to data register + clock-cycle delay + N edges + receive-flag set.",
+    "Slave mode transmission: select line goes LOW + N edges from master + receive-flag set after last edge.",
+    "Mode fault / collision detection.",
+    "All clock polarity/phase combinations.",
+    "MSB-first vs LSB-first byte ordering.",
+    "Bidirectional mode (single data pin).",
+    "Receive overrun (flag-serviced-too-late).",
+    "Baud rate divisor sweep.",
+    "Wait/Stop mode behavior."
+  ]
+}

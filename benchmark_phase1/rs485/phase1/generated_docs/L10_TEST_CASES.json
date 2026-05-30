@@ -1,0 +1,30 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_cases",
+  "ic_name": "TIA/EIA-485 (RS-485 via TI SLLA272C Design Guide)",
+  "no_test_cases_in_input": false,
+  "bring_up_sequence": [],
+  "no_bring_up_sequence_in_input": true,
+  "extraction_evidence": {
+    "derived_from_L3": [
+      {
+        "literal": "0x32 ULSTANDARD",
+        "label": "opcode → happy + negative test-cases"
+      }
+    ]
+  },
+  "class_path": "digital_cmd_driven",
+  "test_cases_present": "partial - the spec is electrical-only and describes conformance points (driver / receiver minimums, common-mode range, termination, stub length, failsafe) but does not provide a formal testbench.",
+  "derived_compliance_test_categories": [
+    "Reset behavior: enable bit cleared; transmit-empty flag set; receive-flag cleared after reset.",
+    "Master mode transmission: write to data register + clock-cycle delay + N edges + receive-flag set.",
+    "Slave mode transmission: select line goes LOW + N edges from master + receive-flag set after last edge.",
+    "Mode fault / collision detection.",
+    "All clock polarity/phase combinations.",
+    "MSB-first vs LSB-first byte ordering.",
+    "Bidirectional mode (single data pin).",
+    "Receive overrun (flag-serviced-too-late).",
+    "Baud rate divisor sweep.",
+    "Wait/Stop mode behavior."
+  ]
+}

@@ -1,0 +1,280 @@
+{
+  "fields": {
+    "channels": [
+      {
+        "name": "TXp",
+        "direction": "output (per Lane, per direction)",
+        "purpose": "Positive line of the differential transmit pair.",
+        "active_levels": "AC-coupled, 0.8 V differential pp typical, 0.5 V common mode, 8b/10b encoded at 2.5 Gb/s Gen 1",
+        "idle_level": "Electrical Idle when LTSSM not in L0 or L0s"
+      },
+      {
+        "name": "TXn",
+        "direction": "output (per Lane, per direction)",
+        "purpose": "Negative line of the differential transmit pair.",
+        "active_levels": "AC-coupled, 0.8 V differential pp typical",
+        "idle_level": "Electrical Idle"
+      },
+      {
+        "name": "RXp",
+        "direction": "input  (per Lane, per direction)",
+        "purpose": "Positive line of the differential receive pair.",
+        "active_levels": "AC-coupled, 0.175 V differential pp min after channel loss",
+        "idle_level": "Electrical Idle detect"
+      },
+      {
+        "name": "RXn",
+        "direction": "input  (per Lane, per direction)",
+        "purpose": "Negative line of the differential receive pair.",
+        "active_levels": "AC-coupled, 0.175 V differential pp min",
+        "idle_level": "Electrical Idle detect"
+      },
+      {
+        "name": "REFCLK+",
+        "direction": "input (per component)",
+        "purpose": "Positive line of 100 MHz reference clock differential pair; SSC-tolerant; common or separate clock topology.",
+        "active_levels": "100 MHz HCSL or similar differential",
+        "idle_level": "n/a; always driven"
+      },
+      {
+        "name": "REFCLK-",
+        "direction": "input (per component)",
+        "purpose": "Negative line of 100 MHz reference clock differential pair.",
+        "active_levels": "100 MHz",
+        "idle_level": "n/a; always driven"
+      },
+      {
+        "name": "PERST#",
+        "direction": "input (per component)",
+        "purpose": "Fundamental Reset; active LOW; asserted while main power is unstable.",
+        "active_levels": "Single-ended LVTTL / LVCMOS, active LOW",
+        "idle_level": "Deasserted HIGH for normal operation"
+      },
+      {
+        "name": "WAKE#",
+        "direction": "open-drain (system-level)",
+        "purpose": "Pulled LOW by any device that wants to resume from L2 / L3.",
+        "active_levels": "Open-drain, active LOW",
+        "idle_level": "Released (pulled HIGH by system pull-up)"
+      }
+    ],
+    "global_signals": [
+      {
+        "name": "REFCLK",
+        "purpose": "100 MHz reference clock for all components in a Common Clock domain."
+      },
+      {
+        "name": "PERST#",
+        "purpose": "Fundamental reset distributed to every component."
+      },
+      {
+        "name": "WAKE#",
+        "purpose": "Open-drain wakeup signal; any device can assert to wake the system from L2/L3."
+      }
+    ],
+    "channel_counts": {
+      "differential_pairs_half_duplex": 1,
+      "differential_pairs_full_duplex": 2,
+      "wires_bus_half_duplex": 2,
+      "wires_bus_full_duplex": 4,
+      "wires_host_per_transceiver": 4,
+      "wires_supply_per_transceiver": 2,
+      "wires_total_minimum_half_duplex_8pin_xcvr": 8
+    },
+    "handshake_pairs": [
+      {
+        "name": "DE-to-D",
+        "from": "host MCU",
+        "to": "transceiver",
+        "rule": "Software asserts DE before clocking the first start bit into D; deasserts DE after the last stop bit + tHOLD."
+      },
+      {
+        "name": "RE#-to-R",
+        "from": "host MCU",
+        "to": "transceiver",
+        "rule": "Software keeps RE# = LOW during receive windows so the host UART sees the bus."
+      },
+      {
+        "name": "Driver-arbitration",
+        "from": "software",
+        "to": "all nodes",
+        "rule": "Application protocol (Modbus master / token / TDM) enforces exclusive DE = HIGH on one node at a time."
+      }
+    ],
+    "dependency_graph": {
+      "common_rule": "Single shared differential bus; all nodes monitor V_AB simultaneously; only one driver may be enabled at a time on half-duplex.",
+      "data_dependency": "Receiver R reflects current V_AB only when RE# = LOW; D drives V_AB only when DE = HIGH.",
+      "failsafe_dependency": "Idle V_AB is held > +200 mV by external R_B divider or by integrated transceiver failsafe biasing."
+    },
+    "logical_signaling_levels": [
+      {
+        "name": "Active TX symbol stream",
+        "meaning": "Continuously driven differential signaling carrying 8b/10b-encoded TLP / DLLP / Idle / Ordered-Set data."
+      },
+      {
+        "name": "Electrical Idle",
+        "meaning": "Transmitter outputs no symbol stream; differential output is undriven (or held at common mode)."
+      },
+      {
+        "name": "Beacon",
+        "meaning": "30 kHz to 500 MHz modulated pulses on the differential pair used to wake the Link from L2 when REFCLK is off."
+      }
+    ],
+    "packet_types_summary": [
+      {
+        "class": "TLP",
+        "members": [
+          "MRd",
+          "MRdLk",
+          "MWr",
+          "IORd",
+          "IOWr",
+          "CfgRd0",
+          "CfgWr0",
+          "CfgRd1",
+          "CfgWr1",
+          "Msg",
+          "MsgD",
+          "Cpl",
+          "CplD",
+          "CplLk",
+          "CplDLk"
+        ],
+        "count": 15
+      },
+      {
+        "class": "DLLP",
+        "members": [
+          "Ack",
+          "Nak",
+          "InitFC1",
+          "InitFC2",
+          "UpdateFC",
+          "PM_Enter_L1",
+          "PM_Enter_L23",
+          "PM_Active_State_Request_L1",
+          "PM_Request_Ack",
+          "Vendor Specific"
+        ],
+        "count": 10
+      }
+    ],
+    "ordering_rules": {
+      "bit_order_within_byte": "Byte is 8b/10b-encoded then transmitted LSB of the 10-bit symbol first on the wire (per Figure 4-3, Bit Transmission Order on Physical Lanes).",
+      "byte_order_within_field": "Little-endian for multi-byte fields within TLP headers (matches PCI convention).",
+      "lane_striping": "Multi-Lane Links stripe successive bytes round-robin starting at Lane 0; STP/SDP MUST land on Lane 0.",
+      "tx_rx_simultaneity": "Dual-simplex: TX and RX directions transmit independently and simultaneously."
+    },
+    "channels_bus_side_2_wire": [
+      {
+        "name": "A (non-inverting)",
+        "direction": "bidirectional (active-driver / tri-state)",
+        "purpose": "Non-inverting differential bus line; when transmitting mark, A is the more positive line of the pair.",
+        "active_levels": "V_A - V_B > +200 mV at receiver → mark; V_A - V_B < -200 mV → space"
+      },
+      {
+        "name": "B (inverting)",
+        "direction": "bidirectional (active-driver / tri-state)",
+        "purpose": "Inverting differential bus line; complementary to A.",
+        "active_levels": "see V_AB rule above"
+      }
+    ],
+    "channels_bus_side_4_wire_full_duplex_optional": [
+      {
+        "name": "Y (TX +)",
+        "direction": "output (master) / input (slave)",
+        "purpose": "Non-inverting master-to-slaves transmit pair."
+      },
+      {
+        "name": "Z (TX -)",
+        "direction": "output (master) / input (slave)",
+        "purpose": "Inverting master-to-slaves transmit pair."
+      },
+      {
+        "name": "A (RX +)",
+        "direction": "input (master) / output (slave)",
+        "purpose": "Non-inverting slave-to-master return pair."
+      },
+      {
+        "name": "B (RX -)",
+        "direction": "input (master) / output (slave)",
+        "purpose": "Inverting slave-to-master return pair."
+      }
+    ],
+    "channels_host_side": [
+      {
+        "name": "D / DI",
+        "direction": "input",
+        "purpose": "Driver input from host UART TX; logic level."
+      },
+      {
+        "name": "DE",
+        "direction": "input",
+        "purpose": "Driver Enable (active HIGH); when LOW, driver tri-stated."
+      },
+      {
+        "name": "RE# (RE)",
+        "direction": "input",
+        "purpose": "Receiver Enable (active LOW); when HIGH, receiver output tri-stated."
+      },
+      {
+        "name": "R / RO",
+        "direction": "output",
+        "purpose": "Receiver output to host UART RX; logic level."
+      }
+    ],
+    "channels_supply": [
+      {
+        "name": "VCC",
+        "direction": "supply",
+        "purpose": "Transceiver supply (typically 5 V or 3.3 V)."
+      },
+      {
+        "name": "GND",
+        "direction": "supply",
+        "purpose": "Ground reference."
+      }
+    ],
+    "logical_signal_states": [
+      {
+        "name": "mark / idle / logical 1",
+        "value": "V_AB > +200 mV; receiver R = HIGH"
+      },
+      {
+        "name": "space / logical 0",
+        "value": "V_AB < -200 mV; receiver R = LOW"
+      },
+      {
+        "name": "loss-of-signal (LOS)",
+        "value": "|V_AB| < 200 mV; receiver R indeterminate unless failsafe-biased"
+      }
+    ],
+    "bus_field_segments": [
+      {
+        "name": "ACTIVE_BIT_DOMINANT_TIME",
+        "type": "data bit",
+        "form": "1 bit time (= 1 / data rate)"
+      },
+      {
+        "name": "RISE_FALL_REGION",
+        "type": "transition",
+        "form": "tr ns (transceiver-specific)"
+      },
+      {
+        "name": "IDLE_BIASED",
+        "type": "interframe",
+        "form": "Driver tri-stated; failsafe holds V_AB > +200 mV"
+      },
+      {
+        "name": "DE_GUARD_BAND",
+        "type": "interframe gap",
+        "form": "Software-controlled blank time between DE deassert and DE reassert"
+      }
+    ]
+  },
+  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "schema_version": "v0.1.62",
+  "doc_class": "L17",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l17_channels v0.1.62",
+  "extraction_evidence": {}
+}
