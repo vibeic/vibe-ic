@@ -236,6 +236,19 @@ def _check_l_doc(layer: int, data: dict,
         return True, ""
     if escapes.get("no_timing_classification") and layer == 8:
         return True, ""
+    # v0.1.88 — L11 (behavioral_sequences + calibration_tables) is N/A when the
+    # IC genuinely has NO source for any of them: no command protocol (so no
+    # host→device command sequences), no OTP image, and no calibration. A
+    # reused-IP CPU SoC (e.g. a RISC-V core whose behavior is firmware-defined,
+    # not a chip command protocol; no fuses; no analog trim) meets all three.
+    # Honest, narrow N/A — only when the doc itself asserts otp_present=False AND
+    # the no_command_protocol escape is set AND no calibration content exists.
+    if layer == 11 and escapes.get("no_command_protocol") \
+            and data.get("otp_present") is False:
+        _cal = (data.get("calibration_tables") or data.get("calibration")
+                or data.get("tables"))
+        if not (_list_len_of_dicts(_cal) or (isinstance(_cal, dict) and _cal)):
+            return True, ""
     typed = _count_typed_fields(data)
     # Wave 35 (v0.119.67) — for layers L1 / L2 / L4 / L7 / L10 /
     # L11 / L13 that fail the simple typed-field count, also expand

@@ -70,3 +70,33 @@ def test_l4_gate_honors_register_map_present_false():
 def test_l4_gate_still_fails_without_flag():
     ok, _ = G._check_l_doc(4, {"registers": []})
     assert ok is False
+
+
+# ---- v0.1.88 — L11 genuine-N/A for reused-IP CPU SoC --------------------------
+def test_l11_na_when_no_command_no_otp_no_cal():
+    # reused-IP CPU SoC: no command protocol + otp_present False + no cal → N/A
+    ok, _ = G._check_l_doc(11, {"otp_present": False, "behavioral_sequences": []},
+                           {"no_command_protocol": True}, "digital_arithmetic_primitive")
+    assert ok is True
+
+
+def test_l11_still_required_for_otp_chip():
+    # otp_present True → L11 still demanded even with no_command_protocol
+    ok, _ = G._check_l_doc(11, {"otp_present": True, "behavioral_sequences": []},
+                           {"no_command_protocol": True}, "digital_arithmetic_primitive")
+    assert ok is False
+
+
+def test_l11_still_required_without_escape():
+    # no no_command_protocol escape → L11 still demanded
+    ok, _ = G._check_l_doc(11, {"otp_present": False, "behavioral_sequences": []},
+                           {}, "digital_arithmetic_primitive")
+    assert ok is False
+
+
+def test_l11_na_blocked_when_calibration_present():
+    ok, _ = G._check_l_doc(11, {"otp_present": False,
+                                "calibration_tables": [{"k": 1}]},
+                           {"no_command_protocol": True}, "digital_arithmetic_primitive")
+    # calibration present → N/A short-circuit must NOT fire; 1 cal entry < 3 → FAIL.
+    assert ok is False
