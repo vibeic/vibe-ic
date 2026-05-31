@@ -5464,11 +5464,46 @@ exit
 # report itself states that manual sign-off remains).
 # ===========================================================================
 
-# sky130 ESD / protection-diode cell-name hints (chip-AGNOSTIC substrings —
-# matched case-insensitively against the master name in DEF COMPONENTS).
-_ESD_CELL_HINTS = ("diode", "_esd", "ggnmos", "ggnmof", "antenna")
-# Pad / IO cell-name hints. A "pad ring" is the set of these instances.
-_PAD_CELL_HINTS = ("pad", "_io", "gpio", "bondpad", "padframe", "_pdio")
+# ESD / pad-ring cell-name classification (chip-AGNOSTIC substrings, matched
+# case-insensitively against the DEF COMPONENTS master name). The token sets were
+# vetted by a 3-lens design panel + 3 adversarial critics against the real sky130
+# IO library (2026-06) and validated on the Caravel chip_io.def pad ring.
+#
+# KEY FACT: in sky130 the ESD network is INTEGRAL to the IO pad/clamp cell — there
+# is NO separate antenna-diode acting as the chip-pad ESD. "hvc" (high-voltage
+# clamp) AND "lvc" (low-voltage clamp) BOTH denote a clamp = ESD-bearing; every
+# `clamped*` variant, `gpiov2`, `analog_esd`, the `*clamp*` primitives, and the
+# reset/special-IO pads (`xres`, `sio`) carry integral ESD. The legacy hint set
+# `("diode","_esd","ggnmos","ggnmof","antenna")` detected only a SEPARATE discrete
+# cell and therefore returned a FALSE "ESD missing" on a real, fully-protected ring.
+_ESD_CELL_HINTS = (
+    "gpiov2", "_hvc", "_lvc", "hvclamp", "lvclamp", "clamp", "clamped",
+    "analog_esd", "_esd_pad", "_esd", "hvc_wpad", "lvc_wpad",
+    "xres", "_sio", "gnd2gnd", "clmp",            # more sky130_fd_io ESD-bearing pads
+    "diode", "ggnmos", "ggnmof", "antenna",        # discrete ESD cells (other PDKs)
+)
+# Explicit NON-ESD / ESD-DISABLED hints — tested BEFORE the ESD scan so a negation
+# ("noesd"/"unclamped") or a raw pad is never mis-flagged ESD-bearing (the single
+# highest-risk inversion: a naive "_esd" scan flags analog_noesd_pad as protected).
+_ESD_NEGATION_HINTS = (
+    "noesd", "no_esd", "unclamp", "noclamp", "declamp", "esd_disabled",
+    "bare_pad", "analog_noesd",
+)
+# Structural ring fillers (corners / common-bus slices / connect-disconnect tiles)
+# — NOT signal pads; excluded from the signal-pad denominator. Reached only AFTER
+# the ESD scan, so a real ESD cell named with 'corner'/'slice' is classed ESD first.
+_STRUCTURAL_PAD_HINTS = (
+    "corner_pad", "com_bus_slice", "_slice_", "connect_", "disconnect_",
+    "constant_block",
+)
+# IO-family hints — what marks a cell as part of an I/O pad ring at all (vs a core
+# std cell / internal macro). Core-macro N/A keys off the ABSENCE of these.
+_IO_FAMILY_HINTS = (
+    "_pad", "_io", "gpio", "bondpad", "padframe", "_pdio", "wpad",
+    "hvclamp", "lvclamp", "_hvc", "_lvc", "gpiov2", "xres", "_sio", "gnd2gnd",
+)
+# Back-compat alias (older references): a pad-ring cell is IO-family or structural.
+_PAD_CELL_HINTS = _IO_FAMILY_HINTS
 
 _DEF_COMPONENT_RE = re.compile(
     r"^\s*-\s+(\S+)\s+(\S+)", re.MULTILINE)
@@ -5497,58 +5532,99 @@ def _parse_def_components(def_file: Path) -> List[Tuple[str, str]]:
     return out
 
 
+def _classify_io_cell(master: str) -> str:
+    """Classify ONE DEF master into an IO-pad-ring role (pure, chip-AGNOSTIC).
+
+    Returns one of: 'esd_pad' (IO pad/clamp with integral ESD), 'nonesd_pad'
+    (IO pad with NO clamp — bare/noesd/plain-analog), 'structural' (corner /
+    common-bus slice / connect-disconnect filler — not a signal pad), or 'other'
+    (core std cell / internal macro — not part of any pad ring).
+
+    Strict token ORDER (vetted by design panel + adversarial critics): IO-family
+    gate → negation/disable → ESD → structural → default IO pad. The order is
+    load-bearing: negation BEFORE esd stops `analog_noesd_pad` being read as ESD;
+    esd BEFORE structural stops `gpiov2_corner_pad` / `esd_clamp_slice` being
+    swallowed by the broad 'corner'/'_slice_' structural tokens."""
+    n = master.lower()
+    if not (any(t in n for t in _IO_FAMILY_HINTS)
+            or any(t in n for t in _STRUCTURAL_PAD_HINTS)):
+        return "other"                                    # core std cell / macro
+    if any(t in n for t in _ESD_NEGATION_HINTS):
+        return "nonesd_pad"                               # explicit non-ESD / disabled
+    if any(t in n for t in _ESD_CELL_HINTS):
+        return "esd_pad"                                  # integral clamp / discrete ESD
+    if any(t in n for t in _STRUCTURAL_PAD_HINTS):
+        return "structural"                               # corner / bus-slice filler
+    return "nonesd_pad"                                   # IO pad, no clamp token
+
+
 def _esd_pad_ring_presence(components: List[Tuple[str, str]]) -> Dict[str, Any]:
     """ESD pad-ring presence check (deterministic, pure).
 
-    Given parsed DEF COMPONENTS [(inst, master), ...], find pad/IO cells and
-    check whether an ESD/diode protection cell is also present in the design.
-    chip-AGNOSTIC — matches only generic name substrings (_ESD_CELL_HINTS /
-    _PAD_CELL_HINTS), never design-specific names.
+    Given parsed DEF COMPONENTS [(inst, master), ...], classify the IO-ring cells
+    and decide ESD presence. chip-AGNOSTIC — matches only generic name substrings,
+    never design-specific names. (Validated on the real Caravel chip_io.def ring.)
 
-    Returns a dict with:
-      status  : "N/A" (no pad ring — core macro)
-              | "MANUAL_REVIEW" (pads present; ESD presence + path to VPWR/VGND
-                                  needs manual confirm)
-      pads    : [pad instance masters found]
-      esd_cells: [esd/diode instance masters found]
-      note    : honest one-line explanation
+    Verdict over the SIGNAL-PAD set (IO pads minus structural fillers):
+      * 0 signal pads                  → status N/A   (core macro — no pad ring)
+      * >=1 signal pad, >=1 ESD-bearing → status MANUAL_REVIEW, esd_presence PRESENT
+      * >=1 signal pad, 0  ESD-bearing → status MANUAL_REVIEW, esd_presence MISSING
 
-    HONESTY: a core-only macro (no pad cells) returns N/A, NOT PASS. When pads
-    ARE present, this is only a *presence* heuristic — confirming the ESD device
-    is a topological neighbour with a real discharge path to VPWR/VGND requires
-    layout+SPICE (commercial PERC), so the status is MANUAL_REVIEW, never PASS."""
-    pads = sorted({m for _i, m in components
-                   if any(h in m.lower() for h in _PAD_CELL_HINTS)})
-    esd_cells = sorted({m for _i, m in components
-                        if any(h in m.lower() for h in _ESD_CELL_HINTS)})
-    if not pads:
-        return {
-            "status": "N/A",
-            "pads": [],
-            "esd_cells": esd_cells,
-            "pad_count": 0,
-            "esd_count": len(esd_cells),
-            "note": ("N/A (no pad ring — core macro). ESD protection is the "
-                     "responsibility of the top-level pad frame; a core-only "
-                     "macro has no chip pads to protect."),
-        }
-    return {
-        "status": "MANUAL_REVIEW",
-        "pads": pads,
+    HONESTY: a core-only macro returns N/A, NOT PASS. When pads are present, this
+    proves ESD CELLS exist (or are absent) — it does NOT prove every pad has a
+    complete primary+secondary discharge path to a correctly-stitched clamp rail;
+    that needs layout+SPICE (commercial PERC). So the status stays MANUAL_REVIEW,
+    never auto-PASS; `esd_presence` reports the accurate presence sub-result."""
+    esd_pads, nonesd_pads, structural = [], [], []
+    for _i, m in components:
+        role = _classify_io_cell(m)
+        if role == "esd_pad":
+            esd_pads.append(m)
+        elif role == "nonesd_pad":
+            nonesd_pads.append(m)
+        elif role == "structural":
+            structural.append(m)
+    signal_pads = sorted(set(esd_pads) | set(nonesd_pads))
+    esd_cells = sorted(set(esd_pads))
+    base = {
+        "pads": signal_pads,
         "esd_cells": esd_cells,
-        "pad_count": len(pads),
+        "pad_count": len(signal_pads),
         "esd_count": len(esd_cells),
-        "note": (
-            f"{len(pads)} pad/IO master(s) present; "
-            f"{len(esd_cells)} ESD/diode master(s) detected (presence-only "
-            "heuristic). MANUAL confirm required: every pad has an ESD "
-            "diode/ggNMOS neighbour with a discharge path to VPWR/VGND "
-            "(layout+SPICE topology — commercial PERC)."
-            if esd_cells else
-            f"{len(pads)} pad/IO master(s) present but NO ESD/diode cell "
-            "detected. MANUAL review required — confirm the pad frame carries "
-            "ESD protection (this presence check found none)."),
+        "structural_count": len(set(structural)),
     }
+    if not signal_pads:
+        base.update({
+            "status": "N/A",
+            "esd_presence": "N/A",
+            "note": ("N/A (no pad ring — core macro). ESD protection is the "
+                     "top-level pad frame's responsibility; a core-only macro "
+                     "has no chip pads to protect. "
+                     f"({len(set(structural))} structural ring filler(s) seen.)"),
+        })
+        return base
+    if esd_cells:
+        base.update({
+            "status": "MANUAL_REVIEW",
+            "esd_presence": "PRESENT",
+            "note": (
+                f"{len(signal_pads)} signal/power pad master(s); "
+                f"{len(esd_cells)} carry integral ESD (clamp/gpiov2/hvc/lvc/esd). "
+                "ESD cells ARE present — MANUAL confirm still required: every pad "
+                "has a complete primary+secondary discharge path to a correctly "
+                "stitched clamp rail (layout+SPICE topology — commercial PERC)."),
+        })
+        return base
+    base.update({
+        "status": "MANUAL_REVIEW",
+        "esd_presence": "MISSING",
+        "note": (
+            f"{len(signal_pads)} signal/power pad master(s) but 0 carry an "
+            "integral ESD clamp (only bare/noesd/plain-analog pads detected). "
+            "Likely ESD GAP — MANUAL review required to confirm the pad frame "
+            "provides ESD protection (this presence check found none)."),
+    })
+    return base
 
 
 def _read_verdict(json_path: Path) -> Optional[str]:

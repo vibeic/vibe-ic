@@ -533,20 +533,69 @@ class TestEsdPadRingPresence:
         assert "core macro" in r["note"]
 
     def test_padring_with_esd_is_manual_review(self):
-        comps = [("pad_io_0", "sky130_fd_io__gpiov2"),
+        comps = [("pad_io_0", "sky130_ef_io__gpiov2_pad"),
                  ("esd_0", "sky130_fd_io__top_xres4v2"),
                  ("diode_0", "sky130_fd_sc_hd__diode_2")]
         r = runner._esd_pad_ring_presence(comps)
         assert r["status"] == "MANUAL_REVIEW"   # never auto-PASS
+        assert r["esd_presence"] == "PRESENT"
         assert r["pad_count"] >= 1
         assert r["esd_count"] >= 1
 
-    def test_padring_without_esd_still_manual_not_fail(self):
-        comps = [("pad_io_0", "sky130_fd_io__gpiov2")]
+    def test_padring_without_esd_flags_missing(self):
+        # a ring of ONLY bare/noesd pads → ESD MISSING (real gap), still MANUAL.
+        comps = [("pad_0", "sky130_ef_io__bare_pad"),
+                 ("pad_1", "sky130_ef_io__analog_noesd_pad")]
         r = runner._esd_pad_ring_presence(comps)
         assert r["status"] == "MANUAL_REVIEW"
+        assert r["esd_presence"] == "MISSING"
         assert r["esd_count"] == 0
-        assert "NO ESD" in r["note"] or "found none" in r["note"]
+        assert "GAP" in r["note"] or "found none" in r["note"]
+
+    # ---- real-ring + adversarial edge-case matrix (workflow-vetted 2026-06) ----
+    def test_caravel_chip_io_mix_is_present(self):
+        # gpiov2 + clamped power pads → ESD PRESENT; corner/com_bus = structural.
+        comps = [("a", "sky130_ef_io__gpiov2_pad_wrapped"),
+                 ("b", "sky130_ef_io__vccd_lvc_clamped3_pad"),
+                 ("c", "sky130_ef_io__vdda_hvc_clamped_pad"),
+                 ("d", "sky130_ef_io__vddio_hvc_pad"),
+                 ("e", "sky130_ef_io__corner_pad"),
+                 ("f", "sky130_ef_io__com_bus_slice_10um")]
+        r = runner._esd_pad_ring_presence(comps)
+        assert r["esd_presence"] == "PRESENT"
+        assert r["pad_count"] == 4 and r["esd_count"] == 4   # corner+slice excluded
+        assert r["structural_count"] == 2
+
+    def test_structural_only_ring_is_na(self):
+        comps = [("a", "sky130_ef_io__corner_pad"),
+                 ("b", "sky130_ef_io__com_bus_slice_1um"),
+                 ("c", "sky130_ef_io__com_bus_slice_20um")]
+        r = runner._esd_pad_ring_presence(comps)
+        assert r["status"] == "N/A" and r["pad_count"] == 0
+
+    def test_core_with_antenna_diode_is_na_not_padring(self):
+        # a std-cell antenna diode is NOT a chip pad ring → stays N/A core macro.
+        comps = [("_1_", "sky130_fd_sc_hd__nor3_1"),
+                 ("ant_0", "sky130_fd_sc_hd__diode_2")]
+        r = runner._esd_pad_ring_presence(comps)
+        assert r["status"] == "N/A"
+
+    def test_negation_token_not_false_present(self):
+        # 'unclamped' must NOT be read as ESD-present (the #1 adversarial hazard).
+        comps = [("p0", "vendor_io__unclamped_bare_pad")]
+        r = runner._esd_pad_ring_presence(comps)
+        assert r["esd_presence"] == "MISSING"
+
+    def test_esd_before_structural_gpiov2_corner(self):
+        # 'gpiov2_corner_pad' matches gpiov2 (ESD) BEFORE 'corner' (structural).
+        assert runner._classify_io_cell("sky130_ef_io__gpiov2_corner_pad") == "esd_pad"
+        # bare 'corner_pad' stays structural.
+        assert runner._classify_io_cell("sky130_ef_io__corner_pad") == "structural"
+
+    def test_lvc_and_hvc_both_esd(self):
+        # both low- and high-voltage clamp pads are ESD-bearing.
+        assert runner._classify_io_cell("sky130_ef_io__vccd_lvc_pad") == "esd_pad"
+        assert runner._classify_io_cell("sky130_ef_io__vdda_hvc_pad") == "esd_pad"
 
 
 class TestPercEquivalent:

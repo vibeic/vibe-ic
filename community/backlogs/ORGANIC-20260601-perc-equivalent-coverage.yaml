@@ -90,3 +90,20 @@ session_context: >-
   were already shipped in v0.2.4-2.6 (antenna/IR/EM/floating); v0.2.7 aggregates them into one
   perc_equivalent report + sign-off memo and adds the ESD pad-ring presence check, well-tap
   latch-up checklist, and auto-N/A cross-domain detection — with manual residuals honestly flagged.
+
+hardening_v0_2_8:
+  date: "2026-06-01"
+  what: >-
+    Real-pad-ring validation of the ESD presence sub-check. The v0.2.7 _ESD_CELL_HINTS
+    (diode/_esd/ggnmos/ggnmof/antenna) detected only a SEPARATE discrete ESD cell and gave a FALSE
+    "ESD missing" on a real sky130 ring (where ESD is INTEGRAL to the gpiov2/hvc/lvc/clamped pad
+    cells). A 3-lens design panel + 3 adversarial critics vetted the sky130 IO ESD taxonomy; the
+    hardened _classify_io_cell() uses IO-family gating + negation-before-esd + esd-before-structural
+    ordering. Validated on the real Caravel chip_io.def: was ESD_MISSING / 811 false pads → now
+    esd_presence=PRESENT, 10 signal pads, 10 ESD-bearing, 612 com_bus_slice fillers excluded.
+  adversarial_resolved:
+    - "negation hazard: 'unclamped'/'noclamp'/'declamp' no longer read as ESD-present (MISSING)"
+    - "structural over-match: 'gpiov2_corner_pad'/'esd_clamp_slice' classed ESD before corner/_slice_"
+    - "lvc AND hvc both = clamp = ESD-bearing (sky130 fact)"
+    - "core-macro + std-cell antenna diode stays N/A (diode is not an IO-ring cell)"
+  status: "ESD presence sub-check now real-ring-accurate; status stays MANUAL_REVIEW (per-pad discharge-path topology still needs commercial PERC / LVS-ESD). +6 edge-case tests."

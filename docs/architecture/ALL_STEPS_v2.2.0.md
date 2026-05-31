@@ -72,11 +72,15 @@ Stage map: **0** Spec/Docs (Phase 1) · **1** RTL+Verify · **2** Synthesis+DFT 
 (4) port labels `magic_port_extract_emit` (Route A) / `lvs_def_port_seed` (Route B) →
 (5) **mandatory** `lvs_signoff_guard` (RAISES on a portless/vacuous match).
 
-**Step 32 — PERC-equivalent coverage** (`perc_equivalent.{rpt,json}` + `PERC_SIGNOFF_MEMO.md`, v0.2.7):
+**Step 32 — PERC-equivalent coverage** (`perc_equivalent.{rpt,json}` + `PERC_SIGNOFF_MEMO.md`, v0.2.7-2.8):
 open-source stand-in for commercial Calibre PERC. AUTOMATED: antenna / IR / EM / floating-nets
 (verdicts read from steps 27-30/ERC). GUARDBAND: EM current-density (<0.5 mA/µm) + ≥2×2 vias.
 MANUAL_REVIEW (never auto-PASS, pending checklist): ESD pad-ring presence, latch-up/well-tap,
 cross-voltage-domain — auto-`N/A` for core-only macros (no pad ring) / single-supply designs.
+The **ESD presence** check (v0.2.8) recognises sky130 IO integral-clamp pads (gpiov2/hvc/lvc/clamped/
+esd) — validated on the real Caravel `chip_io.def` (flips a 612-filler ring from a false ESD_MISSING
+to PRESENT, structural fillers excluded) with negation guards (`unclamped`≠ESD) + esd-before-structural
+ordering (`gpiov2_corner_pad`=ESD), and reports `esd_presence: PRESENT | MISSING | N/A`.
 
 ## Stage 4 — Output & Tapeout (Phase 3, close)
 
