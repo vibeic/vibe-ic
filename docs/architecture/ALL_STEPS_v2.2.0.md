@@ -64,13 +64,19 @@ Stage map: **0** Spec/Docs (Phase 1) · **1** RTL+Verify · **2** Synthesis+DFT 
 | 29 | Antenna check | OpenROAD `check_antennas` | ✅ FIXED v0.2.4 |
 | 30 | Signal integrity (crosstalk) | SPEF coupling-cap screen (Cc/(Cc+Cg)) | ✅ WIRED v0.2.6 (advisory) |
 | 31 | Post-layout gate-level sim (+SDF) | `eda_simulate` | ✅ |
-| 32 | Physical verification (DRC / LVS / ERC) | KLayout DRC + LVS sign-off chain (below) + Magic ERC | ✅ DRC/LVS ; PERC manual |
+| 32 | Physical verification (DRC / LVS / ERC + PERC-equiv) | KLayout DRC + LVS sign-off chain (below) + Magic ERC + `perc_equivalent` aggregate | ✅ DRC/LVS/ERC ; PERC-equiv (~70% auto) |
 | 33 | ECO repair loop | `eco-plan` | ✅ |
 
 **Step 32 — LVS sign-off chain** (under `step_lvs`): (1) structural LEC `eda_lvs yosys_equiv` →
 (2) device-level `eda_extraction` + netgen → (3) powered-netlist `write_verilog -include_pwr_gnd` →
 (4) port labels `magic_port_extract_emit` (Route A) / `lvs_def_port_seed` (Route B) →
 (5) **mandatory** `lvs_signoff_guard` (RAISES on a portless/vacuous match).
+
+**Step 32 — PERC-equivalent coverage** (`perc_equivalent.{rpt,json}` + `PERC_SIGNOFF_MEMO.md`, v0.2.7):
+open-source stand-in for commercial Calibre PERC. AUTOMATED: antenna / IR / EM / floating-nets
+(verdicts read from steps 27-30/ERC). GUARDBAND: EM current-density (<0.5 mA/µm) + ≥2×2 vias.
+MANUAL_REVIEW (never auto-PASS, pending checklist): ESD pad-ring presence, latch-up/well-tap,
+cross-voltage-domain — auto-`N/A` for core-only macros (no pad ring) / single-supply designs.
 
 ## Stage 4 — Output & Tapeout (Phase 3, close)
 

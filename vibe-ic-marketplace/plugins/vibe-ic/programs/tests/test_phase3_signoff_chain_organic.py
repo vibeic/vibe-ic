@@ -471,6 +471,227 @@ class TestErcReport:
 
 
 # ---------------------------------------------------------------------------
+# 8. PERC-equivalent coverage aggregate (ORGANIC-20260601) — Step 32 residual.
+# ---------------------------------------------------------------------------
+# A core-only DEF (no pads, no diodes) → ESD = N/A; single VPWR/VGND → xdomain
+# = N/A. A pad-ring DEF → ESD = MANUAL_REVIEW with a pending checklist.
+_DEF_PADRING = """VERSION 5.8 ;
+DESIGN chip_top ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 100000 100000 ) ;
+COMPONENTS 4 ;
+    - _1_ sky130_fd_sc_hd__nor3_1 + PLACED ( 100 100 ) N ;
+    - pad_io_0 sky130_fd_io__gpiov2 + PLACED ( 0 0 ) N ;
+    - esd_0 sky130_fd_io__top_xres4v2 + PLACED ( 0 200 ) N ;
+    - diode_0 sky130_fd_sc_hd__diode_2 + PLACED ( 200 0 ) N ;
+END COMPONENTS
+SPECIALNETS 2 ;
+    - VGND ( _1_ VNB ) + USE GROUND ;
+    - VPWR ( _1_ VPB ) + USE POWER ;
+END SPECIALNETS
+END DESIGN
+"""
+
+_DEF_MULTI_DOMAIN = """VERSION 5.8 ;
+DESIGN chip_top ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 100000 100000 ) ;
+SPECIALNETS 4 ;
+    - VGND ( _1_ VNB ) + USE GROUND ;
+    - VPWR ( _1_ VPB ) + USE POWER ;
+    - VPWR_AON ( _2_ VPB ) + USE POWER ;
+    - VGND_AON ( _2_ VNB ) + USE GROUND ;
+END SPECIALNETS
+END DESIGN
+"""
+
+
+class TestParseDefComponents:
+    def test_parses_components(self, tmp_path):
+        d = tmp_path / "x.def"
+        d.write_text(_DEF_PADRING)
+        comps = runner._parse_def_components(d)
+        masters = {m for _i, m in comps}
+        assert "sky130_fd_io__gpiov2" in masters
+        assert "sky130_fd_sc_hd__diode_2" in masters
+        assert len(comps) == 4
+
+    def test_no_components_block_returns_empty(self, tmp_path):
+        d = tmp_path / "x.def"
+        d.write_text(_DEF_WITH_PDN)
+        assert runner._parse_def_components(d) == []
+
+
+class TestEsdPadRingPresence:
+    def test_core_macro_is_na_not_pass(self):
+        # No pad cells → N/A honestly (NEVER a silent PASS).
+        comps = [("_1_", "sky130_fd_sc_hd__nor3_1"),
+                 ("_2_", "sky130_fd_sc_hd__and3_1")]
+        r = runner._esd_pad_ring_presence(comps)
+        assert r["status"] == "N/A"
+        assert r["pad_count"] == 0
+        assert "core macro" in r["note"]
+
+    def test_padring_with_esd_is_manual_review(self):
+        comps = [("pad_io_0", "sky130_fd_io__gpiov2"),
+                 ("esd_0", "sky130_fd_io__top_xres4v2"),
+                 ("diode_0", "sky130_fd_sc_hd__diode_2")]
+        r = runner._esd_pad_ring_presence(comps)
+        assert r["status"] == "MANUAL_REVIEW"   # never auto-PASS
+        assert r["pad_count"] >= 1
+        assert r["esd_count"] >= 1
+
+    def test_padring_without_esd_still_manual_not_fail(self):
+        comps = [("pad_io_0", "sky130_fd_io__gpiov2")]
+        r = runner._esd_pad_ring_presence(comps)
+        assert r["status"] == "MANUAL_REVIEW"
+        assert r["esd_count"] == 0
+        assert "NO ESD" in r["note"] or "found none" in r["note"]
+
+
+class TestPercEquivalent:
+    def _seed_subreports(self, project, antenna="PASS", ir="PASS",
+                         em="PASS", erc="PASS"):
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        rpt3.mkdir(parents=True, exist_ok=True)
+        for name, v in (("antenna", antenna), ("ir_drop", ir),
+                        ("em", em), ("erc", erc)):
+            if v is not None:
+                (rpt3 / f"{name}.json").write_text(
+                    json.dumps({"verdict": v}) + "\n")
+
+    def test_core_macro_all_na_pass(self, tmp_path):
+        # spm-like core macro: single supply, no pads → ESD/xdomain = N/A;
+        # all automated PASS → PERC_EQUIV_PASS.
+        project = _mk_project(tmp_path, _DEF_WITH_PDN)
+        self._seed_subreports(project)
+        ok = runner._emit_perc_equivalent(
+            project, "chip_top", _fake_pdk(), "x", [])
+        assert ok
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        assert j["verdict"] == "PERC_EQUIV_PASS"
+        assert j["commercial_calibre_perc_run"] is False
+        # ESD + xdomain auto-N/A (no pads, single supply).
+        assert "ESD protection presence" in j["not_applicable"]
+        assert "Cross-voltage-domain" in j["not_applicable"]
+        # Latch-up always MANUAL.
+        assert "Latch-up / well-tap" in j["manual_review_pending"]
+
+    def test_manual_items_never_faked_as_pass(self, tmp_path):
+        project = _mk_project(tmp_path, _DEF_WITH_PDN)
+        self._seed_subreports(project)
+        runner._emit_perc_equivalent(
+            project, "chip_top", _fake_pdk(), "x", [])
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        cats = {c["category"]: c for c in j["categories"]}
+        # Latch-up MUST be MANUAL_REVIEW, not PASS.
+        assert cats["Latch-up / well-tap"]["status"] == "MANUAL_REVIEW"
+        assert cats["Latch-up / well-tap"]["result"] != "PASS"
+        # and carry a pending (unchecked) checklist.
+        chk = cats["Latch-up / well-tap"]["checklist"]
+        assert all(item["confirmed"] is None for item in chk)
+
+    def test_padring_design_esd_is_manual(self, tmp_path):
+        project = _mk_project(tmp_path, _DEF_PADRING)
+        self._seed_subreports(project)
+        runner._emit_perc_equivalent(
+            project, "chip_top", _fake_pdk(), "x", [])
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        cats = {c["category"]: c for c in j["categories"]}
+        assert cats["ESD protection presence"]["status"] == "MANUAL_REVIEW"
+        assert "ESD protection presence" in j["manual_review_pending"]
+
+    def test_multi_domain_xdomain_is_manual(self, tmp_path):
+        project = _mk_project(tmp_path, _DEF_MULTI_DOMAIN)
+        self._seed_subreports(project)
+        runner._emit_perc_equivalent(
+            project, "chip_top", _fake_pdk(), "x", [])
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        cats = {c["category"]: c for c in j["categories"]}
+        assert cats["Cross-voltage-domain"]["status"] == "MANUAL_REVIEW"
+        assert "Cross-voltage-domain" in j["manual_review_pending"]
+
+    def test_automated_fail_fails_overall(self, tmp_path):
+        # An antenna FAIL must drop the overall verdict.
+        project = _mk_project(tmp_path, _DEF_WITH_PDN)
+        self._seed_subreports(project, antenna="FAIL")
+        runner._emit_perc_equivalent(
+            project, "chip_top", _fake_pdk(), "x", [])
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        assert j["verdict"] == "PERC_EQUIV_FAIL"
+        assert "Antenna" in j["automated_failed"]
+
+    def test_missing_subreport_is_incomplete_not_pass(self, tmp_path):
+        # If an automated report was not emitted → INCOMPLETE, not PASS.
+        project = _mk_project(tmp_path, _DEF_WITH_PDN)
+        self._seed_subreports(project, em=None)
+        runner._emit_perc_equivalent(
+            project, "chip_top", _fake_pdk(), "x", [])
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        assert j["verdict"] == "PERC_EQUIV_INCOMPLETE"
+
+    def test_rpt_states_honesty_and_no_pdn_skips(self, tmp_path):
+        # rpt carries the honest "Calibre PERC NOT run" statement.
+        project = _mk_project(tmp_path, _DEF_WITH_PDN)
+        self._seed_subreports(project)
+        runner._emit_perc_equivalent(
+            project, "chip_top", _fake_pdk(), "x", [])
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        body = (rpt3 / "perc_equivalent.rpt").read_text()
+        assert "Calibre PERC" in body
+        assert "Commercial Calibre PERC run: NO" in body
+        # No routed DEF → skip honestly.
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        notes = []
+        assert runner._emit_perc_equivalent(
+            empty, "chip_top", _fake_pdk(), "x", notes) is False
+        assert any("routed DEF missing" in n for n in notes)
+
+
+class TestPercSignoffMemo:
+    def _emit(self, tmp_path, def_text=_DEF_WITH_PDN):
+        project = _mk_project(tmp_path, def_text)
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        rpt3.mkdir(parents=True, exist_ok=True)
+        for name in ("antenna", "ir_drop", "em", "erc"):
+            (rpt3 / f"{name}.json").write_text(
+                json.dumps({"verdict": "PASS"}) + "\n")
+        runner._emit_perc_equivalent(
+            project, "chip_top", _fake_pdk(), "x", [])
+        return (rpt3 / "PERC_SIGNOFF_MEMO.md")
+
+    def test_memo_generated(self, tmp_path):
+        memo = self._emit(tmp_path)
+        assert memo.is_file()
+        text = memo.read_text()
+        assert "# PERC Sign-off Memo" in text
+        # The honest line is mandatory + program-generated.
+        assert "Commercial Calibre PERC NOT run" in text
+        assert "Program-generated" in text
+
+    def test_memo_lists_manual_items_unchecked(self, tmp_path):
+        memo = self._emit(tmp_path)
+        text = memo.read_text()
+        # Latch-up is always manual → pending unchecked boxes.
+        assert "Latch-up / well-tap" in text
+        assert "- [ ]" in text   # pending, NOT pre-checked
+        assert "- [x]" not in text
+
+    def test_memo_padring_lists_esd_manual(self, tmp_path):
+        memo = self._emit(tmp_path, _DEF_PADRING)
+        text = memo.read_text()
+        assert "ESD protection presence" in text
+        assert "ESD clamp" in text
+
+
+# ---------------------------------------------------------------------------
 # 7. Formal stays informational (no code change) — confirm via flow yaml.
 # ---------------------------------------------------------------------------
 class TestFormalInformational:

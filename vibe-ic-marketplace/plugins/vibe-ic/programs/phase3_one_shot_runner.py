@@ -3962,6 +3962,18 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(erc_rpt))
             written.append(str(rpt_phase3 / "erc.json"))
 
+    # --- ORGANIC-20260601: Step 32 PERC-equivalent coverage aggregate ----
+    # Aggregates antenna/IR/EM/floating (AUTOMATED) + EM guardband + ESD/
+    # latch-up/x-domain (MANUAL_REVIEW or N/A) into ONE honest report + memo.
+    # Runs AFTER the antenna/ir/em/erc emitters above so it reads their
+    # verdicts. Guarded like them (only when a routed DEF exists).
+    perc_rpt = rpt_phase3 / "perc_equivalent.rpt"
+    if primary_def.is_file() and not perc_rpt.is_file():
+        if _emit_perc_equivalent(project, top, pdk, container, notes):
+            written.append(str(perc_rpt))
+            written.append(str(rpt_phase3 / "perc_equivalent.json"))
+            written.append(str(rpt_phase3 / "PERC_SIGNOFF_MEMO.md"))
+
     # --- Step 15-21: per-stage DEF snapshots ----------------------------
     # The runner's pnr.tcl emits write_def at each stage (floorplan,
     # placed, post_cts, post_hold, routed). The def_stage_progression_check
@@ -5427,6 +5439,419 @@ exit
                  "(latch-up/ESD) deferred"),
     }, indent=2) + "\n")
     return True
+
+
+# ===========================================================================
+# ORGANIC-20260601 — PERC-equivalent coverage sign-off (the "last commercial
+# gate", Calibre PERC, Step 32 ERC residual).
+#
+# Calibre PERC = Programmable Electrical Rule Check. It needs a commercial tool
+# because it ties LAYOUT (GDS) to CIRCUIT (SPICE) and checks 7 categories:
+#   ESD / latch-up / antenna / EM / IR / floating-nets / cross-voltage-domain.
+#
+# A maintainer analysis established the open-source flow covers ~70% and the
+# rest is guardband/manual. We aggregate the already-emitted open-source
+# equivalents into ONE honest coverage report. Per-category status is one of:
+#   AUTOMATED     — an open-source tool proved it (antenna / IR / EM / floating)
+#   GUARDBAND     — a design rule, stated as a guardband (NOT a tool proof)
+#   MANUAL_REVIEW — needs human sign-off (ESD topology / latch-up / x-domain)
+#   N/A           — honestly does not apply (e.g. no pad ring, single supply)
+#
+# HONESTY DOCTRINE: ESD / latch-up / x-domain are SEMI/MANUAL — they are NEVER
+# silently reported as PASS. They get a MANUAL_REVIEW status + a checklist with
+# pending fields. The overall verdict is PERC_EQUIV_PASS only when no AUTOMATED
+# category FAILED and the manual items are explicitly LISTED as pending (so the
+# report itself states that manual sign-off remains).
+# ===========================================================================
+
+# sky130 ESD / protection-diode cell-name hints (chip-AGNOSTIC substrings —
+# matched case-insensitively against the master name in DEF COMPONENTS).
+_ESD_CELL_HINTS = ("diode", "_esd", "ggnmos", "ggnmof", "antenna")
+# Pad / IO cell-name hints. A "pad ring" is the set of these instances.
+_PAD_CELL_HINTS = ("pad", "_io", "gpio", "bondpad", "padframe", "_pdio")
+
+_DEF_COMPONENT_RE = re.compile(
+    r"^\s*-\s+(\S+)\s+(\S+)", re.MULTILINE)
+
+
+def _parse_def_components(def_file: Path) -> List[Tuple[str, str]]:
+    """Parse the DEF COMPONENTS block into [(instance, master), ...].
+
+    chip-AGNOSTIC structural parse: no literal names. Returns [] if the DEF
+    has no COMPONENTS block. Each component line is `- <inst> <master> + ...`."""
+    out: List[Tuple[str, str]] = []
+    try:
+        text = def_file.read_text(errors="ignore")
+    except OSError:
+        return out
+    m = re.search(r"^COMPONENTS\b.*?^END COMPONENTS",
+                  text, re.MULTILINE | re.DOTALL)
+    if not m:
+        return out
+    for cm in _DEF_COMPONENT_RE.finditer(m.group(0)):
+        inst, master = cm.group(1), cm.group(2)
+        # Skip the COMPONENTS header artefact and section keywords.
+        if master in (";", "+"):
+            continue
+        out.append((inst, master))
+    return out
+
+
+def _esd_pad_ring_presence(components: List[Tuple[str, str]]) -> Dict[str, Any]:
+    """ESD pad-ring presence check (deterministic, pure).
+
+    Given parsed DEF COMPONENTS [(inst, master), ...], find pad/IO cells and
+    check whether an ESD/diode protection cell is also present in the design.
+    chip-AGNOSTIC — matches only generic name substrings (_ESD_CELL_HINTS /
+    _PAD_CELL_HINTS), never design-specific names.
+
+    Returns a dict with:
+      status  : "N/A" (no pad ring — core macro)
+              | "MANUAL_REVIEW" (pads present; ESD presence + path to VPWR/VGND
+                                  needs manual confirm)
+      pads    : [pad instance masters found]
+      esd_cells: [esd/diode instance masters found]
+      note    : honest one-line explanation
+
+    HONESTY: a core-only macro (no pad cells) returns N/A, NOT PASS. When pads
+    ARE present, this is only a *presence* heuristic — confirming the ESD device
+    is a topological neighbour with a real discharge path to VPWR/VGND requires
+    layout+SPICE (commercial PERC), so the status is MANUAL_REVIEW, never PASS."""
+    pads = sorted({m for _i, m in components
+                   if any(h in m.lower() for h in _PAD_CELL_HINTS)})
+    esd_cells = sorted({m for _i, m in components
+                        if any(h in m.lower() for h in _ESD_CELL_HINTS)})
+    if not pads:
+        return {
+            "status": "N/A",
+            "pads": [],
+            "esd_cells": esd_cells,
+            "pad_count": 0,
+            "esd_count": len(esd_cells),
+            "note": ("N/A (no pad ring — core macro). ESD protection is the "
+                     "responsibility of the top-level pad frame; a core-only "
+                     "macro has no chip pads to protect."),
+        }
+    return {
+        "status": "MANUAL_REVIEW",
+        "pads": pads,
+        "esd_cells": esd_cells,
+        "pad_count": len(pads),
+        "esd_count": len(esd_cells),
+        "note": (
+            f"{len(pads)} pad/IO master(s) present; "
+            f"{len(esd_cells)} ESD/diode master(s) detected (presence-only "
+            "heuristic). MANUAL confirm required: every pad has an ESD "
+            "diode/ggNMOS neighbour with a discharge path to VPWR/VGND "
+            "(layout+SPICE topology — commercial PERC)."
+            if esd_cells else
+            f"{len(pads)} pad/IO master(s) present but NO ESD/diode cell "
+            "detected. MANUAL review required — confirm the pad frame carries "
+            "ESD protection (this presence check found none)."),
+    }
+
+
+def _read_verdict(json_path: Path) -> Optional[str]:
+    """Read the `verdict` field of an already-emitted sign-off JSON. Returns
+    None if the file is missing/unreadable (category was not emitted)."""
+    try:
+        return json.loads(json_path.read_text()).get("verdict")
+    except (OSError, ValueError):
+        return None
+
+
+def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
+                          container: str, notes: List[str]) -> bool:
+    """Aggregate the 7 Calibre-PERC categories into ONE honest open-source
+    PERC-equivalent coverage report (Step 32 residual).
+
+    Reads the verdicts of the already-emitted antenna / ir_drop / em / erc
+    reports (AUTOMATED), states the EM current-density / via-array GUARDBAND,
+    and emits MANUAL_REVIEW checklists for ESD / latch-up / x-domain.
+
+    Writes reports/phase3/perc_equivalent.{rpt,json} + PERC_SIGNOFF_MEMO.md.
+    chip-AGNOSTIC + deterministic. Best-effort; returns True if emitted."""
+    pnr_out = _pl.pnr_dir(project)
+    def_file = pnr_out / f"{top}.def"
+    if not def_file.is_file():
+        notes.append("PERC-equiv skipped: routed DEF missing")
+        return False
+    rpt3 = _pl.reports_phase3_dir(project)
+    rpt3.mkdir(parents=True, exist_ok=True)
+
+    # --- AUTOMATED categories: read the already-emitted verdicts ----------
+    antenna_v = _read_verdict(rpt3 / "antenna.json")
+    ir_v = _read_verdict(rpt3 / "ir_drop.json")
+    em_v = _read_verdict(rpt3 / "em.json")
+    erc_v = _read_verdict(rpt3 / "erc.json")     # floating-net screen
+
+    # --- structural facts from the DEF (chip-AGNOSTIC) --------------------
+    power_nets, ground_nets = _discover_power_nets(def_file)
+    components = _parse_def_components(def_file)
+    esd = _esd_pad_ring_presence(components)
+    # Single power domain = exactly one power net + one ground net pair.
+    single_supply = len(power_nets) <= 1 and len(ground_nets) <= 1
+
+    def _auto(name, verdict, tool, evidence):
+        """An AUTOMATED category. PASS/FAIL from the tool verdict; if the
+        report was not emitted, the category is INCOMPLETE (honest — not a
+        silent PASS)."""
+        if verdict is None:
+            return {"category": name, "status": "AUTOMATED",
+                    "result": "INCOMPLETE", "tool": tool,
+                    "evidence": evidence,
+                    "note": "report not emitted (re-run phase3 sign-off)"}
+        result = "PASS" if verdict == "PASS" else (
+            "REVIEW" if verdict == "REVIEW" else "FAIL")
+        return {"category": name, "status": "AUTOMATED", "result": result,
+                "tool": tool, "evidence": evidence, "source_verdict": verdict}
+
+    categories: List[Dict[str, Any]] = []
+    categories.append(_auto(
+        "Antenna", antenna_v, "OpenROAD check_antennas",
+        "reports/phase3/antenna.json"))
+    categories.append(_auto(
+        "IR drop", ir_v, "OpenROAD PSM analyze_power_grid",
+        "reports/phase3/ir_drop.json"))
+    # EM is AUTOMATED (PSM -enable_em) PLUS a GUARDBAND design rule.
+    em_cat = _auto("EM (electromigration)", em_v,
+                   "OpenROAD PSM analyze_power_grid -enable_em",
+                   "reports/phase3/em.json")
+    em_cat["guardband"] = (
+        "current density < 0.5 mA/um per wire; vias >= 2x2 arrays on "
+        "power straps (stated as a GUARDBAND design rule, not a tool proof)")
+    categories.append(em_cat)
+    categories.append(_auto(
+        "Floating nets", erc_v, "OpenROAD report_floating_nets (ERC screen)",
+        "reports/phase3/erc.json"))
+
+    # --- GUARDBAND-only category: EM via/current-density rules -------------
+    categories.append({
+        "category": "EM current-density / via-array guardband",
+        "status": "GUARDBAND",
+        "result": "GUARDBAND",
+        "tool": "design-rule (guardband)",
+        "rule": ("signal/power wire current density < 0.5 mA/um; power-strap "
+                 "vias >= 2x2 redundant arrays"),
+        "note": ("stated as a GUARDBAND, NOT a commercial-tool EM sign-off; "
+                 "verify against the PDK Jmax tables at the target lifetime."),
+    })
+
+    # --- MANUAL_REVIEW categories (NEVER auto-PASS) -----------------------
+    # ESD protection presence.
+    esd_cat = {
+        "category": "ESD protection presence",
+        "status": esd["status"],   # N/A (core macro) or MANUAL_REVIEW
+        "result": esd["status"],
+        "tool": "DEF/GDS pad-ring scan (presence) + MANUAL confirm",
+        "pad_count": esd["pad_count"],
+        "esd_cell_count": esd["esd_count"],
+        "note": esd["note"],
+    }
+    if esd["status"] == "MANUAL_REVIEW":
+        esd_cat["checklist"] = [
+            {"item": "Every chip pad has an ESD clamp (diode/ggNMOS) neighbour",
+             "confirmed": None},
+            {"item": "ESD device has a low-impedance path to VPWR and VGND",
+             "confirmed": None},
+            {"item": "Primary + secondary clamps sized for target HBM/CDM level",
+             "confirmed": None},
+        ]
+    categories.append(esd_cat)
+
+    # Latch-up / well-tap.
+    categories.append({
+        "category": "Latch-up / well-tap",
+        "status": "MANUAL_REVIEW",
+        "result": "MANUAL_REVIEW",
+        "tool": "Magic DRC well-tap rules (rides existing DRC deck) + MANUAL",
+        "note": ("well-tap spacing is screened by the existing Magic/KLayout "
+                 "DRC deck; full latch-up sign-off (well/substrate tap "
+                 "topology, guard rings near IO) needs commercial PERC + "
+                 "manual confirm."),
+        "checklist": [
+            {"item": "Tap (well/substrate) spacing meets the PDK latch-up rule "
+                     "(screened by the DRC deck)", "confirmed": None},
+            {"item": "Guard rings present around IO / high-current cells",
+             "confirmed": None},
+        ],
+    })
+
+    # Cross-voltage-domain (auto-N/A for single-supply designs).
+    if single_supply:
+        xdomain_cat = {
+            "category": "Cross-voltage-domain",
+            "status": "N/A",
+            "result": "N/A",
+            "tool": "DEF SPECIALNETS power-domain scan",
+            "power_nets": power_nets,
+            "ground_nets": ground_nets,
+            "note": ("N/A (single supply) — DEF SPECIALNETS shows a single "
+                     "VPWR/VGND power-domain pair; no level shifters / "
+                     "domain crossings to check."),
+        }
+    else:
+        xdomain_cat = {
+            "category": "Cross-voltage-domain",
+            "status": "MANUAL_REVIEW",
+            "result": "MANUAL_REVIEW",
+            "tool": "level-shifter placement audit + MANUAL",
+            "power_nets": power_nets,
+            "ground_nets": ground_nets,
+            "note": (f"{len(power_nets)} power / {len(ground_nets)} ground "
+                     "net(s) — MULTIPLE power domains. MANUAL review: confirm "
+                     "level shifters / isolation cells on every domain "
+                     "crossing (commercial PERC checks the topology)."),
+            "checklist": [
+                {"item": "Level shifter on every signal crossing a voltage "
+                         "domain boundary", "confirmed": None},
+                {"item": "Isolation cells on every signal crossing a "
+                         "power-gating boundary", "confirmed": None},
+            ],
+        }
+    categories.append(xdomain_cat)
+
+    # --- Overall verdict (HONEST) -----------------------------------------
+    automated = [c for c in categories if c["status"] == "AUTOMATED"]
+    automated_failed = [c for c in automated if c["result"] == "FAIL"]
+    automated_incomplete = [c for c in automated if c["result"] == "INCOMPLETE"]
+    manual_pending = [c for c in categories
+                      if c["status"] == "MANUAL_REVIEW"]
+    # PERC_EQUIV_PASS only when no AUTOMATED category FAILED, none are
+    # INCOMPLETE, AND the manual items are explicitly listed as pending.
+    if automated_failed:
+        verdict = "PERC_EQUIV_FAIL"
+    elif automated_incomplete:
+        verdict = "PERC_EQUIV_INCOMPLETE"
+    else:
+        verdict = "PERC_EQUIV_PASS"
+
+    summary = {
+        "verdict": verdict,
+        "tool": "open-source PERC-equivalent aggregate",
+        "commercial_calibre_perc_run": False,
+        "automated_pass": [c["category"] for c in automated
+                           if c["result"] == "PASS"],
+        "automated_failed": [c["category"] for c in automated_failed],
+        "automated_incomplete": [c["category"] for c in automated_incomplete],
+        "guardband": [c["category"] for c in categories
+                      if c["status"] == "GUARDBAND"],
+        "manual_review_pending": [c["category"] for c in manual_pending],
+        "not_applicable": [c["category"] for c in categories
+                           if c["status"] == "N/A"],
+        "categories": categories,
+        "honest_note": (
+            "Commercial Calibre PERC NOT run (environment). The open-source "
+            "equivalents above cover the primary risks; ESD / latch-up / "
+            "cross-voltage-domain require the listed MANUAL confirmation and "
+            "are NOT reported as automated PASS."),
+    }
+
+    # --- perc_equivalent.json ---------------------------------------------
+    (rpt3 / "perc_equivalent.json").write_text(json.dumps(summary, indent=2) + "\n")
+
+    # --- perc_equivalent.rpt (human-readable) -----------------------------
+    def _line(c):
+        extra = ""
+        if "source_verdict" in c:
+            extra = f"  (tool verdict: {c['source_verdict']})"
+        return (f"  [{c['status']:<13}] {c['result']:<14} {c['category']}\n"
+                f"       tool: {c.get('tool', '-')}{extra}\n"
+                f"       {c.get('note', '')}\n")
+    body = (
+        "# PERC-equivalent coverage report — open-source aggregate\n"
+        "# (ORGANIC-20260601 Step 32 ERC residual / 'last commercial gate').\n"
+        "# Calibre PERC = Programmable Electrical Rule Check (ties layout to\n"
+        "# circuit). Commercial Calibre PERC was NOT run. This aggregates the\n"
+        "# open-source equivalents for the 7 PERC categories.\n"
+        "#\n"
+        "# Status legend: AUTOMATED = tool-proven | GUARDBAND = design rule |\n"
+        "#   MANUAL_REVIEW = needs human sign-off | N/A = does not apply.\n"
+        "#\n"
+        f"OVERALL VERDICT: {verdict}\n"
+        f"Commercial Calibre PERC run: NO (open-source equivalent)\n"
+        "\n# === Per-category status ===\n"
+        + "".join(_line(c) for c in categories)
+        + "\n# === Honesty statement ===\n"
+        + "# " + summary["honest_note"] + "\n"
+        + ("# MANUAL items still pending sign-off: "
+           + ", ".join(summary["manual_review_pending"]) + "\n"
+           if summary["manual_review_pending"]
+           else "# No MANUAL items pending (all N/A or automated).\n")
+        + "# end of perc_equivalent.rpt\n")
+    (rpt3 / "perc_equivalent.rpt").write_text(body)
+
+    # --- PERC_SIGNOFF_MEMO.md (program-generated; maintainer §6 template) -
+    _emit_perc_signoff_memo(project, top, summary, categories)
+    return True
+
+
+def _emit_perc_signoff_memo(project: Path, top: str,
+                            summary: Dict[str, Any],
+                            categories: List[Dict[str, Any]]) -> Path:
+    """Generate PERC_SIGNOFF_MEMO.md (maintainer §6 template) deterministically
+    from the aggregated PERC-equivalent summary. Program-generated, NOT
+    hand-typed. Written to reports/phase3/PERC_SIGNOFF_MEMO.md."""
+    rpt3 = _pl.reports_phase3_dir(project)
+    rpt3.mkdir(parents=True, exist_ok=True)
+    memo = rpt3 / "PERC_SIGNOFF_MEMO.md"
+
+    def _row(c):
+        return (f"| {c['category']} | {c.get('tool', '-')} | "
+                f"`{c['status']}` | `{c['result']}` |")
+
+    lines = []
+    lines.append(f"# PERC Sign-off Memo — `{top}`")
+    lines.append("")
+    lines.append(f"**Overall verdict:** `{summary['verdict']}`  ")
+    lines.append("**Commercial Calibre PERC run:** NO (open-source equivalent)")
+    lines.append("")
+    lines.append("Calibre PERC (Programmable Electrical Rule Check) ties layout "
+                 "(GDS) to circuit (SPICE) across 7 categories: ESD, latch-up, "
+                 "antenna, EM, IR, floating-nets, cross-voltage-domain. This "
+                 "memo records the open-source equivalent for each.")
+    lines.append("")
+    lines.append("## Per-category tool + result")
+    lines.append("")
+    lines.append("| Category | Open-source tool / method | Status | Result |")
+    lines.append("|---|---|---|---|")
+    lines.extend(_row(c) for c in categories)
+    lines.append("")
+    # Manual checklist appendix — pending items spelled out, NOT pre-checked.
+    manual = [c for c in categories if c["status"] == "MANUAL_REVIEW"]
+    if manual:
+        lines.append("## Manual confirmation still required")
+        lines.append("")
+        lines.append("These categories are SEMI-AUTOMATED / MANUAL and are "
+                     "NOT reported as automated PASS. Each item is pending "
+                     "(`[ ]`) until a human signs off:")
+        lines.append("")
+        for c in manual:
+            lines.append(f"### {c['category']}")
+            lines.append(f"_{c.get('note', '')}_")
+            lines.append("")
+            for item in c.get("checklist", []):
+                lines.append(f"- [ ] {item['item']}")
+            lines.append("")
+    na = [c for c in categories if c["status"] == "N/A"]
+    if na:
+        lines.append("## Not applicable (auto-detected, honest)")
+        lines.append("")
+        for c in na:
+            lines.append(f"- **{c['category']}** — {c.get('note', '')}")
+        lines.append("")
+    lines.append("## Honesty statement")
+    lines.append("")
+    lines.append("> Commercial Calibre PERC NOT run (environment); the "
+                 "open-source equivalents above cover the primary risks; "
+                 "ESD / latch-up / cross-voltage-domain require the listed "
+                 "manual confirmation.")
+    lines.append("")
+    lines.append("_Program-generated by `phase3_one_shot_runner._emit_perc_"
+                 "signoff_memo` — do not hand-edit; re-run phase3 to refresh._")
+    lines.append("")
+    memo.write_text("\n".join(lines))
+    return memo
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,92 @@
+type: enhancement
+severity: P2
+component: programs/phase3_one_shot_runner.py (_emit_perc_equivalent + _emit_perc_signoff_memo + _esd_pad_ring_presence + _parse_def_components)
+
+plugin_version: "0.2.6"
+
+title: >-
+  Aggregate the open-source PERC-equivalent coverage (the "last commercial gate", Calibre PERC,
+  Step 32 ERC residual) into ONE honest sign-off report + memo — AUTOMATED where a tool proves it,
+  GUARDBAND for design rules, MANUAL_REVIEW (never silent PASS) for ESD/latch-up/x-domain
+
+pattern: |
+  Calibre PERC = Programmable Electrical Rule Check. It is the "last commercial gate" because it
+  ties LAYOUT (GDS) to CIRCUIT (SPICE) and screens 7 categories: ESD / latch-up / antenna / EM /
+  IR / floating-nets / cross-voltage-domain. The open-source flow already emits 4 of these
+  (antenna Step 29 _emit_antenna_report, IR Step 27 _emit_ir_em_reports, EM Step 28 same,
+  floating-nets ERC report_floating_nets) but there was no single PERC-equivalent coverage report,
+  and the remaining 3 (ESD / latch-up / x-domain) had no honest semi-automated screen — risking
+  either an unstated gap or a faked PASS.
+
+doctrine: |
+  THE 7 PERC CATEGORIES → open-source mapping (the spec this backlog encodes):
+
+  | Category            | Open-source method                                              | Status        |
+  |---------------------|-----------------------------------------------------------------|---------------|
+  | Antenna             | OpenROAD check_antennas (reports/phase3/antenna.json verdict)   | AUTOMATED     |
+  | IR drop             | OpenROAD PSM analyze_power_grid (ir_drop.json verdict)          | AUTOMATED     |
+  | EM                  | PSM -enable_em (em.json) + current-density/via guardband        | AUTOMATED + GUARDBAND |
+  | Floating nets       | OpenROAD report_floating_nets / ERC screen (erc.json verdict)   | AUTOMATED     |
+  | EM J / via array    | current density < 0.5 mA/um; vias >= 2x2 redundant arrays       | GUARDBAND (design rule, NOT a tool proof) |
+  | ESD presence        | scan DEF COMPONENTS for pad/io + diode/ggNMOS neighbours        | SEMI-AUTO presence + MANUAL confirm |
+  | Latch-up / well-tap | Magic DRC well-tap spacing (rides the existing DRC deck)         | SEMI-AUTO + MANUAL |
+  | Cross-voltage-domain| level-shifter placement; auto-N/A when single power domain      | MANUAL (auto-N/A single supply) |
+
+  WHAT STAYS MANUAL / NEEDS A COMMERCIAL TOOL (honest):
+  - ESD topology: confirming each pad's ESD device is a real topological neighbour with a
+    discharge path to VPWR/VGND is a layout+SPICE check → commercial PERC. The open-source side
+    can only do a *presence* heuristic (cell-name hints: diode / _esd / ggnmos / antenna).
+    A core-only macro (no pad ring) is honestly N/A, NOT PASS.
+  - Latch-up: tap-spacing is screened by the DRC deck, but full latch-up sign-off (well/substrate
+    tap topology, guard rings near IO) needs commercial PERC + manual confirm.
+  - Cross-voltage-domain: level-shifter / isolation-cell topology on every domain crossing needs
+    commercial PERC. Auto-N/A only when the DEF SPECIALNETS shows a single VPWR/VGND pair.
+
+  HONESTY DOCTRINE (the load-bearing rule): the overall verdict is PERC_EQUIV_PASS ONLY when
+  (a) no AUTOMATED category FAILED, (b) none are INCOMPLETE (report not emitted), AND (c) the
+  MANUAL items are explicitly LISTED as pending. The report+memo therefore always STATE that
+  manual sign-off remains; ESD/latch-up/x-domain are NEVER reported as automated PASS.
+
+suggested_fix: |
+  (Implemented.) Add to phase3_one_shot_runner.py, chip-AGNOSTIC + deterministic:
+  1. _parse_def_components(def) → [(inst, master)] structural parse of the COMPONENTS block.
+  2. _esd_pad_ring_presence(components) → pure: pads via _PAD_CELL_HINTS, ESD via _ESD_CELL_HINTS;
+     no pads → status N/A (core macro); pads present → MANUAL_REVIEW + checklist (never PASS).
+  3. _emit_perc_equivalent(...) → reads the 4 already-emitted verdicts (AUTOMATED), states EM
+     guardband, emits MANUAL_REVIEW checklists for ESD/latch-up/x-domain, auto-N/A for single
+     supply; writes reports/phase3/perc_equivalent.{rpt,json}.
+  4. _emit_perc_signoff_memo(...) → program-generated PERC_SIGNOFF_MEMO.md (maintainer §6
+     template): per-category tool+result table, pending unchecked checklists, the explicit honest
+     line "Commercial Calibre PERC NOT run ...".
+  Wire after the ERC emitter in the phase3 sign-off path, guarded like the others (routed DEF
+  exists). Add docker-free unit tests for the emitter + ESD-presence helper + memo + N/A paths.
+
+resolution:
+  resolved_at: "2026-06-01T00:00:00+08:00"
+  resolved_in: >-
+    phase3_one_shot_runner.py (_parse_def_components + _esd_pad_ring_presence +
+    _read_verdict + _emit_perc_equivalent + _emit_perc_signoff_memo, wired after _emit_erc_report)
+    + programs/tests/test_phase3_signoff_chain_organic.py (+23 tests).
+  validated_on: >-
+    Real routed DEF /home/reyerchu/AI_IC_design/_spm_signoff/pnr/spm.routed.def
+    (302 COMPONENTS, single VDD/VSS supply, no pad ring). Emitter produced
+    perc_equivalent.{rpt,json} + PERC_SIGNOFF_MEMO.md with honest per-category
+    status: Antenna/IR/EM/Floating = AUTOMATED PASS, EM-J/via = GUARDBAND,
+    ESD = N/A (core macro), Cross-voltage-domain = N/A (single supply),
+    Latch-up = MANUAL_REVIEW (pending checklist) → overall PERC_EQUIV_PASS.
+  summary: >-
+    The 4 already-shipped categories are genuinely AUTOMATED (tool verdicts read from their
+    JSON); EM adds a stated GUARDBAND; ESD/latch-up/x-domain are SEMI/MANUAL and are NOT faked as
+    PASS — they carry MANUAL_REVIEW status + pending (unchecked) checklists, or honest N/A for
+    core-only macros (no pad ring) and single-supply designs. Genuinely needing a commercial tool:
+    ESD topology (layout+SPICE discharge-path), full latch-up sign-off, and multi-domain
+    level-shifter topology. Suite green (full pytest unchanged baseline + 23 new tests).
+
+id: "ORGANIC-20260601-perc-equivalent-coverage"
+submitted_at: "2026-06-01T00:00:00+08:00"
+session_context: >-
+  Built from a maintainer walkthrough of Calibre PERC (ESD / latch-up / antenna / EM / IR /
+  floating-nets / cross-voltage-domain) and an open-source replacement roadmap. 4 of 7 categories
+  were already shipped in v0.2.4-2.6 (antenna/IR/EM/floating); v0.2.7 aggregates them into one
+  perc_equivalent report + sign-off memo and adds the ESD pad-ring presence check, well-tap
+  latch-up checklist, and auto-N/A cross-domain detection — with manual residuals honestly flagged.

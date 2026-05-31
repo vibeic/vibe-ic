@@ -62,13 +62,18 @@ Stage 對照：**0** 規格/文件（Phase 1）· **1** RTL+驗證 · **2** 合�
 | 29 | Antenna check | OpenROAD `check_antennas` | ✅ FIXED v0.2.4 |
 | 30 | Signal integrity（crosstalk） | SPEF coupling-cap 篩查（Cc/(Cc+Cg)） | ✅ WIRED v0.2.6（advisory） |
 | 31 | Post-layout gate-level sim（+SDF） | `eda_simulate` | ✅ |
-| 32 | Physical verification（DRC / LVS / ERC） | KLayout DRC + LVS 簽核鏈（見下）+ Magic ERC | ✅ DRC/LVS；PERC 人工 |
+| 32 | Physical verification（DRC / LVS / ERC + PERC-equiv） | KLayout DRC + LVS 簽核鏈（見下）+ Magic ERC + `perc_equivalent` 彙整 | ✅ DRC/LVS/ERC；PERC-equiv（~70% 自動） |
 | 33 | ECO repair loop | `eco-plan` | ✅ |
 
 **步 32 — LVS 簽核鏈**（`step_lvs` 之下）：(1) structural LEC `eda_lvs yosys_equiv` →
 (2) device-level `eda_extraction` + netgen → (3) powered-netlist `write_verilog -include_pwr_gnd` →
 (4) port labels `magic_port_extract_emit`（Route A）/ `lvs_def_port_seed`（Route B）→
 (5) **強制** `lvs_signoff_guard`（對 portless/vacuous match 直接 RAISE）。
+
+**步 32 — PERC-equivalent 覆蓋**（`perc_equivalent.{rpt,json}` + `PERC_SIGNOFF_MEMO.md`，v0.2.7）：
+商用 Calibre PERC 的開源替代。AUTOMATED：antenna / IR / EM / floating-nets（讀步 27-30/ERC 的判決）。
+GUARDBAND：EM 電流密度（<0.5 mA/µm）+ ≥2×2 via。MANUAL_REVIEW（**絕不**自動 PASS、附待辦清單）：
+ESD pad-ring 存在性、latch-up/well-tap、跨電壓域 — 對 core-only macro（無 pad ring）/ 單電源設計自動標 `N/A`。
 
 ## Stage 4 — 輸出與 Tapeout（Phase 3 收口）
 
