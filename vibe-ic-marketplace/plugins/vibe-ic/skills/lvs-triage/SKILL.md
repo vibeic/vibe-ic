@@ -48,6 +48,36 @@ LVS proves that the drawn layout corresponds to the schematic / netlist. Mismatc
 
 LVS methodology references: Mentor Calibre user guide, open-source Netgen (http://opencircuitdesign.com/netgen/). Signoff tools: Calibre LVS, Cadence Pegasus, Synopsys IC Validator.
 
+## Structural-LEC "unproven cells" are a substitute-tool gap — cover with device-level LVS (captured v0.1.98)
+
+`eda_lvs mode=yosys_equiv` is *structural* LEC (yosys `equiv_simple`+`equiv_induct`): it proves
+Boolean equivalence with a SAT engine. That engine lacks a model for some standard-cell
+primitives, so those cells come back **"unproven" / `sat_model_unsupported_cells`** — this is a
+LIMITATION OF THE SUBSTITUTE TOOL, **not** a netlist mismatch, and **no yosys flag closes it for
+all cells** (`-undef`, deeper `equiv_induct -seq N`, `dfflibmap`/`async2sync` only widen it).
+
+**To actually cover the unproven cells, switch to device-level LVS** (the sky130/gf180 sign-off
+path — netgen has no SAT-model concept, it matches transistors):
+1. `eda_extraction` (magic ext2spice, pdk=sky130, output_format=spice) — GDS → flat layout SPICE.
+2. `lvs_netgen_setup_emit.py` — emit the netgen `setup_supplement` TCL that globalizes power nets
+   (`global vccd1 vssd1 VPWR VGND`); Magic's ext2spice does NOT mark power as `.global`.
+3. netgen `lvs <layout.spice> <schematic>` with the foundry setup + the supplement, AND the
+   **std-cell SPICE library loaded into the SCHEMATIC circuit** so each gate expands to
+   transistors (else the schematic cells are empty placeholders → a false device-granularity
+   mismatch). This reaches device-class-exact (e.g. HDLC: 20937 = 20937 devices, all 4 classes
+   equivalent — the 230 yosys-unproven cells became 0 device-level-unproven; cf. benchmark_clean
+   sha256 device-exact 12148 = 12148).
+
+**Expected honest residual when the schematic side is a logic-only Verilog netlist:** the tie
+cells (sky130 `conb_1` = two poly resistors to VPWR/VGND) show their power-side terminals as
+disconnected, because a post-PnR Verilog gate netlist has NO power connectivity (`grep VPWR` = 0).
+This is a **Category-D Verilog-vs-extracted power-modeling artifact** (sha256 documented the same),
+NOT a real mismatch — every logic net + all devices match. Closing it fully needs a power-aware
+SPICE schematic side. Caveat: `eda_lvs mode=netgen`'s `matched` flag is currently an unreliable
+regex (see ORGANIC-20260531-eda-lvs-netgen-false-positive-and-no-stdcell-lib) — verify against the
+real netgen verdict lines ("Circuits match"/"failed pin matching"/device-class equivalence), not
+the boolean.
+
 ## Handoff
 
 - Re-run DRC after LVS fix → `/drc-fix`

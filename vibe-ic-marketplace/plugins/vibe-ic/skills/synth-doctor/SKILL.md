@@ -106,18 +106,32 @@ map the constants to the PDK's dedicated tie cell (sky130 `sky130_fd_sc_hd__conb
 dual HI/LO output) and split shared nets — in yosys, after abc and before write_verilog:
 
 ```
-hilomap -hicell <TIE_CELL> <HI_PIN> -locell <TIE_CELL> <LO_PIN>; splitnets; clean
+setundef -zero; hilomap -hicell <TIE_CELL> <HI_PIN> -locell <TIE_CELL> <LO_PIN>; splitnets; clean
 ```
 
-**Path note (the recurring trap):** `phase3_one_shot_runner.py` ALREADY does this
+**Recipe refinement (v0.1.98, learned on the HDLC pilot — the v0.1.95 recipe was
+INSUFFICIENT on a complex design):** two extra rules are load-bearing, not optional:
+1. **`setundef -zero` BEFORE `hilomap`.** A function with don't-care output bits (yosys emits
+   `1'hx` for unreachable/dead bits — common in framing/CRC logic) survives `hilomap` as a
+   bare `zero_`/`x` net that TritonRoute still rejects with DRT-0305. `setundef -zero` resolves
+   the x bits to 0 first so `hilomap` can tie them.
+2. **Do NOT run `opt_clean` (or `clean -purge`) AFTER `hilomap`.** `opt_clean` treats the just-
+   inserted tie cells as removable constant drivers and DELETES them, re-introducing the bare
+   constant nets. Use plain `clean` (or nothing). On HDLC, `hilomap; opt_clean` let DRT-0305
+   fire (0 surviving tie cells); `setundef -zero; hilomap; splitnets; clean` kept all 1780
+   `conb_1` cells and PnR ran clean. (This also satisfies the ECO spare-cell rule above —
+   never `opt_clean` away inserted cells.)
+
+**Path note (the recurring trap):** `phase3_one_shot_runner.py` ALREADY does a tie-cell pass
 automatically (it discovers the tie cell from the liberty and inserts hilomap). But the
 **bare MCP `eda_synth`→`eda_pnr` path** (what the doc→GDS pilots drive) does NOT — its
 yosys script is `synth; dfflibmap; abc; clean; write_verilog` with no hilomap, and it only
 emits a `zero_net_hint` rather than auto-applying the fix. So when driving the bare MCP
-path, either (a) re-synth with the hilomap+splitnets pass above via `eda_run_tcl` before
-`eda_pnr`, or (b) drive synth through the phase3 runner which handles it. Either way the
-cell count is unchanged — the tie cells replace the bare constants 1:1. Tracked for a
-permanent eda_synth fix in `ORGANIC-20260531-mcp-eda-synth-missing-hilomap-tiecells`.
+path, either (a) re-synth with the refined `setundef -zero; hilomap; splitnets; clean` pass
+above via `eda_run_tcl` before `eda_pnr`, or (b) drive synth through the phase3 runner which
+handles it. The cell count is unchanged — the tie cells replace the bare constants 1:1.
+Forward-validated SENT→QSPI→HDLC (3 pilots). Tracked for a permanent eda_synth fix in
+`ORGANIC-20260531-mcp-eda-synth-missing-hilomap-tiecells`.
 
 ## Compliance gate (mandatory — not optional)
 

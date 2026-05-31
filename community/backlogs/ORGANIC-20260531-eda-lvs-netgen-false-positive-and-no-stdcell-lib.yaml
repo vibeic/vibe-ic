@@ -1,0 +1,54 @@
+type: tool-bug
+severity: P2
+component: mcp-eda-server/src/index.js (eda_lvs tool, mode=netgen)
+
+plugin_version: "0.1.98"
+
+title: >-
+  eda_lvs mode=netgen returns a FALSE-POSITIVE matched=true (naive /match/i regex, no real verdict parse) and does not load the std-cell SPICE library into the schematic circuit, so device-level LVS cannot run correctly through the MCP tool
+
+pattern: |
+  Surfaced while closing the HDLC doc→GDS pilot's LVS residual with device-level LVS
+  (magic extraction + netgen). Two distinct defects in eda_lvs mode=netgen:
+
+  1. FALSE-POSITIVE `matched`. The wrapper sets `matched` from a naive `/match/i` regex over
+     netgen stdout. On the first real run netgen NEVER COMPARED — Magic's ext2spice had named
+     the top subckt `hdlc_core_flat` (it appends `_flat`), so netgen emitted "Cannot find cell
+     hdlc_core in file hdlc_core_flat.spice", wrote no report, and exited — yet the wrapper
+     returned `"matched": true`. A LVS tool that reports PASS when it did not run is the most
+     dangerous possible failure (silent false sign-off).
+
+  2. NO std-cell SPICE library on the schematic side. netgen device-level LVS needs BOTH sides
+     at transistor granularity. The layout side (from Magic ext2spice) is transistors, but the
+     schematic side (a post-PnR Verilog gate netlist) has cells that stay as EMPTY placeholders
+     unless the PDK std-cell SPICE library (e.g. sky130_fd_sc_hd.spice, ~437 subckts) is loaded
+     into the schematic circuit so each gate expands to transistors. The MCP wrapper does not
+     load it, producing a false device-granularity mismatch. The pilot had to invoke
+     `netgen -batch source <tcl>` directly (loading the cell lib) to get a true compare.
+
+suggested_fix: |
+  1. Replace the `/match/i` boolean with a real verdict parse of the netgen report:
+     - explicit success: "Circuits match uniquely." / "Netlists match uniquely"
+     - explicit failure: "failed pin matching" / "Circuits do not match" / property/net/device
+       mismatch counts
+     - DID-NOT-RUN guard: if stdout contains "Cannot find cell" / no report file was written /
+       0 device instances on either side → return parse_error:true + matched:null (NEVER true).
+     Mirror the robust-parse discipline the yosys_equiv branch already uses (it returns
+     parse_error rather than a sentinel).
+  2. Auto-name-align: if Magic appended `_flat` to the top subckt, alias it to top_module (or
+     pass `-flatten`); detect the "Cannot find cell <top>" case and retry with the actual name.
+  3. Load the PDK std-cell SPICE library into the SCHEMATIC circuit before `lvs` (a `readnet
+     spice <stdcell.spice> <schematic_circuit>` in the netgen setup), so a Verilog gate netlist
+     expands to transistors. Reference working driver: the pilot's `lvs_device_level.tcl`
+     under /home/reyerchu/AI_IC_design/hdlc_core_pilot/.
+  Corpus-sweep before shipping: re-run the i2s/sent/qspi/hdlc + benchmark_clean/sha256 GDS through
+  the patched netgen mode and confirm the real verdict matches the hand-driven netgen result
+  (device-class-exact), with NO false matched=true on a did-not-run case.
+
+id: "ORGANIC-20260531-eda-lvs-netgen-false-positive-and-no-stdcell-lib"
+submitted_at: "2026-05-31T00:00:00+08:00"
+session_context: >-
+  Found during the HDLC pilot LVS-coverage run (covering the yosys_equiv 230-unproven SAT-model
+  gap with device-level netgen). Device-level LVS reached device-class-exact (20937=20937) only
+  after working around both defects by hand. Companion Bucket-B note added to skills/lvs-triage
+  (device-level-covers-SAT-gap recipe + the matched-flag caveat).

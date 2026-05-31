@@ -33,8 +33,12 @@ suggested_fix: |
        `_v1_6_596_discover_tie_cells`: scan for conb_/conp_/TIEHI/TIELO patterns; sky130
        conb_1 is the dual-output cell).
     2. Insert into the yosys script AFTER abc, BEFORE write_verilog:
-         hilomap -hicell <HI_CELL> <HI_PIN> -locell <LO_CELL> <LO_PIN>; splitnets; clean
+         setundef -zero; hilomap -hicell <HI_CELL> <HI_PIN> -locell <LO_CELL> <LO_PIN>; splitnets; clean
        (omit hilomap + warn if no tie cell is discoverable, exactly as the runner falls back).
+       RECIPE REFINEMENT (v0.1.98, HDLC pilot): `setundef -zero` MUST run BEFORE hilomap — a
+       function with don't-care output bits emits yosys `1'hx` that survives hilomap as a bare
+       zero_/x net and still trips DRT-0305; and do NOT run `opt_clean` after hilomap (it deletes
+       the just-inserted tie cells, re-introducing bare constants). Plain `clean` only.
   This is a known, bounded fix (reference implementation already exists in the runner) but
   edits the LIVE MCP eda-server JS and requires rebuilding + re-testing the running server
   (v0.113.0) against a constant-net design, hence P2 / Bucket-C rather than an inline rule.
