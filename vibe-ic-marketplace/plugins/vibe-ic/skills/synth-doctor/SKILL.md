@@ -97,6 +97,28 @@ When flow-orchestrate detects a tool failure:
 > keep attrs intact, 0 removed); if your fix drops a spare it is a regression —
 > restore it and re-run the checker. See the `design-for-eco` skill.
 
+## Constant nets need a tie-cell pass before PnR (captured v0.1.95)
+
+A gate netlist that drives any constant bit (1'h0 / 1'h1 — from CRC tables, output
+clamps, tie-offs, zeroed unused outputs) as a bare net will fail TritonRoute with
+**DRT-0305 (zero_ net)** / DRT-0199 during detailed route. The fix is a tie-cell pass:
+map the constants to the PDK's dedicated tie cell (sky130 `sky130_fd_sc_hd__conb_1`,
+dual HI/LO output) and split shared nets — in yosys, after abc and before write_verilog:
+
+```
+hilomap -hicell <TIE_CELL> <HI_PIN> -locell <TIE_CELL> <LO_PIN>; splitnets; clean
+```
+
+**Path note (the recurring trap):** `phase3_one_shot_runner.py` ALREADY does this
+automatically (it discovers the tie cell from the liberty and inserts hilomap). But the
+**bare MCP `eda_synth`→`eda_pnr` path** (what the doc→GDS pilots drive) does NOT — its
+yosys script is `synth; dfflibmap; abc; clean; write_verilog` with no hilomap, and it only
+emits a `zero_net_hint` rather than auto-applying the fix. So when driving the bare MCP
+path, either (a) re-synth with the hilomap+splitnets pass above via `eda_run_tcl` before
+`eda_pnr`, or (b) drive synth through the phase3 runner which handles it. Either way the
+cell count is unchanged — the tie cells replace the bare constants 1:1. Tracked for a
+permanent eda_synth fix in `ORGANIC-20260531-mcp-eda-synth-missing-hilomap-tiecells`.
+
 ## Compliance gate (mandatory — not optional)
 
 After producing your output, save it to a file and run:

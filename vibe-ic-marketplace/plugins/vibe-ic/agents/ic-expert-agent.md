@@ -875,3 +875,24 @@ into the gold that the real pipeline never emits (a wireless protocol's gold inh
 half-duplex / wire-count serial fields was caught this way).
 
 _Captured by benchmark-enhancement-capture 2026-05-31._
+
+## Captured by benchmark-enhancement-capture — 2026-05-31 (v0.1.95 SENT doc→GDS pilot)
+
+### Skill: latch a one-cycle valid/strobe output in a self-checking testbench, do not poll it after a driver task returns
+
+When a self-checking testbench drives stimulus through a task/procedure and then checks a
+one-clock-wide output strobe (a frame-valid / data-valid / done pulse that the DUT asserts
+for exactly one cycle), polling the strobe AFTER the driver task returns races the pulse and
+usually misses it — the pulse already came and went inside the task. This reads as a DUT
+failure but the RTL is correct. The fix is in the TB, not the DUT: latch the strobe
+concurrently (a parallel always-block / fork that sets a sticky flag plus captures the
+companion data on the cycle the strobe is high), then assert on the latched flag after the
+task. The SENT-receiver pilot hit this — the frame-valid pulse was correct in RTL (confirmed
+by probing it) but the first TB polled it one cycle too late and reported a false fail.
+
+When a blind-authored DUT "fails" a self-checking TB only on a one-cycle handshake/strobe
+output, suspect the TB's sample timing before re-deriving the RTL — probe the strobe to
+confirm the RTL emits it, then fix the sampling. (General sampling discipline; do not
+over-fit to any one protocol's strobe.)
+
+_Captured by benchmark-enhancement-capture 2026-05-31._

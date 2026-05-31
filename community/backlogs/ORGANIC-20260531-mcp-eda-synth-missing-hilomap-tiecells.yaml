@@ -1,0 +1,52 @@
+type: tool-gap
+severity: P2
+component: mcp-eda-server/src/index.js (eda_synth tool) — vs programs/phase3_one_shot_runner.py
+plugin_version: "0.1.95"
+
+title: >-
+  MCP eda_synth emits bare constant nets (no hilomap tie-cell pass) so the bare MCP eda_synth→eda_pnr doc→GDS path fails TritonRoute DRT-0305 on any design with constant nets; phase3_one_shot_runner already fixes this — port the same hilomap step into eda_synth
+
+pattern: |
+  The MCP `eda_synth` yosys script (index.js ~line 632) is:
+      synth -top <top>; dfflibmap -liberty <lib>; abc -liberty <lib>; clean; stat; write_verilog
+  It does NOT run `hilomap`, so any constant bit (1'h0 / 1'h1 — produced by CRC tables,
+  clamps, tie-offs, unused-output zeroing, etc.) survives as a bare `zero_`/`one_` net in
+  the gate netlist. `eda_pnr` (OpenROAD/TritonRoute) then rejects these with DRT-0305
+  (zero_ net) / DRT-0199. The server already KNOWS this — index.js ~line 1079 emits a
+  `zero_net_hint` pointing at `yosys_hilomap_required_check` + a manual hilomap directive —
+  but eda_synth does NOT auto-apply it, so every caller must manually re-synth with hilomap.
+
+  Meanwhile `phase3_one_shot_runner.py` (v1.6.596+, `_v1_6_596_discover_tie_cells` +
+  hilomap) ALREADY discovers the PDK tie-cell from the liberty and inserts it
+  deterministically — so a design driven through the Vibe-IC phase3 RUNNER never hits this,
+  but a design driven through the bare MCP `eda_synth`→`eda_pnr` path (which is what the
+  doc→GDS pilots use — i2s/ahb_apb/ufs/sent) does. The SENT doc→GDS pilot (v0.1.95) hit it
+  (DRT-0305) and recovered by re-synthesizing in-container with
+  `hilomap -hicell sky130_fd_sc_hd__conb_1 HI -locell sky130_fd_sc_hd__conb_1 LO` +
+  `splitnets` via `eda_run_tcl`. i2s/ahb_apb/ufs dodged it only because their netlists
+  happened to have no bare constant nets — it is latent for any future pilot.
+
+suggested_fix: |
+  Port the phase3_one_shot_runner tie-cell logic into the MCP `eda_synth` tool so the bare
+  MCP path matches the runner path (chip-AGNOSTIC, PDK-agnostic):
+    1. Discover the PDK dual/HI/LO tie cell from the liberty (mirror
+       `_v1_6_596_discover_tie_cells`: scan for conb_/conp_/TIEHI/TIELO patterns; sky130
+       conb_1 is the dual-output cell).
+    2. Insert into the yosys script AFTER abc, BEFORE write_verilog:
+         hilomap -hicell <HI_CELL> <HI_PIN> -locell <LO_CELL> <LO_PIN>; splitnets; clean
+       (omit hilomap + warn if no tie cell is discoverable, exactly as the runner falls back).
+  This is a known, bounded fix (reference implementation already exists in the runner) but
+  edits the LIVE MCP eda-server JS and requires rebuilding + re-testing the running server
+  (v0.113.0) against a constant-net design, hence P2 / Bucket-C rather than an inline rule.
+  Corpus-sweep before shipping: re-run the i2s + ahb_apb + ufs + sent pilots through the
+  patched eda_synth → eda_pnr and confirm 0 DRT-0305 and unchanged cell counts.
+
+id: "ORGANIC-20260531-mcp-eda-synth-missing-hilomap-tiecells"
+submitted_at: "2026-05-31T00:00:00+08:00"
+session_context: >-
+  Surfaced by the SENT (SAE J2716) doc→GDS Shape-A pilot (v0.1.95, the 4th doc→GDS pilot).
+  Recovery was deterministic (hilomap + splitnets re-synth), so this is a clean tool-gap
+  capture: the fix already exists in phase3_one_shot_runner; the work is porting it into the
+  MCP eda_synth tool so the bare doc→GDS path gets it automatically. Companion Bucket-B note
+  added to skills/synth-doctor (constant-net path caveat) so the next pilot doesn't
+  rediscover DRT-0305.
