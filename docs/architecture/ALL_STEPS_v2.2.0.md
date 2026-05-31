@@ -81,6 +81,15 @@ The **ESD presence** check (v0.2.8) recognises sky130 IO integral-clamp pads (gp
 esd) — validated on the real Caravel `chip_io.def` (flips a 612-filler ring from a false ESD_MISSING
 to PRESENT, structural fillers excluded) with negation guards (`unclamped`≠ESD) + esd-before-structural
 ordering (`gpiov2_corner_pad`=ESD), and reports `esd_presence: PRESENT | MISSING | N/A`.
+The **ESD discharge-path topology** check (v0.2.9, a NEW **AUTOMATED** category) automates the
+*connectivity half* of ESD sign-off from DEF COMPONENTS + NETS: domain-loop completeness (a supply
+clamp with no matching ground-return clamp = open loop), clamp stitching (each clamp tied to BOTH a
+power and a ground net), and rated-cell membership. A `TOPOLOGY_GAP` is a conclusive automated FAIL
+→ `PERC_EQUIV_FAIL`; `TOPOLOGY_OK` is necessary-but-not-sufficient. **This shrinks the ESD
+MANUAL_REVIEW residual to exactly the device-physics half** — clamp HBM/CDM sizing (TLP/It2),
+inherited from the rated library-cell datasheet (an adversarial panel confirmed connectivity can
+never prove sizing, so the presence category stays MANUAL). Validated on the real Caravel
+`chip_io.def`: 63 ESD-pad instances, all 3 domain loops closed, 0 dangling, 0 unrated → TOPOLOGY_OK.
 
 ## Stage 4 — Output & Tapeout (Phase 3, close)
 

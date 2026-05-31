@@ -107,3 +107,28 @@ hardening_v0_2_8:
     - "lvc AND hvc both = clamp = ESD-bearing (sky130 fact)"
     - "core-macro + std-cell antenna diode stays N/A (diode is not an IO-ring cell)"
   status: "ESD presence sub-check now real-ring-accurate; status stays MANUAL_REVIEW (per-pad discharge-path topology still needs commercial PERC / LVS-ESD). +6 edge-case tests."
+
+automation_v0_2_9:
+  date: "2026-06-01"
+  what: >-
+    Automated the CONNECTIVITY HALF of per-pad ESD discharge-path verification (the part that does
+    NOT need device physics), shrinking the ESD MANUAL_REVIEW residual to exactly clamp HBM/CDM
+    sizing. New _esd_discharge_topology() + _parse_def_net_terminals() emit a NEW AUTOMATED category
+    "ESD discharge-path topology (connectivity)" in perc_equivalent: C2 domain-loop completeness
+    (supply clamp with no matching vss return clamp = open loop), C3 clamp stitching (each ESD pad/
+    clamp tied to BOTH a power and a ground net per DEF NETS), + rated-cell membership. A
+    TOPOLOGY_GAP is a conclusive automated FAIL -> PERC_EQUIV_FAIL; TOPOLOGY_OK is
+    necessary-but-not-sufficient. Designed + adversarially verified by a 7-agent workflow
+    (3-angle design panel + 3 over-claim critics).
+  honesty: >-
+    An adversarial panel (3 critics, all NEEDS_FIX) proved a connectivity check CANNOT emit a clean
+    "ESD safe" pass: connected != rated != sized (custom cells named to look rated, undersized rated
+    cells). So TOPOLOGY_OK explicitly states necessary-but-not-sufficient, the presence category
+    STAYS MANUAL_REVIEW, and clamps outside the sky130 IO rated family are flagged 'rating cannot be
+    inherited'. The win is automating the conclusive FAILs (open loop / dangling clamp / unrated),
+    not manufacturing a pass.
+  validated_on: >-
+    Real Caravel chip_io.def: 63 ESD-pad instances, all 3 domain loops closed (vddio/vssio, vccd/
+    vssd, vdda/vssa), 0 dangling, 0 unrated -> TOPOLOGY_OK (sizing still MANUAL).
+  residual_now: "ONLY device-physics: clamp HBM/CDM sizing (TLP/It2), inherited from the rated library-cell datasheet; + latch-up device topology + cross-domain device network. Commercial PERC/TLP."
+  tests_added: "+11 (topology unit matrix + DEF net-terminal parser + 2 emitter-integration)."

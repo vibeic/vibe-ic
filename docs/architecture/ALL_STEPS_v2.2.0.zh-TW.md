@@ -77,6 +77,12 @@ ESD pad-ring 存在性、latch-up/well-tap、跨電壓域 — 對 core-only macr
 **ESD 存在性**檢查（v0.2.8）能辨識 sky130 IO 整合式 clamp pad（gpiov2/hvc/lvc/clamped/esd）— 已在真實
 Caravel `chip_io.def` 驗證（把含 612 filler 的環從誤判 ESD_MISSING 翻成 PRESENT、結構填充排除），含 negation
 guard（`unclamped`≠ESD）+ esd-先於-structural 排序（`gpiov2_corner_pad`=ESD），回報 `esd_presence: PRESENT | MISSING | N/A`。
+**ESD 放電路徑 topology** 檢查（v0.2.9，新增 **AUTOMATED** 類別）把 ESD 簽核的*連通性那半*自動化（用 DEF
+COMPONENTS + NETS）：domain-loop 完整性（supply clamp 無對應 ground-return clamp = 開迴路）、clamp stitching
+（每個 clamp 都接到 power 和 ground 兩條 net）、rated-cell 歸屬。`TOPOLOGY_GAP` 是確定性 AUTOMATED FAIL
+→ `PERC_EQUIV_FAIL`；`TOPOLOGY_OK` 是必要但不充分。**這把 ESD 的 MANUAL_REVIEW 殘留縮到剛好只剩 device-physics
+那半**——clamp HBM/CDM 尺寸（TLP/It2），繼承自 rated library cell datasheet（對抗 panel 證明連通性永遠無法證明尺寸，
+故 presence 類別維持 MANUAL）。已在真實 Caravel `chip_io.def` 驗證：63 個 ESD-pad、3 個 domain loop 全閉合、0 dangling、0 unrated → TOPOLOGY_OK。
 
 ## Stage 4 — 輸出與 Tapeout（Phase 3 收口）
 

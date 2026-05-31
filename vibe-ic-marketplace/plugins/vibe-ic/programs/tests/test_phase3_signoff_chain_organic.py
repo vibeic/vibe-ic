@@ -752,3 +752,156 @@ class TestFormalInformational:
         # there is no new mandatory formal gate added by this change.
         assert "formal" in text.lower()
         assert "results.json" in text
+
+
+# ---------------------------------------------------------------------------
+# v0.2.9 — ESD discharge-path TOPOLOGY check (connectivity half automated).
+# Validated against the real Caravel chip_io.def (TOPOLOGY_OK; sizing MANUAL).
+# ---------------------------------------------------------------------------
+class TestEsdDischargeTopology:
+    # a complete sky130-IO pad ring: all 3 domain loops + every pad on both rails
+    _RING = [
+        ("clk_pad", "sky130_ef_io__gpiov2_pad"),
+        ("vddio0", "sky130_ef_io__vddio_hvc_clamped_pad"),
+        ("vssio0", "sky130_ef_io__vssio_hvc_clamped_pad"),
+        ("vccd0", "sky130_ef_io__vccd_lvc_clamped_pad"),
+        ("vssd0", "sky130_ef_io__vssd_lvc_clamped_pad"),
+        ("vdda0", "sky130_ef_io__vdda_hvc_clamped_pad"),
+        ("vssa0", "sky130_ef_io__vssa_hvc_clamped_pad"),
+    ]
+
+    def _full_nets(self, insts):
+        # every instance tied to a power net + a ground net
+        return {i: {"vddio_pwr", "vssio_gnd"} for i in insts}
+
+    def test_complete_ring_is_topology_ok(self):
+        insts = [i for i, _ in self._RING]
+        r = runner._esd_discharge_topology(self._RING, self._full_nets(insts))
+        assert r["status"] == "TOPOLOGY_OK"
+        assert r["gaps"] == []
+        assert r["unrated_clamps"] == []
+
+    def test_missing_return_clamp_is_gap(self):
+        ring = [c for c in self._RING if c[0] != "vssa0"]   # drop vssa return clamp
+        insts = [i for i, _ in ring]
+        r = runner._esd_discharge_topology(ring, self._full_nets(insts))
+        assert r["status"] == "TOPOLOGY_GAP"
+        assert any("vdda" in g and "vssa" in g for g in r["gaps"])
+
+    def test_dangling_clamp_not_tied_to_both_rails_is_gap(self):
+        insts = [i for i, _ in self._RING]
+        nets = self._full_nets(insts)
+        nets["vssa0"] = {"vddio_pwr"}        # only power, no ground → dangling
+        r = runner._esd_discharge_topology(self._RING, nets)
+        assert r["status"] == "TOPOLOGY_GAP"
+        assert any("vssa0" in g and "dangling" in g.lower() for g in r["gaps"])
+
+    def test_core_macro_is_na(self):
+        r = runner._esd_discharge_topology(
+            [("_1_", "sky130_fd_sc_hd__nor3_1")], {})
+        assert r["status"] == "NA"
+
+    def test_no_nets_is_incomplete_not_pass(self):
+        r = runner._esd_discharge_topology(self._RING, {})   # placement-only
+        assert r["status"] == "INCOMPLETE"
+
+    def test_unrated_clamp_flagged(self):
+        ring = self._RING + [("cust0", "acme_io__custom_hvc_clamped_pad")]
+        insts = [i for i, _ in ring]
+        r = runner._esd_discharge_topology(ring, self._full_nets(insts))
+        assert "acme_io__custom_hvc_clamped_pad" in r["unrated_clamps"]
+        assert "CANNOT be inherited" in r["note"]
+
+    def test_honesty_topology_ok_not_sized(self):
+        insts = [i for i, _ in self._RING]
+        r = runner._esd_discharge_topology(self._RING, self._full_nets(insts))
+        assert "NECESSARY-BUT-NOT-SUFFICIENT" in r["note"]
+        assert "sizing" in r["note"].lower()
+
+
+class TestDefNetTerminalParser:
+    _DEF = (
+        "NETS 2 ;\n"
+        "- vddio_net ( clk_pad VDDIO ) ( vddio0 VDDIO ) ( PIN vddio ) + USE POWER ;\n"
+        "- vssio_net ( clk_pad VSSIO ) ( vssio0 VSSIO ) + USE GROUND ;\n"
+        "END NETS\n")
+
+    def test_parses_inst_terminals_skips_pin(self):
+        inst_nets = runner._parse_def_net_terminals(self._DEF)
+        assert inst_nets["clk_pad"] == {"vddio_net", "vssio_net"}
+        assert "PIN" not in inst_nets             # synthetic I/O term skipped
+
+    def test_net_pg_class(self):
+        assert runner._net_pg_class("vssio_net") == "ground"
+        assert runner._net_pg_class("vddio_net") == "power"
+        assert runner._net_pg_class("clk") == "signal"
+
+
+_RING_DEF_HEAD = """VERSION 5.8 ;
+DESIGN chip_top ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 100000 100000 ) ;
+"""
+_RING_COMPONENTS = """COMPONENTS 7 ;
+- clk_pad sky130_ef_io__gpiov2_pad + PLACED ( 0 0 ) N ;
+- vddio0 sky130_ef_io__vddio_hvc_clamped_pad + PLACED ( 0 0 ) N ;
+- vssio0 sky130_ef_io__vssio_hvc_clamped_pad + PLACED ( 0 0 ) N ;
+- vccd0 sky130_ef_io__vccd_lvc_clamped_pad + PLACED ( 0 0 ) N ;
+- vssd0 sky130_ef_io__vssd_lvc_clamped_pad + PLACED ( 0 0 ) N ;
+- vdda0 sky130_ef_io__vdda_hvc_clamped_pad + PLACED ( 0 0 ) N ;
+{vssa}END COMPONENTS
+"""
+_RING_NETS = """NETS 2 ;
+- vddio_net ( clk_pad VDDIO ) ( vddio0 VDDIO ) ( vssio0 VDDIO ) ( vccd0 VCCD ) ( vssd0 VCCD ) ( vdda0 VDDA ){vssa_p} + USE POWER ;
+- vssio_net ( clk_pad VSSIO ) ( vddio0 VSSIO ) ( vssio0 VSSIO ) ( vccd0 VSSD ) ( vssd0 VSSD ) ( vdda0 VSSA ){vssa_g} + USE GROUND ;
+END NETS
+SPECIALNETS 2 ;
+    - VGND ( clk_pad VSSIO ) + USE GROUND ;
+    - VPWR ( clk_pad VDDIO ) + USE POWER ;
+END SPECIALNETS
+END DESIGN
+"""
+
+
+def _ring_def(complete=True):
+    vssa = "- vssa0 sky130_ef_io__vssa_hvc_clamped_pad + PLACED ( 0 0 ) N ;\n" if complete else ""
+    vssa_p = " ( vssa0 VDDA )" if complete else ""
+    vssa_g = " ( vssa0 VSSA )" if complete else ""
+    return (_RING_DEF_HEAD + _RING_COMPONENTS.format(vssa=vssa)
+            + _RING_NETS.format(vssa_p=vssa_p, vssa_g=vssa_g))
+
+
+class TestPercEsdTopologyIntegration:
+    def _seed(self, project):
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        rpt3.mkdir(parents=True, exist_ok=True)
+        for name in ("antenna", "ir_drop", "em", "erc"):
+            (rpt3 / f"{name}.json").write_text(json.dumps({"verdict": "PASS"}) + "\n")
+        return rpt3
+
+    def test_complete_ring_topology_category_is_automated_pass(self, tmp_path):
+        project = _mk_project(tmp_path, _ring_def(complete=True))
+        rpt3 = self._seed(project)
+        assert runner._emit_perc_equivalent(project, "chip_top", _fake_pdk(), "x", [])
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        topo = [c for c in j["categories"]
+                if c["category"].startswith("ESD discharge-path topology")]
+        assert topo and topo[0]["status"] == "AUTOMATED"
+        assert topo[0]["result"] == "PASS"
+        assert topo[0]["topology_status"] == "TOPOLOGY_OK"
+        # presence category still MANUAL (sizing not proven)
+        pres = [c for c in j["categories"]
+                if c["category"] == "ESD protection presence"][0]
+        assert pres["status"] == "MANUAL_REVIEW"
+
+    def test_open_loop_ring_fails_overall(self, tmp_path):
+        project = _mk_project(tmp_path, _ring_def(complete=False))   # no vssa clamp
+        rpt3 = self._seed(project)
+        assert runner._emit_perc_equivalent(project, "chip_top", _fake_pdk(), "x", [])
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        topo = [c for c in j["categories"]
+                if c["category"].startswith("ESD discharge-path topology")][0]
+        assert topo["result"] == "FAIL"
+        assert topo["topology_status"] == "TOPOLOGY_GAP"
+        # a conclusive automated GAP fails the overall PERC-equivalent verdict
+        assert j["verdict"] == "PERC_EQUIV_FAIL"

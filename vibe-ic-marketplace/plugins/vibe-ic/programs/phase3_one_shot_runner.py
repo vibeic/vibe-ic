@@ -5627,6 +5627,128 @@ def _esd_pad_ring_presence(components: List[Tuple[str, str]]) -> Dict[str, Any]:
     return base
 
 
+# DEF net-terminal parser + power/ground net classifier (v0.2.9 — feeds the ESD
+# discharge-path TOPOLOGY check). chip-AGNOSTIC: structural parse, no literal names.
+_NET_TERMINAL_RE = re.compile(r"\(\s*(\S+)\s+(\S+)\s*\)")
+
+
+def _net_pg_class(net: str) -> str:
+    """Classify a net name as 'power' | 'ground' | 'signal' by substring."""
+    n = net.lower()
+    if any(t in n for t in ("vss", "gnd", "vgnd", "vnb")):
+        return "ground"
+    if any(t in n for t in ("vdd", "vcc", "vpwr", "vpb")):
+        return "power"
+    return "signal"
+
+
+def _parse_def_net_terminals(def_text: str) -> Dict[str, set]:
+    """Return {instance: set(net names it has a terminal on)} from DEF NETS +
+    SPECIALNETS. Each net entry `- <net> ... ( <inst> <pin> ) ...`; the synthetic
+    `( PIN <name> )` I/O terminals are skipped. chip-AGNOSTIC."""
+    inst_nets: Dict[str, set] = {}
+    for tag in ("NETS", "SPECIALNETS"):
+        m = re.search(r"^%s\b.*?^END %s" % (tag, tag), def_text,
+                      re.MULTILINE | re.DOTALL)
+        if not m:
+            continue
+        for ent in re.split(r"\n\s*-\s+", m.group(0))[1:]:
+            net = ent.split()[0]
+            for inst, _pin in _NET_TERMINAL_RE.findall(ent):
+                if inst == "PIN":
+                    continue
+                inst_nets.setdefault(inst, set()).add(net)
+    return inst_nets
+
+
+# sky130 IO rated-cell family prefixes — an ESD clamp's HBM/CDM rating may only be
+# INHERITED from a datasheet when the master is a recognised rated library cell.
+_RATED_IO_FAMILIES = ("sky130_fd_io__", "sky130_ef_io__")
+# Canonical supply<->ground ESD clamp-domain pairs (the discharge loop per domain).
+_ESD_DOMAIN_PAIRS = (("vddio", "vssio"), ("vccd", "vssd"), ("vdda", "vssa"))
+
+
+def _esd_discharge_topology(components: List[Tuple[str, str]],
+                            inst_nets: Dict[str, set]) -> Dict[str, Any]:
+    """Per-pad ESD discharge-path TOPOLOGY check (deterministic, pure, v0.2.9).
+
+    Automates the CONNECTIVITY half of ESD sign-off — the part that does NOT need
+    device physics. Finds CONCLUSIVE broken-topology gaps:
+      C2 domain-loop completeness — a supply-side clamp with no matching vss/ground
+         return clamp (or vice-versa) = open ESD return loop = GAP.
+      C3 clamp stitching — an ESD-pad/clamp instance not tied to BOTH a power net
+         AND a ground net (per DEF NETS terminals) = dangling/floating clamp = GAP.
+      rated-cell membership — ESD clamp masters outside the sky130 IO rated family;
+         their datasheet HBM/CDM rating CANNOT be inherited (flagged, not auto-OK).
+
+    status ∈ {NA (core macro), TOPOLOGY_OK, TOPOLOGY_GAP, INCOMPLETE (no NETS)}.
+
+    HONESTY: TOPOLOGY_OK proves connectivity is NECESSARY-BUT-NOT-SUFFICIENT — it
+    does NOT prove clamp HBM/CDM device sizing (TLP/It2 — inherited from the rated
+    cell datasheet, never independently verified here). A TOPOLOGY_GAP is conclusive
+    (the discharge path is structurally broken regardless of clamp physics)."""
+    esd_inst = [(i, m) for i, m in components
+                if _classify_io_cell(m) == "esd_pad"]
+    signal_pads = [(i, m) for i, m in components
+                   if _classify_io_cell(m) in ("esd_pad", "nonesd_pad")]
+    if not signal_pads:
+        return {"status": "NA", "gaps": [], "unrated_clamps": [],
+                "note": "N/A (core macro — no pad ring; ESD is the pad frame's job)."}
+
+    masters = {m.lower() for _i, m in esd_inst}
+
+    def _present(tok: str) -> bool:
+        return any(tok in m for m in masters)
+
+    gaps: List[str] = []
+    # C2 — domain-loop completeness (open ESD return path is a conclusive gap).
+    for hi, lo in _ESD_DOMAIN_PAIRS:
+        if _present(hi) != _present(lo):
+            have, miss = (hi, lo) if _present(hi) else (lo, hi)
+            gaps.append(
+                f"{have}/{lo if have == hi else hi} domain: a {have} clamp is "
+                f"present but no matching {miss} return clamp — open ESD discharge "
+                "loop (no return path).")
+
+    # C3 — each ESD clamp/pad instance must tie to BOTH a power and a ground net.
+    incomplete = not inst_nets          # placement-only DEF: cannot run C3
+    if not incomplete:
+        for i, m in esd_inst:
+            classes = {_net_pg_class(n) for n in inst_nets.get(i, set())}
+            if not ("power" in classes and "ground" in classes):
+                gaps.append(
+                    f"clamp/pad instance '{i}' ({m}) is not tied to both a power "
+                    f"and a ground net (connected rail classes: "
+                    f"{sorted(classes) or 'NONE — floating'}) — dangling clamp / "
+                    "broken discharge path.")
+
+    unrated = sorted({m for _i, m in esd_inst
+                      if not any(m.startswith(f) for f in _RATED_IO_FAMILIES)})
+
+    if incomplete:
+        status = "INCOMPLETE"
+        note = ("DEF has a pad ring but no NETS/SPECIALNETS block (placement-only) "
+                "— per-pad rail connectivity cannot be checked. NOT a pass.")
+    elif gaps:
+        status = "TOPOLOGY_GAP"
+        note = (f"{len(gaps)} conclusive ESD discharge-path topology GAP(s) found "
+                "(open return loop / dangling clamp). These are structural breaks, "
+                "independent of clamp device sizing — fix before sign-off.")
+    else:
+        status = "TOPOLOGY_OK"
+        note = (
+            "Connectivity topology OK: every clamp domain loop is closed (supply + "
+            "ground return clamp) and every ESD pad/clamp is tied to both a power "
+            "and a ground net. NECESSARY-BUT-NOT-SUFFICIENT — this does NOT prove "
+            "clamp HBM/CDM device sizing (TLP/It2), which is inherited from the "
+            "rated library-cell datasheet and still needs commercial PERC/TLP.")
+    if unrated:
+        note += (f" WARNING: {len(unrated)} ESD clamp master(s) are NOT in the "
+                 "sky130 IO rated family — their HBM/CDM rating CANNOT be inherited "
+                 "from a datasheet (TLP/SPICE required): " + ", ".join(unrated[:6]))
+    return {"status": status, "gaps": gaps, "unrated_clamps": unrated, "note": note}
+
+
 def _read_verdict(json_path: Path) -> Optional[str]:
     """Read the `verdict` field of an already-emitted sign-off JSON. Returns
     None if the file is missing/unreadable (category was not emitted)."""
@@ -5734,6 +5856,36 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
              "confirmed": None},
         ]
     categories.append(esd_cat)
+
+    # ESD discharge-path TOPOLOGY (v0.2.9) — AUTOMATES the connectivity half:
+    # conclusive open-loop / dangling-clamp / unrated-clamp gaps from DEF
+    # COMPONENTS + NETS. Only meaningful when a pad ring exists; for a core macro
+    # (esd N/A) it is skipped so it does not perturb the core-macro verdict. The
+    # MANUAL "ESD protection presence" category above stays — device sizing (TLP/
+    # HBM) is never proven here (necessary-but-not-sufficient).
+    if esd["status"] != "N/A":
+        topo = _esd_discharge_topology(
+            components, _parse_def_net_terminals(
+                def_file.read_text(errors="ignore")))
+        if topo["status"] != "NA":
+            topo_result = {"TOPOLOGY_OK": "PASS", "TOPOLOGY_GAP": "FAIL",
+                           "INCOMPLETE": "INCOMPLETE"}[topo["status"]]
+            categories.append({
+                "category": "ESD discharge-path topology (connectivity)",
+                "status": "AUTOMATED",
+                "result": topo_result,
+                "tool": ("DEF COMPONENTS clamp-domain loop + DEF NETS rail "
+                         "connectivity (open-source PERC-equivalent)"),
+                "topology_status": topo["status"],
+                "gaps": topo["gaps"],
+                "unrated_clamps": topo["unrated_clamps"],
+                "evidence": ("connectivity NECESSARY-BUT-NOT-SUFFICIENT: a PASS "
+                             "proves the discharge loops close + clamps are tied "
+                             "to both rails; it does NOT prove clamp HBM/CDM "
+                             "sizing (TLP/It2 — inherited from the rated-cell "
+                             "datasheet). A FAIL is a conclusive structural break."),
+                "note": topo["note"],
+            })
 
     # Latch-up / well-tap.
     categories.append({
