@@ -78,6 +78,39 @@ regex (see ORGANIC-20260531-eda-lvs-netgen-false-positive-and-no-stdcell-lib) �
 real netgen verdict lines ("Circuits match"/"failed pin matching"/device-class equivalence), not
 the boolean.
 
+## Top-level pin matching needs PORTS on the layout `.subckt` — two routes (captured v0.1.114)
+
+After device-level netgen reaches device-count-exact + classes-equivalent (e.g. HDLC
+16393=16393, 0 disconnected nodes), the last residual is often
+`Final result: Top level cell failed pin matching` — because the Magic GDS flat extraction emits
+a **portless** `.subckt <top>` (empty port list), so netgen's name-matching partition has nothing
+to anchor (flat layout nets ≠ schematic nets, disjoint naming). Two general programs close this:
+
+- **Route A — canonical cause-fix (PREFER): `programs/magic_port_extract_emit.py`.** Emits the
+  Magic `port makeall` extraction TCL + the shell preamble. Two prerequisites, both proven on HDLC:
+  (1) `export PDK=<pdk>` and `PDK_ROOT` in the SHELL **before** magic launches (the system
+  `.magicrc` reads `$env(PDK)` at startup — an in-script `set env(PDK)` is too late; the
+  `eda_run_tcl engine=magic` wrapper currently does NOT export it → see
+  ORGANIC-20260531-magic-extraction-no-toplevel-ports; drive via `docker exec iic-eda` with the
+  export preamble). (2) `port makeall` only promotes labels on the PDK **port-purpose** layer
+  (sky130 `MET3PIN` = GDS 70/16); an OpenROAD GDS-streamout step that put pin text on a drawing
+  layer (sky130 10/1) yields nothing — relabel 10/1→70/16 (klayout) first. Result on HDLC: a real
+  port-labeled flat `.subckt hdlc_core_flat clk fcs_ok …` with 20937 devices, and the netgen
+  verdict advances past the pin-match-seed stage. (To reach "Circuits match uniquely" the moved
+  label must also be geometrically snapped to the met3 routing shape so it ties to the net.)
+
+- **Route B — tool-independent fallback: `programs/lvs_def_port_seed.py`.** Parses ANY DEF `PINS`
+  section → ordered `(pin, net, direction)`, and emits both a netgen port-seed TCL and an ordered
+  port list to inject into the portless `.subckt <top>` line. Runs NOW, no Magic dependency.
+  **Honest limit (proven on HDLC):** name-seeding ALONE does NOT converge a flat extraction whose
+  internal nets carry Magic auto-names (`a_NNNN#`) — the injected ports become *disconnected pins*
+  (HDLC: 47 disconnected pins). Route B is a partition HINT / audit artifact; when the layout body
+  has no matching net names, **Route A (real label promotion tied to geometry) is genuinely
+  required** — say so rather than reporting a false PASS.
+
+Both are deterministic + pytest-pinned (`programs/tests/test_magic_port_extract_emit.py`,
+`programs/tests/test_lvs_def_port_seed.py`).
+
 ## Handoff
 
 - Re-run DRC after LVS fix → `/drc-fix`

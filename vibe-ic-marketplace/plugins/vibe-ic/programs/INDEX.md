@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 531
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 531)
+- **Total programs (excluding helpers / shims):** 533
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 533)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 522 |
+| `any` | 524 |
 
 ## Alphabetical listing
 
@@ -291,9 +291,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `llm_semantic_confirm` | any | — | LLM double-confirm for program-extracted SEMANTIC fields. |
 | `lora_protocol_synth` | any | — | LoRa / LoRaWAN protocol synth helper (low-power wide-area network, LPWAN). |
 | `lpddr5_protocol_synth` | any | v0.1.89 | LPDDR5 SDRAM (JEDEC JESD209-5)-class protocol synth helper. |
+| `lvs_def_port_seed` | any | v0.1.114 | DEF-pin port-seed generator for top-level netgen LVS pin matching. |
 | `lvs_netgen_setup_emit` | any | v0.1.49 | Netgen supplementary LVS setup-file generator. |
 | `lvs_report_check` | any | — | wrapper for eda_report_audit --mode lvs. |
 | `lvs_triage_classify` | any | v0.1.50 | LVS triage classifier (Pattern-B → program). |
+| `magic_port_extract_emit` | any | v0.1.114 | Magic port-labeled GDS-extraction TCL generator. |
 | `manifest_leak_check` | any | v0.47.6 | Detect benchmark-value leaks in fact manifests. |
 | `manufacturing_fab_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
 | `marketplace_version_sync_check` | any | — | marketplace_version_sync_check.py |
@@ -603,7 +605,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (522 programs)
+### `any` (524 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -865,9 +867,11 @@ _(no programs in this group)_
 - `llm_semantic_confirm` — LLM double-confirm for program-extracted SEMANTIC fields.
 - `lora_protocol_synth` — LoRa / LoRaWAN protocol synth helper (low-power wide-area network, LPWAN).
 - `lpddr5_protocol_synth` — LPDDR5 SDRAM (JEDEC JESD209-5)-class protocol synth helper.  _[v0.1.89]_
+- `lvs_def_port_seed` — DEF-pin port-seed generator for top-level netgen LVS pin matching.  _[v0.1.114]_
 - `lvs_netgen_setup_emit` — Netgen supplementary LVS setup-file generator.  _[v0.1.49]_
 - `lvs_report_check` — wrapper for eda_report_audit --mode lvs.
 - `lvs_triage_classify` — LVS triage classifier (Pattern-B → program).  _[v0.1.50]_
+- `magic_port_extract_emit` — Magic port-labeled GDS-extraction TCL generator.  _[v0.1.114]_
 - `manifest_leak_check` — Detect benchmark-value leaks in fact manifests.  _[v0.47.6]_
 - `manufacturing_fab_intake_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
 - `marketplace_version_sync_check` — marketplace_version_sync_check.py

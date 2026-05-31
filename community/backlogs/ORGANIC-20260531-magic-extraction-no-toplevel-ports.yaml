@@ -1,0 +1,81 @@
+type: tool-gap
+severity: P2
+component: mcp-eda-server (eda_extraction tool — Magic ext2spice; eda_run_tcl engine=magic)
+
+plugin_version: "0.1.114"
+
+title: >-
+  Magic GDS extraction (eda_extraction / eda_run_tcl engine=magic) emits a portless .subckt <top>,
+  so device-level netgen LVS cannot anchor top-level pin matching; the canonical fix needs (a)
+  env(PDK) exported BEFORE the system .magicrc is read, and (b) a `port makeall` extraction whose
+  pin labels sit on the PDK port-purpose layer (sky130 MET3PIN 70/16), not a drawing layer.
+
+pattern: |
+  Surfaced closing the HDLC doc→GDS pilot's LAST LVS residual (RESULT_e2e_pilot.md § 8.1). After
+  device-level LVS reached device-count-EXACT (16393=16393, all transistor classes equivalent,
+  0 disconnected nodes via the powered netlist), netgen still reported
+  `Final result: Top level cell failed pin matching` because the Magic flat extraction's
+  `.subckt hdlc_core` had an EMPTY port list — netgen's name-matching partition had nothing to
+  anchor (flat 13725 layout nets vs 8507 schematic nets, disjoint naming).
+
+  Two distinct, deterministic blockers were found and proven in-container:
+
+  1. ENV(PDK) NOT EXPORTED BEFORE .magicrc. `eda_run_tcl engine=magic` launches magic WITHOUT
+     `export PDK=...`, so the system `.magicrc` aborts with
+     `Error parsing user ".magicrc": can't read "env(PDK)": no such variable`, the tech is never
+     loaded ("Using technology minimum"), and the inline script is never even read
+     ("File /tmp/run_tcl_... couldn't be read"). Setting `set env(PDK)` INSIDE the script is too
+     late (the system .magicrc runs at startup, before any -rcfile script). PROVEN FIX: launch via
+     `export PDK=sky130A PDK_ROOT=... ; magic -noconsole -dnull -rcfile <pdk>.magicrc <script>`
+     (works flawlessly via `docker exec iic-eda` — tech loads, port makeall + ext2spice succeed).
+
+  2. `port makeall` PROMOTES NOTHING WHEN PIN TEXT IS ON A DRAWING LAYER. Even with the env fix,
+     `port makeall` found 0 named ports because OpenROAD `write_gds` placed the 47 pin labels on
+     GDS 10/1 (sky130 pwell-drawing — NOT a label/port purpose). Magic only promotes labels on a
+     pin/port-purpose layer (sky130 MET3PIN = 70/16; text = MET3TXT 70/5). PROVEN: relabeling the
+     47 texts 10/1 -> 70/16 (klayout) THEN `port makeall` emitted a real port-labeled flat
+     `.subckt hdlc_core_flat clk fcs_ok frame_valid ...` WITH 20937 devices, and the netgen
+     verdict advanced from "Top level cell failed pin matching" to
+     "Netlists do not match / Port matching may fail to disambiguate symmetries" (the top ports
+     now exist on both sides and are compared). Residual after that: the moved labels were not
+     guaranteed geometrically coincident with the met3 routing shape, so Magic listed them as
+     named-but-disconnected nodes — a label-SNAPPING refinement, not a fundamental blocker.
+
+suggested_fix: |
+  In the packaged mcp-eda-server:
+  1. eda_run_tcl engine=magic: export PDK + PDK_ROOT in the child env (from the `pdk` param /
+     detected PDK_ROOT) BEFORE invoking magic, and pass the FOUNDRY `<pdk>.magicrc` via -rcfile
+     (not the system default). This unblocks ALL magic-engine scripts, not just extraction.
+  2. eda_extraction: add a `promote_ports` (a.k.a. `port_makeall`) boolean param that injects
+     `port makeall` (and an optional `flatten <top>`) into the generated ext2spice TCL so the
+     emitted `.subckt <top>` carries top-level ports — required for top-level netgen pin matching.
+     Deterministic TCL is already provided by `programs/magic_port_extract_emit.py` (Route A).
+  3. When the GDS pin text is on a drawing layer (OpenROAD write_gds default), either:
+       (a) re-emit pin labels on the PDK port-purpose layer with label SNAP to the routing shape
+           (klayout: move 10/1 -> 70/16 for sky130 met3 AND snap to the met3 polygon), or
+       (b) drive write_gds / write_gds with -label_cells / correct LEF pin layer so labels land on
+           MET*PIN with the right purpose in the first place.
+     Then `port makeall` ties each port to its net and netgen can converge.
+  4. Fallback when no Magic path is available (Route B, SHIPPED): `programs/lvs_def_port_seed.py`
+     recovers the ordered top-port set from the DEF PINS section and injects it into the portless
+     `.subckt`. NOTE (honest): name-seeding ALONE does not converge a flat extraction whose
+     internal nets carry Magic auto-names (proven: it produces 47 disconnected pins) — Route B is
+     a partition HINT / audit artifact; Route A (real label promotion tied to geometry) is the
+     authoritative close.
+
+  Corpus-sweep before shipping: re-run i2s / hdlc / benchmark_clean/sha256 GDS through the patched
+  eda_extraction(promote_ports=true) + eda_run_tcl(magic, env-prepped) and confirm the emitted
+  `.subckt <top>` carries ports and the netgen top-level pin match advances (ideally to
+  "Circuits match uniquely" once label-snapping is correct).
+
+related: "ORGANIC-20260531-eda-lvs-netgen-false-positive-and-no-stdcell-lib"
+
+id: "ORGANIC-20260531-magic-extraction-no-toplevel-ports"
+submitted_at: "2026-05-31T00:00:00+08:00"
+session_context: >-
+  Found closing the HDLC pilot top-level LVS pin-match residual. Delivered two GENERAL, TESTED
+  plugin programs: programs/magic_port_extract_emit.py (Route A canonical: env preamble + port
+  makeall TCL, 18 pytest) and programs/lvs_def_port_seed.py (Route B fallback: DEF PINS ->
+  ordered ports + netgen seed + .subckt injection, 22 pytest). Empirically validated in-container:
+  env-prepped docker-exec magic runs `port makeall` correctly; relabel-to-MET3PIN advanced the
+  netgen verdict past the pin-match-seed stage. Companion Bucket-B note added to skills/lvs-triage.
