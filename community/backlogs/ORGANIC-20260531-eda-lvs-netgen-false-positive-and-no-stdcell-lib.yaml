@@ -52,3 +52,13 @@ session_context: >-
   gap with device-level netgen). Device-level LVS reached device-class-exact (20937=20937) only
   after working around both defects by hand. Companion Bucket-B note added to skills/lvs-triage
   (device-level-covers-SAT-gap recipe + the matched-flag caveat).
+
+interim_defense: >-
+  v0.2.1 ships programs/lvs_signoff_guard.py — a deterministic, process-enforced gate that
+  RAISES (exit 1) when a (claimed) LVS match is against a PORTLESS extracted top .subckt
+  (the vacuous-match condition that produces the silent false positive). This turns the known
+  tool limitation into an enforced check NOW, before the MCP eda_lvs verdict-parse fix lands:
+  even if eda_lvs reports matched=true, the guard refuses to trust it unless the extraction has
+  top-level ports to anchor against. 14 pytest. The permanent fix (real verdict parse +
+  did-not-run guard + std-cell-lib load) per suggested_fix above is still required in the MCP
+  server; the guard is the safety net until then.

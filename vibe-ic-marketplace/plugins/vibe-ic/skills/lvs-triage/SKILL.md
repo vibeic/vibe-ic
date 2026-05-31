@@ -78,6 +78,14 @@ regex (see ORGANIC-20260531-eda-lvs-netgen-false-positive-and-no-stdcell-lib) �
 real netgen verdict lines ("Circuits match"/"failed pin matching"/device-class equivalence), not
 the boolean.
 
+**Mandatory sign-off guard (v0.2.1):** before trusting ANY LVS "match", run
+`programs/lvs_signoff_guard.py --spice <extracted.spice> [--top <name>]` (or call
+`lvs_signoff_guard.assert_lvs_trustworthy(...)`). It RAISES on a PORTLESS extracted top
+`.subckt` — the vacuous-match condition that lets a naive wrapper report a SILENT
+FALSE-POSITIVE. A match is only trustworthy when the layout top has ports to anchor against;
+if the guard trips, fix the extraction (Route A `port makeall` via `magic_port_extract_emit.py`,
+or DEF-seed via `lvs_def_port_seed.py`) and re-run — never sign off on a portless match.
+
 ## Top-level pin matching needs PORTS on the layout `.subckt` — two routes (captured v0.1.114)
 
 After device-level netgen reaches device-count-exact + classes-equivalent (e.g. HDLC

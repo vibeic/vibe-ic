@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 533
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 533)
+- **Total programs (excluding helpers / shims):** 534
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 534)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 524 |
+| `any` | 525 |
 
 ## Alphabetical listing
 
@@ -294,6 +294,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lvs_def_port_seed` | any | v0.1.114 | DEF-pin port-seed generator for top-level netgen LVS pin matching. |
 | `lvs_netgen_setup_emit` | any | v0.1.49 | Netgen supplementary LVS setup-file generator. |
 | `lvs_report_check` | any | — | wrapper for eda_report_audit --mode lvs. |
+| `lvs_signoff_guard` | any | v0.2.1 | defensive check against a SILENT FALSE-POSITIVE LVS match. |
 | `lvs_triage_classify` | any | v0.1.50 | LVS triage classifier (Pattern-B → program). |
 | `magic_port_extract_emit` | any | v0.1.114 | Magic port-labeled GDS-extraction TCL generator. |
 | `manifest_leak_check` | any | v0.47.6 | Detect benchmark-value leaks in fact manifests. |
@@ -605,7 +606,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (524 programs)
+### `any` (525 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -870,6 +871,7 @@ _(no programs in this group)_
 - `lvs_def_port_seed` — DEF-pin port-seed generator for top-level netgen LVS pin matching.  _[v0.1.114]_
 - `lvs_netgen_setup_emit` — Netgen supplementary LVS setup-file generator.  _[v0.1.49]_
 - `lvs_report_check` — wrapper for eda_report_audit --mode lvs.
+- `lvs_signoff_guard` — defensive check against a SILENT FALSE-POSITIVE LVS match.  _[v0.2.1]_
 - `lvs_triage_classify` — LVS triage classifier (Pattern-B → program).  _[v0.1.50]_
 - `magic_port_extract_emit` — Magic port-labeled GDS-extraction TCL generator.  _[v0.1.114]_
 - `manifest_leak_check` — Detect benchmark-value leaks in fact manifests.  _[v0.47.6]_
