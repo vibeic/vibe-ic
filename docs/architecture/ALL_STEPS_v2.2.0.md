@@ -119,61 +119,52 @@ MCP `eda_lint`/`eda_synth`/`eda_cocotb`.
 
 ---
 
-## B. 33-STEP STAGE MODEL (sign-off view, `33_step_flow_overview.md`)
+## B. 33-STEP STAGE MODEL — ALL 33 STEPS, CONTIGUOUS (sign-off view, `33_step_flow_overview.md`)
 
-### Stage 1 — RTL Generation + Verification (steps 1-6)
-| # | Step | Tool/Skill | Gate |
-|---|---|---|---|
-| 1 | Spec-to-RTL | `spec-to-rtl` | L1-L9 present + RTL emitted |
-| 2 | Lint | `eda_lint` + Phase-2a gates + polluter check | Verilator 0 errors |
-| 3 | CDC / RDC check | `cdc-check` | CDC paths synchronised |
-| 4 | Simulation | `testbench-gen` + `eda_simulate` + coverage | all tb PASS + coverage |
-| 5 | Formal verification | `formal-verify` + `assertion-gen` | k-induction proved |
-| 6 | FPGA early prototype | `fpga-test-harness` + `eda_fpga_compile/program` + on-board BIST | `.sof` + BIST PASS |
+**Every step 1→33, no gaps.** Stage is a column (S1 RTL+verify / S2 synth+DFT / S3 physical+sign-off
+/ S4 output+validation). (§ A is the runner-marker view; § D below is a *subset* — only the
+sign-off checks with a known open-source gap.)
 
-### Stage 2 — Synthesis + DFT (steps 7-13)
-| # | Step | Tool/Skill | Gate |
-|---|---|---|---|
-| 7 | Constraint setup | `constraint-gen` | `*.sdc` + 3-corner `pvt_matrix.json` |
-| 8 | SDC validation | SDC lint | all clock/IO constraints present |
-| 9 | Synthesis (Yosys) | `eda_synth` + `synth-doctor` | mapped netlist + cell count |
-| 10 | Pre-layout STA | `eda_sta_mcorner` (SS/TT/FF) | WNS/WHS all corners |
-| 11 | DFT insertion (scan + ATPG) | `dft-insert` + `atpg` + `eda_dft` | scan chain + stuck-at ≥85% |
-| 12 | Post-DFT optimization | resynth / buffering | timing held |
-| 13 | Equivalence check | `equivalence-check` + Yosys `equiv` | RTL ≡ post-DFT netlist |
+| # | Stage | Step | Tool/Skill | Gate |
+|---|---|---|---|---|
+| 1 | S1 | Spec-to-RTL | `spec-to-rtl` | L1-L9 present + RTL emitted |
+| 2 | S1 | Lint | `eda_lint` + Phase-2a gates + polluter check | Verilator 0 errors |
+| 3 | S1 | CDC / RDC check | `cdc-check` | CDC paths synchronised |
+| 4 | S1 | Simulation | `testbench-gen` + `eda_simulate` + coverage | all tb PASS + coverage |
+| 5 | S1 | Formal verification | `formal-verify` + `assertion-gen` | k-induction proved (informational waiver if no model) |
+| 6 | S1 | FPGA early prototype | `fpga-test-harness` + `eda_fpga_compile/program` + on-board BIST | `.sof` + BIST PASS |
+| 7 | S2 | Constraint setup | `constraint-gen` | `*.sdc` + 3-corner `pvt_matrix.json` |
+| 8 | S2 | SDC validation | SDC lint | all clock/IO constraints present |
+| 9 | S2 | Synthesis (Yosys) | `eda_synth` + `synth-doctor` (+ tie-cell pass) | mapped netlist + cell count |
+| 10 | S2 | Pre-layout STA | `eda_sta_mcorner` (SS/TT/FF) | WNS/WHS all corners |
+| 11 | S2 | DFT insertion (scan + ATPG) | `dft-insert` + `atpg` + `eda_dft` | scan chain + stuck-at ≥85% |
+| 12 | S2 | Post-DFT optimization | resynth / buffering | timing held |
+| 13 | S2 | Equivalence check | `equivalence-check` + Yosys `equiv` | RTL ≡ post-DFT netlist |
+| 14 | S3 | Floorplan + PDN | `eda_pnr` (init) | area / utilization |
+| 15 | S3 | Clock planning | clock-planning skill | clock-buffer list |
+| 16 | S3 | Placement (global + detailed) | `eda_pnr` | placement legal |
+| 17 | S3 | CTS | `eda_pnr enable_cts=true` | clock skew |
+| 18 | S3 | Post-CTS hold fixing | `repair_timing -hold` | WHS > 0 |
+| 19 | S3 | Routing (global + detailed) | `eda_pnr enable_detailed_route=true` + `def_stage_progression_check` | 0 overflow + DEF SHA differs |
+| 20 | S3 | Parasitic Extraction (RC→SPEF) | `eda_extraction` (OpenRCX) | `spef_extraction_check` (sky130 = no captable → ENV-BLOCKED) |
+| 21 | S3 | Post-route STA (MMMC) | `eda_sta_mcorner` | 3-corner pass |
+| 22 | S3 | IR Drop | OpenROAD PSM `analyze_power_grid` | `ir_drop_report_check` (FIXED v0.2.4) |
+| 23 | S3 | EM check | PSM `-enable_em` | `em_report_check` (FIXED v0.2.4) |
+| 24 | S3 | Antenna check | OpenROAD `check_antennas` | 0 violation (report-path FIXED v0.2.4) |
+| 25 | S3 | Signal Integrity (crosstalk/noise) | SI screen (decoupled-C) | `si_crosstalk_check` (screen; full needs SPEF) |
+| 26 | S3 | Post-Layout Gate-Level Sim (+SDF) | `eda_simulate` | `post_layout_sim_check` PASS |
+| 27 | S3 | Physical Verification | `eda_drc_klayout` + `eda_lvs` + ERC | DRC=0 / LVS device-exact / ERC floating-net |
+| 28 | S3 | ECO repair loop | `eco-plan` | `eco_loop_audit` PASS |
+| 29 | S4 | Power analysis | pre + post layout | meets spec |
+| 30 | S4 | Metal Fill (density fill) | OpenROAD `filler_placement` → `filled.def` | `metal_fill_density_check` (FIXED v0.2.4) |
+| 31 | S4 | Tapeout checklist | `tapeout-checklist` + `signoff_audit` | 4/4 strict |
+| 32 | S4 | GDSII output | `eda_gds` + `def2gds` | only if step 27 clean |
+| 33 | S4 | FPGA final sign-off | recompile + on-board test + `fpga_on_board_attestation_check` | bitstream hash + hw evidence |
 
-### Stage 3 — Physical Design + Sign-off (steps 14-28)
-| # | Step | Tool/Skill | Gate |
-|---|---|---|---|
-| 14 | Floorplan + PDN | `eda_pnr` (init) | area / utilization |
-| 15 | Clock planning | clock-planning skill | clock-buffer list |
-| 16 | Placement (global + detailed) | `eda_pnr` | placement legal |
-| 17 | CTS | `eda_pnr enable_cts=true` | clock skew |
-| 18 | Post-CTS hold fixing | `repair_timing -hold` | WHS > 0 |
-| 19 | Routing (global + detailed) | `eda_pnr enable_detailed_route=true` + `def_stage_progression_check` | 0 overflow + DEF SHA differs |
-| 20 | Parasitic Extraction (RC→SPEF) | `eda_extraction` | `spef_extraction_check` PASS |
-| 21 | Post-route STA (MMMC) | `eda_sta_mcorner` | 3-corner pass |
-| 22 | IR Drop | `eda_ir_drop` | static + dynamic |
-| 23 | EM check | electromigration | lifetime ≥ 10 yr |
-| 24 | Antenna check | OpenROAD antenna | 0 violation |
-| 25 | Signal Integrity (crosstalk/noise) | SI analysis | `si_crosstalk_check` PASS |
-| 26 | Post-Layout Gate-Level Sim (+SDF) | `eda_simulate` | `post_layout_sim_check` PASS |
-| 27 | Physical Verification | `eda_drc_klayout` + `eda_lvs` + ERC + Density | DRC=0 / LVS match / ERC=0 |
-| 28 | ECO repair loop | `eco-plan` | `eco_loop_audit` PASS |
-
-### Stage 4 — Output + Validation (steps 29-33)
-| # | Step | Tool/Skill | Gate |
-|---|---|---|---|
-| 29 | Power analysis | pre + post layout | meets spec |
-| 30 | Metal Fill (density fill) | `eda_pnr` | `metal_fill_density_check` PASS |
-| 31 | Tapeout checklist | `tapeout-checklist` + `signoff_audit` | 4/4 strict |
-| 32 | GDSII output | `eda_gds` + `def2gds` | only if step 27 clean |
-| 33 | FPGA final sign-off | recompile + on-board test + `fpga_on_board_attestation_check` | bitstream hash + hw evidence |
-
-> **Numbering caveat:** the Stage-3 sign-off checks have a SECOND numbering in the sign-off-audit
-> scheme used in § D (SPEF 22 / STA 23 / IR 24 / EM 25 / Antenna 26 / SI 27 / DRC-LVS-ERC 30 /
-> fill 33), which differs from this 33-step doc (SPEF 20 / STA 21 / IR 22 / EM 23 / Antenna 24 /
-> SI 25 / PV 27 / fill 30). To be unified by `flow_doc_emit.py` (below).
+> **Numbering caveat:** the Stage-3 sign-off checks ALSO carry a sign-off-audit numbering used in
+> § D (SPEF 22 / STA 23 / IR 24 / EM 25 / Antenna 26 / SI 27 / DRC-LVS-ERC 30 / fill 33), which
+> differs from THIS 33-step numbering above (SPEF 20 / STA 21 / IR 22 / EM 23 / Antenna 24 / SI 25 /
+> PV 27 / fill 30). Same checks, two ID schemes; to be unified by `flow_doc_emit.py`.
 
 ---
 
@@ -189,20 +180,26 @@ MCP `eda_lint`/`eda_synth`/`eda_cocotb`.
 
 ---
 
-## D. Phase-3 sign-off checks — gap status (sign-off-audit numbering)
+## D. Phase-3 sign-off checks — gap status (SUBSET; sign-off-audit numbering)
 
-| Step | Check | Open-source status | Severity |
+> **This is a SUBSET, not the full step list** — only the Phase-3 sign-off checks that had an
+> open-source gap (which is why 14-21 / 28 / 29 / 31 / 32 are absent *here*: they had no gap).
+> The complete contiguous 1→33 list is **§ B**. Status as of v0.2.4 (fixes shipped — see backlog
+> `ORGANIC-20260531-phase3-signoff-chain-open-source-gaps`):
+
+| Step | Check | Status (v0.2.4) | Severity |
 |---|---|---|---|
-| 22 | SPEF (OpenRCX) | `extract.tcl` must `global_route` + `set_wire_rc` first | 🔶 medium |
-| 23 | Post-route STA (MMMC) | runs once SPEF exists; pilots report slack +X ns MET | 🟢 none (passes) |
+| 22 | SPEF (OpenRCX) | ordering fixed (`set_wire_rc`→`global_route`→`write_spef`); **ENV-BLOCKED** — sky130A ships no OpenRCX captable | 🔴 env |
+| 23 | Post-route STA (MMMC) | passes; pilots report slack +X ns MET | 🟢 none |
 | 24 | IR drop (PSM) | cascading-missing on SPEF | 🔶 medium |
-| 25 | EM | cascading-missing on SPEF | 🔶 medium |
-| 26 | Antenna | router runs it; report not on audit path | 🟢 low |
-| 27 | SI (crosstalk) | cascading-missing on SPEF | 🔶 medium |
-| 30 | DRC / LVS / ERC | sky130 ships only Calibre decks; open decks need wiring (LVS chain = § C) | 🔴 high (env) |
-| 33 | Metal fill | runner lacks the fill stage → no `filled.def` | 🔶 medium |
-| 18 | Spare cells | 30 placed; `spare_cells.json` missing `rows[]` | 🟢 low (schema) |
-| 5 | Formal | `altsyncram` no formal model → INFORMATIONAL waiver | 🟢 none |
+| 24 | IR drop | **FIXED** — OpenROAD PSM `analyze_power_grid` (walks DEF SPECIALNETS directly; no SPEF needed — the cascade premise was wrong) → `reports/phase3/ir_drop.{rpt,json}` | 🟢 fixed |
+| 25 | EM | **FIXED** — PSM `-enable_em` → `em.{rpt,json}` | 🟢 fixed |
+| 26 | Antenna | **FIXED** — `check_antennas` re-emitted to `antenna.{rpt,json}` (report-path) | 🟢 fixed |
+| 27 | SI (crosstalk) | **PARTIAL** — decoupled-C SCREEN_PASS now emitted; full coupling-cap SI still needs SPEF (env-blocked) | 🔶 screen |
+| 30 | DRC / LVS / ERC | **PARTIAL** — KLayout sky130 DRC + Magic floating-net ERC + device-level LVS (§ C) all wired/passing; full Calibre PERC (latch-up/ESD) env-deferred | 🔶 partial |
+| 33 | Metal fill | **FIXED** — OpenROAD `filler_placement` → `phase3/stage3/pnr/filled.def` + `density.{rpt,json}` | 🟢 fixed |
+| 18 | Spare cells | **FIXED** — `spare_cells.json` now has `rows[]` (derived from existing placement; placement unchanged) | 🟢 fixed |
+| 5 | Formal | confirmed INFORMATIONAL waiver (altsyncram no model) — no code change | 🟢 none |
 
 **None is a circuit-design error** — all script-ordering / cascading / environment / report-schema.
 Actionable fixes tracked in `ORGANIC-20260531-phase3-signoff-chain-open-source-gaps`.
