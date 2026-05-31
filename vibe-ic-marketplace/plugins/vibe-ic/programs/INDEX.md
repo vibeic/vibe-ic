@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 534
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 534)
+- **Total programs (excluding helpers / shims):** 535
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 535)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 525 |
+| `any` | 526 |
 
 ## Alphabetical listing
 
@@ -181,6 +181,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `fix_fault_cut_names` | any | v0.63 | Rewrite Fault-cut netlist so escaped identifiers with embedded dots |
 | `flexray_protocol_synth` | any | — | FlexRay Communications System protocol synth helper (protocol #49). |
 | `flow_compliance_check` | any | Wave 91 | Strict Vibe-IC phase 2+3 gate (40 main-track |
+| `flow_doc_emit` | any | — | auto-generate the RUNNER-MARKER view of the Vibe-IC flow. |
 | `flow_stage_check` | any | — | wrapper for signoff_audit --mode flow. |
 | `foundry_handoff_pack_gen` | any | — | emit Step 35 foundry handoff package skeleton. |
 | `foundry_handoff_package_check` | any | Wave 88 | gate (v1.6.13 Wave 88, integerised |
@@ -606,7 +607,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (525 programs)
+### `any` (526 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -759,6 +760,7 @@ _(no programs in this group)_
 - `fix_fault_cut_names` — Rewrite Fault-cut netlist so escaped identifiers with embedded dots  _[v0.63]_
 - `flexray_protocol_synth` — FlexRay Communications System protocol synth helper (protocol #49).
 - `flow_compliance_check` — Strict Vibe-IC phase 2+3 gate (40 main-track  _[Wave 91]_
+- `flow_doc_emit` — auto-generate the RUNNER-MARKER view of the Vibe-IC flow.
 - `flow_stage_check` — wrapper for signoff_audit --mode flow.
 - `foundry_handoff_pack_gen` — emit Step 35 foundry handoff package skeleton.
 - `foundry_handoff_package_check` — gate (v1.6.13 Wave 88, integerised  _[Wave 88]_
