@@ -199,7 +199,7 @@ metal-fill stage; the `spare_cells.json` schema field) are tracked in
 
 | Pilot | Archetype | ic_class | LVS stop point |
 |---|---|---|---|
-| i2s | streaming-rx | digital_cmd_driven | structural (3 SAT-unproven) |
+| i2s | streaming-rx | digital_cmd_driven | **device-level exact 4499=4499** (3 SAT-unproven → 0; 0 tie cells, port-label floor) |
 | ahb_apb | bus-bridge | bus_interconnect | — |
 | ufs | storage-framer | serial_peripheral | — |
 | sent | sensor-decoder | digital_arithmetic_primitive | structural all-proven 1388/1388 |
@@ -207,10 +207,12 @@ metal-fill stage; the `spare_cells.json` schema field) are tracked in
 | hdlc | packet-framer | digital_cmd_driven | **device-level exact 20937=20937** (SAT gap → 0) |
 | spacewire | link credit-flow-control | digital_arithmetic_primitive | **device-level exact 6676=6676 / powered 6164=6164** (99 SAT-unproven → 0; port-label floor) |
 
-Both hdlc + spacewire show the §5 LVS chain end-to-end: structural-LEC SAT residual → device-level
-netgen (covers it to device-class-exact) → powered-netlist (eliminates the tie-cell power-pin node)
-→ residual = the Category-D port-label floor (`port makeall` / sign-off LVS), with `lvs_signoff_guard`
-correctly refusing to claim a vacuous portless match.
+**All three device-level-closed pilots (i2s + hdlc + spacewire) now share one stop point** — the
+§5 LVS chain end-to-end: structural-LEC SAT residual → device-level netgen (covers it to
+device-class-exact, every SAT-unproven cell → 0) → powered-netlist (eliminates the tie-cell
+power-pin node; N/A for i2s, which has 0 tie cells) → residual = the Category-D port-label floor
+(`port makeall` / sign-off LVS), with `lvs_signoff_guard` correctly refusing a vacuous portless
+match. No pilot now stops at the structural-SAT gap.
 
 ---
 

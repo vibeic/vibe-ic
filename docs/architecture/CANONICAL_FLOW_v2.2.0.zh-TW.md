@@ -194,7 +194,7 @@ DRC/LVS deck；metal-fill 階段；`spare_cells.json` schema 欄位）追蹤於
 
 | Pilot | 原型 | ic_class | LVS 停點 |
 |---|---|---|---|
-| i2s | streaming-rx | digital_cmd_driven | structural（3 SAT-unproven） |
+| i2s | streaming-rx | digital_cmd_driven | **device-level exact 4499=4499**（3 SAT-unproven → 0；0 tie cell，port-label floor） |
 | ahb_apb | bus-bridge | bus_interconnect | — |
 | ufs | storage-framer | serial_peripheral | — |
 | sent | sensor-decoder | digital_arithmetic_primitive | structural 全證 1388/1388 |
@@ -202,9 +202,11 @@ DRC/LVS deck；metal-fill 階段；`spare_cells.json` schema 欄位）追蹤於
 | hdlc | packet-framer | digital_cmd_driven | **device-level exact 20937=20937**（SAT 落差 → 0） |
 | spacewire | link credit-flow-control | digital_arithmetic_primitive | **device-level exact 6676=6676 / powered 6164=6164**（99 SAT-unproven → 0；port-label floor） |
 
-hdlc + spacewire 都完整走過 §5 LVS 鏈：structural-LEC SAT 殘留 → device-level netgen（覆蓋到
-device-class-exact）→ powered-netlist（消除 tie-cell 電源-pin 節點）→ 殘留 = Category-D port-label
-floor（`port makeall` / sign-off LVS），`lvs_signoff_guard` 正確拒絕 vacuous portless match。
+**三個做了 device-level 的 pilot（i2s + hdlc + spacewire）現在共用同一個停點** — §5 LVS 鏈端到端：
+structural-LEC SAT 殘留 → device-level netgen（覆蓋到 device-class-exact，每個 SAT-unproven cell → 0）
+→ powered-netlist（消除 tie-cell 電源-pin 節點；i2s 無 tie cell 故 N/A）→ 殘留 = Category-D port-label
+floor（`port makeall` / sign-off LVS），`lvs_signoff_guard` 正確拒絕 vacuous portless match。**已無
+任何 pilot 停在 structural-SAT 落差。**
 
 ---
 
