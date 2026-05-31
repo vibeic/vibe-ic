@@ -1,6 +1,6 @@
 # Vibe-IC — ALL Phases / Stages / Steps (v2.2.0, exhaustive)
 
-**Plugin 0.2.2.** Complete enumeration of every phase, stage, and step. There are **two coexisting
+**Plugin 0.2.6.** Complete enumeration of every phase, stage, and step. There are **two coexisting
 views**: **(A)** the runner ground-truth markers (`[N/15]` / `def step_*`) that the code actually
 prints, and **(B)** the 33-step Stage model (sign-off view). Both are listed in full below; the
 companion `CANONICAL_FLOW_v2.2.0.md` is the narrative. Source of truth = the runners.
@@ -27,44 +27,44 @@ and keep their native A*/M* ids. Auto-generated live in `FLOW_STEPS_GENERATED.md
 
 ### A.1 Phase 1 — global steps 1-34 (15 main markers + 19 sub-steps, `phase1_doc_one_shot_runner.py`)
 
-| Marker | Step |
-|---|---|
-| `[1/15]` | Text extraction (input/docs → input_doc; 2 MB scan cap, v0.1.91) |
-| `[2/15]` | L1_DATASHEET |
-| `[3/15]` | L2_FRS |
-| `[4/15]` | L3_CMD_PROTOCOL |
-| `[5/15]` | L4_REGMAP |
-| `[6/15]` | L5_ADI_SPEC |
-| `[7/15]` | L6_CONTROL_LOGIC |
-| `[8/15]` | L7_TEST_DEBUG |
-| `[9/15]` | L8_RTL_CONSTANTS |
-| `[10/15]` | L9_INTEGRATION_SPEC |
-| `[11/15]` | L10_TEST_CASES |
-| `[12/15]` | L11_OTP_CONTENT |
-| `[13/15]` | L12_BEHAVIORAL_SEQUENCES |
-| `[14/15]` | L13_LAB_CALIBRATION |
-| `[14b/15]` | L8_TIMING_WAVEFORM |
-| `[14b2/15]` | L8 protocol-width extract (R19) |
-| `[14b3/15]` | L8 encoding-table overlay (R41) |
-| `[14b4/15]` | L6 FSM / control-logic overlay (R42) |
-| `[14b5/15]` | L12 behavioral-sequences overlay (R43) |
-| `[14b6/15]` | L17/L18/L8_TIMING/L9 batch synth (R46) — DEPRECATED → 14c3 |
-| `[14b7/15]` | L8_RTL_CONSTANTS universal protocol constants (R48) |
-| `[14c/15]` | L14-L18 protocol spec extract |
-| `[14c0/15]` | L9 integration_spec overlay (R40) |
-| `[14c1/15]` | L1 protocol metadata overlay (R23) |
-| `[14c1b/15]` | L17 handshake_pairs overlay (R27) |
-| `[14c2/15]` | L3 protocol mirror from L14-L18 (R21) |
-| `[14c3/15]` | L17/L18/L8_TIMING/L9 batch synth (R46 relocated) |
-| `[14c4/15]` | L1/L2/L6/L7/L12 universal protocol doc facts (R50) |
-| `[14c5/15]` | L4/L5/L10/L14/L15 residual cleanup (R52) |
-| `[14d/15]` | L19-L23 skeleton emit |
-| `[14e/15]` | serial_peripheral_protocol class synth (R53/R54/R55) — **81-protocol detector→synth dispatch** |
-| `[14e2/15]` | bus_interconnect_protocol Tier-2 synth (TileLink/Wishbone/Avalon/OCP/AXI-Stream) |
-| `[14e3/15]` | Universal packet/PDU L10↔L3 opcode-consistency sweep |
-| `[15/15]` | Coverage / parity report |
+| # | Marker | Step |
+|---|---|---|
+| 1 | `[1/15]` | Text extraction (input/docs → input_doc; 2 MB scan cap, v0.1.91) |
+| 2 | `[2/15]` | L1_DATASHEET |
+| 3 | `[3/15]` | L2_FRS |
+| 4 | `[4/15]` | L3_CMD_PROTOCOL |
+| 5 | `[5/15]` | L4_REGMAP |
+| 6 | `[6/15]` | L5_ADI_SPEC |
+| 7 | `[7/15]` | L6_CONTROL_LOGIC |
+| 8 | `[8/15]` | L7_TEST_DEBUG |
+| 9 | `[9/15]` | L8_RTL_CONSTANTS |
+| 10 | `[10/15]` | L9_INTEGRATION_SPEC |
+| 11 | `[11/15]` | L10_TEST_CASES |
+| 12 | `[12/15]` | L11_OTP_CONTENT |
+| 13 | `[13/15]` | L12_BEHAVIORAL_SEQUENCES |
+| 14 | `[14/15]` | L13_LAB_CALIBRATION |
+| 15 | `[14b/15]` | L8_TIMING_WAVEFORM |
+| 16 | `[14b2/15]` | L8 protocol-width extract (R19) |
+| 17 | `[14b3/15]` | L8 encoding-table overlay (R41) |
+| 18 | `[14b4/15]` | L6 FSM / control-logic overlay (R42) |
+| 19 | `[14b5/15]` | L12 behavioral-sequences overlay (R43) |
+| 20 | `[14b6/15]` | L17/L18/L8_TIMING/L9 batch synth (R46) — DEPRECATED → 14c3 |
+| 21 | `[14b7/15]` | L8_RTL_CONSTANTS universal protocol constants (R48) |
+| 22 | `[14c/15]` | L14-L18 protocol spec extract |
+| 23 | `[14c0/15]` | L9 integration_spec overlay (R40) |
+| 24 | `[14c1/15]` | L1 protocol metadata overlay (R23) |
+| 25 | `[14c1b/15]` | L17 handshake_pairs overlay (R27) |
+| 26 | `[14c2/15]` | L3 protocol mirror from L14-L18 (R21) |
+| 27 | `[14c3/15]` | L17/L18/L8_TIMING/L9 batch synth (R46 relocated) |
+| 28 | `[14c4/15]` | L1/L2/L6/L7/L12 universal protocol doc facts (R50) |
+| 29 | `[14c5/15]` | L4/L5/L10/L14/L15 residual cleanup (R52) |
+| 30 | `[14d/15]` | L19-L23 skeleton emit |
+| 31 | `[14e/15]` | serial_peripheral_protocol class synth (R53/R54/R55) — **81-protocol detector→synth dispatch** |
+| 32 | `[14e2/15]` | bus_interconnect_protocol Tier-2 synth (TileLink/Wishbone/Avalon/OCP/AXI-Stream) |
+| 33 | `[14e3/15]` | Universal packet/PDU L10↔L3 opcode-consistency sweep |
+| 34 | `[15/15]` | Coverage / parity report |
 
-→ **34 distinct Phase-1 markers** (15 main + 19 sub/overlay/dispatch).
+→ **Phase 1 = global steps 1-34** (15 main markers + 19 sub/overlay/dispatch). Phase 2 continues at 35.
 
 ### A.2 Phase 2 — step functions (`phase2_one_shot_runner.py`) — **global steps 35-49**
 
@@ -156,7 +156,7 @@ sign-off checks with a known open-source gap.)
 | 17 | S3 | CTS | `eda_pnr enable_cts=true` | clock skew |
 | 18 | S3 | Post-CTS hold fixing | `repair_timing -hold` | WHS > 0 |
 | 19 | S3 | Routing (global + detailed) | `eda_pnr enable_detailed_route=true` + `def_stage_progression_check` | 0 overflow + DEF SHA differs |
-| 20 | S3 | Parasitic Extraction (RC→SPEF) | `eda_extraction` (OpenRCX) | `spef_extraction_check` (sky130 = no captable → ENV-BLOCKED) |
+| 20 | S3 | Parasitic Extraction (RC→SPEF) | `eda_extraction` (OpenRCX, captable `rules.openrcx.sky130A.nom.magic`) | `spef_extraction_check` (FIXED v0.2.5 — real 268 KB SPEF) |
 | 21 | S3 | Post-route STA (MMMC) | `eda_sta_mcorner` | 3-corner pass |
 | 22 | S3 | IR Drop | OpenROAD PSM `analyze_power_grid` | `ir_drop_report_check` (FIXED v0.2.4) |
 | 23 | S3 | EM check | PSM `-enable_em` | `em_report_check` (FIXED v0.2.4) |
@@ -194,18 +194,17 @@ sign-off checks with a known open-source gap.)
 
 > **This is a SUBSET, not the full step list** — only the Phase-3 sign-off checks that had an
 > open-source gap (which is why 14-21 / 28 / 29 / 31 / 32 are absent *here*: they had no gap).
-> The complete contiguous 1→33 list is **§ B**. Status as of v0.2.4 (fixes shipped — see backlog
+> The complete contiguous 1→33 list is **§ B**. Status as of v0.2.6 (fixes shipped — see backlog
 > `ORGANIC-20260531-phase3-signoff-chain-open-source-gaps`):
 
-| Step | Check | Status (v0.2.4) | Severity |
+| Step | Check | Status (v0.2.6) | Severity |
 |---|---|---|---|
 | 22 | SPEF (OpenRCX) | **WORKS** (prior "ENV-BLOCKED" was a false negative) — sky130A **does** ship the OpenRCX captable at `/foss/pdks/sky130A/libs.tech/openlane/rules.openrcx.sky130A.{min,nom,max}.magic`; `extract_parasitics -ext_model_file <…nom.magic>` + `write_spef` extracts on a real routed DEF (spm: 1370 rc segments, 330 nets, 1700 caps). The earlier RCX-0107 "0 segments" was an EMPTY (routing-less) DEF, not a missing captable. | 🟢 works |
 | 23 | Post-route STA (MMMC) | passes; pilots report slack +X ns MET | 🟢 none |
-| 24 | IR drop (PSM) | cascading-missing on SPEF | 🔶 medium |
-| 24 | IR drop | **FIXED** — OpenROAD PSM `analyze_power_grid` (walks DEF SPECIALNETS directly; no SPEF needed — the cascade premise was wrong) → `reports/phase3/ir_drop.{rpt,json}` | 🟢 fixed |
+| 24 | IR drop (PSM) | **FIXED** — OpenROAD PSM `analyze_power_grid` (walks DEF SPECIALNETS directly; no SPEF needed — the cascade premise was wrong) → `reports/phase3/ir_drop.{rpt,json}` | 🟢 fixed |
 | 25 | EM | **FIXED** — PSM `-enable_em` → `em.{rpt,json}` | 🟢 fixed |
 | 26 | Antenna | **FIXED** — `check_antennas` re-emitted to `antenna.{rpt,json}` (report-path) | 🟢 fixed |
-| 27 | SI (crosstalk) | **PARTIAL** — decoupled-C SCREEN_PASS now emitted; full coupling-cap SI still needs SPEF (env-blocked) | 🔶 screen |
+| 27 | SI (crosstalk) | **WIRED to real SPEF** (v0.2.6) — per-net coupling ratio Cc/(Cc+Cg) from the OpenRCX SPEF (spm: 503 nets, max 0.99, mean 0.66, 80 coupling-dominated) + worst-case capacitive-divider noise bound. Coupling ratios are advisory (driven victims tolerate them); `violations_count=0` (full pass/fail needs a timing-window/driver-strength SI tool). decoupled-C is the no-SPEF fallback. | 🟢 screen (real Cc) |
 | 30 | DRC / LVS / ERC | **PARTIAL** — KLayout sky130 DRC + Magic floating-net ERC + device-level LVS (§ C) all wired/passing; full Calibre PERC (latch-up/ESD) env-deferred | 🔶 partial |
 | 33 | Metal fill | **FIXED** — OpenROAD `filler_placement` → `phase3/stage3/pnr/filled.def` + `density.{rpt,json}` | 🟢 fixed |
 | 18 | Spare cells | **FIXED** — `spare_cells.json` now has `rows[]` (derived from existing placement; placement unchanged) | 🟢 fixed |
@@ -218,16 +217,17 @@ Actionable fixes tracked in `ORGANIC-20260531-phase3-signoff-chain-open-source-g
 
 ## E. Totals
 
-| View | Count |
-|---|---|
-| Phase 1 runner markers | 34 (15 main + 19 sub) |
-| Phase 2 step functions | 14 (+1 phase3 hook) |
-| Phase 3 step functions | 6 |
-| Analog | A1–A8 (8) |
-| Mixed-signal | M1–M4 (4) |
-| 33-step Stage model | 33 (Stage 1:6 / 2:7 / 3:15 / 4:5) |
-| LVS sign-off chain layers | 5 |
-| Phase-3 sign-off checks | 10 |
+| View | Count | Global steps |
+|---|---|---|
+| Phase 1 runner markers | 34 (15 main + 19 sub) | 1–34 |
+| Phase 2 step functions | 15 | 35–49 |
+| Phase 3 step functions | 6 | 50–55 |
+| **Sequential flow total** | **55** | **1–55 (contiguous, no restart)** |
+| Analog (parallel) | A1–A8 (8) | A1–A8 |
+| Mixed-signal (parallel) | M1–M4 (4) | M1–M4 |
+| 33-step Stage model (§B, separate) | 33 | Stage 1:6 / 2:7 / 3:15 / 4:5 |
+| LVS sign-off chain layers (§C) | 5 | — |
+| Phase-3 sign-off checks (§D subset) | 10 | — |
 
 ---
 

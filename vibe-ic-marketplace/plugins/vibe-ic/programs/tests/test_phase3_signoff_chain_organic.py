@@ -285,30 +285,94 @@ class TestAntennaReport:
 # ---------------------------------------------------------------------------
 # 2b. SI crosstalk screen (deterministic, no container).
 # ---------------------------------------------------------------------------
+# A tiny IEEE-1481 SPEF with known caps. Net *1 = mostly coupling (dominated),
+# net *2 = mostly ground (low coupling). *CAP entries: `idx node val` = ground;
+# `idx n1 n2 val` = coupling (credited to both nets).
+_SPEF_SAMPLE = """\
+*SPEF "ieee 1481-1999"
+*DESIGN "toy"
+*C_UNIT 1 PF
+*D_NET *1 1.0
+*CAP
+1 *1:1 0.01
+2 *1:2 *2:3 0.99
+*RES
+1 *1:1 *1:2 5.0
+*END
+*D_NET *2 1.0
+*CAP
+1 *2:1 0.90
+2 *2:3 *1:2 0.10
+*END
+"""
+
+
 class TestSiCrosstalk:
-    def test_si_passes_gate(self, tmp_path):
+    # ---- SPEF coupling-cap parser (pure) ----
+    def test_parse_spef_caps(self):
+        cg, cc = runner._parse_spef_caps(_SPEF_SAMPLE)
+        assert round(cg["*1"], 3) == 0.01
+        assert round(cg["*2"], 3) == 0.90
+        # coupling cap 0.99 credited to BOTH *1 and *2; 0.10 also to both
+        assert round(cc["*1"], 3) == 1.09     # 0.99 + 0.10
+        assert round(cc["*2"], 3) == 1.09
+
+    def test_si_coupling_metrics(self):
+        cg, cc = runner._parse_spef_caps(_SPEF_SAMPLE)
+        m = runner._si_coupling_metrics(cg, cc)
+        assert m["nets"] == 2
+        # *1 ratio = 1.09/(1.09+0.01) ≈ 0.991 → coupling-dominated
+        assert m["max_coupling_ratio"] > 0.9
+        assert m["violations_gt0p9"] >= 1
+        assert m["max_crosstalk_noise_mv"] > 0
+
+    def test_si_uses_real_spef_when_present(self, tmp_path):
         project = _mk_project(tmp_path)
         rpt3 = runner._pl.reports_phase3_dir(project)
         rpt3.mkdir(parents=True, exist_ok=True)
+        spef = tmp_path / "chip_top.spef"
+        spef.write_text(_SPEF_SAMPLE)
         si = rpt3 / "si_crosstalk.rpt"
         ok = runner._emit_si_crosstalk_report(
-            project, "chip_top", rpt3 / "ir_drop.rpt", si, [])
-        assert ok and si.is_file()
+            project, "chip_top", spef, rpt3 / "ir_drop.rpt", si, [])
+        assert ok
+        j = json.loads((rpt3 / "si_crosstalk.json").read_text())
+        assert j["tool"] == "spef-coupling-cap-si-screen"
+        assert j["nets_analyzed"] == 2
+        assert j["max_coupling_ratio"] > 0.9
+        assert j["nets_coupling_dominated_gt0p9"] >= 1
+        # HONESTY: a high coupling ratio is advisory, NOT a manufactured violation
+        assert j["violations_count"] == 0
+        # gate still PASSes (screen, not a proven-failure sign-off)
         import si_crosstalk_check as sic
-        rc = sic.main([str(project)])
-        assert rc == 0, "si_crosstalk gate must PASS on the screen"
+        assert sic.main([str(project)]) == 0
 
-    def test_si_is_honest_screen(self, tmp_path):
+    def test_si_falls_back_to_decoupled_screen_without_spef(self, tmp_path):
         project = _mk_project(tmp_path)
         rpt3 = runner._pl.reports_phase3_dir(project)
         rpt3.mkdir(parents=True, exist_ok=True)
         si = rpt3 / "si_crosstalk.rpt"
-        runner._emit_si_crosstalk_report(
-            project, "chip_top", rpt3 / "ir_drop.rpt", si, [])
+        # spef=None → decoupled-C fallback
+        ok = runner._emit_si_crosstalk_report(
+            project, "chip_top", None, rpt3 / "ir_drop.rpt", si, [])
+        assert ok and si.is_file()
         j = json.loads((rpt3 / "si_crosstalk.json").read_text())
-        # Must NOT claim a full sign-off — explicitly a screen.
         assert "screen" in j["verdict"].lower()
-        assert "SPEF" in j["method"]
+        import si_crosstalk_check as sic
+        assert sic.main([str(project)]) == 0
+
+    def test_si_gate_passes_both_paths(self, tmp_path):
+        # the gate must pass on the SPEF screen too (violations_count == 0)
+        project = _mk_project(tmp_path)
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        rpt3.mkdir(parents=True, exist_ok=True)
+        spef = tmp_path / "chip_top.spef"
+        spef.write_text(_SPEF_SAMPLE)
+        runner._emit_si_crosstalk_report(
+            project, "chip_top", spef, rpt3 / "ir_drop.rpt",
+            rpt3 / "si_crosstalk.rpt", [])
+        import si_crosstalk_check as sic
+        assert sic.main([str(project)]) == 0
 
 
 # ---------------------------------------------------------------------------

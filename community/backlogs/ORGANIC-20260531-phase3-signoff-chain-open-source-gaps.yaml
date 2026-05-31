@@ -117,12 +117,20 @@ resolution:
         {rpt,json}. Validated: 0 net / 0 pin violations on spm pilot.
     - step: 27
       name: "SI / crosstalk"
-      verdict: FIXED_AS_SCREEN
+      verdict: FIXED_AS_REAL_SPEF_SCREEN
       change: >-
-        New _emit_si_crosstalk_report() emits reports/phase3/si_crosstalk.
-        {rpt,json}. HONEST: this is a decoupled-C structural screen (no SPEF
-        coupling caps), explicitly marked verdict=SCREEN_PASS, not a full SI
-        sign-off. si_crosstalk_check PASS.
+        v0.2.6: now WIRED to the real OpenRCX SPEF (Step 22). New pure helpers
+        _parse_spef_caps() (IEEE-1481 *CAP parser → per-net ground/coupling cap)
+        + _si_coupling_metrics() (coupling ratio Cc/(Cc+Cg), worst-case
+        capacitive-divider noise). _emit_si_crosstalk_report() uses them when a
+        SPEF is present (decoupled-C is the no-SPEF fallback). Validated on the
+        spm SPEF: 503 nets, max ratio 0.9947, mean 0.6567, 80 coupling-dominated
+        (>0.9), max noise bound 1790 mV. HONESTY: a high coupling ratio on a
+        DRIVEN net is NOT a proven failure (mean ~0.66 is normal for dense
+        sky130) — the bound assumes a floating victim, so ratios are reported
+        as an ADVISORY watch-list and violations_count stays 0; a full pass/fail
+        SI sign-off needs victim/aggressor timing-window + driver-strength
+        analysis (commercial SI tool). si_crosstalk_check PASS both paths.
     - step: 30
       name: "DRC + LVS + ERC + Density"
       verdict: PARTIAL
@@ -147,8 +155,8 @@ resolution:
         spares, so Step 18 spares survive. metal_fill_density_check PASS.
   still_open:
     - "Calibre PERC latch-up/ESD (Step 30): needs commercial deck."
-    - "Full coupling-cap SI (Step 27): now feasible via the real SPEF (v0.2.5) — wire the SPEF into the SI screen as a follow-up."
-  tests_added: "programs/tests/test_phase3_signoff_chain_organic.py (24 tests incl. the v0.2.5 SPEF-captable pins); full suite PASS."
+    - "Full pass/fail SI sign-off (Step 27): the v0.2.6 screen reports real coupling ratios but a timing-window + driver-strength noise sign-off still needs a commercial SI tool (the coupling-dominated net list is the watch-list)."
+  tests_added: "programs/tests/test_phase3_signoff_chain_organic.py (26 tests incl. v0.2.5 SPEF-captable + v0.2.6 SPEF-SI coupling pins); full suite PASS."
 
 id: "ORGANIC-20260531-phase3-signoff-chain-open-source-gaps"
 submitted_at: "2026-05-31T00:00:00+08:00"
