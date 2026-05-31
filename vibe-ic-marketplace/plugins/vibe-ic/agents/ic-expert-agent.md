@@ -896,3 +896,25 @@ confirm the RTL emits it, then fix the sampling. (General sampling discipline; d
 over-fit to any one protocol's strobe.)
 
 _Captured by benchmark-enhancement-capture 2026-05-31._
+
+## Captured by benchmark-enhancement-capture — 2026-05-31 (v0.1.97 QSPI/OSPI doc→GDS pilot)
+
+### Skill: a serial-receive shift engine needs ONE explicit bit counter, or the last bit double-captures at the phase boundary
+
+When a controller shifts data IN over a serial link — especially a multi-lane one where each
+clock edge captures 1 or 4 bits (SPI/QSPI/OSPI, and any serial-peripheral-class receiver) —
+count received bits with a SINGLE explicit counter that advances by exactly the lane width on
+each sampled edge and ends the phase when it reaches the target bit count. Schemes that derive
+"done" from a separate byte counter, an edge-toggle, or the FSM-state transition alone tend to
+sample the FINAL bit twice at the data-to-done boundary (the last shift and the phase-exit land
+on the same edge), corrupting the last received byte. The QSPI Fast-Read pilot hit exactly this
+— the final byte's last bit was double-captured — and it was fixed in RTL by introducing one
+dedicated read-bit counter that is the sole source of BOTH the shift-enable and the
+phase-complete condition (one capture per bit, lane-width aware).
+
+When a blind-authored serial controller returns a received value that is correct except for the
+last bit/byte, suspect a double-capture at the receive-phase boundary before re-deriving the
+protocol — make the bit counter the single source of truth for shift-and-stop. (General
+serial-receive discipline; lane-width parameterized, not specific to any one flash command.)
+
+_Captured by benchmark-enhancement-capture 2026-05-31._

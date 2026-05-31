@@ -50,3 +50,12 @@ session_context: >-
   MCP eda_synth tool so the bare doc→GDS path gets it automatically. Companion Bucket-B note
   added to skills/synth-doctor (constant-net path caveat) so the next pilot doesn't
   rediscover DRT-0305.
+
+forward_validation: >-
+  CONFIRMED on the QSPI/OSPI flash-controller doc→GDS pilot (v0.1.97, 5th pilot): the
+  synth-doctor constant-net note was applied PROACTIVELY — hilomap conb_1 + splitnets via
+  eda_run_tcl between eda_synth and eda_pnr — and PnR completed clean on the first attempt
+  (dr_retried=false, DRT-0199=0, no DRT-0305). The captured fix prevented the same failure
+  class on the next pilot without re-discovery, which is exactly the closed-loop payoff and
+  RAISES confidence that porting hilomap into eda_synth (the suggested_fix) is the correct,
+  general remedy. Two independent pilots (SENT recovered, QSPI pre-empted) now motivate it.
