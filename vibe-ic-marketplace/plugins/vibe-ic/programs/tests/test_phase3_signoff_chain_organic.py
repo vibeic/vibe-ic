@@ -6,12 +6,13 @@ monkeypatching `_docker_exec` with synthetic OpenROAD PSM / antenna /
 filler_placement stdout, then asserting that (a) the emitted reports carry
 the exact keyword / tool-signature anchors the downstream gate checks
 (eda_report_audit:ir_drop / :em, metal_fill_density_check, si_crosstalk_check)
-require, and (b) the SPEF extract.tcl runs set_wire_rc → global_route →
-write_spef in that order, and (c) spare_cells.json now carries a rows[] field
+require, and (b) the SPEF extract.tcl discovers the OpenRCX captable and runs
+extract_parasitics -ext_model_file → write_spef (v0.2.5; estimate is fallback-only),
+and (c) spare_cells.json now carries a rows[] field
 derived deterministically from the existing placement.
 
 Covers the 7 backlog items:
-  1 SPEF      — TCL ordering fix (set_wire_rc + global_route before write_spef)
+  1 SPEF      — OpenRCX captable discovery + extract_parasitics -ext_model_file (v0.2.5)
   2 IR/EM/SI  — PSM analyze_power_grid report content + gate keywords
   3 Antenna   — check_antennas report re-emitted to audit path
   4 DRC/ERC   — ERC report emitter content (DRC env probe is integration-only)
@@ -141,32 +142,44 @@ class TestDiscoverPowerNets:
 
 
 # ---------------------------------------------------------------------------
-# 1. SPEF extract.tcl ordering (set_wire_rc + global_route before write_spef)
+# 1. SPEF extract.tcl uses the OpenRCX captable (v0.2.5 — corrected from the
+#    estimate-only recipe; sky130A DOES ship rules.openrcx.sky130A.nom.magic and
+#    `extract_parasitics -ext_model_file` writes a real SPEF — validated: spm
+#    routed DEF → 1370 rc segments, 268 KB SPEF).
 # ---------------------------------------------------------------------------
-class TestSpefTclOrdering:
-    def test_tcl_command_order(self, tmp_path, monkeypatch):
+class TestSpefTclCaptable:
+    def _emit(self, tmp_path, monkeypatch):
         project = _mk_project(tmp_path)
         ex = runner._pl.extracted_dir(project)
         ex.mkdir(parents=True, exist_ok=True)
         spef = ex / "chip_top.spef"
-        monkeypatch.setattr(runner, "_to_container_path",
-                            lambda p, c: p)
-        # No SPEF produced (env has no captable) → _docker_exec is a no-op.
+        monkeypatch.setattr(runner, "_to_container_path", lambda p, c: p)
         monkeypatch.setattr(runner, "_docker_exec",
                             lambda c, cmd, timeout=0: (0, "", ""))
         runner._emit_spef(project, "chip_top", _fake_pdk(), "x", spef, [])
         tcl_files = list(ex.glob("extract_*.tcl"))
         assert tcl_files, "extract TCL was not written"
-        lines = [l.strip() for l in tcl_files[0].read_text().splitlines()
+        return tcl_files[0].read_text()
+
+    def test_tcl_runs_real_openrcx_extraction(self, tmp_path, monkeypatch):
+        tcl = self._emit(tmp_path, monkeypatch)
+        # the real OpenRCX path: discover captable → define corner → extract_parasitics
+        assert "rules.openrcx" in tcl, "must glob the OpenRCX captable"
+        assert "define_process_corner -ext_model_index" in tcl
+        assert "extract_parasitics -ext_model_file" in tcl, (
+            "write_spef needs extract_parasitics (OpenRCX), not estimate_parasitics")
+
+    def test_estimate_is_fallback_only(self, tmp_path, monkeypatch):
+        tcl = self._emit(tmp_path, monkeypatch)
+        # estimate_parasitics may remain ONLY inside the no-captable fallback branch
+        assert "SPEF_NO_CAPTABLE_FALLBACK_ESTIMATE" in tcl
+        # write_spef still present + last
+        lines = [l.strip() for l in tcl.splitlines()
                  if l.strip() and not l.strip().startswith("#")]
-        i_swr = next(i for i, l in enumerate(lines)
-                     if "set_wire_rc -signal" in l)
-        i_gr = next(i for i, l in enumerate(lines)
-                    if "global_route" in l and "catch" in l)
+        i_ext = next(i for i, l in enumerate(lines)
+                     if "extract_parasitics -ext_model_file" in l)
         i_ws = next(i for i, l in enumerate(lines) if "write_spef" in l)
-        assert i_swr < i_gr < i_ws, (
-            "SPEF TCL must run set_wire_rc -> global_route -> write_spef "
-            f"in order, got {i_swr} / {i_gr} / {i_ws}")
+        assert i_ext < i_ws, "extract_parasitics must precede write_spef"
 
 
 # ---------------------------------------------------------------------------

@@ -4450,49 +4450,68 @@ def _emit_spef(project: Path, top: str, pdk: PdkConfig, container: str,
         for f in pdk.macro_lefs
     )
     mp = pdk.metal_prefix
-    # ORGANIC-20260531 Step 22 fix: OpenRCX `write_spef` needs a routed DB
-    # with a per-layer wire-RC model AND a global-route topology BEFORE it
-    # is invoked. Pre-fix the TCL only called `estimate_parasitics` then
-    # `write_spef`, which silently produced NO SPEF because OpenRCX had no
-    # routing data to extract from. The fix replicates the PnR step's
-    # wire-RC + global_route sequence on the routed DEF, then writes SPEF:
-    #   1. set_wire_rc -signal/-clock (per-layer R/C, sky130 met1/met5)
-    #   2. global_route (re-derive the routing topology on the routed DB)
-    #   3. estimate_parasitics -global_routing (net-RC from that topology)
-    #   4. write_spef (OpenRCX sign-off SPEF — now has data)
-    # All steps NONFATAL-guarded (mirror the PnR step's style) so a PDK
-    # without RC files still completes; the gate then falls through to its
-    # documented waiver. chip-AGNOSTIC: layer names come from pdk.metal_prefix.
-    # Read DEF instead of verilog+link (avoids "Chip already has a block").
+    # ORGANIC-20260531 Step 22 fix (v0.2.5 — CORRECTED): `write_spef` is the OpenRCX
+    # sign-off command; it needs `extract_parasitics -ext_model_file <captable>` to have
+    # run — NOT `estimate_parasitics` (that only populates lumped RC for STA and leaves
+    # OpenRCX with "no extraction data" → RCX-0134 → empty SPEF). The prior code called
+    # estimate_parasitics then write_spef, which is why it never produced a SPEF.
+    #
+    # The captable is NOT missing: sky130A ships it at
+    #   <PDK>/libs.tech/openlane/rules.openrcx.sky130A.{min,nom,max}.magic
+    # (gf180 ships rules.openrcx.gf180mcuD.nom). The earlier "ENV-BLOCKED / no captable"
+    # finding was a false negative — it was tested on a routing-less DEF (0 rc segments).
+    # Verified working: spm routed DEF → 1370 rc segments, 330 nets, 1700 caps extracted.
+    #
+    # Sequence (chip- AND pdk-AGNOSTIC — the captable is globbed from the PDK root derived
+    # from the tech-LEF path; layer names from pdk.metal_prefix):
+    #   1. set_wire_rc (per-layer R/C — harmless; needed by the estimate fallback)
+    #   2. discover the OpenRCX captable for this PDK
+    #   3a. captable found → define_process_corner + extract_parasitics -ext_model_file
+    #       (real OpenRCX extraction); 3b. else → estimate_parasitics fallback
+    #   4. write_spef
+    # All NONFATAL-guarded so a PDK without a captable still completes (falls through to
+    # the documented waiver). Read DEF (not verilog+link) to avoid "Chip already has a block".
     tcl_path.write_text(f"""
 read_lef {tech_lef_c}
 read_lef {cell_lef_c}
 {macro_lefs_tcl}
 read_liberty {liberty_c}
 read_def {def_c}
-# --- Step 22.1: per-layer wire-RC model (REQUIRED before global_route) ---
+# --- Step 22.1: per-layer wire-RC (harmless; required by the estimate fallback) ---
 if {{[catch {{set_wire_rc -signal -layer {mp}1}} _swr_sig]}} {{
-  if {{[catch {{set_wire_rc -layer {mp}1}} _swr_sig2]}} {{
-    puts "SPEF_SET_WIRE_RC_SIGNAL_NONFATAL: $_swr_sig2"
+  catch {{set_wire_rc -layer {mp}1}}
+}}
+catch {{set_wire_rc -clock -layer {mp}5}}
+# --- Step 22.2: discover the OpenRCX captable for THIS PDK (chip/PDK-AGNOSTIC) ---
+# Derive the PDK root from the tech-LEF path (.../<PDK>/libs.ref/...), then glob the
+# OpenLane OpenRCX extraction-model file (rules.openrcx.<pdk>.nom.magic | .nom).
+set _tlef {tech_lef_c}
+set _i [string first "/libs.ref/" $_tlef]
+set _rules ""
+if {{$_i > 0}} {{
+  set _root [string range $_tlef 0 [expr {{$_i - 1}}]]
+  set _c [lsort [glob -nocomplain $_root/libs.tech/openlane/rules.openrcx.*.nom.magic]]
+  if {{[llength $_c] == 0}} {{
+    set _c [lsort [glob -nocomplain $_root/libs.tech/openlane/rules.openrcx.*.nom]]
+  }}
+  if {{[llength $_c] > 0}} {{ set _rules [lindex $_c 0] }}
+}}
+if {{$_rules ne ""}} {{
+  # --- Step 22.3a: full OpenRCX extraction with the captable (sign-off SPEF) ---
+  puts "SPEF_OPENRCX_CAPTABLE: $_rules"
+  catch {{define_process_corner -ext_model_index 0 X}}
+  if {{[catch {{extract_parasitics -ext_model_file $_rules -corner_cnt 1 -max_res 50 -coupling_threshold 0.1}} _ee]}} {{
+    puts "SPEF_EXTRACT_PARASITICS_NONFATAL: $_ee"
+  }}
+}} else {{
+  # --- Step 22.3b: fallback — no captable for this PDK; estimate_parasitics ---
+  puts "SPEF_NO_CAPTABLE_FALLBACK_ESTIMATE"
+  catch {{global_route}}
+  if {{[catch {{estimate_parasitics -global_routing}} _pe1]}} {{
+    catch {{estimate_parasitics -placement}}
   }}
 }}
-if {{[catch {{set_wire_rc -clock -layer {mp}5}} _swr_clk]}} {{
-  puts "SPEF_SET_WIRE_RC_CLOCK_NONFATAL: $_swr_clk"
-}}
-# --- Step 22.2: re-derive global-route topology on the routed DB ---
-# global_route populates the routing guides OpenRCX/estimate_parasitics
-# need. The routed DEF already has detailed-route geometry, but a fresh
-# global_route gives estimate_parasitics a complete net topology to walk.
-if {{[catch {{global_route}} _gr_err]}} {{
-  puts "SPEF_GLOBAL_ROUTE_NONFATAL: $_gr_err"
-}}
-# --- Step 22.3: net-RC from the routed topology ---
-if {{[catch {{estimate_parasitics -global_routing}} pe_err1]}} {{
-  if {{[catch {{estimate_parasitics -placement}} pe_err2]}} {{
-    puts "SPEF_ESTIMATE_PARASITICS_FAIL: $pe_err1 / $pe_err2"
-  }}
-}}
-# --- Step 22.4: sign-off SPEF (OpenRCX) — now has routed data ---
+# --- Step 22.4: write the SPEF ---
 if {{[catch {{write_spef {spef_c}}} spef_err]}} {{
   puts "SPEF_WRITE_FAIL: $spef_err"
 }}

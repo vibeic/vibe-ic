@@ -52,13 +52,16 @@ resolution:
     subservient pilot GDS, via the iic-eda (iic-osic-tools) container.
     All emitted artefacts re-run their downstream gate check → exit 0.
   summary: >-
-    5 of 7 items FIXED end-to-end on the open-source flow; 1 PARTIAL (DRC/LVS
-    /ERC — DRC+ERC+LVS all wired and passing, full Calibre PERC latch-up/ESD
-    deferred); 1 ENV-BLOCKED (SPEF — script-order fix shipped but sky130A
-    ships no OpenRCX captable, RCX-0468). KEY CORRECTION: IR/EM/SI/antenna are
-    NOT actually cascade-blocked by SPEF — OpenROAD PSM (analyze_power_grid),
-    check_antennas, and filler_placement all operate on the routed DEF
-    directly, no SPEF required. So fixing those did not depend on SPEF.
+    v0.2.5: 6 of 7 items FIXED end-to-end on the open-source flow (SPEF now
+    FIXED — see below); 1 PARTIAL (DRC/LVS/ERC — DRC+ERC+LVS all wired and
+    passing, full Calibre PERC latch-up/ESD deferred). KEY CORRECTION 1:
+    IR/EM/SI/antenna are NOT cascade-blocked by SPEF — OpenROAD PSM
+    (analyze_power_grid), check_antennas, filler_placement all operate on the
+    routed DEF directly. KEY CORRECTION 2 (v0.2.5): SPEF was NOT env-blocked —
+    sky130A DOES ship the OpenRCX captable; the bug was calling
+    estimate_parasitics instead of extract_parasitics -ext_model_file. Now
+    produces a real 268 KB SPEF on the spm routed DEF. This also un-gates the
+    full coupling-cap SI sign-off (step 27).
   items:
     - step: 5
       name: "Formal"
@@ -76,17 +79,25 @@ resolution:
         Placement unchanged. Deterministic; rows cover all spares.
     - step: 22
       name: "SPEF (RC -> SPEF)"
-      verdict: ENV_BLOCKED
+      verdict: FIXED
       change: >-
-        _emit_spef() extract.tcl now runs set_wire_rc -> global_route ->
-        write_spef in the correct order (was estimate_parasitics -> write_spef).
-        The ordering fix is correct and necessary BUT insufficient in this
-        container: OpenROAD write_spef is the OpenRCX command and requires an
-        extraction model file (captable), which sky130A does not ship
-        (RCX-0468 "Can't open extraction model file"; RCX-0134 "no extraction
-        data"). Tracked separately in
-        ORGANIC-20260531-phase3-spef-blocked-no-openrcx-captable.yaml.
-      precise_blocker: "sky130A has no OpenRCX *.rules captable (only ihp-sg13g2 ships one)"
+        v0.2.5 CORRECTION of the earlier ENV_BLOCKED call (which was a FALSE
+        NEGATIVE). The real bug: write_spef is the OpenRCX sign-off command and
+        needs `extract_parasitics -ext_model_file <captable>` to have run — the
+        prior code called `estimate_parasitics` (lumped RC for STA only), so
+        OpenRCX had "no extraction data" (RCX-0134) and wrote no SPEF. sky130A
+        DOES ship the captable at
+        <PDK>/libs.tech/openlane/rules.openrcx.sky130A.{min,nom,max}.magic
+        (and gf180 ships rules.openrcx.gf180mcuD.nom). _emit_spef() now globs
+        the captable from the PDK root (derived from the tech-LEF path; chip-
+        AND pdk-AGNOSTIC), runs `define_process_corner -ext_model_index 0 X` +
+        `extract_parasitics -ext_model_file <captable> -corner_cnt 1 -max_res 50
+        -coupling_threshold 0.1` + `write_spef`, with the estimate path kept
+        only as the no-captable fallback. VALIDATED on the spm routed DEF:
+        1370 rc segments, 330 nets / 1700 caps / 2361 ccs, real 268 KB SPEF
+        (*SPEF "ieee 1481-1999"). The earlier RCX-0468/RCX-0107 was an EMPTY
+        (routing-less) DEF + wrong (estimate) command, NOT a missing captable.
+      precise_blocker: "none — sky130A ships rules.openrcx.sky130A.{min,nom,max}.magic; fixed in v0.2.5"
     - steps: [24, 25]
       name: "IR drop + EM"
       verdict: FIXED
@@ -135,9 +146,9 @@ resolution:
         filler_placement only ADDS into row gaps and never removes dont_touch
         spares, so Step 18 spares survive. metal_fill_density_check PASS.
   still_open:
-    - "SPEF (Step 22): no OpenRCX captable for sky130A in-container (RCX-0468)."
     - "Calibre PERC latch-up/ESD (Step 30): needs commercial deck."
-  tests_added: "programs/tests/test_phase3_signoff_chain_organic.py (22 tests); full suite 5166 -> 5188 PASS."
+    - "Full coupling-cap SI (Step 27): now feasible via the real SPEF (v0.2.5) — wire the SPEF into the SI screen as a follow-up."
+  tests_added: "programs/tests/test_phase3_signoff_chain_organic.py (24 tests incl. the v0.2.5 SPEF-captable pins); full suite PASS."
 
 id: "ORGANIC-20260531-phase3-signoff-chain-open-source-gaps"
 submitted_at: "2026-05-31T00:00:00+08:00"

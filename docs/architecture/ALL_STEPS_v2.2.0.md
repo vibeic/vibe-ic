@@ -20,7 +20,12 @@ companion `CANONICAL_FLOW_v2.2.0.md` is the narrative. Source of truth = the run
 
 ## A. RUNNER-MARKER VIEW (ground truth)
 
-### A.1 Phase 1 — 15 main steps + every sub-step (`phase1_doc_one_shot_runner.py`)
+**ONE continuous global step number across the sequential flow Phase 1 → 2 → 3** (Phase 3 does
+**NOT** restart at 1 — it is global 50-55). Analog A1-A8 / Mixed M1-M4 run **parallel** to Phase 2
+and keep their native A*/M* ids. Auto-generated live in `FLOW_STEPS_GENERATED.md` (regenerate with
+`flow_doc_emit.py`). § B below is the orthogonal 33-step silicon-flow model (its own 1→33).
+
+### A.1 Phase 1 — global steps 1-34 (15 main markers + 19 sub-steps, `phase1_doc_one_shot_runner.py`)
 
 | Marker | Step |
 |---|---|
@@ -61,39 +66,44 @@ companion `CANONICAL_FLOW_v2.2.0.md` is the narrative. Source of truth = the run
 
 → **34 distinct Phase-1 markers** (15 main + 19 sub/overlay/dispatch).
 
-### A.2 Phase 2 — step functions (`phase2_one_shot_runner.py`, logical order)
+### A.2 Phase 2 — step functions (`phase2_one_shot_runner.py`) — **global steps 35-49**
+
+> Continuous global numbering (does NOT restart at 1; continues from Phase 1's 34 markers).
+> Auto-generated live in `FLOW_STEPS_GENERATED.md`.
 
 | # | Step | Note |
 |---|---|---|
-| 1 | `step_phase1` | re-run/ingest Phase 1 if needed |
-| 2 | `step_rig_topology_skeleton` | topology scaffold |
-| 3 | `step_rtl_gen` | WAIVE for `rtl_gen=null` ic_class → `spec-to-rtl` role; `phase2_scaffold_gen.py` emits top/regs/fsm/tb/soc_wrap/cocotb |
-| 4 | `step_full_stack_tb_gen` | self-checking TB |
-| 5 | `step_reference_tb` | reference-TB conformance (eco_loop ≤3 retries) |
-| 6 | `step_yosys_synth` | gate-level synth |
-| 7 | `step_qsf_gen` | FPGA project |
-| 8 | `step_sdc_gen` | constraints |
-| 9 | `step_otp_image_check` | OTP image (if any) |
-| 10 | `step_fpga_compile` | FPGA build → `.sof` |
-| 11 | `step_fpga_burn` | program board |
-| 12 | `step_usb_hid_tester_verify` | host protocol-tester acceptance |
-| 13 | `step_emit_phase2_manifests` | manifests |
-| 14 | `step_final_audit` | aggregate audit |
-| (hook) | `step_phase3` | chains into Phase 3 when run end-to-end |
+| 35 | `step_phase1` | re-run/ingest Phase 1 if needed |
+| 36 | `step_rig_topology_skeleton` | topology scaffold |
+| 37 | `step_rtl_gen` | WAIVE for `rtl_gen=null` ic_class → `spec-to-rtl` role; `phase2_scaffold_gen.py` emits top/regs/fsm/tb/soc_wrap/cocotb |
+| 38 | `step_full_stack_tb_gen` | self-checking TB |
+| 39 | `step_reference_tb` | reference-TB conformance (eco_loop ≤3 retries) |
+| 40 | `step_yosys_synth` | gate-level synth |
+| 41 | `step_qsf_gen` | FPGA project |
+| 42 | `step_sdc_gen` | constraints |
+| 43 | `step_otp_image_check` | OTP image (if any) |
+| 44 | `step_fpga_compile` | FPGA build → `.sof` |
+| 45 | `step_fpga_burn` | program board |
+| 46 | `step_usb_hid_tester_verify` | host protocol-tester acceptance |
+| 47 | `step_emit_phase2_manifests` | manifests |
+| 48 | `step_final_audit` | aggregate audit |
+| 49 | `step_phase3` | chains into Phase 3 when run end-to-end |
 
 Surrounding gates: `rtl_hygiene_lint --fix`, `spec_conformance_check`, `chip_top_gate_wrapper_gen`,
 MCP `eda_lint`/`eda_synth`/`eda_cocotb`.
 
-### A.3 Phase 3 — step functions (`phase3_one_shot_runner.py`)
+### A.3 Phase 3 — step functions (`phase3_one_shot_runner.py`) — **global steps 50-55 (NOT 1-6)**
+
+> Phase 3 is the back-end; its step functions continue the global count — they do **not** restart at 1.
 
 | # | Step | Tool (open-source) |
 |---|---|---|
-| 1 | `step_synth` | yosys (+ tie-cell pass: `setundef -zero; hilomap; splitnets; clean`) |
-| 2 | `step_pnr` | OpenROAD (floorplan→PDN→place→CTS→route) |
-| 3 | `step_gds` | KLayout (`def2gds`) |
-| 4 | `step_drc` | KLayout sky130 deck |
-| 5 | `step_lvs` | netgen / yosys_equiv — the LVS sign-off chain (§ D) |
-| 6 | `step_canonicalize_artefacts` | normalize outputs |
+| 50 | `step_synth` | yosys (+ tie-cell pass: `setundef -zero; hilomap; splitnets; clean`) |
+| 51 | `step_pnr` | OpenROAD (floorplan→PDN→place→CTS→route) |
+| 52 | `step_gds` | KLayout (`def2gds`) |
+| 53 | `step_drc` | KLayout sky130 deck |
+| 54 | `step_lvs` | netgen / yosys_equiv — the LVS sign-off chain (§ C) |
+| 55 | `step_canonicalize_artefacts` | normalize outputs (+ the § D sign-off emitters) |
 
 ### A.4 Analog A1–A8 (`analog_one_shot_runner.py`, parallel to Phase 2)
 
@@ -189,7 +199,7 @@ sign-off checks with a known open-source gap.)
 
 | Step | Check | Status (v0.2.4) | Severity |
 |---|---|---|---|
-| 22 | SPEF (OpenRCX) | ordering fixed (`set_wire_rc`→`global_route`→`write_spef`); **ENV-BLOCKED** — sky130A ships no OpenRCX captable | 🔴 env |
+| 22 | SPEF (OpenRCX) | **WORKS** (prior "ENV-BLOCKED" was a false negative) — sky130A **does** ship the OpenRCX captable at `/foss/pdks/sky130A/libs.tech/openlane/rules.openrcx.sky130A.{min,nom,max}.magic`; `extract_parasitics -ext_model_file <…nom.magic>` + `write_spef` extracts on a real routed DEF (spm: 1370 rc segments, 330 nets, 1700 caps). The earlier RCX-0107 "0 segments" was an EMPTY (routing-less) DEF, not a missing captable. | 🟢 works |
 | 23 | Post-route STA (MMMC) | passes; pilots report slack +X ns MET | 🟢 none |
 | 24 | IR drop (PSM) | cascading-missing on SPEF | 🔶 medium |
 | 24 | IR drop | **FIXED** — OpenROAD PSM `analyze_power_grid` (walks DEF SPECIALNETS directly; no SPEF needed — the cascade premise was wrong) → `reports/phase3/ir_drop.{rpt,json}` | 🟢 fixed |
