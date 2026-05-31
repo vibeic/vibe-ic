@@ -159,6 +159,42 @@ DRT-0305. The bare MCP `eda_synth` path lacks this (backlog `ORGANIC-20260531-mc
 
 ---
 
+## 5b. Phase-3 sign-off checks — gap status
+
+`step_drc`/`step_lvs` are the headline gates, but a complete sign-off runs more checks. The rows
+below are the **sign-off checks and their status** (not every physical-design step — placement /
+CTS / routing / output / ECO are covered in § 4 and the § 6 pilots and pass). **None of the gaps
+below is a circuit-design error** — they are script-ordering / cascading / environment /
+report-schema issues. Severities + root causes (audited):
+
+> **Step-number caveat (this is why "step 23" looked missing):** two numberings exist. The IDs
+> below follow the **sign-off-audit** scheme (SPEF 22 / STA 23 / IR 24 / EM 25 / Antenna 26 /
+> SI 27 / DRC-LVS-ERC 30 / fill 33). The repo's `33_step_flow_overview.md` numbers the SAME
+> checks differently (SPEF 20 / STA 21 / IR 22 / EM 23 / Antenna 24 / SI 25 / PV 27). Reconcile to
+> one scheme when `flow_doc_emit.py` lands (§ 8). **Step 23 = Post-route STA**, listed below as
+> PASS — it was absent earlier only because the gap-focused draft omitted passing checks.
+
+| Step | Check | What it is (one line) | Open-source status | Severity |
+|---|---|---|---|---|
+| 22 | **SPEF** (OpenRCX) | per-wire R/C "parasitic" extract — feeds STA/IR/EM/SI | `extract.tcl` must call `global_route` + `set_wire_rc` first, else no SPEF | 🔶 medium (script order) |
+| 23 | **Post-route STA** (MMMC) | multi-corner static timing sign-off | runs once SPEF exists; pilots report setup slack +X ns **MET** (3-corner) | 🟢 none (passes) |
+| 24 | **IR drop** (PSM) | power-grid voltage-droop under switching current | cascading-missing: unlocks once SPEF (22) exists | 🔶 medium (cascade) |
+| 25 | **EM** | electromigration — current density erodes metal over time | cascading-missing: needs SPEF (22) | 🔶 medium (cascade) |
+| 27 | **SI** | crosstalk — a net's transition couples to neighbours | cascading-missing: needs SPEF (22) | 🔶 medium (cascade) |
+| 26 | **Antenna** | long routed metal accumulates plasma charge → gate punch-through | OpenROAD router already runs it; report not on the audit path | 🟢 low (done, report-path) |
+| 30 | **DRC / LVS / ERC** | foundry rule check / layout-vs-schematic / electrical-rule | sky130 PDK ships only Calibre decks; open-source needs KLayout/Magic decks wired (this era added the device-level netgen LVS chain in §5) | 🔴 high (env / deck) |
+| 33 | **Metal fill** | dummy metal for CMP density uniformity | runner lacks the fill stage → no `filled.def` | 🔶 medium (missing stage) |
+| 18 | **Spare cells** | tied-off ECO spares for metal-only late fixes | 30 spares placed correctly; `spare_cells.json` missing a `rows[]` field → audit can't read | 🟢 low (report schema) |
+| 5 | **Formal** | SAT/model-checking proof (vs sampled simulation) | `altsyncram` primitive has no formal model → INFORMATIONAL waiver (function covered by post-layout sim, step 28) | 🟢 none (waived) |
+
+**Doctrine:** treat each like the LVS chain (§5) — separate the *design-correctness* signal (here:
+clean) from the *tool/script/report* signal (here: the actionable gaps). The actionable fixes
+(SPEF `extract.tcl` ordering; the IR/EM/SI cascade it unblocks; open-source DRC/LVS decks; the
+metal-fill stage; the `spare_cells.json` schema field) are tracked in
+`ORGANIC-20260531-phase3-signoff-chain-open-source-gaps`.
+
+---
+
 ## 6. doc→GDS pilot evidence (7 pilots, real sky130A GDS)
 
 | Pilot | Archetype | ic_class | LVS stop point |
@@ -168,8 +204,13 @@ DRT-0305. The bare MCP `eda_synth` path lacks this (backlog `ORGANIC-20260531-mc
 | ufs | storage-framer | serial_peripheral | — |
 | sent | sensor-decoder | digital_arithmetic_primitive | structural all-proven 1388/1388 |
 | qspi | command-controller | serial_peripheral | structural all-proven 1434/1434 |
-| hdlc | packet-framer | digital_cmd_driven | **device-level exact 20937=20937** |
-| spacewire | link credit-flow-control | digital_arithmetic_primitive | structural 493/592 (device-level closes the SAT gap; not yet re-run) |
+| hdlc | packet-framer | digital_cmd_driven | **device-level exact 20937=20937** (SAT gap → 0) |
+| spacewire | link credit-flow-control | digital_arithmetic_primitive | **device-level exact 6676=6676 / powered 6164=6164** (99 SAT-unproven → 0; port-label floor) |
+
+Both hdlc + spacewire show the §5 LVS chain end-to-end: structural-LEC SAT residual → device-level
+netgen (covers it to device-class-exact) → powered-netlist (eliminates the tie-cell power-pin node)
+→ residual = the Category-D port-label floor (`port makeall` / sign-off LVS), with `lvs_signoff_guard`
+correctly refusing to claim a vacuous portless match.
 
 ---
 

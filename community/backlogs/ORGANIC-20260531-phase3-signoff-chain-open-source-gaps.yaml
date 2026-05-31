@@ -1,0 +1,54 @@
+type: enhancement
+severity: P2
+component: programs/phase3_one_shot_runner.py + extract.tcl + open-source signoff decks
+
+plugin_version: "0.2.2"
+
+title: >-
+  Phase-3 sign-off chain has 5 actionable open-source gaps (SPEF extract.tcl ordering → IR/EM/SI cascade; open-source DRC/LVS/ERC decks; metal-fill stage; spare_cells.json schema; antenna report-path) — none a design error
+
+pattern: |
+  Audit of a full Phase-3 sign-off (33-step numbering) shows 7 MISSING/FAIL items, ALL of which
+  are script-ordering / cascading / environment / report-schema issues — NOT circuit-design
+  errors (the physical implementation is complete). Root causes:
+
+  - Step 22 SPEF (OpenRCX parasitic extract): extract.tcl does not call `global_route` +
+    `set_wire_rc` before OpenRCX, so OpenRCX has no routed data → no SPEF file. [medium]
+  - Steps 24/25/27 IR-drop / EM / SI: cascading-missing — these depend on SPEF (22). OpenROAD
+    has open-source PSM (power-grid) + SI tools; they are simply not triggered without SPEF.
+    Fixing 22 unlocks all three. [medium, cascade]
+  - Step 26 Antenna: the OpenROAD router ALREADY runs antenna checks during routing; the report
+    just isn't written to the path the audit script expects. "Done but not reported." [low]
+  - Step 30 DRC/LVS/ERC: the sky130 PDK ships only Calibre rule decks. The open-source container
+    has KLayout + Magic but no wired-up open DRC/LVS decks. (This era added the device-level
+    netgen LVS chain — see CANONICAL_FLOW_v2.2.0 §5 + ORGANIC-...-magic-extraction-no-toplevel-ports;
+    DRC/ERC open-deck wiring is still open.) [high, environment]
+  - Step 33 Metal fill: the runner lacks a fill stage, so no `filled.def` is produced (CMP density
+    fill). Missing script stage, not a design issue. [medium]
+  - Step 18 Spare cells: 30 spare cells ARE placed correctly, but `spare_cells.json` is missing a
+    `rows[]` field, so the audit can't read it and reports FAIL. Report-schema bug only. [low]
+  - Step 5 Formal: `altsyncram` (Altera sync-RAM primitive) has no formal model → INFORMATIONAL
+    waiver; function is covered by post-layout simulation (step 28). [none, waived]
+
+suggested_fix: |
+  Priority order (each is bounded + deterministic):
+  1. SPEF (22): in extract.tcl, run `global_route` + `set_wire_rc -layer <...>` before `define_process_corner`/
+     OpenRCX `extract_parasitics`; emit the SPEF. This single fix also unblocks IR/EM/SI (24/25/27)
+     — re-run OpenROAD PSM (`analyze_power_grid`) + SI after SPEF exists.
+  2. DRC/ERC open decks (30): wire KLayout sky130 DRC (the klayout deck used by eda_drc_klayout) +
+     Magic ERC into the phase3 audit; LVS already has the §5 device-level netgen chain.
+  3. Metal fill (33): add a fill stage (OpenROAD `density_fill` or KLayout fill) → `filled.def`.
+  4. Spare cells (18): add the `rows[]` field to spare_cells.json (placement already correct).
+  5. Antenna (26): point the audit at the router's existing antenna report (or re-emit to the
+     expected path). Formal (5) stays an informational waiver.
+  Each: corpus-sweep on benchmark_clean/{spm,sha256,subservient} + the doc→GDS pilots; the audit
+  should go green WITHOUT touching any design data.
+
+id: "ORGANIC-20260531-phase3-signoff-chain-open-source-gaps"
+submitted_at: "2026-05-31T00:00:00+08:00"
+session_context: >-
+  Captured from a maintainer walkthrough of the Phase-3 sign-off audit (the SPEF→IR/EM/SI cascade,
+  antenna report-path, DRC/LVS/ERC open-deck gap, metal-fill stage, spare-cell schema, formal
+  informational). Documented in docs/architecture/CANONICAL_FLOW_v2.2.0.md § 5b with the severity
+  table. Complements the §5 LVS chain already shipped (device-level netgen / powered-netlist /
+  port-label Route A/B / sign-off guard).
