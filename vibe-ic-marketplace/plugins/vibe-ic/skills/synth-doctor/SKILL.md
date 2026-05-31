@@ -130,7 +130,7 @@ emits a `zero_net_hint` rather than auto-applying the fix. So when driving the b
 path, either (a) re-synth with the refined `setundef -zero; hilomap; splitnets; clean` pass
 above via `eda_run_tcl` before `eda_pnr`, or (b) drive synth through the phase3 runner which
 handles it. The cell count is unchanged — the tie cells replace the bare constants 1:1.
-Forward-validated SENT→QSPI→HDLC (3 pilots). Tracked for a permanent eda_synth fix in
+Forward-validated SENT→QSPI→HDLC→SpaceWire (4 pilots, clean first-pass each). Tracked for a permanent eda_synth fix in
 `ORGANIC-20260531-mcp-eda-synth-missing-hilomap-tiecells`.
 
 ## Compliance gate (mandatory — not optional)

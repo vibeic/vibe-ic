@@ -918,3 +918,31 @@ protocol — make the bit counter the single source of truth for shift-and-stop.
 serial-receive discipline; lane-width parameterized, not specific to any one flash command.)
 
 _Captured by benchmark-enhancement-capture 2026-05-31._
+
+## Captured by benchmark-enhancement-capture — 2026-05-31 (v0.2.2 SpaceWire link-controller doc→GDS pilot)
+
+### Skill: a link-establishment FSM's disconnect/timeout watchdog must be gated on "link active" and reset by ANY valid received symbol
+
+In a serial-link controller that brings a connection up through a multi-state exchange FSM
+(the SpaceWire shape: ErrorReset → ErrorWait → Ready → Started → Connecting → Run; the same
+pattern applies to any credit/handshake link with bring-up timers), the disconnect and
+no-activity timeout watchdogs are the two easiest things to get wrong, and both produce a
+link that never reaches its run state. Two rules:
+1. **Do not let a disconnect/timeout fire before the link has seen activity.** On first
+   entering an active state (e.g. Started), the watchdog must be gated on a "received
+   activity seen" flag — otherwise it trips immediately on the silent line before the peer
+   has even responded, bouncing the FSM back to reset forever.
+2. **Reset the no-activity timeout on ANY valid received symbol, not only the specific
+   keep-alive token.** A watchdog that only rearms on the keep-alive (SpaceWire NULL/FCT)
+   will time out in the middle of legitimate traffic (data/control characters that are not
+   the keep-alive). Any successfully-received, parity-good symbol is evidence the link is
+   alive and must rearm the timer.
+
+The SpaceWire pilot hit both: disconnect fired on entering Started before any RX activity
+(fixed by gating on an rx-activity-seen flag), and the bring-up timeout tripped mid-NULL
+(fixed by rearming on any received character). When a blind-authored link controller never
+reaches its run/connected state in a bring-up testbench, suspect these two watchdog gates
+before re-deriving the protocol. (General link-FSM watchdog discipline; applies to any
+connection-establishment state machine with timers, not specific to SpaceWire.)
+
+_Captured by benchmark-enhancement-capture 2026-05-31._
