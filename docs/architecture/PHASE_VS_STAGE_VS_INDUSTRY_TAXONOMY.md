@@ -1,5 +1,8 @@
 # Vibe-IC 步驟分類對照：Phase vs Stage 0-4 vs 業內傳統
 
+> ⚠️ **已被 `docs/architecture/CANONICAL_FLOW_v2.2.0.md` 取代**（plugin v0.2.2）。此 54-entity
+> 對照表早於 81-protocol Phase-1 dispatch、Phase-2 scaffold、doc→GDS LVS 簽核鏈。保留供歷史參考。
+
 **Source of truth**：`docs/architecture/CANONICAL_FLOW_v1.6.45.md`
 **Generated**：2026-05-23
 **範圍**：54 entities = 40 main-track steps + 9 analog (A1-A9) + 4 mixed-signal (M1-M4) + 1 P0 pre-flight

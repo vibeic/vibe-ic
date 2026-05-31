@@ -1,5 +1,8 @@
 # Vibe-IC 標準 IC 設計流程
 
+> ⚠️ **已被 `docs/architecture/CANONICAL_FLOW_v2.2.0.md` 取代**（plugin v0.2.2）。本文件的 33-step
+> 逐步規格仍可作後段參考，但流程總覽以新版（對齊 runner 實際 step 標記）為準。
+
 **版本**：v1.0
 **日期**：2026-04-12
 **定位**：給定 Design Documents，產出 production-ready IC (GDS + FPGA SOF)

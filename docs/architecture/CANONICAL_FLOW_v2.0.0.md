@@ -1,5 +1,9 @@
 # Vibe-IC Canonical Flow v2.0.0
 
+> ⚠️ **SUPERSEDED by `docs/architecture/CANONICAL_FLOW_v2.2.0.md`** (plugin v0.2.2). This v2.0.0
+> doc predates the 81-protocol Phase-1 dispatch, the Phase-2 scaffold bridge, and the doc→GDS
+> LVS sign-off chain. Kept for history.
+
 **Status**: ACTIVE (since 2026-05-23, RFC v2.0 implemented on branch v2.0-phase-redesign)
 **Predecessor**: `archive/CANONICAL_FLOW_v1.6.45.md`
 **Companion**: `RFC_v2.0_PHASE_REDESIGN.md`、`RENAME_MAPPING_v2.0.0.md`

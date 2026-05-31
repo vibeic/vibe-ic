@@ -1,5 +1,8 @@
 # Vibe-IC IC 設計流程 — 33 步 + 3 Phase
 
+> ⚠️ **已被 `docs/architecture/CANONICAL_FLOW_v2.2.0.md` 取代**（plugin v0.2.2）。33-step 模型仍適用
+> Phase 2b+3 後段，但未含 81-protocol Phase-1 dispatch 與新的 LVS 簽核鏈。新版以 runner 實際 step 標記為準。
+
 > Source of truth: `vibe-ic-marketplace/plugins/vibe-ic-core/flow/phase2_phase3.yaml`
 > 33 個 step + 4 個 stage 的完整列舉。每一步都有自動化 gate；`flow_compliance_check.py`
 > 會解析這個 YAML 產生 PASS/FAIL 矩陣。
