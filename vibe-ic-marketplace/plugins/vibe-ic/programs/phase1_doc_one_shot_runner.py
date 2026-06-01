@@ -51469,16 +51469,16 @@ def main() -> int:
     try:
         import importlib as _importlib_auto
         _gd_auto = _pl.generated_docs_dir(project)
-        # Detection blob: generated L1-L3 + input_doc text (content only — never
-        # a filename or benchmark-folder name).
+        # Detection blob: input_doc text FIRST, then generated L1-L3 (content
+        # only — never a filename or benchmark-folder name). input_doc-first is
+        # deliberate: a drop-in detector may apply SUBJECT-DOMINANCE by checking
+        # the blob HEAD (= the source spec's title/abstract). This lets a
+        # protocol that is a genuine SUB-CLAUSE of a larger spec (e.g. MDIO /
+        # SGMII inside the full IEEE 802.3) be distinguished from that larger
+        # spec: only the doc whose TITLE is the protocol fires, not every doc
+        # that merely mentions it in a buried clause. Substring-only detectors
+        # (espi/lpc/interlaken/usb_pd) are order-independent and unaffected.
         _auto_blob = ""
-        for _n in ("L1_DATASHEET.json", "L2_FRS.json", "L3_CMD_PROTOCOL.json"):
-            _q = _gd_auto / _n
-            if _q.is_file():
-                try:
-                    _auto_blob += _q.read_text()
-                except Exception:
-                    pass
         _idir_auto = _pl.input_doc_dir(project)
         if _idir_auto.is_dir():
             for _f in sorted(_idir_auto.iterdir()):
@@ -51487,6 +51487,13 @@ def main() -> int:
                         _auto_blob += _f.read_text(errors="ignore")
                     except Exception:
                         pass
+        for _n in ("L1_DATASHEET.json", "L2_FRS.json", "L3_CMD_PROTOCOL.json"):
+            _q = _gd_auto / _n
+            if _q.is_file():
+                try:
+                    _auto_blob += _q.read_text()
+                except Exception:
+                    pass
         _here_auto = Path(__file__).resolve().parent
         for _path_auto in sorted(_here_auto.glob("*_protocol_synth.py")):
             _stem_auto = _path_auto.stem               # e.g. "espi_protocol_synth"

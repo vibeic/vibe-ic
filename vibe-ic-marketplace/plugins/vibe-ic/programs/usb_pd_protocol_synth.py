@@ -1,0 +1,445 @@
+"""USB Power Delivery (USB-PD) protocol synth helper.
+
+Drop-in protocol synth discovered by the runner's generic auto-dispatch
+(`AUTO_DISPATCH = True`). Applies the USB Power Delivery Specification (Rev 3.1)
+canonical content to L1-L23 when the USB-PD structural signature is present.
+
+Doctrine — GENERAL not keyword: detection uses canonical STRUCTURAL signatures
+read from the L-doc / input_doc CONTENT blob only (never a filename or folder
+name): the USB Type-C Configuration Channel (CC) wire, Biphase Mark Coding (BMC)
+on CC at 300 kbaud, the Source/Sink power-role model, the Power Data Object
+(PDO) / Request Data Object (RDO) contract, the SOP/SOP'/SOP'' ordered sets, and
+the Source_Capabilities -> Request -> Accept -> PS_RDY contract handshake.
+
+Sibling disambiguation — USB-PD vs USB 2.0 data vs USB4.
+  * USB 2.0 is a D+/D- differential DATA bus with NRZI line coding, packet IDs
+    (PID), endpoints and SOF tokens. It carries NO CC configuration channel, NO
+    BMC, NO PDO/RDO power objects, NO Source/Sink power contract. USB-PD is NOT
+    USB 2.0 data — the detector DEFERS if the spec is USB-2.0-data-primary
+    (NRZI + endpoints + PID with no CC / no PDO).
+  * USB4 is a 20/40/80 Gbps tunneling fabric (routers tunnel USB 3.x, DisplayPort
+    and PCI Express). It REFERENCES the Type-C CC pins and even names "USB PD"
+    in passing, but it defines NO BMC line code, NO PDO/RDO power objects, NO
+    Source_Capabilities/Request/PS_RDY contract messages. USB-PD is NOT USB4 —
+    the detector DEFERS if the spec is USB4-primary (40 Gbps + tunneling +
+    routers) unless the USB-PD-exclusive power-contract quorum dominates.
+The detector requires a USB-PD NAME TOKEN ("power delivery" / "usb-pd" / "usb pd")
+as a NECESSARY condition PLUS a USB-PD-exclusive structural quorum (BMC + CC +
+PDO/RDO + the Source/Sink contract messages), so a plain-USB-2.0 / USB4 spec
+cannot false-fire.
+
+Public entry: ``apply_usb_pd_synth(generated_docs_dir, is_usb_pd_flag, ic_name)``.
+Module-level ``is_usb_pd(blob)`` is the content-only detector.
+"""
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Optional
+
+
+def _word(token: str, low: str) -> bool:
+    """Whole-word match for short acronyms so a bare 'pdo'/'rdo'/'bmc' does not
+    fire on substrings inside unrelated words (e.g. 'clampdown', 'teardown')."""
+    return re.search(r"\b" + re.escape(token) + r"\b", low) is not None
+
+# Generic auto-dispatch opt-in (read by phase1_doc_one_shot_runner [14e2b/15]).
+AUTO_DISPATCH = True
+IC_NAME = "USB Power Delivery (USB-PD)"
+
+# Docs whose canonical content sits at the TOP level of the L-doc JSON.
+_FLAT_DOCS = (
+    "L1_DATASHEET", "L2_FRS", "L3_CMD_PROTOCOL", "L4_REGMAP", "L5_ADI_SPEC",
+    "L6_CONTROL_LOGIC", "L7_TEST_DEBUG", "L8_RTL_CONSTANTS",
+    "L8_TIMING_WAVEFORM", "L9_INTEGRATION_SPEC", "L10_TEST_CASES",
+    "L11_OTP_CONTENT", "L12_BEHAVIORAL_SEQUENCES", "L13_LAB_CALIBRATION",
+)
+# Docs whose canonical content sits under a "fields" wrapper.
+_FIELDS_DOCS = (
+    "L14_PROTOCOL_VERSIONING", "L15_ENCODING_TABLES",
+    "L16_COMPLIANCE_PROPERTIES", "L17_CHANNEL_SIGNAL_CATALOG",
+    "L18_INTERCONNECT_TOPOLOGY", "L19_CONSTRAINTS_PDK",
+    "L20_DFT_SCAN_TOPOLOGY", "L21_POWER_INTENT", "L22_VERIFICATION_PLAN",
+    "L23_SECURITY_REQUIREMENTS",
+)
+
+
+def is_usb_pd(blob: str) -> bool:
+    """Content-only USB-PD detector with USB-2.0 / USB4 MUTEX."""
+    if not blob:
+        return False
+    low = blob.lower()
+    # Name token (NECESSARY): explicit USB Power Delivery identifier.
+    name_token = ("power delivery" in low
+                  or "usb-pd" in low or "usb pd" in low or "usb_pd" in low)
+    if not name_token:
+        return False
+    # USB-PD-exclusive structural marks. Short acronyms (bmc/pdo/rdo) use
+    # whole-word matching so they cannot fire on substrings such as
+    # 'clampdown' (pdo), 'teardown' (rdo) or an arbitrary 'bmc' fragment.
+    bmc = "biphase mark" in low
+    cc_line = ("configuration channel" in low
+               or _word("cc1", low) or _word("cc2", low) or "cc wire" in low)
+    pdo_rdo = (("power data object" in low or _word("pdo", low))
+               and ("request data object" in low or _word("rdo", low)))
+    source_sink = ("source" in low and "sink" in low
+                   and ("vbus" in low or "vconn" in low))
+    contract_msgs = sum(bool(t in low) for t in (
+        "source_capabilities", "source capabilities", "ps_rdy",
+        "pr_swap", "dr_swap", "vconn_swap")) >= 2
+    sop_sets = ("sop'" in low or "sop''" in low
+                or ("ordered set" in low and "sop" in low))
+    score = sum(bool(x) for x in
+                (bmc, cc_line, pdo_rdo, source_sink, contract_msgs, sop_sets))
+    # USB-2.0-data-primary MUTEX: a D+/D- NRZI endpoint spec with PIDs but no CC
+    # configuration channel and no PDO power objects is USB 2.0, not USB-PD.
+    usb2_primary = (("nrzi" in low or "d+/d-" in low or "d+ / d-" in low)
+                    and ("endpoint" in low or "packet id" in low or " pid " in low)
+                    and not cc_line and not pdo_rdo)
+    if usb2_primary:
+        return False
+    # USB4-primary MUTEX: a 40 Gbps tunneling-router spec that only MENTIONS PD
+    # in passing (no BMC, no PDO/RDO power contract, no PS_RDY/Source_Capabilities)
+    # is USB4, not USB-PD.
+    usb4_primary = (("40 gbit" in low or "40 gbps" in low or "tunnel" in low
+                     or "router" in low)
+                    and not bmc and not pdo_rdo and not contract_msgs)
+    if usb4_primary:
+        return False
+    # Require the BMC line code + CC + PDO/RDO power-object signature plus the
+    # Source/Sink contract — the USB-PD-only structural quorum (>= 4 marks with
+    # the power-object contract present).
+    return bmc and pdo_rdo and source_sink and score >= 4
+
+
+# ----------------------------------------------------------------------
+# Canonical USB-PD content (USB Power Delivery Specification Rev 3.1).
+# ----------------------------------------------------------------------
+def _canon():
+    return {
+        "L1_DATASHEET": {
+            "ic_name": IC_NAME,
+            "document_title": "USB Power Delivery Specification",
+            "document_number": "USB PD Rev 3.1",
+            "manufacturer": "USB Implementers Forum (USB-IF)",
+            "revised_date": "Revision 3.1, Version 1.8",
+            "external_pins": ["CC1", "CC2", "VBUS", "VCONN", "GND"],
+            "external_pin_count": 5,
+            "package": "USB Type-C connector interface (no dedicated package)",
+            "key_features": [
+                "Power and data role negotiation over the USB Type-C Configuration Channel (CC) wire",
+                "Distinct from USB 2.0 data (D+/D-, NRZI, PID, endpoints) and from USB4 tunneling (20/40/80 Gbps)",
+                "Biphase Mark Coding (BMC) on CC at a nominal 300 kbaud",
+                "Source / Sink power roles plus DFP/UFP data roles; swappable via PR_Swap, DR_Swap, VCONN_Swap",
+                "Source advertises Power Data Objects (PDO); Sink selects one via a Request Data Object (RDO)",
+                "PDO types: Fixed Supply, Variable Supply, Battery, Augmented PDO (Programmable Power Supply / PPS)",
+                "Contract handshake: Source_Capabilities -> Request -> Accept -> PS_RDY",
+                "Maximum negotiated power 240 W (Extended Power Range, 48 V at 5 A) in Rev 3.1",
+            ],
+            "io_voltage": "VBUS 5 V to 48 V (negotiated); CC single-ended logic",
+            "clock_frequency": "300 kbaud BMC on CC (3.33 us unit interval)",
+        },
+        "L2_FRS": {
+            "ic_name": IC_NAME,
+            "protocol_overview": {
+                "type": "Power/data-role negotiation over the USB Type-C Configuration Channel (CC)",
+                "duplex": "half-duplex; each message acknowledged with GoodCRC before the next",
+                "line_code": "Biphase Mark Coding (BMC) at 300 kbaud",
+                "distinct_from": ["USB 2.0 data (D+/D-, NRZI, PID, endpoints)", "USB4 tunneling (routers, 20/40/80 Gbps)"],
+                "roles": ["Source", "Sink", "DFP", "UFP"],
+                "wire_names": ["CC1", "CC2", "VBUS", "VCONN", "GND"],
+                "power_objects": ["PDO (Power Data Object)", "RDO (Request Data Object)", "APDO (Augmented PDO / PPS)"],
+                "max_power_w": 240,
+                "crc": "CRC-32 (IEEE 802.3 polynomial 0x04C11DB7) over header + data objects",
+            },
+            "functional_requirements": [
+                "PD communication is carried on the connected CC wire of the USB Type-C link using BMC at 300 kbaud.",
+                "A packet is Preamble -> SOP* ordered set -> 16-bit Message Header -> 0..7 32-bit data objects -> CRC-32 -> EOP.",
+                "The Source advertises its PDO list via Source_Capabilities; the Sink selects one PDO via a Request carrying an RDO.",
+                "Explicit Contract: Source_Capabilities -> Request -> Accept -> (VBUS transition) -> PS_RDY.",
+                "Power, data, and VCONN roles are independently swappable via PR_Swap, DR_Swap, VCONN_Swap after a contract exists.",
+                "Every received message is acknowledged with a GoodCRC control message before the next message is sent.",
+                "Soft Reset resets MessageID/protocol layer; Hard Reset tears down the contract and returns default roles; Cable Reset resets the cable plug.",
+                "SOP targets the port partner, SOP' the near-end cable plug, SOP'' the far-end cable plug.",
+            ],
+        },
+        "L3_CMD_PROTOCOL": {
+            "ic_name": IC_NAME,
+            "protocol_type": "Message-based over CC; 16-bit Message Header selects Control / Data / Extended message types; CRC-32 protected; GoodCRC acknowledged.",
+            "opcodes": [
+                {"hex": "0x01", "name": "GoodCRC", "purpose": "Control: acknowledge error-free receipt of the previous message"},
+                {"hex": "0x02", "name": "GotoMin", "purpose": "Control: Sink must drop to its minimum operating current"},
+                {"hex": "0x03", "name": "Accept", "purpose": "Control: request or role swap accepted"},
+                {"hex": "0x04", "name": "Reject", "purpose": "Control: request or role swap rejected"},
+                {"hex": "0x05", "name": "Ping", "purpose": "Control: Source keep-alive"},
+                {"hex": "0x06", "name": "PS_RDY", "purpose": "Control: power supply ready at the new contract voltage"},
+                {"hex": "0x07", "name": "Get_Source_Cap", "purpose": "Control: ask the partner to send its Source_Capabilities"},
+                {"hex": "0x08", "name": "Get_Sink_Cap", "purpose": "Control: ask the partner to send its Sink_Capabilities"},
+                {"hex": "0x09", "name": "DR_Swap", "purpose": "Control: request a Data Role swap"},
+                {"hex": "0x0A", "name": "PR_Swap", "purpose": "Control: request a Power Role swap"},
+                {"hex": "0x0B", "name": "VCONN_Swap", "purpose": "Control: request a VCONN Source swap"},
+                {"hex": "0x0C", "name": "Wait", "purpose": "Control: defer the request, try again later"},
+                {"hex": "0x0D", "name": "Soft_Reset", "purpose": "Control: reset the protocol layer (MessageID) without removing VBUS"},
+                {"hex": "0x01", "name": "Source_Capabilities", "msg_class": "data", "num_data_objects": ">=1", "purpose": "Data (NumDataObj>=1): Source advertises its list of PDOs. Shares the 4-bit Type 0x01 with the GoodCRC control message; disambiguated by Number of Data Objects in the header."},
+                {"hex": "0x02", "name": "Request", "msg_class": "data", "num_data_objects": ">=1", "purpose": "Data (NumDataObj>=1): Sink requests one PDO via an RDO. Shares Type 0x02 with the GotoMin control message."},
+                {"hex": "0x03", "name": "BIST", "msg_class": "data", "num_data_objects": ">=1", "purpose": "Data (NumDataObj>=1): Built-In Self Test. Shares Type 0x03 with the Accept control message."},
+                {"hex": "0x04", "name": "Sink_Capabilities", "msg_class": "data", "num_data_objects": ">=1", "purpose": "Data (NumDataObj>=1): Sink advertises its list of Sink PDOs. Shares Type 0x04 with the Reject control message."},
+                {"hex": "0x0F", "name": "Vendor_Defined", "msg_class": "data", "num_data_objects": ">=1", "purpose": "Data (NumDataObj>=1): Vendor Defined Message (VDM), e.g. Alternate Mode."},
+            ],
+            "response_codes": [
+                {"hex": "0x03", "name": "Accept", "meaning": "Request / swap accepted"},
+                {"hex": "0x04", "name": "Reject", "meaning": "Request / swap rejected"},
+                {"hex": "0x0C", "name": "Wait", "meaning": "Request deferred; retry later"},
+                {"hex": "0x06", "name": "PS_RDY", "meaning": "Power supply has reached the new contract voltage"},
+                {"hex": "0x01", "name": "GoodCRC", "meaning": "Per-message CRC acknowledgement"},
+            ],
+            "crc": {"name": "CRC-32", "poly_hex": "0x04C11DB7", "init_hex": "0xFFFFFFFF",
+                    "coverage": "Message Header + all data objects; IEEE 802.3 CRC-32"},
+            "ordered_sets": {"SOP": "Sync-1 Sync-1 Sync-1 Sync-2 (port partner)",
+                             "SOP'": "Sync-1 Sync-1 Sync-3 Sync-3 (near-end cable plug)",
+                             "SOP''": "Sync-1 Sync-3 Sync-1 Sync-3 (far-end cable plug)",
+                             "Hard Reset": "RST-1 RST-1 RST-1 RST-2",
+                             "Cable Reset": "RST-1 Sync-1 RST-1 Sync-3"},
+            "line_code": "Biphase Mark Coding (BMC) at 300 kbaud",
+            "message_based": True,
+            "acknowledged": "GoodCRC per message",
+        },
+        "L4_REGMAP": {
+            "ic_name": IC_NAME,
+            "registers": [
+                {"offset": "Header[3:0]", "name": "Message Type", "desc": "Selects the Control or Data message"},
+                {"offset": "Header[4]", "name": "Port Data Role", "desc": "0=UFP, 1=DFP"},
+                {"offset": "Header[6:5]", "name": "Specification Revision", "desc": "00=Rev1.0, 01=Rev2.0, 10=Rev3.0/3.1"},
+                {"offset": "Header[7]", "name": "Port Power Role / Cable Plug", "desc": "Power role bit (or Cable Plug for SOP'/SOP'')"},
+                {"offset": "Header[10:8]", "name": "Message ID", "desc": "Rolling counter for retransmission detection"},
+                {"offset": "Header[14:11]", "name": "Number of Data Objects", "desc": "0=Control message, 1-7=Data message"},
+                {"offset": "Header[15]", "name": "Extended", "desc": "1=Extended message with an Extended Message Header"},
+            ],
+            "pdo_fields": {"bits_31_30": "PDO type (00=Fixed, 01=Battery, 10=Variable, 11=Augmented/PPS)",
+                           "fixed_voltage": "50 mV units", "fixed_current": "10 mA units",
+                           "apdo": "PPS programmable voltage 20 mV steps, current 50 mA steps"},
+            "rdo_fields": {"object_position": "bits 30:28 (1-based selected PDO index)",
+                           "giveback": "bit 27", "capability_mismatch": "bit 26",
+                           "usb_comms_capable": "bit 25",
+                           "operating_current": "bits 19:10 (10 mA units)",
+                           "max_operating_current": "bits 9:0 (10 mA units)"},
+        },
+        "L5_ADI_SPEC": {
+            "ic_name": IC_NAME,
+            "analog_mixed_signal": "BMC single-ended signalling on CC; VBUS power transition (5 V to 48 V); VCONN supply on the non-comm CC pin.",
+            "io_standard": "USB Type-C CC single-ended logic; VBUS 5-48 V power rail",
+            "not_applicable_reason": "USB-PD is predominantly a digital negotiation protocol; the only analog aspect is the VBUS power transition and BMC eye.",
+        },
+        "L6_CONTROL_LOGIC": {
+            "ic_name": IC_NAME,
+            "control_logic": {
+                "source_fsm": ["Unattached", "Attached (advertise Source_Capabilities)",
+                               "Wait for Request", "Evaluate Request -> Accept/Reject/Wait",
+                               "Transition VBUS to new contract", "Send PS_RDY",
+                               "Explicit Contract (Ready)", "Handle PR_Swap/DR_Swap/VCONN_Swap"],
+                "sink_fsm": ["Unattached", "Attached (wait Source_Capabilities)",
+                             "Evaluate PDOs and pick one", "Send Request (RDO)",
+                             "Wait Accept", "Wait PS_RDY", "Explicit Contract (Ready)"],
+                "atomic_message_sequence": "AMS — a contract negotiation or swap is an indivisible message sequence guarded by Soft_Reset on protocol error.",
+                "acknowledgement": "Every message is acknowledged by a GoodCRC; missing GoodCRC triggers retransmission then Soft_Reset.",
+            },
+        },
+        "L7_TEST_DEBUG": {
+            "ic_name": IC_NAME,
+            "test_debug": {
+                "bist_carrier": "BIST Carrier Mode transmits a continuous carrier on CC for eye-diagram measurement",
+                "bist_test_data": "BIST Test Data exercises the receiver with a known pattern",
+                "cap_query": "Get_Source_Cap / Get_Sink_Cap read the partner's advertised capabilities",
+                "crc_check": "CRC-32 detects bit errors; GoodCRC acknowledges error-free receipt"},
+        },
+        "L8_RTL_CONSTANTS": {
+            "ic_name": IC_NAME,
+            "width_parameters": {
+                "MESSAGE_HEADER_BITS": {"width_bits": 16},
+                "DATA_OBJECT_BITS": {"width_bits": 32},
+                "CRC_BITS": {"width_bits": 32},
+                "NUM_DATA_OBJECTS": {"legal_values": [0, 1, 2, 3, 4, 5, 6, 7]},
+                "MESSAGE_ID_BITS": {"width_bits": 3}},
+            "key_constants": {
+                "CRC32_POLY": "0x04C11DB7", "BAUD_KBAUD": 300, "UI_US": 3.33,
+                "MAX_DATA_OBJECTS": 7, "MAX_POWER_W": 240, "VSAFE5V_V": 5,
+                "MAX_VBUS_V": 48, "MAX_CURRENT_A": 5, "PREAMBLE_BITS": 64},
+            "pdo_type_encodings": {"00": "Fixed Supply", "01": "Battery",
+                                   "10": "Variable Supply", "11": "Augmented PDO (PPS)"},
+            "spec_rev_encodings": {"00": "Rev 1.0", "01": "Rev 2.0", "10": "Rev 3.0/3.1"},
+        },
+        "L8_TIMING_WAVEFORM": {
+            "ic_name": IC_NAME,
+            "timing_constants": {"ui_us": 3.33, "baud_kbaud": 300,
+                                 "t_receive_ms": {"min": 0.75, "max": 1.0},
+                                 "t_transmit_us_max": 195,
+                                 "crc_receive_timer_ms": {"min": 0.9, "max": 1.1},
+                                 "t_sender_response_ms": {"min": 24, "max": 30},
+                                 "ps_transition_timer_ms": {"min": 450, "max": 550},
+                                 "t_hard_reset_complete_ms_max": 5},
+            "line_code_waveform": {"coding": "Biphase Mark Coding (BMC)",
+                                   "transition": "guaranteed transition at every bit boundary; mid-bit transition for logic 1",
+                                   "clock_recovery": "receiver recovers clock from the BMC transitions"},
+            "packet_waveform": {"order": ["Preamble (64-bit alternating)", "SOP* ordered set (4 K-codes)",
+                                          "Message Header (16 bits)", "0..7 Data Objects (32 bits each)",
+                                          "CRC-32 (32 bits)", "EOP K-code"]},
+        },
+        "L9_INTEGRATION_SPEC": {
+            "ic_name": IC_NAME,
+            "integration_overview": {
+                "partners": ["Source (supplies VBUS)", "Sink (consumes VBUS)"],
+                "data_roles": ["DFP (Downstream Facing Port)", "UFP (Upstream Facing Port)"],
+                "physical": "USB Type-C connector; PD on the connected CC wire; VCONN on the other CC pin",
+                "distinct_from": "USB 2.0 D+/D- data and USB4 tunneling are carried separately; PD only negotiates power/role over CC",
+                "init_sequence": "On attach: Source advertises Source_Capabilities; Sink sends Request (RDO); Source Accepts, transitions VBUS, sends PS_RDY to establish the Explicit Contract.",
+                "max_power_w": 240},
+        },
+        "L10_TEST_CASES": {
+            "ic_name": IC_NAME,
+            "test_cases": [
+                {"name": "explicit_contract", "desc": "Source_Capabilities -> Request -> Accept -> PS_RDY establishes a contract."},
+                {"name": "goodcrc_ack", "desc": "Every message is acknowledged with GoodCRC before the next is sent."},
+                {"name": "pps_request", "desc": "Sink selects an APDO and programs an output voltage in 20 mV steps via the RDO."},
+                {"name": "pr_swap", "desc": "PR_Swap exchanges Source and Sink power roles after a contract exists."},
+                {"name": "soft_reset", "desc": "Soft_Reset resets MessageID without removing VBUS or the contract."},
+                {"name": "hard_reset", "desc": "Hard Reset forces VBUS to vSafe0V/vSafe5V and returns default power roles."},
+                {"name": "crc_error", "desc": "Corrupted CRC-32 -> no GoodCRC -> retransmission then Soft_Reset."}],
+        },
+        "L11_OTP_CONTENT": {
+            "ic_name": IC_NAME,
+            "otp_content": "N/A — USB-PD is a negotiation protocol, no one-time-programmable fuse content defined.",
+            "applicable": False,
+        },
+        "L12_BEHAVIORAL_SEQUENCES": {
+            "ic_name": IC_NAME,
+            "contract_sequence": ["Source sends Source_Capabilities (PDO list) on SOP.",
+                                  "Sink evaluates PDOs and replies Request carrying an RDO selecting one PDO.",
+                                  "Source replies Accept (or Reject / Wait).",
+                                  "Source transitions VBUS to the requested voltage.",
+                                  "Source sends PS_RDY; the Explicit Contract is in place."],
+            "swap_sequence": ["Either partner sends PR_Swap / DR_Swap / VCONN_Swap.",
+                              "Partner replies Accept.",
+                              "Roles are exchanged; for PR_Swap the new Source sends PS_RDY."],
+            "reset_sequence": ["Soft_Reset resets the protocol layer (MessageID); VBUS preserved.",
+                               "Hard Reset ordered set tears down the contract; VBUS to vSafe0V/vSafe5V; default roles restored.",
+                               "Cable Reset resets the cable plug (SOP'/SOP'') without disturbing the port contract."],
+        },
+        "L13_LAB_CALIBRATION": {
+            "ic_name": IC_NAME,
+            "lab_calibration": "N/A — protocol negotiation; only BMC eye and VBUS transition are measured, no analog trim.",
+            "applicable": False,
+        },
+        "L14_PROTOCOL_VERSIONING": {
+            "spec_version": "USB Power Delivery Specification Revision 3.1, Version 1.8 (USB-IF)",
+            "lineage": [
+                {"version": "USB PD 1.0", "year": "2012", "summary": "Original PD over VBUS using BFSK; superseded by CC-based PD."},
+                {"version": "USB PD 2.0", "year": "2014", "summary": "BMC on the Type-C CC wire; Fixed/Variable/Battery PDOs."},
+                {"version": "USB PD 3.0", "year": "2017", "summary": "Adds Programmable Power Supply (PPS / APDO), extended messages, fast role swap."},
+                {"version": "USB PD 3.1", "year": "2021", "summary": "Extended Power Range up to 240 W (48 V at 5 A)."}],
+            "backward_compat_traps": [
+                {"trap_name": "Not_USB2_data", "rule": "USB-PD negotiates power/role over the CC wire with BMC; it is NOT the USB 2.0 D+/D- data bus (NRZI, PID, endpoints, SOF).", "trap": "Decoding USB-PD as USB 2.0 data (looking for D+/D-, NRZI, endpoints) is wrong — PD lives on CC."},
+                {"trap_name": "Not_USB4_tunneling", "rule": "USB-PD only negotiates power and roles; it does NOT tunnel USB 3.x / DisplayPort / PCIe at 20/40/80 Gbps like USB4 routers.", "trap": "Treating the CC/VCONN pins as the USB4 high-speed tunneling fabric misses that PD is a low-speed contract protocol."}],
+        },
+        "L15_ENCODING_TABLES": {
+            "control_message_table": {"header_columns": ["Type", "Name"], "rows": [
+                ["0x01", "GoodCRC"], ["0x02", "GotoMin"], ["0x03", "Accept"], ["0x04", "Reject"],
+                ["0x05", "Ping"], ["0x06", "PS_RDY"], ["0x07", "Get_Source_Cap"], ["0x08", "Get_Sink_Cap"],
+                ["0x09", "DR_Swap"], ["0x0A", "PR_Swap"], ["0x0B", "VCONN_Swap"], ["0x0C", "Wait"],
+                ["0x0D", "Soft_Reset"]]},
+            "data_message_table": {"header_columns": ["Type", "Name"], "rows": [
+                ["0x01", "Source_Capabilities"], ["0x02", "Request"], ["0x03", "BIST"],
+                ["0x04", "Sink_Capabilities"], ["0x0F", "Vendor_Defined"]]},
+            "pdo_type_table": {"header_columns": ["Bits31:30", "PDO Type"], "rows": [
+                ["00", "Fixed Supply"], ["01", "Battery"], ["10", "Variable Supply"], ["11", "Augmented PDO (PPS)"]]},
+            "ordered_set_table": {"header_columns": ["Ordered Set", "K-codes"], "rows": [
+                ["SOP", "Sync-1 Sync-1 Sync-1 Sync-2"], ["SOP'", "Sync-1 Sync-1 Sync-3 Sync-3"],
+                ["SOP''", "Sync-1 Sync-3 Sync-1 Sync-3"], ["Hard Reset", "RST-1 RST-1 RST-1 RST-2"],
+                ["Cable Reset", "RST-1 Sync-1 RST-1 Sync-3"]]},
+            "header_field_table": {"header_columns": ["Bits", "Field"], "rows": [
+                ["3:0", "Message Type"], ["4", "Port Data Role"], ["6:5", "Specification Revision"],
+                ["7", "Port Power Role / Cable Plug"], ["10:8", "Message ID"],
+                ["14:11", "Number of Data Objects"], ["15", "Extended"]]},
+        },
+        "L16_COMPLIANCE_PROPERTIES": {
+            "must_have_properties": [
+                "PD communication uses Biphase Mark Coding (BMC) on the connected CC wire at 300 kbaud.",
+                "A packet is Preamble + SOP* ordered set + 16-bit Message Header + 0..7 32-bit data objects + CRC-32 + EOP.",
+                "The Explicit Contract is established by Source_Capabilities -> Request -> Accept -> PS_RDY.",
+                "CRC-32 uses the IEEE 802.3 polynomial 0x04C11DB7 over the header and data objects.",
+                "Every received message is acknowledged with a GoodCRC before the next message.",
+                "Power, data, and VCONN roles are swappable via PR_Swap, DR_Swap, VCONN_Swap.",
+                "Hard Reset returns both partners to their default power roles and brings VBUS to vSafe0V/vSafe5V."],
+            "usb_pd_distinguishers": [
+                "Negotiation runs on the Type-C CC wire — not on the USB 2.0 D+/D- data pair.",
+                "BMC line code at 300 kbaud — not USB 2.0 NRZI nor USB4 multi-gigabit signalling.",
+                "Power Data Objects (PDO) and Request Data Objects (RDO) define the power contract.",
+                "Source/Sink power roles with PR_Swap — absent from both USB 2.0 data and USB4 tunneling."],
+        },
+        "L17_CHANNEL_SIGNAL_CATALOG": {
+            "channels": [
+                {"name": "CC1", "direction": "bidirectional", "purpose": "Configuration Channel wire 1; carries BMC PD communication or VCONN/orientation."},
+                {"name": "CC2", "direction": "bidirectional", "purpose": "Configuration Channel wire 2; the wire not used for comm carries VCONN."},
+                {"name": "VBUS", "direction": "Source->Sink", "purpose": "Negotiated bus power, 5 V (default) up to 48 V."},
+                {"name": "VCONN", "direction": "supplied by VCONN Source", "purpose": "Powers the electronically marked cable (eMarker) on the non-comm CC pin."},
+                {"name": "GND", "direction": "shared", "purpose": "Ground return."}],
+            "roles": [
+                {"name": "Source", "purpose": "Supplies VBUS; advertises Source_Capabilities (PDOs)."},
+                {"name": "Sink", "purpose": "Consumes VBUS; issues Request (RDO)."},
+                {"name": "DFP", "purpose": "Downstream Facing Port (host data role)."},
+                {"name": "UFP", "purpose": "Upstream Facing Port (device data role)."}],
+            "channel_counts": {"physical_signals": 5, "cc_wires": 2, "power_roles": 2, "data_roles": 2},
+        },
+        "L18_INTERCONNECT_TOPOLOGY": {
+            "topology_type": "Point-to-point Source <-> Sink over a USB Type-C cable; PD on the connected CC wire; SOP'/SOP'' address the cable plugs.",
+            "supported_topologies": [
+                {"name": "Source to Sink", "description": "Two port partners negotiate a power contract over CC (SOP messages)."},
+                {"name": "Port to cable plug", "description": "SOP' addresses the near-end cable plug, SOP'' the far-end plug (eMarker query)."}],
+            "device_classification": {"power_roles": ["Source", "Sink"], "data_roles": ["DFP", "UFP"], "cable": "Electronically Marked Cable (eMarker, powered by VCONN)"},
+            "distinct_from": "USB 2.0 D+/D- data link and USB4 tunneling router fabric",
+        },
+        "L19_CONSTRAINTS_PDK": {"pdk_target": "N/A (protocol spec, not a tapeout)",
+                                "io_voltage": "VBUS 5-48 V; CC single-ended logic", "baud_kbaud": 300},
+        "L20_DFT_SCAN_TOPOLOGY": {"scan_topology": "N/A — protocol spec, no DFT defined.",
+                                  "built_in_self_test": "BIST Carrier Mode + BIST Test Data on CC"},
+        "L21_POWER_INTENT": {"power_domains": ["VBUS 5-48 V negotiated rail", "VCONN cable-marker supply"],
+                             "power_considerations": "USB-PD negotiates VBUS up to 240 W (48 V at 5 A); PPS allows fine programmable voltage/current for efficient charging."},
+        "L22_VERIFICATION_PLAN": {"verification_items": ["Explicit contract negotiation",
+                                  "GoodCRC acknowledgement", "PPS / APDO request", "Power-role swap",
+                                  "Soft Reset", "Hard Reset", "CRC-32 error handling", "SOP'/SOP'' cable plug messaging"]},
+        "L23_SECURITY_REQUIREMENTS": {"attack_surface": [
+            "A malicious Source could advertise out-of-range PDOs; the Sink must validate the offered voltage/current before accepting.",
+            "Vendor Defined Messages (VDM) for Alternate Modes must be authenticated to prevent rogue mode entry."],
+            "security_notes": "USB-PD defines optional Authentication (digital certificate exchange over the CC link) to verify a Source/cable before accepting high power."},
+    }
+
+
+def apply_usb_pd_synth(generated_docs_dir, is_usb_pd_flag: bool,
+                       ic_name: Optional[str]) -> None:
+    """Force-merge USB-PD-canonical content into the generated L-docs when the
+    USB-PD signature matched. No-op otherwise."""
+    if not is_usb_pd_flag:
+        return
+    gd = Path(generated_docs_dir)
+    canon = _canon()
+    name = ic_name or IC_NAME
+    for doc in _FLAT_DOCS:
+        p = gd / f"{doc}.json"
+        if not p.is_file():
+            continue
+        d = json.loads(p.read_text())
+        d.update(canon.get(doc, {}))
+        d["ic_name"] = name
+        p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    for doc in _FIELDS_DOCS:
+        p = gd / f"{doc}.json"
+        if not p.is_file():
+            continue
+        d = json.loads(p.read_text())
+        f = d.get("fields")
+        if not isinstance(f, dict):
+            f = {}
+        f.update(canon.get(doc, {}))
+        d["fields"] = f
+        d["ic_name"] = name
+        p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")

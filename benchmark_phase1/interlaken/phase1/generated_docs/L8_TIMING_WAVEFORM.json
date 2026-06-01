@@ -1,0 +1,33 @@
+{
+  "schema_version": "1",
+  "doc_class": "timing_waveform",
+  "ic_name": "Interlaken Protocol Definition",
+  "timing_windows": [],
+  "timing_constants": {
+    "per_lane_line_rate_gbps": [
+      6.25,
+      10.3125,
+      12.5
+    ],
+    "word_payload_bits": 64,
+    "word_wire_bits": 67,
+    "metaframe_length_words": 2048
+  },
+  "waveforms": [],
+  "extraction_evidence": {},
+  "framing_waveform": {
+    "word_encoding": "64B/67B per lane",
+    "control_data_bit": "bit 64 (1=Control, 0=Data)",
+    "scrambled_bit": "bit 65",
+    "inversion_bit": "bit 66",
+    "metaframe": "Sync, Scrambler State, Skip, Diagnostic every MetaFrameLength words"
+  },
+  "burst_waveform": {
+    "order": [
+      "Burst Control Word (SOP, channel, flow control)",
+      "Data Words (payload)",
+      "Idle/Burst Control Word (EOP, EOP_Format, CRC-24)",
+      "Idle Control Words between bursts"
+    ]
+  }
+}

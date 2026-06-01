@@ -8,7 +8,7 @@
 > `python3 flow_doc_emit.py`.
 
 
-## Phase 1 — `phase1_doc_one_shot_runner.py` (global steps 1-34)
+## Phase 1 — `phase1_doc_one_shot_runner.py` (global steps 1-35)
 
 | # | Marker | Step |
 |---|---|---|
@@ -44,39 +44,40 @@
 | 30 | [14d/15] | L19-L23 skeleton emit |
 | 31 | [14e/15] | serial_peripheral_protocol class synth (R53/R54/R55) |
 | 32 | [14e2/15] | bus_interconnect_protocol Tier-2 synth (TileLink / Wishbone) |
-| 33 | [14e3/15] | L10↔L3 packet-protocol opcode consistency sweep |
-| 34 | [15/15] | coverage report |
+| 33 | [14e2b/15] | generic drop-in protocol-synth auto-dispatch |
+| 34 | [14e3/15] | L10↔L3 packet-protocol opcode consistency sweep |
+| 35 | [15/15] | coverage report |
 
-## Phase 2 — `phase2_one_shot_runner.py` (global steps 35-49)
-
-| # | Step function |
-|---|---|
-| 35 | `step_rig_topology_skeleton` |
-| 36 | `step_phase1` |
-| 37 | `step_rtl_gen` |
-| 38 | `step_full_stack_tb_gen` |
-| 39 | `step_reference_tb` |
-| 40 | `step_yosys_synth` |
-| 41 | `step_qsf_gen` |
-| 42 | `step_sdc_gen` |
-| 43 | `step_otp_image_check` |
-| 44 | `step_fpga_compile` |
-| 45 | `step_fpga_burn` |
-| 46 | `step_usb_hid_tester_verify` |
-| 47 | `step_phase3` |
-| 48 | `step_emit_phase2_manifests` |
-| 49 | `step_final_audit` |
-
-## Phase 3 — `phase3_one_shot_runner.py` (global steps 50-55)
+## Phase 2 — `phase2_one_shot_runner.py` (global steps 36-50)
 
 | # | Step function |
 |---|---|
-| 50 | `step_synth` |
-| 51 | `step_pnr` |
-| 52 | `step_gds` |
-| 53 | `step_drc` |
-| 54 | `step_lvs` |
-| 55 | `step_canonicalize_artefacts` |
+| 36 | `step_rig_topology_skeleton` |
+| 37 | `step_phase1` |
+| 38 | `step_rtl_gen` |
+| 39 | `step_full_stack_tb_gen` |
+| 40 | `step_reference_tb` |
+| 41 | `step_yosys_synth` |
+| 42 | `step_qsf_gen` |
+| 43 | `step_sdc_gen` |
+| 44 | `step_otp_image_check` |
+| 45 | `step_fpga_compile` |
+| 46 | `step_fpga_burn` |
+| 47 | `step_usb_hid_tester_verify` |
+| 48 | `step_phase3` |
+| 49 | `step_emit_phase2_manifests` |
+| 50 | `step_final_audit` |
+
+## Phase 3 — `phase3_one_shot_runner.py` (global steps 51-56)
+
+| # | Step function |
+|---|---|
+| 51 | `step_synth` |
+| 52 | `step_pnr` |
+| 53 | `step_gds` |
+| 54 | `step_drc` |
+| 55 | `step_lvs` |
+| 56 | `step_canonicalize_artefacts` |
 
 ## Analog — `analog_one_shot_runner.py` (8 steps, PARALLEL to Phase 2)
 
@@ -93,5 +94,5 @@
 
 ## Totals
 
-Sequential global steps: 55 (Phase 1: 1-34 · Phase 2: 35-49 · Phase 3: 50-55) · Analog (parallel): 8
+Sequential global steps: 56 (Phase 1: 1-35 · Phase 2: 36-50 · Phase 3: 51-56) · Analog (parallel): 8
 

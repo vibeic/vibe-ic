@@ -149,6 +149,23 @@ def is_qspi_ospi(blob: str) -> bool:
         return False
     low = blob.lower()
 
+    # --- MUTEX vs eSPI (v0.2.13) -----------------------------------------
+    # eSPI (Enhanced SPI) is SPI-FAMILY and genuinely supports Single/Dual/Quad
+    # I/O over ESPI_IO[3:0] plus a Flash Access channel, so it satisfies the
+    # multi-IO + flash QSPI structural features. But eSPI is NOT a JEDEC xSPI
+    # NOR-flash command interface: it multiplexes four logical channels
+    # (Peripheral / Virtual Wire / OOB / Flash Access) with a command/response
+    # turnaround protocol and GET/SET_CONFIGURATION negotiation. If the eSPI
+    # four-channel signature is present, DEFER and let the eSPI synth own it.
+    espi_signature = (
+        "virtual wire" in low
+        and "flash access" in low
+        and ("oob" in low or "out-of-band" in low or "out of band" in low)
+        and ("get_configuration" in low or "set_configuration" in low
+             or "espi_alert" in low or "enhanced serial peripheral" in low))
+    if espi_signature:
+        return False
+
     # --- MUTEX vs ONFI / parallel-NAND-flash (the hard sibling) ----------
     # ONFI (Open NAND Flash Interface) is a PARALLEL, byte/word-wide NAND
     # protocol that ALSO uses DQ0..DQ7 data lines, a DQS read strobe, DDR

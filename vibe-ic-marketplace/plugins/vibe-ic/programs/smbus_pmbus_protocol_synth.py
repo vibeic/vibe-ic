@@ -65,6 +65,7 @@ smbus_pmbus_ic_name)``.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -134,9 +135,14 @@ def is_smbus_pmbus(blob: str) -> bool:
     low = blob.lower()
 
     # --- SMBus-specific structural features (absent from a plain-I2C spec) ---
+    # v0.2.13: "PEC" must be a WHOLE WORD. A bare substring match also hits
+    # "ADI_SPEC" / "SPECIFICATION" / "EXPECTED", which — combined with any
+    # CRC-8 mention — false-fired on the eSPI benchmark (eSPI has CRC-8 and
+    # the token "ADI_SPEC" in L5). The SMBus Packet Error Code is always
+    # written "PEC" as a standalone mnemonic, so a word boundary is exact.
     pec = (
         "Packet Error Code" in blob
-        or ("PEC" in blob and ("CRC-8" in blob or "CRC8" in blob))
+        or (re.search(r"\bPEC\b", blob) and ("CRC-8" in blob or "CRC8" in blob))
     )
     smbalert = ("SMBALERT" in blob or "Alert Response Address" in blob
                 or "Alert Response" in blob)

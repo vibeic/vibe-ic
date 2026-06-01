@@ -1,0 +1,5 @@
+{
+  "ic_name": "Low Pin Count (LPC) Interface",
+  "lab_calibration": "N/A — purely digital protocol; no analog trim/calibration.",
+  "applicable": false
+}
