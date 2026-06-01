@@ -1,0 +1,51 @@
+type: enhancement
+severity: P3
+component: program:spec_conformance_check
+
+plugin_version: "0.2.13"
+
+title: >-
+  Add a deterministic opcode-field-width + L3/L15 cross-consistency check —
+  the usb_pd synth+gold fabricated data-message opcodes 0x11-0x1F that are
+  STRUCTURALLY IMPOSSIBLE for a 4-bit Type field, and gated-parity-0 was blind
+  because the gold carried the identical fabrication.
+
+pattern: |
+  usb_pd_protocol_synth + claude_extracted L3_CMD_PROTOCOL assigned the USB-PD
+  data messages hexes 0x11 Source_Capabilities / 0x12 Request / 0x13 BIST /
+  0x14 Sink_Capabilities / 0x1F Vendor_Defined. But USB-PD's Message Header
+  Message Type is a 4-bit field (L4_REGMAP Header[3:0]); the legal range is
+  0x0..0xF. Control and Data messages SHARE that 4-bit space and are
+  disambiguated by the Number-of-Data-Objects field, so the real codes are
+  0x01/0x02/0x03/0x04/0x0F. Two independent tells were present yet ungated:
+    (a) 0x11-0x1F exceed 2^4-1 = 0xF given the declared 4-bit Type width.
+    (b) the SAME synth's L15 data_message_table already said Source_Capabilities
+        = 0x01 / BIST = 0x03 / Vendor_Defined = 0x0F — an intra-design L3-vs-L15
+        contradiction.
+  gated parity == 0 because the gold copied the same wrong hexes (shared error).
+  Caught only by adversarial review. Fixed this session in both synth and gold
+  (0x01/0x02/0x03/0x04/0x0F + msg_class/num_data_objects tags), but no gate
+  enforces either invariant generally.
+
+suggested_fix: |
+  Extend spec_conformance_check.py (or a new opcode_field_width_consistency_
+  check.py) with two deterministic checks over the L docs:
+    1. FIELD-WIDTH: if L4/L8 declare a command-type / opcode field of width W
+       bits, every L3.opcodes[].hex must satisfy int(hex,16) <= 2^W - 1.
+       FAIL (not WARN) on overflow — it is structurally impossible, never a
+       judgment call.
+    2. L3<->L15 CROSS-CONSISTENCY: for each mnemonic that appears in BOTH
+       L3.opcodes and an L15 encoding table, the hex must match. FAIL on a
+       mismatch (intra-design contradiction).
+  Both are chip-AGNOSTIC and rely only on declared widths + name->hex maps.
+  Corpus sweep: run against all phase1 benchmarks; expect zero failures after
+  the v0.2.13 usb_pd fix.
+
+id: "ORGANIC-20260601-opcode-field-width-consistency-check"
+submitted_at: "2026-06-01T14:32:00+00:00"
+session_context: >-
+  v0.2.13 phase1 close-loop. The usb_pd benchmark was added via the 5-protocol
+  workflow; its adversarial-review stage flagged the fabricated 0x11-0x1F
+  data-message opcodes (4-bit Type field => impossible; L3 contradicted L15).
+  Fixed in synth + gold this session. The generalizable gate (declared-width
+  bound + L3/L15 agreement) was not built; filed for a future iteration.
