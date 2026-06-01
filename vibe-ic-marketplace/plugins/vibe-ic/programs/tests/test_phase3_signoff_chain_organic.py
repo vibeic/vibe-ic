@@ -993,3 +993,85 @@ class TestPercWelltapIntegration:
         man = [c for c in j["categories"]
                if c["category"].startswith("Latch-up / well-tap (spacing")]
         assert man and man[0]["status"] == "MANUAL_REVIEW"
+
+
+# ---------------------------------------------------------------------------
+# v0.2.10 — END-TO-END integration on a faithful multi-domain padded chip.
+# Composes ALL the v0.2.7-2.10 PERC categories at once (the unit tests each
+# exercise one in isolation). Structure mirrors the real Caravel chip_io:
+# 3 supply domains (SPECIALNETS) → xdomain MANUAL (not N/A); a gpiov2 + clamped
+# pad ring tied to both rails → ESD PRESENT + topology OK; well taps present.
+# ---------------------------------------------------------------------------
+_PADDED_CHIP_DEF = """VERSION 5.8 ;
+DESIGN chip_top ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 200000 200000 ) ;
+COMPONENTS 9 ;
+- io_clk sky130_ef_io__gpiov2_pad + PLACED ( 1000 1000 ) N ;
+- p_vddio sky130_ef_io__vddio_hvc_clamped_pad + PLACED ( 2000 1000 ) N ;
+- p_vssio sky130_ef_io__vssio_hvc_clamped_pad + PLACED ( 3000 1000 ) N ;
+- p_vccd sky130_ef_io__vccd_lvc_clamped_pad + PLACED ( 4000 1000 ) N ;
+- p_vssd sky130_ef_io__vssd_lvc_clamped_pad + PLACED ( 5000 1000 ) N ;
+- p_vdda sky130_ef_io__vdda_hvc_clamped_pad + PLACED ( 6000 1000 ) N ;
+- p_vssa sky130_ef_io__vssa_hvc_clamped_pad + PLACED ( 7000 1000 ) N ;
+- core0 sky130_fd_sc_hd__nor3_1 + PLACED ( 50000 50000 ) N ;
+- tap0 sky130_fd_sc_hd__tapvpwrvgnd_1 + PLACED ( 50500 50000 ) N ;
+END COMPONENTS
+NETS 2 ;
+- vpwr_net ( io_clk VDDIO ) ( p_vddio VDDIO ) ( p_vssio VDDIO ) ( p_vccd VCCD ) ( p_vssd VCCD ) ( p_vdda VDDA ) ( p_vssa VDDA ) + USE POWER ;
+- vgnd_net ( io_clk VSSIO ) ( p_vddio VSSIO ) ( p_vssio VSSIO ) ( p_vccd VSSD ) ( p_vssd VSSD ) ( p_vdda VSSA ) ( p_vssa VSSA ) + USE GROUND ;
+END NETS
+SPECIALNETS 6 ;
+    - vddio ( io_clk VDDIO ) + USE POWER ;
+    - vssio ( io_clk VSSIO ) + USE GROUND ;
+    - vccd ( core0 VPB ) + USE POWER ;
+    - vssd ( core0 VNB ) + USE GROUND ;
+    - vdda ( p_vdda VDDA ) + USE POWER ;
+    - vssa ( p_vssa VSSA ) + USE GROUND ;
+END SPECIALNETS
+END DESIGN
+"""
+
+
+class TestPercPaddedChipEndToEnd:
+    def test_all_categories_compose_on_multidomain_padded_chip(self, tmp_path):
+        project = _mk_project(tmp_path, _PADDED_CHIP_DEF)
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        rpt3.mkdir(parents=True, exist_ok=True)
+        for n in ("antenna", "ir_drop", "em", "erc"):
+            (rpt3 / f"{n}.json").write_text(json.dumps({"verdict": "PASS"}) + "\n")
+        assert runner._emit_perc_equivalent(
+            project, "chip_top", _fake_pdk(), "x", [])
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        cats = {c["category"]: c for c in j["categories"]}
+
+        # ESD presence stays MANUAL (sizing), topology AUTOMATED PASS.
+        assert cats["ESD protection presence"]["status"] == "MANUAL_REVIEW"
+        assert cats["ESD discharge-path topology (connectivity)"]["result"] == "PASS"
+        # Well taps present → AUTOMATED PASS; spacing/physics still MANUAL.
+        assert cats["Latch-up well-tap presence"]["result"] == "PASS"
+        assert cats["Latch-up well-tap presence"]["welltap_status"] == "WELLTAP_PRESENT"
+        lu = next(c for k, c in cats.items()
+                  if k.startswith("Latch-up / well-tap (spacing"))
+        assert lu["status"] == "MANUAL_REVIEW"
+        # 3 supply domains → cross-voltage-domain MANUAL, NOT auto-N/A.
+        assert cats["Cross-voltage-domain"]["status"] == "MANUAL_REVIEW"
+        # overall: no AUTOMATED failed, manual items pending → PASS.
+        assert j["verdict"] == "PERC_EQUIV_PASS"
+
+    def test_padded_chip_open_loop_fails_overall(self, tmp_path):
+        # drop the vssa return clamp → ESD topology GAP → PERC_EQUIV_FAIL even
+        # with a full pad ring + taps (the conclusive automated FAIL dominates).
+        broken = _PADDED_CHIP_DEF.replace(
+            "- p_vssa sky130_ef_io__vssa_hvc_clamped_pad + PLACED ( 7000 1000 ) N ;\n",
+            "").replace("COMPONENTS 9 ;", "COMPONENTS 8 ;")
+        project = _mk_project(tmp_path, broken)
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        rpt3.mkdir(parents=True, exist_ok=True)
+        for n in ("antenna", "ir_drop", "em", "erc"):
+            (rpt3 / f"{n}.json").write_text(json.dumps({"verdict": "PASS"}) + "\n")
+        runner._emit_perc_equivalent(project, "chip_top", _fake_pdk(), "x", [])
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        cats = {c["category"]: c for c in j["categories"]}
+        assert cats["ESD discharge-path topology (connectivity)"]["result"] == "FAIL"
+        assert j["verdict"] == "PERC_EQUIV_FAIL"
