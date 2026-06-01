@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 535
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 535)
+- **Total programs (excluding helpers / shims):** 536
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 536)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 526 |
+| `any` | 527 |
 
 ## Alphabetical listing
 
@@ -355,6 +355,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pdk_udp_synth_shim_gen` | any | — | v1.6.218 (ORGANIC-20260512-followup). |
 | `pdk_yosys_flatten_for_quartus` | any | — | v1.6.222 (ORGANIC-20260512-followup-2). |
 | `per_opcode_response_latency_table_check` | any | v0.119.30 | gate (LL-33) catching |
+| `perc_corpus_sweep` | any | v0.2.4 | run the v0.2.4-2.11 PERC-equivalent sign-off chain across a CORPUS |
 | `periodic_signal_required_check` | any | — | Verify that for every protocol-mandated |
 | `periodic_timer_vs_rx_activity_check` | any | — | Periodic TX-triggering timer |
 | `phase1_all_l_docs_present_check` | any | Wave 23 | gate (Wave 23, v0.119.55). |
@@ -607,7 +608,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (526 programs)
+### `any` (527 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -933,6 +934,7 @@ _(no programs in this group)_
 - `pdk_udp_synth_shim_gen` — v1.6.218 (ORGANIC-20260512-followup).
 - `pdk_yosys_flatten_for_quartus` — v1.6.222 (ORGANIC-20260512-followup-2).
 - `per_opcode_response_latency_table_check` — gate (LL-33) catching  _[v0.119.30]_
+- `perc_corpus_sweep` — run the v0.2.4-2.11 PERC-equivalent sign-off chain across a CORPUS  _[v0.2.4]_
 - `periodic_signal_required_check` — Verify that for every protocol-mandated
 - `periodic_timer_vs_rx_activity_check` — Periodic TX-triggering timer
 - `phase1_all_l_docs_present_check` — gate (Wave 23, v0.119.55).  _[Wave 23]_

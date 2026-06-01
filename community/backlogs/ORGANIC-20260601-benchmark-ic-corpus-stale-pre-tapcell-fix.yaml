@@ -1,0 +1,52 @@
+type: hygiene
+severity: P3
+component: benchmark_ic/ corpus DEFs (phase3 artifacts)
+
+plugin_version: "0.2.11"
+
+title: >-
+  benchmark_ic/ corpus routed DEFs are STALE (pre-v0.1.46 tapcell-insertion fix): all 14 DEF-bearing
+  ICs ship 0 well/substrate-tap cells; the 2 sha256 DEFs predate the PDN flow entirely. Regenerate
+  through the current runner so future PERC sweeps measure today's output, not a stale artifact.
+
+pattern: |
+  A Shape-A PERC sign-off sweep (v0.2.11 perc_equivalent chain) across the 21-directory benchmark_ic/
+  corpus found, over the 14 DEF-bearing ICs (901→47503 components):
+    - 14/14 WELLTAP_GAP — 0 valid well/substrate-tap cells despite thousands of placed std cells.
+    - 14/14 ESD presence N/A — core macros, no chip pad ring (correct, honest).
+    - 12/14 x-domain N/A (single supply) + 2/14 (sha256_v2, sha256_v2variant) INCOMPLETE (0 power /
+      0 ground resolvable — those DEFs have no PDN at any stage).
+  DECISIVE CONTROL: the same spm design re-run FRESH through phase3_one_shot_runner.py on the current
+  v0.2.11 plugin inserts 67 tap cells (floorplan.def=0 → placed/cts/hold/routed all=67) and emits
+  PERC_EQUIV_PASS with welltap=WELLTAP_PRESENT. So the corpus 0-tap is NOT a current-runner bug — the
+  benchmark_ic DEFs predate the v0.1.46/v0.1.49 tapcell-insertion fix (and the sha256 pair predate the
+  PDN flow). The well-tap presence check (v0.2.10) CORRECTLY flagged the real 0-tap latch-up exposure
+  in those stale artifacts (CHECK_VALUE_PROVEN, zero false-positives; the fresh control proves no
+  over-fire on current output).
+
+impact: |
+  Low/hygiene — no functional plugin bug. But any RESULT that cites a benchmark_ic/ PERC number as a
+  CURRENT-quality signal would be misleading, because the DEFs are pre-fix. The numbers are valid only
+  as "the check correctly flags these stale artifacts," not as "the runner ships latch-up-broken
+  silicon today."
+
+suggested_fix: |
+  1. Regenerate the benchmark_ic/ corpus DEFs through the current v0.2.11 runner (phase3 at minimum:
+     re-PnR each IC's existing phase2 netlist so the tapcell + PDN steps run). Smallest-first:
+     subservient (901c) → darkriscv (5053) → picorv32 (5961) → … This is container-serial (one
+     iic-eda), so pipeline rather than fan-out.
+  2. After regeneration, re-run the PERC sweep; expect welltap → WELLTAP_PRESENT and the sha256 pair
+     → resolvable single-supply N/A (PDN present), matching the fresh spm control.
+  3. Until regenerated, any benchmark_ic PERC citation MUST disclose pre-tapcell-fix staleness
+     (done in benchmark_ic/RESULT_PERC_CORPUS_v0211.md).
+  4. (Optional) a tiny artifact-vintage guard: a check that warns when a routed DEF with >N std cells
+     has 0 taps AND a 0-tap sibling exists at an older plugin version — distinguishes stale-artifact
+     from a live regression automatically.
+
+id: "ORGANIC-20260601-benchmark-ic-corpus-stale-pre-tapcell-fix"
+submitted_at: "2026-06-01T00:00:00+08:00"
+session_context: >-
+  Surfaced by the v0.2.11 Shape-A 21-IC PERC corpus sweep (benchmark_ic/RESULT_PERC_CORPUS_v0211.md).
+  Complements ORGANIC-20260601-perc-equivalent-coverage (the PERC chain itself). The sweep is the
+  first corpus-scale exercise of the v0.2.4-2.11 PERC sign-off chain; it proved the checks' value +
+  zero-false-positive behavior at scale, and the fresh control proved the current runner is sound.
