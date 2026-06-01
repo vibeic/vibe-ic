@@ -946,3 +946,91 @@ before re-deriving the protocol. (General link-FSM watchdog discipline; applies 
 connection-establishment state machine with timers, not specific to SpaceWire.)
 
 _Captured by benchmark-enhancement-capture 2026-05-31._
+
+## Benchmark-captured RTL-authoring patterns (benchmark-enhancement-capture, 2026-06-01)
+
+Generalized, chip-AGNOSTIC patterns absorbed from the open-benchmark fresh-blind sweep. Each is a general convention — NOT a benchmark lookup table.
+
+### Skill: Apply power-up determinism before scoring blind-authored sequential RTL
+
+**Pattern**: A functional reference whose registered outputs initialize to 0 will mismatch a logically-correct DUT that is X at t=0; the blind-authoring path must apply the power-up-determinism fix (insert initial-0 on reset-less registered outputs) before scoring.
+
+**When to apply**: Scoring blind-authored RTL (direct-agent, no runner) against a functional reference model that initializes its registered outputs to a known value.
+
+**What to do**: Run the deterministic power-up hygiene pass (`rtl_hygiene_lint` --fix) on each authored sample before invoking the scorer, exactly as the canonical gates-harness step does; do not skip it just because authoring was done directly.
+
+**Worked pattern** (anonymized): A trivial N-bit register that copies input to a registered output is logically correct but reads X at t=0 with no initial value; after the power-up fix inserts an initial-0, it matches the reference's initialized output from the first cycle.
+
+**Why this is GENERAL**: Chip-agnostic and benchmark-agnostic: any sequential DUT compared cycle-by-cycle against an initialized reference needs power-up determinism; the fix is a pure structural insertion with no design-specific knowledge.
+
+_Captured by benchmark-enhancement-capture 2026-06-01._
+
+### Skill: Shift-amount-controlled shifter defaults to logical shift, not rotate
+
+**Pattern**: A shifter driven by a shift-AMOUNT control input implements a logical shift (zero-fill of vacated bits) by default, not a rotate, unless the spec explicitly says rotate-only.
+
+**When to apply**: Authoring a multi-stage shifter whose control input encodes a shift amount and the prose uses the word 'shift' (possibly alongside 'or rotate').
+
+**What to do**: Implement zero-fill for the bits vacated at each stage; reserve wrap-around (rotate) only for specs that state rotate explicitly.
+
+**Worked pattern** (anonymized): An all-ones word shifted right by its maximum amount yields a single set bit for a logical shift but stays all-ones for a rotate; use that maximal-shift vector as the discriminating self-check when the prose is ambiguous.
+
+**Why this is GENERAL**: Standard digital-design convention independent of width or technology; the max-shift self-test distinguishes the two interpretations without peeking at any hidden testbench.
+
+_Captured by benchmark-enhancement-capture 2026-06-01._
+
+### Skill: Parameterize pipelined datapaths with data-width and stage-width
+
+**Pattern**: Pipelined arithmetic blocks conventionally expose a data-width parameter and a per-stage chunk-width parameter; a hardcoded width fails to elaborate when a harness overrides them.
+
+**When to apply**: The module name or spec implies pipelining (pipe / pipeline / stages) and the prose gives one concrete datapath width.
+
+**What to do**: Declare data-width and stage-width as parameters; derive operand/result widths and the pipeline-stage count from them (adder result width = data-width + 1, stages = data-width / stage-width).
+
+**Worked pattern** (anonymized): A pipelined adder described at one width but instantiated by the harness with overridden width/stage parameters elaborates only if the module is parameterized; default to parameters even when only one width is stated.
+
+**Why this is GENERAL**: Genre convention for pipelined datapaths, independent of the specific width; no hidden-testbench knowledge required.
+
+_Captured by benchmark-enhancement-capture 2026-06-01._
+
+### Skill: A Moore machine registers its output — a ~50%-mismatch signature is a one-cycle output-timing error
+
+**Pattern**: When a spec explicitly says "Moore state machine", the output is a function of the STATE ONLY and is therefore registered (it appears one cycle after the input that caused the state change). Implementing it as a Mealy/combinational output (output = function of current input) passes a same-cycle check but mismatches a delayed reference on roughly HALF the samples.
+
+**When to apply**: Authoring any FSM whose prose names it "Moore" (or otherwise ties the output to state, not to the current input), especially serial scanners (sequence detectors, serial arithmetic like a two's-complementer).
+
+**What to do**: Register the output (`out <= f(state)` on the clock edge), not `assign out = f(state, in)`. If a blind run shows a ~50% (≈ N/2 in N) mismatch on an FSM, suspect a one-cycle output-timing offset and flip Mealy↔Moore per the prose's stated machine type.
+
+**Worked pattern** (anonymized): A serial bit-stream machine that should pass bits through inverted after the first set bit mismatched ~209/436 as a same-cycle Mealy; registering the output (Moore) aligned it to the delayed reference and the mismatch went to 0. The ~half-mismatch count is the discriminating signature.
+
+**Why this is GENERAL**: Moore-vs-Mealy output registration is a textbook FSM property; the ~50%-mismatch→timing-offset heuristic is benchmark-agnostic and needs no hidden-testbench knowledge.
+
+_Captured by benchmark-enhancement-capture 2026-06-01._
+
+### Skill: Declare every port the interface lists — even ports the logic doesn't use
+
+**Pattern**: A given module interface (header) is a hard contract: the scoring harness instantiates the module by that exact port list. Omitting a declared port — even one a purely-combinational body never reads, like `clk` in a next-state/output block — is a compile error against the harness, not a stylistic choice.
+
+**When to apply**: Any spec that fixes the module header — whether the verification harness supplies the port list or the prompt states it. Especially combinational next-state logic that declares `clk`/`reset` it doesn't functionally use.
+
+**What to do**: Copy the interface verbatim — same names, widths, `[hi:lo]` direction, and the full port set. Declare unused-but-listed ports anyway. Re-check the header before submitting when a prior attempt was a compile_error.
+
+**Worked pattern** (anonymized): A combinational next-state block compiled standalone but compile-errored in the harness because its header dropped the `clk` the interface declares first; re-adding the unused `clk` port fixed it with no logic change.
+
+**Why this is GENERAL**: Honoring the published interface contract is universal; it encodes no hidden-testbench behavior, only the public signature.
+
+_Captured by benchmark-enhancement-capture 2026-06-01._
+
+### Skill: Match the input-vector bit-direction to the variable names a K-map / truth-table uses
+
+**Pattern**: When a combinational spec names its variables by indexed bits (e.g. a K-map drawn over `x[1]..x[4]`), declaring the input vector with the wrong index direction (`[3:0]` vs `[4:1]`) silently remaps which physical bit each named variable is — every derived minterm then targets the wrong bit and the function is wrong even when the algebra is right.
+
+**When to apply**: Any K-map / truth-table problem whose axes are labelled with specific bit indices.
+
+**What to do**: Declare the port with the SAME `[hi:lo]` range the spec's variable names imply, so `x[1]` in your code is the `x[1]` the K-map axis means. Reproduce the map cell-by-cell against the named bits, then minimize.
+
+**Worked pattern** (anonymized): A K-map over `x[1..4]` authored with `input [3:0] x` plus an arbitrary bit-to-variable guess mismatched 30/100; redeclaring `input [4:1] x` so the literal names lined up (and re-deriving the SOP on those names) fixed it.
+
+**Why this is GENERAL**: Aligning declared bit-direction to the spec's own variable naming is a faithful-transcription rule, not a hidden-oracle peek.
+
+_Captured by benchmark-enhancement-capture 2026-06-01._

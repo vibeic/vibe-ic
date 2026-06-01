@@ -62,13 +62,18 @@
         "tb_compile_with_ref": false,
         "pass_regex": "Your Design Passed",
         "fail_regex": "Test failed|Your Design Failed",
-        "cwd_design_dir": true
+        "cwd_design_dir": true,
+        "verify_discriminating": true
       },
       "scorer_substitution_gap": [],
       "scorer_substitution_gap_note": "Per open-benchmark-methodology § 3-§ 4. v0.1.44 verified the v0.1.37 claim by re-running both flagged designs under Verilator 5.020 (which supports SV-2012 array-literal init + `break;`). Result: ring_counter PASSes under Verilator (genuine substitution gap, recovered); asyn_fifo FAILs under Verilator with functional mismatch (the claim that this was a TB-side gap was wrong — the candidate RTL has a real functional bug). Updated to empty list per § 4: a gap entry must be DEFENSIBLE under a tool that supports the missing feature; one was, one wasn't. Honest scoring per § 3.",
       "tool_substitution_verified_under": "Verilator 5.020 (Debian 5.020-1, --timing --binary)",
-      "scorer_substitution_recovered_pass": ["ring_counter"],
-      "scorer_substitution_recovered_fail": ["asyn_fifo"],
+      "scorer_substitution_recovered_pass": [
+        "ring_counter"
+      ],
+      "scorer_substitution_recovered_fail": [
+        "asyn_fifo"
+      ],
       "status": "RUNNABLE — standalone designs with own testbench, Shape B harness"
     },
     "cvdp": {

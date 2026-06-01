@@ -320,8 +320,8 @@ auto-registry framework may need a small extension.
 
 ## 9. License
 
-`mcp-eda-server` is MIT-licensed. Any vendor driver added here MUST be
-under an MIT-compatible OSS license. Acceptable: MIT, BSD-2-Clause,
+`mcp-eda-server` is Apache-2.0-licensed. Any vendor driver added here MUST be
+under an Apache-2.0-compatible OSS license. Acceptable: MIT, BSD-2-Clause,
 BSD-3-Clause, Apache-2.0. Reject GPL/LGPL drivers (they would re-license
 the server). Add a `# License:` line at the top of `driver.py` when the
-upstream license differs from MIT.
+upstream license differs from Apache-2.0.
