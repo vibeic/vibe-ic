@@ -2,17 +2,49 @@
   "schema_version": 2,
   "doc_class": "integration_spec",
   "ic_name": "USB Power Delivery (USB-PD)",
-  "top_module": "chip_top",
+  "top_module": "usb_pd_engine",
   "top_module_extraction_strategy": "canonical_chip_top_sentinel",
   "no_top_module_in_input": true,
   "ports": [],
   "top_ports": [],
   "top_module_pins": [],
   "no_integration_in_input": true,
-  "submodules": [],
+  "submodules": [
+    {
+      "name": "bmc_codec",
+      "role": "Physical layer: Biphase Mark Coding (BMC) encode/decode on the CC wire at 300 kbaud; recovers clock from the guaranteed BMC transitions.",
+      "evidence": "§3: USB-PD uses Biphase Mark Coding (BMC) on the CC wire at a nominal 300 kbaud."
+    },
+    {
+      "name": "protocol_layer",
+      "role": "Frames/deframes Preamble + SOP* ordered set + 16-bit Message Header + 0..7 data objects + CRC-32 + EOP; checks CRC-32 and emits GoodCRC.",
+      "evidence": "§4 Packet Framing; §6 Message Header (16 bits); §10: every received message is acknowledged with GoodCRC."
+    },
+    {
+      "name": "policy_engine",
+      "role": "Drives the Explicit Contract negotiation FSM (Source_Capabilities -> Request -> Accept -> PS_RDY) and the PR_Swap/DR_Swap/VCONN_Swap and Soft/Hard/Cable Reset flows.",
+      "evidence": "§10 Contract Negotiation; §5 Role Swaps; §11 Reset Mechanisms."
+    }
+  ],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
-  "fsm_states": [],
+  "fsm_states": [
+    {
+      "name": "AdvertiseCaps",
+      "description": "Source advertises its PDO list via Source_Capabilities.",
+      "evidence": "§10.1: Source sends Source_Capabilities (its PDO list) on SOP."
+    },
+    {
+      "name": "EvaluateRequest",
+      "description": "Source evaluates the Sink's RDO and replies Accept / Reject / Wait.",
+      "evidence": "§10.2/§10.3: Sink replies with Request carrying an RDO; Source replies Accept (or Reject / Wait)."
+    },
+    {
+      "name": "ExplicitContract",
+      "description": "Contract established after PS_RDY; ready for role swaps.",
+      "evidence": "§10.4/§10.5: Source transitions VBUS, sends PS_RDY; the Explicit Contract is now in place."
+    }
+  ],
   "no_fsm_states_in_input": true,
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,

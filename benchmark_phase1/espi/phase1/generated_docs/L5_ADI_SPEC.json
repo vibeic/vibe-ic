@@ -12,6 +12,7 @@
   "analog_digital_interface_present": false,
   "signaling_summary": "Digital protocol block; signaling is on the named external pins per the protocol specification.",
   "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
+  "no_analog": true,
   "analog_mixed_signal": "Digital source-synchronous interface; I/O rail 1.0 V / 1.8 V; no analog blocks.",
   "io_standard": "1.0 V / 1.8 V CMOS",
   "not_applicable_reason": "eSPI is a purely digital protocol interface."

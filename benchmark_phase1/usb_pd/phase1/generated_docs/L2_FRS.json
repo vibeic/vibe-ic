@@ -93,7 +93,48 @@
     "Gen 2 (10 Gbps/lane) is mandatory; Gen 3 (20 Gbps/lane) is the full-feature target.",
     "Optional Thunderbolt 3 interoperability when advertised."
   ],
-  "timing_parameters": [],
+  "timing_parameters": {
+    "bmc_unit_interval_us": {
+      "nom": 3.33,
+      "evidence": "§12: UI (BMC unit interval) 3.33 us nominal (300 kbaud); §3: the unit interval (UI) is nominally 3.33 us."
+    },
+    "bmc_half_bit_us": {
+      "nom": 1.67,
+      "evidence": "§3: BMC has a transition at every bit boundary plus a mid-bit transition for a logic 1, so the logic-1 half-bit cell is half the 3.33 us UI = 1.67 us."
+    },
+    "bmc_baud_kbaud": {
+      "nom": 300,
+      "evidence": "§3 / §12: BMC on the CC wire at a nominal 300 kbaud."
+    },
+    "t_receive_ms": {
+      "min": 0.75,
+      "max": 1.0,
+      "evidence": "§12: tReceive (inter-frame gap) min 0.75 ms, max 1.0 ms."
+    },
+    "t_transmit_us": {
+      "max": 195,
+      "evidence": "§12: tTransmit max 195 us between messages of a burst."
+    },
+    "crc_receive_timer_ms": {
+      "min": 0.9,
+      "max": 1.1,
+      "evidence": "§12: CRCReceiveTimer min 0.9 ms, max 1.1 ms (GoodCRC must arrive)."
+    },
+    "t_sender_response_ms": {
+      "min": 24,
+      "max": 30,
+      "evidence": "§12: tSenderResponse min 24 ms, max 30 ms (Accept/Reject latency)."
+    },
+    "ps_transition_timer_ms": {
+      "min": 450,
+      "max": 550,
+      "evidence": "§12: PSTransitionTimer min 450 ms, max 550 ms (VBUS to new contract)."
+    },
+    "t_hard_reset_complete_ms": {
+      "max": 5,
+      "evidence": "§12: tHardReset complete max 5 ms."
+    }
+  },
   "fmax_mhz": null,
   "no_fmax_mhz_in_input": true,
   "extraction_evidence": {

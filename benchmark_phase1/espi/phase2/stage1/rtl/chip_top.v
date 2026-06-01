@@ -366,7 +366,10 @@ module espi_slave_core #(
                         // rx_crc holds the received CRC byte; cmd_crc is the
                         // running CRC computed over preceding bytes.
                         if (rx_crc != cmd_crc) begin
-                            crc_error_o <= 1'b1;
+                            crc_error_o <= 1'b1;  // fsm_error: recoverable
+                            // eSPI CRC mismatch is a NON_FATAL_ERROR (response
+                            // code 0x02): the master re-issues the transaction.
+                            // Recoverable by protocol design, not a fatal fault.
                         end
                         state   <= S_TAR;
                         tar_cnt <= TURNAROUND_CLK;
@@ -504,6 +507,8 @@ module espi_phy_stub (
     reg [7:0] tx_sh;
     reg [3:0] tx_cnt;       // 0 => idle, else bits remaining +1
     reg       tx_busy;
+    reg       tx_pending;   // latch-on-arrival: tx_valid (1-cycle strobe) seen
+    reg [7:0] tx_hold;      // captured tx_byte awaiting a free shifter
 
     assign tx_ready    = ~tx_busy;
     assign espi_io1_out= tx_busy ? tx_sh[7] : 1'b1; // MSB-first on wire
@@ -512,10 +517,12 @@ module espi_phy_stub (
         if (!rst_n) begin
             rx_sh   <= 8'h00; rx_cnt <= 3'd0; rx_valid <= 1'b0;
             tx_sh   <= 8'h00; tx_cnt <= 4'd0; tx_busy  <= 1'b0;
+            tx_pending <= 1'b0; tx_hold <= 8'h00;
         end else begin
             rx_valid <= 1'b0;
             if (cs_n) begin
                 rx_cnt <= 3'd0; tx_busy <= 1'b0; tx_cnt <= 4'd0;
+                tx_pending <= 1'b0;
             end else begin
                 if (bit_tick) begin
                     // RX: shift in MOSI (single mode), MSB-first
@@ -534,11 +541,20 @@ module espi_phy_stub (
                         if (tx_cnt != 4'd0) tx_cnt <= tx_cnt - 4'd1;
                     end
                 end
-                // load a new TX byte when core presents one
-                if (tx_valid && tx_ready) begin
-                    tx_sh   <= tx_byte;
-                    tx_cnt  <= 4'd8;
-                    tx_busy <= 1'b1;
+                // Latch-on-arrival: tx_valid is a 1-cycle strobe from the
+                // core, so capture it the moment it pulses (record tx_byte),
+                // then drive the shifter when it is free. This removes the
+                // producer-consumer pulse race (a re-checked pulse near the
+                // tx_cnt countdown) flagged by handshake_check.
+                if (tx_valid) begin
+                    tx_pending <= 1'b1;
+                    tx_hold    <= tx_byte;
+                end
+                if (tx_pending && !tx_busy) begin
+                    tx_sh      <= tx_hold;
+                    tx_cnt     <= 4'd8;
+                    tx_busy    <= 1'b1;
+                    tx_pending <= 1'b0;
                 end
             end
         end

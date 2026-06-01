@@ -250,9 +250,19 @@ def _canon():
         },
         "L5_ADI_SPEC": {
             "ic_name": IC_NAME,
+            # IEEE 802.3 Clause 22/45 MDIO is a purely DIGITAL management
+            # protocol. The only analog-flavoured element in the whole spec is
+            # the off-chip MDIO pull-up resistor (1.5 kΩ-10 kΩ to a 1.2-3.3 V
+            # supply, §2 + §8) — a board passive powered by an external supply,
+            # NOT an on-chip analog block this controller designs. The open-drain
+            # pad simply tri-states (Hi-Z) and the external resistor pulls the bus
+            # high. There are therefore NO on-chip analog blocks to capture; this
+            # is the doc's own honest typed N/A (mirrors L11.applicable=False /
+            # L13.applicable=False), accepted by l_doc_structured_field_count.
+            "no_analog": True,
             "analog_mixed_signal": "Digital open-drain management interface; MDIO requires an external pull-up; pull-up supply 1.2 V to 3.3 V; no analog blocks.",
             "io_standard": "Open-drain MDIO with external pull-up; CMOS MDC",
-            "not_applicable_reason": "MDIO is a purely digital management protocol interface.",
+            "not_applicable_reason": "MDIO is a purely digital management protocol interface; the only analog element is an off-chip board pull-up resistor (1.5 kΩ-10 kΩ), not an on-chip analog block.",
         },
         "L6_CONTROL_LOGIC": {
             "ic_name": IC_NAME,
@@ -343,6 +353,99 @@ def _canon():
         },
         "L9_INTEGRATION_SPEC": {
             "ic_name": IC_NAME,
+            # L9 STRUCTURAL CONTRACT — faithful transcription of the ACTUAL
+            # chip_top.v RTL interface (the synthesizable ground truth), NOT
+            # invented. The two protocol pins are MDC (the IEEE 802.3 §2
+            # management clock) and the MDIO line, which the RTL exposes as the
+            # standard tri-state primitive mdio_o / mdio_oe / mdio_i so a pad /
+            # IOBUF can attach at the SoC boundary (open-drain, external pull-up).
+            # MDIO has NO dedicated reset wire on the bus (§11), so rst_n is the
+            # chip's own active-low synchronous reset; clk is the core clock that
+            # divides down to the ≤2.5 MHz MDC. Port names MUST match the RTL so
+            # the generated full-stack TB binds and elaborates.
+            "top_module": "chip_top",
+            "ports": [
+                {"name": "clk", "dir": "input", "width": 1,
+                 "desc": "Synchronous core clock; divided down to generate MDC (≤2.5 MHz, IEEE 802.3 §8)."},
+                {"name": "rst_n", "dir": "input", "width": 1,
+                 "desc": "Active-low synchronous reset. MDIO has no dedicated reset wire on the bus (IEEE 802.3 §11); this is the chip's own reset."},
+                {"name": "start", "dir": "input", "width": 1,
+                 "desc": "Pulse high for one clk to launch a management frame."},
+                {"name": "clause45", "dir": "input", "width": 1,
+                 "desc": "0 = Clause 22 frame (ST=01), 1 = Clause 45 frame (ST=00)."},
+                {"name": "op", "dir": "input", "width": 2,
+                 "desc": "Operation code: C22 10=read/01=write; C45 00=address/01=write/11=read/10=read-increment (IEEE 802.3 §3/§5)."},
+                {"name": "phyad", "dir": "input", "width": 5,
+                 "desc": "PHYAD (Clause 22) / PRTAD (Clause 45), selects one of 32 PHYs/ports (IEEE 802.3 §3/§5/§9)."},
+                {"name": "regad", "dir": "input", "width": 5,
+                 "desc": "REGAD (Clause 22) / DEVAD (Clause 45 MMD device address) (IEEE 802.3 §3/§5)."},
+                {"name": "wdata", "dir": "input", "width": 16,
+                 "desc": "16-bit write data, or the register address payload on a Clause 45 Address frame (IEEE 802.3 §3/§5)."},
+                {"name": "rdata", "dir": "output", "width": 16,
+                 "desc": "16-bit data captured from the PHY on a read frame (IEEE 802.3 §3)."},
+                {"name": "busy", "dir": "output", "width": 1,
+                 "desc": "High while a management frame is in flight."},
+                {"name": "done", "dir": "output", "width": 1,
+                 "desc": "One-clk pulse when a frame completes."},
+                {"name": "rd_valid", "dir": "output", "width": 1,
+                 "desc": "Asserted with done when the completed frame was a read."},
+                {"name": "mdc", "dir": "output", "width": 1,
+                 "desc": "Management Data Clock, sourced by the STA, ≤2.5 MHz; PHY/MMD samples MDIO on its rising edge (IEEE 802.3 §2)."},
+                {"name": "mdio_o", "dir": "output", "width": 1,
+                 "desc": "MDIO drive value to the pad (open-drain line; STA-driven in the command portion) (IEEE 802.3 §2/§7)."},
+                {"name": "mdio_oe", "dir": "output", "width": 1,
+                 "desc": "MDIO output-enable to the pad (1 = STA drives; released to Hi-Z during read turnaround so the PHY can drive) (IEEE 802.3 §7)."},
+                {"name": "mdio_i", "dir": "input", "width": 1,
+                 "desc": "MDIO sampled value from the pad (PHY-driven in the read-data portion) (IEEE 802.3 §2/§7)."},
+            ],
+            # Mirror to top_ports so the runner's full-stack TB generator
+            # (which reads L9.top_ports first and keys on `direction`) binds
+            # these exact RTL port names with the correct reg/wire direction.
+            # Output ports MUST be `direction: output` so the TB declares them as
+            # wires the DUT can drive (declaring them reg breaks elaboration).
+            "top_ports": [
+                {"name": "clk", "direction": "input", "width": 1},
+                {"name": "rst_n", "direction": "input", "width": 1},
+                {"name": "start", "direction": "input", "width": 1},
+                {"name": "clause45", "direction": "input", "width": 1},
+                {"name": "op", "direction": "input", "width": 2},
+                {"name": "phyad", "direction": "input", "width": 5},
+                {"name": "regad", "direction": "input", "width": 5},
+                {"name": "wdata", "direction": "input", "width": 16},
+                {"name": "rdata", "direction": "output", "width": 16},
+                {"name": "busy", "direction": "output", "width": 1},
+                {"name": "done", "direction": "output", "width": 1},
+                {"name": "rd_valid", "direction": "output", "width": 1},
+                {"name": "mdc", "direction": "output", "width": 1},
+                {"name": "mdio_o", "direction": "output", "width": 1},
+                {"name": "mdio_oe", "direction": "output", "width": 1},
+                {"name": "mdio_i", "direction": "input", "width": 1},
+            ],
+            # 6-state controller FSM that walks the Clause 22 frame phases
+            # (IEEE 802.3 §3 frame order + §7 turnaround): IDLE -> PRE (32-bit
+            # preamble) -> HDR (ST+OP+PHYAD+REGAD command header) -> TA
+            # (turnaround) -> DATA (16-bit data) -> DONE -> IDLE.
+            "fsm_states": [
+                {"name": "IDLE", "desc": "MDIO released (Hi-Z, pulled high); wait for a STA-issued transaction.",
+                 "next": "PRE"},
+                {"name": "PRE", "desc": "Drive/skip the 32-bit preamble (32 contiguous ones; mdc_cnt counts the 32 MDC cycles).",
+                 "next": "HDR"},
+                {"name": "HDR", "desc": "Shift the 14-bit command header ST(2)+OP(2)+PHYAD/PRTAD(5)+REGAD/DEVAD(5) MSB-first out of cmd_sr.",
+                 "next": "TA"},
+                {"name": "TA", "desc": "2-bit turnaround: drive 10 on a write; on a read tri-state MDIO in bit 1 then sample PHY-driven 0 in bit 2 (Z0).",
+                 "next": "DATA"},
+                {"name": "DATA", "desc": "Shift the 16-bit DATA field MSB-first through data_sr: drive on write, sample on read.",
+                 "next": "DONE"},
+                {"name": "DONE", "desc": "Last data bit clocked; release MDIO (Hi-Z) and signal transaction complete.",
+                 "next": "IDLE"},
+            ],
+            # Internal datapath registers referenced by the FSM (faithful to the
+            # frame model: a preamble/bit counter + the command & data shift regs).
+            "internal_wires": [
+                {"name": "mdc_cnt", "width_bits": 6, "desc": "MDC bit counter: counts the 32 preamble cycles and the per-field bit positions."},
+                {"name": "cmd_sr", "width_bits": 14, "desc": "Command-header shift register holding ST+OP+PHYAD+REGAD, shifted MSB first."},
+                {"name": "data_sr", "width_bits": 16, "desc": "16-bit DATA shift register, MSB first (drive on write, capture on read)."},
+            ],
             "integration_overview": {
                 "master": "Station Management entity (STA), typically embedded in the MAC",
                 "slaves": ["PHY (Clause 22)", "MDIO Manageable Device / MMD (Clause 45)"],
@@ -368,6 +471,62 @@ def _canon():
         },
         "L12_BEHAVIORAL_SEQUENCES": {
             "ic_name": IC_NAME,
+            # L12 BEHAVIORAL CONTRACT — typed list-of-dicts (the schema the
+            # l_doc_structured_field_count gate counts), each a faithful
+            # transcription of an IEEE 802.3 frame sequence (§3 Clause 22 frame,
+            # §5 Clause 45 indirect addressing, §7 turnaround). The legacy
+            # string-list forms below are kept as human-readable aliases.
+            "behavioral_sequences": [
+                {"name": "clause22_write",
+                 "clause": 22,
+                 "trigger": "STA asserts start with clause45=0, op=01 (Clause 22 write).",
+                 "steps": [
+                     {"action": "STA drives the 32-bit preamble (32 contiguous ones) on MDIO.",
+                      "expected_signal": "MDIO=1 for 32 MDC cycles", "next_state": "PRE"},
+                     {"action": "STA drives ST=01 then OP=01 (write) MSB-first.",
+                      "expected_signal": "MDIO = ST(01) OP(01)", "next_state": "HDR"},
+                     {"action": "STA drives 5-bit PHYAD then 5-bit REGAD MSB-first.",
+                      "expected_signal": "MDIO = PHYAD[4:0] REGAD[4:0]", "next_state": "HDR"},
+                     {"action": "STA drives TA=10 (no bus turnaround on a write).",
+                      "expected_signal": "MDIO = 1 then 0", "next_state": "TA"},
+                     {"action": "STA drives the 16-bit DATA field MSB-first.",
+                      "expected_signal": "MDIO = wdata[15:0]", "next_state": "DATA"},
+                     {"action": "STA releases MDIO (Hi-Z); done pulses for one clk.",
+                      "expected_signal": "mdio_oe=0, done=1", "next_state": "DONE"},
+                 ]},
+                {"name": "clause22_read",
+                 "clause": 22,
+                 "trigger": "STA asserts start with clause45=0, op=10 (Clause 22 read).",
+                 "steps": [
+                     {"action": "STA drives the 32-bit preamble (32 contiguous ones) on MDIO.",
+                      "expected_signal": "MDIO=1 for 32 MDC cycles", "next_state": "PRE"},
+                     {"action": "STA drives ST=01, OP=10 (read), then PHYAD and REGAD MSB-first.",
+                      "expected_signal": "MDIO = ST(01) OP(10) PHYAD REGAD", "next_state": "HDR"},
+                     {"action": "STA tri-states MDIO during TA bit 1 (Z); PHY drives 0 during TA bit 2.",
+                      "expected_signal": "mdio_oe=0 (bit1 Z), MDIO=0 (bit2, PHY)", "next_state": "TA"},
+                     {"action": "STA samples the PHY-driven 16-bit DATA on MDC rising edges MSB-first.",
+                      "expected_signal": "rdata[15:0] captured from mdio_i", "next_state": "DATA"},
+                     {"action": "PHY releases MDIO after the last data bit; done+rd_valid pulse.",
+                      "expected_signal": "done=1, rd_valid=1", "next_state": "DONE"},
+                 ]},
+                {"name": "clause45_address",
+                 "clause": 45,
+                 "trigger": "STA asserts start with clause45=1, op=00 (Clause 45 Address frame) to load the 16-bit register address into the addressed MMD (DEVAD).",
+                 "steps": [
+                     {"action": "STA drives the 32-bit preamble (32 contiguous ones) on MDIO.",
+                      "expected_signal": "MDIO=1 for 32 MDC cycles", "next_state": "PRE"},
+                     {"action": "STA drives ST=00 (Clause 45) then OP=00 (address) MSB-first.",
+                      "expected_signal": "MDIO = ST(00) OP(00)", "next_state": "HDR"},
+                     {"action": "STA drives 5-bit PRTAD then 5-bit DEVAD (selects the MMD).",
+                      "expected_signal": "MDIO = PRTAD[4:0] DEVAD[4:0]", "next_state": "HDR"},
+                     {"action": "STA drives TA=10.",
+                      "expected_signal": "MDIO = 1 then 0", "next_state": "TA"},
+                     {"action": "STA drives the 16-bit register ADDRESS in the DATA field MSB-first.",
+                      "expected_signal": "MDIO = wdata[15:0] (register address)", "next_state": "DATA"},
+                     {"action": "A subsequent Write (OP=01)/Read (OP=11)/Read-Increment (OP=10) frame operates on the loaded address.",
+                      "expected_signal": "loaded address used by the next frame", "next_state": "DONE"},
+                 ]},
+            ],
             "write_sequence": ["STA drives 32-bit preamble (all ones).",
                                "STA drives ST = 01 (Clause 22).",
                                "STA drives OP = 01 (write).",

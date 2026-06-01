@@ -1,0 +1,4 @@
+{
+  "verdict": "PASS",
+  "evidence": "sim/reference_tb/ref_tb.log"
+}

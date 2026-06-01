@@ -2,7 +2,114 @@
   "schema_version": 2,
   "doc_class": "behavioral_sequences",
   "ic_name": "IEEE 802.3 Management Data Input/Output (MDIO)",
-  "behavioral_sequences": [],
+  "behavioral_sequences": [
+    {
+      "name": "clause22_write",
+      "clause": 22,
+      "trigger": "STA asserts start with clause45=0, op=01 (Clause 22 write).",
+      "steps": [
+        {
+          "action": "STA drives the 32-bit preamble (32 contiguous ones) on MDIO.",
+          "expected_signal": "MDIO=1 for 32 MDC cycles",
+          "next_state": "PRE"
+        },
+        {
+          "action": "STA drives ST=01 then OP=01 (write) MSB-first.",
+          "expected_signal": "MDIO = ST(01) OP(01)",
+          "next_state": "HDR"
+        },
+        {
+          "action": "STA drives 5-bit PHYAD then 5-bit REGAD MSB-first.",
+          "expected_signal": "MDIO = PHYAD[4:0] REGAD[4:0]",
+          "next_state": "HDR"
+        },
+        {
+          "action": "STA drives TA=10 (no bus turnaround on a write).",
+          "expected_signal": "MDIO = 1 then 0",
+          "next_state": "TA"
+        },
+        {
+          "action": "STA drives the 16-bit DATA field MSB-first.",
+          "expected_signal": "MDIO = wdata[15:0]",
+          "next_state": "DATA"
+        },
+        {
+          "action": "STA releases MDIO (Hi-Z); done pulses for one clk.",
+          "expected_signal": "mdio_oe=0, done=1",
+          "next_state": "DONE"
+        }
+      ]
+    },
+    {
+      "name": "clause22_read",
+      "clause": 22,
+      "trigger": "STA asserts start with clause45=0, op=10 (Clause 22 read).",
+      "steps": [
+        {
+          "action": "STA drives the 32-bit preamble (32 contiguous ones) on MDIO.",
+          "expected_signal": "MDIO=1 for 32 MDC cycles",
+          "next_state": "PRE"
+        },
+        {
+          "action": "STA drives ST=01, OP=10 (read), then PHYAD and REGAD MSB-first.",
+          "expected_signal": "MDIO = ST(01) OP(10) PHYAD REGAD",
+          "next_state": "HDR"
+        },
+        {
+          "action": "STA tri-states MDIO during TA bit 1 (Z); PHY drives 0 during TA bit 2.",
+          "expected_signal": "mdio_oe=0 (bit1 Z), MDIO=0 (bit2, PHY)",
+          "next_state": "TA"
+        },
+        {
+          "action": "STA samples the PHY-driven 16-bit DATA on MDC rising edges MSB-first.",
+          "expected_signal": "rdata[15:0] captured from mdio_i",
+          "next_state": "DATA"
+        },
+        {
+          "action": "PHY releases MDIO after the last data bit; done+rd_valid pulse.",
+          "expected_signal": "done=1, rd_valid=1",
+          "next_state": "DONE"
+        }
+      ]
+    },
+    {
+      "name": "clause45_address",
+      "clause": 45,
+      "trigger": "STA asserts start with clause45=1, op=00 (Clause 45 Address frame) to load the 16-bit register address into the addressed MMD (DEVAD).",
+      "steps": [
+        {
+          "action": "STA drives the 32-bit preamble (32 contiguous ones) on MDIO.",
+          "expected_signal": "MDIO=1 for 32 MDC cycles",
+          "next_state": "PRE"
+        },
+        {
+          "action": "STA drives ST=00 (Clause 45) then OP=00 (address) MSB-first.",
+          "expected_signal": "MDIO = ST(00) OP(00)",
+          "next_state": "HDR"
+        },
+        {
+          "action": "STA drives 5-bit PRTAD then 5-bit DEVAD (selects the MMD).",
+          "expected_signal": "MDIO = PRTAD[4:0] DEVAD[4:0]",
+          "next_state": "HDR"
+        },
+        {
+          "action": "STA drives TA=10.",
+          "expected_signal": "MDIO = 1 then 0",
+          "next_state": "TA"
+        },
+        {
+          "action": "STA drives the 16-bit register ADDRESS in the DATA field MSB-first.",
+          "expected_signal": "MDIO = wdata[15:0] (register address)",
+          "next_state": "DATA"
+        },
+        {
+          "action": "A subsequent Write (OP=01)/Read (OP=11)/Read-Increment (OP=10) frame operates on the loaded address.",
+          "expected_signal": "loaded address used by the next frame",
+          "next_state": "DONE"
+        }
+      ]
+    }
+  ],
   "no_behavioral_sequences_in_input": true,
   "no_calibration": false,
   "extraction_evidence": {},

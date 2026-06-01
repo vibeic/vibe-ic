@@ -3,7 +3,64 @@
   "doc_class": "control_logic",
   "ic_name": "USB Power Delivery (USB-PD)",
   "reject_rules": [],
-  "fsm_states": [],
+  "fsm_states": [
+    {
+      "name": "Unattached",
+      "description": "No port partner; monitor CC for attach.",
+      "on": "partner attaches",
+      "next": "AdvertiseCaps",
+      "evidence": "§2 Source/Sink defined by who sources VBUS; §10 negotiation begins after attach."
+    },
+    {
+      "name": "AdvertiseCaps",
+      "description": "Source sends Source_Capabilities (its PDO list) on SOP.",
+      "on": "Source_Capabilities sent + GoodCRC",
+      "next": "WaitRequest",
+      "evidence": "§10.1: Source sends Source_Capabilities (its PDO list) on SOP."
+    },
+    {
+      "name": "WaitRequest",
+      "description": "Wait for the Sink to reply with a Request carrying an RDO.",
+      "on": "Request(RDO) received",
+      "next": "EvaluateRequest",
+      "evidence": "§10.2: Sink replies with Request carrying an RDO selecting one PDO."
+    },
+    {
+      "name": "EvaluateRequest",
+      "description": "Evaluate the requested RDO and reply Accept, Reject or Wait.",
+      "on": "Accept sent",
+      "next": "TransitionVBUS",
+      "evidence": "§10.3: Source replies Accept (or Reject / Wait)."
+    },
+    {
+      "name": "TransitionVBUS",
+      "description": "Transition VBUS to the newly requested contract voltage.",
+      "on": "VBUS settled",
+      "next": "SendPSRDY",
+      "evidence": "§10.4: Source transitions VBUS to the new voltage, then sends PS_RDY."
+    },
+    {
+      "name": "SendPSRDY",
+      "description": "Send PS_RDY to declare the supply ready at the new voltage.",
+      "on": "PS_RDY sent + GoodCRC",
+      "next": "ExplicitContract",
+      "evidence": "§10.4/§7 0x06 PS_RDY: Power Supply ready at the new contract voltage."
+    },
+    {
+      "name": "ExplicitContract",
+      "description": "Explicit Contract in place; ready; either partner may issue PR_Swap / DR_Swap / VCONN_Swap.",
+      "on": "PR_Swap/DR_Swap/VCONN_Swap or Hard Reset",
+      "next": "HandleSwapOrReset",
+      "evidence": "§10.5: The Explicit Contract is now in place; either partner may later issue PR_Swap, DR_Swap or VCONN_Swap."
+    },
+    {
+      "name": "HandleSwapOrReset",
+      "description": "Process role swap (Accept then exchange roles) or a Soft/Hard/Cable Reset.",
+      "on": "swap complete / reset done",
+      "next": "ExplicitContract or Unattached",
+      "evidence": "§5 PR_Swap/DR_Swap/VCONN_Swap; §11 Soft/Hard/Cable Reset."
+    }
+  ],
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
   "no_fsm_states_in_input": true,

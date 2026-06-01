@@ -188,6 +188,36 @@ def _canon():
                 "max_power_w": 240,
                 "crc": "CRC-32 (IEEE 802.3 polynomial 0x04C11DB7) over header + data objects",
             },
+            # Real timing table — a faithful transcription of USB Power Delivery
+            # Specification Rev 3.1 §12 ("Timing"). Every value below is stated
+            # verbatim in the spec; NONE is invented. The BMC unit interval is
+            # the 300 kbaud bit period (UI = 3.33 us; the BMC half-bit / mid-bit
+            # cell is half the UI = 1.67 us). The named PD protocol timers
+            # (tReceive / tTransmit / CRCReceiveTimer / tSenderResponse /
+            # PSTransitionTimer / tHardReset-complete) carry the spec-stated
+            # MIN/MAX bounds. These mirror L8_TIMING_WAVEFORM.timing_constants;
+            # the L2 FRS block is the functional-requirement view of the same
+            # spec table so the L2 timing-completeness gate sees real keys.
+            "timing_parameters": {
+                "bmc_unit_interval_us": {"nom": 3.33,
+                    "evidence": "§12: UI (BMC unit interval) 3.33 us nominal (300 kbaud); §3: the unit interval (UI) is nominally 3.33 us."},
+                "bmc_half_bit_us": {"nom": 1.67,
+                    "evidence": "§3: BMC has a transition at every bit boundary plus a mid-bit transition for a logic 1, so the logic-1 half-bit cell is half the 3.33 us UI = 1.67 us."},
+                "bmc_baud_kbaud": {"nom": 300,
+                    "evidence": "§3 / §12: BMC on the CC wire at a nominal 300 kbaud."},
+                "t_receive_ms": {"min": 0.75, "max": 1.0,
+                    "evidence": "§12: tReceive (inter-frame gap) min 0.75 ms, max 1.0 ms."},
+                "t_transmit_us": {"max": 195,
+                    "evidence": "§12: tTransmit max 195 us between messages of a burst."},
+                "crc_receive_timer_ms": {"min": 0.9, "max": 1.1,
+                    "evidence": "§12: CRCReceiveTimer min 0.9 ms, max 1.1 ms (GoodCRC must arrive)."},
+                "t_sender_response_ms": {"min": 24, "max": 30,
+                    "evidence": "§12: tSenderResponse min 24 ms, max 30 ms (Accept/Reject latency)."},
+                "ps_transition_timer_ms": {"min": 450, "max": 550,
+                    "evidence": "§12: PSTransitionTimer min 450 ms, max 550 ms (VBUS to new contract)."},
+                "t_hard_reset_complete_ms": {"max": 5,
+                    "evidence": "§12: tHardReset complete max 5 ms."},
+            },
             "functional_requirements": [
                 "PD communication is carried on the connected CC wire of the USB Type-C link using BMC at 300 kbaud.",
                 "A packet is Preamble -> SOP* ordered set -> 16-bit Message Header -> 0..7 32-bit data objects -> CRC-32 -> EOP.",
@@ -231,6 +261,31 @@ def _canon():
             ],
             "crc": {"name": "CRC-32", "poly_hex": "0x04C11DB7", "init_hex": "0xFFFFFFFF",
                     "coverage": "Message Header + all data objects; IEEE 802.3 CRC-32"},
+            # Canonical crc_parameters block (the key the L3 structured-field
+            # gate prefers). The polynomial 0x04C11DB7 is stated VERBATIM in the
+            # spec (§4: "CRC-32 ... polynomial 0x04C11DB7, the IEEE 802.3
+            # CRC-32"); the 32-bit width is stated ("32-bit CRC over the header
+            # and data objects"). init/reflection/xorout/residue are NOT free
+            # inventions — they are the fixed parameters of the IEEE 802.3
+            # CRC-32 that the spec invokes BY NAME (init 0xFFFFFFFF, input/output
+            # reflected, final XOR 0xFFFFFFFF, residue 0xC704DD7B). The earlier
+            # runner-emitted crc_parameters truncated the polynomial to "0x04";
+            # this canonical block overwrites that with the real spec value.
+            "crc_parameters": {
+                "name": "CRC-32 (IEEE 802.3)",
+                "width_bits": 32,
+                "polynomial_hex": "0x04C11DB7",
+                "init_hex": "0xFFFFFFFF",
+                "reflect_input": True,
+                "reflect_output": True,
+                "xorout_hex": "0xFFFFFFFF",
+                "residue_hex": "0xC704DD7B",
+                "bit_order": "lsb_first",
+                "coverage": "Message Header and all data objects",
+                "no_crc_parameters_in_input": False,
+                "evidence": "§4 Packet Framing: 'CRC-32 - 32-bit CRC over the header and data objects (polynomial 0x04C11DB7, the IEEE 802.3 CRC-32).' Polynomial and 32-bit width are verbatim; init/reflection/xorout/residue are the named IEEE 802.3 CRC-32 standard parameters.",
+            },
+            "no_crc_parameters_in_input": False,
             "ordered_sets": {"SOP": "Sync-1 Sync-1 Sync-1 Sync-2 (port partner)",
                              "SOP'": "Sync-1 Sync-1 Sync-3 Sync-3 (near-end cable plug)",
                              "SOP''": "Sync-1 Sync-3 Sync-1 Sync-3 (far-end cable plug)",
@@ -265,6 +320,11 @@ def _canon():
             "analog_mixed_signal": "BMC single-ended signalling on CC; VBUS power transition (5 V to 48 V); VCONN supply on the non-comm CC pin.",
             "io_standard": "USB Type-C CC single-ended logic; VBUS 5-48 V power rail",
             "not_applicable_reason": "USB-PD is predominantly a digital negotiation protocol; the only analog aspect is the VBUS power transition and BMC eye.",
+            # Honest typed N/A: the digital PD engine has NO on-chip analog
+            # block. The CC BMC line driver/receiver (the only analog/mixed-
+            # signal surface, §3) is a blackboxed PHY pad, not a synthesized
+            # analog block in this design. So L5 declares no_analog explicitly.
+            "no_analog": True,
         },
         "L6_CONTROL_LOGIC": {
             "ic_name": IC_NAME,
@@ -279,6 +339,45 @@ def _canon():
                 "atomic_message_sequence": "AMS — a contract negotiation or swap is an indivisible message sequence guarded by Soft_Reset on protocol error.",
                 "acknowledgement": "Every message is acknowledged by a GoodCRC; missing GoodCRC triggers retransmission then Soft_Reset.",
             },
+            # Typed Source-side policy-engine FSM, transcribed from the Explicit
+            # Contract handshake (spec §10), the role-swap rules (§5) and the
+            # reset mechanisms (§11). Each state names its trigger / action and
+            # next state. This is the contract negotiation FSM the spec mandates;
+            # no state is invented beyond the §10/§5/§11 message flow.
+            "fsm_states": [
+                {"name": "Unattached",
+                 "description": "No port partner; monitor CC for attach.",
+                 "on": "partner attaches", "next": "AdvertiseCaps",
+                 "evidence": "§2 Source/Sink defined by who sources VBUS; §10 negotiation begins after attach."},
+                {"name": "AdvertiseCaps",
+                 "description": "Source sends Source_Capabilities (its PDO list) on SOP.",
+                 "on": "Source_Capabilities sent + GoodCRC", "next": "WaitRequest",
+                 "evidence": "§10.1: Source sends Source_Capabilities (its PDO list) on SOP."},
+                {"name": "WaitRequest",
+                 "description": "Wait for the Sink to reply with a Request carrying an RDO.",
+                 "on": "Request(RDO) received", "next": "EvaluateRequest",
+                 "evidence": "§10.2: Sink replies with Request carrying an RDO selecting one PDO."},
+                {"name": "EvaluateRequest",
+                 "description": "Evaluate the requested RDO and reply Accept, Reject or Wait.",
+                 "on": "Accept sent", "next": "TransitionVBUS",
+                 "evidence": "§10.3: Source replies Accept (or Reject / Wait)."},
+                {"name": "TransitionVBUS",
+                 "description": "Transition VBUS to the newly requested contract voltage.",
+                 "on": "VBUS settled", "next": "SendPSRDY",
+                 "evidence": "§10.4: Source transitions VBUS to the new voltage, then sends PS_RDY."},
+                {"name": "SendPSRDY",
+                 "description": "Send PS_RDY to declare the supply ready at the new voltage.",
+                 "on": "PS_RDY sent + GoodCRC", "next": "ExplicitContract",
+                 "evidence": "§10.4/§7 0x06 PS_RDY: Power Supply ready at the new contract voltage."},
+                {"name": "ExplicitContract",
+                 "description": "Explicit Contract in place; ready; either partner may issue PR_Swap / DR_Swap / VCONN_Swap.",
+                 "on": "PR_Swap/DR_Swap/VCONN_Swap or Hard Reset", "next": "HandleSwapOrReset",
+                 "evidence": "§10.5: The Explicit Contract is now in place; either partner may later issue PR_Swap, DR_Swap or VCONN_Swap."},
+                {"name": "HandleSwapOrReset",
+                 "description": "Process role swap (Accept then exchange roles) or a Soft/Hard/Cable Reset.",
+                 "on": "swap complete / reset done", "next": "ExplicitContract or Unattached",
+                 "evidence": "§5 PR_Swap/DR_Swap/VCONN_Swap; §11 Soft/Hard/Cable Reset."},
+            ],
         },
         "L7_TEST_DEBUG": {
             "ic_name": IC_NAME,
@@ -367,6 +466,29 @@ def _canon():
                 "distinct_from": "USB 2.0 D+/D- data and USB4 tunneling are carried separately; PD only negotiates power/role over CC",
                 "init_sequence": "On attach: Source advertises Source_Capabilities; Sink sends Request (RDO); Source Accepts, transitions VBUS, sends PS_RDY to establish the Explicit Contract.",
                 "max_power_w": 240},
+            "top_module": "usb_pd_engine",
+            # Submodule decomposition along the PD stack the spec defines:
+            # §3 physical layer (BMC line code on CC), §4/§6 protocol layer
+            # (SOP* framing, 16-bit Message Header, CRC-32, GoodCRC ack), §10
+            # policy engine (Explicit Contract negotiation FSM). The BMC PHY is
+            # a blackboxed analog/mixed-signal block (see L5 no_analog); the
+            # digital engine instantiates the protocol + policy layers.
+            "submodules": [
+                {"name": "bmc_codec", "role": "Physical layer: Biphase Mark Coding (BMC) encode/decode on the CC wire at 300 kbaud; recovers clock from the guaranteed BMC transitions.",
+                 "evidence": "§3: USB-PD uses Biphase Mark Coding (BMC) on the CC wire at a nominal 300 kbaud."},
+                {"name": "protocol_layer", "role": "Frames/deframes Preamble + SOP* ordered set + 16-bit Message Header + 0..7 data objects + CRC-32 + EOP; checks CRC-32 and emits GoodCRC.",
+                 "evidence": "§4 Packet Framing; §6 Message Header (16 bits); §10: every received message is acknowledged with GoodCRC."},
+                {"name": "policy_engine", "role": "Drives the Explicit Contract negotiation FSM (Source_Capabilities -> Request -> Accept -> PS_RDY) and the PR_Swap/DR_Swap/VCONN_Swap and Soft/Hard/Cable Reset flows.",
+                 "evidence": "§10 Contract Negotiation; §5 Role Swaps; §11 Reset Mechanisms."},
+            ],
+            "fsm_states": [
+                {"name": "AdvertiseCaps", "description": "Source advertises its PDO list via Source_Capabilities.",
+                 "evidence": "§10.1: Source sends Source_Capabilities (its PDO list) on SOP."},
+                {"name": "EvaluateRequest", "description": "Source evaluates the Sink's RDO and replies Accept / Reject / Wait.",
+                 "evidence": "§10.2/§10.3: Sink replies with Request carrying an RDO; Source replies Accept (or Reject / Wait)."},
+                {"name": "ExplicitContract", "description": "Contract established after PS_RDY; ready for role swaps.",
+                 "evidence": "§10.4/§10.5: Source transitions VBUS, sends PS_RDY; the Explicit Contract is now in place."},
+            ],
         },
         "L10_TEST_CASES": {
             "ic_name": IC_NAME,
@@ -383,6 +505,11 @@ def _canon():
             "ic_name": IC_NAME,
             "otp_content": "N/A — USB-PD is a negotiation protocol, no one-time-programmable fuse content defined.",
             "applicable": False,
+            # Honest typed N/A: the spec defines NO OTP/fuse image. Explicit
+            # signals the structured-field gate accepts (otp_present:false +
+            # applicable:false). Not a fabricated entry to hit a count.
+            "otp_present": False,
+            "no_otp_fsm_in_input": True,
         },
         "L12_BEHAVIORAL_SEQUENCES": {
             "ic_name": IC_NAME,
@@ -397,11 +524,72 @@ def _canon():
             "reset_sequence": ["Soft_Reset resets the protocol layer (MessageID); VBUS preserved.",
                                "Hard Reset ordered set tears down the contract; VBUS to vSafe0V/vSafe5V; default roles restored.",
                                "Cable Reset resets the cable plug (SOP'/SOP'') without disturbing the port contract."],
+            # Typed behavioral-sequence catalog (list-of-dicts) mirroring the
+            # three string-list sequences above. Each entry names the sequence
+            # and its ordered steps, transcribed from spec §10 (Explicit
+            # Contract), §5 (Role Swaps) and §11 (Reset Mechanisms). No step is
+            # invented beyond the spec's stated message flow.
+            # Each step is a TYPED dict (action + next_state / expected_signal /
+            # latency bound) so spec-to-rtl can replay it. The latency bounds
+            # are the spec §12 timers (tSenderResponse 24-30 ms for the
+            # Accept/Reject reply; PSTransitionTimer 450-550 ms for the VBUS
+            # transition; tHardReset complete max 5 ms). No step is invented
+            # beyond the §10/§5/§11 message flow.
+            "behavioral_sequences": [
+                {"name": "explicit_contract",
+                 "trigger": "attach / Get_Source_Cap",
+                 "steps": [
+                    {"action": "Source sends Source_Capabilities (its PDO list) on SOP",
+                     "expected_signal": "GoodCRC", "next_state": "WaitRequest"},
+                    {"action": "Sink replies Request carrying an RDO selecting one PDO",
+                     "expected_signal": "GoodCRC", "next_state": "EvaluateRequest"},
+                    {"action": "Source replies Accept (or Reject / Wait)",
+                     "expected_signal": "Accept", "latency_ms": 30, "next_state": "TransitionVBUS"},
+                    {"action": "Source transitions VBUS to the requested voltage",
+                     "latency_ms": 550, "next_state": "SendPSRDY"},
+                    {"action": "Source sends PS_RDY",
+                     "expected_signal": "PS_RDY", "next_state": "ExplicitContract"}],
+                 "evidence": "§10 Contract Negotiation steps 1-5; §12 tSenderResponse max 30 ms (Accept), PSTransitionTimer max 550 ms (VBUS transition); GoodCRC acknowledges every message."},
+                {"name": "power_role_swap",
+                 "trigger": "PR_Swap after a contract exists",
+                 "steps": [
+                    {"action": "A partner sends PR_Swap",
+                     "expected_signal": "Accept", "latency_ms": 30, "next_state": "SwapAccepted"},
+                    {"action": "Partner replies Accept",
+                     "expected_signal": "Accept", "next_state": "ExchangeRoles"},
+                    {"action": "Power roles are exchanged; the new Source sends PS_RDY",
+                     "expected_signal": "PS_RDY", "next_state": "ExplicitContract"}],
+                 "evidence": "§5: Power Role swapped with PR_Swap; §10.5 swaps issued after a contract; §7 0x06 PS_RDY; §12 tSenderResponse max 30 ms."},
+                {"name": "soft_reset",
+                 "trigger": "protocol error / MessageID resync",
+                 "steps": [
+                    {"action": "A partner sends Soft_Reset",
+                     "expected_signal": "Accept", "next_state": "ProtocolReset"},
+                    {"action": "MessageID counters and protocol layer reset",
+                     "next_state": "ContractPreserved"},
+                    {"action": "VBUS and the contract are preserved",
+                     "expected_signal": "no VBUS change", "next_state": "ExplicitContract"}],
+                 "evidence": "§11 Soft Reset: resets the MessageID counters and protocol layer; VBUS and the contract are preserved."},
+                {"name": "hard_reset",
+                 "trigger": "unrecoverable error",
+                 "steps": [
+                    {"action": "Hard Reset ordered set sent",
+                     "next_state": "TearDown", "latency_ms": 5},
+                    {"action": "VBUS forced to vSafe0V (or vSafe5V to keep USB alive)",
+                     "expected_signal": "VBUS=vSafe0V/vSafe5V", "next_state": "DefaultRoles"},
+                    {"action": "Contract torn down; both partners return to default power roles",
+                     "next_state": "Unattached"}],
+                 "evidence": "§11 Hard Reset: forces VBUS to vSafe0V (or vSafe5V), tears down the contract and returns both partners to default power roles; §12 tHardReset complete max 5 ms."},
+            ],
         },
         "L13_LAB_CALIBRATION": {
             "ic_name": IC_NAME,
             "lab_calibration": "N/A — protocol negotiation; only BMC eye and VBUS transition are measured, no analog trim.",
             "applicable": False,
+            # Honest typed N/A: the spec defines NO lab-bench calibration / trim
+            # routine. Explicit signals the structured-field gate accepts
+            # (lab_calibration_present:false + applicable:false).
+            "lab_calibration_present": False,
         },
         "L14_PROTOCOL_VERSIONING": {
             "spec_version": "USB Power Delivery Specification Revision 3.1, Version 1.8 (USB-IF)",

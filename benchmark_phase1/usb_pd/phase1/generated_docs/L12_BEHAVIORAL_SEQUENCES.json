@@ -2,7 +2,106 @@
   "schema_version": 2,
   "doc_class": "behavioral_sequences",
   "ic_name": "USB Power Delivery (USB-PD)",
-  "behavioral_sequences": [],
+  "behavioral_sequences": [
+    {
+      "name": "explicit_contract",
+      "trigger": "attach / Get_Source_Cap",
+      "steps": [
+        {
+          "action": "Source sends Source_Capabilities (its PDO list) on SOP",
+          "expected_signal": "GoodCRC",
+          "next_state": "WaitRequest"
+        },
+        {
+          "action": "Sink replies Request carrying an RDO selecting one PDO",
+          "expected_signal": "GoodCRC",
+          "next_state": "EvaluateRequest"
+        },
+        {
+          "action": "Source replies Accept (or Reject / Wait)",
+          "expected_signal": "Accept",
+          "latency_ms": 30,
+          "next_state": "TransitionVBUS"
+        },
+        {
+          "action": "Source transitions VBUS to the requested voltage",
+          "latency_ms": 550,
+          "next_state": "SendPSRDY"
+        },
+        {
+          "action": "Source sends PS_RDY",
+          "expected_signal": "PS_RDY",
+          "next_state": "ExplicitContract"
+        }
+      ],
+      "evidence": "§10 Contract Negotiation steps 1-5; §12 tSenderResponse max 30 ms (Accept), PSTransitionTimer max 550 ms (VBUS transition); GoodCRC acknowledges every message."
+    },
+    {
+      "name": "power_role_swap",
+      "trigger": "PR_Swap after a contract exists",
+      "steps": [
+        {
+          "action": "A partner sends PR_Swap",
+          "expected_signal": "Accept",
+          "latency_ms": 30,
+          "next_state": "SwapAccepted"
+        },
+        {
+          "action": "Partner replies Accept",
+          "expected_signal": "Accept",
+          "next_state": "ExchangeRoles"
+        },
+        {
+          "action": "Power roles are exchanged; the new Source sends PS_RDY",
+          "expected_signal": "PS_RDY",
+          "next_state": "ExplicitContract"
+        }
+      ],
+      "evidence": "§5: Power Role swapped with PR_Swap; §10.5 swaps issued after a contract; §7 0x06 PS_RDY; §12 tSenderResponse max 30 ms."
+    },
+    {
+      "name": "soft_reset",
+      "trigger": "protocol error / MessageID resync",
+      "steps": [
+        {
+          "action": "A partner sends Soft_Reset",
+          "expected_signal": "Accept",
+          "next_state": "ProtocolReset"
+        },
+        {
+          "action": "MessageID counters and protocol layer reset",
+          "next_state": "ContractPreserved"
+        },
+        {
+          "action": "VBUS and the contract are preserved",
+          "expected_signal": "no VBUS change",
+          "next_state": "ExplicitContract"
+        }
+      ],
+      "evidence": "§11 Soft Reset: resets the MessageID counters and protocol layer; VBUS and the contract are preserved."
+    },
+    {
+      "name": "hard_reset",
+      "trigger": "unrecoverable error",
+      "steps": [
+        {
+          "action": "Hard Reset ordered set sent",
+          "next_state": "TearDown",
+          "latency_ms": 5
+        },
+        {
+          "action": "VBUS forced to vSafe0V (or vSafe5V to keep USB alive)",
+          "expected_signal": "VBUS=vSafe0V/vSafe5V",
+          "next_state": "DefaultRoles"
+        },
+        {
+          "action": "Contract torn down; both partners return to default power roles",
+          "next_state": "Unattached"
+        }
+      ],
+      "evidence": "§11 Hard Reset: forces VBUS to vSafe0V (or vSafe5V), tears down the contract and returns both partners to default power roles; §12 tHardReset complete max 5 ms."
+    }
+  ],
   "no_behavioral_sequences_in_input": true,
   "no_calibration": false,
   "extraction_evidence": {},

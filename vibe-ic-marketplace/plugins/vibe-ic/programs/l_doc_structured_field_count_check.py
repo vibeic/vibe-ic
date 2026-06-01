@@ -158,6 +158,85 @@ def _list_len_of_dicts(value) -> int:
     return sum(1 for x in value if isinstance(x, dict))
 
 
+# v0.2.16 — honest typed-N/A recognition (completing the set started by
+# L5.no_analog / L12.no_calibration). A pure-digital protocol IC genuinely
+# has NO CRC / NO OTP fuses / NO lab-calibration. The synth/runner already
+# emit explicit honest declarations for these; the gate must ACCEPT them as
+# satisfying the requirement instead of FAILing for a structurally absent
+# field that the doc itself has truthfully declared N/A.
+#
+# HONESTY GUARDS (chip-AGNOSTIC, no waiver — this is the doc's OWN typed
+# declaration, never a missing/empty field standing in for one):
+#   (a) only an EXPLICIT boolean-True no_X flag (or explicit applicable=False)
+#       counts — a bare missing/empty field does NOT;
+#   (b) an explicit no_X == False (or otp_present == True / applicable == True)
+#       leaves the requirement IN FORCE — a protocol that genuinely HAS the
+#       feature must still populate it;
+#   (c) these mirror the gate's own existing escapes, completing the set.
+
+def _explicit_true(value) -> bool:
+    """True only for an EXPLICIT boolean True. Strings, ints, None, missing
+    keys, and False all return False — so a bare/absent/false field can NEVER
+    masquerade as an honest N/A declaration (HONESTY GUARD (a)/(b))."""
+    return value is True
+
+
+def _explicit_false(value) -> bool:
+    """True only for an EXPLICIT boolean False."""
+    return value is False
+
+
+def _has_honest_no_crc(data: dict) -> bool:
+    """L3: doc explicitly declares it has NO CRC. Accept the existing
+    `no_crc_parameters_in_input == true` (or a `no_crc == true`) flag, but
+    ONLY when it is explicitly True. A genuinely-CRC protocol that left
+    no_crc == False (or absent) keeps the crc_parameters requirement in
+    force (HONESTY GUARD (b))."""
+    return (_explicit_true(data.get("no_crc_parameters_in_input"))
+            or _explicit_true(data.get("no_crc"))
+            or _explicit_true(data.get("no_crc_in_input")))
+
+
+def _has_honest_no_otp(data: dict) -> bool:
+    """L11: doc explicitly declares it has NO OTP fuse content. Accept any of
+    the honest signals the runner already emits: an explicit no_otp* True flag
+    (e.g. `no_otp_fsm_in_input`), an explicit `otp_present == false`, or an
+    explicit `applicable == false`. `otp_present` is sometimes a free-text
+    string (functional description) — that does NOT count; only the explicit
+    boolean False does, plus any explicit no_otp* True flag / applicable
+    False (HONESTY GUARD (a))."""
+    if _explicit_false(data.get("otp_present")):
+        return True
+    if _explicit_false(data.get("applicable")):
+        return True
+    for k, v in data.items():
+        if not isinstance(k, str):
+            continue
+        kl = k.lower()
+        if (kl.startswith("no_otp") or kl == "no_fuse"
+                or kl.startswith("no_fuse")) and _explicit_true(v):
+            return True
+    return False
+
+
+def _has_honest_no_lab(data: dict) -> bool:
+    """L13: doc explicitly declares it has NO lab-bench calibration. Accept an
+    explicit `lab_calibration_present == false`, an explicit `applicable ==
+    false`, or an explicit no_lab* True flag (HONESTY GUARD (a))."""
+    if _explicit_false(data.get("lab_calibration_present")):
+        return True
+    if _explicit_false(data.get("applicable")):
+        return True
+    for k, v in data.items():
+        if not isinstance(k, str):
+            continue
+        kl = k.lower()
+        if (kl.startswith("no_lab")
+                or kl.startswith("no_calibration")) and _explicit_true(v):
+            return True
+    return False
+
+
 def _detect_l_layer(name: str) -> int | None:
     """Return the L layer integer (1..13) inferred from filename, or
     None if the file does not name an L doc."""
@@ -305,10 +384,21 @@ def _check_l_doc(layer: int, data: dict,
                 f"entries in `opcodes`; have {n_opcodes}. Each entry "
                 f"must be a dict (hex/name/payload_bytes/...). Threshold "
                 f"is min(5, ceil(0.8 * planned_count)).")
-        if not crc_ok:
+        # v0.2.16 — honest no-CRC escape (completing the set begun by
+        # L5.no_analog / L12.no_calibration). A pure-digital management /
+        # serial protocol (MDIO, raw shift-register bus, ...) genuinely has
+        # NO CRC. ACCEPT a filled crc_parameters OR the doc's OWN explicit
+        # `no_crc_parameters_in_input == true` declaration. A bare missing
+        # crc_parameters with no explicit no_crc flag still FAILs, and a
+        # protocol that genuinely HAS CRC (no_crc==false / filled block)
+        # keeps the requirement in force.
+        if not crc_ok and not _has_honest_no_crc(data):
             return False, (
                 "L3 cmd_protocol must carry a `crc_parameters` (or `crc`) "
-                "dict block (polynomial_hex / init_hex / bit_order / ...).")
+                "dict block (polynomial_hex / init_hex / bit_order / ...), "
+                "OR declare it has none via an explicit "
+                "`no_crc_parameters_in_input: true` flag (the doc's own "
+                "honest typed N/A — not a waiver, not a bare missing field).")
     elif layer == 4:
         # v0.1.82 — honest N/A escape, mirroring L5.no_analog /
         # L12.no_calibration. A CPU-core / SoC spec can explicitly declare it
@@ -555,11 +645,22 @@ def _check_l_doc(layer: int, data: dict,
         elif isinstance(otp_fields, list):
             n_otp_fields = _list_len_of_dicts(otp_fields)
         best = max(n_seqs, n_cal, n_otp, n_otp_fields)
-        if best < 3:
+        # v0.2.16 — honest no-OTP escape (completing the set begun by
+        # L5.no_analog / L12.no_calibration). A pure-digital protocol IC
+        # genuinely has NO OTP fuse content. ACCEPT the required behavioral/
+        # calibration entries OR the doc's OWN explicit honest no-OTP signal
+        # already emitted by the runner (otp_present==false / applicable==false
+        # / no_otp_fsm_in_input==true). Guarded: only an explicit True no_X
+        # flag or explicit False otp_present/applicable counts — a bare
+        # missing/empty field never does, and a genuinely-OTP IC keeps the
+        # ≥3-typed-entry requirement in force.
+        if best < 3 and not _has_honest_no_otp(data):
             return False, (
                 f"L11 must carry ≥3 typed entries across "
                 f"`behavioral_sequences` + `calibration_tables` "
-                f"(Wave 32 joint ownership); have "
+                f"(Wave 32 joint ownership), OR declare it has no OTP fuse "
+                f"content via an explicit honest signal (otp_present: false / "
+                f"applicable: false / no_otp_fsm_in_input: true); have "
                 f"behavioral_sequences={n_seqs}, "
                 f"calibration_tables={n_cal} (legacy otp_table={n_otp}).")
     elif layer == 12:
@@ -599,11 +700,21 @@ def _check_l_doc(layer: int, data: dict,
             if isinstance(rpa, dict):
                 n_cases += sum(1 for v in rpa.values()
                                if v not in (None, "", [], {}))
-        if n_cases < 5:
+        # v0.2.16 — honest no-lab-calibration escape (completing the set begun
+        # by L5.no_analog / L12.no_calibration). A purely-digital protocol IC
+        # genuinely has NO on-chip / lab-bench calibration. ACCEPT the typed
+        # cases OR the doc's OWN explicit honest no-lab signal already emitted
+        # by the runner (lab_calibration_present==false / applicable==false).
+        # Guarded: only an explicit False / explicit True no_lab flag counts —
+        # a bare missing/empty field never does.
+        if n_cases < 5 and not _has_honest_no_lab(data):
             return False, (
                 f"L13 lab_calibration / test_cases must carry ≥5 typed "
                 f"cases (or calibration_steps[] / lab_equipment[] / "
-                f"rig_pin_assignments{{}} entries); have {n_cases}.")
+                f"rig_pin_assignments{{}} entries), OR declare it has no lab "
+                f"calibration via an explicit honest signal "
+                f"(lab_calibration_present: false / applicable: false); "
+                f"have {n_cases}.")
     else:
         return True, ""
     return True, ""

@@ -166,6 +166,146 @@ def test_generic_keepalive_pattern(tmp_path):
     assert out["verdict"] == "PASS"
 
 
+def test_clock_divider_mdc_cnt_not_flagged(tmp_path):
+    """mdio mdc_cnt shape: the counter's expiry path only toggles a clock-like
+    reg (`mdc <= ~mdc`) and pulses a 1-cycle tick (`mdc_tick <= 1'b1`). It does
+    NOT gate a TX / output-enable / packet-send event — it is a CLOCK DIVIDER,
+    not a periodic-TX wake timer. Must NOT warn."""
+    src = """
+    module mdio_mdc(input clk, input rst_n, output reg mdc);
+        localparam [15:0] MDC_DIV = 16'd24;
+        localparam S_IDLE = 2'd0;
+        reg [1:0]  state;
+        reg [15:0] mdc_cnt;
+        reg        mdc_tick;
+        always @(posedge clk) begin
+            if (!rst_n) begin
+                mdc_cnt  <= 16'd0;
+                mdc      <= 1'b0;
+                mdc_tick <= 1'b0;
+            end else if (state == S_IDLE) begin
+                mdc_cnt  <= 16'd0;
+                mdc      <= 1'b0;
+                mdc_tick <= 1'b0;
+            end else if (mdc_cnt == MDC_DIV[15:0]) begin
+                mdc_cnt  <= 16'd0;
+                mdc      <= ~mdc;
+                mdc_tick <= 1'b1;
+            end else begin
+                mdc_cnt  <= mdc_cnt + 16'd1;
+                mdc_tick <= 1'b0;
+            end
+        end
+    endmodule
+    """
+    rc, out = _run(tmp_path, src)
+    assert rc == 0, out
+    assert out["verdict"] == "PASS", out
+
+
+def test_pure_div_toggle_not_flagged(tmp_path):
+    """Simplest register-divided clock with a prescaler `div_cnt` and a toggle
+    on expiry (`clk_div <= ~clk_div`). No TX event ⇒ clock divider ⇒ no warn.
+    Mirrors sdc_gen._find_register_divided_clocks form B."""
+    src = """
+    module clkdiv(input clk, input rst_n, output reg clk_div);
+        reg [7:0] div_cnt;
+        always @(posedge clk) begin
+            if (!rst_n) begin
+                div_cnt <= 8'd0;
+                clk_div <= 1'b0;
+            end else if (div_cnt == 8'd99) begin
+                div_cnt <= 8'd0;
+                clk_div <= ~clk_div;
+            end else begin
+                div_cnt <= div_cnt + 8'd1;
+            end
+        end
+    endmodule
+    """
+    rc, out = _run(tmp_path, src)
+    assert rc == 0, out
+    assert out["verdict"] == "PASS", out
+
+
+def test_real_wake_timer_still_flagged_alongside_divider(tmp_path):
+    """A genuine autonomous wake-pulse timer (expiry path drives a TX wake
+    event, no RX reset) must STILL warn — even when a clock divider lives in
+    the SAME file. The divider must be silent; the wake timer must not."""
+    src = """
+    module mixed(input clk, input rst_n, output reg mdc,
+                 output reg wake_pulse_o);
+        // --- clock divider: must NOT warn ---
+        reg [15:0] mdc_cnt;
+        reg        mdc_tick;
+        always @(posedge clk) begin
+            if (!rst_n) begin
+                mdc_cnt  <= 16'd0;
+                mdc      <= 1'b0;
+                mdc_tick <= 1'b0;
+            end else if (mdc_cnt == 16'd24) begin
+                mdc_cnt  <= 16'd0;
+                mdc      <= ~mdc;
+                mdc_tick <= 1'b1;
+            end else begin
+                mdc_cnt  <= mdc_cnt + 16'd1;
+                mdc_tick <= 1'b0;
+            end
+        end
+        // --- real wake/keepalive timer: must STILL warn (gates a TX event,
+        //     no RX-activity reset) ---
+        reg [18:0] wake_cnt;
+        always @(posedge clk) begin
+            if (!rst_n) begin
+                wake_cnt    <= 19'd0;
+                wake_pulse_o <= 1'b0;
+            end else begin
+                wake_pulse_o <= 1'b0;
+                if (wake_cnt == 19'd249999) begin
+                    wake_cnt     <= 19'd0;
+                    wake_pulse_o <= 1'b1;
+                end else wake_cnt <= wake_cnt + 19'd1;
+            end
+        end
+    endmodule
+    """
+    rc, out = _run(tmp_path, src)
+    assert rc == 1, out
+    assert out["verdict"] == "FAIL", out
+    flagged = {f["register"] for f in out["findings"]}
+    assert "wake_cnt" in flagged, out
+    assert "mdc_cnt" not in flagged, out
+
+
+def test_divider_with_tx_event_still_flagged(tmp_path):
+    """A counter that toggles a clock reg BUT also drives a TX event on expiry
+    is NOT a pure clock divider — it must STILL warn (do-not-silence guard)."""
+    src = """
+    module tricky(input clk, input rst_n, output reg clk_div,
+                  output reg tx_send_o);
+        reg [15:0] period_cnt;
+        always @(posedge clk) begin
+            if (!rst_n) begin
+                period_cnt <= 16'd0;
+                clk_div    <= 1'b0;
+                tx_send_o  <= 1'b0;
+            end else begin
+                tx_send_o <= 1'b0;
+                if (period_cnt == 16'd5000) begin
+                    period_cnt <= 16'd0;
+                    clk_div    <= ~clk_div;
+                    tx_send_o  <= 1'b1;
+                end else period_cnt <= period_cnt + 16'd1;
+            end
+        end
+    endmodule
+    """
+    rc, out = _run(tmp_path, src)
+    assert rc == 1, out
+    flagged = {f["register"] for f in out["findings"]}
+    assert "period_cnt" in flagged, out
+
+
 def test_missing_file(tmp_path):
     r = subprocess.run(
         [sys.executable, str(PROGRAM), str(tmp_path / "nope.v")],

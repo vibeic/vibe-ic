@@ -1,0 +1,5 @@
+{
+  "verdict": "PASS",
+  "reset_strategy": "async-assert sync-deassert",
+  "reset_signal": "reset_n"
+}

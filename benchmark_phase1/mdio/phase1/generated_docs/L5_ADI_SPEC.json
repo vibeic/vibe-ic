@@ -124,7 +124,8 @@
     "1000BASE-X fiber: AC-coupled differential NRZ at ~400-800 mV pp, 1.25 GBd.",
     "Auto-Negotiation FLP: same line driver as 10BASE-T NLP — ±2.5 V pulses on twisted pair."
   ],
+  "no_analog": true,
   "analog_mixed_signal": "Digital open-drain management interface; MDIO requires an external pull-up; pull-up supply 1.2 V to 3.3 V; no analog blocks.",
   "io_standard": "Open-drain MDIO with external pull-up; CMOS MDC",
-  "not_applicable_reason": "MDIO is a purely digital management protocol interface."
+  "not_applicable_reason": "MDIO is a purely digital management protocol interface; the only analog element is an off-chip board pull-up resistor (1.5 kΩ-10 kΩ), not an on-chip analog block."
 }
