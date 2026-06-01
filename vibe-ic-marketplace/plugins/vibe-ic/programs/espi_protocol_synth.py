@@ -109,11 +109,26 @@ def _canon():
             ],
             "io_voltage": "1.0 V / 1.8 V",
             "clock_frequency": "20 MHz to 66 MHz",
+            "electrical_specs": [
+                {"name": "I/O rail voltage", "min_typ_max": {"min": 1.0, "typ": 1.8, "max": 1.8}, "unit": "V",
+                 "conditions": "all eSPI signals referenced to this rail", "evidence": {"literal": "All signals are referenced to the 1.0 V / 1.8 V I/O rail"}},
+                {"name": "ESPI_CLK frequency", "min_typ_max": {"min": 20, "typ": 33, "max": 66}, "unit": "MHz",
+                 "conditions": "20 MHz at boot, up to 66 MHz negotiated", "evidence": {"literal": "ESPI_CLK frequency 20 MHz (boot) up to 66 MHz (negotiated)"}},
+                {"name": "Setup time tSU", "min_typ_max": {"min": 2, "typ": 2, "max": 2}, "unit": "ns",
+                 "conditions": "data valid before sampling edge", "evidence": {"literal": "Setup time tSU 2 ns"}},
+                {"name": "Hold time tHO", "min_typ_max": {"min": 1, "typ": 1, "max": 1}, "unit": "ns",
+                 "conditions": "data held after sampling edge", "evidence": {"literal": "Hold time tHO 1 ns"}},
+                {"name": "CS# to CLK setup", "min_typ_max": {"min": 2, "typ": 2, "max": 2}, "unit": "clocks",
+                 "conditions": "chip-select assert before first clock", "evidence": {"literal": "CS# to CLK setup 2 clocks"}},
+                {"name": "Reset pulse width", "min_typ_max": {"min": 100, "typ": 100, "max": 100}, "unit": "us",
+                 "conditions": "minimum ESPI_RESET# low time", "evidence": {"literal": "Reset pulse width minimum 100 us"}},
+            ],
         },
         "L2_FRS": {
             "ic_name": IC_NAME,
             "protocol_overview": {
                 "type": "Source-synchronous serial bus, single master to one or more slaves",
+                "half_duplex": True,
                 "duplex": "half-duplex (command phase then turnaround then response phase)",
                 "synchronous": True,
                 "replaces": "Low Pin Count (LPC) bus",
@@ -241,6 +256,25 @@ def _canon():
                                                "optional data", "CRC byte", "TAR (2 clk float)",
                                                "response code (8 bits)", "response data/status",
                                                "CRC byte", "CS# deassert"]},
+            # RX (host/external) vs TX (DUT/internal) per-symbol widths. eSPI is
+            # half-duplex: the slave RECEIVES the master command phase and DRIVES
+            # the response phase after a 2-clock turnaround. Per-symbol width =
+            # one ESPI_CLK period (15 ns @66 MHz .. 50 ns @20 MHz). Required by
+            # internal_vs_external_timing_check (half_duplex=true).
+            "rx_timing": {
+                "description": "host/external: master command-phase symbols the slave RX samples",
+                "H1_ns": {"min": 15, "typ": 30, "max": 50},
+                "H0_ns": {"min": 15, "typ": 30, "max": 50},
+                "BR_ns": {"min": 30, "typ": 60, "max": 100, "note": "turnaround = 2 ESPI_CLK"},
+                "IBT_ns": {"min": 15, "typ": 30, "max": 50, "note": "min symbol cadence = 1 ESPI_CLK"},
+            },
+            "tx_timing": {
+                "description": "DUT/internal: slave response-phase symbols driven after TAR",
+                "H1_ns": {"min": 15, "typ": 30, "max": 50},
+                "H0_ns": {"min": 15, "typ": 30, "max": 50},
+                "BR_ns": {"min": 30, "typ": 60, "max": 100, "note": "turnaround = 2 ESPI_CLK"},
+                "IBT_ns": {"min": 15, "typ": 30, "max": 50, "note": "min symbol cadence = 1 ESPI_CLK"},
+            },
         },
         "L9_INTEGRATION_SPEC": {
             "ic_name": IC_NAME,

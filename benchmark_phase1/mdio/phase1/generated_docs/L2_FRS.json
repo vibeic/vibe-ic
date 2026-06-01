@@ -92,6 +92,7 @@
   "protocol_overview": {
     "type": "Two-wire low-speed serial management bus, single master (STA) to one or more PHY/MMD slaves",
     "duplex": "half-duplex (command portion driven by STA, data portion driven by PHY on read, with a turnaround between them)",
+    "half_duplex": true,
     "synchronous": true,
     "also_known_as": "MII Management interface (MIIM)",
     "clock_max_mhz": 2.5,

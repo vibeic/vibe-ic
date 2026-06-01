@@ -56,6 +56,7 @@
   "no_frs_sections_in_input": false,
   "protocol_overview": {
     "type": "Source-synchronous serial bus, single master to one or more slaves",
+    "half_duplex": true,
     "duplex": "half-duplex (command phase then turnaround then response phase)",
     "synchronous": true,
     "replaces": "Low Pin Count (LPC) bus",

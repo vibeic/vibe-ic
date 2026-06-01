@@ -144,12 +144,43 @@ def _canon():
             ],
             "io_voltage": "1.2 V to 3.3 V (pull-up supply)",
             "clock_frequency": "up to 2.5 MHz",
+            "electrical_specs": [
+                {"name": "MDC maximum frequency",
+                 "min_typ_max": {"min": None, "typ": None, "max": 2.5},
+                 "unit": "MHz", "conditions": "Station-management clock sourced by the STA",
+                 "evidence": {"literal": "MDC maximum frequency        2.5 MHz"}},
+                {"name": "MDC minimum period",
+                 "min_typ_max": {"min": 400, "typ": None, "max": None},
+                 "unit": "ns", "conditions": "Corresponds to the 2.5 MHz MDC maximum",
+                 "evidence": {"literal": "MDC minimum period           400 ns"}},
+                {"name": "MDIO setup to MDC rising (tsetup)",
+                 "min_typ_max": {"min": 10, "typ": None, "max": None},
+                 "unit": "ns", "conditions": "STA-sourced data, setup before MDC rising edge",
+                 "evidence": {"literal": "MDIO setup to MDC rising     10 ns (min), STA-sourced data"}},
+                {"name": "MDIO hold from MDC rising (thold)",
+                 "min_typ_max": {"min": 10, "typ": None, "max": None},
+                 "unit": "ns", "conditions": "STA-sourced data, hold after MDC rising edge",
+                 "evidence": {"literal": "MDIO hold from MDC rising    10 ns (min)"}},
+                {"name": "MDIO output delay from MDC (PHY-sourced)",
+                 "min_typ_max": {"min": 0, "typ": None, "max": 300},
+                 "unit": "ns", "conditions": "PHY-sourced data, Clause 22 read response",
+                 "evidence": {"literal": "MDIO output delay from MDC   0 ns to 300 ns (PHY-sourced data, Clause 22)"}},
+                {"name": "MDIO pull-up resistor",
+                 "min_typ_max": {"min": 1.5, "typ": None, "max": 10},
+                 "unit": "kohm", "conditions": "External pull-up; MDIO is open-drain",
+                 "evidence": {"literal": "MDIO drive                   open-drain, external pull-up 1.5 k to 10 k"}},
+                {"name": "Pull-up supply voltage",
+                 "min_typ_max": {"min": 1.2, "typ": None, "max": 3.3},
+                 "unit": "V", "conditions": "Supply for the external MDIO pull-up; CMOS MDC I/O at 3.3 V / 2.5 V / 1.2 V",
+                 "evidence": {"literal": "Supply for pull-up           1.2 V to 3.3 V"}},
+            ],
         },
         "L2_FRS": {
             "ic_name": IC_NAME,
             "protocol_overview": {
                 "type": "Two-wire low-speed serial management bus, single master (STA) to one or more PHY/MMD slaves",
                 "duplex": "half-duplex (command portion driven by STA, data portion driven by PHY on read, with a turnaround between them)",
+                "half_duplex": True,
                 "synchronous": True,
                 "also_known_as": "MII Management interface (MIIM)",
                 "clock_max_mhz": 2.5,
@@ -277,6 +308,38 @@ def _canon():
             "transaction_waveform": {"order": ["PRE (32 ones)", "ST (2 bits)", "OP (2 bits)",
                                                "PHYAD/PRTAD (5 bits)", "REGAD/DEVAD (5 bits)",
                                                "TA (2 bits)", "DATA (16 bits, MSB first)"]},
+            "symbol_directionality": {
+                "rx_host_side": ["H0", "H1"],
+                "tx_dut_side": ["H0", "H1"],
+                "note": ("MDIO has no break/inter-byte symbols; the on-wire "
+                         "symbol set is the logic-1 bit (H1) and logic-0 bit "
+                         "(H0), one per MDC rising edge."),
+            },
+            "rx_timing": {
+                "description": ("Host (STA) drives the command portion (PRE/ST/"
+                                "OP/PHYAD/REGAD) and samples MDIO on the MDC "
+                                "rising edge during a READ frame. Per-bit widths "
+                                "the DUT/PHY RX decoder must tolerate at 2.5 MHz."),
+                "direction": "host -> DUT/PHY (external, into the DUT)",
+                "sample_edge": "MDIO sampled on MDC rising edge",
+                "H1_high_ns": 200, "H1_low_ns": 0,
+                "H0_high_ns": 0, "H0_low_ns": 200,
+                "mdc_half_period_ns": 200,
+                "setup_min_ns": 10, "hold_min_ns": 10,
+            },
+            "tx_timing": {
+                "description": ("DUT-side drive: STA drives PRE/ST/OP/PHYAD/"
+                                "REGAD + WRITE data + the write-TA; the PHY/MMD "
+                                "drives the TA bit-2 zero and the 16-bit read "
+                                "data MSB first. Per-bit widths the TX encoder "
+                                "emits at 2.5 MHz."),
+                "direction": "DUT/PHY -> bus (internal, out of the DUT)",
+                "drive_edge": "MDIO updated on MDC falling edge, stable at rising edge",
+                "H1_high_ns": 200, "H1_low_ns": 0,
+                "H0_high_ns": 0, "H0_low_ns": 200,
+                "mdc_half_period_ns": 200,
+                "output_delay_max_ns": 300,
+            },
         },
         "L9_INTEGRATION_SPEC": {
             "ic_name": IC_NAME,

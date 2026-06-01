@@ -293,5 +293,39 @@
       "TA (2 bits)",
       "DATA (16 bits, MSB first)"
     ]
+  },
+  "symbol_directionality": {
+    "rx_host_side": [
+      "H0",
+      "H1"
+    ],
+    "tx_dut_side": [
+      "H0",
+      "H1"
+    ],
+    "note": "MDIO has no break/inter-byte symbols; the on-wire symbol set is the logic-1 bit (H1) and logic-0 bit (H0), one per MDC rising edge."
+  },
+  "rx_timing": {
+    "description": "Host (STA) drives the command portion (PRE/ST/OP/PHYAD/REGAD) and samples MDIO on the MDC rising edge during a READ frame. Per-bit widths the DUT/PHY RX decoder must tolerate at 2.5 MHz.",
+    "direction": "host -> DUT/PHY (external, into the DUT)",
+    "sample_edge": "MDIO sampled on MDC rising edge",
+    "H1_high_ns": 200,
+    "H1_low_ns": 0,
+    "H0_high_ns": 0,
+    "H0_low_ns": 200,
+    "mdc_half_period_ns": 200,
+    "setup_min_ns": 10,
+    "hold_min_ns": 10
+  },
+  "tx_timing": {
+    "description": "DUT-side drive: STA drives PRE/ST/OP/PHYAD/REGAD + WRITE data + the write-TA; the PHY/MMD drives the TA bit-2 zero and the 16-bit read data MSB first. Per-bit widths the TX encoder emits at 2.5 MHz.",
+    "direction": "DUT/PHY -> bus (internal, out of the DUT)",
+    "drive_edge": "MDIO updated on MDC falling edge, stable at rising edge",
+    "H1_high_ns": 200,
+    "H1_low_ns": 0,
+    "H0_high_ns": 0,
+    "H0_low_ns": 200,
+    "mdc_half_period_ns": 200,
+    "output_delay_max_ns": 300
   }
 }

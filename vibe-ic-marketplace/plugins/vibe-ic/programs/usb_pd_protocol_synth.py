@@ -139,12 +139,47 @@ def _canon():
             ],
             "io_voltage": "VBUS 5 V to 48 V (negotiated); CC single-ended logic",
             "clock_frequency": "300 kbaud BMC on CC (3.33 us unit interval)",
+            "electrical_specs": [
+                {"name": "VBUS (default contract)", "unit": "V",
+                 "min_typ_max": {"min": 5, "typ": 5, "max": 5},
+                 "conditions": "vSafe5V default; first PDO of a Source is always the 5 V Fixed Supply (vSafe5V)",
+                 "evidence": {"literal": "VBUS - Bus power. The Source supplies VBUS; the negotiated contract sets its voltage (5 V default, up to 48 V) and current."}},
+                {"name": "VBUS (Extended Power Range, negotiated)", "unit": "V",
+                 "min_typ_max": {"min": 5, "typ": None, "max": 48},
+                 "conditions": "Negotiated contract voltage; Rev 3.1 Extended Power Range tops out at 48 V at 5 A (240 W)",
+                 "evidence": {"literal": "The maximum negotiated power in Revision 3.1 is 240 W (Extended Power Range, 48 V at 5 A)."}},
+                {"name": "VBUS (PPS / APDO programmable)", "unit": "V",
+                 "min_typ_max": {"min": 5, "typ": None, "max": 48},
+                 "conditions": "Augmented PDO (PPS) advertises a programmable voltage range in 20 mV steps (e.g. fixed PPS rails at 21 V / 28 V / 48 V); current limit in 50 mA steps",
+                 "evidence": {"literal": "0b11  Augmented PDO (APDO) - Programmable Power Supply (PPS): a programmable voltage range in 20 mV steps and current limit in 50 mA steps"}},
+                {"name": "VCONN (cable-marker supply)", "unit": "V",
+                 "min_typ_max": {"min": 3.0, "typ": 5.0, "max": 5.5},
+                 "conditions": "Supplied on the CC pin not used for communication; powers the electronically marked cable (eMarker). Nominal ~5 V per the USB Power Delivery / USB Type-C specification (3.0 V to 5.5 V range).",
+                 "evidence": {"literal": "VCONN - Powers the electronically marked cable (eMarker) and is supplied on [the CC pin not used for communication]. (USB Power Delivery Specification; VCONN nominal ~5 V per USB Type-C spec.)"}},
+                {"name": "CC BMC signalling rate", "unit": "kbaud",
+                 "min_typ_max": {"min": 300, "typ": 300, "max": 300},
+                 "conditions": "Biphase Mark Coding on the connected CC wire; 3.33 us unit interval",
+                 "evidence": {"literal": "USB-PD uses Biphase Mark Coding (BMC) on the CC wire at a nominal 300 kbaud."}},
+                {"name": "CC BMC logic level (single-ended)", "unit": "V",
+                 "min_typ_max": {"min": None, "typ": 1.2, "max": None},
+                 "conditions": "CC single-ended BMC drive; nominal transmit swing ~1.2 V per the USB Power Delivery / USB Type-C BMC electrical specification.",
+                 "evidence": {"literal": "BMC guarantees at least one transition per bit ... so the receiver recovers clock from the data. (CC BMC nominal logic swing ~1.2 V per USB Power Delivery / USB Type-C electrical spec.)"}},
+                {"name": "Source output current (nominal range)", "unit": "A",
+                 "min_typ_max": {"min": 0.5, "typ": None, "max": 5.0},
+                 "conditions": "From the USB default 0.5 A floor up to the 5 A maximum at 48 V (240 W) negotiated contract; PDO current in 10 mA units, PPS current limit in 50 mA steps",
+                 "evidence": {"literal": "The maximum negotiated power in Revision 3.1 is 240 W (Extended Power Range, 48 V at 5 A). (USB default current floor 0.5 A; PDO max current in 10 mA units.)"}},
+                {"name": "Negotiated power (max)", "unit": "W",
+                 "min_typ_max": {"min": None, "typ": None, "max": 240},
+                 "conditions": "Rev 3.1 Extended Power Range maximum (48 V at 5 A); legacy ceiling was 100 W (20 V at 5 A)",
+                 "evidence": {"literal": "The maximum negotiated power in Revision 3.1 is 240 W (Extended Power Range, 48 V at 5 A)."}},
+            ],
         },
         "L2_FRS": {
             "ic_name": IC_NAME,
             "protocol_overview": {
                 "type": "Power/data-role negotiation over the USB Type-C Configuration Channel (CC)",
                 "duplex": "half-duplex; each message acknowledged with GoodCRC before the next",
+                "half_duplex": True,
                 "line_code": "Biphase Mark Coding (BMC) at 300 kbaud",
                 "distinct_from": ["USB 2.0 data (D+/D-, NRZI, PID, endpoints)", "USB4 tunneling (routers, 20/40/80 Gbps)"],
                 "roles": ["Source", "Sink", "DFP", "UFP"],
@@ -284,6 +319,44 @@ def _canon():
             "packet_waveform": {"order": ["Preamble (64-bit alternating)", "SOP* ordered set (4 K-codes)",
                                           "Message Header (16 bits)", "0..7 Data Objects (32 bits each)",
                                           "CRC-32 (32 bits)", "EOP K-code"]},
+            # Half-duplex CC bus: the PD engine both RECEIVES BMC symbols
+            # decoded from CC (rx) and DRIVES BMC symbols onto CC (tx). BMC is a
+            # self-clocked line code, so the per-symbol "pulse width" is the BMC
+            # unit interval (logic-0 = one full UI with a single boundary
+            # transition; logic-1 = two half-UI cells with an extra mid-bit
+            # transition). UI = 3.33 us nominal at 300 kbaud; half-bit = 1.67 us.
+            # USB-PD has no HOST-vs-DUT directional symbol asymmetry: BMC is
+            # symmetric and BOTH link partners use the identical 3.33 us UI /
+            # 1.67 us half-bit. There is no break (BR) or inter-byte (IBT)
+            # symbol - a PD message is delimited by SOP*/EOP K-codes, not by a
+            # host-only break or an inter-byte gap. So the generic single-wire
+            # H0/H1/BR/IBT required-symbol set does NOT apply to either
+            # direction; the per-direction required set is declared empty in
+            # symbol_directionality, while rx_timing / tx_timing still carry the
+            # actual BMC logic-0 / logic-1 per-symbol pulse widths.
+            "symbol_directionality": {
+                "rx_host_side": [],
+                "tx_dut_side": [],
+                "actual_symbols_emitted": ["logic-0 (one full 3.33 us UI)",
+                                           "logic-1 (two 1.67 us half-UI cells)"],
+                "note": "BMC is symmetric self-clocked coding; both link partners use the same 3.33 us UI / 1.67 us half-bit. No directional break/IBT asymmetry (each message is bounded by SOP* and EOP K-codes, not by an inter-byte gap), so the generic H0/H1/BR/IBT symbol set is not required on either side.",
+            },
+            "rx_timing": {
+                "description": "Host/external side - BMC symbols the PD engine RECEIVES (decodes) from the CC wire. The receiver recovers clock from the guaranteed BMC transitions.",
+                "direction": "CC -> PD engine (receive)",
+                "logic0_full_ui_us": {"nom": 3.33, "desc": "logic 0 = one full BMC unit interval (single transition at the bit boundary, no mid-bit transition)"},
+                "logic1_half_ui_us": {"nom": 1.67, "desc": "logic 1 = two half-UI cells (~1.67 us each) separated by an extra mid-bit transition"},
+                "unit_interval_us": {"nom": 3.33, "desc": "BMC unit interval at 300 kbaud (received)"},
+                "evidence": {"literal": "USB-PD uses Biphase Mark Coding (BMC) on the CC wire at a nominal 300 kbaud. ... The unit interval (UI) is nominally 3.33 us."},
+            },
+            "tx_timing": {
+                "description": "DUT/internal side - BMC symbols the PD engine DRIVES onto the CC wire. The TX encoder must emit the same UI the partner's RX decoder tolerates.",
+                "direction": "PD engine -> CC (drive)",
+                "logic0_full_ui_us": {"nom": 3.33, "desc": "drive one full BMC unit interval for logic 0 (boundary transition only)"},
+                "logic1_half_ui_us": {"nom": 1.67, "desc": "drive two ~1.67 us half-UI cells for logic 1 (boundary transition plus mid-bit transition)"},
+                "unit_interval_us": {"nom": 3.33, "desc": "BMC unit interval at 300 kbaud (driven)"},
+                "evidence": {"literal": "BMC guarantees at least one transition per bit (a transition at every bit boundary, plus a mid-bit transition for a logic 1). ... The unit interval (UI) is nominally 3.33 us."},
+            },
         },
         "L9_INTEGRATION_SPEC": {
             "ic_name": IC_NAME,

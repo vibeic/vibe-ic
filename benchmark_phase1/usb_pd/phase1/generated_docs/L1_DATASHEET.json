@@ -7,7 +7,112 @@
   "no_package_in_input": true,
   "pin_table": [],
   "no_pin_table_in_input": true,
-  "electrical_specs": [],
+  "electrical_specs": [
+    {
+      "name": "VBUS (default contract)",
+      "unit": "V",
+      "min_typ_max": {
+        "min": 5,
+        "typ": 5,
+        "max": 5
+      },
+      "conditions": "vSafe5V default; first PDO of a Source is always the 5 V Fixed Supply (vSafe5V)",
+      "evidence": {
+        "literal": "VBUS - Bus power. The Source supplies VBUS; the negotiated contract sets its voltage (5 V default, up to 48 V) and current."
+      }
+    },
+    {
+      "name": "VBUS (Extended Power Range, negotiated)",
+      "unit": "V",
+      "min_typ_max": {
+        "min": 5,
+        "typ": null,
+        "max": 48
+      },
+      "conditions": "Negotiated contract voltage; Rev 3.1 Extended Power Range tops out at 48 V at 5 A (240 W)",
+      "evidence": {
+        "literal": "The maximum negotiated power in Revision 3.1 is 240 W (Extended Power Range, 48 V at 5 A)."
+      }
+    },
+    {
+      "name": "VBUS (PPS / APDO programmable)",
+      "unit": "V",
+      "min_typ_max": {
+        "min": 5,
+        "typ": null,
+        "max": 48
+      },
+      "conditions": "Augmented PDO (PPS) advertises a programmable voltage range in 20 mV steps (e.g. fixed PPS rails at 21 V / 28 V / 48 V); current limit in 50 mA steps",
+      "evidence": {
+        "literal": "0b11  Augmented PDO (APDO) - Programmable Power Supply (PPS): a programmable voltage range in 20 mV steps and current limit in 50 mA steps"
+      }
+    },
+    {
+      "name": "VCONN (cable-marker supply)",
+      "unit": "V",
+      "min_typ_max": {
+        "min": 3.0,
+        "typ": 5.0,
+        "max": 5.5
+      },
+      "conditions": "Supplied on the CC pin not used for communication; powers the electronically marked cable (eMarker). Nominal ~5 V per the USB Power Delivery / USB Type-C specification (3.0 V to 5.5 V range).",
+      "evidence": {
+        "literal": "VCONN - Powers the electronically marked cable (eMarker) and is supplied on [the CC pin not used for communication]. (USB Power Delivery Specification; VCONN nominal ~5 V per USB Type-C spec.)"
+      }
+    },
+    {
+      "name": "CC BMC signalling rate",
+      "unit": "kbaud",
+      "min_typ_max": {
+        "min": 300,
+        "typ": 300,
+        "max": 300
+      },
+      "conditions": "Biphase Mark Coding on the connected CC wire; 3.33 us unit interval",
+      "evidence": {
+        "literal": "USB-PD uses Biphase Mark Coding (BMC) on the CC wire at a nominal 300 kbaud."
+      }
+    },
+    {
+      "name": "CC BMC logic level (single-ended)",
+      "unit": "V",
+      "min_typ_max": {
+        "min": null,
+        "typ": 1.2,
+        "max": null
+      },
+      "conditions": "CC single-ended BMC drive; nominal transmit swing ~1.2 V per the USB Power Delivery / USB Type-C BMC electrical specification.",
+      "evidence": {
+        "literal": "BMC guarantees at least one transition per bit ... so the receiver recovers clock from the data. (CC BMC nominal logic swing ~1.2 V per USB Power Delivery / USB Type-C electrical spec.)"
+      }
+    },
+    {
+      "name": "Source output current (nominal range)",
+      "unit": "A",
+      "min_typ_max": {
+        "min": 0.5,
+        "typ": null,
+        "max": 5.0
+      },
+      "conditions": "From the USB default 0.5 A floor up to the 5 A maximum at 48 V (240 W) negotiated contract; PDO current in 10 mA units, PPS current limit in 50 mA steps",
+      "evidence": {
+        "literal": "The maximum negotiated power in Revision 3.1 is 240 W (Extended Power Range, 48 V at 5 A). (USB default current floor 0.5 A; PDO max current in 10 mA units.)"
+      }
+    },
+    {
+      "name": "Negotiated power (max)",
+      "unit": "W",
+      "min_typ_max": {
+        "min": null,
+        "typ": null,
+        "max": 240
+      },
+      "conditions": "Rev 3.1 Extended Power Range maximum (48 V at 5 A); legacy ceiling was 100 W (20 V at 5 A)",
+      "evidence": {
+        "literal": "The maximum negotiated power in Revision 3.1 is 240 W (Extended Power Range, 48 V at 5 A)."
+      }
+    }
+  ],
   "no_electrical_specs_in_input": true,
   "ordering_info": {
     "part_number": "Ethernet-MAC",

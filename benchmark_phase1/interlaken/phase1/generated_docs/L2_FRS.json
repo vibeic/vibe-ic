@@ -70,6 +70,7 @@
   "no_frs_sections_in_input": false,
   "protocol_overview": {
     "type": "Channelized chip-to-chip packet interface over N bonded SerDes lanes",
+    "half_duplex": false,
     "layers": [
       "Protocol Layer (bursts, channels, flow control)",
       "Framing Layer (64B/67B, metaframe, lane striping, integrity)",

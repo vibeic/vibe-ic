@@ -57,6 +57,7 @@
   "protocol_overview": {
     "type": "Power/data-role negotiation over the USB Type-C Configuration Channel (CC)",
     "duplex": "half-duplex; each message acknowledged with GoodCRC before the next",
+    "half_duplex": true,
     "line_code": "Biphase Mark Coding (BMC) at 300 kbaud",
     "distinct_from": [
       "USB 2.0 data (D+/D-, NRZI, PID, endpoints)",

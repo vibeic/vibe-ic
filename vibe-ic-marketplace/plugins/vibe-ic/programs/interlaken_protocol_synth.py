@@ -124,11 +124,20 @@ def _canon():
             ],
             "io_voltage": "SerDes differential signaling (implementation-defined)",
             "clock_frequency": "Per-lane SerDes line rate (e.g. 6.25 / 10.3125 / 12.5 Gbps)",
+            "electrical_specs": [
+                {"name": "Per-lane SerDes line rate", "min_typ_max": {"min": 6.25, "typ": 10.3125, "max": 12.5}, "unit": "Gbps",
+                 "conditions": "64B/67B encoded, per bonded lane", "evidence": {"literal": "each lane runs at the SerDes line rate (e.g. 6.25, 10.3125, 12.5 Gbps)"}},
+                {"name": "Bonded lane count N", "min_typ_max": {"min": 4, "typ": 12, "max": 24}, "unit": "lanes",
+                 "conditions": "implementation-defined lane bonding", "evidence": {"literal": "The number of lanes N is implementation-defined (e.g. 4, 10, 12, 24 lanes)"}},
+                {"name": "Word wire width (64B/67B)", "min_typ_max": {"min": 67, "typ": 67, "max": 67}, "unit": "bits",
+                 "conditions": "64 payload + 3 framing bits", "evidence": {"literal": "Every 67-bit word carries 64 payload bits plus 3 framing bits"}},
+            ],
         },
         "L2_FRS": {
             "ic_name": IC_NAME,
             "protocol_overview": {
                 "type": "Channelized chip-to-chip packet interface over N bonded SerDes lanes",
+                "half_duplex": False,
                 "layers": ["Protocol Layer (bursts, channels, flow control)",
                            "Framing Layer (64B/67B, metaframe, lane striping, integrity)",
                            "SerDes lanes (PCS/PMA)"],

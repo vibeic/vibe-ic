@@ -99,6 +99,7 @@
   "protocol_overview": {
     "type": "Synchronous parallel multiplexed bus, single host to one or more peripherals",
     "duplex": "half-duplex (host drives command/address then turnaround then peripheral drives SYNC/data)",
+    "half_duplex": true,
     "synchronous": true,
     "replaces": "ISA / X-bus expansion bus",
     "succeeded_by": "Enhanced Serial Peripheral Interface (eSPI)",

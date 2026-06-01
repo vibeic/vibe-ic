@@ -63,6 +63,7 @@
   "no_frs_sections_in_input": false,
   "protocol_overview": {
     "type": "SerDes link serializing GMII (Gigabit Media Independent Interface) between an Ethernet MAC and a PHY",
+    "half_duplex": false,
     "duplex": "full-duplex, one differential pair per direction",
     "serial": true,
     "replaces": "the parallel 10-bit GMII data path (and RGMII parallel DDR)",

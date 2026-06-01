@@ -7,7 +7,99 @@
   "no_package_in_input": true,
   "pin_table": [],
   "no_pin_table_in_input": true,
-  "electrical_specs": [],
+  "electrical_specs": [
+    {
+      "name": "MDC maximum frequency",
+      "min_typ_max": {
+        "min": null,
+        "typ": null,
+        "max": 2.5
+      },
+      "unit": "MHz",
+      "conditions": "Station-management clock sourced by the STA",
+      "evidence": {
+        "literal": "MDC maximum frequency        2.5 MHz"
+      }
+    },
+    {
+      "name": "MDC minimum period",
+      "min_typ_max": {
+        "min": 400,
+        "typ": null,
+        "max": null
+      },
+      "unit": "ns",
+      "conditions": "Corresponds to the 2.5 MHz MDC maximum",
+      "evidence": {
+        "literal": "MDC minimum period           400 ns"
+      }
+    },
+    {
+      "name": "MDIO setup to MDC rising (tsetup)",
+      "min_typ_max": {
+        "min": 10,
+        "typ": null,
+        "max": null
+      },
+      "unit": "ns",
+      "conditions": "STA-sourced data, setup before MDC rising edge",
+      "evidence": {
+        "literal": "MDIO setup to MDC rising     10 ns (min), STA-sourced data"
+      }
+    },
+    {
+      "name": "MDIO hold from MDC rising (thold)",
+      "min_typ_max": {
+        "min": 10,
+        "typ": null,
+        "max": null
+      },
+      "unit": "ns",
+      "conditions": "STA-sourced data, hold after MDC rising edge",
+      "evidence": {
+        "literal": "MDIO hold from MDC rising    10 ns (min)"
+      }
+    },
+    {
+      "name": "MDIO output delay from MDC (PHY-sourced)",
+      "min_typ_max": {
+        "min": 0,
+        "typ": null,
+        "max": 300
+      },
+      "unit": "ns",
+      "conditions": "PHY-sourced data, Clause 22 read response",
+      "evidence": {
+        "literal": "MDIO output delay from MDC   0 ns to 300 ns (PHY-sourced data, Clause 22)"
+      }
+    },
+    {
+      "name": "MDIO pull-up resistor",
+      "min_typ_max": {
+        "min": 1.5,
+        "typ": null,
+        "max": 10
+      },
+      "unit": "kohm",
+      "conditions": "External pull-up; MDIO is open-drain",
+      "evidence": {
+        "literal": "MDIO drive                   open-drain, external pull-up 1.5 k to 10 k"
+      }
+    },
+    {
+      "name": "Pull-up supply voltage",
+      "min_typ_max": {
+        "min": 1.2,
+        "typ": null,
+        "max": 3.3
+      },
+      "unit": "V",
+      "conditions": "Supply for the external MDIO pull-up; CMOS MDC I/O at 3.3 V / 2.5 V / 1.2 V",
+      "evidence": {
+        "literal": "Supply for pull-up           1.2 V to 3.3 V"
+      }
+    }
+  ],
   "no_electrical_specs_in_input": true,
   "ordering_info": {
     "part_number": "mdio",

@@ -126,12 +126,39 @@ def _canon():
             ],
             "io_voltage": "3.3 V (PCI signaling)",
             "clock_frequency": "33 MHz (PCI clock)",
+            "electrical_specs": [
+                {"name": "LCLK frequency", "min_typ_max": {"min": None, "typ": 33, "max": None},
+                 "unit": "MHz",
+                 "conditions": "Reuses the PCI clock; LPC adds no separate clock pin. All LPC signals driven and sampled relative to the rising edge of LCLK.",
+                 "evidence": {"literal": "LCLK frequency            33 MHz (the PCI clock)"}},
+                {"name": "Signaling voltage", "min_typ_max": {"min": None, "typ": 3.3, "max": None},
+                 "unit": "V",
+                 "conditions": "All required LPC signals share the 3.3 V signaling levels of PCI (PCI 3.3 V levels).",
+                 "evidence": {"literal": "Signaling voltage         3.3 V (PCI levels)"}},
+                {"name": "Setup time tSU", "min_typ_max": {"min": 7, "typ": None, "max": None},
+                 "unit": "ns",
+                 "conditions": "LAD[3:0] input setup before the rising edge of LCLK (PCI input setup).",
+                 "evidence": {"literal": "Setup time tSU            7 ns (PCI input setup)"}},
+                {"name": "Hold time tHO", "min_typ_max": {"min": 0, "typ": None, "max": None},
+                 "unit": "ns",
+                 "conditions": "LAD[3:0] input hold after the rising edge of LCLK (PCI input hold).",
+                 "evidence": {"literal": "Hold time tHO             0 ns (PCI input hold)"}},
+                {"name": "Clock-to-out tVAL", "min_typ_max": {"min": None, "typ": None, "max": 11},
+                 "unit": "ns",
+                 "conditions": "LAD[3:0] valid delay from the rising edge of LCLK (PCI Tval).",
+                 "evidence": {"literal": "Clock-to-out tVAL         max 11 ns (PCI Tval)"}},
+                {"name": "Reset (LRESET#) min assert", "min_typ_max": {"min": 1, "typ": None, "max": None},
+                 "unit": "ms",
+                 "conditions": "LRESET# is the active-low reset (same signal as PCI RST#); minimum asserted time at power-up.",
+                 "evidence": {"literal": "Reset (LRESET#) min       1 ms asserted at power-up"}},
+            ],
         },
         "L2_FRS": {
             "ic_name": IC_NAME,
             "protocol_overview": {
                 "type": "Synchronous parallel multiplexed bus, single host to one or more peripherals",
                 "duplex": "half-duplex (host drives command/address then turnaround then peripheral drives SYNC/data)",
+                "half_duplex": True,
                 "synchronous": True,
                 "replaces": "ISA / X-bus expansion bus",
                 "succeeded_by": "Enhanced Serial Peripheral Interface (eSPI)",
@@ -261,6 +288,29 @@ def _canon():
             "cycle_waveform": {"order": ["LFRAME# low + START (4b)", "CYCTYPE+DIR (4b)",
                                          "ADDR nibbles", "TAR (2 clk)", "SYNC (4b)",
                                          "DATA nibbles (LSN then MSN)", "TAR (2 clk)"]},
+            # Half-duplex direction split (host==external/RX vs peripheral==internal/TX).
+            # LPC is a SYNCHRONOUS parallel bus, NOT a single-wire LIN-style
+            # line-code link -- it has no H0/H1/BR/IBT pulse-width symbols.
+            # Each "symbol" here is one LPC field nibble, sampled/driven one
+            # per rising edge of the 33 MHz LCLK (period 30 ns). We declare the
+            # per-side required-symbol sets empty (symbol_directionality) because
+            # the four LIN-style symbols simply do not exist in LPC.
+            "symbol_directionality": {"rx_host_side": [], "tx_dut_side": []},
+            "rx_timing": {
+                "description": "Host-driven (external) fields the peripheral SAMPLES on the rising edge of LCLK during the command/address/write-data phase, before turnaround.",
+                "lclk_period_ns": 30,
+                "START_nibble_ns": 30,
+                "CYCTYPE_DIR_nibble_ns": 30,
+                "ADDR_nibble_ns": 30,
+                "WDATA_nibble_ns": 30,
+                "evidence": {"literal": "All LPC signals are driven and sampled relative to the rising edge of LCLK."}},
+            "tx_timing": {
+                "description": "Peripheral-driven (internal/DUT) fields the peripheral DRIVES on the rising edge of LCLK after turnaround: the SYNC field then the read-data nibbles.",
+                "lclk_period_ns": 30,
+                "turnaround_clocks": 2,
+                "SYNC_nibble_ns": 30,
+                "RDATA_nibble_ns": 30,
+                "evidence": {"literal": "The TAR (turnaround) interval is 2 LCLK cycles."}},
         },
         "L9_INTEGRATION_SPEC": {
             "ic_name": IC_NAME,

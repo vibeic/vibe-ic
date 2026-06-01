@@ -7,7 +7,86 @@
   "no_package_in_input": true,
   "pin_table": [],
   "no_pin_table_in_input": true,
-  "electrical_specs": [],
+  "electrical_specs": [
+    {
+      "name": "I/O rail voltage",
+      "min_typ_max": {
+        "min": 1.0,
+        "typ": 1.8,
+        "max": 1.8
+      },
+      "unit": "V",
+      "conditions": "all eSPI signals referenced to this rail",
+      "evidence": {
+        "literal": "All signals are referenced to the 1.0 V / 1.8 V I/O rail"
+      }
+    },
+    {
+      "name": "ESPI_CLK frequency",
+      "min_typ_max": {
+        "min": 20,
+        "typ": 33,
+        "max": 66
+      },
+      "unit": "MHz",
+      "conditions": "20 MHz at boot, up to 66 MHz negotiated",
+      "evidence": {
+        "literal": "ESPI_CLK frequency 20 MHz (boot) up to 66 MHz (negotiated)"
+      }
+    },
+    {
+      "name": "Setup time tSU",
+      "min_typ_max": {
+        "min": 2,
+        "typ": 2,
+        "max": 2
+      },
+      "unit": "ns",
+      "conditions": "data valid before sampling edge",
+      "evidence": {
+        "literal": "Setup time tSU 2 ns"
+      }
+    },
+    {
+      "name": "Hold time tHO",
+      "min_typ_max": {
+        "min": 1,
+        "typ": 1,
+        "max": 1
+      },
+      "unit": "ns",
+      "conditions": "data held after sampling edge",
+      "evidence": {
+        "literal": "Hold time tHO 1 ns"
+      }
+    },
+    {
+      "name": "CS# to CLK setup",
+      "min_typ_max": {
+        "min": 2,
+        "typ": 2,
+        "max": 2
+      },
+      "unit": "clocks",
+      "conditions": "chip-select assert before first clock",
+      "evidence": {
+        "literal": "CS# to CLK setup 2 clocks"
+      }
+    },
+    {
+      "name": "Reset pulse width",
+      "min_typ_max": {
+        "min": 100,
+        "typ": 100,
+        "max": 100
+      },
+      "unit": "us",
+      "conditions": "minimum ESPI_RESET# low time",
+      "evidence": {
+        "literal": "Reset pulse width minimum 100 us"
+      }
+    }
+  ],
   "no_electrical_specs_in_input": true,
   "ordering_info": {
     "part_number": "espi",

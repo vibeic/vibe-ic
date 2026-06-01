@@ -7,7 +7,86 @@
   "no_package_in_input": true,
   "pin_table": [],
   "no_pin_table_in_input": true,
-  "electrical_specs": [],
+  "electrical_specs": [
+    {
+      "name": "LCLK frequency",
+      "min_typ_max": {
+        "min": null,
+        "typ": 33,
+        "max": null
+      },
+      "unit": "MHz",
+      "conditions": "Reuses the PCI clock; LPC adds no separate clock pin. All LPC signals driven and sampled relative to the rising edge of LCLK.",
+      "evidence": {
+        "literal": "LCLK frequency            33 MHz (the PCI clock)"
+      }
+    },
+    {
+      "name": "Signaling voltage",
+      "min_typ_max": {
+        "min": null,
+        "typ": 3.3,
+        "max": null
+      },
+      "unit": "V",
+      "conditions": "All required LPC signals share the 3.3 V signaling levels of PCI (PCI 3.3 V levels).",
+      "evidence": {
+        "literal": "Signaling voltage         3.3 V (PCI levels)"
+      }
+    },
+    {
+      "name": "Setup time tSU",
+      "min_typ_max": {
+        "min": 7,
+        "typ": null,
+        "max": null
+      },
+      "unit": "ns",
+      "conditions": "LAD[3:0] input setup before the rising edge of LCLK (PCI input setup).",
+      "evidence": {
+        "literal": "Setup time tSU            7 ns (PCI input setup)"
+      }
+    },
+    {
+      "name": "Hold time tHO",
+      "min_typ_max": {
+        "min": 0,
+        "typ": null,
+        "max": null
+      },
+      "unit": "ns",
+      "conditions": "LAD[3:0] input hold after the rising edge of LCLK (PCI input hold).",
+      "evidence": {
+        "literal": "Hold time tHO             0 ns (PCI input hold)"
+      }
+    },
+    {
+      "name": "Clock-to-out tVAL",
+      "min_typ_max": {
+        "min": null,
+        "typ": null,
+        "max": 11
+      },
+      "unit": "ns",
+      "conditions": "LAD[3:0] valid delay from the rising edge of LCLK (PCI Tval).",
+      "evidence": {
+        "literal": "Clock-to-out tVAL         max 11 ns (PCI Tval)"
+      }
+    },
+    {
+      "name": "Reset (LRESET#) min assert",
+      "min_typ_max": {
+        "min": 1,
+        "typ": null,
+        "max": null
+      },
+      "unit": "ms",
+      "conditions": "LRESET# is the active-low reset (same signal as PCI RST#); minimum asserted time at power-up.",
+      "evidence": {
+        "literal": "Reset (LRESET#) min       1 ms asserted at power-up"
+      }
+    }
+  ],
   "no_electrical_specs_in_input": true,
   "ordering_info": {
     "part_number": "lpc",

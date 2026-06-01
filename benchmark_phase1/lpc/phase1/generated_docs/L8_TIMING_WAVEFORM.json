@@ -51,5 +51,30 @@
       "DATA nibbles (LSN then MSN)",
       "TAR (2 clk)"
     ]
+  },
+  "symbol_directionality": {
+    "rx_host_side": [],
+    "tx_dut_side": []
+  },
+  "rx_timing": {
+    "description": "Host-driven (external) fields the peripheral SAMPLES on the rising edge of LCLK during the command/address/write-data phase, before turnaround.",
+    "lclk_period_ns": 30,
+    "START_nibble_ns": 30,
+    "CYCTYPE_DIR_nibble_ns": 30,
+    "ADDR_nibble_ns": 30,
+    "WDATA_nibble_ns": 30,
+    "evidence": {
+      "literal": "All LPC signals are driven and sampled relative to the rising edge of LCLK."
+    }
+  },
+  "tx_timing": {
+    "description": "Peripheral-driven (internal/DUT) fields the peripheral DRIVES on the rising edge of LCLK after turnaround: the SYNC field then the read-data nibbles.",
+    "lclk_period_ns": 30,
+    "turnaround_clocks": 2,
+    "SYNC_nibble_ns": 30,
+    "RDATA_nibble_ns": 30,
+    "evidence": {
+      "literal": "The TAR (turnaround) interval is 2 LCLK cycles."
+    }
   }
 }

@@ -74,5 +74,55 @@
       "CRC byte",
       "CS# deassert"
     ]
+  },
+  "rx_timing": {
+    "description": "host/external: master command-phase symbols the slave RX samples",
+    "H1_ns": {
+      "min": 15,
+      "typ": 30,
+      "max": 50
+    },
+    "H0_ns": {
+      "min": 15,
+      "typ": 30,
+      "max": 50
+    },
+    "BR_ns": {
+      "min": 30,
+      "typ": 60,
+      "max": 100,
+      "note": "turnaround = 2 ESPI_CLK"
+    },
+    "IBT_ns": {
+      "min": 15,
+      "typ": 30,
+      "max": 50,
+      "note": "min symbol cadence = 1 ESPI_CLK"
+    }
+  },
+  "tx_timing": {
+    "description": "DUT/internal: slave response-phase symbols driven after TAR",
+    "H1_ns": {
+      "min": 15,
+      "typ": 30,
+      "max": 50
+    },
+    "H0_ns": {
+      "min": 15,
+      "typ": 30,
+      "max": 50
+    },
+    "BR_ns": {
+      "min": 30,
+      "typ": 60,
+      "max": 100,
+      "note": "turnaround = 2 ESPI_CLK"
+    },
+    "IBT_ns": {
+      "min": 15,
+      "typ": 30,
+      "max": 50,
+      "note": "min symbol cadence = 1 ESPI_CLK"
+    }
   }
 }
