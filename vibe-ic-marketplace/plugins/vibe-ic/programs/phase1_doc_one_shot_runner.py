@@ -6063,7 +6063,22 @@ def extract_text_pipeline(project: Path,
                                           # (its own previous pass output)
                                           # as input, yielding ~3x duplicate
                                           # L doc entries per README.
-                                          "phase1"})
+                                          "phase1",
+                                          # v0.2.14 — never scoop DOWNSTREAM
+                                          # build output back into phase1. A
+                                          # full doc->GDS run leaves
+                                          # phase3/stage4/foundry_handoff/README
+                                          # (+ phase2 RTL/report trees); the
+                                          # README rglob below (depth<=4) was
+                                          # ingesting them and citing them in
+                                          # L1, which the RTL-as-oracle leak
+                                          # guard then correctly FAILed at
+                                          # [14b/15] — halting phase1 before the
+                                          # [14e2b] auto-dispatch on any project
+                                          # previously taken to GDS. phase1
+                                          # reads INPUT docs only.
+                                          "phase2", "phase3", "reports",
+                                          "extracted_docs"})
             if not _v1_6_343_any_doc_dir:
                 _v1_6_343_cap = 30
                 _v1_6_343_count = 0
