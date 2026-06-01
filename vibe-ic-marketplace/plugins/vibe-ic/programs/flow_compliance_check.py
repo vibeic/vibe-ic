@@ -1952,6 +1952,23 @@ _CLASS_SKIPPABLE_ANALOG_GATES: frozenset[str] = frozenset({
     "analog_hardmacro_check",
     "mixed_signal_cosim_check",
     "analog_content_detected_must_emit_l5_check",
+    # v1.6.553 — post-layout SPICE correlation is an ANALOG / mixed-signal
+    # signoff deliverable, NOT a digital one. For a pure-digital IC class
+    # (analog_applicable=False) the critical-path is signed off by STA +
+    # SPEF + Liberty — there is never a transistor-level SPICE deck to
+    # correlate against. Without this skip, every digital-only IC that
+    # completes Phase 3 (and therefore emits phase3/stage3/extracted/*.spef
+    # + phase3/stage3/sta/*.rpt) trips spice_correlation_check's
+    # NO_SPICE_VERIFICATION FAIL, which under --skip-analog surfaced as a
+    # spurious phase2 FAIL on digital command-driven protocol ICs (espi /
+    # usb_pd / sgmii). HONEST + GENERAL: this fires ONLY when the detected
+    # IC class is registry-matched AND analog_applicable=False (fail-closed
+    # for unknown classes); a genuinely-analog IC (analog_applicable=True)
+    # still runs the gate and still FAILs on a missing/uncorrelated SPICE
+    # deck. The analog-HW sibling self-skips on absent hw_measurements.json
+    # but is class-gated here too for symmetry.
+    "spice_correlation_check",
+    "analog_hw_spice_correlation_check",
 })
 
 
