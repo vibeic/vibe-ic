@@ -4828,6 +4828,22 @@ def _power_domain_family(net: str) -> str:
     return n
 
 
+# Logic-CONSTANT / tie nets that are routed on the power or ground rail (and may be
+# declared `USE POWER/GROUND` in SPECIALNETS) but are NOT a separate power domain.
+# v0.2.12 fix: a tie-low `zero_` net (from the `setundef -zero; hilomap` tie-cell pass)
+# declared USE GROUND was being counted as a SECOND ground domain → false multi_domain
+# → false XDOMAIN_GAP on a single-supply core macro (surfaced by the external-IC sweep
+# on secworks/prince). Tie/constant nets must be excluded from the DOMAIN count.
+_CONSTANT_NET_TOKENS = ("zero_", "_zero", "one_", "_one", "tie_hi", "tie_lo",
+                        "tielo", "tiehi", "logic0", "logic1", "const0", "const1")
+
+
+def _is_constant_net(net: str) -> bool:
+    """True if `net` is a logic-constant / tie net (not a power domain). chip-AGNOSTIC."""
+    n = net.lower()
+    return any(t in n for t in _CONSTANT_NET_TOKENS)
+
+
 def _discover_power_domains(def_file: Path) -> Dict[str, Any]:
     """Robustly count distinct power/ground DOMAIN FAMILIES from a DEF (v0.2.11).
 
@@ -4865,6 +4881,8 @@ def _discover_power_domains(def_file: Path) -> Dict[str, Any]:
                 r"^\s*-\s+([A-Za-z_][\w$\[\]]*)(.*?)(?=^\s*-\s+|\Z)",
                 m.group(0), re.MULTILINE | re.DOTALL):
             name, body = net_m.group(1), net_m.group(2)
+            if _is_constant_net(name):       # tie/logic-constant net → not a domain
+                continue
             if re.search(r"\bUSE\s+POWER\b", body):
                 pw_fams.add(_power_domain_family(name)); source = "USE-keyword"
             elif re.search(r"\bUSE\s+GROUND\b", body):
@@ -4878,6 +4896,8 @@ def _discover_power_domains(def_file: Path) -> Dict[str, Any]:
                 continue
             for nm in re.finditer(r"^\s*-\s+([A-Za-z_][\w$\[\]]*)",
                                   m.group(0), re.MULTILINE):
+                if _is_constant_net(nm.group(1)):    # tie/constant net → not a domain
+                    continue
                 cls = _net_pg_class(nm.group(1))
                 if cls == "power":
                     pw_fams.add(_power_domain_family(nm.group(1)))

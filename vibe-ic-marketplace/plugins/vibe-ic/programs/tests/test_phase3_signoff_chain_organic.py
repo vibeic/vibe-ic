@@ -1182,3 +1182,52 @@ class TestXdomainLevelshifter:
     def test_iso_whole_segment_no_false_fire(self):
         assert not runner._ISO_SEGMENT_RE.search("sky130_fd_sc_hd__isolatch")
         assert runner._ISO_SEGMENT_RE.search("foo__iso_1")
+
+
+# ---------------------------------------------------------------------------
+# v0.2.12 — tie/logic-constant net (zero_/one_) declared USE GROUND/POWER must
+# NOT count as a power domain. Surfaced by the external-IC sweep: secworks/prince
+# has a `zero_` tie-low SPECIALNET (from setundef -zero; hilomap) → was counted as
+# a 2nd ground domain → false multi_domain → false XDOMAIN_GAP on a single-supply
+# core macro. The fix: _is_constant_net excludes tie nets from the domain count.
+# ---------------------------------------------------------------------------
+class TestXdomainTieNetExclusion:
+    _PRINCE_LIKE_DEF = """VERSION 5.8 ;
+DESIGN prince ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 150000 150000 ) ;
+COMPONENTS 2 ;
+- _1_ sky130_fd_sc_hd__nor3_1 + PLACED ( 0 0 ) N ;
+- t0 sky130_fd_sc_hd__tapvpwrvgnd_1 + PLACED ( 100 0 ) N ;
+END COMPONENTS
+SPECIALNETS 3 ;
+    - VPWR ( _1_ VPB ) + USE POWER ;
+    - VGND ( _1_ VNB ) + USE GROUND ;
+    - zero_ ( t0 LO ) + USE GROUND ;
+END SPECIALNETS
+END DESIGN
+"""
+
+    def _mk(self, tmp_path):
+        f = tmp_path / "r.def"; f.write_text(self._PRINCE_LIKE_DEF)
+        return f
+
+    def test_is_constant_net(self):
+        assert runner._is_constant_net("zero_")
+        assert runner._is_constant_net("net_one_")
+        assert runner._is_constant_net("tie_lo")
+        assert not runner._is_constant_net("vgnd")
+        assert not runner._is_constant_net("vccd1")
+
+    def test_tie_net_not_counted_as_domain(self, tmp_path):
+        dom = runner._discover_power_domains(self._mk(tmp_path))
+        assert dom["ground_families"] == ["vgnd"]      # zero_ excluded
+        assert dom["power_families"] == ["vpwr"]
+        assert dom["multi_domain"] is False            # NOT a false 2-domain
+
+    def test_xdomain_single_supply_despite_tie_net(self, tmp_path):
+        f = self._mk(tmp_path)
+        comps = runner._parse_def_components(f)
+        xd = runner._xdomain_levelshifter_check(f, comps)
+        assert xd["status"] == "N/A"                   # was a false XDOMAIN_GAP
+        assert xd["result"] == "N/A"
