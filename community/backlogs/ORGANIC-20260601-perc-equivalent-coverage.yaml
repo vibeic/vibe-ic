@@ -156,3 +156,36 @@ latchup_v0_2_10:
     physics (Vhold>Vdd, SCR beta product, guard-ring efficacy) -> MANUAL.
   residual_now: "tap SPACING (max-tap-distance — screened by the DRC deck) + device-physics latch-up (Vhold/SCR-beta/guard-ring efficacy — commercial PERC/TLP)."
   tests_added: "+7 (presence matrix incl. false-token + foreign-tap + the real-0-tap emitter-integration FAIL)."
+
+xdomain_v0_2_11:
+  date: "2026-06-01"
+  what: >-
+    Automated the conclusive-FAIL half of the cross-voltage-domain category + fixed a REAL
+    domain-count bug surfaced by running the shipped functions on the real Caravel chip_io.def.
+    (1) DOMAIN-COUNT FIX: new _discover_power_domains() counts distinct power/ground domain
+    families from a UNION of NETS + SPECIALNETS USE POWER/GROUND, with a net-name-token fallback
+    when no USE keyword exists. The old single_supply heuristic read ONLY SPECIALNETS, so Caravel
+    chip_io.def (supplies declared as plain NETS, 0 SPECIALNETS) was WRONGLY classified
+    single-supply -> x-domain auto-N/A (silent over-claim). Now correctly multi_domain=True.
+    (2) +'vswitch' to _net_pg_class power tokens (sky130 IO power-switch rail was mis-classed
+    signal). (3) CONCLUSIVE FAIL: new _xdomain_levelshifter_check() -> XDOMAIN_GAP when >=2 domains
+    AND 0 level-shifter/isolation/IO-crossing cells (an inter-domain signal is guaranteed
+    un-shifted) -> PERC_EQUIV_FAIL.
+  honesty: >-
+    A 6-agent workflow (3-angle design + 3 over-claim critics, BOTH critics UNSOUND/NOT-SOUND)
+    proved (a) XDOMAIN_OK_PRESENCE over-claims ("a crossing cell exists somewhere" != "every
+    crossing is shifted" — connect_vcchib is a power-bus slice, not necessarily a signal shifter),
+    and (b) aggressive digit-strip family-collapse can UNDER-count (vdd1 1.8V + vdd2 1.2V merged ->
+    false single-supply -> silent over-claim). So we ship ONLY the conservative bulletproof subset:
+    presence keeps the category MANUAL_REVIEW (no structural OK emitted); family-collapse strips
+    decoration only (_pad/_q/_h/_core/_net), NOT index digits, so voltage splits stay distinct;
+    unresolved partitions -> INCOMPLETE, never silent N/A. Per-crossing direction / isolation
+    efficacy stay device-physics MANUAL.
+  validated_on: >-
+    Real Caravel chip_io.def (in-container, shipped functions): 0 SPECIALNETS, supplies via NETS ->
+    OLD code returned ([],[]) -> single-supply (WRONG); NEW _discover_power_domains -> power
+    families {vccd1,vccd2,vcchib,vdda,vddio,vswitch}, ground {vssa,vssd1,vssio} -> multi_domain=True
+    (correct). Synthetic edge matrix all pass (genuine single supply, conservative collapse,
+    vswitch, zero-crossing GAP, LS-present MANUAL, iso whole-segment guard, unresolved INCOMPLETE).
+  residual_now: "per-crossing level-shifter correctness (every crossing shifted? direction lo->hi/hi->lo?) + isolation-clamp efficacy under power-gating = device physics, commercial PERC."
+  tests_added: "+10 (domain-count incl. the Caravel-NETS-only fix + conservative-collapse + vswitch + unresolved-not-NA; level-shifter zero-crossing GAP + present-MANUAL + iso whole-segment + single-supply-NA)."

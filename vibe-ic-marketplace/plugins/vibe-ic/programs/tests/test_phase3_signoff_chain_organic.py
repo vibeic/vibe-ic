@@ -496,6 +496,10 @@ _DEF_MULTI_DOMAIN = """VERSION 5.8 ;
 DESIGN chip_top ;
 UNITS DISTANCE MICRONS 1000 ;
 DIEAREA ( 0 0 100000 100000 ) ;
+COMPONENTS 2 ;
+- _1_ sky130_fd_sc_hd__nor3_1 + PLACED ( 0 0 ) N ;
+- ls0 sky130_fd_sc_hdll__lpflow_lsbuf_lh_isowell_1 + PLACED ( 100 0 ) N ;
+END COMPONENTS
 SPECIALNETS 4 ;
     - VGND ( _1_ VNB ) + USE GROUND ;
     - VPWR ( _1_ VPB ) + USE POWER ;
@@ -1006,7 +1010,7 @@ _PADDED_CHIP_DEF = """VERSION 5.8 ;
 DESIGN chip_top ;
 UNITS DISTANCE MICRONS 1000 ;
 DIEAREA ( 0 0 200000 200000 ) ;
-COMPONENTS 9 ;
+COMPONENTS 10 ;
 - io_clk sky130_ef_io__gpiov2_pad + PLACED ( 1000 1000 ) N ;
 - p_vddio sky130_ef_io__vddio_hvc_clamped_pad + PLACED ( 2000 1000 ) N ;
 - p_vssio sky130_ef_io__vssio_hvc_clamped_pad + PLACED ( 3000 1000 ) N ;
@@ -1016,6 +1020,7 @@ COMPONENTS 9 ;
 - p_vssa sky130_ef_io__vssa_hvc_clamped_pad + PLACED ( 7000 1000 ) N ;
 - core0 sky130_fd_sc_hd__nor3_1 + PLACED ( 50000 50000 ) N ;
 - tap0 sky130_fd_sc_hd__tapvpwrvgnd_1 + PLACED ( 50500 50000 ) N ;
+- ls0 sky130_fd_sc_hdll__lpflow_lsbuf_lh_isowell_1 + PLACED ( 51000 50000 ) N ;
 END COMPONENTS
 NETS 2 ;
 - vpwr_net ( io_clk VDDIO ) ( p_vddio VDDIO ) ( p_vssio VDDIO ) ( p_vccd VCCD ) ( p_vssd VCCD ) ( p_vdda VDDA ) ( p_vssa VDDA ) + USE POWER ;
@@ -1064,7 +1069,7 @@ class TestPercPaddedChipEndToEnd:
         # with a full pad ring + taps (the conclusive automated FAIL dominates).
         broken = _PADDED_CHIP_DEF.replace(
             "- p_vssa sky130_ef_io__vssa_hvc_clamped_pad + PLACED ( 7000 1000 ) N ;\n",
-            "").replace("COMPONENTS 9 ;", "COMPONENTS 8 ;")
+            "").replace("COMPONENTS 10 ;", "COMPONENTS 9 ;")
         project = _mk_project(tmp_path, broken)
         rpt3 = runner._pl.reports_phase3_dir(project)
         rpt3.mkdir(parents=True, exist_ok=True)
@@ -1075,3 +1080,105 @@ class TestPercPaddedChipEndToEnd:
         cats = {c["category"]: c for c in j["categories"]}
         assert cats["ESD discharge-path topology (connectivity)"]["result"] == "FAIL"
         assert j["verdict"] == "PERC_EQUIV_FAIL"
+
+
+# ---------------------------------------------------------------------------
+# v0.2.11 — cross-voltage-domain: robust multi-domain count (NETS+SPECIALNETS)
+# + conclusive zero-crossing-cell FAIL. Fixes the real Caravel single-supply
+# mis-count (power via NETS, not SPECIALNETS). Presence stays MANUAL (an
+# adversarial panel ruled a structural OK over-claims).
+# ---------------------------------------------------------------------------
+def _mk_def(tmp_path, body, name="chip_top.def"):
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True, exist_ok=True)
+    f = pnr / name
+    f.write_text(body)
+    return f
+
+
+_CARAVEL_LIKE_DEF = """VERSION 5.8 ;
+DESIGN chip_io ;
+NETS 10 ;
+- vccd1 ( a x ) + ROUTED met1 ;
+- vccd2 ( b x ) ;
+- vdda ( c x ) ;
+- vddio ( d x ) ;
+- vcchib ( e x ) ;
+- vswitch ( f x ) ;
+- vssio ( g x ) ;
+- vssd1 ( h x ) ;
+- vssa ( i x ) ;
+- clk ( j x ) ;
+END NETS
+END DESIGN
+"""
+
+
+class TestXdomainPowerDomains:
+    def test_caravel_nets_only_supplies_is_multidomain(self, tmp_path):
+        # THE FIX: Caravel declares supplies via NETS (no SPECIALNETS) — must NOT
+        # be mis-counted as single-supply.
+        f = _mk_def(tmp_path, _CARAVEL_LIKE_DEF)
+        dom = runner._discover_power_domains(f)
+        assert dom["resolved"] is True
+        assert dom["multi_domain"] is True
+        assert dom["source"] == "net-name-fallback"
+        assert "vddio" in dom["power_families"] and "vswitch" in dom["power_families"]
+
+    def test_genuine_single_supply(self, tmp_path):
+        f = _mk_def(tmp_path, "DESIGN core ;\nSPECIALNETS 2 ;\n"
+                    "- VPWR ( a VPB ) + USE POWER ;\n"
+                    "- VGND ( a VNB ) + USE GROUND ;\nEND SPECIALNETS\nEND DESIGN\n")
+        dom = runner._discover_power_domains(f)
+        assert dom["multi_domain"] is False
+        assert dom["source"] == "USE-keyword"
+
+    def test_conservative_collapse_keeps_voltage_splits_distinct(self):
+        # vdd1(1.8V) and vdd2(1.2V) must NOT merge (would hide a domain) — only
+        # decoration (_pad) is stripped.
+        assert runner._power_domain_family("vccd1") == "vccd1"
+        assert runner._power_domain_family("vccd2") == "vccd2"
+        assert runner._power_domain_family("vccd_pad") == "vccd"
+
+    def test_vswitch_is_power(self):
+        assert runner._net_pg_class("vswitch") == "power"
+
+    def test_unresolved_is_not_silent_na(self, tmp_path):
+        # opaque supply names + no USE keyword → unresolved → INCOMPLETE, NOT N/A.
+        f = _mk_def(tmp_path, "DESIGN x ;\nNETS 1 ;\n- mysteryrail ( a y ) ;\n"
+                    "END NETS\nEND DESIGN\n")
+        dom = runner._discover_power_domains(f)
+        assert dom["resolved"] is False
+
+
+class TestXdomainLevelshifter:
+    def test_multidomain_zero_crossing_is_gap(self, tmp_path):
+        f = _mk_def(tmp_path, _CARAVEL_LIKE_DEF)
+        xd = runner._xdomain_levelshifter_check(f, [("_1_", "sky130_fd_sc_hd__nor3_1")])
+        assert xd["status"] == "XDOMAIN_GAP" and xd["result"] == "FAIL"
+
+    def test_multidomain_with_levelshifter_is_manual(self, tmp_path):
+        f = _mk_def(tmp_path, _CARAVEL_LIKE_DEF)
+        comps = [("_1_", "sky130_fd_sc_hd__nor3_1"),
+                 ("ls0", "sky130_fd_sc_hdll__lpflow_lsbuf_lh_isowell_1")]
+        xd = runner._xdomain_levelshifter_check(f, comps)
+        assert xd["status"] == "MANUAL_REVIEW"     # presence != OK (never auto-pass)
+        assert xd["n_crossing"] == 1
+
+    def test_io_connect_slice_counts_as_crossing(self, tmp_path):
+        # Caravel's real crossing structure is the connect_vcchib IO slice.
+        f = _mk_def(tmp_path, _CARAVEL_LIKE_DEF)
+        comps = [("s0", "sky130_ef_io__connect_vcchib_vccd_and_vswitch_vddio_slice_20um")]
+        xd = runner._xdomain_levelshifter_check(f, comps)
+        assert xd["n_crossing"] == 1 and xd["status"] == "MANUAL_REVIEW"
+
+    def test_single_supply_is_na(self, tmp_path):
+        f = _mk_def(tmp_path, "DESIGN core ;\nSPECIALNETS 2 ;\n"
+                    "- VPWR ( a VPB ) + USE POWER ;\n"
+                    "- VGND ( a VNB ) + USE GROUND ;\nEND SPECIALNETS\nEND DESIGN\n")
+        xd = runner._xdomain_levelshifter_check(f, [("_1_", "sky130_fd_sc_hd__nor3_1")])
+        assert xd["status"] == "N/A"
+
+    def test_iso_whole_segment_no_false_fire(self):
+        assert not runner._ISO_SEGMENT_RE.search("sky130_fd_sc_hd__isolatch")
+        assert runner._ISO_SEGMENT_RE.search("foo__iso_1")

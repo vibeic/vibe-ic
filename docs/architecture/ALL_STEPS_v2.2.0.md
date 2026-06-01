@@ -96,6 +96,15 @@ MANUAL_REVIEW residual to exactly the device-physics half** — clamp HBM/CDM si
 inherited from the rated library-cell datasheet (an adversarial panel confirmed connectivity can
 never prove sizing, so the presence category stays MANUAL). Validated on the real Caravel
 `chip_io.def`: 63 ESD-pad instances, all 3 domain loops closed, 0 dangling, 0 unrated → TOPOLOGY_OK.
+The **cross-voltage-domain** check (v0.2.11) now counts power domains robustly from **NETS + SPECIALNETS**
+`USE POWER/GROUND` + recognised supply-net families (fixing the real Caravel single-supply mis-count —
+its supplies are declared via NETS, not SPECIALNETS, so the old SPECIALNETS-only path wrongly returned
+single-supply). Conclusive automated FAIL: **≥2 domains AND 0 level-shifter/isolation/IO-crossing cells**
+→ `XDOMAIN_GAP` → `PERC_EQUIV_FAIL` (an inter-domain signal is guaranteed un-shifted). When ≥1 crossing
+cell is present the category stays **MANUAL_REVIEW** (an adversarial panel ruled "a crossing cell exists
+somewhere" ≠ "every crossing is shifted"; per-crossing direction lo→hi/hi→lo + isolation-clamp efficacy
+are device physics). Conservative family-collapse keeps `vccd1`/`vccd2` voltage splits DISTINCT
+(never merges a real domain away); unresolved partitions degrade to INCOMPLETE, never silent N/A.
 
 ## Stage 4 — Output & Tapeout (Phase 3, close)
 

@@ -4811,6 +4811,165 @@ def _discover_power_nets(def_file: Path) -> Tuple[List[str], List[str]]:
     return power, ground
 
 
+def _power_domain_family(net: str) -> str:
+    """Collapse a power/ground net name to its DOMAIN FAMILY key (chip-AGNOSTIC).
+
+    CONSERVATIVE collapse (v0.2.11): only strip clearly-non-domain decoration —
+    trailing `_pad`/`_q`/`_h`/`_core`/`_net` suffixes — NOT a trailing index digit.
+    Rationale (adversarial finding): stripping a trailing digit would merge a real
+    voltage split like vdd1(1.8V)+vdd2(1.2V) into ONE family → false single-supply →
+    silent CVD over-claim (the dangerous direction). So vccd1 and vccd2 stay DISTINCT
+    families here; the only de-dup is decoration. Over-counting indexed siblings of
+    the SAME domain at worst yields a (harmless) MANUAL_REVIEW, never a missed gap."""
+    n = net.lower()
+    for suf in ("_pad", "_core", "_net", "_q", "_h"):
+        if n.endswith(suf):
+            n = n[: -len(suf)]
+    return n
+
+
+def _discover_power_domains(def_file: Path) -> Dict[str, Any]:
+    """Robustly count distinct power/ground DOMAIN FAMILIES from a DEF (v0.2.11).
+
+    Fixes the real Caravel bug: `_discover_power_nets` reads ONLY SPECIALNETS USE
+    POWER/GROUND, but Caravel chip_io.def declares supplies as ordinary NETS with NO
+    USE keyword → returns ([],[]) → mis-classified single-supply. This counts from a
+    UNION of structural signals, NEVER SPECIALNETS alone:
+      S1 SPECIALNETS '+ USE POWER|GROUND'   (the existing path)
+      S2 NETS '+ USE POWER|GROUND'          (some flows tag PG there)
+      S3 fallback: classify every `- <net>` declaration in BOTH blocks via
+         `_net_pg_class` (power/ground token) when S1+S2 are empty.
+    Each classified net is collapsed to a domain family (`_power_domain_family`).
+
+    Returns {n_power_domains, n_ground_domains, power_families, ground_families,
+    multi_domain, source, resolved}. `resolved` is False when no family could be
+    classified (opaque-supply / no NETS) → caller must degrade to INCOMPLETE, never
+    silently assume single-supply (that was the exact bug). CONSERVATIVE: errs toward
+    multi_domain (a false multi → harmless MANUAL; a false single → hides a hazard)."""
+    try:
+        text = def_file.read_text(errors="ignore")
+    except OSError:
+        return {"n_power_domains": 0, "n_ground_domains": 0, "power_families": [],
+                "ground_families": [], "multi_domain": False, "source": "unreadable",
+                "resolved": False}
+    pw_fams: set = set()
+    gn_fams: set = set()
+    source = None
+    # S1 + S2: USE POWER/GROUND in SPECIALNETS and NETS
+    for tag in ("SPECIALNETS", "NETS"):
+        m = re.search(r"^%s\b.*?^END %s" % (tag, tag), text,
+                      re.MULTILINE | re.DOTALL)
+        if not m:
+            continue
+        for net_m in re.finditer(
+                r"^\s*-\s+([A-Za-z_][\w$\[\]]*)(.*?)(?=^\s*-\s+|\Z)",
+                m.group(0), re.MULTILINE | re.DOTALL):
+            name, body = net_m.group(1), net_m.group(2)
+            if re.search(r"\bUSE\s+POWER\b", body):
+                pw_fams.add(_power_domain_family(name)); source = "USE-keyword"
+            elif re.search(r"\bUSE\s+GROUND\b", body):
+                gn_fams.add(_power_domain_family(name)); source = "USE-keyword"
+    # S3 fallback: no USE-keyword PG anywhere → classify net-name declarations
+    if not pw_fams and not gn_fams:
+        for tag in ("SPECIALNETS", "NETS"):
+            m = re.search(r"^%s\b.*?^END %s" % (tag, tag), text,
+                          re.MULTILINE | re.DOTALL)
+            if not m:
+                continue
+            for nm in re.finditer(r"^\s*-\s+([A-Za-z_][\w$\[\]]*)",
+                                  m.group(0), re.MULTILINE):
+                cls = _net_pg_class(nm.group(1))
+                if cls == "power":
+                    pw_fams.add(_power_domain_family(nm.group(1)))
+                elif cls == "ground":
+                    gn_fams.add(_power_domain_family(nm.group(1)))
+        if pw_fams or gn_fams:
+            source = "net-name-fallback"
+    resolved = bool(pw_fams or gn_fams)
+    return {
+        "n_power_domains": len(pw_fams),
+        "n_ground_domains": len(gn_fams),
+        "power_families": sorted(pw_fams),
+        "ground_families": sorted(gn_fams),
+        "multi_domain": len(pw_fams) >= 2 or len(gn_fams) >= 2,
+        "source": source or "none",
+        "resolved": resolved,
+    }
+
+
+# Level-shifter / isolation / IO-domain-crossing cell-name tokens (chip-AGNOSTIC
+# substrings, vetted against the real sky130 cell families). DIGITAL_LS + analog +
+# IO-slice are plain substrings; the bare 'iso' cell match is WHOLE-segment only
+# (regex) so 'isolation'/'comparison'/'denisov' substrings never false-fire.
+_XDOMAIN_CROSSING_TOKENS = (
+    "lsbuf", "levelshifter", "lvlshift", "isowell", "lsbuflv2hv", "lv2hv", "hv2lv",
+    "connect_vcchib", "connect_vccd", "amuxsplit",
+)
+_ISO_SEGMENT_RE = re.compile(r"(?:^|_)iso(?:_|\d|$)", re.IGNORECASE)
+
+
+def _xdomain_levelshifter_check(def_file: Path,
+                                components: List[Tuple[str, str]]) -> Dict[str, Any]:
+    """Cross-voltage-domain level-shifter PRESENCE check (deterministic, v0.2.11).
+
+    Composes robust domain-count + crossing-cell presence. Automates ONLY the
+    adversarially-bulletproof outcomes (the workflow critics ruled XDOMAIN_OK_PRESENCE
+    over-claims — "a crossing cell exists somewhere" ≠ "every crossing is shifted" —
+    so we do NOT emit a structural OK; presence keeps the category MANUAL):
+      * not multi_domain (resolved single-supply)  → N/A  (no crossings possible)
+      * unresolved domain partition                → INCOMPLETE (never silent N/A)
+      * multi_domain AND 0 crossing structures      → XDOMAIN_GAP (conclusive FAIL:
+            ≥1 inter-domain signal is guaranteed un-shifted)
+      * multi_domain AND ≥1 crossing structure      → MANUAL_REVIEW (presence noted as
+            necessary-but-NOT-sufficient; per-crossing correctness = device physics)
+
+    chip-AGNOSTIC; matches only generic master-name tokens, never net/instance names.
+    Fixes the real Caravel single-supply mis-count (power via NETS, not SPECIALNETS)."""
+    dom = _discover_power_domains(def_file)
+    crossing = sorted({m for _i, m in components
+                       if any(t in m.lower() for t in _XDOMAIN_CROSSING_TOKENS)
+                       or _ISO_SEGMENT_RE.search(m.lower())})
+    n_cross = sum(1 for _i, m in components
+                  if any(t in m.lower() for t in _XDOMAIN_CROSSING_TOKENS)
+                  or _ISO_SEGMENT_RE.search(m.lower()))
+    base = {"power_domains": dom["power_families"],
+            "ground_domains": dom["ground_families"],
+            "multi_domain": dom["multi_domain"],
+            "domain_source": dom["source"],
+            "crossing_cells": crossing, "n_crossing": n_cross}
+    if not dom["resolved"]:
+        base.update({"status": "INCOMPLETE", "result": "INCOMPLETE",
+                     "note": ("power-domain partition unresolvable from this DEF "
+                              "(no USE-keyword PG, no recognizable supply net names) "
+                              "— cannot classify single vs multi supply. NOT N/A.")})
+        return base
+    if not dom["multi_domain"]:
+        base.update({"status": "N/A", "result": "N/A",
+                     "note": (f"single supply ({dom['n_power_domains']} power / "
+                              f"{dom['n_ground_domains']} ground domain family, via "
+                              f"{dom['source']}) — no cross-voltage-domain crossings "
+                              "possible.")})
+        return base
+    if n_cross == 0:
+        base.update({
+            "status": "XDOMAIN_GAP", "result": "FAIL",
+            "note": (f"{dom['n_power_domains']} power / {dom['n_ground_domains']} "
+                     "ground domain families but ZERO level-shifter / isolation / "
+                     "IO-domain-crossing cells in COMPONENTS — at least one "
+                     "inter-domain signal is guaranteed un-shifted. Conclusive "
+                     "structural cross-voltage-domain GAP; fix before sign-off.")})
+        return base
+    base.update({
+        "status": "MANUAL_REVIEW", "result": "MANUAL_REVIEW",
+        "note": (f"{dom['n_power_domains']} power / {dom['n_ground_domains']} ground "
+                 f"domain families; {n_cross} level-shifter/isolation/crossing cell(s) "
+                 "present. NECESSARY-BUT-NOT-SUFFICIENT: presence does NOT prove EVERY "
+                 "inter-domain signal passes through a shifter, nor shifter direction "
+                 "(lo→hi/hi→lo) nor isolation-clamp efficacy — those are device physics "
+                 "(commercial PERC). MANUAL per-crossing review required.")})
+    return base
+
+
 def _emit_ir_em_reports(project: Path, top: str, pdk: PdkConfig,
                         container: str, ir_rpt: Path, em_rpt: Path,
                         notes: List[str]) -> Tuple[bool, bool]:
@@ -5707,7 +5866,9 @@ def _net_pg_class(net: str) -> str:
     n = net.lower()
     if any(t in n for t in ("vss", "gnd", "vgnd", "vnb")):
         return "ground"
-    if any(t in n for t in ("vdd", "vcc", "vpwr", "vpb")):
+    # 'vswitch' (sky130 IO power-switch rail) has no vdd/vcc substring → add it
+    # explicitly (v0.2.11); 'vcchib' is already caught by 'vcc'.
+    if any(t in n for t in ("vdd", "vcc", "vpwr", "vpb", "vswitch")):
         return "power"
     return "signal"
 
@@ -5854,11 +6015,11 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
     erc_v = _read_verdict(rpt3 / "erc.json")     # floating-net screen
 
     # --- structural facts from the DEF (chip-AGNOSTIC) --------------------
-    power_nets, ground_nets = _discover_power_nets(def_file)
     components = _parse_def_components(def_file)
     esd = _esd_pad_ring_presence(components)
-    # Single power domain = exactly one power net + one ground net pair.
-    single_supply = len(power_nets) <= 1 and len(ground_nets) <= 1
+    # (Cross-voltage-domain now uses _xdomain_levelshifter_check, which counts
+    # domains robustly from NETS+SPECIALNETS — see below; the old SPECIALNETS-only
+    # single_supply heuristic was removed in v0.2.11 as it mis-classified Caravel.)
 
     def _auto(name, verdict, tool, evidence):
         """An AUTOMATED category. PASS/FAIL from the tool verdict; if the
@@ -5998,38 +6159,32 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
         ],
     })
 
-    # Cross-voltage-domain (auto-N/A for single-supply designs).
-    if single_supply:
-        xdomain_cat = {
-            "category": "Cross-voltage-domain",
-            "status": "N/A",
-            "result": "N/A",
-            "tool": "DEF SPECIALNETS power-domain scan",
-            "power_nets": power_nets,
-            "ground_nets": ground_nets,
-            "note": ("N/A (single supply) — DEF SPECIALNETS shows a single "
-                     "VPWR/VGND power-domain pair; no level shifters / "
-                     "domain crossings to check."),
-        }
-    else:
-        xdomain_cat = {
-            "category": "Cross-voltage-domain",
-            "status": "MANUAL_REVIEW",
-            "result": "MANUAL_REVIEW",
-            "tool": "level-shifter placement audit + MANUAL",
-            "power_nets": power_nets,
-            "ground_nets": ground_nets,
-            "note": (f"{len(power_nets)} power / {len(ground_nets)} ground "
-                     "net(s) — MULTIPLE power domains. MANUAL review: confirm "
-                     "level shifters / isolation cells on every domain "
-                     "crossing (commercial PERC checks the topology)."),
-            "checklist": [
-                {"item": "Level shifter on every signal crossing a voltage "
-                         "domain boundary", "confirmed": None},
-                {"item": "Isolation cells on every signal crossing a "
-                         "power-gating boundary", "confirmed": None},
-            ],
-        }
+    # Cross-voltage-domain (v0.2.11): robust multi-domain count (NETS+SPECIALNETS
+    # union — fixes the real Caravel power-via-NETS single-supply mis-count) +
+    # conclusive zero-crossing-cell FAIL. Presence keeps the category MANUAL (an
+    # adversarial panel ruled a structural "OK" over-claims; per-crossing
+    # correctness is device physics).
+    xd = _xdomain_levelshifter_check(def_file, components)
+    xdomain_cat = {
+        "category": "Cross-voltage-domain",
+        "status": ("AUTOMATED" if xd["status"] == "XDOMAIN_GAP" else xd["status"]),
+        "result": xd["result"],
+        "tool": "DEF NETS+SPECIALNETS power-domain count + level-shifter cell scan",
+        "power_domains": xd["power_domains"],
+        "ground_domains": xd["ground_domains"],
+        "domain_source": xd["domain_source"],
+        "crossing_cells": xd["crossing_cells"],
+        "xdomain_status": xd["status"],
+        "note": xd["note"],
+    }
+    if xd["status"] == "MANUAL_REVIEW":
+        xdomain_cat["checklist"] = [
+            {"item": "Level shifter on every signal crossing a voltage "
+                     "domain boundary (direction lo->hi / hi->lo correct)",
+             "confirmed": None},
+            {"item": "Isolation cells on every signal crossing a "
+                     "power-gating boundary", "confirmed": None},
+        ]
     categories.append(xdomain_cat)
 
     # --- Overall verdict (HONEST) -----------------------------------------

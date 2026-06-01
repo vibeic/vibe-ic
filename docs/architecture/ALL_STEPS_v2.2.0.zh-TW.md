@@ -87,6 +87,13 @@ COMPONENTS + NETS）：domain-loop 完整性（supply clamp 無對應 ground-ret
 → `PERC_EQUIV_FAIL`；`TOPOLOGY_OK` 是必要但不充分。**這把 ESD 的 MANUAL_REVIEW 殘留縮到剛好只剩 device-physics
 那半**——clamp HBM/CDM 尺寸（TLP/It2），繼承自 rated library cell datasheet（對抗 panel 證明連通性永遠無法證明尺寸，
 故 presence 類別維持 MANUAL）。已在真實 Caravel `chip_io.def` 驗證：63 個 ESD-pad、3 個 domain loop 全閉合、0 dangling、0 unrated → TOPOLOGY_OK。
+**跨電壓域**檢查（v0.2.11）現在從 **NETS + SPECIALNETS** 的 `USE POWER/GROUND` + 認得的供電網路家族穩健計數
+電源域（修正真實 Caravel 單電源誤判——它的供電是宣告在 NETS 而非 SPECIALNETS，舊的 SPECIALNETS-only 路徑會誤回
+單電源）。確定性 AUTOMATED FAIL：**≥2 域且 0 個 level-shifter/isolation/IO-crossing cell** → `XDOMAIN_GAP`
+→ `PERC_EQUIV_FAIL`（必有一條跨域訊號未經位準轉換）。有 ≥1 crossing cell 時類別維持 **MANUAL_REVIEW**
+（對抗 panel 判定「某處有 crossing cell」≠「每條跨域都有轉換」；per-crossing 方向 lo→hi/hi→lo + isolation
+clamp 效能屬 device physics）。保守 family-collapse 讓 `vccd1`/`vccd2` 電壓分割維持獨立（絕不誤併真實域）；
+無法解析的 partition 降為 INCOMPLETE、絕不靜默 N/A。
 
 ## Stage 4 — 輸出與 Tapeout（Phase 3 收口）
 
