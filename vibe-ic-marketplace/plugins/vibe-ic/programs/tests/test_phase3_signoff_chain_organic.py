@@ -76,6 +76,21 @@ def _fake_pdk() -> "runner.PdkConfig":
     )
 
 
+def _fake_pdk_with_diode() -> "runner.PdkConfig":
+    """Same as _fake_pdk but with the sky130A antenna diode cell set (v0.2.14)."""
+    pdk = _fake_pdk()
+    pdk.antenna_diode_cell = "sky130_fd_sc_hd__diode_2"
+    return pdk
+
+
+def _fake_pdk_with_exclude() -> "runner.PdkConfig":
+    """Same as _fake_pdk but with a PnR cell-exclusion file set (v0.2.14)."""
+    pdk = _fake_pdk()
+    pdk.pnr_exclude_cell_file = ("/foss/pdks/sky130A/libs.tech/openlane/"
+                                 "sky130_fd_sc_hd/drc_exclude.cells")
+    return pdk
+
+
 # ---------------------------------------------------------------------------
 # 6. Spare-cell rows[] field (placement unchanged)
 # ---------------------------------------------------------------------------
@@ -280,6 +295,289 @@ class TestAntennaReport:
         assert "0 net violations" in body
         j = json.loads((ant.parent / "antenna.json").read_text())
         assert j["clean"] is True and j["verdict"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# 3b. v0.2.14 — antenna REPAIR Tcl shape + in-session authoritative result.
+# ---------------------------------------------------------------------------
+class TestAntennaRepairTcl:
+    """Pin the silicon-critical antenna-repair sequence (v0.1.49 doctrine: the
+    Tcl-block builder is a pure helper so a regression cannot silently revert it).
+    The chacha verification (85/112 -> 0/0) depended on every one of these."""
+
+    def test_proven_sequence_present(self):
+        tcl = runner._antenna_repair_tcl(_fake_pdk_with_diode())
+        # Inside the repair branch: global_route BEFORE repair_antennas (jumper
+        # insertion needs a fresh GRT graph) -> repair_antennas -> detailed_route
+        # (realize) -> the FINAL check_antennas (last occurrence).
+        # anchor on COMMAND forms (bare keywords also appear in comments)
+        i_gr = tcl.index("catch {global_route}")
+        i_ra = tcl.index("repair_antennas sky130")
+        i_dr = tcl.index("catch {detailed_route")
+        i_ck_last = tcl.index("catch {check_antennas}")   # final post-repair check
+        assert i_gr < i_ra < i_dr < i_ck_last, "antenna repair sequence out of order"
+        assert "ANTENNA_POSTROUTE_DONE" in tcl   # sentinel for the in-session read
+
+    def test_skip_when_clean_precheck(self):
+        # SKIP-WHEN-CLEAN (perf): a cheap read-only check_antennas runs on the main
+        # route FIRST (before the repair global_route); if 0 net violations, the
+        # expensive repair+reroute is skipped, and that skip branch runs NO
+        # global_route (so it cannot disturb the main route's wires).
+        tcl = runner._antenna_repair_tcl(_fake_pdk_with_diode())
+        i_precheck = tcl.index("set _ant_pre [check_antennas]")   # read-only precheck
+        i_gr = tcl.index("catch {global_route}")                  # repair-branch GR
+        assert i_precheck < i_gr, "precheck must run before the repair global_route"
+        assert "ANTENNA_ALREADY_CLEAN" in tcl          # the skip marker
+        assert "$_ant_pre == 0" in tcl                 # gate on 0 net violations
+        # the skip branch (if-body, before `} else {`) emits NO global_route command
+        skip_seg = tcl[tcl.index("$_ant_pre == 0"):tcl.index("} else {")]
+        assert "catch {global_route}" not in skip_seg
+
+    def test_diode_cell_is_positional_not_flag(self):
+        # The v0.2.14 bug: `repair_antenna -diode_cell <c>` (singular + flag) errors
+        # with STA-0562. Correct form is `repair_antennas <c>` (plural, positional).
+        tcl = runner._antenna_repair_tcl(_fake_pdk_with_diode())
+        assert "repair_antennas sky130_fd_sc_hd__diode_2" in tcl
+        assert "-diode_cell" not in tcl          # the broken flag must never return
+        assert "repair_antenna " not in tcl      # singular form is not a command
+
+    def test_skipped_without_diode_cell(self):
+        tcl = runner._antenna_repair_tcl(_fake_pdk())   # no antenna_diode_cell
+        assert "ANTENNA_REPAIR_SKIPPED" in tcl
+        assert "repair_antennas" not in tcl      # honest skip, not a silent pass
+
+    def test_all_steps_nonfatal_guarded(self):
+        # Antenna repair must never abort the PnR — every step is catch-guarded.
+        tcl = runner._antenna_repair_tcl(_fake_pdk_with_diode())
+        for cmd in ("global_route", "repair_antennas", "detailed_route",
+                    "check_antennas"):
+            assert ("catch {" + cmd) in tcl, f"{cmd} not NONFATAL-guarded"
+
+
+class TestDontUseTcl:
+    """Pin the set_dont_use step that stops OpenROAD inserting PnR-forbidden cells
+    (probe/lpflow/DRC-failed) which TritonRoute can't route (DRT-0085). It reads the
+    PDK's OWN drc_exclude.cells — general + authoritative, not a hand-curated list."""
+
+    def test_reads_pdk_exclusion_file(self):
+        pdk = _fake_pdk()
+        pdk.pnr_exclude_cell_file = "/foss/pdks/x/drc_exclude.cells"
+        tcl = runner._dont_use_tcl(pdk)
+        assert "/foss/pdks/x/drc_exclude.cells" in tcl
+        assert "set_dont_use $_du_cell" in tcl     # applies each listed cell
+        assert "file exists" in tcl                # guarded if the PDK lacks it
+
+    def test_skips_comments_and_blanks(self):
+        tcl = runner._dont_use_tcl(_fake_pdk_with_exclude())
+        assert 'string index $_du_cell 0] eq "#"' in tcl   # skip comment lines
+        assert "string trim" in tcl
+
+    def test_nonfatal_and_skip_when_absent(self):
+        tcl = runner._dont_use_tcl(_fake_pdk_with_exclude())
+        assert "SET_DONT_USE_NONFATAL" in tcl       # a bad cell never aborts PnR
+        assert "DONT_USE_APPLIED" in tcl
+        # PDK with no exclusion file → honest skip, not a silent unrestricted pool
+        assert "DONT_USE_SKIPPED" in runner._dont_use_tcl(_fake_pdk())
+
+    def test_does_not_exclude_clkbuf_or_fill(self):
+        # The step must NEVER hardcode plain clkbuf (CTS needs it) or tap/decap/fill
+        # (dedicated steps place them). It only READS the PDK file, so it carries no
+        # such literals itself.
+        tcl = runner._dont_use_tcl(_fake_pdk_with_exclude())
+        assert "clkbuf_" not in tcl
+        assert "tapvpwrvgnd" not in tcl and "__fill_" not in tcl
+
+    def test_sky130a_pdk_points_at_drc_exclude(self):
+        pdk = runner._detect_pdk(__import__("pathlib").Path("/nonexistent"), "sky130A")
+        assert pdk.pnr_exclude_cell_file is not None
+        assert pdk.pnr_exclude_cell_file.endswith(
+            "sky130_fd_sc_hd/drc_exclude.cells")
+
+    def test_wired_after_link_design_before_opt(self):
+        import inspect
+        src = inspect.getsource(runner.step_pnr)
+        assert "dont_use_block = _dont_use_tcl(pdk)" in src
+        # injected right after read_sdc, before the wire-RC / opt sequence
+        assert "{dont_use_block}# === v0.1.26 wire-RC model ===" in src
+
+
+class TestPgNetCleanupTcl:
+    """Pin the DRT-0305 PG-net cleanup that MUST precede routing (v0.1.49 doctrine).
+    A non-special POWER/GROUND net in regular NETS aborts ALL detailed routing;
+    this pass removes/reclassifies it so the design routes instead of silently
+    shipping unrouted."""
+
+    def test_cleanup_targets_nonspecial_pg_only(self):
+        tcl = runner._pg_net_cleanup_tcl()
+        assert 'getSigType' in tcl
+        assert '"POWER"' in tcl and '"GROUND"' in tcl
+        assert 'isSpecial' in tcl              # real PG nets (special) are spared
+
+    def test_cleanup_deletes_dangling_reclassifies_connected(self):
+        tcl = runner._pg_net_cleanup_tcl()
+        assert 'dbNet_destroy' in tcl          # dangling stub -> delete
+        assert 'setSigType SIGNAL' in tcl      # connected -> route as signal
+        # delete is gated on zero iterms AND zero bterms (dangling only)
+        assert 'getITerms' in tcl and 'getBTerms' in tcl
+
+    def test_cleanup_is_nonfatal_guarded(self):
+        tcl = runner._pg_net_cleanup_tcl()
+        assert tcl.startswith("if {[catch {")
+        assert "PG_CLEANUP_NONFATAL" in tcl
+
+    def test_cleanup_wired_before_global_route(self):
+        # The cleanup block must be interpolated into the PnR Tcl BEFORE
+        # global_route (else the abort still fires). Guard via the helper var name.
+        import inspect
+        src = inspect.getsource(runner.step_pnr)
+        assert "pg_cleanup_block = _pg_net_cleanup_tcl()" in src
+        assert "{pg_cleanup_block}global_route" in src
+
+
+class TestAntennaInSessionPreference:
+    """_emit_antenna_report must PREFER the in-session post-repair counts from the
+    PnR openroad.log over a fresh (lossy) re-global_route measurement."""
+
+    def _seed(self, tmp_path, log_body):
+        project = _mk_project(tmp_path)
+        pnr = runner._pl.pnr_dir(project)
+        (pnr / "chip_top.def").write_text("DESIGN x ; END DESIGN\n")
+        (pnr / "openroad.log").write_text(log_body)
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        rpt3.mkdir(parents=True, exist_ok=True)
+        return project, rpt3 / "antenna.rpt"
+
+    def test_in_session_clean_used_without_container(self, tmp_path, monkeypatch):
+        # If the in-session path is taken, _docker_exec must NOT be called.
+        def _boom(*a, **k):
+            raise AssertionError("re-global_route fallback ran despite in-session result")
+        monkeypatch.setattr(runner, "_docker_exec", _boom)
+        project, ant = self._seed(tmp_path,
+            "[INFO GRT-0302] Inserted 104 jumpers for 84 nets.\n"
+            "[INFO ANT-0002] Found 0 net violations.\n"
+            "[INFO ANT-0001] Found 0 pin violations.\n"
+            "ANTENNA_POSTROUTE_DONE\n")
+        ok = runner._emit_antenna_report(project, "chip_top", _fake_pdk(),
+                                         "x", ant, [])
+        assert ok
+        j = json.loads((ant.parent / "antenna.json").read_text())
+        assert j["verdict"] == "PASS" and j["clean"] is True
+        assert j["mode"] == "antenna_check_in_session_post_repair"
+        assert "openroad.log" in j["source"]
+
+    def test_in_session_takes_last_pair(self, tmp_path, monkeypatch):
+        # A stale pre-repair count may appear earlier; the LAST pair is the
+        # post-repair one and must win.
+        monkeypatch.setattr(runner, "_docker_exec",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("fallback ran")))
+        project, ant = self._seed(tmp_path,
+            "[INFO ANT-0002] Found 85 net violations.\n"   # pre-repair (stale)
+            "[INFO ANT-0001] Found 112 pin violations.\n"
+            "[INFO GRT-0302] Inserted 104 jumpers for 84 nets.\n"
+            "[INFO ANT-0002] Found 0 net violations.\n"     # post-repair (wins)
+            "[INFO ANT-0001] Found 0 pin violations.\n"
+            "ANTENNA_POSTROUTE_DONE\n")
+        runner._emit_antenna_report(project, "chip_top", _fake_pdk(), "x", ant, [])
+        j = json.loads((ant.parent / "antenna.json").read_text())
+        assert j["net_violations"] == 0 and j["pin_violations"] == 0
+        assert j["verdict"] == "PASS"
+
+    def test_in_session_residual_reported_fail(self, tmp_path, monkeypatch):
+        # Honest: a non-zero residual after repair is reported FAIL, not hidden.
+        monkeypatch.setattr(runner, "_docker_exec",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("fallback ran")))
+        project, ant = self._seed(tmp_path,
+            "[INFO ANT-0002] Found 4 net violations.\n"
+            "[INFO ANT-0001] Found 2 pin violations.\n"
+            "ANTENNA_POSTROUTE_DONE\n")
+        runner._emit_antenna_report(project, "chip_top", _fake_pdk(), "x", ant, [])
+        j = json.loads((ant.parent / "antenna.json").read_text())
+        assert j["net_violations"] == 4 and j["pin_violations"] == 2
+        assert j["verdict"] == "FAIL" and j["clean"] is False
+
+    def test_routing_incomplete_reported_fail_not_clean(self, tmp_path, monkeypatch):
+        # The silicon-DOA honesty fix: a 0/0 antenna count measured after a FAILED
+        # detailed_route (abort marker present) is VACUOUS — the design has no
+        # realized signal routing. It must be reported FAIL, never a silent clean
+        # PASS on an unrouted design.
+        monkeypatch.setattr(runner, "_docker_exec",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("fallback ran")))
+        project, ant = self._seed(tmp_path,
+            "[ERROR DRT-0305] Net zero_ of signal type GROUND is not routable.\n"
+            "DETAILED_ROUTE_NONFATAL: DRT-0305\n"
+            "[INFO ANT-0002] Found 0 net violations.\n"   # vacuous — global route only
+            "[INFO ANT-0001] Found 0 pin violations.\n"
+            "ANTENNA_POSTROUTE_DONE\n")
+        runner._emit_antenna_report(project, "chip_top", _fake_pdk(), "x", ant, [])
+        j = json.loads((ant.parent / "antenna.json").read_text())
+        assert j["routing_incomplete"] is True
+        assert j["verdict"] == "FAIL" and j["clean"] is False
+        assert "ROUTING INCOMPLETE" in ant.read_text()
+
+    def test_routing_failed_unmeasurable_still_fails_no_fallback(self, tmp_path,
+                                                                  monkeypatch):
+        # The exact chacha case: detailed_route aborts (DRT-0085), which tears down
+        # the routing so the in-session check_antennas cannot even measure (ANT-0008,
+        # no counts). The sentinel is still present. This MUST be reported FAIL /
+        # routing_incomplete WITHOUT falling through to the re-global_route fallback
+        # (which would re-route an unrepaired design and report a misleading count).
+        monkeypatch.setattr(runner, "_docker_exec",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("fallback ran on unmeasurable route")))
+        project, ant = self._seed(tmp_path,
+            "[INFO GRT-0012] Found 0 antenna violations.\n"
+            "REPAIR_ANTENNA_DONE: diode=sky130_fd_sc_hd__diode_2\n"
+            "[ERROR DRT-0085] Valid access pattern combination not found for\n"
+            "REPAIR_ANTENNA_REROUTE_NONFATAL: DRT-0085\n"
+            "[ERROR ANT-0008] No detailed or global routing found.\n"
+            "ANTENNA_POSTROUTE_CHECK_NONFATAL: ANT-0008\n"
+            "ANTENNA_POSTROUTE_DONE\n")
+        ok = runner._emit_antenna_report(project, "chip_top", _fake_pdk(),
+                                         "x", ant, [])
+        assert ok
+        j = json.loads((ant.parent / "antenna.json").read_text())
+        assert j["routing_incomplete"] is True
+        assert j["verdict"] == "FAIL" and j["clean"] is False
+        assert j["net_violations"] is None and j["pin_violations"] is None
+        assert "unmeasured" in ant.read_text()
+
+    def test_clean_route_stays_pass(self, tmp_path, monkeypatch):
+        # A genuinely routed design (no abort marker) keeps the clean PASS — the
+        # routing_incomplete guard must NOT false-positive on healthy runs.
+        monkeypatch.setattr(runner, "_docker_exec",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("fallback ran")))
+        project, ant = self._seed(tmp_path,
+            "[INFO DRT-0267] cpu time = ...\n"            # normal completion noise
+            "[INFO ANT-0002] Found 0 net violations.\n"
+            "[INFO ANT-0001] Found 0 pin violations.\n"
+            "ANTENNA_POSTROUTE_DONE\n")
+        runner._emit_antenna_report(project, "chip_top", _fake_pdk(), "x", ant, [])
+        j = json.loads((ant.parent / "antenna.json").read_text())
+        assert j["routing_incomplete"] is False
+        assert j["verdict"] == "PASS" and j["clean"] is True
+
+    def test_no_sentinel_falls_through_to_container(self, tmp_path, monkeypatch):
+        # Without the sentinel the in-session shortcut must NOT fire; the fallback
+        # re-global_route measurement (container) is used instead.
+        calls = {"n": 0}
+
+        def _fake_exec(c, cmd, timeout=0):
+            calls["n"] += 1
+            return (0, "[INFO ANT-0002] Found 7 net violations.\n"
+                       "[INFO ANT-0001] Found 0 pin violations.\n", "")
+        monkeypatch.setattr(runner, "_to_container_path", lambda p, c: p)
+        monkeypatch.setattr(runner, "_docker_exec", _fake_exec)
+        project, ant = self._seed(tmp_path,
+            "[INFO ANT-0002] Found 0 net violations.\n"   # present but NO sentinel
+            "[INFO ANT-0001] Found 0 pin violations.\n")
+        runner._emit_antenna_report(project, "chip_top", _fake_pdk(), "x", ant, [])
+        assert calls["n"] == 1, "fallback container measurement should have run"
+        j = json.loads((ant.parent / "antenna.json").read_text())
+        assert j["net_violations"] == 7   # from the container path, not the log
 
 
 # ---------------------------------------------------------------------------

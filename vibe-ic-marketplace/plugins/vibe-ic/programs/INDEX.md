@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 536
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 536)
+- **Total programs (excluding helpers / shims):** 544
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 544)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 527 |
+| `any` | 535 |
 
 ## Alphabetical listing
 
@@ -167,6 +167,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `emitter_failure_mode_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `emmc_protocol_synth` | any | v0.1.84 | Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth. |
 | `enhancement_emit` | any | v0.1.35 | driver for the benchmark-enhancement-capture skill. |
+| `espi_protocol_synth` | any | — | Enhanced Serial Peripheral Interface (eSPI) protocol synth helper. |
 | `ethercat_protocol_synth` | any | v0.1.84 | EtherCAT-class protocol synth helper. |
 | `ethernet_800g_protocol_synth` | any | v0.1.89 | IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper. |
 | `ethernet_protocol_synth` | any | v0.1.84 | IEEE 802.3 Ethernet-class protocol synth helper. |
@@ -244,6 +245,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `input_docs_coverage_check` | any | v0.50 | v0.50 plugin gate |
 | `integration_spec_audit` | any | — | Deterministic compliance check for integration-spec-gen. |
 | `interface_encoding_audit` | any | — | Detect gray-code vs binary encoding mismatches |
+| `interlaken_protocol_synth` | any | — | Interlaken protocol synth helper. |
 | `internal_vs_external_timing_check` | any | — | L8 must separate host-side from DUT-side timing. |
 | `io_link_protocol_synth` | any | — | IO-Link (IEC 61131-9 / SDCI) protocol synth helper. |
 | `ip_catalog_pull` | any | — | Pull catalog IP RTL files into project's canonical |
@@ -291,6 +293,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `literal_verdict_keyword_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `llm_semantic_confirm` | any | — | LLM double-confirm for program-extracted SEMANTIC fields. |
 | `lora_protocol_synth` | any | — | LoRa / LoRaWAN protocol synth helper (low-power wide-area network, LPWAN). |
+| `lpc_protocol_synth` | any | — | Low Pin Count (LPC) Interface protocol synth helper. |
 | `lpddr5_protocol_synth` | any | v0.1.89 | LPDDR5 SDRAM (JEDEC JESD209-5)-class protocol synth helper. |
 | `lvs_def_port_seed` | any | v0.1.114 | DEF-pin port-seed generator for top-level netgen LVS pin matching. |
 | `lvs_netgen_setup_emit` | any | v0.1.49 | Netgen supplementary LVS setup-file generator. |
@@ -303,6 +306,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `marketplace_version_sync_check` | any | — | marketplace_version_sync_check.py |
 | `mask_application_check` | any | — | Verify any AND-mask rule the spec declares |
 | `mcp_execution_verify` | any | — | Deterministic MCP tool execution verifier. |
+| `mdio_protocol_synth` | any | — | IEEE 802.3 Management Data Input/Output (MDIO) protocol synth helper. |
 | `memory_read_pipeline_check` | any | — | Registered-read memory modules must |
 | `metadata_content_substance_check` | any | — | guard against empty / near-empty |
 | `metal_fill_density_check` | any | — | Verify metal fill was inserted and density is within bounds. |
@@ -331,6 +335,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `onewire_protocol_synth` | any | v0.1.84 | 1-Wire-class protocol synth helper. |
 | `onfi_protocol_synth` | any | v0.1.84 | ONFI NAND-Flash protocol synth helper. |
 | `opcode_dispatch_completeness_check` | any | Wave 13 | v0.119.45 (Wave 13) gate. |
+| `opcode_field_width_consistency_check` | any | v0.2.13 | Opcode field-width bound + L3<->L15 hex-consistency check (v0.2.13). |
 | `openroad_tcl_deprecation_check` | any | v0.69 | Recursively scan a plugin tree for |
 | `oracle_dump_required_check` | any | — | Category-B workflow gate. |
 | `oracle_vector_gen` | any | v0.114 | v0.114 (BACKLOG-v6 C1 closure). |
@@ -401,6 +406,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `project_outputs_in_tree_check` | any | — | project_outputs_in_tree_check.py |
 | `protocol_delimiter_consistency_check` | any | v0.99 | Verify the RTL FSM that validates |
 | `protocol_detector_lib` | any | v0.1.95 | Canonical helpers for Phase-1 protocol-class detectors (captured v0.1.95). |
+| `protocol_detector_no_misfire_matrix` | any | v0.2.13 | Bidirectional protocol-detector no-misfire + gold cross-contamination matrix. |
 | `protocol_fsm_topology_check` | any | v0.116 | BACKLOG-v11 P0.1. |
 | `protocol_gap_check` | any | — | Generate inter-unit gap assertions for any serial protocol. |
 | `protocol_ip_simulation_required_check` | any | v0.116 | BACKLOG-v11 P2.1. |
@@ -473,6 +479,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `self_rx_mask_required_check` | any | Wave 16 | Wave 16 silent-bug gate. |
 | `send_test_active_drive_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `sent_protocol_synth` | any | — | Single Edge Nibble Transmission (SENT) protocol synth helper. |
+| `sgmii_protocol_synth` | any | — | Serial-GMII (SGMII) protocol synth helper. |
 | `si_crosstalk_check` | any | — | Verify signal integrity / crosstalk analysis was performed. |
 | `signoff_audit` | any | v0.52 | signoff_audit.py -- Multi-mode signoff evidence checker (LEGACY gate). |
 | `signoff_ladder_run` | any | v0.1.51 | Chip-level 5-tier sign-off ladder runner (B1 from spm pilot). |
@@ -539,6 +546,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `upf_syntax_check` | any | — | upf_syntax_check.py -- Deterministic UPF file syntax checker. |
 | `url_oracle_guard` | any | — | RTL-as-oracle prohibition for cited-URL handling. |
 | `usb4_protocol_synth` | any | v0.1.89 | USB4 protocol synth helper. |
+| `usb_pd_protocol_synth` | any | — | USB Power Delivery (USB-PD) protocol synth helper. |
 | `usb_protocol_synth` | any | v0.1.82 | USB-class protocol synth helper. |
 | `vector_op_rtl_gen` | any | v0.1.8 | deterministic vector-operation → RTL generator. |
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that |
@@ -608,7 +616,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (527 programs)
+### `any` (535 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -747,6 +755,7 @@ _(no programs in this group)_
 - `emitter_failure_mode_check` — anti-fabrication gate (v1.6.38).
 - `emmc_protocol_synth` — Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth.  _[v0.1.84]_
 - `enhancement_emit` — driver for the benchmark-enhancement-capture skill.  _[v0.1.35]_
+- `espi_protocol_synth` — Enhanced Serial Peripheral Interface (eSPI) protocol synth helper.
 - `ethercat_protocol_synth` — EtherCAT-class protocol synth helper.  _[v0.1.84]_
 - `ethernet_800g_protocol_synth` — IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper.  _[v0.1.89]_
 - `ethernet_protocol_synth` — IEEE 802.3 Ethernet-class protocol synth helper.  _[v0.1.84]_
@@ -824,6 +833,7 @@ _(no programs in this group)_
 - `input_docs_coverage_check` — v0.50 plugin gate  _[v0.50]_
 - `integration_spec_audit` — Deterministic compliance check for integration-spec-gen.
 - `interface_encoding_audit` — Detect gray-code vs binary encoding mismatches
+- `interlaken_protocol_synth` — Interlaken protocol synth helper.
 - `internal_vs_external_timing_check` — L8 must separate host-side from DUT-side timing.
 - `io_link_protocol_synth` — IO-Link (IEC 61131-9 / SDCI) protocol synth helper.
 - `ip_catalog_pull` — Pull catalog IP RTL files into project's canonical
@@ -870,6 +880,7 @@ _(no programs in this group)_
 - `literal_verdict_keyword_check` — anti-fabrication gate (v1.6.38).
 - `llm_semantic_confirm` — LLM double-confirm for program-extracted SEMANTIC fields.
 - `lora_protocol_synth` — LoRa / LoRaWAN protocol synth helper (low-power wide-area network, LPWAN).
+- `lpc_protocol_synth` — Low Pin Count (LPC) Interface protocol synth helper.
 - `lpddr5_protocol_synth` — LPDDR5 SDRAM (JEDEC JESD209-5)-class protocol synth helper.  _[v0.1.89]_
 - `lvs_def_port_seed` — DEF-pin port-seed generator for top-level netgen LVS pin matching.  _[v0.1.114]_
 - `lvs_netgen_setup_emit` — Netgen supplementary LVS setup-file generator.  _[v0.1.49]_
@@ -882,6 +893,7 @@ _(no programs in this group)_
 - `marketplace_version_sync_check` — marketplace_version_sync_check.py
 - `mask_application_check` — Verify any AND-mask rule the spec declares
 - `mcp_execution_verify` — Deterministic MCP tool execution verifier.
+- `mdio_protocol_synth` — IEEE 802.3 Management Data Input/Output (MDIO) protocol synth helper.
 - `memory_read_pipeline_check` — Registered-read memory modules must
 - `metadata_content_substance_check` — guard against empty / near-empty
 - `metal_fill_density_check` — Verify metal fill was inserted and density is within bounds.
@@ -910,6 +922,7 @@ _(no programs in this group)_
 - `onewire_protocol_synth` — 1-Wire-class protocol synth helper.  _[v0.1.84]_
 - `onfi_protocol_synth` — ONFI NAND-Flash protocol synth helper.  _[v0.1.84]_
 - `opcode_dispatch_completeness_check` — v0.119.45 (Wave 13) gate.  _[Wave 13]_
+- `opcode_field_width_consistency_check` — Opcode field-width bound + L3<->L15 hex-consistency check (v0.2.13).  _[v0.2.13]_
 - `openroad_tcl_deprecation_check` — Recursively scan a plugin tree for  _[v0.69]_
 - `oracle_dump_required_check` — Category-B workflow gate.
 - `oracle_vector_gen` — v0.114 (BACKLOG-v6 C1 closure).  _[v0.114]_
@@ -980,6 +993,7 @@ _(no programs in this group)_
 - `project_outputs_in_tree_check` — project_outputs_in_tree_check.py
 - `protocol_delimiter_consistency_check` — Verify the RTL FSM that validates  _[v0.99]_
 - `protocol_detector_lib` — Canonical helpers for Phase-1 protocol-class detectors (captured v0.1.95).  _[v0.1.95]_
+- `protocol_detector_no_misfire_matrix` — Bidirectional protocol-detector no-misfire + gold cross-contamination matrix.  _[v0.2.13]_
 - `protocol_fsm_topology_check` — BACKLOG-v11 P0.1.  _[v0.116]_
 - `protocol_gap_check` — Generate inter-unit gap assertions for any serial protocol.
 - `protocol_ip_simulation_required_check` — BACKLOG-v11 P2.1.  _[v0.116]_
@@ -1050,6 +1064,7 @@ _(no programs in this group)_
 - `self_rx_mask_required_check` — Wave 16 silent-bug gate.  _[Wave 16]_
 - `send_test_active_drive_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `sent_protocol_synth` — Single Edge Nibble Transmission (SENT) protocol synth helper.
+- `sgmii_protocol_synth` — Serial-GMII (SGMII) protocol synth helper.
 - `si_crosstalk_check` — Verify signal integrity / crosstalk analysis was performed.
 - `signoff_audit` — signoff_audit.py -- Multi-mode signoff evidence checker (LEGACY gate).  _[v0.52]_
 - `signoff_ladder_run` — Chip-level 5-tier sign-off ladder runner (B1 from spm pilot).  _[v0.1.51]_
@@ -1116,6 +1131,7 @@ _(no programs in this group)_
 - `upf_syntax_check` — upf_syntax_check.py -- Deterministic UPF file syntax checker.
 - `url_oracle_guard` — RTL-as-oracle prohibition for cited-URL handling.
 - `usb4_protocol_synth` — USB4 protocol synth helper.  _[v0.1.89]_
+- `usb_pd_protocol_synth` — USB Power Delivery (USB-PD) protocol synth helper.
 - `usb_protocol_synth` — USB-class protocol synth helper.  _[v0.1.82]_
 - `vector_op_rtl_gen` — deterministic vector-operation → RTL generator.  _[v0.1.8]_
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that  _[v0.119.30]_

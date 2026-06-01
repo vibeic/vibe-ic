@@ -625,6 +625,18 @@ class PdkConfig:
     # PDKs the runner emits a NONFATAL skip.
     tapcell_master: Optional[str] = None
     tapcell_distance_um: float = 14.0  # SKY130 latch-up rule typical
+    # Antenna-repair diode cell (v0.2.14). OpenROAD `repair_antenna` inserts these
+    # after detailed_route to fix process-antenna violations; None → step SKIPPED.
+    antenna_diode_cell: Optional[str] = None
+    # v0.2.14 — PnR cell-exclusion file (the PDK's OWN drc_exclude.cells, i.e. the
+    # PNR_EXCLUDED_CELL_FILE that OpenLane/librelane feed to OpenROAD `set_dont_use`).
+    # Applied after link_design, before any resizer/CTS/repair step, so the optimizer
+    # never substitutes a probe/lpflow/DRC-failed cell that TritonRoute then cannot
+    # route (the root cause of [ERROR DRT-0085] when repair_design inserted
+    # sky130_fd_sc_hd__probe_p_8 as a slew buffer). Reading the PDK's own file keeps
+    # this general (any PDK shipping such a file works) and authoritative (identical
+    # to the canonical open-source flow); None → step SKIPPED.
+    pnr_exclude_cell_file: Optional[str] = None
     # Local IP macros (pdk_local/<vendor>/) — added to all backend steps
     # so hard macros (OTP, RAM, ADC, etc.) are properly integrated.
     macro_libs: List[str] = field(default_factory=list)
@@ -661,6 +673,9 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                          "sky130A.lydrc",
                 metal_prefix="met",
                 tapcell_master="sky130_fd_sc_hd__tapvpwrvgnd_1",
+                antenna_diode_cell="sky130_fd_sc_hd__diode_2",
+                pnr_exclude_cell_file=f"{PDKS_IN_CONTAINER}/sky130A/libs.tech/"
+                "openlane/sky130_fd_sc_hd/drc_exclude.cells",
                 tapcell_distance_um=14.0,
             )
 
@@ -2203,6 +2218,170 @@ def _build_spare_protection_tcl(plan: Dict[str, Any], out_dir_c: str
     return "\n".join(lines) + "\n"
 
 
+def _dont_use_tcl(pdk: "PdkConfig") -> str:
+    """v0.2.14 — emit OpenROAD Tcl that excludes the PDK's PnR-forbidden cells from
+    the resizer/CTS/repair cell pool, returned as a pure string so the
+    silicon-critical step is pinned by regression tests (v0.1.49 doctrine).
+
+    Root cause (chacha external-IC pilot): OpenROAD `repair_design` was free to pick
+    `sky130_fd_sc_hd__probe_p_8` (a characterization PROBE cell) as a slew-fix buffer.
+    TritonRoute cannot route a probe cell as logic, so detailed routing aborted with
+    `[ERROR DRT-0085] Valid access pattern combination not found` and the design
+    shipped unrouted. The canonical open-source flow (OpenLane/librelane) prevents
+    this by feeding the PDK's own PNR-exclusion list to `set_dont_use` before any
+    optimization. We do exactly that: read the PDK's `drc_exclude.cells` (probe +
+    lpflow + DRC-failed masters; it deliberately does NOT list plain clkbuf cells —
+    CTS needs those — nor tap/decap/fill/diode, which dedicated steps place). Reading
+    the PDK's OWN file keeps this GENERAL (any PDK shipping one works, no hand-curated
+    list to drift) and AUTHORITATIVE (byte-identical to the reference flow).
+    `set_dont_use` only narrows the optimizer's choices; synthesis-mapped logic and
+    the explicit master lists used by tapcell/decap/fill/antenna steps are untouched.
+    NONFATAL-guarded; SKIPPED when the PDK declares no exclusion file."""
+    if not pdk.pnr_exclude_cell_file:
+        return ("puts \"DONT_USE_SKIPPED: no PNR cell-exclusion file for this PDK; "
+                "optimizer cell pool unrestricted\"\n")
+    f = pdk.pnr_exclude_cell_file
+    return (
+        f"if {{[file exists {f}]}} {{\n"
+        f"  set _du_f [open {f} r]\n"
+        "  set _du_n 0\n"
+        "  while {[gets $_du_f _du_cell] >= 0} {\n"
+        "    set _du_cell [string trim $_du_cell]\n"
+        "    if {$_du_cell eq \"\" || [string index $_du_cell 0] eq \"#\"} { continue }\n"
+        "    if {[catch {set_dont_use $_du_cell} _du_e]} {\n"
+        "      puts \"SET_DONT_USE_NONFATAL: $_du_cell -- $_du_e\"\n"
+        "    } else { incr _du_n }\n"
+        "  }\n"
+        "  close $_du_f\n"
+        "  catch {report_dont_use}\n"
+        "  puts \"DONT_USE_APPLIED: $_du_n cells from "
+        f"{f}\"\n"
+        "} else {\n"
+        f"  puts \"DONT_USE_SKIPPED: PNR exclude file not found ({f})\"\n"
+        "}\n")
+
+
+def _pg_net_cleanup_tcl() -> str:
+    """v0.2.14 — emit OpenROAD Tcl that removes the DRT-0305 detailed-route-abort
+    class, returned as a pure string so the silicon-critical cleanup is pinned by
+    regression tests (v0.1.49 doctrine).
+
+    Root cause (surfaced by the chacha external-IC pilot): a non-special
+    POWER/GROUND-typed net sitting in the regular NETS section — e.g. a dangling
+    `zero_`/`one_` constant-tie stub left by Yosys `setundef`/`hilomap` — makes
+    TritonRoute abort ALL detailed routing with `[ERROR DRT-0305] ... is not
+    routable by TritonRoute. Move to special nets.`. The prior runner swallowed
+    that as a NONFATAL "cosmetic warning" and shipped a design with ZERO signal
+    detailed routing (every NET left bare connectivity) as if it had routed —
+    a silicon-DOA trap. This pass runs BEFORE global_route and:
+      * deletes any such net that is dangling (no iterm/bterm) — it has no
+        electrical role, so removal is unconditionally safe; this is the common
+        `zero_`/`one_` stub case;
+      * reclassifies any that ARE connected to SIGNAL, so TritonRoute routes them
+        normally instead of rejecting them.
+    Real power/ground nets are SPECIAL (declared in SPECIALNETS) and are never
+    touched. On a healthy design that already routes there are no such nets, so
+    this pass is a no-op. General, chip-AGNOSTIC, NONFATAL-guarded."""
+    return (
+        "if {[catch {\n"
+        "  set _blk [ord::get_db_block]\n"
+        "  set _pgdel 0; set _pgsig 0\n"
+        "  foreach _net [$_blk getNets] {\n"
+        "    set _st [$_net getSigType]\n"
+        "    if {($_st eq \"POWER\" || $_st eq \"GROUND\") && ![$_net isSpecial]} {\n"
+        "      if {[llength [$_net getITerms]] == 0 && "
+        "[llength [$_net getBTerms]] == 0} {\n"
+        "        puts \"PG_CLEANUP_DEL: [$_net getName] ($_st)\"\n"
+        "        odb::dbNet_destroy $_net; incr _pgdel\n"
+        "      } else {\n"
+        "        puts \"PG_CLEANUP_SIG: [$_net getName] ($_st)\"\n"
+        "        $_net setSigType SIGNAL; incr _pgsig\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "  puts \"PG_CLEANUP_DONE: deleted=$_pgdel reclassified=$_pgsig\"\n"
+        "} _pgc]} { puts \"PG_CLEANUP_NONFATAL: $_pgc\" }\n")
+
+
+def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
+    """v0.2.14 — emit the OpenROAD Tcl that repairs process-antenna violations
+    after the main detailed_route, returned as a pure string so the
+    silicon-critical sequence is pinned by regression tests (v0.1.49 doctrine).
+
+    The corpus sweep (prince/chacha/poly1305/aes/sha3) showed real designs
+    (>~10k cells) systematically FAIL the Step-29 antenna check because the PnR
+    never repaired antennas. PROVEN fix, validated on chacha (50k-cell sky130A):
+    85 net / 112 pin antenna violations -> 0/0. Two non-obvious facts drive the
+    exact sequence:
+      (1) `repair_antennas` fixes violations chiefly by JUMPER insertion (layer
+          hopping), which needs a FRESH global-route graph. After the prior
+          detailed_route that graph is consumed, so repair degrades to diode-only
+          insertion (a handful of diodes, ~no improvement). We rebuild it:
+          global_route -> repair_antennas -> detailed_route, which realizes the
+          jumpers (104 jumpers cleared all 84 nets on chacha).
+      (2) `check_antennas` cannot read routing from a re-`read_def` (ANT-0008 "No
+          detailed or global routing found"); a separate measurement pass is
+          forced to re-global_route, which DISCARDS the antenna-fixing jumpers and
+          mis-reports the design as still-violating. The only faithful measurement
+          is IN-SESSION, here, on the realized routing. Its ANT-0002/ANT-0001
+          lines land in openroad.log and are read authoritatively by
+          _emit_antenna_report (which prefers them over its re-global_route
+          fallback).
+
+    `repair_antennas` is the OpenROAD spelling (plural; the diode cell is a
+    POSITIONAL arg, NOT a `-diode_cell` flag — verified against OpenROAD 26Q1
+    `help repair_antennas`). NONFATAL-guarded throughout; when the PDK declares no
+    antenna diode cell the step is SKIPPED (the design is left for a manual diode
+    ECO rather than silently passing).
+
+    SKIP-WHEN-CLEAN (v0.2.14, performance): the repair's `detailed_route` is a FULL
+    route pass that ~doubles wall-clock on a large congested design. It is only
+    needed when the realized main route actually HAS antenna violations. So we first
+    run a cheap READ-ONLY `check_antennas` directly on the main detailed_route
+    (verified: check_antennas reads the detailed routing directly — no global_route
+    needed — when signal routing exists). If it reports 0 net violations the design
+    is already antenna-clean and we SKIP the global_route+repair+detailed_route
+    entirely (the precheck's own ANT-0002/ANT-0001 0/0 are the shippable result).
+    Net-violation count of 0 implies pin-violation count 0 (a net violation IS a net
+    with a violating pin), so the net-count return value is a sufficient gate. The
+    skip path runs NO global_route, so it cannot disturb the main route's wires.
+    Only when violations remain (or the precheck cannot measure) do we pay the
+    proven repair sequence above."""
+    if not pdk.antenna_diode_cell:
+        return ("puts \"ANTENNA_REPAIR_SKIPPED: no diode cell for this PDK; "
+                "antenna violations need manual diode ECO\"\n")
+    return (
+        "# Cheap read-only precheck on the realized main route (no global_route):\n"
+        "set _ant_pre -1\n"
+        "if {[catch {set _ant_pre [check_antennas]} _ape]} { puts "
+        "\"ANTENNA_PRECHECK_NONFATAL: $_ape\" }\n"
+        "if {$_ant_pre == 0} {\n"
+        "  # Already antenna-clean after the main route — skip the expensive\n"
+        "  # repair+reroute. The precheck's own ANT-0002/ANT-0001 (0/0) are the\n"
+        "  # shippable result; no global_route ran, so the main route is untouched.\n"
+        "  puts \"ANTENNA_ALREADY_CLEAN: 0 net violations, skipping repair+reroute\"\n"
+        "} else {\n"
+        "  # Violations remain (or precheck could not measure) — pay the proven\n"
+        "  # sequence: fresh global_route (jumper insertion needs it) ->\n"
+        "  # repair_antennas -> detailed_route (realize) -> in-session check.\n"
+        "  if {[catch {global_route} _ra_gr]} { puts "
+        "\"REPAIR_ANTENNA_GR_NONFATAL: $_ra_gr\" }\n"
+        "  if {[catch {repair_antennas "
+        f"{pdk.antenna_diode_cell}"
+        " -iterations 5} _ra_err]} {\n"
+        "    puts \"REPAIR_ANTENNA_NONFATAL: $_ra_err\"\n"
+        "  } else {\n"
+        f"    puts \"REPAIR_ANTENNA_DONE: diode={pdk.antenna_diode_cell}\"\n"
+        "    if {[catch {detailed_route -verbose 0} _ra_dr]} { puts "
+        "\"REPAIR_ANTENNA_REROUTE_NONFATAL: $_ra_dr\" }\n"
+        "  }\n"
+        "  # Authoritative in-session post-repair antenna check.\n"
+        "  if {[catch {check_antennas} _ra_chk]} { puts "
+        "\"ANTENNA_POSTROUTE_CHECK_NONFATAL: $_ra_chk\" }\n"
+        "}\n"
+        "puts \"ANTENNA_POSTROUTE_DONE\"\n")
+
+
 def step_pnr(project: Path, top: str, pdk: PdkConfig,
              container: str, die_um: str, util: float,
              spare_density=None) -> StepResult:
@@ -2410,6 +2589,13 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                         "for this PDK; dynamic-IR margin + density-fill rules "
                         "must be handled out-of-band\"\n")
 
+    # v0.2.14 — antenna repair + the DRT-0305 PG-net cleanup that must precede
+    # routing. Both built by pure helpers so the silicon-critical Tcl is pinned by
+    # regression tests (v0.1.49 doctrine).
+    antenna_repair_block = _antenna_repair_tcl(pdk)
+    pg_cleanup_block = _pg_net_cleanup_tcl()
+    dont_use_block = _dont_use_tcl(pdk)
+
     # v1.6.36 — emit per-stage DEF snapshots so def_stage_progression_check
     # sees byte-distinct, instance-count-growing, monotone-size files. Each
     # OpenROAD command modifies the in-memory database; write_def after
@@ -2424,7 +2610,11 @@ read_liberty {liberty_c}
 read_verilog {netlist_c}
 link_design {top}
 read_sdc {sdc_c}
-# === v0.1.26 wire-RC model ===
+# === v0.2.14 — restrict the resizer/CTS/repair cell pool (after link_design,
+# before any optimization). Prevents OpenROAD from inserting PnR-forbidden cells
+# (probe / lpflow / DRC-failed) that TritonRoute then cannot route (DRT-0085).
+# See _dont_use_tcl. ===
+{dont_use_block}# === v0.1.26 wire-RC model ===
 # Without set_wire_rc, OpenROAD has no per-layer R/C, so (a) STA ignores
 # interconnect delay (optimistic) and (b) repair_timing -setup aborts with
 # RSZ-0089 "Could not find a resistance value for any corner" because it
@@ -2503,7 +2693,12 @@ if {{[catch {{repair_timing -hold}} hold_err]}} {{
 }}
 detailed_placement
 write_def {out_dir_c}/post_hold.def
-{routing_constraint_tcl}global_route
+{routing_constraint_tcl}# === v0.2.14 — DRT-0305 PG-net cleanup (MUST precede global_route) ===
+# A non-special POWER/GROUND net in regular NETS (dangling zero_/one_ tie stub)
+# makes TritonRoute abort ALL detailed routing; remove/reclassify it first so the
+# design actually routes instead of silently shipping unrouted. See
+# _pg_net_cleanup_tcl for the full rationale.
+{pg_cleanup_block}global_route
 # === v0.1.26 post-global-route SETUP / DRV repair ===
 # Re-estimate RC from global routing and repair again so the final routed
 # netlist reflects setup-closed, fanout-buffered nets (best-effort).
@@ -2531,7 +2726,8 @@ if {{[catch {{detailed_placement}} _gr_dp_err]}} {{
 if {{[catch {{detailed_route}} dr_err]}} {{
   puts "DETAILED_ROUTE_NONFATAL: $dr_err"
 }}
-# === v0.1.48 — decap + filler insertion ===
+# === v0.2.14 — antenna repair (diode insertion) after detailed_route ===
+{antenna_repair_block}# === v0.1.48 — decap + filler insertion ===
 # spm pilot Tier 2 EM/decap finding: prior runs (v0.1.25 → v0.1.47) emitted
 # ZERO decap or filler cells. Empty std-cell-row gaps left an MPW-rejecting
 # combination: no dynamic IR margin (no decap), open density-fill rules
@@ -5178,6 +5374,94 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
     def_file = pnr_out / f"{top}.def"
     if not def_file.is_file():
         return False
+    # v0.2.14 — PREFER the in-session post-repair antenna check from the PnR run.
+    # The PnR session runs global_route -> repair_antennas (jumpers) ->
+    # detailed_route -> check_antennas; that in-session check is the ONLY faithful
+    # measurement, because a fresh read_def here cannot see the realized routing
+    # (ANT-0008 forces a re-global_route that discards the antenna-fixing jumpers
+    # and would mis-report the repaired design as still-violating). When the PnR log
+    # carries the ANTENNA_POSTROUTE_DONE sentinel, parse its authoritative
+    # ANT-0002/ANT-0001 counts directly and skip the lossy re-route below.
+    pnr_log = pnr_out / "openroad.log"
+    if pnr_log.is_file():
+        log_txt = pnr_log.read_text(errors="ignore")
+        if "ANTENNA_POSTROUTE_DONE" in log_txt:
+            # HONESTY: the in-session antenna count is only meaningful if the design
+            # actually DETAIL-routed. When detailed_route aborted (DRT-0305 dangling
+            # PG net, DRT-0085 unroutable pin access) the design has NO realized
+            # signal routing — and the in-session check_antennas then either runs on
+            # the global route only (vacuous 0/0) OR cannot measure at all (ANT-0008,
+            # because the failed detailed_route tore the routing down). EITHER way the
+            # design must be reported FAIL, never a silent antenna-clean pass on an
+            # unrouted design (the silicon-DOA trap). These markers are emitted ONLY
+            # on a routing failure, so a healthy run never trips them.
+            _route_fail_markers = (
+                "DETAILED_ROUTE_NONFATAL",
+                "REPAIR_ANTENNA_REROUTE_NONFATAL",
+                "[ERROR DRT-0305]", "[ERROR DRT-0085]",
+                "ANTENNA_POSTROUTE_CHECK_NONFATAL", "[ERROR ANT-0008]")
+            routing_incomplete = any(m in log_txt for m in _route_fail_markers)
+            nets = re.findall(r"Found\s+(\d+)\s+net violations", log_txt)
+            pins = re.findall(r"Found\s+(\d+)\s+pin violations", log_txt)
+            have_counts = bool(nets and pins)
+            # Engage the authoritative in-session result when EITHER a clean count
+            # exists OR routing demonstrably failed. Only when NEITHER holds (sentinel
+            # present but no counts and no failure marker — a surprising state) do we
+            # fall through to the re-global_route fallback below.
+            if have_counts or routing_incomplete:
+                if have_counts:
+                    net_viol = int(nets[-1])  # last pair = post-repair check
+                    pin_viol = int(pins[-1])
+                else:
+                    net_viol = -1  # could not measure (ANT-0008 after failed route)
+                    pin_viol = -1
+                if routing_incomplete:
+                    clean = False
+                    verdict = "FAIL"
+                else:
+                    total = net_viol + pin_viol
+                    clean = total == 0
+                    verdict = "PASS" if clean else "FAIL"
+                _count_str = (f"{net_viol} net violations, {pin_viol} pin violations"
+                              if have_counts
+                              else "unmeasured (detailed_route aborted; "
+                                   "check_antennas found no routing, ANT-0008)")
+                antenna_rpt.parent.mkdir(parents=True, exist_ok=True)
+                _incomplete_note = (
+                    "\n# ROUTING INCOMPLETE: detailed_route did not complete (abort\n"
+                    "# markers in openroad.log). Any antenna count above was measured\n"
+                    "# on the GLOBAL route only, or could not be measured at all — it\n"
+                    "# is vacuous because the design has no realized signal detail-\n"
+                    "# routing. Reported FAIL, never a silent antenna-clean pass on an\n"
+                    "# unrouted design.\n"
+                    if routing_incomplete else "")
+                antenna_rpt.write_text(
+                    "# OpenROAD antenna check (gate-oxide protection) — IN-SESSION\n"
+                    "# post-repair result captured during PnR (global_route ->\n"
+                    "# repair_antennas -> detailed_route -> check_antennas). This is\n"
+                    "# the faithful measurement of the realized, antenna-repaired\n"
+                    "# routing; a separate re-read cannot credit the jumpers\n"
+                    "# (ANT-0008). Source: phase3/stage3/pnr/openroad.log.\n"
+                    f"antenna check: {_count_str}\n"
+                    f"antenna clean: {'YES' if clean else 'NO'}\n"
+                    f"routing complete: {'NO' if routing_incomplete else 'YES'}\n"
+                    + _incomplete_note)
+                (antenna_rpt.parent / "antenna.json").write_text(json.dumps({
+                    "tool": "openroad",
+                    "mode": "antenna_check_in_session_post_repair",
+                    "net_violations": net_viol if have_counts else None,
+                    "pin_violations": pin_viol if have_counts else None,
+                    "clean": clean,
+                    "routing_incomplete": routing_incomplete,
+                    "source": "phase3/stage3/pnr/openroad.log",
+                    "verdict": verdict,
+                }, indent=2) + "\n")
+                notes.append(
+                    f"antenna: in-session post-repair check {_count_str}"
+                    + (" — ROUTING INCOMPLETE (detailed_route aborted; "
+                       "reported FAIL, not a clean pass on an unrouted design)"
+                       if routing_incomplete else ""))
+                return True
     mp = pdk.metal_prefix
     def_c = _to_container_path(str(def_file), container)
     tech_lef_c = _to_container_path(str(pdk.tech_lef), container)
