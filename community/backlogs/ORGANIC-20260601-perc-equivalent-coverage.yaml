@@ -132,3 +132,27 @@ automation_v0_2_9:
     vssd, vdda/vssa), 0 dangling, 0 unrated -> TOPOLOGY_OK (sizing still MANUAL).
   residual_now: "ONLY device-physics: clamp HBM/CDM sizing (TLP/It2), inherited from the rated library-cell datasheet; + latch-up device topology + cross-domain device network. Commercial PERC/TLP."
   tests_added: "+11 (topology unit matrix + DEF net-terminal parser + 2 emitter-integration)."
+
+latchup_v0_2_10:
+  date: "2026-06-01"
+  what: >-
+    Automated the conclusive-FAIL half of the latch-up well-tap category. New
+    _welltap_presence_check() emits a NEW AUTOMATED "Latch-up well-tap presence" category: a routed
+    DEF with 0 valid well/substrate-tap cells is a conclusive WELLTAP_GAP FAIL -> PERC_EQUIV_FAIL.
+    Tap match is whole-segment 'tap' token + sky130 rated-tap allowlist (bootstrap/captune/adaptor
+    never count; foreign 'tap'-token masters reported unknown, not counted). The old MANUAL-only
+    "Latch-up / well-tap" stub is renamed "Latch-up / well-tap (spacing + device-physics)" and STAYS
+    MANUAL_REVIEW.
+  real_bug_caught: >-
+    The real spm/subservient/neorv32 routed DEFs in-container all ship 0 tap cells (302/4105/47503
+    components, 0 taps) — a genuine v0.1.45-class tapcell-skip structural latch-up exposure that this
+    check now flags conclusively, not a box-tick.
+  honesty: >-
+    A 6-agent workflow (3-angle design + 3 over-claim critics, BOTH critics NOT SOUND) proved the
+    spatial density / max-tap-distance checks over-claim from DEF alone (degenerate DIEAREA,
+    looser-than-foundry pitch, tapvgnd-only ties, fail-open unrecognized cells). So ONLY tap presence
+    (the adversarially-bulletproof, conclusive-FAIL part) is shipped; WELLTAP_PRESENT is stated
+    necessary-but-not-sufficient and never claims 'latch-up safe'. Spacing -> DRC deck; device
+    physics (Vhold>Vdd, SCR beta product, guard-ring efficacy) -> MANUAL.
+  residual_now: "tap SPACING (max-tap-distance — screened by the DRC deck) + device-physics latch-up (Vhold/SCR-beta/guard-ring efficacy — commercial PERC/TLP)."
+  tests_added: "+7 (presence matrix incl. false-token + foreign-tap + the real-0-tap emitter-integration FAIL)."

@@ -624,8 +624,8 @@ class TestPercEquivalent:
         # ESD + xdomain auto-N/A (no pads, single supply).
         assert "ESD protection presence" in j["not_applicable"]
         assert "Cross-voltage-domain" in j["not_applicable"]
-        # Latch-up always MANUAL.
-        assert "Latch-up / well-tap" in j["manual_review_pending"]
+        # Latch-up spacing/device-physics always MANUAL.
+        assert any("Latch-up / well-tap" in c for c in j["manual_review_pending"])
 
     def test_manual_items_never_faked_as_pass(self, tmp_path):
         project = _mk_project(tmp_path, _DEF_WITH_PDN)
@@ -635,12 +635,12 @@ class TestPercEquivalent:
         rpt3 = runner._pl.reports_phase3_dir(project)
         j = json.loads((rpt3 / "perc_equivalent.json").read_text())
         cats = {c["category"]: c for c in j["categories"]}
-        # Latch-up MUST be MANUAL_REVIEW, not PASS.
-        assert cats["Latch-up / well-tap"]["status"] == "MANUAL_REVIEW"
-        assert cats["Latch-up / well-tap"]["result"] != "PASS"
+        # Latch-up spacing/device-physics MUST be MANUAL_REVIEW, not PASS.
+        lu = next(c for k, c in cats.items() if k.startswith("Latch-up / well-tap"))
+        assert lu["status"] == "MANUAL_REVIEW"
+        assert lu["result"] != "PASS"
         # and carry a pending (unchecked) checklist.
-        chk = cats["Latch-up / well-tap"]["checklist"]
-        assert all(item["confirmed"] is None for item in chk)
+        assert all(item["confirmed"] is None for item in lu["checklist"])
 
     def test_padring_design_esd_is_manual(self, tmp_path):
         project = _mk_project(tmp_path, _DEF_PADRING)
@@ -905,3 +905,91 @@ class TestPercEsdTopologyIntegration:
         assert topo["topology_status"] == "TOPOLOGY_GAP"
         # a conclusive automated GAP fails the overall PERC-equivalent verdict
         assert j["verdict"] == "PERC_EQUIV_FAIL"
+
+
+# ---------------------------------------------------------------------------
+# v0.2.10 — latch-up well-tap PRESENCE (automates the conclusive 0-tap FAIL).
+# Real routed DEFs (spm/subservient/neorv32) ship 0 tap cells → WELLTAP_GAP.
+# Only tap-presence is shipped; spacing + device-physics stay MANUAL (an
+# adversarial panel showed spatial density/max-distance over-claim from DEF).
+# ---------------------------------------------------------------------------
+class TestWelltapPresence:
+    def test_zero_taps_is_gap(self):
+        comps = [("_%d_" % i, m) for i, m in enumerate(
+            ["sky130_fd_sc_hd__nor3_1", "sky130_fd_sc_hd__and3_1"] * 3)]
+        r = runner._welltap_presence_check(comps)
+        assert r["status"] == "WELLTAP_GAP"
+        assert r["reason"] == "ZERO_TAPS"
+        assert r["n_tap"] == 0
+
+    def test_rated_taps_present(self):
+        comps = [("_1_", "sky130_fd_sc_hd__nor3_1"),
+                 ("t0", "sky130_fd_sc_hd__tapvpwrvgnd_1"),
+                 ("t1", "sky130_fd_sc_hd__tap_1")]
+        r = runner._welltap_presence_check(comps)
+        assert r["status"] == "WELLTAP_PRESENT"
+        assert r["n_tap"] == 2
+
+    def test_false_token_not_counted(self):
+        # 'bootstrap' / 'captune' embed 'tap' as a substring — must NOT count.
+        for bad in ("acme__bootstrap_buf", "foo__captune_1", "x__adaptor_2"):
+            comps = [("_1_", "sky130_fd_sc_hd__nor3_1"), ("b", bad)]
+            r = runner._welltap_presence_check(comps)
+            assert r["status"] == "WELLTAP_GAP", bad
+            assert r["n_tap"] == 0
+
+    def test_foreign_tap_reported_not_counted(self):
+        comps = [("_1_", "sky130_fd_sc_hd__nor3_1"), ("ft", "vendor__tap_1")]
+        r = runner._welltap_presence_check(comps)
+        assert r["status"] == "WELLTAP_GAP"
+        assert r["reason"] == "NO_VALID_TAPS"
+        assert "vendor__tap_1" in r["unknown_taps"]
+
+    def test_no_std_cells_is_na(self):
+        # decap/fill only → not a placed transistor block → NA, not FAIL.
+        comps = [("d0", "sky130_fd_sc_hd__decap_4"),
+                 ("f0", "sky130_fd_sc_hd__fill_1")]
+        r = runner._welltap_presence_check(comps)
+        assert r["status"] == "NA"
+
+    def test_honesty_present_not_sufficient(self):
+        comps = [("_1_", "sky130_fd_sc_hd__nor3_1"),
+                 ("t0", "sky130_fd_sc_hd__tap_1")]
+        r = runner._welltap_presence_check(comps)
+        assert "NECESSARY-BUT-NOT-SUFFICIENT" in r["note"]
+        assert "spacing" in r["note"].lower()
+
+
+class TestPercWelltapIntegration:
+    def _seed(self, project):
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        rpt3.mkdir(parents=True, exist_ok=True)
+        for name in ("antenna", "ir_drop", "em", "erc"):
+            (rpt3 / f"{name}.json").write_text(json.dumps({"verdict": "PASS"}) + "\n")
+        return rpt3
+
+    _TAPLESS_DEF = (_RING_DEF_HEAD
+                    + "COMPONENTS 2 ;\n"
+                    "- _1_ sky130_fd_sc_hd__nor3_1 + PLACED ( 0 0 ) N ;\n"
+                    "- _2_ sky130_fd_sc_hd__and3_1 + PLACED ( 100 0 ) N ;\n"
+                    "END COMPONENTS\n"
+                    "SPECIALNETS 2 ;\n"
+                    "    - VGND ( _1_ VNB ) + USE GROUND ;\n"
+                    "    - VPWR ( _1_ VPB ) + USE POWER ;\n"
+                    "END SPECIALNETS\nEND DESIGN\n")
+
+    def test_tapless_routed_def_fails_overall(self, tmp_path):
+        # the real v0.1.45 silicon bug: a routed DEF with 0 tap cells.
+        project = _mk_project(tmp_path, self._TAPLESS_DEF)
+        rpt3 = self._seed(project)
+        assert runner._emit_perc_equivalent(project, "chip_top", _fake_pdk(), "x", [])
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        wt = [c for c in j["categories"]
+              if c["category"] == "Latch-up well-tap presence"][0]
+        assert wt["status"] == "AUTOMATED" and wt["result"] == "FAIL"
+        assert wt["welltap_status"] == "WELLTAP_GAP"
+        assert j["verdict"] == "PERC_EQUIV_FAIL"
+        # the device-physics latch-up category still present + MANUAL
+        man = [c for c in j["categories"]
+               if c["category"].startswith("Latch-up / well-tap (spacing")]
+        assert man and man[0]["status"] == "MANUAL_REVIEW"

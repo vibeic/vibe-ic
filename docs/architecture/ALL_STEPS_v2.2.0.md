@@ -75,8 +75,14 @@ Stage map: **0** Spec/Docs (Phase 1) · **1** RTL+Verify · **2** Synthesis+DFT 
 **Step 32 — PERC-equivalent coverage** (`perc_equivalent.{rpt,json}` + `PERC_SIGNOFF_MEMO.md`, v0.2.7-2.8):
 open-source stand-in for commercial Calibre PERC. AUTOMATED: antenna / IR / EM / floating-nets
 (verdicts read from steps 27-30/ERC). GUARDBAND: EM current-density (<0.5 mA/µm) + ≥2×2 vias.
-MANUAL_REVIEW (never auto-PASS, pending checklist): ESD pad-ring presence, latch-up/well-tap,
-cross-voltage-domain — auto-`N/A` for core-only macros (no pad ring) / single-supply designs.
+MANUAL_REVIEW (never auto-PASS, pending checklist): latch-up spacing/device-physics,
+cross-voltage-domain — auto-`N/A` for core-only macros / single-supply designs. **Latch-up well-tap
+presence** (v0.2.10) is now AUTOMATED: a routed DEF with 0 valid well/substrate-tap cells is a
+conclusive `WELLTAP_GAP` FAIL → `PERC_EQUIV_FAIL` (catches the real v0.1.45-class tapcell-skip
+silicon bug; the real spm/subservient/neorv32 routed DEFs all ship 0 taps). Only tap *presence* is
+automated — tap spacing + the device-physics latch-up criterion (Vhold>Vdd, SCR β-product,
+guard-ring efficacy) stay MANUAL (an adversarial panel showed DEF-only spatial density/max-distance
+over-claims).
 The **ESD presence** check (v0.2.8) recognises sky130 IO integral-clamp pads (gpiov2/hvc/lvc/clamped/
 esd) — validated on the real Caravel `chip_io.def` (flips a 612-filler ring from a false ESD_MISSING
 to PRESENT, structural fillers excluded) with negation guards (`unclamped`≠ESD) + esd-before-structural

@@ -73,7 +73,11 @@ Stage 對照：**0** 規格/文件（Phase 1）· **1** RTL+驗證 · **2** 合�
 **步 32 — PERC-equivalent 覆蓋**（`perc_equivalent.{rpt,json}` + `PERC_SIGNOFF_MEMO.md`，v0.2.7-2.8）：
 商用 Calibre PERC 的開源替代。AUTOMATED：antenna / IR / EM / floating-nets（讀步 27-30/ERC 的判決）。
 GUARDBAND：EM 電流密度（<0.5 mA/µm）+ ≥2×2 via。MANUAL_REVIEW（**絕不**自動 PASS、附待辦清單）：
-ESD pad-ring 存在性、latch-up/well-tap、跨電壓域 — 對 core-only macro（無 pad ring）/ 單電源設計自動標 `N/A`。
+latch-up spacing/device-physics、跨電壓域 — 對 core-only macro / 單電源設計自動標 `N/A`。**Latch-up well-tap
+存在性**（v0.2.10）現在 AUTOMATED：routed DEF 若有 0 個有效 well/substrate-tap cell = 確定性 `WELLTAP_GAP`
+FAIL → `PERC_EQUIV_FAIL`（抓到真實 v0.1.45 級的 tapcell-skip 矽 bug；真實 spm/subservient/neorv32 routed DEF
+全都 0 taps）。只自動化 tap *存在性* — tap 間距 + device-physics latch-up 判據（Vhold>Vdd、SCR β-product、
+guard-ring 效能）維持 MANUAL（對抗 panel 證明 DEF-only 的空間密度/max-distance 會 over-claim）。
 **ESD 存在性**檢查（v0.2.8）能辨識 sky130 IO 整合式 clamp pad（gpiov2/hvc/lvc/clamped/esd）— 已在真實
 Caravel `chip_io.def` 驗證（把含 612 filler 的環從誤判 ESD_MISSING 翻成 PRESENT、結構填充排除），含 negation
 guard（`unclamped`≠ESD）+ esd-先於-structural 排序（`gpiov2_corner_pad`=ESD），回報 `esd_presence: PRESENT | MISSING | N/A`。

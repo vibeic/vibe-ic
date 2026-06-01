@@ -5627,6 +5627,76 @@ def _esd_pad_ring_presence(components: List[Tuple[str, str]]) -> Dict[str, Any]:
     return base
 
 
+# Well/substrate-tap (latch-up) cell-name match — WHOLE delimited segment 'tap'
+# (so 'bootstrap'/'adaptor'/'captune' never count), case-insensitive. PDK-agnostic.
+_WELLTAP_TOKEN_RE = re.compile(r"(?:^|_)tap(?:\d|_|$)", re.IGNORECASE)
+# Recognised tap masters (sky130 std-cell families). A 'tap'-token master not on
+# the allowlist is reported as unknown-tap (NOT counted as a valid latch-up tie).
+_WELLTAP_RATED = (
+    "sky130_fd_sc_hd__tap", "sky130_fd_sc_hdll__tap", "sky130_fd_sc_hs__tap",
+    "sky130_fd_sc_ls__tap", "sky130_fd_sc_ms__tap", "sky130_fd_sc_lp__tap",
+    "sky130_fd_sc_hvl__tap", "sky130_ef_sc_hd__tap",
+)
+
+
+def _welltap_presence_check(components: List[Tuple[str, str]]) -> Dict[str, Any]:
+    """Latch-up well-tap STRUCTURAL presence check (deterministic, pure, v0.2.10).
+
+    Automates ONLY the adversarially-bulletproof half — tap PRESENCE — which catches
+    the real v0.1.45-class silicon bug (tapcell step skipped → 0 substrate/well ties
+    → categorical latch-up exposure). It deliberately does NOT attempt spatial
+    density / max-tap-distance (an adversarial panel showed those over-claim from
+    DEF alone: degenerate DIEAREA, looser-than-foundry pitch, tapvgnd-only ties).
+
+    status ∈ {NA (no std cells — not a placed block), WELLTAP_GAP (placed cells but
+    0 valid taps = conclusive FAIL), WELLTAP_PRESENT (>=1 valid tap)}.
+
+    HONESTY: WELLTAP_PRESENT proves tap cells were inserted — it is
+    NECESSARY-BUT-NOT-SUFFICIENT and says NOTHING about tap SPACING (max-tap-distance,
+    screened separately by the DRC deck) or the device-physics latch-up criterion
+    (Vhold>Vdd, parasitic-SCR beta product, guard-ring efficacy) — those stay MANUAL.
+    A WELLTAP_GAP is conclusive: zero substrate/well ties latches up regardless."""
+    # transistor-bearing std cells (exclude physical-only fillers/taps/decap/diodes)
+    def _is_std_cell(m: str) -> bool:
+        ml = m.lower()
+        if _WELLTAP_TOKEN_RE.search(ml):
+            return False
+        return not any(t in ml for t in ("decap", "fill", "diode", "tapvpwr",
+                                         "_endcap", "boundary", "antenna"))
+    std_cells = [m for _i, m in components if _is_std_cell(m)]
+    tap_tokened = sorted({m for _i, m in components
+                          if _WELLTAP_TOKEN_RE.search(m.lower())})
+    valid_taps = [m for m in tap_tokened
+                  if any(m.lower().startswith(r) for r in _WELLTAP_RATED)]
+    unknown_taps = [m for m in tap_tokened if m not in valid_taps]
+    n_tap = sum(1 for _i, m in components
+                if any(m.lower().startswith(r) for r in _WELLTAP_RATED))
+    if not std_cells:
+        return {"status": "NA", "n_tap": n_tap, "unknown_taps": unknown_taps,
+                "note": "N/A — no placed transistor-bearing std cells (not a placed block)."}
+    if n_tap == 0:
+        reason = "NO_VALID_TAPS" if tap_tokened else "ZERO_TAPS"
+        extra = (f" ({len(unknown_taps)} 'tap'-token master(s) seen but none on the "
+                 "PDK rated-tap allowlist: " + ", ".join(unknown_taps[:4]) + ")"
+                 ) if unknown_taps else ""
+        return {
+            "status": "WELLTAP_GAP", "n_tap": 0, "unknown_taps": unknown_taps,
+            "reason": reason,
+            "note": (f"{reason}: {len(std_cells)} placed std cell(s) but 0 valid "
+                     f"well/substrate-tap cells{extra} — no substrate/well ties = "
+                     "categorical latch-up exposure (the tapcell step was skipped). "
+                     "Conclusive structural GAP; fix before sign-off."),
+        }
+    return {
+        "status": "WELLTAP_PRESENT", "n_tap": n_tap, "unknown_taps": unknown_taps,
+        "note": (f"{n_tap} well/substrate-tap cell(s) present. "
+                 "NECESSARY-BUT-NOT-SUFFICIENT: proves taps were inserted, but does "
+                 "NOT prove tap SPACING (max-tap-distance — DRC deck) nor the "
+                 "device-physics latch-up criterion (Vhold>Vdd, SCR beta product, "
+                 "guard-ring efficacy) — those stay MANUAL."),
+    }
+
+
 # DEF net-terminal parser + power/ground net classifier (v0.2.9 — feeds the ESD
 # discharge-path TOPOLOGY check). chip-AGNOSTIC: structural parse, no literal names.
 _NET_TERMINAL_RE = re.compile(r"\(\s*(\S+)\s+(\S+)\s*\)")
@@ -5887,20 +5957,43 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                 "note": topo["note"],
             })
 
-    # Latch-up / well-tap.
+    # Latch-up well-tap PRESENCE (v0.2.10) — AUTOMATES the conclusive structural
+    # FAIL (0 substrate/well ties = the real v0.1.45 silicon bug). Spacing +
+    # device-physics stay MANUAL below.
+    welltap = _welltap_presence_check(components)
+    if welltap["status"] != "NA":
+        categories.append({
+            "category": "Latch-up well-tap presence",
+            "status": "AUTOMATED",
+            "result": "PASS" if welltap["status"] == "WELLTAP_PRESENT" else "FAIL",
+            "tool": "DEF COMPONENTS well/substrate-tap scan (open-source PERC-equiv)",
+            "welltap_status": welltap["status"],
+            "tap_count": welltap["n_tap"],
+            "unknown_taps": welltap["unknown_taps"],
+            "evidence": ("NECESSARY-BUT-NOT-SUFFICIENT: a PASS proves tap cells were "
+                         "inserted; it does NOT prove tap spacing or the device-"
+                         "physics latch-up criterion. A FAIL (0 valid taps) is a "
+                         "conclusive structural latch-up exposure."),
+            "note": welltap["note"],
+        })
+
+    # Latch-up spacing + device-physics — STAYS MANUAL_REVIEW (never auto-PASS).
     categories.append({
-        "category": "Latch-up / well-tap",
+        "category": "Latch-up / well-tap (spacing + device-physics)",
         "status": "MANUAL_REVIEW",
         "result": "MANUAL_REVIEW",
         "tool": "Magic DRC well-tap rules (rides existing DRC deck) + MANUAL",
-        "note": ("well-tap spacing is screened by the existing Magic/KLayout "
-                 "DRC deck; full latch-up sign-off (well/substrate tap "
-                 "topology, guard rings near IO) needs commercial PERC + "
-                 "manual confirm."),
+        "note": ("tap PRESENCE is automated above; tap SPACING (max-tap-distance) "
+                 "is screened by the Magic/KLayout DRC deck; full latch-up sign-off "
+                 "(holding voltage Vhold>Vdd, parasitic-SCR beta product, guard-ring "
+                 "efficacy under injected substrate current) needs commercial PERC + "
+                 "manual confirm — device physics, not derivable from DEF."),
         "checklist": [
-            {"item": "Tap (well/substrate) spacing meets the PDK latch-up rule "
-                     "(screened by the DRC deck)", "confirmed": None},
-            {"item": "Guard rings present around IO / high-current cells",
+            {"item": "Tap (well/substrate) spacing meets the PDK max-tap-distance "
+                     "rule (screened by the DRC deck)", "confirmed": None},
+            {"item": "Holding voltage Vhold > Vdd (parasitic SCR cannot sustain)",
+             "confirmed": None},
+            {"item": "Guard rings present + effective around IO / high-current cells",
              "confirmed": None},
         ],
     })
