@@ -15,6 +15,15 @@
       "Error and fault condition detection and handling",
       "Reset behavior verification",
       "Back-to-back / sustained operation"
+    ],
+    "verification_items": [
+      "Reset defaults",
+      "Config negotiation",
+      "Per-channel flow control",
+      "Virtual Wire tunneling",
+      "CRC error handling",
+      "WAIT_STATE insertion",
+      "ALERT/GET_STATUS handshake"
     ]
   },
   "extraction_hints": [
@@ -23,5 +32,6 @@
   ],
   "extraction_status": "NOT_YET_EXTRACTED",
   "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
-  "extraction_evidence": {}
+  "extraction_evidence": {},
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)"
 }

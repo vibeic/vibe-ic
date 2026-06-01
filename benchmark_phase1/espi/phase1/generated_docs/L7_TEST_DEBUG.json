@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "test_debug",
-  "ic_name": "espi",
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
   "test_scenarios": [],
   "test_modes": [],
   "no_test_modes_in_input": true,
@@ -17,5 +17,11 @@
   "engineer_mode_unlock_sequence": null,
   "no_engineer_mode_unlock_in_input": true,
   "vsuite_per_kw_cap_skipped_v1_6_373": 0,
-  "extraction_evidence": {}
+  "extraction_evidence": {},
+  "test_debug": {
+    "in_band_reset": "CMD 0xFF resets the link",
+    "status_poll": "GET_STATUS (0x20) reads channel FREE/AVAIL bits",
+    "config_readback": "GET_CONFIGURATION (0x22) reads negotiated frequency/mode/CRC",
+    "crc_check": "optional CRC-8 detects bit errors"
+  }
 }

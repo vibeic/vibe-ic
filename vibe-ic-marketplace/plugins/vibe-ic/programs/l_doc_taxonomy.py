@@ -409,7 +409,17 @@ def na_stub(ic_class: str, l_doc: str) -> Dict[str, str]:
         "applicability": "N/A",
         "ic_class": ic_class,
         "rationale": na_rationale(ic_class, l_doc),
-        "emitted_by": "l_doc_taxonomy.na_stub v0.1.51",
+        # v0.2.14: an N/A stub is, by definition, a doc the ic_class declares
+        # not-applicable, so there is no source evidence to cite — the honest
+        # representation is an EMPTY extraction_evidence dict. The Wave-23
+        # extraction_evidence_schema_check hard-requires the field to EXIST on
+        # every L1-L13 doc on disk (an empty dict is explicitly allowed, see its
+        # _validate_evidence). Without this key, every na_stub (e.g. L5/L11/L13
+        # for a pure-digital protocol) false-FAILed the gate as "field missing",
+        # gating the phase2 runner's overall verdict on docs that are correctly
+        # N/A. General — applies to every ic_class that emits N/A stubs.
+        "extraction_evidence": {},
+        "emitted_by": "l_doc_taxonomy.na_stub v0.2.14",
     }
 
 

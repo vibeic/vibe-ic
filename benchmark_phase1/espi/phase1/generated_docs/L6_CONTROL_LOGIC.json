@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "control_logic",
-  "ic_name": "espi",
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
   "reject_rules": [],
   "fsm_states": [],
   "pipeline_stages": [],
@@ -11,5 +11,30 @@
   "fsm_tokens": [],
   "extraction_evidence": {
     "input/docs/Intel_eSPI_Base_Specification.txt": []
+  },
+  "control_logic": {
+    "master_fsm": [
+      "Idle (CS# high)",
+      "Assert CS#",
+      "Drive CMD opcode",
+      "Drive command fields/data",
+      "Drive CRC",
+      "Turnaround (release bus)",
+      "Sample response code",
+      "Sample response data/status/CRC",
+      "Deassert CS#"
+    ],
+    "slave_fsm": [
+      "Wait CS# assert",
+      "Receive CMD + fields + CRC",
+      "Check CRC",
+      "Turnaround (take bus)",
+      "Insert WAIT_STATE bytes if not ready",
+      "Drive response code",
+      "Drive response data/status/CRC",
+      "Release on CS# deassert"
+    ],
+    "flow_control": "Per-channel FREE/AVAIL bits in STATUS gate PUT/GET; DEFER for non-posted; completion returned later.",
+    "alert": "Slave drives ESPI_ALERT# (or ESPI_IO[1] in single-slave dedicated-alert mode); master responds with GET_STATUS."
   }
 }

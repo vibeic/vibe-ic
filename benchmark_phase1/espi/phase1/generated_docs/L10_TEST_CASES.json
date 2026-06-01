@@ -1,8 +1,33 @@
 {
   "schema_version": 2,
   "doc_class": "test_cases",
-  "ic_name": "espi",
-  "test_cases": [],
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
+  "test_cases": [
+    {
+      "name": "reset_defaults",
+      "desc": "After ESPI_RESET#, link is Single I/O, 20 MHz, CRC disabled."
+    },
+    {
+      "name": "get_status",
+      "desc": "GET_STATUS returns 16-bit STATUS with correct FREE/AVAIL bits."
+    },
+    {
+      "name": "config_negotiate",
+      "desc": "SET_CONFIGURATION sets 66 MHz + Quad; GET_CONFIGURATION reads it back."
+    },
+    {
+      "name": "vwire_tunnel",
+      "desc": "PUT_VWIRE delivers a system-event index/data pair; slave reflects it."
+    },
+    {
+      "name": "crc_error",
+      "desc": "Corrupted CRC -> NON_FATAL_ERROR response."
+    },
+    {
+      "name": "wait_state",
+      "desc": "Slave not ready inserts 0x0F WAIT_STATE bytes before response code."
+    }
+  ],
   "no_test_cases_in_input": true,
   "bring_up_sequence": [],
   "no_bring_up_sequence_in_input": true,

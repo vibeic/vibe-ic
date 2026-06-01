@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "integration_spec",
-  "ic_name": "espi",
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
   "top_module": "espi",
   "top_module_extraction_strategy": "l1_ic_name_fallback",
   "no_top_module_in_input": true,
@@ -67,5 +67,18 @@
   "no_interface_type_in_input": true,
   "interface_types": [],
   "no_interface_types_in_input": true,
-  "chip_top_interfaces": []
+  "chip_top_interfaces": [],
+  "integration_overview": {
+    "master": "Chipset / PCH",
+    "slaves": [
+      "Embedded Controller (EC)",
+      "Baseboard Management Controller (BMC)",
+      "Super-I/O",
+      "Flash device"
+    ],
+    "topology": "single master, per-slave ESPI_CS#, shared ESPI_CLK and ESPI_IO[3:0]",
+    "replaces": "Low Pin Count (LPC) bus",
+    "pin_count": 8,
+    "init_sequence": "On ESPI_RESET# deassert: Single I/O, 20 MHz, CRC off; master negotiates via GET/SET_CONFIGURATION; enable each channel (set Channel Enable, poll Channel Ready)."
+  }
 }

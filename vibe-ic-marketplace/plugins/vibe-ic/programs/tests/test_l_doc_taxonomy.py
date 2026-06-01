@@ -166,7 +166,18 @@ class TestNaStub:
 
     def test_stub_attributes_to_program(self):
         stub = mod.na_stub("bus_interconnect_protocol", "L11")
-        assert "v0.1.51" in stub["emitted_by"]
+        # Version-agnostic: pin the program ATTRIBUTION, not a frozen version
+        # string (the emitter bumps versions — e.g. v0.1.51 -> v0.2.14 when the
+        # stub gained extraction_evidence:{} for the Wave-23 schema gate).
+        assert "l_doc_taxonomy.na_stub" in stub["emitted_by"]
+
+    def test_stub_carries_extraction_evidence(self):
+        # v0.2.14: an N/A stub must carry a schema-valid (empty-dict-allowed)
+        # extraction_evidence so extraction_evidence_schema_check does not
+        # false-FAIL it as "field missing".
+        stub = mod.na_stub("bus_interconnect_protocol", "L11")
+        assert "extraction_evidence" in stub
+        assert stub["extraction_evidence"] == {}
 
     def test_stub_for_unrecognised_ic_class_has_fallback_rationale(self):
         # Even for an unknown ic_class, na_stub must NOT crash —

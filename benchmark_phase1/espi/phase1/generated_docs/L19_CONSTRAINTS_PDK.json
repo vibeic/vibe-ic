@@ -4,13 +4,18 @@
   "applicability": "APPLICABLE",
   "ic_class": "serial_peripheral_protocol",
   "fields": {
-    "pdk_target": null,
+    "pdk_target": "N/A (protocol spec, not a tapeout)",
     "die_area_budget_um": null,
     "power_budget_uw": null,
     "sdc_constraints_path": null,
     "floorplan_hints": [],
     "constraints_present": false,
-    "notes": "Block-level peripheral spec does not include PDK / timing constraints; these are deferred to the SoC integration spec."
+    "notes": "Block-level peripheral spec does not include PDK / timing constraints; these are deferred to the SoC integration spec.",
+    "io_voltage": "1.0 V / 1.8 V",
+    "clock_mhz": [
+      20,
+      66
+    ]
   },
   "extraction_hints": [
     "Look for floorplan, area, power, timing constraints.",
@@ -18,5 +23,6 @@
   ],
   "extraction_status": "NOT_YET_EXTRACTED",
   "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
-  "extraction_evidence": {}
+  "extraction_evidence": {},
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)"
 }
