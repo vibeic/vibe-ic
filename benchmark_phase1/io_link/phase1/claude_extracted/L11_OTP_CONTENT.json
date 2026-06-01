@@ -10,7 +10,6 @@
   },
   "class_path": "serial_peripheral_protocol",
   "no_otp_fsm_in_input": true,
-  "otp_present": false,
   "notes": "IO-Link (IEC 61131-9, SDCI) does not define OTP/fuse content as a protocol concept. The VendorID, DeviceID, RevisionID, COM rate, and identification strings are Device configuration (often factory-programmed) exposed via the Direct Parameter page and the ISDU. An implementation may back these with non-volatile storage, but the standard only requires the identity be readable and the communication parameters be consistent. Optional Data Storage backs up Device parameters at the Master so a replaced Device is auto-parameterized.",
   "ic_name": "IO-Link Interface (SDCI, IEC 61131-9)",
   "otp_equivalent_factory_burned_fields": [

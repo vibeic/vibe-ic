@@ -28,19 +28,60 @@ class TestHallucScrub:
         assert doc["ic_name"] == "AMBA AXI Protocol Specification"
 
     def test_opcode_page_number_scrubbed(self):
+        # v0.2.13 — both hexes are scrubbed (2 entries) AND the now-zombie
+        # entries are dropped from `opcodes` (1 more entry), leaving the
+        # list empty. This is the AMBA-AXI false-FAIL fix: a bus protocol
+        # with no real opcodes must end up with opcodes=[] so the
+        # l3_opcode_name_coverage gate VACUOUS_PASSes instead of seeing
+        # 100% OPCODE_NAME_UNKNOWN placeholders.
         doc = {"opcodes": [{"hex": "0x16", "name": "?"},
                             {"hex": "0x48", "name": "?"}]}
         log = mod.scrub_l_doc(doc, "L3_CMD_PROTOCOL")
-        # Both 0x16 and 0x48 are in the page-num catalog
-        assert len(log) == 2
-        assert doc["opcodes"][0]["hex"] == "<HALLUCINATION_SCRUBBED>"
-        assert doc["opcodes"][1]["hex"] == "<HALLUCINATION_SCRUBBED>"
+        scrub_entries = [s for s in log
+                         if s.pattern_name == "opcode_from_two_digit_decimal_page_number"]
+        drop_entries = [s for s in log
+                        if s.pattern_name == "drop_scrubbed_opcode_zombie"]
+        assert len(scrub_entries) == 2
+        assert len(drop_entries) == 1
+        assert doc["opcodes"] == []
 
     def test_legitimate_opcode_not_scrubbed(self):
         doc = {"opcodes": [{"hex": "0xAB", "name": "WRITE_REG"}]}
         log = mod.scrub_l_doc(doc, "L3_CMD_PROTOCOL")
         assert log == []
         assert doc["opcodes"][0]["hex"] == "0xAB"
+
+    def test_drop_scrubbed_opcode_zombie_recomputes_flags(self):
+        # A bus-protocol L3 that synthesised 2 page-number opcodes, with
+        # the emitter's sibling flags set as if those opcodes were real.
+        # After scrub+drop, the list is empty and the flags are corrected.
+        doc = {
+            "opcodes": [{"hex": "0x23", "name": "OPCODE_NAME_UNKNOWN"},
+                        {"hex": "0x55", "name": "OPCODE_NAME_UNKNOWN"}],
+            "no_opcodes_in_input": False,
+            "placeholder_opcode_count": 2,
+            "no_opcode_names_in_input": True,
+        }
+        mod.scrub_l_doc(doc, "L3_CMD_PROTOCOL")
+        assert doc["opcodes"] == []
+        assert doc["no_opcodes_in_input"] is True
+        assert doc["placeholder_opcode_count"] == 0
+        assert doc["no_opcode_names_in_input"] is False
+
+    def test_drop_scrubbed_keeps_real_opcodes(self):
+        # Mixed list: one real opcode + one scrubbed zombie. Only the
+        # zombie is dropped; the real opcode and its flags survive.
+        doc = {
+            "opcodes": [{"hex": "0xAB", "name": "WRITE_REG"},
+                        {"hex": "<HALLUCINATION_SCRUBBED>", "name": "OPCODE_NAME_UNKNOWN"}],
+            "no_opcodes_in_input": False,
+            "placeholder_opcode_count": 1,
+        }
+        mod.scrub_l_doc(doc, "L3_CMD_PROTOCOL")
+        assert len(doc["opcodes"]) == 1
+        assert doc["opcodes"][0]["name"] == "WRITE_REG"
+        assert doc["no_opcodes_in_input"] is False
+        assert doc["placeholder_opcode_count"] == 0
 
     def test_scrub_log_records_provenance(self):
         doc = {"ic_name": "SUCH ARM TECHNOLOGY"}

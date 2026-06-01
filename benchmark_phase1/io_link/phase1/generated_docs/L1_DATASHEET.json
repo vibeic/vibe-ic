@@ -469,15 +469,15 @@
     "sensor",
     "actuator"
   ],
-  "tick_nominal_us": 3,
-  "tick_range_us": [
-    3,
-    90
-  ],
-  "sync_calibration_ticks": 56,
-  "nibble_bits": 4,
-  "nibble_pulse_period_ticks": "12 + value (12..27 ticks, value 0..15)",
-  "crc_bits": 4,
+  "supply_voltage_v": 24,
+  "com_rates_kbaud": {
+    "COM1": 4.8,
+    "COM2": 38.4,
+    "COM3": 230.4
+  },
+  "uart_framing": "8-E-1 (1 start, 8 data, 1 even parity, 1 stop)",
+  "process_data_max_bytes": 32,
+  "max_cable_length_m": 20,
   "topology_summary": "Point-to-point: one IO-Link Device (sensor or actuator) connects to one port of an IO-Link Master over a single three-wire cable. The Master provides multiple independent ports; each port drives exactly one Device. There is no bus and no multi-drop.",
   "use_cases": [
     "Smart sensors (photoelectric, inductive, pressure, temperature, level)",
@@ -502,14 +502,5 @@
       "date": "2013",
       "description": "International standardization of the IO-Link interface as IEC 61131-9 (SDCI — Single-drop Digital Communication Interface)."
     }
-  ],
-  "supply_voltage_v": 24,
-  "com_rates_kbaud": {
-    "COM1": 4.8,
-    "COM2": 38.4,
-    "COM3": 230.4
-  },
-  "uart_framing": "8-E-1 (1 start, 8 data, 1 even parity, 1 stop)",
-  "process_data_max_bytes": 32,
-  "max_cable_length_m": 20
+  ]
 }

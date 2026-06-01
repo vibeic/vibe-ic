@@ -44,7 +44,6 @@
         "purpose": "Ground / 0 V return."
       }
     ],
-    "sent_power_considerations": "SENT defines a simple three-wire supply (signal + 5 V supply + ground). Basic SENT transmits continuously; SENT-SPC allows the sensor to idle between ECU triggers to save power. Detailed rails and low-power behavior are sensor-implementation concerns.",
     "io_link_power_considerations": "IO-Link defines a three-wire supply: L+ (24 V), L- (ground), and the C/Q signal line. The Device draws operating current from L+/L-; the C/Q communication shares the supply ground. Detailed rails and low-power behavior are Device-implementation concerns."
   },
   "ic_name": "IO-Link Interface (SDCI, IEC 61131-9)"

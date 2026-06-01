@@ -1,0 +1,36 @@
+{
+  "schema_version": 2,
+  "doc_class": "cmd_protocol",
+  "ic_name": "espi",
+  "opcodes": [],
+  "no_opcodes_in_input": true,
+  "placeholder_opcode_count": 0,
+  "no_opcode_names_in_input": false,
+  "crc_parameters": {
+    "polynomial_hex": "0x07",
+    "polynomial_reflected_hex": "0xE0",
+    "init_hex": null,
+    "bit_order": "lsb_first",
+    "xorout_hex": "0x00",
+    "residue_check_hex": "0x00",
+    "reset_at_break": true,
+    "golden_vectors": []
+  },
+  "no_crc_parameters_in_input": false,
+  "verdict_byte_offset": null,
+  "verdict_byte_hex": null,
+  "no_verdict_byte_in_input": true,
+  "addr_max": null,
+  "len_max": null,
+  "payload_semantics": null,
+  "no_payload_semantics_in_input": true,
+  "opcode_synthesis_skipped_reason": "L2.protocol_overview.half_duplex is not True and no explicit opcode/command-table heading was found in input/docs/. Free-form hex bytes in prose, SVG labels, or PDF text do not constitute opcode evidence.",
+  "extraction_evidence": {
+    "input/docs/Intel_eSPI_Base_Specification.txt": [
+      {
+        "literal": "0x07",
+        "label": "CRC polynomial (extracted regex)"
+      }
+    ]
+  }
+}

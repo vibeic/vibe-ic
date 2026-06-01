@@ -17,7 +17,6 @@
   "no_bring_up_sequence_in_input": false,
   "extraction_evidence": {},
   "class_path": "serial_peripheral_protocol",
-  "test_cases_present": "partial - the specification defines protocol behaviors rather than an embedded testbench; the categories below are derived from the spec.",
   "derived_compliance_test_categories": [
     "Wake-up: the wake-up request switches the Device from SIO to SDCI mode.",
     "COM-rate detection: the Master detects COM1 / COM2 / COM3.",

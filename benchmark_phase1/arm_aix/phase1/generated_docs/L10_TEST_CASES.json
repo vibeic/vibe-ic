@@ -2,55 +2,11 @@
   "schema_version": 2,
   "doc_class": "test_cases",
   "ic_name": "AMBA AXI / ACE Protocol Specification",
-  "test_cases": [
-    {
-      "name": "send_opcode_name_unknown_happy",
-      "kind": "happy_path",
-      "stimulus": "host sends <HALLUCINATION_SCRUBBED>",
-      "expected": "DUT replies per response_payload_template",
-      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
-      "evidence": "L3.opcodes"
-    },
-    {
-      "name": "send_opcode_name_unknown_no_wake",
-      "kind": "pre_wake_false",
-      "stimulus": "host sends <HALLUCINATION_SCRUBBED> immediately after POR (no preceding wake pulse)",
-      "expected": "DUT silent (no response frame)",
-      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
-      "evidence": "L3.pre_wake_allowed"
-    },
-    {
-      "name": "send_opcode_name_unknown_happy",
-      "kind": "happy_path",
-      "stimulus": "host sends <HALLUCINATION_SCRUBBED>",
-      "expected": "DUT replies per response_payload_template",
-      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
-      "evidence": "L3.opcodes"
-    },
-    {
-      "name": "send_opcode_name_unknown_no_wake",
-      "kind": "pre_wake_false",
-      "stimulus": "host sends <HALLUCINATION_SCRUBBED> immediately after POR (no preceding wake pulse)",
-      "expected": "DUT silent (no response frame)",
-      "opcode_hex": "<HALLUCINATION_SCRUBBED>",
-      "evidence": "L3.pre_wake_allowed"
-    }
-  ],
-  "no_test_cases_in_input": false,
+  "test_cases": [],
+  "no_test_cases_in_input": true,
   "bring_up_sequence": [],
   "no_bring_up_sequence_in_input": true,
-  "extraction_evidence": {
-    "derived_from_L3": [
-      {
-        "literal": "<HALLUCINATION_SCRUBBED> OPCODE_NAME_UNKNOWN",
-        "label": "opcode → happy + negative test-cases"
-      },
-      {
-        "literal": "<HALLUCINATION_SCRUBBED> OPCODE_NAME_UNKNOWN",
-        "label": "opcode → happy + negative test-cases"
-      }
-    ]
-  },
+  "extraction_evidence": {},
   "extraction_strategy": {
     "hallucination_scrub_v0_1_60": [
       {

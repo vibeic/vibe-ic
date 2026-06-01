@@ -2,8 +2,6 @@
   "schema_version": 2,
   "doc_class": "rtl_constants",
   "ic_name": "IO-Link Interface (SDCI, IEC 61131-9)",
-  "rx_classifier_ticks": null,
-  "no_rx_classifier_ticks_in_input": true,
   "timing_constants": [],
   "no_timing_constants_in_input": true,
   "timing_parameters": [],
@@ -72,59 +70,6 @@
       "source": "phase1_auto_extraction"
     }
   ],
-  "width_parameters": {
-    "DATA_BUS_WIDTH_bits": 8,
-    "ADDRESS_BUS_WIDTH_bits": 3,
-    "CHIP_SELECT_PINS": 3,
-    "REGISTER_COUNT_VISIBLE": 8,
-    "REGISTER_COUNT_TOTAL_WITH_DLAB": 10,
-    "BAUD_DIVISOR_WIDTH_bits": 16,
-    "FIFO_DEPTH_BYTES_RX": 16,
-    "FIFO_DEPTH_BYTES_TX": 16,
-    "RX_FIFO_ERROR_BITS_PER_BYTE": 3,
-    "CHARACTER_WIDTH_RANGE_bits": [
-      5,
-      6,
-      7,
-      8
-    ],
-    "OVERSAMPLING_RATIO": 16,
-    "SENT_STANDARD": "SAE J2716",
-    "MODULATION": "single-wire (C/Q) UART 8-E-1 (SDCI) / binary switching (SIO)",
-    "TICK_NOMINAL_US": 3,
-    "TICK_MIN_US": 3,
-    "TICK_MAX_US": 90,
-    "SYNC_CALIBRATION_TICKS": 56,
-    "NIBBLE_BITS": 4,
-    "NIBBLE_OFFSET_TICKS": 12,
-    "NIBBLE_VALUE_MAX": 15,
-    "NIBBLE_PERIOD_MIN_TICKS": 12,
-    "NIBBLE_PERIOD_MAX_TICKS": 27,
-    "MIN_NIBBLE_LOW_TICKS": 5,
-    "CRC_BITS": 4,
-    "DATA_NIBBLE_MIN": 1,
-    "DATA_NIBBLE_MAX": 6,
-    "UNIDIRECTIONAL": true,
-    "POINT_TO_POINT": true,
-    "EMBEDDED_CLOCK": false,
-    "FORWARDED_CLOCK": false,
-    "IO_LINK_STANDARD": "IEC 61131-9 (SDCI)",
-    "SUPPLY_VOLTAGE_V": 24,
-    "COM1_KBAUD": 4.8,
-    "COM2_KBAUD": 38.4,
-    "COM3_KBAUD": 230.4,
-    "UART_START_BITS": 1,
-    "UART_DATA_BITS": 8,
-    "UART_PARITY": "even",
-    "UART_STOP_BITS": 1,
-    "UART_BITS_PER_CHAR": 11,
-    "PROCESS_DATA_MAX_BYTES": 32,
-    "ISDU_INDEX_BITS": 16,
-    "ISDU_SUBINDEX_BITS": 8,
-    "MAX_CABLE_LENGTH_M": 20,
-    "HALF_DUPLEX": true,
-    "MASTER_INITIATED": true
-  },
   "voltage_levels": {
     "VDD_nominal": "+5 V ± 10 %",
     "VIL_max": "0.8 V",
@@ -168,40 +113,9 @@
       "DCD",
       "RI"
     ],
-    "is_single_wire": true,
-    "is_unidirectional": true,
     "is_point_to_point": true,
-    "edge_of_interest": "falling",
     "embedded_clock": false,
     "forwarded_clock": false,
-    "tick_nominal_us": 3,
-    "tick_range_us": [
-      3,
-      90
-    ],
-    "sync_calibration_ticks": 56,
-    "nibble_bits": 4,
-    "nibble_offset_ticks": 12,
-    "nibble_value_max": 15,
-    "nibble_period_ticks": [
-      12,
-      27
-    ],
-    "crc_bits": 4,
-    "data_nibble_range": [
-      1,
-      6
-    ],
-    "frame_order": [
-      "Synchronization/Calibration pulse (56 ticks)",
-      "Status & Serial Communication nibble",
-      "Data nibbles (1-6, typically two 12-bit channels)",
-      "CRC nibble (4-bit, CRC-4)",
-      "Optional pause pulse"
-    ],
-    "spc_variant": true,
-    "slow_serial_channel": true,
-    "is_single_wire_signal": true,
     "signal_wire": "C/Q",
     "is_half_duplex": true,
     "master_initiated": true,
@@ -252,22 +166,6 @@
     "DTR": "HIGH (inactive)",
     "TXRDY": "HIGH (inactive — no XMIT data)",
     "RXRDY": "HIGH (inactive — no RCVR data)"
-  },
-  "frame_format_constants": {
-    "uart_character": "8-E-1 (1 start, 8 data, 1 even parity, 1 stop)",
-    "m_sequence": "Master message (MC + data + CKT) + Device response (data + status + CKS)",
-    "m_sequence_types": [
-      "TYPE_0",
-      "TYPE_1",
-      "TYPE_2"
-    ],
-    "process_data_max_bytes": 32
-  },
-  "crc_constants": {
-    "crc4_nibble": {
-      "width_bits": 4,
-      "coverage": "data nibbles (optionally status nibble)"
-    }
   },
   "default_signal_values_when_idle": {
     "sio": "In SIO mode the C/Q line carries the binary switching value.",

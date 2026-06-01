@@ -42,20 +42,16 @@
   "class_path": "serial_peripheral_protocol",
   "fsm_states_transmitter": [
     {
-      "name": "SEND_CALIBRATION",
-      "description": "Emit the 56-tick synchronization/calibration pulse."
+      "name": "SEND_CALIBRATION"
     },
     {
-      "name": "SEND_STATUS",
-      "description": "Emit the status & serial communication nibble (12 + value ticks)."
+      "name": "SEND_STATUS"
     },
     {
-      "name": "SEND_DATA",
-      "description": "Emit the 1-6 data nibbles."
+      "name": "SEND_DATA"
     },
     {
-      "name": "SEND_CRC",
-      "description": "Emit the CRC-4 nibble."
+      "name": "SEND_CRC"
     },
     {
       "name": "SEND_PAUSE",
@@ -64,24 +60,19 @@
   ],
   "fsm_states_receiver": [
     {
-      "name": "WAIT_CALIBRATION",
-      "description": "Wait for a synchronization/calibration pulse (~56 ticks, longer than any nibble pulse)."
+      "name": "WAIT_CALIBRATION"
     },
     {
-      "name": "MEASURE_CALIBRATION",
-      "description": "Measure the calibration pulse and divide by 56 to obtain the per-frame tick time."
+      "name": "MEASURE_CALIBRATION"
     },
     {
-      "name": "DECODE_STATUS",
-      "description": "Decode the status & serial communication nibble (status bits + slow-channel bit 2/3)."
+      "name": "DECODE_STATUS"
     },
     {
-      "name": "DECODE_DATA",
-      "description": "Decode the 1-6 data nibbles by measuring each falling-edge-to-falling-edge period."
+      "name": "DECODE_DATA"
     },
     {
-      "name": "DECODE_CRC",
-      "description": "Decode the CRC nibble and recompute CRC-4 over the data nibbles to validate the frame."
+      "name": "DECODE_CRC"
     },
     {
       "name": "FRAME_DONE",
@@ -96,8 +87,7 @@
   "anti_deadlock_rule": "TX SOUT and RX SIN are independent serial wires; full-duplex operation has no cross-coupling. The chip-select bus interface uses simple RD/WR strobes.",
   "exit_from_reset": "After Master Reset (MR=1 for ≥ 1 µs): all registers (except RBR/THR/DLL/DLM) cleared; SOUT, INTR, OUT1, OUT2, RTS, DTR set per Table I. Software must program DLL/DLM (baud) and LCR (framing) before transmission begins.",
   "default_ready_state_recommendation": {
-    "idle": "In SIO mode the C/Q line carries the binary switching value; in SDCI mode the line idles at the UART idle level between characters.",
-    "resync": "On a checksum/parity error the Master retries; on repeated failure it falls back to SIO and may re-wake the Device."
+    "idle": "In SIO mode the C/Q line carries the binary switching value; in SDCI mode the line idles at the UART idle level between characters."
   },
   "loopback_diagnostic_mode": {
     "trigger": "MCR bit 4 (LOOP) = 1.",

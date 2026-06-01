@@ -44,33 +44,6 @@
         "purpose": "Drives the Device state machine (STARTUP/PREOPERATE/OPERATE/Fallback)."
       }
     ],
-    "channel_counts": {
-      "serial_data_pins": 2,
-      "modem_control_pins": 6,
-      "user_output_pins": 2,
-      "dma_handshake_pins": 2,
-      "cpu_data_bus_bits": 8,
-      "cpu_address_pins": 3,
-      "chip_select_pins": 3,
-      "cpu_control_pins": 5,
-      "clock_reset_pins": 5,
-      "supply_pins": 2,
-      "total_external_pins": 40,
-      "signal_wires": 1,
-      "total_wires": 3,
-      "nibble_bits": 4,
-      "crc_bits": 4,
-      "data_nibble_max": 6,
-      "sync_calibration_ticks": 56,
-      "tick_nominal_us": 3,
-      "slow_message_type_count": 2,
-      "uart_bits_per_char": 11,
-      "process_data_max_bytes": 32,
-      "com_rate_count": 3,
-      "supply_voltage_v": 24,
-      "m_sequence_type_count": 3,
-      "device_state_count": 3
-    },
     "handshake_pairs": [
       {
         "name": "Wake-up / mode switch",

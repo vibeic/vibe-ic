@@ -42,50 +42,58 @@
   "class_path": "serial_peripheral_protocol",
   "fsm_states_transmitter": [
     {
-      "name": "SEND_CALIBRATION",
-      "description": "Emit the 56-tick synchronization/calibration pulse."
+      "name": "TX_IDLE",
+      "description": "SOUT HIGH; THR + TX FIFO empty; THRE=1, TEMT=1."
     },
     {
-      "name": "SEND_STATUS",
-      "description": "Emit the status & serial communication nibble (12 + value ticks)."
+      "name": "TX_START_BIT",
+      "description": "Drive SOUT LOW for 1 bit-time (start bit)."
     },
     {
-      "name": "SEND_DATA",
-      "description": "Emit the 1-6 data nibbles."
+      "name": "TX_DATA_BITS",
+      "description": "Shift out 5-8 data bits LSB-first on SOUT, one bit per BAUDOUT/16 cycle."
     },
     {
-      "name": "SEND_CRC",
-      "description": "Emit the CRC-4 nibble."
+      "name": "TX_PARITY_BIT",
+      "description": "Drive parity bit (even / odd / mark / space) if PEN=1."
     },
     {
-      "name": "SEND_PAUSE",
-      "description": "Optionally emit a pause pulse to fix the frame length, then start the next frame."
+      "name": "TX_STOP_BITS",
+      "description": "Drive SOUT HIGH for 1, 1.5, or 2 stop bit-times."
+    },
+    {
+      "name": "TX_BREAK",
+      "description": "While LCR.BREAK=1: hold SOUT LOW continuously."
     }
   ],
   "fsm_states_receiver": [
     {
-      "name": "WAIT_CALIBRATION",
-      "description": "Wait for a synchronization/calibration pulse (~56 ticks, longer than any nibble pulse)."
+      "name": "RX_IDLE",
+      "description": "Wait for SIN HIGH→LOW (start-bit edge)."
     },
     {
-      "name": "MEASURE_CALIBRATION",
-      "description": "Measure the calibration pulse and divide by 56 to obtain the per-frame tick time."
+      "name": "RX_START_BIT",
+      "description": "Re-sample SIN mid-bit (8 clocks into the bit cell) to confirm valid start; false start-bit detection."
     },
     {
-      "name": "DECODE_STATUS",
-      "description": "Decode the status & serial communication nibble (status bits + slow-channel bit 2/3)."
+      "name": "RX_DATA_BITS",
+      "description": "Sample SIN mid-bit (every 16th BAUDOUT) and shift into receive shift register LSB-first."
     },
     {
-      "name": "DECODE_DATA",
-      "description": "Decode the 1-6 data nibbles by measuring each falling-edge-to-falling-edge period."
+      "name": "RX_PARITY_BIT",
+      "description": "Sample parity bit (if PEN=1) and compare to expected parity."
     },
     {
-      "name": "DECODE_CRC",
-      "description": "Decode the CRC nibble and recompute CRC-4 over the data nibbles to validate the frame."
+      "name": "RX_STOP_BITS",
+      "description": "Sample stop bit(s); if 0 then FE=1."
     },
     {
-      "name": "FRAME_DONE",
-      "description": "Output the decoded values and flags; optionally consume a pause pulse; return to WAIT_CALIBRATION."
+      "name": "RX_TRANSFER",
+      "description": "Move received character + error bits into RBR (char mode) or RX FIFO (FIFO mode); set DR=1."
+    },
+    {
+      "name": "RX_BREAK_DET",
+      "description": "SIN held LOW for ≥ entire character time → BI=1."
     }
   ],
   "fsm_hints": {
@@ -115,22 +123,6 @@
     "4: Transmitter Holding Register Empty",
     "5 (lowest): MODEM Status — CTS/DSR/RI/DCD change"
   ],
-  "exit_from_reset_or_poweron": "On power-up the Device is in SIO mode (the C/Q line is a binary switching signal). It remains in SIO until an IO-Link Master issues a wake-up request, which switches it into SDCI communication mode.",
-  "configurations": [
-    {
-      "name": "SIO operation",
-      "description": "C/Q line as a plain digital switching signal (no communication)."
-    },
-    {
-      "name": "SDCI operation",
-      "description": "UART communication on the C/Q line: cyclic Process Data + acyclic On-request Data + Events."
-    },
-    {
-      "name": "Data Storage",
-      "description": "Optional Master-side parameter backup/restore so a replaced Device is auto-parameterized."
-    }
-  ],
-  "timing_dependency_rule": "Cyclic Process Data exchange in OPERATE must respect the Device's MinCycleTime; the Master uses a MasterCycleTime greater than or equal to the Device's minimum. Communication cannot start until the wake-up request has switched the Device from SIO into SDCI mode.",
   "fsm_states_master": [
     {
       "name": "WAKE_UP",
@@ -170,5 +162,21 @@
       "name": "OPERATE",
       "description": "Exchange cyclic Process Data; serve On-request Data; raise Events."
     }
-  ]
+  ],
+  "exit_from_reset_or_poweron": "On power-up the Device is in SIO mode (the C/Q line is a binary switching signal). It remains in SIO until an IO-Link Master issues a wake-up request, which switches it into SDCI communication mode.",
+  "configurations": [
+    {
+      "name": "SIO operation",
+      "description": "C/Q line as a plain digital switching signal (no communication)."
+    },
+    {
+      "name": "SDCI operation",
+      "description": "UART communication on the C/Q line: cyclic Process Data + acyclic On-request Data + Events."
+    },
+    {
+      "name": "Data Storage",
+      "description": "Optional Master-side parameter backup/restore so a replaced Device is auto-parameterized."
+    }
+  ],
+  "timing_dependency_rule": "Cyclic Process Data exchange in OPERATE must respect the Device's MinCycleTime; the Master uses a MasterCycleTime greater than or equal to the Device's minimum. Communication cannot start until the wake-up request has switched the Device from SIO into SDCI mode."
 }

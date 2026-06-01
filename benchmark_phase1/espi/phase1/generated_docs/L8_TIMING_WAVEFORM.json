@@ -1,0 +1,48 @@
+{
+  "schema_version": "1",
+  "doc_class": "timing_waveform",
+  "ic_name": "espi",
+  "timing_windows": [],
+  "timing_constants": [],
+  "waveforms": [],
+  "extraction_evidence": {},
+  "clock_domains": [
+    {
+      "name": "clk",
+      "freq_low_mhz": 20.0,
+      "freq_high_mhz": null,
+      "role": "primary",
+      "freq_mhz": 20.0,
+      "reset_strategy": "unspecified",
+      "evidence": {
+        "file": "input/docs/Intel_eSPI_Base_Specification.txt",
+        "line": 15,
+        "matched_substring": "20 MHz"
+      },
+      "extraction_strategy": "clock_domain_doc_prose_fmax",
+      "freq_hz": 20000000,
+      "period_ns": 50.0,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    },
+    {
+      "name": "clk",
+      "freq_mhz": 66.0,
+      "freq_hz": 66000000,
+      "low_mhz": 66.0,
+      "high_mhz": 66.0,
+      "role": "extracted_from_doc_freq_mention",
+      "source": "input/docs/Intel_eSPI_Base_Specification.txt",
+      "reset_strategy": "unspecified",
+      "extraction_strategy": "doc_freq_mention_keyword_window",
+      "freq_evidence_count_v1_6_368": 1,
+      "best_rank_v1_6_370": 5,
+      "primary_evidence_v1_6_370": "input/docs/Intel_eSPI_Base_Specification.txt",
+      "derived_from": "clk",
+      "period_ns": 15.151515,
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    }
+  ],
+  "clock_mhz": 20.0
+}

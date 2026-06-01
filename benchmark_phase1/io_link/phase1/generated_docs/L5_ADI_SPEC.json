@@ -40,13 +40,11 @@
     "edge": "start-bit falling edge",
     "rule": "1 start + 8 data (LSB first) + 1 even parity + 1 stop per character."
   },
-  "tick_nominal_us": 3,
-  "sync_calibration_ticks": 56,
-  "encoding_role_in_analog": "IO-Link carries digital octets as UART characters on the single C/Q wire (0 V / 24 V push-pull); the analog/physical concern is the switching levels, the C/Q dual-mode behavior (SIO switching vs SDCI communication), and the bit timing at COM1/COM2/COM3, not a multi-level analog signal. Frame integrity comes from the even parity bit and the CKT/CKS checksums.",
   "supply_voltage_v": 24,
   "com_rates_kbaud": {
     "COM1": 4.8,
     "COM2": 38.4,
     "COM3": 230.4
-  }
+  },
+  "encoding_role_in_analog": "IO-Link carries digital octets as UART characters on the single C/Q wire (0 V / 24 V push-pull); the analog/physical concern is the switching levels, the C/Q dual-mode behavior (SIO switching vs SDCI communication), and the bit timing at COM1/COM2/COM3, not a multi-level analog signal. Frame integrity comes from the even parity bit and the CKT/CKS checksums."
 }

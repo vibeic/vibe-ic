@@ -77,9 +77,6 @@
       "point-to-point (no routing)"
     ],
     "device_classification": {
-      "transmitter": "Smart sensor that emits SENT frames.",
-      "receiver": "ECU that decodes the nibble stream.",
-      "spc_master": "ECU that drives the SENT-SPC master trigger pulse.",
       "master": "IO-Link Master port that initiates and drives the link.",
       "device": "IO-Link Device (sensor/actuator) that answers the Master.",
       "transceiver": "C/Q line driver supporting SIO and SDCI."

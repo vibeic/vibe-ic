@@ -289,30 +289,6 @@
     "forwarded_clock": false,
     "encoding": "UART character framing on the C/Q line: each character is 1 start bit, 8 data bits (LSB first), 1 even parity bit, and 1 stop bit (8-E-1, 11 bit times) at the negotiated COM rate.",
     "modulation": "Push-pull single-wire (C/Q) levels (0 V near L- / 24 V near L+); UART asynchronous serial framing in SDCI mode, binary switching in SIO mode.",
-    "tick_nominal_us": 3,
-    "tick_range_us": [
-      3,
-      90
-    ],
-    "sync_calibration_ticks": 56,
-    "nibble_bits": 4,
-    "nibble_offset_ticks": 12,
-    "nibble_value_max": 15,
-    "data_nibble_range": [
-      1,
-      6
-    ],
-    "crc_bits": 4,
-    "frame_order": [
-      "Synchronization/Calibration pulse (56 ticks)",
-      "Status & Serial Communication nibble",
-      "Data nibbles (1-6, typically two 12-bit channels)",
-      "CRC nibble (4-bit, CRC-4)",
-      "Optional pause pulse"
-    ],
-    "unidirectional": true,
-    "point_to_point": true,
-    "topology": "IO-Link Master port -> single three-wire cable (L+, L-, C/Q) -> one IO-Link Device; one Device per port, no bus, no multi-drop, no on-wire addressing.",
     "supply_voltage_v": 24,
     "com_rates_kbaud": {
       "COM1": 4.8,
@@ -334,7 +310,9 @@
       "OPERATE"
     ],
     "max_cable_length_m": 20,
-    "is_fieldbus": false
+    "point_to_point": true,
+    "is_fieldbus": false,
+    "topology": "IO-Link Master port -> single three-wire cable (L+, L-, C/Q) -> one IO-Link Device; one Device per port, no bus, no multi-drop, no on-wire addressing."
   },
   "no_protocol_overview_in_input": false,
   "compliance_requirements": [

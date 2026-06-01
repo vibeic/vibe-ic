@@ -345,7 +345,6 @@
     "input/docs/io_link_spec.txt": []
   },
   "class_path": "serial_peripheral_protocol",
-  "register_map_present": true,
   "base_address": "Defined at SoC level; offsets given relative to module base.",
   "notes": "IO-Link (IEC 61131-9, SDCI) is a communication interface rather than a memory-mapped register IC. A Device exposes the Direct Parameter page (read directly during STARTUP) and an ISDU-addressed parameter space (Index/Subindex). The groups below are the canonical IO-Link configuration/parameter surfaces.",
   "register_count": 12,

@@ -19,9 +19,7 @@
         "trap": "Expecting the Device to initiate communication is wrong."
       },
       {
-        "trap_name": "Not_plain_UART_not_SENT",
-        "rule": "IO-Link reuses UART 8-E-1 but adds the C/Q dual-mode line, wake-up, SIO/SDCI modes, M-sequences, CKT/CKS, and ISDU; it is not a plain UART link and not SENT (nibble/tick/J2716).",
-        "trap": "Applying plain async UART decoding or SENT nibble/tick decoding to an IO-Link link is wrong."
+        "trap_name": "Not_plain_UART_not_SENT"
       }
     ],
     "spec_version": "IEC 61131-9 (SDCI — Single-drop Digital Communication Interface) / IO-Link",

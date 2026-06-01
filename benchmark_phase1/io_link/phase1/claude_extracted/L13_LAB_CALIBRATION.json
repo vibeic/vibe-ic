@@ -9,7 +9,6 @@
     "ic_class_applicability_gate_v0_1_62": "ic_class='serial_peripheral_protocol' declares LL13 not applicable; emitted as N/A stub (l_doc_taxonomy.na_stub)"
   },
   "class_path": "serial_peripheral_protocol",
-  "lab_calibration_present": false,
   "notes": "IO-Link characterization centers on the C/Q line switching/UART levels, the wake-up request and SIO<->SDCI transition, the COM-rate bit timing (COM1/COM2/COM3) and 8-E-1 framing, the M-sequence CKT/CKS checksums, the Process Data cycle time vs MinCycleTime, the ISDU parameter access, and Event reporting. Conformance is established by IO-Link / IEC 61131-9 (SDCI) compliance testing.",
   "ic_name": "IO-Link Interface (SDCI, IEC 61131-9)",
   "lab_measurement_targets_from_spec": [

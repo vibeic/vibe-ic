@@ -75,31 +75,6 @@
     },
     "clock_recovery": "asynchronous: local UART bit clock per end; start-bit edge synchronizes each character."
   },
-  "nibble_waveform": {
-    "rule": "nibble pulse period = 12 + value ticks (value 0-15)",
-    "period_range_ticks": [
-      12,
-      27
-    ],
-    "edge": "each pulse begins with a falling edge; measure to the next falling edge."
-  },
-  "frame_waveform": {
-    "order": [
-      "Synchronization/Calibration pulse (56 ticks)",
-      "Status & Serial Communication nibble",
-      "Data nibbles (1-6, typically two 12-bit channels)",
-      "CRC nibble (4-bit, CRC-4)",
-      "Optional pause pulse"
-    ],
-    "sync_calibration_ticks": 56,
-    "crc": "4-bit CRC (CRC-4) nibble after the data nibbles.",
-    "pause": "optional pause pulse pads the frame to a constant length."
-  },
-  "spc_waveform": {
-    "trigger": "ECU master trigger pulse starts a frame (synchronous).",
-    "response": "sensor returns a standard SENT frame.",
-    "addressing": "trigger pulse width selects the data channel."
-  },
   "general_timing_rule": "UART characters are clocked at the negotiated COM rate (COM1 = 4.8 kbaud, COM2 = 38.4 kbaud, COM3 = 230.4 kbaud); each character is 11 bit times (8-E-1); M-sequences are half-duplex Master message + Device response; the cyclic Process Data exchange respects the Device's MinCycleTime.",
   "data_rate_waveform": {
     "com_rates_kbaud": {

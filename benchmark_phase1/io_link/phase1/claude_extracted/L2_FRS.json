@@ -230,7 +230,6 @@
     {
       "section": "15",
       "title": "RELATIONSHIP TO SIBLINGS",
-      "content": "IO-Link reuses UART character framing (8-E-1) but is NOT a plain UART link: a\nplain UART link has only asynchronous start/stop framing on TX/RX wires and\nno C/Q dual-mode line, no wake-up request, no SIO<->SDCI mode switch, no\nM-sequences, and no ISDU. IO-Link is also not SENT (SAE J2716): SENT encodes\ndata as nibble pulse widths in ticks on a single wire with a 56-tick\ncalibration pulse, whereas IO-Link uses standard UART octets at COM1/COM2/COM3\nwith M-sequence framing and CKT/CKS checksums. The defining IO-Link signature\nis the SDCI single-drop point-to-point link on the C/Q combined communication\nand switching line, with the wake-up request switching SIO mode to SDCI mode,\nM-sequences with CKT/CKS checksums at COM1/COM2/COM3, cyclic Process Data,\nacyclic On-request Data via ISDU Index/…",
       "evidence": "input/docs/io_link_spec.txt",
       "heading_shape": "numbered"
     },
@@ -289,28 +288,6 @@
     "forwarded_clock": false,
     "encoding": "UART character framing on the C/Q line: each character is 1 start bit, 8 data bits (LSB first), 1 even parity bit, and 1 stop bit (8-E-1, 11 bit times) at the negotiated COM rate.",
     "modulation": "Push-pull single-wire (C/Q) levels (0 V near L- / 24 V near L+); UART asynchronous serial framing in SDCI mode, binary switching in SIO mode.",
-    "tick_nominal_us": 3,
-    "tick_range_us": [
-      3,
-      90
-    ],
-    "sync_calibration_ticks": 56,
-    "nibble_bits": 4,
-    "nibble_offset_ticks": 12,
-    "nibble_value_max": 15,
-    "data_nibble_range": [
-      1,
-      6
-    ],
-    "crc_bits": 4,
-    "frame_order": [
-      "Synchronization/Calibration pulse (56 ticks)",
-      "Status & Serial Communication nibble",
-      "Data nibbles (1-6, typically two 12-bit channels)",
-      "CRC nibble (4-bit, CRC-4)",
-      "Optional pause pulse"
-    ],
-    "unidirectional": true,
     "point_to_point": true,
     "topology": "IO-Link Master port -> single three-wire cable (L+, L-, C/Q) -> one IO-Link Device; one Device per port, no bus, no multi-drop, no on-wire addressing.",
     "supply_voltage_v": 24,

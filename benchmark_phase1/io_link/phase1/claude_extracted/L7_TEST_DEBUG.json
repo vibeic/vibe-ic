@@ -40,7 +40,6 @@
   "vsuite_per_kw_cap_skipped_v1_6_373": 0,
   "extraction_evidence": {},
   "class_path": "serial_peripheral_protocol",
-  "test_debug_architecture_present": true,
   "test_debug_features": [
     "Internal loopback (MCR.LOOP=1) for fault isolation; SOUT internally drives SIN; modem outputs drive modem inputs.",
     "Break, parity, overrun, framing error simulation through loopback + register manipulation.",

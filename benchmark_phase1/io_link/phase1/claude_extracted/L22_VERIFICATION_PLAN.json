@@ -7,7 +7,6 @@
     "coverage_goals": [],
     "formal_properties": [],
     "regression_matrix": {},
-    "verification_plan_present": "implicit",
     "notes": "IO-Link does not ship an embedded testbench, but the standard implies a verification plan spanning the wake-up and SIO<->SDCI mode switch, the COM-rate detection and 8-E-1 framing, the M-sequence CKT/CKS checksums, the cyclic Process Data and MinCycleTime, the ISDU parameter access, Events, and the Device state machine. IO-Link (IEC 61131-9, SDCI) compliance testing supplies the formal suite.",
     "verification_categories_derived_from_spec": [
       "Wake-up / mode switch — the wake-up request switches SIO to SDCI.",

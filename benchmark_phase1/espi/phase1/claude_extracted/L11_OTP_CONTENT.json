@@ -1,0 +1,5 @@
+{
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
+  "otp_content": "N/A — eSPI is a bus protocol, no one-time-programmable fuse content defined.",
+  "applicable": false
+}

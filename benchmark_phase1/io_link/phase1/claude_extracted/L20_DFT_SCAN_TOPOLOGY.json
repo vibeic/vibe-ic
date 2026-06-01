@@ -9,7 +9,6 @@
     "ic_class_applicability_gate_v0_1_62": "ic_class='serial_peripheral_protocol' declares LL20 not applicable; emitted as N/A stub (l_doc_taxonomy.na_stub)"
   },
   "fields": {
-    "dft_present": "partial",
     "notes": "IO-Link's protocol-level DFT surface is the per-character even parity, the per-M-sequence CKT/CKS checksum, the Device status octet and Events, and the Direct Parameter page / ISDU readback. Chip-level JTAG / scan / BIST remain Device-vendor / SoC-integrator concerns; conformance is established by IO-Link (IEC 61131-9, SDCI) compliance testing.",
     "internal_diagnostics": [
       "Loopback (MCR.LOOP=1) — SOUT internally drives SIN; modem outputs drive modem inputs.",

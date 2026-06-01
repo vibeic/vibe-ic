@@ -9,7 +9,6 @@
     "ic_class_applicability_gate_v0_1_62": "ic_class='serial_peripheral_protocol' declares LL23 not applicable; emitted as N/A stub (l_doc_taxonomy.na_stub)"
   },
   "fields": {
-    "security_requirements_present": false,
     "notes": "IO-Link (IEC 61131-9, SDCI) is a point-to-point single-drop sensor/actuator link: its built-in protection is anti-corruption (the per-character even parity plus the per-M-sequence CKT/CKS checksums and retry/fallback). The link carries plaintext UART octets. Cryptographic confidentiality / authentication are NOT part of the base SDCI data path; functional safety (IO-Link Safety) and security are provided by separate IO-Link profiles if required.",
     "ic_name": "IO-Link Interface (SDCI, IEC 61131-9)",
     "anti_corruption_features": [

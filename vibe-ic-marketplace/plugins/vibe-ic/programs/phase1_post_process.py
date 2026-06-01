@@ -204,7 +204,62 @@ def scrub_l_doc(obj: Any, l_doc_name: str,
                         new_value=pat.replacement, why=pat.why,
                     ))
                 break
+    # v0.2.13 — after the in-place scrub, an opcode entry whose `hex`
+    # was replaced by the HALLUCINATION_SCRUBBED sentinel is a zombie:
+    # it carries no trustworthy encoding and (for bus-interconnect specs
+    # with no real command protocol, e.g. AMBA AXI) was synthesised from
+    # page-format figures in the first place. Leaving it in `opcodes`
+    # makes `no_opcodes_in_input` lie (False) and trips
+    # l3_opcode_name_coverage_check (every zombie name is
+    # OPCODE_NAME_UNKNOWN → 100% placeholder → FAIL → runner exit 1).
+    # ic_class_profile._l3_has_commands already filters these out; do the
+    # same at the source so generated_docs match a fresh extraction
+    # (which carries no opcodes key at all). General / sentinel-based —
+    # no protocol name in the predicate.
+    log.extend(_drop_scrubbed_opcodes(obj, l_doc_name))
     return log
+
+
+# Opcode entries whose hex was scrubbed to this sentinel are dropped.
+_SCRUBBED_HEX = "<HALLUCINATION_SCRUBBED>"
+
+
+def _drop_scrubbed_opcodes(obj: Any, l_doc_name: str) -> List["ScrubLog"]:
+    """Remove opcode entries whose `hex` is the scrub sentinel and
+    recompute the L3 sibling flags. Returns an audit log. General:
+    fires on any dict carrying an `opcodes` list; no-op otherwise."""
+    out: List[ScrubLog] = []
+    if not isinstance(obj, dict):
+        return out
+    ops = obj.get("opcodes")
+    if not isinstance(ops, list) or not ops:
+        return out
+    kept = [op for op in ops
+            if not (isinstance(op, dict) and op.get("hex") == _SCRUBBED_HEX)]
+    dropped = len(ops) - len(kept)
+    if dropped <= 0:
+        return out
+    obj["opcodes"] = kept
+    out.append(ScrubLog(
+        l_doc=l_doc_name, pattern_name="drop_scrubbed_opcode_zombie",
+        path="opcodes", old_value=f"{len(ops)} entries",
+        new_value=f"{len(kept)} entries",
+        why=f"dropped {dropped} opcode(s) whose hex was scrubbed as a "
+            f"hallucination; a scrubbed-hex opcode carries no real "
+            f"encoding (consistent with ic_class_profile._l3_has_commands)",
+    ))
+    # Recompute the sibling flags the L3 emitter derives from `opcodes`
+    # so they stay truthful after the drop.
+    if "no_opcodes_in_input" in obj:
+        obj["no_opcodes_in_input"] = not kept
+    placeholder_names = {None, "", "OPCODE_NAME_UNKNOWN", "TODO"}
+    ph = sum(1 for op in kept
+             if isinstance(op, dict) and op.get("name") in placeholder_names)
+    if "placeholder_opcode_count" in obj:
+        obj["placeholder_opcode_count"] = ph
+    if "no_opcode_names_in_input" in obj:
+        obj["no_opcode_names_in_input"] = bool(kept) and ph == len(kept)
+    return out
 
 
 # ---------------------------------------------------------------------------

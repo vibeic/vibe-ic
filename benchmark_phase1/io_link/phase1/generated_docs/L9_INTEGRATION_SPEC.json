@@ -94,30 +94,6 @@
     "clock_source": "External crystal between XIN and XOUT, or external clock on XIN (≤ 24.0 MHz). Independent RCLK input for the receiver section if desired.",
     "reset_source": "Master Reset MR pin (active HIGH, Schmitt input, ≥ 1 µs).",
     "interrupt_routing": "Single INTR output (active HIGH) ORs all enabled sources.",
-    "sent_standard": "SAE J2716",
-    "tick_nominal_us": 3,
-    "tick_range_us": [
-      3,
-      90
-    ],
-    "sync_calibration_ticks": 56,
-    "nibble_bits": 4,
-    "nibble_pulse_period_ticks": "12 + value",
-    "crc_bits": 4,
-    "data_nibble_range": [
-      1,
-      6
-    ],
-    "modulation": "single-wire (C/Q) UART (SDCI) / binary switching (SIO)",
-    "clocking": "asynchronous UART (local bit clock per end)",
-    "unidirectional": true,
-    "point_to_point": true,
-    "spc_variant": true,
-    "interfaces": {
-      "signal": "C/Q combined communication and switching line (0 V / 24 V)",
-      "supply": "L+ (24 V)",
-      "ground": "L- (ground / 0 V return)"
-    },
     "io_link_standard": "IEC 61131-9 (SDCI)",
     "supply_voltage_v": 24,
     "com_rates_kbaud": {
@@ -138,8 +114,16 @@
       "OPERATE"
     ],
     "max_cable_length_m": 20,
+    "modulation": "single-wire (C/Q) UART (SDCI) / binary switching (SIO)",
+    "clocking": "asynchronous UART (local bit clock per end)",
+    "point_to_point": true,
     "half_duplex": true,
-    "master_initiated": true
+    "master_initiated": true,
+    "interfaces": {
+      "signal": "C/Q combined communication and switching line (0 V / 24 V)",
+      "supply": "L+ (24 V)",
+      "ground": "L- (ground / 0 V return)"
+    }
   },
   "interface_categories": [
     "Signal interface — single C/Q combined communication and switching line.",

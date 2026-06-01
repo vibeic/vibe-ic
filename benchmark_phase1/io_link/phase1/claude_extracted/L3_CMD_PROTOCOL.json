@@ -6,8 +6,6 @@
   "no_opcodes_in_input": true,
   "placeholder_opcode_count": 0,
   "no_opcode_names_in_input": false,
-  "crc_parameters": null,
-  "no_crc_parameters_in_input": true,
   "verdict_byte_offset": null,
   "verdict_byte_hex": null,
   "no_verdict_byte_in_input": true,
@@ -181,13 +179,6 @@
   ],
   "burst_based": false,
   "byte_oriented": true,
-  "frame_format": {
-    "start_bit": "1 bit, always LOW (mark→space transition).",
-    "data_bits": "5, 6, 7, or 8 bits, LSB first.",
-    "parity_bit": "Optional; even / odd / stick (mark or space).",
-    "stop_bits": "1, 1.5 (5-bit char only), or 2 bits, always HIGH.",
-    "idle_state": "HIGH (mark)."
-  },
   "frame_structure": [
     {
       "element": "Master Control (MC) octet",
@@ -214,54 +205,11 @@
       "purpose": "6-bit checksum + 2-bit type/event field over the Device response."
     }
   ],
-  "nibble_encoding": {
-    "bits_per_nibble": 4,
-    "pulse_period_ticks": "12 + value",
-    "value_range": [
-      0,
-      15
-    ],
-    "period_range_ticks": [
-      12,
-      27
-    ],
-    "min_low_ticks": 5,
-    "note": "Each nibble pulse is measured falling-edge to falling-edge; value = (period_ticks - 12)."
-  },
-  "slow_serial_channel": [
-    {
-      "name": "Short Serial Message",
-      "frames": 16,
-      "payload": "4-bit message ID + 8-bit data + 4-bit CRC (16-bit total)",
-      "carrier": "bit 2 (serial data) and bit 3 (start) of the status nibble."
-    },
-    {
-      "name": "Enhanced Serial Message",
-      "frames": "~18",
-      "payload": "configuration / identification (extended ID + 12/16-bit data + CRC)",
-      "carrier": "bit 2/3 of the status nibble across many frames."
-    }
-  ],
-  "spc_variant": {
-    "name": "SENT-SPC (Short PWM Code)",
-    "trigger": "ECU drives a master trigger pulse on the signal line.",
-    "response": "Sensor returns a standard SENT frame.",
-    "addressing": "The master trigger pulse width can select which data channel the sensor returns (addressable).",
-    "synchronous": true
-  },
-  "crc": {
-    "crc_bits": 4,
-    "name": "CRC-4",
-    "coverage": "data nibbles (and optionally the status nibble)",
-    "method": "4-bit polynomial with a defined seed; lookup-table-based calculation."
-  },
   "addressing": {
     "on_wire": "None — point-to-point, one Device per Master port.",
     "parameters": "ISDU Index (16-bit) + Subindex (8-bit)."
   },
-  "nibble_oriented": true,
   "frame_oriented": true,
-  "unidirectional": true,
   "uart_character": {
     "start_bits": 1,
     "data_bits": 8,
