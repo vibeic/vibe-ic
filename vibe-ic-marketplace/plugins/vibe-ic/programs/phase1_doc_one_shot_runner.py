@@ -51453,6 +51453,72 @@ def main() -> int:
     # PURELY on the structural fact `L3.opcodes == []` — never on protocol or
     # folder name. A genuine command IC keeps a non-empty L3.opcodes and is
     # left untouched, so its required per-opcode coverage is preserved.
+    # v0.2.13 — generic drop-in protocol-synth auto-dispatch. The hand-wired
+    # chain above (R55 / Tier-2) covers the 80 built-in protocol synths. To let
+    # NEW protocols (and third-party plugins) extend coverage WITHOUT editing
+    # this 51k-line runner, any `*_protocol_synth.py` that OPTS IN with a
+    # module-level `AUTO_DISPATCH = True` and exposes `is_<base>(blob)` +
+    # `apply_<base>_synth(gd, flag, ic_name)` is discovered here and dispatched.
+    # Opt-in (not blanket auto-fire) means the 80 built-ins — none of which set
+    # AUTO_DISPATCH — are NEVER touched by this path, so it cannot regress them.
+    # The discovered synth's OWN inline structural detector is the real gate
+    # (it must be strict enough not to fire on a sibling protocol — verified by
+    # the no-misfire sweep). Doctrine: general extension point, not benchmark
+    # keyword; mirrors ic_class_registry "third-party plugins can append".
+    print(f"[14e2b/15] generic drop-in protocol-synth auto-dispatch ...")
+    try:
+        import importlib as _importlib_auto
+        _gd_auto = _pl.generated_docs_dir(project)
+        # Detection blob: generated L1-L3 + input_doc text (content only — never
+        # a filename or benchmark-folder name).
+        _auto_blob = ""
+        for _n in ("L1_DATASHEET.json", "L2_FRS.json", "L3_CMD_PROTOCOL.json"):
+            _q = _gd_auto / _n
+            if _q.is_file():
+                try:
+                    _auto_blob += _q.read_text()
+                except Exception:
+                    pass
+        _idir_auto = _pl.input_doc_dir(project)
+        if _idir_auto.is_dir():
+            for _f in sorted(_idir_auto.iterdir()):
+                if _f.is_file() and _f.suffix.lower() in (".txt", ".md"):
+                    try:
+                        _auto_blob += _f.read_text(errors="ignore")
+                    except Exception:
+                        pass
+        _here_auto = Path(__file__).resolve().parent
+        for _path_auto in sorted(_here_auto.glob("*_protocol_synth.py")):
+            _stem_auto = _path_auto.stem               # e.g. "espi_protocol_synth"
+            _base_auto = _stem_auto[:-len("_protocol_synth")]
+            try:
+                _mod_auto = _importlib_auto.import_module(_stem_auto)
+            except Exception:
+                continue
+            if not getattr(_mod_auto, "AUTO_DISPATCH", False):
+                continue                               # not an opt-in drop-in
+            _is_fn = getattr(_mod_auto, f"is_{_base_auto}", None)
+            _apply_fn = getattr(_mod_auto, f"apply_{_base_auto}_synth", None)
+            if not callable(_is_fn) or not callable(_apply_fn):
+                continue
+            try:
+                _flag_auto = bool(_is_fn(_auto_blob))
+            except Exception:
+                _flag_auto = False
+            if not _flag_auto:
+                continue
+            _icn_auto = getattr(_mod_auto, "IC_NAME", None)
+            try:
+                _apply_fn(_gd_auto, True, _icn_auto)
+                print(f"      → auto-dispatch fired: {_base_auto} "
+                      f"(is_{_base_auto}=True)")
+            except Exception as _ad_err:
+                print(f"      auto-dispatch {_base_auto} FAILED (fail-open): "
+                      f"{_ad_err}", file=sys.stderr)
+    except Exception as _auto_err:
+        print(f"      generic auto-dispatch FAILED (fail-open): {_auto_err}",
+              file=sys.stderr)
+
     print(f"[14e3/15] L10↔L3 packet-protocol opcode consistency sweep ...")
     try:
         _gd_sweep = _pl.generated_docs_dir(project)
