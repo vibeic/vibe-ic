@@ -141,6 +141,50 @@ def _list_rtl(project: Path) -> List[Path]:
     return (sorted(r.glob("*.sv")) + sorted(r.glob("*.v")))
 
 
+def _strip_v_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
+    text = re.sub(r"//[^\n]*", " ", text)
+    return text
+
+
+def _find_register_divided_clocks(
+        rtl_files: List[Path]) -> List[Tuple[str, str]]:
+    """Detect register-divided clocks so we can emit a matching
+    ``create_generated_clock`` (otherwise STA reports zero-slack on every
+    path crossing into the divider's domain and CTS will not balance the
+    divider's tree).  Chip-AGNOSTIC — mirrors the detection used by
+    derived_clock_sdc_required_check.py:
+
+        Form A — combinational toggle:
+            always @(posedge SRC) DIV <= ~DIV;
+        Form B — counter divide:
+            always @(posedge SRC) if (cnt == N-1) DIV <= ~DIV;
+
+    Returns a de-duplicated list of (src_clk, div_clk) tuples.
+    """
+    found: "Dict[str, str]" = {}
+    blk_re = re.compile(
+        r"always\s*@\s*\(\s*posedge\s+([A-Za-z_]\w*)[^)]*\)(.*?)"
+        r"(?=always\s*@|endmodule|\Z)",
+        flags=re.DOTALL)
+    for f in rtl_files:
+        try:
+            txt = _strip_v_comments(f.read_text(encoding="utf-8",
+                                                errors="ignore"))
+        except Exception:
+            continue
+        for m in blk_re.finditer(txt):
+            src = m.group(1)
+            body = m.group(2)
+            for tm in re.finditer(
+                    r"\b([A-Za-z_]\w*)\s*<=\s*~\s*\1\b", body):
+                div = tm.group(1)
+                if div == src:
+                    continue
+                found.setdefault(div, src)
+    return [(src, div) for div, src in found.items()]
+
+
 def _detect_board_wrapper(rtl_files: List[Path], board: str
                           ) -> Optional[Tuple[str, str]]:
     """Returns (module_name, port_signature_blob) if a board wrapper exists."""
@@ -243,7 +287,8 @@ def _is_output(name: str, direction: str) -> bool:
 # ---------------------------------------------------------------------------
 def _render_sdc(top: str, clock_port: str, period_ns: float,
                 inputs: List[str], outputs: List[str],
-                async_ports: List[str]) -> str:
+                async_ports: List[str],
+                gen_clocks: Optional[List[Tuple[str, str]]] = None) -> str:
     period_str = f"{period_ns:.3f}".rstrip("0").rstrip(".") or "20"
     lines: List[str] = []
     lines.append("# =========================================================================")
@@ -264,6 +309,19 @@ def _render_sdc(top: str, clock_port: str, period_ns: float,
     lines.append("derive_pll_clocks")
     lines.append("derive_clock_uncertainty")
     lines.append("")
+    # Register-divided clocks (e.g. an MDC management clock toggled by an
+    # internal FSM counter): each needs a create_generated_clock so STA
+    # propagates a clock onto the divider's domain and CTS balances its
+    # tree. Divide ratio is left at 2 (the toggle factor) — the deterministic
+    # generator cannot know the runtime counter modulus; the actual ratio is
+    # parameterised in RTL and refined at PnR if needed.
+    if gen_clocks:
+        lines.append("# Register-divided (generated) clocks")
+        for src, div in gen_clocks:
+            lines.append(
+                f"create_generated_clock -name {div} -divide_by 2 "
+                f"-source [get_ports {{{src}}}] [get_pins {{{div}_reg/Q}}]")
+        lines.append("")
     if inputs:
         lines.append("# Synchronous data inputs (moderate setup/hold)")
         for sig in inputs:
@@ -413,13 +471,15 @@ def main() -> int:
         print(f"SKIP: {out} exists (use --force to overwrite)")
         return 0
 
+    gen_clocks = _find_register_divided_clocks(rtl_files)
     text = _render_sdc(top, clock_port, period_ns, inputs, outputs,
-                       async_ports)
+                       async_ports, gen_clocks)
     out.write_text(text, encoding="utf-8")
     print(f"PASS sdc_gen: {out} "
           f"(clock={clock_port}@{clock_mhz}MHz period={period_ns:.2f}ns; "
           f"{len(inputs)} in / {len(outputs)} out / "
-          f"{len(async_ports)} false_path)")
+          f"{len(async_ports)} false_path / "
+          f"{len(gen_clocks)} generated_clock)")
     return 0
 
 

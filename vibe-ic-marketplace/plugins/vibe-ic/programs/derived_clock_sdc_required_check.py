@@ -77,6 +77,27 @@ def _strip_comments_sdc(text: str) -> str:
     return re.sub(r"#[^\n]*", "", text)
 
 
+def _autodiscover_sdc_text(target: Path) -> str:
+    """When the check is invoked on a project directory with no explicit
+    --sdc (as flow_compliance_check.py does — it passes only the project
+    root), auto-discover every *.sdc under the project so a valid
+    create_generated_clock emitted by sdc_gen.py is honoured.  Without
+    this, the gate FALSE-FAILed any RTL with a register-divided clock even
+    though the runner had already written a correct generated-clock SDC.
+    Chip-AGNOSTIC: globs all *.sdc, concatenates their comment-stripped
+    text. Returns "" if the target is a single file or no SDC exists.
+    """
+    if not target.is_dir():
+        return ""
+    parts: List[str] = []
+    for sdc in sorted(target.rglob("*.sdc")):
+        try:
+            parts.append(_strip_comments_sdc(sdc.read_text(errors="replace")))
+        except OSError:
+            continue
+    return "\n".join(parts)
+
+
 def find_derived_clocks(rtl_text: str) -> List[Tuple[str, str, int]]:
     """Return list of (src_clk, div_clk, line_no) tuples."""
     out: List[Tuple[str, str, int]] = []
@@ -177,6 +198,11 @@ def audit(rtl_target: Path, sdc_path: Optional[Path]) -> List[Finding]:
     sdc_text = ""
     if sdc_path and sdc_path.exists():
         sdc_text = _strip_comments_sdc(sdc_path.read_text(errors="replace"))
+    elif sdc_path is None:
+        # No explicit --sdc: auto-discover under the project directory so
+        # the gate works when invoked as `<check>.py <project>` (the
+        # flow_compliance_check.py call shape).
+        sdc_text = _autodiscover_sdc_text(rtl_target)
 
     for src, div, fpath, ln in pairs:
         if sdc_has_generated_clock(sdc_text, div):

@@ -176,9 +176,15 @@ def find_rtl_clock_period_ns(project: Path) -> Optional[float]:
             txt = f.read_text(errors="replace")
         except Exception:
             continue
+        # Left word-boundary so a master-clock synonym like CLOCK_PERIOD_NS
+        # does NOT match as the SUFFIX of an unrelated domain-specific key
+        # (e.g. `nibble_clock_period_ns` / `mdc_min_period_ns` / a
+        # `byte_clock_period_ns` data-interface period). Those describe a
+        # protocol bit/nibble clock — not the core clk this check budgets.
+        _lb = r"(?<![A-Za-z0-9_])"
         # NS first
         for syn in _PERIOD_SYNONYMS_NS:
-            m = re.search(syn + r"\b\D{0,40}?([0-9]+(?:\.[0-9]+)?)", txt,
+            m = re.search(_lb + syn + r"\b\D{0,40}?([0-9]+(?:\.[0-9]+)?)", txt,
                           re.IGNORECASE)
             if m:
                 try:
@@ -187,7 +193,7 @@ def find_rtl_clock_period_ns(project: Path) -> Optional[float]:
                     pass
         # PS → ns
         for syn in _PERIOD_SYNONYMS_PS:
-            m = re.search(syn + r"\b\D{0,40}?([0-9]+(?:\.[0-9]+)?)", txt,
+            m = re.search(_lb + syn + r"\b\D{0,40}?([0-9]+(?:\.[0-9]+)?)", txt,
                           re.IGNORECASE)
             if m:
                 try:
@@ -196,7 +202,7 @@ def find_rtl_clock_period_ns(project: Path) -> Optional[float]:
                     pass
         # HZ → ns
         for syn in _FREQ_SYNONYMS_HZ:
-            m = re.search(syn + r"\b\D{0,40}?([0-9]+(?:_[0-9]+)*)",
+            m = re.search(_lb + syn + r"\b\D{0,40}?([0-9]+(?:_[0-9]+)*)",
                           txt, re.IGNORECASE)
             if m:
                 try:
