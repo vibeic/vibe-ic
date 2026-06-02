@@ -124,7 +124,9 @@ Written by `eda_spice_corner` — PVT matrix with per-spec pass/fail.
 
 - Do not run all corners on iteration 0 — TT-only suffices for initial sanity
   (enforced by `corner_schedule_policy.py`).
-- Do not make more than 2 simultaneous changes per iteration — hard to debug.
+- Do not make more than 2 simultaneous changes per iteration — single-variable
+  attribution (enforced by `sizing_history_emit.py`: record each iteration's
+  `changed_params: [<param>, ...]`; >2 → `TOO_MANY_SIMULTANEOUS_CHANGES`).
 - Do not exceed 5 iterations — enforced by `iterative_search.py` `max_rounds`.
 - (JUDGMENT) Do not adjust a device that has no sensitivity to the failing spec —
   picking the sensitive device is the causal-analysis step the table cannot do.

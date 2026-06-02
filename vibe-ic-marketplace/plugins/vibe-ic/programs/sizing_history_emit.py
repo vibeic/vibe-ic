@@ -141,6 +141,22 @@ def validate_history(data: dict) -> List[dict]:
             out.append({"rule": "MISSING_FIELD",
                         "field": f"iterations[{i}].changes",
                         "message": "iteration record missing 'changes'"})
+        # v0.2.25 — the sizing loop's "do not make more than 2 simultaneous
+        # changes per iteration" discipline, now a deterministic check (was
+        # prose-only — D3 re-audit residual). Enforced structurally when the
+        # iteration records a `changed_params` list: > 2 changed parameters in
+        # one iteration breaks single-variable attribution (you cannot tell
+        # which knob moved the metric). Legacy records that carry only the
+        # free-text `changes` string are not counted (no schema regression);
+        # to enforce, emit `changed_params: [<param>, ...]`.
+        cp = rec.get("changed_params")
+        if isinstance(cp, list) and len(cp) > 2:
+            out.append({"rule": "TOO_MANY_SIMULTANEOUS_CHANGES",
+                        "field": f"iterations[{i}].changed_params",
+                        "message": (f"iteration changed {len(cp)} parameters "
+                                    f"{cp} — the sizing loop must not make more "
+                                    f"than 2 simultaneous changes per iteration "
+                                    f"(single-variable attribution discipline).")})
     return out
 
 

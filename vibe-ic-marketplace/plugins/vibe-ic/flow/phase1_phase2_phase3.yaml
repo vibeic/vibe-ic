@@ -431,8 +431,9 @@ steps:
       - "phase2/stage2/constraints/*.sdc"
       - "phase2/stage2/constraints/pvt_matrix.json"
     gate:
-      files_exist: ["phase2/stage2/constraints/*.sdc", "phase2/stage2/constraints/pvt_matrix.json"]
-      all_of: true
+      all_of:
+        - files_exist: ["phase2/stage2/constraints/*.sdc", "phase2/stage2/constraints/pvt_matrix.json"]
+        - program_exit_zero: "sdc_syntax_check . --json reports/phase2/gates/sdc_syntax.json"
     blocks_on: [1]
 
   - id: 8
@@ -577,7 +578,9 @@ steps:
     required_outputs:
       - "phase1/analog/*/spec.json"
     gate:
-      files_exist: ["phase1/analog/*/spec.json"]
+      all_of:
+        - files_exist: ["phase1/analog/*/spec.json"]
+        - program_exit_zero: "analog_a1_spec_extract_check . --json reports/analog/a1_spec.json"
     blocks_on: []
 
   - id: A2
@@ -589,7 +592,9 @@ steps:
     required_outputs:
       - "phase2/analog/*/topology.md"
     gate:
-      files_exist: ["phase2/analog/*/topology.md"]
+      all_of:
+        - files_exist: ["phase2/analog/*/topology.md"]
+        - program_exit_zero: "analog_a2_topology_select_check . --json reports/analog/a2_topology.json"
     blocks_on: [A1]
 
   - id: A3
@@ -632,8 +637,10 @@ steps:
     required_outputs:
       - "phase3/analog/*/layout.mag OR phase3/analog/*/*.gds"
     gate:
-      files_exist: ["phase3/analog/*/layout.mag", "phase3/analog/*/*.gds"]
-      any_of: true
+      all_of:
+        - files_exist: ["phase3/analog/*/layout.mag", "phase3/analog/*/*.gds"]
+          any_of: true
+        - program_exit_zero: "analog_a5_layout_check . --json reports/analog/a5_layout.json"
     blocks_on: [A4]
 
   - id: A7

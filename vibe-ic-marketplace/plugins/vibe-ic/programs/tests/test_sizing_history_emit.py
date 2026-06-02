@@ -157,3 +157,33 @@ def test_emit_final_refuses_invalid(tmp_path):
 def test_missing_file():
     r = _run("validate-final", "/nonexistent/final.json")
     assert r.returncode == 2
+
+
+# v0.2.25 — D3 re-audit residual: the "<=2 simultaneous changes per iteration"
+# discipline is now a structural check on changed_params.
+def test_history_more_than_two_changed_params_fails():
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location(
+        "sizing_history_emit",
+        str(Path(__file__).resolve().parent.parent / "sizing_history_emit.py"))
+    _m = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_m)
+    # 3 changed params in one iteration -> violation
+    bad = {"iterations": [
+        {"iter": 0, "changes": "init", "changed_params": []},
+        {"iter": 1, "changes": "tune", "changed_params": ["W_M1", "L_M2", "Cc"]},
+    ]}
+    vios = _m.validate_history(bad)
+    assert any(v["rule"] == "TOO_MANY_SIMULTANEOUS_CHANGES" for v in vios), vios
+    # exactly 2 changed params -> OK (no such violation)
+    ok = {"iterations": [
+        {"iter": 0, "changes": "init", "changed_params": []},
+        {"iter": 1, "changes": "tune", "changed_params": ["W_M1", "L_M2"]},
+    ]}
+    assert not any(v["rule"] == "TOO_MANY_SIMULTANEOUS_CHANGES"
+                   for v in _m.validate_history(ok))
+    # legacy record with only the free-text `changes` string (no changed_params)
+    # is NOT flagged (no schema regression).
+    legacy = {"iterations": [{"iter": 0, "changes": "W up, L down, Cc up"}]}
+    assert not any(v["rule"] == "TOO_MANY_SIMULTANEOUS_CHANGES"
+                   for v in _m.validate_history(legacy))
