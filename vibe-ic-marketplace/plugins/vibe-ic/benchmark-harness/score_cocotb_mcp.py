@@ -33,6 +33,7 @@ Outputs <project>/reports/cocotb_score.json with the TESTS / PASS / FAIL counts.
 """
 from __future__ import annotations
 import argparse, json, subprocess, shutil, time, re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -100,6 +101,10 @@ def main():
     ap.add_argument("--mount-container", default="/foss/designs")
     ap.add_argument("--container", default="iic-eda")
     ap.add_argument("--simulator", default="icarus")
+    ap.add_argument("--waves", type=int, default=0,
+                    help="WAVES env for the cocotb runner (0=off default, 1=dump FST/VCD). "
+                         "Pinned into the container env so cocotb 2.0.1 runner.py "
+                         "int(os.getenv('WAVES', waves)) never sees None (the 1.x->2.0 gap).")
     ap.add_argument("--timeout", type=int, default=300)
     a = ap.parse_args()
 
@@ -162,11 +167,36 @@ def main():
     # /foss/tools/iverilog/lib — those paths are only injected by the container's
     # login profile (`bash -lc`), NOT by plain `docker exec`. Use bash -lc so the
     # session inherits the full toolchain PATH + LD_LIBRARY_PATH.
+    # cocotb 2.0.1 runner.py L508-509 do int(os.getenv("WAVES", waves)) /
+    # int(os.getenv("GUI", gui)). int(None) raises TypeError when a 1.x-style
+    # harness passes waves=None / gui=None AND the env var is unset (the
+    # nvidia/cvdp-sim harness was written for cocotb 1.x, which tolerated it).
+    # Pin WAVES+GUI to 0 so cocotb's int() always sees the string "0"
+    # (int("0")==0), never None. The cocotb runner reads the WAVES *env var*
+    # BEFORE falling back to the harness's waves= param, so our export wins even
+    # when the harness passes waves=None (empirically: priority_encoder PASSes).
+    # We ALSO mirror it to WAVE (singular): some harnesses read wave=os.getenv(
+    # "WAVE") and could feed it into their OWN int(); WAVE=0 defends that path
+    # too. This is an ENV adaptation of the cocotb-2.0 runner (our disclosed § 3
+    # substitution layer), NOT a change to the hidden per-project harness.
+    #
+    # We deliberately DO NOT export TARGET. TARGET is read only inside the
+    # xcelium coverage gate (harness covt_report_check(): float(os.getenv(
+    # "TARGET"))), which opens /code/rundir/coverage.log FIRST — a file only
+    # Cadence imc produces, so under the icarus substitution it never exists and
+    # the gate FileNotFounds before TARGET is ever read. Injecting a fabricated
+    # TARGET would risk a SPURIOUS coverage pass if real xcelium output were ever
+    # mounted; the coverage dimension is genuinely unmeasurable here and is
+    # surfaced honestly as a non-blocking coverage_gate Cat-D, never papered over.
+    waves_v = '1' if a.waves else '0'
     inner = (
         f"export VERILOG_SOURCES={rtl_c}; "
         f"export SIM={a.simulator}; "
         f"export TOPLEVEL={a.top}; "
         f"export MODULE={test_module}; "
+        f"export WAVES={waves_v}; "
+        f"export WAVE={waves_v}; "
+        f"export GUI=0; "
         f"export PYTHONPATH={work_c}:${{PYTHONPATH:-}}; "
         f"cd {work_c} && python3 -m pytest -rA -s test_runner.py"
     )
@@ -176,22 +206,68 @@ def main():
     elapsed = time.time() - t0
     out = p.stdout + p.stderr
 
-    # cocotb / pytest reports "TESTS=N PASS=M FAIL=K SKIP=L"
+    # --- Functional verdict: cocotb's OWN results.xml is AUTHORITATIVE --------
+    # A post-test xcelium coverage-gate (covt_report_check/imc, see below) can
+    # crash AFTER the functional tests ran+passed, swallowing pytest's
+    # "TESTS=N PASS=M..." summary line. cocotb flushes its JUnit results.xml at
+    # end-of-test, BEFORE that post-test coverage step, so the XML carries the
+    # true functional result even when stdout is truncated. Prefer it; fall back
+    # to the pytest marker only when no parseable cocotb XML exists.
+    func = _parse_cocotb_results_xml(work_dir)
     m = re.search(r"TESTS\s*=\s*(\d+)\s+PASS\s*=\s*(\d+)\s+FAIL\s*=\s*(\d+)\s+SKIP\s*=\s*(\d+)", out)
-    if m:
+    if func is not None:
+        tests, passed, failed, skipped = func
+        functional_source = "results.xml"
+    elif m:
         tests, passed, failed, skipped = (int(x) for x in m.groups())
+        functional_source = "pytest-marker"
     else:
         tests = passed = failed = skipped = 0
+        functional_source = "none"
+
+    # functional_verdict is derived from cocotb results.xml ONLY (null when no
+    # XML found — the functional dimension is then not independently measurable).
+    if func is None:
+        functional_verdict = None
+    elif tests > 0 and failed == 0 and skipped == 0:
+        functional_verdict = "PASS"
+    else:
+        functional_verdict = "FAIL"
 
     # v0.1.57 capture: distinguish DUT-FAIL from HARNESS-SUBSTITUTION error.
     # When tests==0 AND pytest reported a TypeError/ImportError/ModuleNotFoundError
     # raised by the harness (cocotb-tools / harness_library.py) BEFORE any cocotb
     # test ran, the scorer was looking at a tool-substitution gap (per § 3 +
-    # § 4 Cat D), not a DUT bug. Surface this in the JSON so the agent
-    # consuming cocotb_score.json can classify correctly without having to
-    # parse log_tail by eye, and without violating the blind rule by reading
-    # score/src/harness_library.py.
+    # § 4 Cat D), not a DUT bug. We pass the AUTHORITATIVE tests count
+    # (results.xml-derived when available) so a coverage-gate crash on a PASSING
+    # functional run short-circuits to None (_detect_harness_error's first guard
+    # is `if tests>0: return None`) instead of masking the PASS.
     harness_error = _detect_harness_error(out, tests, p.returncode)
+
+    # The xcelium assertion-coverage gate (covt_report_check/imc reading
+    # coverage.log) cannot run under the icarus substitution (§3). Detect it
+    # from the SCORER OUTPUT ONLY (blind rule: never read harness_library.py)
+    # and surface it as a SEPARATE, non-blocking coverage-only Cat-D gap so it
+    # does NOT mask the functional verdict.
+    coverage_gate = None
+    cov_sig = _detect_coverage_gate(out)
+    if cov_sig is not None:
+        cov_blocking = not (tests > 0 and failed == 0)
+        coverage_gate = {
+            "detected": True,
+            "kind": "xcelium-coverage-gate-unmeasurable-under-icarus",
+            "signal": cov_sig,
+            "category": "coverage-only",
+            "blocking": cov_blocking,
+            "note": ("covt_report_check()/imc reads coverage.log which only xcelium "
+                     "populates; the icarus substitution (§3) cannot produce it. "
+                     "Functional tests are scored from cocotb results.xml "
+                     "independently; coverage is a DISCLOSED Cat-D gap."),
+        }
+        # When the coverage gate is the blocking failure before any test ran,
+        # tag the (existing) harness_error so consumers can distinguish it.
+        if harness_error is not None:
+            harness_error["category"] = "coverage-only"
 
     # Single-pass scorer. We do NOT silently retry with alternative RTL variants
     # (sync→async, etc.) — that would over-fit to the hidden harness's reset
@@ -201,6 +277,7 @@ def main():
     # document it as Cat-A FLOOR in RESULT.md and run the alternative variant
     # as a SEPARATE score with a SEPARATE --rtl arg — never silently inside one
     # score invocation.
+    verdict = "PASS" if (tests > 0 and failed == 0 and skipped == 0 and passed == tests) else "FAIL"
     summary = {
         "project": str(project),
         "top": a.top,
@@ -208,12 +285,21 @@ def main():
         "tool": f"docker exec {a.container} (iverilog + cocotb)",
         "tool_substitution_note": "Substitutes nvidia/cvdp-sim:v1.0.0 (gated). cocotb 2.0.1; see open-benchmark-methodology skill § 3.",
         "tests": tests, "passed": passed, "failed": failed, "skipped": skipped,
-        "verdict": "PASS" if (tests > 0 and failed == 0 and skipped == 0 and passed == tests) else "FAIL",
+        "verdict": verdict,
+        # functional_verdict (results.xml only; null when no XML) lets a consumer
+        # trust the functional dimension even when the overall verdict was
+        # historically conflated with the (unmeasurable) coverage gate.
+        "functional_verdict": functional_verdict,
+        "functional_source": functional_source,
         "elapsed_s": round(elapsed, 2),
         "log_tail": out[-2000:],
         # v0.1.57: when verdict==FAIL with tests==0, harness_error tells the
         # consumer whether to triage as Cat D (tool gap) vs unknown.
         "harness_error": harness_error,
+        # coverage_gate: non-null when the xcelium coverage step appears; when
+        # blocking==False the functional tests still passed and this is purely a
+        # DISCLOSED Cat-D coverage gap (NOT a functional FAIL).
+        "coverage_gate": coverage_gate,
     }
     reports = project / "reports"
     reports.mkdir(exist_ok=True)
@@ -221,9 +307,11 @@ def main():
     note = ""
     if harness_error and tests == 0:
         note = f"  ← {harness_error['kind']} in cocotb runner (Cat-D candidate; see harness_error in cocotb_score.json)"
-    print(f"{a.top} (Shape D)  TESTS={tests} PASS={passed} FAIL={failed} SKIP={skipped}  → verdict {summary['verdict']}{note}")
+    elif coverage_gate and not coverage_gate["blocking"]:
+        note = "  ← xcelium coverage gate unmeasurable under icarus (Cat-D coverage-only; functional verdict unaffected)"
+    print(f"{a.top} (Shape D)  TESTS={tests} PASS={passed} FAIL={failed} SKIP={skipped}  → verdict {verdict}{note}")
     print(f"  cocotb_score.json: {reports / 'cocotb_score.json'}")
-    raise SystemExit(0 if summary["verdict"] == "PASS" else 1)
+    raise SystemExit(0 if verdict == "PASS" else 1)
 
 
 # Patterns that indicate a HARNESS-SIDE failure (cocotb-tools / runner / version
@@ -234,6 +322,12 @@ _HARNESS_ERROR_PATTERNS = (
     # cocotb runner.test() internal — what we saw in CVDP priority_encoder v0.1.56
     (re.compile(r"TypeError: int\(\) argument must be a string"),
      "cocotb-tools-typeerror"),
+    # Safety net for a harness-side numeric coercion of an unset env var (e.g.
+    # float(os.getenv("TARGET")) in a coverage gate) that crashes BEFORE any
+    # test ran (tests==0). When tests>0 the _detect_harness_error guard already
+    # short-circuits to None, so this only fires for a genuine pre-test crash.
+    (re.compile(r"TypeError: float\(\) argument must be a string"),
+     "harness-float-coercion-typeerror"),
     (re.compile(r"ModuleNotFoundError: No module named"),
      "cocotb-import-missing-module"),
     (re.compile(r"ImportError:"),
@@ -292,6 +386,90 @@ def _detect_harness_error(out: str, tests: int, returncode: int) -> dict | None:
         m = pat.search(out)
         if m:
             return {"kind": kind, "signal": m.group(0)[:200]}
+    return None
+
+
+def _parse_cocotb_results_xml(work_dir: Path):
+    """Parse cocotb's OWN JUnit results to recover the FUNCTIONAL verdict,
+    independently of pytest's stdout marker (which a post-test xcelium
+    coverage-gate crash can swallow). Reads ONLY cocotb-emitted XML under the
+    scorer's work_dir — never score/src/*.py — so the blind rule is preserved.
+
+    cocotb 2.0.1 writes per-test JUnit XML at sim_build/<module>.result.xml (or
+    the legacy results.xml in the run cwd). XML shape (confirmed on real
+    Shape-D runs):
+      <testsuites><testsuite>
+        <testcase .../>                 -> PASSED
+        <testcase><failure/></testcase> -> FAILED
+        <testcase><error/></testcase>   -> FAILED
+        <testcase><skipped/></testcase> -> SKIPPED
+
+    Returns (tests, passed, failed, skipped) aggregated + de-duped by
+    (classname, name) across all matched XML files, or None when no parseable
+    cocotb XML exists. Pure stdlib (xml.etree) so it is unit-testable without
+    docker. Glob is SCOPED to work_dir (project/cocotb_work) so it never picks
+    up a Vibe-IC sim/results.xml artifact (which is JSON, not cocotb XML).
+    """
+    patterns = ("sim_build/*.result.xml", "*.result.xml", "results.xml")
+    files, seen = [], set()
+    for pat in patterns:
+        for f in sorted(work_dir.glob(pat)):
+            rp = f.resolve()
+            if rp not in seen:
+                seen.add(rp)
+                files.append(f)
+    if not files:
+        return None
+    total = failed = skipped = 0
+    seen_cases = set()
+    parsed_any = False
+    for f in files:
+        try:
+            root = ET.parse(str(f)).getroot()
+        except (ET.ParseError, OSError):
+            continue  # e.g. a JSON results.xml artifact — skip, don't crash
+        parsed_any = True
+        for tc in root.iter("testcase"):
+            dedup_key = (tc.get("classname") or "", tc.get("name") or "")
+            if dedup_key in seen_cases:
+                continue
+            seen_cases.add(dedup_key)
+            total += 1
+            if tc.find("failure") is not None or tc.find("error") is not None:
+                failed += 1
+            elif tc.find("skipped") is not None:
+                skipped += 1
+    if not parsed_any:
+        return None
+    passed = total - failed - skipped
+    return (total, passed, failed, skipped)
+
+
+# The xcelium assertion-coverage gate (harness covt_report_check()/coverage_report()
+# invoking Cadence imc, which reads coverage.log) cannot run under the icarus
+# substitution (§3) — imc is not in the container and coverage.log is never
+# produced. Detected from SCORER OUTPUT ONLY (blind rule). Generic CVDP-family
+# tokens — NO project / module / host-path literal — so this stays chip-agnostic.
+_COVERAGE_GATE_PATTERNS = (
+    re.compile(r"coverage\.log"),
+    re.compile(r"covt_report_check"),
+    re.compile(r"coverage_report"),
+    re.compile(r"\bimc\b"),
+)
+
+
+def _detect_coverage_gate(out: str):
+    """Return the matched xcelium/imc coverage-gate signature (str, <=200 chars)
+    when the unmeasurable-under-icarus coverage step appears in the scorer
+    output, else None. Independent of _detect_harness_error: this runs even when
+    tests>0 (the whole point — to surface the DISCLOSED Cat-D coverage gap on a
+    PASSING functional run), whereas _detect_harness_error returns None once
+    tests>0.
+    """
+    for pat in _COVERAGE_GATE_PATTERNS:
+        mt = pat.search(out)
+        if mt:
+            return mt.group(0)[:200]
     return None
 
 
