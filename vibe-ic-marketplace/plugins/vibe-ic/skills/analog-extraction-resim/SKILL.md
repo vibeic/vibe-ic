@@ -37,11 +37,14 @@ After analog layout in Magic, extracts parasitic RC and re-simulates across PVT 
    - Run `eda_spice_corner` with same corners as pre-layout
    - Output: `analog/<block>/post_layout_corner_results.json`
 
-3. **Compare pre vs post**:
-   - For each spec metric in each corner:
-     - Calculate degradation: `(post - pre) / pre × 100%`
-     - Flag >20% degradation as ERROR
-     - Flag >10% degradation as WARNING
+3. **Compare pre vs post** — run the deterministic checker; do not re-grade by hand:
+   ```bash
+   python3 programs/analog_pre_vs_post_layout_check.py <project> --json
+   ```
+   It computes per-metric per-corner degradation `(post - pre) / pre × 100%` and
+   classifies it against the **canonical degradation bands, which the program owns**
+   (single source of truth — see "Degradation thresholds" below). Do NOT hardcode a
+   different ERROR/WARNING cutoff in your report; quote the program's verdict.
    - Typical degradation sources:
      - Bandwidth reduction (parasitic C on high-impedance nodes)
      - Gain reduction (parasitic R in signal path)
@@ -56,22 +59,23 @@ After analog layout in Magic, extracts parasitic RC and re-simulates across PVT 
   "pre_layout_file": "corner_results.json",
   "post_layout_file": "post_layout_corner_results.json",
   "comparison": {
-    "gain_db": {"pre": 62.3, "post": 58.1, "degradation_pct": -6.7, "status": "WARNING"},
-    "ugb_mhz": {"pre": 11.2, "post": 8.9, "degradation_pct": -20.5, "status": "ERROR"},
+    "gain_db": {"pre": 62.3, "post": 58.1, "degradation_pct": -6.7, "status": "OK"},
+    "ugb_mhz": {"pre": 11.2, "post": 7.5, "degradation_pct": -33.0, "status": "ERROR"},
     "vout_dc": {"pre": 1.8002, "post": 1.7998, "degradation_pct": -0.02, "status": "OK"}
   },
-  "worst_degradation": {"metric": "ugb_mhz", "pct": -20.5},
+  "worst_degradation": {"metric": "ugb_mhz", "pct": -33.0},
   "overall_status": "NEEDS_RELAYOUT"
 }
 ```
 
 ## Degradation thresholds
 
-| Degradation | Status | Action |
-|------------|--------|--------|
-| <10% | OK | Proceed to hardmacro generation |
-| 10-20% | WARNING | Note for review, may proceed |
-| >20% | ERROR | Re-layout required (improve routing, add shielding) |
+**Owned by `programs/analog_pre_vs_post_layout_check.py` (single source of truth).**
+As of the current program: `≤20%` = OK, `>20%` = WARNING (note for review, may
+proceed), `>30%` = ERROR (re-layout required — improve routing, add shielding). Do
+not restate a conflicting cutoff here or in the skill body; if the policy needs to
+change, change it in the program (one place) so the SKILL.md and the runtime never
+drift again.
 
 ## Do not
 

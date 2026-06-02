@@ -96,19 +96,54 @@ endmodule
 Capture once at reset (baseline) and again after the test stimulus;
 diff to confirm the expected LEDs lit up.
 
-## Anti-patterns
+## Anti-patterns (run the lint — do NOT eyeball these)
 
-- **One-LED-per-signal mismatch.** Using `instantaneous` mode for a
-  1-cycle pulse → the camera will never catch it.
-- **All signals on the same mode.** Mixing pulse + sticky + byte
-  modes without commenting which is which → reviewer cannot decode
-  the photo.
-- **Sticky without a reset path.** A sticky LED will be ON forever
-  even if the test never stimulated the signal — make sure the reset
-  clears it before each test stage.
-- **Placement on shared LED pins.** Some boards reuse LED pins for
-  other functions (USB-Blaster, configuration). Check the QSF before
-  allocating LEDR[N].
+> **Doctrine (user, 2026-05-29):** 把修法寫進工具，而非寫進 prompt.
+>
+> The four deterministic structural anti-patterns below are now enforced
+> by **`programs/fpga_led_probe_lint.py`** (17 pytest cases pin each
+> rule + every no-false-alert guard). Run the program on your emitted
+> top BEFORE claiming the LED allocation is sound — the prose below is
+> the rationale, not the rule applicator.
+
+```bash
+python3 plugins/vibe-ic/programs/fpga_led_probe_lint.py \
+    <your_fpga_top.v> \
+    [--qsf <board.qsf>] \
+    [--json fpga_led_probe_lint.json]
+```
+
+Exit codes: `0` = PASS / SKIP (nothing to lint); `1` = anti-pattern found;
+`2` = usage error. The JSON `findings[]` carries `rule` / `file` / `line`
+/ `detail` / `fix_hint` for each hit.
+
+The four rules it flags (and ONLY these — no false alerts):
+
+- **`instantaneous-on-pulse`** — Using `instantaneous` mode
+  (`assign LED[N] = sig;`) for a 1-cycle pulse → the camera will never
+  catch it. The lint recognises a pulse by a pulse-token name (deny-listed
+  against held levels like `*_en` / `*_busy` / `*_state`) **or** the
+  structural set-1/set-0 pulse shape; a pulse fed through `pulse_stretch`
+  is NOT flagged.
+- **`mode-mix-without-table`** — Mixing ≥ 2 of {pulse, sticky, byte}
+  modes without a commented **`LED PROBE TABLE`** → reviewer cannot decode
+  the photo. A single-mode top needs no table (not flagged).
+- **`sticky-without-reset-clear`** — A sticky LED latch set to `1'b1` and
+  driving an LED but never cleared on reset will be ON forever even if the
+  test never stimulated the signal. The lint accepts both `if (!rst_n)
+  reg <= 1'b0;` and group-clear `{a, b} <= 2'b00;`.
+- **`shared-pin-vs-QSF`** — An LED bit driven in RTL with no matching
+  `set_location_assignment ... -to LEDR[N]` in the supplied `.qsf` (some
+  boards reuse LED pins for USB-Blaster / configuration). **Skipped
+  entirely when no `--qsf` is supplied** — absence is never a false FAIL.
+
+**AI judgment still required:** the lint enforces the *structural*
+anti-patterns; YOU still choose the right mode per signal (is this signal
+truly steady-state, a 1-cycle pulse, or an event flag?) and author a
+PROBE TABLE whose human-readable "expected behaviour per test stage"
+column actually matches the host capture sequence. The lint cannot judge
+whether your mode *choice* matches the signal's real timing — only that
+the code is internally consistent.
 
 ## Compliance
 

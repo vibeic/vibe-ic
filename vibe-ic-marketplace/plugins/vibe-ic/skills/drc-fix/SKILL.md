@@ -66,6 +66,71 @@ Grounded in DRC-Coder and LLM-assisted layout repair research. Key insight: DRC 
 - Do not waive hard rules without explicit user approval
 - Do not touch cells outside the block boundary without flagging it
 
+## Canonical loop infrastructure (mandatory — shared with all *-fix loops)
+
+When the DRC fix workflow iterates (re-run DRC → residual still > 0 → adjust
+spacing/jog/fill → re-run), that loop MUST be driven by the two shared
+closed-loop primitives so every fix loop in Vibe-IC obeys one
+convergence / plateau / regression policy and one runaway / dedup guard —
+do **not** hand-roll a bespoke retry counter or duplicate-fix check.
+
+**1. `programs/iterative_search.py` — the parameter sweep.**
+Model the per-rule fix knobs as a typed `SearchSpace`; `IterativeSearch`
+proposes the next layout-edit trial and `ConvergenceChecker` classifies the
+residual-violation history (`CONVERGED` / `PLATEAU` / `REGRESSION` /
+`EXHAUSTED` / `CONTINUE`):
+
+```python
+import iterative_search as it
+space = it.SearchSpace([
+    it.Dimension("jog_tracks", "integer", lo=0, hi=8),       # extra routing tracks
+    it.Dimension("spacing_nm", "continuous", lo=0.0, hi=400.0),
+    it.Dimension("fill_density", "continuous", lo=0.0, hi=1.0),
+    it.Dimension("strategy", "enumerate", choices=["jog", "widen", "fill", "diode"]),
+])
+# target=0 residual violations; minimize the count
+checker = it.ConvergenceChecker(target=0.0, tolerance=0.0, patience=4)
+search  = it.IterativeSearch(space, checker, maximize=False, seed=7, max_rounds=20)
+
+def evaluate(point):          # caller runs KLayout/Magic DRC here
+    return residual_violation_count   # lower is better
+outcome = search.run(evaluate)        # outcome.status / best_point / rounds
+```
+
+`IterativeSearch` constructs an `AdmissionGuard(bounds=space.bounds(),
+max_iterations=max_rounds)` internally, so each proposed edit is already
+runaway- and dedup-guarded when you use `search.propose()` / `search.run()`.
+
+**2. `programs/loop_admission_guard.py` — admit each iteration BEFORE the DRC run.**
+A DRC re-run is expensive; gate every proposed edit through
+`AdmissionGuard.admit()` first:
+
+```python
+import loop_admission_guard as g
+guard = g.AdmissionGuard(
+    bounds={"spacing_nm": (0.0, 400.0), "fill_density": (0.0, 1.0)},
+    caps={"jog_tracks": 8},                 # REJECT a runaway jog count
+    max_iterations=20)                       # hard RUNAWAY iteration budget
+res = guard.admit({"jog_tracks": 1, "spacing_nm": 90.0, "strategy": "jog"})
+if res.admitted:
+    rerun_drc(res.proposal)                  # res.proposal is post-clamp / safe
+# else res.reason in {DUPLICATE, RUNAWAY_CAP, RUNAWAY_ITERATION_BUDGET}
+```
+
+CLI one-shot decision (exit 0 = ADMITTED, 1 = REJECTED):
+
+```bash
+python3 programs/loop_admission_guard.py decision.json
+# decision.json: {"bounds":{...},"caps":{...},"max_iterations":20,
+#                 "history":[...prior edits...],"proposal":{...}}
+```
+
+`canonical_fingerprint(proposal)` is the dedup key — re-proposing a fix
+combination already tried this session is rejected with `reason="DUPLICATE"`
+instead of wasting a KLayout/Magic DRC pass. This is ADDITIVE: it enforces a
+budget + plateau/regression exit around the existing "Fix order → Expected
+residual → Verification" steps without changing any of them.
+
 ## ⛔ ECO spare-cell preservation (mandatory)
 
 > ⛔ **ECO spare-cell preservation:** cells/gates/pads carrying the `dont_touch` /

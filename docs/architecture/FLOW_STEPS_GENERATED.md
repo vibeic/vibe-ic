@@ -48,7 +48,7 @@
 | 34 | [14e3/15] | L10↔L3 packet-protocol opcode consistency sweep |
 | 35 | [15/15] | coverage report |
 
-## Phase 2 — `phase2_one_shot_runner.py` (global steps 36-50)
+## Phase 2 — `phase2_one_shot_runner.py` (global steps 36-51)
 
 | # | Step function |
 |---|---|
@@ -65,19 +65,20 @@
 | 46 | `step_fpga_burn` |
 | 47 | `step_usb_hid_tester_verify` |
 | 48 | `step_phase3` |
-| 49 | `step_emit_phase2_manifests` |
-| 50 | `step_final_audit` |
+| 49 | `step_complexity_advisory` |
+| 50 | `step_emit_phase2_manifests` |
+| 51 | `step_final_audit` |
 
-## Phase 3 — `phase3_one_shot_runner.py` (global steps 51-56)
+## Phase 3 — `phase3_one_shot_runner.py` (global steps 52-57)
 
 | # | Step function |
 |---|---|
-| 51 | `step_synth` |
-| 52 | `step_pnr` |
-| 53 | `step_gds` |
-| 54 | `step_drc` |
-| 55 | `step_lvs` |
-| 56 | `step_canonicalize_artefacts` |
+| 52 | `step_synth` |
+| 53 | `step_pnr` |
+| 54 | `step_gds` |
+| 55 | `step_drc` |
+| 56 | `step_lvs` |
+| 57 | `step_canonicalize_artefacts` |
 
 ## Analog — `analog_one_shot_runner.py` (8 steps, PARALLEL to Phase 2)
 
@@ -94,5 +95,5 @@
 
 ## Totals
 
-Sequential global steps: 56 (Phase 1: 1-35 · Phase 2: 36-50 · Phase 3: 51-56) · Analog (parallel): 8
+Sequential global steps: 57 (Phase 1: 1-35 · Phase 2: 36-51 · Phase 3: 52-57) · Analog (parallel): 8
 

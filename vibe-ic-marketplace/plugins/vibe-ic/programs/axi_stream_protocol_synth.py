@@ -1135,7 +1135,7 @@ def _l13(gd: Path) -> None:
     ]
     d["notes"] = (
         "AXI4-Stream is a synchronous-logic on-chip interface; there is no "
-        "analog/lab calibration in the specification. Timing is closed by "
+        "analog or lab calibration in the specification. Timing is closed by "
         "synthesis/STA at ACLK, not by bench calibration. This layer is "
         "essentially N/A for the AXI4-Stream contract.")
     _write(p, d)

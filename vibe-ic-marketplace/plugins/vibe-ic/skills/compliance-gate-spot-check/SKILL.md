@@ -12,9 +12,41 @@ paired_program: flow_compliance_check.py
 - Project carries a waiver that satisfies the gate but the underlying defect is real
 - The gate's PASS condition is satisfied trivially (e.g. "L9 has ≥3 typed fields" satisfied by stub fields)
 
+## Prioritize the sampling budget (optional — falls back to uniform sampling)
+
+Before sampling, ask the **gate-reliability register** which gates have a history
+of being gamed / false-passed, so the limited spot-check budget lands on the
+historically-dangerous gates first instead of uniformly across all 77. The
+register is `programs/gate_reliability_register.py` — a self-calibrating
+per-gate EMA ledger of pass-rate and **false-PASS-rate**. It is an *optional
+prioritizer*: when the ledger is empty/absent it ranks nothing, and you fall
+back to the uniform "5 random gates" behavior in step 1 below.
+
+The ledger path is positional (the program calls it `LEDGER`). Use a stable
+location such as `<project>/reports/gate_reliability_register.json` (or a
+shared cross-project ledger). Steps:
+
+1a. **Ensure the ledger exists, then rank.** A freshly `touch`ed (empty) ledger
+    ranks to `[]` and you proceed uniformly — so this never blocks you:
+
+    ```bash
+    # create on first use so `rank` never errors on a missing file
+    touch <project>/reports/gate_reliability_register.json
+
+    # priority-ordered gate list (highest false-PASS history first)
+    python3 programs/gate_reliability_register.py rank \
+        <project>/reports/gate_reliability_register.json --top 10
+    ```
+
+    The output is a JSON array of `{"gate": ..., "spotcheck_priority": ...}`
+    sorted highest-priority first. **Spend your sampling budget on the
+    top-ranked gates** (they are the historically-gamed ones) before sampling
+    the remaining gates at random. If the array is empty, sample uniformly.
+
 ## Verification checklist
 
-1. **Sample 5 random PASS gates** from the 77 list. For each:
+1. **Sample 5 PASS gates** — drawn from the register `rank` output above
+   (top-ranked first; fill the rest at random from the 77 list). For each:
    - Open the gate's `*_check.py` source
    - Read the PASS condition logic
    - Open the project's relevant artifact the gate inspects
@@ -41,6 +73,37 @@ paired_program: flow_compliance_check.py
 5. **Cross-gate consistency**:
    - If `protocol_reference_tb_pass_check=PASS` and `bit_level_full_stack_tb_oracle_check=PASS`, the per_vector data should match scenarios in reference TB transcript
    - If `flow_compliance_check Overall=PASS` and any individual gate=FAIL, that's a contradiction → investigate
+
+## Record outcomes back to the register (so the ledger learns)
+
+After spot-checking each sampled gate, write its outcome back so future
+spot-checks re-prioritize. This is **additive** — it only updates the EMA
+ledger and never changes any gate's own pass/fail logic. For each gate you
+inspected:
+
+- Gate held up under inspection → record a clean PASS:
+
+  ```bash
+  python3 programs/gate_reliability_register.py record \
+      <project>/reports/gate_reliability_register.json \
+      --gate <gate_name> --pass
+  ```
+
+- Gate reported PASS but you proved the design was actually wrong
+  (gameable pattern, trivial satisfier, stale waiver) → record a **false PASS**
+  so it floats to the top next time:
+
+  ```bash
+  python3 programs/gate_reliability_register.py record \
+      <project>/reports/gate_reliability_register.json \
+      --gate <gate_name> --pass --false-pass
+  ```
+
+- Gate legitimately FAILed → record a fail (`--fail`; `--false-pass` is
+  rejected with `--fail`).
+
+Optionally dump the updated ledger with
+`python3 programs/gate_reliability_register.py report <ledger>`.
 
 ## Spot-check actions
 

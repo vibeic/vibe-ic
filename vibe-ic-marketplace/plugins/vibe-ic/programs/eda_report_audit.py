@@ -169,6 +169,15 @@ TOOL_SIGNATURES = {
         "slack",
         "primetime",
     ],
+    "antenna": [
+        "openroad",            # OpenROAD check_antennas
+        "check_antenna",
+        "ANT-",                # OpenROAD ANT-0001/0002 message codes
+        "antenna check",
+        "net violations",      # "Found N net violations"
+        "pin violations",
+        "gate-oxide",
+    ],
 }
 
 # Minimum reasonable file size (bytes) for a real report on a non-trivial
@@ -186,6 +195,7 @@ MIN_REPORT_BYTES = {
     "em":      1024,
     "ir_drop": 1024,
     "sta":     1024,
+    "antenna": 200,   # OpenROAD check_antennas clean reports are short but real
 }
 
 
@@ -544,6 +554,91 @@ def _check_sta(project_dir: Path) -> AuditResult:
     return result
 
 
+def _check_antenna(project_dir: Path) -> AuditResult:
+    """Antenna (gate-oxide) substance check — the missing sibling of em/ir_drop.
+    Step 26 historically gated only on antenna.rpt PRESENCE; this parses the
+    violation count so a present-but-violating report FAILs. Modeled on
+    _check_em: PDK-waiver aware, FAILs on a missing report, and exactly mirrors
+    the EM/IR `program_exit_zero` semantics so it does not regress projects whose
+    antenna report is clean."""
+    result = AuditResult(program="eda_report_audit:antenna", passed=False)
+    reason = _waived_for_pdk(project_dir, "antenna")
+    if reason and len(reason) >= 20:
+        result.findings.append(Finding(
+            rule="WAIVED_TOOL_UNAVAILABLE", severity="INFO",
+            message=f"Antenna report waived for this PDK: {reason[:80]}"))
+        result.passed = True
+        result.summary = {"waived": True, "reason": reason}
+        return result
+    files = _discover(project_dir, ["*antenna*.rpt", "*antenna*.json",
+                                     "*ANT*.rpt"])
+    if not files:
+        result.findings.append(Finding(
+            rule="ANTENNA_REPORT_EXISTS", severity="ERROR",
+            message="No antenna report found (searched *antenna*.rpt, *antenna*.json)"))
+        result.summary = {"files_found": 0, "violations": None}
+        return result
+
+    # Parse violation counts from the OpenROAD check_antennas idiom:
+    #   "Found N net violations." / "Found M pin violations."
+    #   "antenna check: N net violations, M pin violations"
+    #   "antenna clean: YES|NO"
+    found_re = re.compile(r"Found\s+(\d+)\s+(?:net|pin|antenna)\s+violation", re.I)
+    pair_re = re.compile(r"(\d+)\s+net\s+violations?,?\s+(\d+)\s+pin\s+violations?", re.I)
+    clean_re = re.compile(r"antenna\s+clean\s*:\s*(YES|NO|TRUE|FALSE)", re.I)
+    total_viol = None
+    clean_flag = None
+    best_file = ""
+    for fp in files:
+        try:
+            text = fp.read_text(errors="replace")
+        except OSError:
+            continue
+        if not best_file:
+            best_file = str(fp)
+        m = clean_re.search(text)
+        if m:
+            clean_flag = m.group(1).upper() in ("YES", "TRUE")
+        # Prefer the authoritative "[INFO ANT] Found N net/pin violations" lines;
+        # only fall back to the "N net violations, M pin violations" summary line
+        # when the Found-lines are absent, so the two never double-count.
+        found_hits = list(found_re.finditer(text))
+        cnt = 0
+        seen = False
+        if found_hits:
+            for mm in found_hits:
+                cnt += int(mm.group(1)); seen = True
+        else:
+            for mm in pair_re.finditer(text):
+                cnt += int(mm.group(1)) + int(mm.group(2)); seen = True
+        if seen:
+            total_viol = (total_viol or 0) + cnt
+
+    authentic = _check_tool_authenticity(files, "antenna", result)
+    # Determine pass: a parseable count of 0 (or an explicit "clean: YES") is a
+    # clean antenna result; >0 is a real violation FAIL. A present report with NO
+    # parseable count is treated like _check_em's missing-content case → ERROR
+    # (catches a malformed/empty antenna report), consistent with the siblings.
+    if total_viol is None and clean_flag is None:
+        result.findings.append(Finding(
+            rule="ANTENNA_VIOLATION_COUNT", severity="ERROR",
+            message="No antenna violation count or clean-status found in report",
+            file=best_file))
+        result.passed = False
+    elif (total_viol or 0) > 0 or clean_flag is False:
+        result.findings.append(Finding(
+            rule="ANTENNA_VIOLATIONS_ZERO", severity="ERROR",
+            message=f"Antenna violations present: {total_viol or 'see report'} "
+                    f"(net+pin); insert diode or re-route",
+            file=best_file))
+        result.passed = False
+    else:
+        result.passed = authentic
+    result.summary = {"files_found": len(files), "violations": total_viol,
+                      "clean": clean_flag, "tool_authentic": authentic}
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Mode dispatch
 # ---------------------------------------------------------------------------
@@ -554,6 +649,7 @@ MODE_MAP = {
     "em": _check_em,
     "ir_drop": _check_ir_drop,
     "sta": _check_sta,
+    "antenna": _check_antenna,
 }
 
 

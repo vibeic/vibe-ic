@@ -1210,7 +1210,7 @@ def _l13(gd: Path) -> None:
     ]
     d["notes"] = (
         "Avalon is a synchronous-logic on-chip interface; there is no "
-        "analog/lab calibration in the specification. Timing is closed by FPGA "
+        "analog or lab calibration in the specification. Timing is closed by FPGA "
         "synthesis/STA, not by bench calibration. This layer is essentially "
         "N/A for the Avalon contract.")
     _write(p, d)

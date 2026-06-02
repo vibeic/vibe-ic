@@ -103,6 +103,76 @@ Written by `eda_spice_corner` — PVT matrix with per-spec pass/fail.
 - `sizing_final.json` → `/analog-layout` (Step A5)
 - If 5 iterations fail → back to `/analog-topology-select` (re-evaluate topology)
 
+## Canonical loop infrastructure (mandatory — shared with all closed-loop skills)
+
+The sizing loop (Iteration 0..N) MUST be driven by the two shared closed-loop
+primitives so the analog W/L sweep obeys the SAME convergence / plateau /
+regression policy and the SAME runaway / dedup guard as the digital fix loops
+(hold-fix / drc-fix / eco-plan) — do **not** hand-roll a bespoke iteration
+counter or duplicate-sizing check. This sits alongside the existing
+"Convergence strategy" table and "Stopping conditions" (5-iteration cap), which
+remain authoritative for the device-adjustment heuristics.
+
+**1. `programs/iterative_search.py` — the W/L parameter sweep.**
+Model the device sizes as a typed `SearchSpace`; `IterativeSearch` proposes the
+next sizing trial and `ConvergenceChecker` classifies the worst-corner yield
+score history (`CONVERGED` / `PLATEAU` / `REGRESSION` / `EXHAUSTED` /
+`CONTINUE`):
+
+```python
+import iterative_search as it
+space = it.SearchSpace([
+    it.Dimension("W_in_um",  "continuous", lo=1.0, hi=200.0),   # input-pair width
+    it.Dimension("L_in_um",  "continuous", lo=0.15, hi=4.0),
+    it.Dimension("Ibias_uA", "continuous", lo=1.0,  hi=100.0),
+    it.Dimension("Cc_pF",    "continuous", lo=0.1,  hi=10.0),
+])
+# target = 100% worst-corner yield; maximize toward it
+checker = it.ConvergenceChecker(target=100.0, tolerance=0.0, patience=2)
+search  = it.IterativeSearch(space, checker, maximize=True, seed=7,
+                             max_rounds=5)        # mirrors the 5-iteration cap
+def evaluate(point):          # caller runs analog-netlist-gen + eda_spice_corner here
+    return worst_corner_yield_pct                 # higher is better
+outcome = search.run(evaluate)                    # outcome.status / best_point / rounds
+```
+
+`IterativeSearch` constructs an `AdmissionGuard(bounds=space.bounds(),
+max_iterations=max_rounds)` internally, so each proposed sizing point is already
+runaway- and dedup-guarded via `search.propose()` / `search.run()`. The
+`max_rounds=5` budget enforces the existing "Do not exceed 5 iterations" rule
+in code rather than by convention.
+
+**2. `programs/loop_admission_guard.py` — admit each sizing trial BEFORE the SPICE run.**
+A full PVT corner sweep is the expensive step; gate every proposed sizing
+through `AdmissionGuard.admit()` first so a duplicate or runaway sizing never
+launches `eda_spice_corner`:
+
+```python
+import loop_admission_guard as g
+guard = g.AdmissionGuard(
+    bounds={"W_in_um": (1.0, 200.0), "Ibias_uA": (1.0, 100.0)},
+    caps={"Ibias_uA": 100.0},               # REJECT a runaway bias current
+    max_iterations=5)                        # hard RUNAWAY iteration budget
+res = guard.admit({"W_in_um": 40.0, "L_in_um": 2.0, "Ibias_uA": 30.0})
+if res.admitted:
+    run_corner_sweep(res.proposal)           # res.proposal is post-clamp / safe
+# else res.reason in {DUPLICATE, RUNAWAY_CAP, RUNAWAY_ITERATION_BUDGET}
+```
+
+CLI one-shot decision (exit 0 = ADMITTED, 1 = REJECTED):
+
+```bash
+python3 programs/loop_admission_guard.py decision.json
+# decision.json: {"bounds":{...},"caps":{...},"max_iterations":5,
+#                 "history":[...prior sizings...],"proposal":{...}}
+```
+
+`canonical_fingerprint(proposal)` (md5, key-order- and float-noise-stable) is
+the dedup key — re-proposing a W/L/bias combination already simulated this
+session is rejected with `reason="DUPLICATE"` instead of burning another
+multi-corner SPICE sweep. The `sizing_history.json` output should record each
+admitted point's fingerprint so the dedup set is reproducible across resumes.
+
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
 
 If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,

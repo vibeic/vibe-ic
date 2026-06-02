@@ -21,6 +21,37 @@ description: "Verify that all required artifacts exist and pass quality checks b
 
 Verify all required deliverables exist and meet quality standards before allowing the design to proceed to the next phase.
 
+## Deterministic gate (run this FIRST — single command per checkpoint)
+
+The required-file checklist + the fixed numeric thresholds (DS>=70, AN>=56,
+spec 0-ERROR, SVA>=8, DRC<=5, cell_count>0) + the SOF-non-zero check are now
+codified in one deterministic program so every agent applies the **same**
+files and the **same** numbers every time:
+
+```bash
+python3 programs/checkpoint_gate_check.py <project_dir> --checkpoint {1|2|3} --json
+```
+
+- Exit `0` = PASS (every required file present + every applicable threshold met).
+- Exit `1` = FAIL (a required file is MISSING or a threshold is violated).
+- Exit `2` = usage / project-dir I/O error.
+
+It degrades gracefully: an absent artifact is reported `MISSING` (never a
+crash, never silently passed); the external scorers
+(`ds_quality_check.py` / `an_validator.py` / `spec_validator.py` /
+`synth_doctor.py`, which ship in the repo-root `tools/` dir) are reported
+`MISSING-SCORER` if unavailable on this host so you know to re-run the score
+on a machine that has them — `MISSING-SCORER` alone does NOT flip a PASS to
+FAIL. A clean DRC report (no `violation` token) correctly counts 0, so there
+is no false alert.
+
+**Run the program FIRST.** The per-checkpoint prose below is the human
+explanation of what the program enforces PLUS the genuinely-qualitative
+checks the program cannot evaluate (pin-name consistency between DS/AN,
+register-address agreement, schematic↔RTL signal match, STA waiver
+documentation) — those still need AI judgment. Do not hand-eyeball the
+numeric thresholds; let the program own them.
+
 ## Checkpoint 1: Phase 1 → Phase 2 (Spec → Design)
 
 ### MANDATORY first gate: all 10 L-layer docs
@@ -50,13 +81,18 @@ and the project's `<host_tester>` then FAILs at integration.
 - [ ] `generated_docs/` — all 10 L1-L9 JSONs (enforced by phase1_doc_presence_check.py)
 
 ### Quality Checks
+
+**Codified in `checkpoint_gate_check.py --checkpoint 1` (let the program own these):**
+- [ ] All 5 `phase1_spec/0*.md` files present + `generated_docs/` 10/10 L-layer docs
+- [ ] `ds_quality_check.py` score >= 70/100
+- [ ] `an_validator.py` score >= 56/80
+- [ ] `spec_validator.py` reports 0 ERROR-level mismatches
+
+**Still requires AI judgment (the program cannot fully evaluate these):**
 - [ ] Datasheet has no TBD values
 - [ ] Pin names consistent between DS and AN
 - [ ] Register addresses match between DS and AN firmware example
 - [ ] All timing parameters have min/typ/max
-- [ ] `ds_quality_check.py` score >= 70/100
-- [ ] `an_validator.py` score >= 56/80
-- [ ] `spec_validator.py` reports 0 ERROR-level mismatches
 - [ ] If RTL is already drafted: `spec_conformance_check.py` reports 0 ERROR
       (ports + reset mode/polarity + latency match the spec contract)
 
@@ -119,12 +155,16 @@ Decision: PROCEED TO PHASE 2 / REVISE
 - [ ] `phase2_design/schematic/<module>_schematic.md` — circuit diagram
 
 ### Quality Checks
-- [ ] Synthesis: 0 errors, cell count > 0
-- [ ] `synth_doctor.py` status != FAIL
+
+**Codified in `checkpoint_gate_check.py --checkpoint 2` (let the program own these):**
+- [ ] All 8 required RTL/synth/pnr/gds/signoff/schematic files present
+- [ ] `programs/synth_doctor.py` verdict != MANUAL_REVIEW (CLEAN/DIAGNOSED ok)
 - [ ] Cell count > 0 (from synth.log, not just file existence)
 - [ ] SVA assertion count >= 8 (in `*_formal.sv`)
+- [ ] DRC: if `drc_report.rpt` exists, violations <= 5 (else reported SKIP)
+
+**Still requires AI judgment (the program cannot fully evaluate these):**
 - [ ] P&R: placement + routing complete
-- [ ] DRC: if `drc_report.rpt` exists, violations <= 5
 - [ ] All signals in schematic match RTL ports
 
 ### Automated Quality Gate Commands
@@ -132,10 +172,10 @@ Decision: PROCEED TO PHASE 2 / REVISE
 Run these commands from the project root (all must pass):
 
 ```bash
-# 1. Synth doctor — must not be FAIL
-python3 tools/vibe_ic_tools/synth_doctor.py phase2_design/synth/synth.log --json
-# Check: .status != "FAIL"
-# Check: .cell_count > 0
+# 1. Synth doctor — log must not classify to an un-fixable error pattern
+python3 programs/synth_doctor.py phase2_design/synth/synth.log --json
+# Check: .verdict is "CLEAN" or "DIAGNOSED" (MANUAL_REVIEW => human triage needed)
+# Check: cell count > 0 separately (grep synth.log; synth_doctor only classifies errors)
 
 # 2. SVA assertion count (must be >= 8)
 grep -c 'assert\s*property\|assert\s*(' phase2_design/rtl/*_formal.sv
@@ -151,8 +191,8 @@ if [ -f phase2_design/signoff/drc_report.rpt ]; then
 fi
 
 # 4. P&R doctor (optional, for additional diagnostics)
-python3 tools/vibe_ic_tools/pnr_doctor.py phase2_design/pnr/pnr.log --json
-# Check: .status != "FAIL"
+python3 programs/pnr_doctor.py phase2_design/pnr/pnr.log --json
+# Check: .verdict is "CLEAN" or "DIAGNOSED" (MANUAL_REVIEW => human triage needed)
 
 # 5. Log results
 python3 tools/vibe_ic_tools/vibe_ic_log.py log \
@@ -178,9 +218,14 @@ Write `phase2_design/checkpoint2_signoff.md`
 - [ ] `phase3_verify/fpga/sta.summary` — Timing analysis summary
 
 ### Quality Checks
+
+**Codified in `checkpoint_gate_check.py --checkpoint 3` (let the program own these):**
+- [ ] All 7 required Quartus FPGA files present (qpf/qsf/sdc/top/compile.log/fit.summary/sta.summary)
+- [ ] SOF file generated (non-zero size)
+
+**Still requires AI judgment (the program cannot fully evaluate these):**
 - [ ] Quartus map: 0 errors
 - [ ] Quartus fit: successful placement & routing
-- [ ] SOF file generated (non-zero size)
 - [ ] STA: no setup/hold violations (or documented waivers)
 
 ### FPGA Flow Commands (on <host>, Quartus 23.1 Lite)

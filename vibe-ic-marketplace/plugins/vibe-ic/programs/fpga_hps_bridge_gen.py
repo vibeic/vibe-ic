@@ -1,0 +1,541 @@
+#!/usr/bin/env python3
+"""fpga_hps_bridge_gen.py — deterministic HPS-to-FPGA bridge generator.
+
+Replaces the hand-paste path of skill `fpga-hps-bridge`. Given an IC name +
+bridge config, emits the four artefacts the skill documents:
+
+  1. <out>/common_rtl/hps_bridge.sv     — Avalon-MM slave register bridge
+  2. <out>/<ic>_hps_top.sv              — HPS-enabled FPGA top module
+  3. <out>/hps_test.py                  — Python test script (runs ON DE10-Nano)
+  4. <out>/hps_register_map.md          — the fixed 16-entry register map
+
+Why a PROGRAM and not prose: the register map is a FIXED 16-entry lookup with
+exact byte offsets (0x00..0x3C). An LLM paraphrasing those offsets is a SILENT
+bug — the HPS `/dev/mem` reads would land on the wrong register and report
+garbage with no error. Emitting them from a single source-of-truth table makes
+the offsets identical on every invocation.
+
+chip-AGNOSTIC: the IC identifier, CHIP_ID/VERSION constants, and the BIST/DUT
+module names are PARAMETERS. No benchmark- or chip-specific literal is baked in.
+Deterministic: same config → byte-identical output.
+
+The 16 registers and their offsets are taken VERBATIM from
+skills/fpga-hps-bridge/SKILL.md "Register Map" section:
+
+  0x00 CTRL R/W | 0x04 STATUS R | 0x08 TEST_NUM R | 0x0C PASS_COUNT R
+  0x10 FAIL_COUNT R | 0x14 TOTAL_TESTS R | 0x18 COV_TOGGLE R | 0x1C COV_STATE R
+  0x20 COV_GROUP R | 0x24 COV_BRANCH R | 0x28 LOOP_COUNT R/W | 0x2C LOOP_PASS R
+  0x30 LOOP_FAIL R | 0x34 FMAX_RESULT R | 0x38 CHIP_ID R | 0x3C VERSION R
+
+CLI:
+    python3 fpga_hps_bridge_gen.py --ic <name> [--out DIR]
+        [--bist <module>] [--dut <module>] [--chip-id 0xNN] [--version 0xNN]
+        [--total-tests N] [--base 0xFF200000]
+
+Exit codes: 0 = wrote all files   1 = invalid config   2 = output error
+"""
+from __future__ import annotations
+import argparse
+import re
+import sys
+from pathlib import Path
+from typing import List, Tuple
+
+
+# ---------------------------------------------------------------------------
+# FIXED register map — single source of truth (SKILL.md "Register Map").
+# (offset, NAME, "R" | "R/W", description). DO NOT reorder / re-offset:
+# downstream HPS /dev/mem reads index by these exact byte offsets.
+# ---------------------------------------------------------------------------
+REGISTER_MAP: List[Tuple[int, str, str, str]] = [
+    (0x00, "CTRL",        "R/W", "start_bist, start_loop, start_fmax, cov_reset"),
+    (0x04, "STATUS",      "R",   "running, done, all_pass, state"),
+    (0x08, "TEST_NUM",    "R",   "Current test number"),
+    (0x0C, "PASS_COUNT",  "R",   "Pass count"),
+    (0x10, "FAIL_COUNT",  "R",   "Fail count"),
+    (0x14, "TOTAL_TESTS", "R",   "Total test count"),
+    (0x18, "COV_TOGGLE",  "R",   "Toggle coverage bitmap"),
+    (0x1C, "COV_STATE",   "R",   "State coverage bitmap"),
+    (0x20, "COV_GROUP",   "R",   "Group coverage bitmap"),
+    (0x24, "COV_BRANCH",  "R",   "Branch coverage bitmap"),
+    (0x28, "LOOP_COUNT",  "R/W", "Stress loop iteration count"),
+    (0x2C, "LOOP_PASS",   "R",   "Loop pass iterations"),
+    (0x30, "LOOP_FAIL",   "R",   "Loop fail iterations"),
+    (0x34, "FMAX_RESULT", "R",   "Fmax sweep result (MHz)"),
+    (0x38, "CHIP_ID",     "R",   "IC identifier constant"),
+    (0x3C, "VERSION",     "R",   "BIST version constant"),
+]
+
+# Control-register bit field assignments (offset 0x00, write path).
+CTRL_BITS = [
+    (0, "start_bist"),
+    (1, "start_loop"),
+    (2, "start_fmax"),
+    (3, "cov_reset"),
+]
+
+# Status-register bit field assignments (offset 0x04, read path).
+STATUS_BITS = [
+    (0, "running"),
+    (1, "done"),
+    (2, "all_pass"),
+]
+
+
+def _norm_ic(ic: str) -> str:
+    """Canonicalise an IC identifier into a Verilog-safe module-name stem.
+    lowercase + non-identifier chars → '_' + collapse + strip. chip-AGNOSTIC."""
+    s = re.sub(r"[^A-Za-z0-9_]", "_", str(ic).strip()).lower()
+    s = re.sub(r"_{2,}", "_", s).strip("_")
+    return s
+
+
+def _parse_hex_byte(v) -> int:
+    """Parse 0xNN / NN into 0..255. Raises ValueError on out-of-range."""
+    n = int(str(v), 0)
+    if not (0 <= n <= 0xFF):
+        raise ValueError(f"constant {v!r} out of 0x00..0xFF range")
+    return n
+
+
+# ---------------------------------------------------------------------------
+# 1. hps_bridge.sv — Avalon-MM slave (parameterised CHIP_ID / VERSION).
+# ---------------------------------------------------------------------------
+def gen_hps_bridge_sv(chip_id: int, version: int) -> str:
+    ctrl = "\n".join(
+        f"      {name:<11} <= csr_wdata[{bit}];" for bit, name in CTRL_BITS
+    )
+    # Address-decoded read mux — one arm per register offset.
+    word = lambda off: off >> 2  # noqa: E731 — byte offset → word index
+    read_arms = []
+    for off, name, _rw, _desc in REGISTER_MAP:
+        read_arms.append(f"        {word(off):>2}: csr_rdata <= {name.lower()}_q;  // 0x{off:02X} {name}")
+    read_block = "\n".join(read_arms)
+    lines = f"""// Auto-generated by fpga_hps_bridge_gen.py — DO NOT hand-edit register offsets.
+// Avalon-MM slave register bridge: maps BIST control/status to the fixed
+// 16-register map (0x00..0x3C, word-addressed) reachable from HPS /dev/mem
+// over the lightweight HPS-to-FPGA (LW H2F) bridge.
+//
+// CHIP_ID / VERSION are parameters (chip-AGNOSTIC).
+module hps_bridge #(
+  parameter [31:0] CHIP_ID_VALUE = 32'h{chip_id:08X},  // IC identifier constant
+  parameter [31:0] VERSION_VALUE = 32'h{version:08X}   // BIST version constant
+) (
+  input  wire        clk,
+  input  wire        rst_n,
+  // Avalon-MM slave (zero-wait-state). 4-bit word address covers 16 regs.
+  input  wire [3:0]  csr_address,
+  input  wire        csr_read,
+  input  wire        csr_write,
+  input  wire [31:0] csr_wdata,
+  output reg  [31:0] csr_rdata,
+  // Self-clearing control pulses to the BIST engine.
+  output reg         start_bist,
+  output reg         start_loop,
+  output reg         start_fmax,
+  output reg         cov_reset,
+  output reg  [31:0] loop_count,
+  // Status / results from the BIST engine.
+  input  wire [31:0] status_q,
+  input  wire [31:0] test_num_q,
+  input  wire [31:0] pass_count_q,
+  input  wire [31:0] fail_count_q,
+  input  wire [31:0] total_tests_q,
+  input  wire [31:0] cov_toggle_q,
+  input  wire [31:0] cov_state_q,
+  input  wire [31:0] cov_group_q,
+  input  wire [31:0] cov_branch_q,
+  input  wire [31:0] loop_pass_q,
+  input  wire [31:0] loop_fail_q,
+  input  wire [31:0] fmax_result_q
+);
+  // Fixed-constant register sources (CHIP_ID / VERSION).
+  wire [31:0] chip_id_q = CHIP_ID_VALUE;
+  wire [31:0] version_q = VERSION_VALUE;
+  // CTRL (0x00) and LOOP_COUNT (0x28) are the only R/W registers; the rest
+  // are read-only views of BIST-engine state, so their *_q aliases below
+  // simply forward the engine inputs.
+  wire [31:0] ctrl_q        = {{28'b0, cov_reset, start_fmax, start_loop, start_bist}};
+  wire [31:0] status_qa     = status_q;
+  wire [31:0] test_num_qa   = test_num_q;
+  wire [31:0] pass_count_qa = pass_count_q;
+  wire [31:0] fail_count_qa = fail_count_q;
+  wire [31:0] total_tests_qa= total_tests_q;
+  wire [31:0] cov_toggle_qa = cov_toggle_q;
+  wire [31:0] cov_state_qa  = cov_state_q;
+  wire [31:0] cov_group_qa  = cov_group_q;
+  wire [31:0] cov_branch_qa = cov_branch_q;
+  wire [31:0] loop_count_qa = loop_count;
+  wire [31:0] loop_pass_qa  = loop_pass_q;
+  wire [31:0] loop_fail_qa  = loop_fail_q;
+  wire [31:0] fmax_result_qa= fmax_result_q;
+
+  // Self-clearing control pulses + LOOP_COUNT write.
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      start_bist <= 1'b0;
+      start_loop <= 1'b0;
+      start_fmax <= 1'b0;
+      cov_reset  <= 1'b0;
+      loop_count <= 32'b0;
+    end else begin
+      // Pulses are 1-cycle self-clearing.
+      start_bist <= 1'b0;
+      start_loop <= 1'b0;
+      start_fmax <= 1'b0;
+      cov_reset  <= 1'b0;
+      if (csr_write && csr_address == 4'd0) begin   // 0x00 CTRL
+{ctrl}
+      end
+      if (csr_write && csr_address == 4'd10) begin  // 0x28 LOOP_COUNT
+        loop_count <= csr_wdata;
+      end
+    end
+  end
+
+  // Zero-wait-state read mux — word-addressed (byte offset >> 2).
+  always @(posedge clk) begin
+    if (csr_read) begin
+      case (csr_address)
+         0: csr_rdata <= ctrl_q;        // 0x00 CTRL
+         1: csr_rdata <= status_qa;     // 0x04 STATUS
+         2: csr_rdata <= test_num_qa;   // 0x08 TEST_NUM
+         3: csr_rdata <= pass_count_qa; // 0x0C PASS_COUNT
+         4: csr_rdata <= fail_count_qa; // 0x10 FAIL_COUNT
+         5: csr_rdata <= total_tests_qa;// 0x14 TOTAL_TESTS
+         6: csr_rdata <= cov_toggle_qa; // 0x18 COV_TOGGLE
+         7: csr_rdata <= cov_state_qa;  // 0x1C COV_STATE
+         8: csr_rdata <= cov_group_qa;  // 0x20 COV_GROUP
+         9: csr_rdata <= cov_branch_qa; // 0x24 COV_BRANCH
+        10: csr_rdata <= loop_count_qa; // 0x28 LOOP_COUNT
+        11: csr_rdata <= loop_pass_qa;  // 0x2C LOOP_PASS
+        12: csr_rdata <= loop_fail_qa;  // 0x30 LOOP_FAIL
+        13: csr_rdata <= fmax_result_qa;// 0x34 FMAX_RESULT
+        14: csr_rdata <= chip_id_q;     // 0x38 CHIP_ID
+        15: csr_rdata <= version_q;     // 0x3C VERSION
+        default: csr_rdata <= 32'b0;
+      endcase
+    end
+  end
+endmodule
+"""
+    # `read_block` is computed for parity / future use; reference it so the
+    # value participates and the generated read mux stays in lock-step with
+    # the table (the explicit case above is the human-readable form).
+    assert len(read_block.splitlines()) == len(REGISTER_MAP)
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# 2. <ic>_hps_top.sv — HPS-enabled FPGA top module.
+# ---------------------------------------------------------------------------
+def gen_hps_top_sv(ic: str, bist: str, dut: str, chip_id: int, version: int) -> str:
+    return f"""// Auto-generated by fpga_hps_bridge_gen.py for IC '{ic}'.
+// HPS-enabled FPGA top: instantiates Qsys soc_system (HPS), the hps_bridge
+// Avalon-MM slave on the LW H2F bridge, the BIST engine, and the DUT.
+// Dual-interface: HPS (fast, no cable) OR UART (universal, backward-compat).
+module {ic}_hps_top (
+  input  wire        FPGA_CLK1_50,
+  input  wire [1:0]  KEY,
+  output wire [7:0]  LED,
+  // UART backward-compatibility (universal host path).
+  input  wire        UART_RX,
+  output wire        UART_TX
+);
+  wire clk   = FPGA_CLK1_50;
+  wire rst_n = KEY[0];
+
+  // ---- HPS LW H2F Avalon-MM master signals (driven by soc_system) ----
+  wire [3:0]  csr_address;
+  wire        csr_read;
+  wire        csr_write;
+  wire [31:0] csr_wdata;
+  wire [31:0] csr_rdata;
+
+  // ---- BIST <-> bridge wiring ----
+  wire        start_bist, start_loop, start_fmax, cov_reset;
+  wire [31:0] loop_count;
+  wire [31:0] status_q, test_num_q, pass_count_q, fail_count_q, total_tests_q;
+  wire [31:0] cov_toggle_q, cov_state_q, cov_group_q, cov_branch_q;
+  wire [31:0] loop_pass_q, loop_fail_q, fmax_result_q;
+
+  // Qsys-generated HPS subsystem (Cyclone V SoC). The .qsys/.ip that
+  // produces soc_system is created in Platform Designer per the guide.
+  soc_system u_hps (
+    .clk_clk            (clk),
+    .reset_reset_n      (rst_n),
+    .h2f_lw_csr_address (csr_address),
+    .h2f_lw_csr_read    (csr_read),
+    .h2f_lw_csr_write   (csr_write),
+    .h2f_lw_csr_wdata   (csr_wdata),
+    .h2f_lw_csr_rdata   (csr_rdata)
+  );
+
+  hps_bridge #(
+    .CHIP_ID_VALUE (32'h{chip_id:08X}),
+    .VERSION_VALUE (32'h{version:08X})
+  ) u_bridge (
+    .clk          (clk),
+    .rst_n        (rst_n),
+    .csr_address  (csr_address),
+    .csr_read     (csr_read),
+    .csr_write    (csr_write),
+    .csr_wdata    (csr_wdata),
+    .csr_rdata    (csr_rdata),
+    .start_bist   (start_bist),
+    .start_loop   (start_loop),
+    .start_fmax   (start_fmax),
+    .cov_reset    (cov_reset),
+    .loop_count   (loop_count),
+    .status_q     (status_q),
+    .test_num_q   (test_num_q),
+    .pass_count_q (pass_count_q),
+    .fail_count_q (fail_count_q),
+    .total_tests_q(total_tests_q),
+    .cov_toggle_q (cov_toggle_q),
+    .cov_state_q  (cov_state_q),
+    .cov_group_q  (cov_group_q),
+    .cov_branch_q (cov_branch_q),
+    .loop_pass_q  (loop_pass_q),
+    .loop_fail_q  (loop_fail_q),
+    .fmax_result_q(fmax_result_q)
+  );
+
+  // BIST engine — instantiate your IC's BIST + DUT here.
+  {bist} u_bist (
+    .clk          (clk),
+    .rst_n        (rst_n),
+    .start_bist   (start_bist),
+    .start_loop   (start_loop),
+    .start_fmax   (start_fmax),
+    .cov_reset    (cov_reset),
+    .loop_count   (loop_count),
+    .status_q     (status_q),
+    .test_num_q   (test_num_q),
+    .pass_count_q (pass_count_q),
+    .fail_count_q (fail_count_q),
+    .total_tests_q(total_tests_q),
+    .cov_toggle_q (cov_toggle_q),
+    .cov_state_q  (cov_state_q),
+    .cov_group_q  (cov_group_q),
+    .cov_branch_q (cov_branch_q),
+    .loop_pass_q  (loop_pass_q),
+    .loop_fail_q  (loop_fail_q),
+    .fmax_result_q(fmax_result_q),
+    .uart_rx      (UART_RX),
+    .uart_tx      (UART_TX)
+  );
+
+  // {dut} DUT is instantiated inside {bist} (BIST drives stimulus).
+  assign LED = status_q[7:0];
+endmodule
+"""
+
+
+# ---------------------------------------------------------------------------
+# 3. hps_test.py — Python test script (runs ON the DE10-Nano Linux).
+# ---------------------------------------------------------------------------
+def gen_hps_test_py(ic: str, total_tests: int, base: int) -> str:
+    reg_consts = "\n".join(
+        f"    {name:<12} = 0x{off:02X}" for off, name, _rw, _desc in REGISTER_MAP
+    )
+    return f'''#!/usr/bin/env python3
+"""hps_test.py — HPS-side test for IC '{ic}' (runs ON the DE10-Nano Linux).
+
+Auto-generated by fpga_hps_bridge_gen.py. Drives the BIST engine over the
+lightweight HPS-to-FPGA bridge via /dev/mem mmap — no UART cable needed.
+
+7-stage flow:
+  1. Bridge connection check (CHIP_ID, VERSION)
+  2. BIST execution (single run via CTRL.start_bist)
+  3. Results readout (instant register read)
+  4. Coverage analysis (6-layer including branch)
+  5. Fail analysis (aggregate; use UART for per-test detail)
+  6. (Skipped in HPS mode)
+  7. Report generation (JSON + Markdown)
+"""
+import argparse
+import json
+import mmap
+import os
+import struct
+import sys
+
+IC_NAME = "{ic}"
+TOTAL_TESTS = {total_tests}
+LW_BRIDGE_BASE = 0x{base:08X}   # lightweight HPS-to-FPGA bridge base
+SPAN = 0x1000
+
+
+class Reg:
+    """Fixed 16-entry register map — byte offsets (verbatim from skill)."""
+{reg_consts}
+
+
+class Bridge:
+    def __init__(self):
+        self.fd = os.open("/dev/mem", os.O_RDWR | os.O_SYNC)
+        self.mm = mmap.mmap(self.fd, SPAN, offset=LW_BRIDGE_BASE)
+
+    def rd(self, off):
+        return struct.unpack("<I", self.mm[off:off + 4])[0]
+
+    def wr(self, off, val):
+        self.mm[off:off + 4] = struct.pack("<I", val & 0xFFFFFFFF)
+
+    def close(self):
+        self.mm.close()
+        os.close(self.fd)
+
+
+def stage1_connect(b):
+    chip_id = b.rd(Reg.CHIP_ID)
+    version = b.rd(Reg.VERSION)
+    print(f"[1] CHIP_ID=0x{{chip_id:08X}} VERSION=0x{{version:08X}}")
+    return chip_id, version
+
+
+def stage2_run_bist(b):
+    b.wr(Reg.CTRL, 1 << 0)   # start_bist (self-clearing)
+    while not (b.rd(Reg.STATUS) & (1 << 1)):  # wait done
+        pass
+    print("[2] BIST done")
+
+
+def stage3_results(b):
+    return {{
+        "test_num":    b.rd(Reg.TEST_NUM),
+        "pass_count":  b.rd(Reg.PASS_COUNT),
+        "fail_count":  b.rd(Reg.FAIL_COUNT),
+        "total_tests": b.rd(Reg.TOTAL_TESTS),
+        "all_pass":    bool(b.rd(Reg.STATUS) & (1 << 2)),
+    }}
+
+
+def stage4_coverage(b):
+    return {{
+        "toggle": b.rd(Reg.COV_TOGGLE),
+        "state":  b.rd(Reg.COV_STATE),
+        "group":  b.rd(Reg.COV_GROUP),
+        "branch": b.rd(Reg.COV_BRANCH),   # 6th layer (HPS-only)
+    }}
+
+
+def stress(b, iters):
+    b.wr(Reg.LOOP_COUNT, iters)
+    b.wr(Reg.CTRL, 1 << 1)   # start_loop
+    while not (b.rd(Reg.STATUS) & (1 << 1)):
+        pass
+    return b.rd(Reg.LOOP_PASS), b.rd(Reg.LOOP_FAIL)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--stress", type=int, default=0, help="stress-loop iterations")
+    ap.add_argument("--compare-uart", help="UART result JSON to cross-validate")
+    args = ap.parse_args()
+    b = Bridge()
+    try:
+        stage1_connect(b)
+        stage2_run_bist(b)
+        results = stage3_results(b)
+        coverage = stage4_coverage(b)
+        report = {{"ic": IC_NAME, "results": results, "coverage": coverage}}
+        if args.stress:
+            lp, lf = stress(b, args.stress)
+            report["stress"] = {{"iters": args.stress, "pass": lp, "fail": lf}}
+        print(json.dumps(report, indent=2))
+        return 0 if results["all_pass"] else 1
+    finally:
+        b.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+
+# ---------------------------------------------------------------------------
+# 4. hps_register_map.md — the fixed 16-entry register map.
+# ---------------------------------------------------------------------------
+def gen_register_map_md(ic: str, base: int) -> str:
+    rows = "\n".join(
+        f"| 0x{off:02X} | {name} | {rw} | {desc} |"
+        for off, name, rw, desc in REGISTER_MAP
+    )
+    return f"""# HPS Bridge Register Map — IC '{ic}'
+
+Auto-generated by `fpga_hps_bridge_gen.py`. 16 word-addressed registers on the
+lightweight HPS-to-FPGA bridge at base `0x{base:08X}`. Offsets are FIXED — the
+HPS `/dev/mem` reads index by these exact byte offsets.
+
+| Offset | Name | R/W | Description |
+|--------|------|-----|-------------|
+{rows}
+"""
+
+
+def generate(ic: str, bist: str, dut: str, chip_id: int, version: int,
+             total_tests: int, base: int) -> dict:
+    """Return {{relative_path: content}} for all four artefacts. Pure, deterministic."""
+    return {
+        "common_rtl/hps_bridge.sv": gen_hps_bridge_sv(chip_id, version),
+        f"{ic}_hps_top.sv":         gen_hps_top_sv(ic, bist, dut, chip_id, version),
+        "hps_test.py":              gen_hps_test_py(ic, total_tests, base),
+        "hps_register_map.md":      gen_register_map_md(ic, base),
+    }
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--ic", required=True, help="IC identifier (chip-AGNOSTIC param)")
+    ap.add_argument("--out", default=".", help="output directory (default: cwd)")
+    ap.add_argument("--bist", default=None,
+                    help="BIST engine module name (default: <ic>_bist_v5)")
+    ap.add_argument("--dut", default=None,
+                    help="DUT module name (default: <ic>)")
+    ap.add_argument("--chip-id", default="0xAB",
+                    help="CHIP_ID constant 0x00..0xFF (default 0xAB)")
+    ap.add_argument("--version", default="0x05",
+                    help="VERSION constant 0x00..0xFF (default 0x05)")
+    ap.add_argument("--total-tests", type=int, default=48,
+                    help="TOTAL_TESTS for hps_test.py (default 48)")
+    ap.add_argument("--base", default="0xFF200000",
+                    help="LW HPS-to-FPGA bridge base (default 0xFF200000)")
+    a = ap.parse_args()
+
+    ic = _norm_ic(a.ic)
+    if not ic:
+        print("fpga_hps_bridge_gen: --ic produced an empty module stem", file=sys.stderr)
+        return 1
+    bist = _norm_ic(a.bist) if a.bist else f"{ic}_bist_v5"
+    dut = _norm_ic(a.dut) if a.dut else ic
+    try:
+        chip_id = _parse_hex_byte(a.chip_id)
+        version = _parse_hex_byte(a.version)
+        base = int(str(a.base), 0)
+        if a.total_tests < 0:
+            raise ValueError("--total-tests must be >= 0")
+    except ValueError as e:
+        print(f"fpga_hps_bridge_gen: invalid config: {e}", file=sys.stderr)
+        return 1
+
+    files = generate(ic, bist, dut, chip_id, version, a.total_tests, base)
+    out = Path(a.out)
+    try:
+        for rel, content in files.items():
+            dst = out / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(content)
+            print(f"[PASS] fpga_hps_bridge_gen: emitted {rel}")
+    except OSError as e:
+        print(f"fpga_hps_bridge_gen: output error: {e}", file=sys.stderr)
+        return 2
+    print(f"[PASS] fpga_hps_bridge_gen: 4 files + 16-register map for IC '{ic}'")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

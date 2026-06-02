@@ -49,16 +49,27 @@ def test_gold_allowlist_only_applies_to_gold_blob(tmp_path):
 
 # --- end-to-end CI gate: no foreign detector may fire on any benchmark GOLD ---
 import pytest  # noqa: E402
+from pathlib import Path  # noqa: E402
 
-BP = mod.DEFAULT_BP
+# Real private corpus when present, else the committed synthetic fixture so the
+# gold cross-contamination sweep ACTUALLY RUNS in the shipped tree.
+_REAL_BP = mod.DEFAULT_BP
+_SYNTHETIC_BP = Path(__file__).resolve().parent / "fixtures" / "synthetic_benchmark_phase1"
+BP = _REAL_BP if _REAL_BP.is_dir() else _SYNTHETIC_BP
 
 
-@pytest.mark.skipif(not BP.is_dir(), reason="benchmark_phase1 fixtures absent")
+@pytest.mark.skipif(not BP.is_dir(),
+                    reason="neither benchmark_phase1/ nor synthetic fixtures present")
 def test_no_gold_cross_contamination():
     """Every benchmark's claude_extracted GOLD must be free of foreign-protocol
     content (modulo the documented parent-spec-contains-subclause allowlist).
     This is what would have caught the Tier-G io_link SENT contamination
-    automatically; gated-parity-0 cannot (v0.1.89 lesson)."""
+    automatically; gated-parity-0 cannot (v0.1.89 lesson).
+
+    Runs against the real private ``benchmark_phase1/`` when present, else against
+    the committed synthetic per-protocol fixture (each benchmark's synthetic gold
+    carries only its own protocol's content, so a clean run proves the sweep is
+    live, not vacuous)."""
     _det, _benches, _rows, misfires, _own = mod.run_matrix(BP, "gold")
     assert not misfires, f"gold cross-contamination: {misfires}"
 

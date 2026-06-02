@@ -257,7 +257,7 @@ def mode_detect(_args: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
 def _find_plugin_program(name: str) -> Optional[str]:
     """Locate a helper Python program in the vibe-ic plugin tree.
 
-    v1.6.0 merged vibe-ic-core + vibe-ic-d → unified `vibe-ic`. This
+    v1.6.0 merged vibe-ic + vibe-ic-d → unified `vibe-ic`. This
     lookup tries the merged path first, falls back to the legacy
     vibe-ic-d path for old installs. Honours VIBE_IC_PROGRAMS_DIR (new)
     and VIBE_IC_D_PROGRAMS_DIR (legacy) for explicit overrides.

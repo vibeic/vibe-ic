@@ -35,6 +35,23 @@ For each analog block in `<project>/analog/<block>/`:
 - All corners' verdict columns parse and are numeric
 - Margin to spec on every corner ≥10%
 
+**Run the deterministic gate first** — the ≥27-corner count and the
+≥10% per-corner margin floor are fixed thresholds, so let the program
+assert them (it accepts both `A4_corners.json` and the runner's
+`corner_results.json`, self-skips when no corner artefact / stub data
+exists, and never over-flags informational corners with no numeric
+margin):
+
+```bash
+python3 ../../programs/analog_corner_margin_check.py <project> \
+    --json <project>/reports/gates/analog_corner_margin.json
+```
+
+Exit 0 = PASS (or self-skip), 1 = FAIL (count < 27 or a corner < 10%).
+Note this is *stricter* than `analog_corner_sweep_check.py` (which only
+enforces the lighter 9-corner 3×3 matrix). After the gate is green,
+apply AI judgment to the items below.
+
 ### A5 layout
 - A5_layout.json references a Magic .mag file that exists
 - DRC clean (or has waivers list)

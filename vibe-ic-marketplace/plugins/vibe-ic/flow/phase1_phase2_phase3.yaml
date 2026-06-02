@@ -918,7 +918,10 @@ steps:
     required_outputs:
       - "reports/phase3/antenna.rpt"
     gate:
-      files_exist: ["reports/phase3/antenna.rpt"]
+      # Substance gate (was presence-only) — parses the OpenROAD check_antennas
+      # violation count; FAILs on net/pin violations > 0, mirroring the EM (25)
+      # and IR (24) report_check siblings. PDK-waiver aware; clean reports PASS.
+      program_exit_zero: "antenna_report_check . --mode antenna --json reports/phase3/antenna.json"
     blocks_on: [21]
 
   # ── Step 27: Signal Integrity ────────────────────────────

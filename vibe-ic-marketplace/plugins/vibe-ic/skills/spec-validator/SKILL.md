@@ -16,72 +16,73 @@ Ensures that Datasheet, Application Note, and Specification are internally consi
 
 ## Tools
 
-### 1. ds_quality_check.py — Datasheet Scoring (0-100)
+> The three scoring/consistency rubrics below are **deterministic programs**, not
+> prose to grade by hand. The exact criteria, weights and thresholds live in the
+> programs (`programs/ds_quality_check.py`, `programs/an_validator.py`,
+> `programs/spec_validator.py`) so every agent gets the identical score. **Run
+> the program — do not re-grade the table mentally.** All three are
+> chip-AGNOSTIC, pure-stdlib, and degrade to `MISSING`/`SKIP` (never a false
+> FAIL) on absent or unexpected input.
 
-Scores a Markdown datasheet on 10 criteria (0-10 each):
+### 1. ds_quality_check.py — Datasheet (L1) Scoring (0-100)
 
-| # | Criterion | Full marks when... |
-|---|-----------|-------------------|
-| 1 | Features | Section exists, >=5 bullet items |
-| 2 | Description | >=2 paragraphs |
-| 3 | Pin Configuration | Table with >=3 columns |
-| 4 | Absolute Maximum Ratings | Table exists with >=5 params |
-| 5 | Recommended Operating Conditions | Table with min/typ/max |
-| 6 | Electrical Characteristics | DC + AC sections with tables |
-| 7 | Timing Diagrams | ASCII art or description present |
-| 8 | Block Diagram | Visual diagram present |
-| 9 | Detailed Description + Register Map | Long description + register table |
-| 10 | Application Information | Circuit diagram + component values |
+Scores a Markdown datasheet on 10 criteria (0-10 each: Features, Description,
+Pin Configuration, Absolute Maximum Ratings, Recommended Operating Conditions,
+Electrical Characteristics, Timing Diagrams, Block Diagram, Detailed
+Description + Register Map, Application Information). **Run it:**
 
 ```bash
-python3 tools/vibe_ic_tools/ds_quality_check.py phase1_spec/04_datasheet.md
-python3 tools/vibe_ic_tools/ds_quality_check.py phase1_spec/04_datasheet.md --json
+# single file or a project dir (auto-locates the datasheet)
+python3 programs/ds_quality_check.py phase1_spec/04_datasheet.md --json
+python3 programs/ds_quality_check.py <project_dir> --json
 ```
 
-**Checkpoint 1 threshold: score >= 70/100**
+Output: `{score, max:100, threshold:70, verdict, breakdown:[...]}`.
+**Checkpoint 1 threshold: score >= 70/100** (exit 0 = PASS, 1 = FAIL,
+2 = MISSING/empty — treat MISSING as "datasheet not produced yet", not a fail).
 
-### 2. an_validator.py — Application Note Scoring (0-80)
+### 2. an_validator.py — Application Note (AN) Scoring (0-80)
 
-Scores on 8 criteria (0-10 each):
-
-| # | Criterion | Full marks when... |
-|---|-----------|-------------------|
-| 1 | Overview | >=2 paragraphs, >300 chars |
-| 2 | Typical Application Circuit | ASCII schematic + components |
-| 3 | External Component Selection | Table + values |
-| 4 | PCB Layout | Guidelines + diagram |
-| 5 | Firmware Example | Code block + register ops |
-| 6 | Design Calculations | >=3 formulas + values |
-| 7 | FAQ | >=5 Q&A items |
-| 8 | Competitive Comparison | Table with >=3 products |
+Scores a Markdown application note on 8 criteria (0-10 each: Overview, Typical
+Application Circuit, External Component Selection, PCB Layout, Firmware Example,
+Design Calculations, FAQ, Competitive Comparison). **Run it:**
 
 ```bash
-python3 tools/vibe_ic_tools/an_validator.py phase1_spec/05_appnote.md
-python3 tools/vibe_ic_tools/an_validator.py phase1_spec/05_appnote.md --json
+python3 programs/an_validator.py phase1_spec/05_appnote.md --json
+python3 programs/an_validator.py <project_dir> --json
 ```
 
-**Checkpoint 1 threshold: score >= 56/80**
+Output: `{score, max:80, threshold:56, verdict, breakdown:[...]}`.
+**Checkpoint 1 threshold: score >= 56/80.**
 
-### 3. spec_validator.py — Cross-Consistency Check
+### 3. spec_validator.py — DS↔AN Cross-Consistency Check
 
-Compares identifiers across documents:
-- Pin names: DS Pin Configuration vs AN Typical Application Circuit
-- Register addresses: DS Register Map vs AN Firmware Example
-- TBD/TODO values: must be zero across all documents
+Cross-checks identifiers between documents (DS Pin Configuration ↔ AN Typical
+Application Circuit; DS Register Map ↔ AN Firmware Example; and TBD/TODO/
+placeholder tokens that must be zero across all docs). Identifiers are parsed
+structurally from the docs — never compared against a hard-coded pin/register
+list — and a check is **SKIPPED** (not flagged) when either side lacks the
+section or parsable identifiers, so a sparse doc never produces a false
+mismatch. **Run it:**
 
 ```bash
-python3 tools/vibe_ic_tools/spec_validator.py \
+python3 programs/spec_validator.py \
     --ds phase1_spec/04_datasheet.md \
     --an phase1_spec/05_appnote.md \
-    --spec phase1_spec/03_spec_confirmed.md
-
-python3 tools/vibe_ic_tools/spec_validator.py \
-    --ds phase1_spec/04_datasheet.md \
-    --an phase1_spec/05_appnote.md \
-    --json
+    --spec phase1_spec/03_spec_confirmed.md --json
+# or auto-locate DS + AN inside a project dir:
+python3 programs/spec_validator.py <project_dir> --json
 ```
 
-**Checkpoint 1 threshold: 0 ERROR-level mismatches**
+Output: `{verdict, error_count, findings:[...]}` with rules `pin-mismatch`,
+`register-mismatch`, `unresolved-tbd` (all ERROR) and `section-missing` (INFO/
+SKIP). **Checkpoint 1 threshold: 0 ERROR-level mismatches.**
+
+**AI judgment (keep):** a passing score is necessary, not sufficient. Still
+eyeball the `breakdown` for criteria that scored full marks on thin content
+(e.g. a register table with placeholder rows), and confirm any
+`section-missing` SKIP is genuinely "section not applicable for this IC class"
+rather than "section forgotten". Use `/datasheet-gen` to raise a low DS score.
 
 ### 4. spec_conformance_check.py — Spec↔RTL contract gate (once RTL exists)
 

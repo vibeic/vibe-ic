@@ -944,7 +944,7 @@ def _l9(gd: Path) -> None:
         "interface, MAC engine (CSMA-CA, superframe/GTS, FCS), AES-128 CCM* "
         "security engine, and the NWK/APS/ZDO/ZCL stack interface.")
     d["chip_top_interfaces"] = [
-        {"name": "rf_if", "type": "analog/digital RF",
+        {"name": "rf_if", "type": "analog-digital RF",
          "signals": ["rf_p", "rf_n", "rf_bias", "xtal_p", "xtal_n"]},
         {"name": "host_sap", "type": "SAP message / register",
          "signals": ["mlme_req", "mlme_cfm", "mcps_data", "pd_data"]},

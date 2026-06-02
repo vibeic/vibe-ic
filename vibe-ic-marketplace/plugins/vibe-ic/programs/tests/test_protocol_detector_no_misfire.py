@@ -33,7 +33,14 @@ import pytest
 
 PROGRAMS_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = Path(__file__).resolve().parents[5]
-BP = REPO_ROOT / "benchmark_phase1"
+# The real private corpus, when present.
+_REAL_BP = REPO_ROOT / "benchmark_phase1"
+# A small, self-contained synthetic corpus committed under tests/fixtures/ so this
+# guard ACTUALLY RUNS (fires-on-own + no-misfire-on-foreign) without the private
+# benchmark_phase1/. The real dir wins when it exists; otherwise we fall back to the
+# synthetic one (a handful of representative protocols, chip-AGNOSTIC structural specs).
+_SYNTHETIC_BP = Path(__file__).resolve().parent / "fixtures" / "synthetic_benchmark_phase1"
+BP = _REAL_BP if _REAL_BP.is_dir() else _SYNTHETIC_BP
 
 
 def _discover_detectors():
@@ -95,12 +102,33 @@ def test_every_detector_is_callable_and_empty_safe():
         assert fn(None) is False, f"is_{stem}(None) should be False"  # type: ignore[arg-type]
 
 
-@pytest.mark.skipif(not BP.is_dir(), reason="benchmark_phase1 fixtures absent")
+def _ensure_synthetic_corpus():
+    """Materialize the committed synthetic corpus if it was cleaned (defensive)."""
+    if _REAL_BP.is_dir() or _SYNTHETIC_BP.is_dir():
+        return
+    try:
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
+        from synthetic_protocol_blobs import build_synthetic_benchmark_phase1
+        build_synthetic_benchmark_phase1(_SYNTHETIC_BP)
+    except Exception:
+        pass
+
+
+_ensure_synthetic_corpus()
+
+
+@pytest.mark.skipif(not BP.is_dir(),
+                    reason="neither benchmark_phase1/ nor synthetic fixtures present")
 def test_no_detector_fires_on_a_foreign_benchmark():
     """Each auto-discovered detector must fire ONLY on its own benchmark.
 
     Content SUPERSET (input_doc + every generated L-doc) — stricter than the
     runner's actual blob — so zero foreign fires here ⇒ zero in the runner.
+
+    Runs against the real private ``benchmark_phase1/`` when present, else against
+    the committed synthetic per-protocol fixture (``tests/fixtures/...``) — so the
+    fires-on-own + no-misfire-on-foreign sweep executes in the shipped tree too.
     """
     benches = sorted(d for d in os.listdir(BP) if (BP / d).is_dir() and _blob_for(d))
     blobs = {b: _blob_for(b) for b in benches}

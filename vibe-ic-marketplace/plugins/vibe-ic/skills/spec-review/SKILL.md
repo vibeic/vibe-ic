@@ -40,10 +40,34 @@ A bad spec is the cheapest bug to fix and the most expensive to ship. This skill
 
 ## Workflow
 
+**Step 0 — run the deterministic structural lint FIRST (do not eyeball it).**
+The presence/structure half of the checklist above — *is each declared signal's
+`{direction, width, polarity, clock, reset}` present? does each timing statement
+name a reference edge? does each declared mode have entry + exit? are the four
+corner-case checklist items covered?* — is mechanical and must run identically
+every time. Run it before any human reading so the rest of your review is spent
+only on judgment:
+
+```bash
+python3 programs/spec_review_lint.py <spec_file> --json spec/spec_review_lint.json
+# add --strict to make any WARN finding fail the gate (exit 1)
+```
+
+The lint is chip-AGNOSTIC and no-false-alert: it flags ONLY genuinely-missing
+declared structure (a signal that IS declared but lacks an attribute, a real
+timing statement with no edge, an uncovered corner-case item). A pure-prose spec
+with no interface list yields no signal findings; an empty/short spec SKIPs; a
+missing file exits 2. Treat every `WARN` as a concrete must-fix gap and fold the
+JSON findings into your dimension table below. It does NOT judge ambiguity wording
+or propose rewrites — that is your job in steps 3-5.
+
 1. Read the spec end-to-end
-2. For each dimension above, mark each section as GREEN / YELLOW / RED
-3. List specific sentences that are ambiguous with suggested rewrites
-4. Flag missing subsections
+2. For each dimension above, mark each section as GREEN / YELLOW / RED — seed the
+   Unambiguous / Testable / Complete-corner-cases rows from `spec_review_lint.json`,
+   then apply judgment to the consistency / interface / non-functional rows
+3. List specific sentences that are ambiguous with suggested rewrites **(judgment —
+   the lint does not do this)**
+4. Flag missing subsections **(judgment, beyond the lint's structural items)**
 5. Propose cover properties that should exist once the spec is hardened (handoff to `/assertion-gen`)
 
 ## Output format

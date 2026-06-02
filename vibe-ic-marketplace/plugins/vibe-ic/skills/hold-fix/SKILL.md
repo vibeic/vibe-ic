@@ -151,6 +151,71 @@ Hold timing: T_hold < T_clk_skew + T_data_delay. When CTS adds clock insertion d
 - New hold after routing -> re-run this skill post-route
 - Signoff -> `/tapeout-checklist` includes hold clean as gate
 
+## Canonical loop infrastructure (mandatory — shared with all *-fix loops)
+
+The "Iterate Until Clean" loop (Step 5) MUST be driven by the two shared
+closed-loop primitives so every fix loop in Vibe-IC obeys one
+convergence / plateau / regression policy and one runaway / dedup guard —
+do **not** hand-roll a bespoke iteration counter or duplicate-check.
+
+**1. `programs/iterative_search.py` — the parameter sweep.**
+Model the hold-fix knobs as a typed `SearchSpace` and let `IterativeSearch`
+propose the next buffer/skew trial; `ConvergenceChecker` classifies the slack
+history (`CONVERGED` / `PLATEAU` / `REGRESSION` / `EXHAUSTED` / `CONTINUE`):
+
+```python
+import iterative_search as it
+space = it.SearchSpace([
+    it.Dimension("buffers", "integer", lo=0, hi=512),     # delay cells to insert
+    it.Dimension("skew_ps", "continuous", lo=-50.0, hi=50.0),
+    it.Dimension("strategy", "enumerate", choices=["repair_hold", "buffer", "pad"]),
+])
+# target=0 WHS, tolerance = margin; patience guards against a stuck loop
+checker = it.ConvergenceChecker(target=0.0, tolerance=1.0, patience=4)
+search  = it.IterativeSearch(space, checker, maximize=True, seed=7, max_rounds=20)
+
+def evaluate(point):          # caller runs OpenROAD repair_timing -hold + OpenSTA here
+    return measured_WHS_ps    # higher (toward 0) is better
+outcome = search.run(evaluate)
+# outcome.status, outcome.best_point, outcome.best_score, outcome.rounds
+```
+
+`IterativeSearch` internally constructs an `AdmissionGuard(bounds=space.bounds(),
+max_iterations=max_rounds)`, so every proposed point is already runaway- and
+dedup-guarded when you use `search.propose()` / `search.run()`.
+
+**2. `programs/loop_admission_guard.py` — admit each iteration BEFORE the EDA run.**
+If you drive the loop manually (not via `search.run`), wrap every proposed
+buffer/skew trial through `AdmissionGuard.admit()` and only spend the expensive
+OpenROAD/OpenSTA round when `res.admitted` is true:
+
+```python
+import loop_admission_guard as g
+guard = g.AdmissionGuard(
+    bounds={"skew_ps": (-50.0, 50.0)},      # clamp into range
+    caps={"buffers": 512},                  # REJECT a runaway buffer count
+    max_iterations=20)                       # hard RUNAWAY iteration budget
+res = guard.admit({"buffers": 143, "skew_ps": -22.0})
+if res.admitted:
+    run_iteration(res.proposal)              # res.proposal is post-clamp / safe
+# else res.reason in {DUPLICATE, RUNAWAY_CAP, RUNAWAY_ITERATION_BUDGET}
+```
+
+CLI one-shot decision (exit 0 = ADMITTED, 1 = REJECTED):
+
+```bash
+python3 programs/loop_admission_guard.py decision.json
+# decision.json: {"bounds":{...},"caps":{...},"max_iterations":20,
+#                 "history":[...prior proposals...],"proposal":{...}}
+```
+
+`canonical_fingerprint(proposal)` (md5, key-order- and float-noise-stable) is
+the dedup key — an already-tried buffer/skew combination is rejected with
+`reason="DUPLICATE"` instead of burning another STA run. This replaces the
+informal "Typical iteration count: 2-4 rounds" expectation with an enforced
+budget and plateau/regression exit, while leaving every existing convergence
+criterion in Step 5 unchanged.
+
 ## ⛔ ECO spare-cell preservation (mandatory)
 
 > ⛔ **ECO spare-cell preservation:** cells/gates/pads carrying the `dont_touch` /

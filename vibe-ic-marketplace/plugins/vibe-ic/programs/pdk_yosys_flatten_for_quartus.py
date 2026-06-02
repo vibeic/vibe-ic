@@ -40,7 +40,7 @@ import argparse, json, os, subprocess, sys, tempfile, shutil
 from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[1]
-ATPG_HARMONIZE = PLUGIN / "skills" / "atpg-name-harmonize" / "fix_fault_cut_names.py"
+ATPG_HARMONIZE = PLUGIN / "programs" / "fix_fault_cut_names.py"
 
 YS_TEMPLATE = """\
 read_verilog {pdk_shim}

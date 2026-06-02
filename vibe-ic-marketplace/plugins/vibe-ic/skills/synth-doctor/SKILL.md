@@ -10,13 +10,34 @@ Automatically diagnose EDA tool failures and provide actionable fix suggestions.
 ## Tools
 
 ### synth_doctor.py — Yosys Synthesis Errors
+
+**Run the program — do not re-derive the classification by hand.** The 10-pattern
+log→fix table below is implemented deterministically in
+`programs/synth_doctor.py`; invoke it on any Yosys synth log and it emits
+`{matched_pattern, canonical_fix, confidence}` per finding (chip-AGNOSTIC,
+identical every run):
+
 ```bash
-python3 tools/vibe_ic_tools/synth_doctor.py synth.log          # diagnosis
-python3 tools/vibe_ic_tools/synth_doctor.py synth.log --fix     # with fix code
-python3 tools/vibe_ic_tools/synth_doctor.py synth.log --json    # machine output
+python3 programs/synth_doctor.py synth.log          # human diagnosis
+python3 programs/synth_doctor.py synth.log --fix     # include the canonical fix recipe
+python3 programs/synth_doctor.py synth.log --json    # machine output {matched_pattern, canonical_fix, confidence}
 ```
 
-10 known patterns from 135-IC campaign:
+Importable too: `from synth_doctor import diagnose; diagnose(open('synth.log').read())`.
+Verdicts: `CLEAN` (no known signature — note the deny-list + length-floor mean a
+clean log NEVER false-alerts), `DIAGNOSED` (≥1 known pattern, fix + confidence
+attached), `MANUAL_REVIEW` (only an unrecognised error → `UNKNOWN`, no auto-fix),
+`MISSING` (log file absent — graceful, exit 2, no crash). `confidence` is the
+per-pattern auto-fix success rate from the 135-IC campaign (`PRACTICAL_NOTES.md`).
+
+**AI judgment still required** when the program returns `DIAGNOSED` with low
+confidence or `MANUAL_REVIEW`: the canonical fix is a *recipe*, not a blind patch.
+For `MULTI_DRIVER`, the correct merge priority is an FSM-context judgement; for
+`WIDTH_MISMATCH`, choose zero- vs sign-extend per signal signedness; for
+`SYNTAX_ERROR`/`UNKNOWN`, read the raw error and decide. Apply the program's
+classification first, then reason about the specific fix.
+
+10 known patterns from 135-IC campaign (implemented in `programs/synth_doctor.py`):
 | Pattern | Frequency | Auto-fixable |
 |---------|:---------:|:------------:|
 | UNPACKED_ARRAY | Common | Yes — flatten to packed |
@@ -31,21 +52,41 @@ python3 tools/vibe_ic_tools/synth_doctor.py synth.log --json    # machine output
 | UNKNOWN | Rare | Manual review needed |
 
 ### pnr_doctor.py — OpenROAD P&R Errors
+
+**Run the program** — `programs/pnr_doctor.py` is the PnR analog of
+`synth_doctor.py`, implementing the 10-pattern OpenROAD log→fix table below.
+Same `{matched_pattern, canonical_fix, confidence}` envelope, same verdicts and
+no-false-alert contract (deny-list + length-floor; a clean route log returns
+`CLEAN`):
+
 ```bash
-python3 tools/vibe_ic_tools/pnr_doctor.py pnr.log              # diagnosis
-python3 tools/vibe_ic_tools/pnr_doctor.py pnr.log --drc drc.rpt # with DRC
+python3 programs/pnr_doctor.py pnr.log              # human diagnosis
+python3 programs/pnr_doctor.py pnr.log --fix         # include the canonical fix recipe
+python3 programs/pnr_doctor.py pnr.log --drc drc.rpt # also scan a DRC report (source-tagged)
+python3 programs/pnr_doctor.py pnr.log --json        # machine output
 ```
 
-10 known patterns:
-| Pattern | Auto-fixable |
-|---------|:------------:|
-| GPL_DIVERGE | Skip (trivial design) |
-| DRT_POWER_NET | Use global route only |
-| FLOORPLAN_FAIL | Fix site name |
-| DRC_SPACING | Reduce utilization |
-| TIMING_FAIL | Relax clock period |
-| NO_CLOCK | Add virtual clock |
-| CONGESTION | Reduce density |
+Importable: `from pnr_doctor import diagnose; diagnose(log_text, drc_text)`.
+
+10 known patterns (implemented in `programs/pnr_doctor.py`; `confidence` shown):
+| Pattern | OpenROAD signature | Canonical fix | conf |
+|---------|---|---|:---:|
+| GPL_DIVERGE | GPL-*, "placement diverged" | skip (trivial design) | 0.50 |
+| DRT_POWER_NET | POWER/GROUND net in signal router | global/PDN route only (manual) | 0.0 |
+| FLOORPLAN_FAIL | IFP-*, die-area invalid | fix site name from cell LEF | 1.0 |
+| DRC_SPACING | spacing/short violation | reduce utilization | 0.70 |
+| TIMING_FAIL | negative slack / WNS<0 | re-arch long path / relax per spec | 0.0 |
+| NO_CLOCK | "no clocks defined" | add (virtual) clock in SDC | 0.90 |
+| CONGESTION | congestion / overflow | reduce density | 0.70 |
+| DRT_ZERO_NET | DRT-0305 zero_ GROUND | tie-cell pass (setundef -zero; hilomap; splitnets; clean) | 1.0 |
+| SITE_NOT_FOUND | IFP-0018 site not found | read SITE from cell LEF | 1.0 |
+| MISSING_TRACKS | PPL-0021 no routing tracks | add make_tracks from LEF PITCH | 0.90 |
+
+**AI judgment still required** for the two `confidence=0.0` patterns:
+`DRT_POWER_NET` needs a manual floorplan/PDN fix, and `TIMING_FAIL` must NOT be
+"fixed" by silently relaxing a fixed-spec clock — re-architect the long path
+(see `arith_ss_corner_risk_check.py` below) or relax only if the spec allows.
+The program flags them but deliberately does not auto-fix.
 
 ### arith_ss_corner_risk_check.py — slow-corner timing-risk predictor (pre-synth)
 
@@ -80,9 +121,11 @@ python3 programs/output_latency_advisor.py --rtl-dir <rtl>
 ## Integration with flow-orchestrate
 
 When flow-orchestrate detects a tool failure:
-1. Run synth_doctor or pnr_doctor on the log
-2. If auto-fixable: apply fix and retry
-3. If manual: present diagnosis to user with suggested fix
+1. Run `programs/synth_doctor.py` (or `programs/pnr_doctor.py`) `--json` on the log
+2. If `verdict==DIAGNOSED` and the finding's `auto_fixable` is true (confidence>0):
+   apply the `canonical_fix` and retry
+3. If `verdict==MANUAL_REVIEW`, or a finding has `confidence==0`: present the
+   diagnosis to the user with the suggested fix and exercise AI judgment
 4. Log all diagnoses to phase2_eda.log
 
 ## ⛔ ECO spare-cell preservation (mandatory)

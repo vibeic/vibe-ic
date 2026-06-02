@@ -77,6 +77,68 @@ Grounded in agentic EDA ECO research and industrial spare-cell methodologies. Th
 - Do not skip the regression list — ECOs are where silent bugs hide
 - Do not propose changes that violate the sign-off timing margin without flagging it
 
+## Canonical loop infrastructure (mandatory — shared with all *-fix loops)
+
+When an ECO is iterated (try a metal-only routing/spare-mapping variant →
+STA/DRC spot-check → adjust → retry), that loop MUST be driven by the two
+shared closed-loop primitives so every fix loop in Vibe-IC obeys one
+convergence / plateau / regression policy and one runaway / dedup guard —
+do **not** hand-roll a bespoke retry counter or duplicate-variant check.
+
+**1. `programs/iterative_search.py` — the ECO variant sweep.**
+Model the ECO knobs as a typed `SearchSpace`; `IterativeSearch` proposes the
+next spare-mapping/route trial and `ConvergenceChecker` classifies the
+score history (e.g. worst-slack or residual-violation count):
+
+```python
+import iterative_search as it
+space = it.SearchSpace([
+    it.Dimension("spare_gates", "integer", lo=0, hi=64),     # spares to consume
+    it.Dimension("detour_um", "continuous", lo=0.0, hi=200.0),
+    it.Dimension("metal_only", "boolean"),                   # metal-only vs base-layer
+])
+checker = it.ConvergenceChecker(target=0.0, tolerance=1.0, patience=4)
+search  = it.IterativeSearch(space, checker, maximize=True, seed=7, max_rounds=20)
+
+def evaluate(point):          # caller runs the P&R ECO + STA/DRC spot-check here
+    return measured_worst_slack_ps        # higher (toward target) is better
+outcome = search.run(evaluate)            # outcome.status / best_point / rounds
+```
+
+`IterativeSearch` builds an `AdmissionGuard(bounds=space.bounds(),
+max_iterations=max_rounds)` internally, so each proposed ECO variant is already
+runaway- and dedup-guarded via `search.propose()` / `search.run()`.
+
+**2. `programs/loop_admission_guard.py` — admit each ECO trial BEFORE the P&R run.**
+A P&R ECO + regression spot-check is expensive; gate every proposed variant
+through `AdmissionGuard.admit()` first:
+
+```python
+import loop_admission_guard as g
+guard = g.AdmissionGuard(
+    bounds={"detour_um": (0.0, 200.0)},     # clamp into range
+    caps={"spare_gates": 64},               # REJECT a runaway spare-consumption count
+    max_iterations=20)                       # hard RUNAWAY iteration budget
+res = guard.admit({"spare_gates": 4, "detour_um": 12.0, "metal_only": True})
+if res.admitted:
+    run_eco_iteration(res.proposal)          # res.proposal is post-clamp / safe
+# else res.reason in {DUPLICATE, RUNAWAY_CAP, RUNAWAY_ITERATION_BUDGET}
+```
+
+CLI one-shot decision (exit 0 = ADMITTED, 1 = REJECTED):
+
+```bash
+python3 programs/loop_admission_guard.py decision.json
+# decision.json: {"bounds":{...},"caps":{...},"max_iterations":20,
+#                 "history":[...prior variants...],"proposal":{...}}
+```
+
+`canonical_fingerprint(proposal)` is the dedup key — re-proposing an ECO
+variant already tried this session is rejected with `reason="DUPLICATE"`
+instead of consuming another P&R/STA round. This is ADDITIVE: it enforces a
+budget + plateau/regression exit around the existing Planning-workflow and
+"Regression to re-run" steps without changing any of them.
+
 ## ⛔ ECO spare-cell preservation (mandatory)
 
 > ⛔ **ECO spare-cell preservation:** cells/gates/pads carrying the `dont_touch` /

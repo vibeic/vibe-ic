@@ -2841,6 +2841,66 @@ def _legacy_step_phase3_unused(project: Path, top_name: str,
 
 
 # -------------------------------------------------------------------------
+# 8b. design-complexity advisory (ADVISORY-ONLY — never gates)
+# -------------------------------------------------------------------------
+def step_complexity_advisory(project: Path) -> StepResult:
+    """Emit a heuristic design-complexity score + tier + flow-effort
+    recommendations into reports/phase2/complexity_advisory.json.
+
+    ADVISORY-ONLY by contract:
+      - status is always "ADVISORY" (never PASS/FAIL/SKIP), so this step
+        cannot change _aggregate_verdict or the runner's return code.
+      - the entire body is wrapped in try/except: any estimator failure is
+        swallowed and reported as detail, never propagated.
+
+    The advisory routes flow effort (catalog-glue vs from-scratch RTL,
+    synth effort, FPGA early-prototype, STA corner depth) — it does NOT
+    block the flow. chip-AGNOSTIC: scans whatever RTL the project ships.
+    """
+    t0 = time.time()
+    try:
+        import sys as _sys
+        _here = Path(__file__).resolve().parent
+        if str(_here) not in _sys.path:
+            _sys.path.insert(0, str(_here))
+        from design_complexity_estimator import (
+            features_from_project as _features_from_project,
+            estimate as _estimate,
+        )
+        from dataclasses import asdict as _asdict
+
+        feats = _features_from_project(project)
+        result = _estimate(feats)
+
+        out = project / "reports" / "phase2" / "complexity_advisory.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        payload = dict(_asdict(result))
+        payload["advisory_only"] = True
+        payload["source"] = "design_complexity_estimator.features_from_project"
+        out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+
+        recs = result.recommendations
+        detail = (f"complexity score={result.score} tier={result.tier} "
+                  f"(prefer_catalog_glue={recs.get('prefer_catalog_glue')} "
+                  f"synth_effort={recs.get('synth_effort')} "
+                  f"fpga_early={recs.get('run_fpga_early_prototype')} "
+                  f"sta_corners={recs.get('sta_corners')}) — ADVISORY only")
+        print(f"[phase2] complexity advisory: {detail}")
+        return StepResult("complexity_advisory", "ADVISORY",
+                          time.time() - t0, detail,
+                          ["reports/phase2/complexity_advisory.json"],
+                          extras={"score": result.score, "tier": result.tier,
+                                  "recommendations": dict(recs),
+                                  "advisory_only": True})
+    except Exception as e:  # noqa: BLE001 — advisory must never fail the run
+        detail = f"complexity advisory skipped (non-fatal): {e}"
+        print(f"[phase2] {detail}")
+        return StepResult("complexity_advisory", "ADVISORY",
+                          time.time() - t0, detail,
+                          extras={"advisory_only": True, "error": str(e)})
+
+
+# -------------------------------------------------------------------------
 # 9. final flow_compliance audit
 # -------------------------------------------------------------------------
 def step_emit_phase2_manifests(project: Path,
@@ -3355,6 +3415,13 @@ def main() -> int:
 
     # Step 2 — RTL gen
     plan.append(step_rtl_gen(project, ic_class))
+
+    # Step 2a — design-complexity advisory (ADVISORY-ONLY, NON-GATING).
+    # Runs right after RTL is available so the estimator can scan it.
+    # Emits reports/phase2/complexity_advisory.json + a log line; status
+    # is "ADVISORY" (never PASS/FAIL/SKIP) so it cannot change the
+    # aggregate verdict or return code. Wrapped in try/except internally.
+    plan.append(step_complexity_advisory(project))
 
     # Step 2b — full-stack TB skeleton emit (v1.6.88 #20 Bug 3 P0).
     # Must run AFTER rtl_gen (so L9 + DUT module are stable) but

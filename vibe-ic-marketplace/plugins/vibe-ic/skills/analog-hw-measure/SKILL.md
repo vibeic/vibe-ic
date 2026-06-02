@@ -52,13 +52,38 @@ Drives the measurement instruments (oscilloscope + FPGA ADC) to capture real ana
 
 ## Waveform parsing
 
-For scope CSV data (time, voltage columns):
+The DC/rise/settling/overshoot/freq/jitter math below is FIXED and
+deterministic — do NOT re-derive it by hand each run. Once you have a
+captured scope CSV (`time,voltage`), invoke the program so the numbers come
+out identically every time:
+
+```bash
+python3 programs/scope_waveform_metrics.py <scope_csv> \
+    [--spec analog/<block>/spec.json] [--json analog/<block>/hw_measurements.json]
+```
+
+It emits `{dc_level, rise_time, settling_time, overshoot, freq, jitter}` and,
+when a spec JSON with per-metric `min`/`max` is given, a per-spec
+`PASS`/`FAIL` (a metric that cannot be computed grades `SKIP`, never a false
+`FAIL`). Exit 0 = extracted / all gradeable specs PASS, 1 = a spec FAILed,
+2 = IO/parse error. The program degrades gracefully: a capture shorter than
+`--min-samples` (default 8), with no detectable edge, or non-periodic reports
+the affected metric as `null` + a MISSING/SKIP note instead of guessing.
+
+The frozen formulas it implements (kept here for reference / review only):
 - **DC level**: mean of last 20% of capture window
 - **Rise time**: 10%-90% transition time
 - **Settling time**: time to stay within ±2% of final value
 - **Overshoot**: (peak - final) / final × 100%
-- **Frequency**: FFT peak or zero-crossing period measurement
+- **Frequency**: FFT peak or zero-crossing period measurement (the program
+  uses the deterministic mean-crossing-period path)
 - **Jitter**: std dev of period over N cycles
+
+**AI judgment stays with you** — choosing the right instrument per block
+(scope transient vs ADC DC vs periodic-pulse), setting timebase/trigger,
+deciding when a capture is trustworthy, and interpreting a `SKIP`/MISSING
+metric (re-capture vs accept) are NOT delegated to the program. The program
+only freezes the arithmetic on a capture you already judged good.
 
 ## Output format
 
