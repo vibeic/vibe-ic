@@ -732,32 +732,50 @@ steps:
       # step. The dispatcher itself is an internal coordinator;
       # individual gate logic stays in the dedicated checks below.
       - phase3_backend_step
+      - floorplan_pdn_check
     required_outputs:
       - "phase3/stage3/pnr/floorplan.def"
       - "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done"
     gate:
-      files_exist: ["phase3/stage3/pnr/floorplan.def"]
+      all_of:
+        - files_exist: ["phase3/stage3/pnr/floorplan.def"]
+        - program_exit_zero: "floorplan_pdn_check . --json reports/phase3/pnr/floorplan_pdn.json"
     blocks_on: [13, 14, A8]
 
   - id: 16
     name: "Clock planning"
     stage: stage3
     skills: [cts-plan]
+    programs:
+      - clock_plan_check
     required_outputs:
       - "phase3/stage3/cts/clock_plan.json"
     gate:
-      files_exist: ["phase3/stage3/cts/clock_plan.json"]
+      # Substance gate: clock_plan_check.py parses the real
+      # phase3/stage3/cts/clock_plan.json and verifies SUBSTANCE — it does NOT
+      # trust file presence. It FAILs honestly (rc=1) on an absent / empty /
+      # unparseable plan, on an empty plan (no clock defined), on any clock with
+      # no positive period (or non-positive period/frequency), on any clock with
+      # no source pin/port, and on any SDC create_clock that is dropped from the
+      # plan. So a single program_exit_zero subsumes the file-presence
+      # precondition (the checker's first FAIL is CLOCK_PLAN_MISSING).
+      program_exit_zero:
+        command: "clock_plan_check . --json reports/phase2/gates/clock_plan.json"
     blocks_on: [15]
 
   - id: 17
     name: "Placement (global + detailed)"
     stage: stage3
     skills: [placement-optimize]
+    programs:
+      - placement_legality_check
     mcp_tools: [eda_pnr]
     required_outputs:
       - "phase3/stage3/pnr/placed.def"
     gate:
-      files_exist: ["phase3/stage3/pnr/placed.def"]
+      all_of:
+        - files_exist: ["phase3/stage3/pnr/placed.def"]
+        - program_exit_zero: "placement_legality_check . --json reports/phase3/placement_legality.json"
     blocks_on: [16]
 
   # ── Step 18: Spare-cell + ECO-prep insertion (Design-for-ECO) ──
@@ -816,11 +834,23 @@ steps:
     name: "CTS (Clock Tree Synthesis)"
     stage: stage3
     mcp_tools: [eda_pnr]
+    programs:
+      - cts_quality_check
     required_outputs:
       - "phase3/stage3/pnr/post_cts.def"
       - "phase3/stage3/cts/clock_tree.rpt"
     gate:
-      files_exist: ["phase3/stage3/pnr/post_cts.def", "phase3/stage3/cts/clock_tree.rpt"]
+      all_of:
+        # File presence is a precondition (the checker also FAILs honestly
+        # on absence, but keeping files_exist matches sibling Step 18 style).
+        - files_exist: ["phase3/stage3/pnr/post_cts.def", "phase3/stage3/cts/clock_tree.rpt"]
+        # Substance: clock_tree.rpt carries real clock-tree metrics (a parsed
+        # latency/path-depth and, when present, a numeric skew), clock buffers
+        # were actually inserted (count > 0, cross-checked report vs DEF),
+        # every post_cts.def instance is PLACED/FIXED, and skew <= target when
+        # the report/clock_plan states one. FAILs on the vacuous "CTS not
+        # invoked" stub or zero buffers; never fabricates a skew limit.
+        - program_exit_zero: "cts_quality_check . --json reports/phase3/gates/cts_quality.json"
     blocks_on: [18]
 
   - id: 20
@@ -830,10 +860,23 @@ steps:
       fallback_to: 19
       trigger: "Hold violation; insert delay cell or re-CTS"
     skills: [hold-fix]
+    programs:
+      - hold_closure_check
     required_outputs:
       - "phase3/stage3/pnr/post_hold.def"
     gate:
-      files_exist: ["phase3/stage3/pnr/post_hold.def"]
+      all_of:
+        # File-presence precondition (kept, consistent with sibling Steps 21/23).
+        - files_exist: ["phase3/stage3/pnr/post_hold.def"]
+        # Substance: prove the Step-20 hold-FIXING step did real work — either a
+        # parsed hold report with worst hold slack >= 0, OR (no report) the
+        # post_hold.def provably differs from its pre-hold input post_cts.def
+        # with a non-negative inserted-instance delta (hold buffers/delay cells
+        # inserted). FAILs honestly on a negative-slack hold report, on a
+        # post_hold.def byte-identical to post_cts.def (no fixing happened), and
+        # on a missing/empty/garbage DEF. The canonical final hold sign-off is
+        # Step 23 post-route STA — this gate only confirms Step-20 did real work.
+        - program_exit_zero: "hold_closure_check . --json reports/phase3/pnr/hold_closure.json"
     blocks_on: [19]
 
   - id: 21
