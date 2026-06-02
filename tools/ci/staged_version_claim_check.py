@@ -272,7 +272,7 @@ def _content_skipped(line: str) -> bool:
 # `__version__ = "1.0.0"`, or a report dict's `"version": "1.0.0"` — is the
 # program's OWN semver, a namespace DISTINCT from the plugin's version, so it
 # is never a forward plugin claim. The motivating 9d4e984a leak was a prose
-# COMMENT claim (`# … added v1.6.19`), which does not match this assignment
+# COMMENT claim (`# … added vX.Y.Z`), which does not match this assignment
 # shape, so this carve-out does not reopen that hole.
 _PROG_VER_CONST_RE = re.compile(
     r"""(?:^|[^.\w])(?:VERSION|__version__)\s*=\s*["']\d+\.\d+\.\d+"""
