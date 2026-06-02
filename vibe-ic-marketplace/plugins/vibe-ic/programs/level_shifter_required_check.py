@@ -1,20 +1,35 @@
 #!/usr/bin/env python3
 """
-level_shifter_required_check.py — gate (v1.6.13 Wave 88).
+level_shifter_required_check.py — M2 gate (substance-verifying).
 
-M2 — level shifter insertion audit
+M2 — level-shifter insertion audit
+===================================
+
+A level shifter is REQUIRED on every net that crosses from a power domain at
+one rail voltage into a domain at a different rail voltage.  This checker
+INDEPENDENTLY derives the set of voltage-mismatched crossings from
+``power_domain.json#crossings`` and asserts that for *each* one an inserted
+level-shifter entry exists in ``level_shifter.json``.  It does NOT trust the
+producer's ``all_required_inserted`` boolean — it recomputes it and rejects a
+self-asserted PASS that contradicts the substance.
+
+The required set is the SOURCE OF TRUTH: a level_shifter.json that lists no
+cells while power_domain.json enumerates a voltage-mismatched crossing is the
+exact silicon hazard this gate guards (a signal driven at one VDD into a gate
+powered at another VDD) and FAILs.
 
 Behaviour
 ---------
-* SKIP (rc=2) — required artefacts missing AND step not waived.
-* WAIVED (rc=0) — `waivers.json` declares step waived (evidence + ticket).
-* PASS (rc=0) — required files present; gate-specific predicate is a
-  stub in v1.6.13 (PASS-on-presence).
-* FAIL (rc=1) — files present but predicate fails (not used in v1.6.13).
+* SKIP (rc=2) — ``power_domain.json`` absent AND step not waived (genuinely
+  inapplicable — e.g. no mixed-signal blocks).  Never a vacuous PASS.
+* WAIVED (rc=0) — ``waivers.json`` declares step waived (evidence + ticket).
+* PASS (rc=0) — every voltage-mismatched crossing has a matching inserted
+  level shifter (including the legitimate zero-required case where the design
+  has crossings but none are voltage-mismatched).
+* FAIL (rc=1) — power_domain.json malformed, OR one or more required level
+  shifters is missing, OR level_shifter.json itself is malformed.
 
 chip-AGNOSTIC. No vendor / IC / tool-specific data hard-coded.
-
-Default rationale when SKIP: Level shifter insertion auditor not shipped.
 
 Usage
 -----
@@ -47,10 +62,119 @@ def _step_waived(project, step_label):
     return None
 
 
-_GATE_NAME = 'level_shifter_required_check'
-_GATE_LABEL = 'level_shifter'
-_REQUIRED_FILES = ['reports/analog/mixed_signal/level_shifter.json']
-_WAIVER_RATIONALE = 'Level shifter insertion auditor not shipped.'
+_GATE_NAME = "level_shifter_required_check"
+_GATE_LABEL = "level_shifter"
+_PD_REL = "reports/analog/mixed_signal/power_domain.json"
+_LS_REL = "reports/analog/mixed_signal/level_shifter.json"
+_PD_REL_LEGACY = "reports/mixed_signal/power_domain.json"
+_LS_REL_LEGACY = "reports/mixed_signal/level_shifter.json"
+_WAIVER_RATIONALE = "Level shifter insertion auditor not shipped."
+
+
+def _first_existing(project, *rels):
+    for r in rels:
+        p = project / r
+        if p.is_file():
+            return p
+    return None
+
+
+def _load_json(path):
+    try:
+        return json.loads(path.read_text()), None
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def _net_keys(entry):
+    keys = set()
+    if isinstance(entry, str):
+        if entry.strip():
+            keys.add(entry.strip().lower())
+        return keys
+    if not isinstance(entry, dict):
+        return keys
+    for k in ("net", "signal", "name", "on_net", "crossing", "crossing_id",
+              "from_net", "wire"):
+        v = entry.get(k)
+        if isinstance(v, str) and v.strip():
+            keys.add(v.strip().lower())
+    return keys
+
+
+def _collect_inserted_nets(obj):
+    nets = set()
+    if not isinstance(obj, dict):
+        return nets
+    for fld in ("level_shifters", "cells", "inserted", "entries",
+                "protections", "list", "items"):
+        seq = obj.get(fld)
+        if isinstance(seq, list):
+            for e in seq:
+                nets |= _net_keys(e)
+    return nets
+
+
+def _crossing_net_token(c):
+    if isinstance(c, str):
+        return c.strip().lower()
+    if isinstance(c, dict):
+        for k in ("net", "signal", "name", "crossing_id", "id"):
+            v = c.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip().lower()
+    return ""
+
+
+def _needs_level_shifter(c):
+    if not isinstance(c, dict):
+        return False
+    vf = c.get("vdd_from", c.get("v_from", c.get("vdd_src")))
+    vt = c.get("vdd_to", c.get("v_to", c.get("vdd_sink")))
+    if vf is not None and vt is not None:
+        try:
+            if abs(float(vf) - float(vt)) > 1e-9:
+                return True
+        except (TypeError, ValueError):
+            if str(vf) != str(vt):
+                return True
+    return c.get("level_shifter_required") is True
+
+
+def _audit(pd_obj, ls_obj):
+    findings = []
+    crossings = pd_obj.get("crossings") if isinstance(pd_obj, dict) else None
+    if not isinstance(crossings, list):
+        findings.append({
+            "severity": "ERROR", "rule": "NO_CROSSING_LIST",
+            "message": "power_domain.json has no 'crossings' list — cannot "
+                       "derive the required level-shifter set."})
+        return findings, 0, 1
+
+    inserted = _collect_inserted_nets(ls_obj) if ls_obj is not None else set()
+    n_required = 0
+    n_missing = 0
+    for idx, c in enumerate(crossings):
+        if not _needs_level_shifter(c):
+            continue
+        n_required += 1
+        token = _crossing_net_token(c) or f"<crossing#{idx}>"
+        if token not in inserted:
+            n_missing += 1
+            findings.append({
+                "severity": "ERROR", "rule": "MISSING_LEVEL_SHIFTER",
+                "message": (f"crossing '{token}' is voltage-mismatched and "
+                            f"requires a level shifter, but no inserted "
+                            f"level-shifter cell references it.")})
+
+    claim = ls_obj.get("all_required_inserted") if isinstance(ls_obj, dict) else None
+    if claim is True and n_missing > 0:
+        findings.append({
+            "severity": "ERROR", "rule": "CONTRADICTS_PRODUCER",
+            "message": (f"level_shifter.json claims all_required_inserted=true "
+                        f"but {n_missing} required shifter(s) are missing — "
+                        f"self-asserted PASS rejected.")})
+    return findings, n_required, n_missing
 
 
 def main(argv=None):
@@ -65,30 +189,61 @@ def main(argv=None):
         print(f"[{_GATE_NAME}] project dir not found: {project}", file=sys.stderr)
         return 2
 
-    found = [p for p in _REQUIRED_FILES if list(project.glob(p))]
-    missing = [p for p in _REQUIRED_FILES if p not in found]
-
+    pd_path = _first_existing(project, _PD_REL, _PD_REL_LEGACY)
     waiver = _step_waived(project, args.step_label)
-    if missing and not waiver:
+
+    findings = []
+    if pd_path is None and not waiver:
         verdict, rc = "SKIP", 2
         findings = [{"severity": "INFO", "rule": "REQUIRED_FILES_MISSING",
-                      "message": f"missing: {missing}"}]
-    elif missing and waiver:
+                     "message": f"missing: {_PD_REL} (no power-domain crossing "
+                                f"list to derive required shifters from)"}]
+    elif pd_path is None and waiver:
         verdict, rc = "WAIVED", 0
         findings = [{"severity": "WAIVED", "rule": "STEP_WAIVED",
-                      "message": f"waiver={waiver.get('ticket','?')}: {waiver.get('reason','?')}"}]
+                     "message": f"waiver={waiver.get('ticket','?')}: "
+                                f"{waiver.get('reason','?')}"}]
     else:
-        verdict, rc = "PASS", 0
-        findings = [{"severity": "INFO", "rule": "FILES_PRESENT",
-                      "message": f"all {len(_REQUIRED_FILES)} required artefacts present"}]
+        pd_obj, err = _load_json(pd_path)
+        if err is not None:
+            verdict, rc = "FAIL", 1
+            findings = [{"severity": "ERROR", "rule": "MALFORMED_ARTEFACT",
+                         "message": f"power_domain.json unparseable: {err}"}]
+        else:
+            ls_path = _first_existing(project, _LS_REL, _LS_REL_LEGACY)
+            ls_obj = None
+            if ls_path is not None:
+                ls_obj, ls_err = _load_json(ls_path)
+                if ls_err is not None:
+                    findings.append({
+                        "severity": "ERROR", "rule": "MALFORMED_ARTEFACT",
+                        "message": f"level_shifter.json unparseable: {ls_err}"})
+                    verdict, rc = "FAIL", 1
+                    ls_obj = "__ERR__"
+            if ls_obj == "__ERR__":
+                pass  # verdict already FAIL
+            else:
+                a_findings, n_req, n_missing = _audit(pd_obj, ls_obj)
+                findings.extend(a_findings)
+                # A required level shifter with NO level_shifter.json at all
+                # is a missing artefact -> honest FAIL (already counted as
+                # missing in _audit because inserted set is empty).
+                if n_missing > 0:
+                    verdict, rc = "FAIL", 1
+                else:
+                    verdict, rc = "PASS", 0
+                    findings.append({
+                        "severity": "INFO", "rule": "ALL_REQUIRED_INSERTED",
+                        "message": (f"{n_req} voltage-mismatched crossing(s) "
+                                    f"require a level shifter; all are present"
+                                    f" (or design has none).")})
 
     out = {
         "gate": _GATE_NAME,
         "verdict": verdict,
         "step_label": args.step_label,
-        "required_files": _REQUIRED_FILES,
-        "found": found,
-        "missing": missing,
+        "required_files": [_PD_REL, _LS_REL],
+        "pd_artefact": str(pd_path.relative_to(project)) if pd_path else None,
         "waiver": waiver,
         "rationale_when_skipped": _WAIVER_RATIONALE,
         "findings": findings,
@@ -99,10 +254,9 @@ def main(argv=None):
         out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n")
     print(f"=== {_GATE_NAME} ({project.name}) ===")
     print(f"  verdict: {verdict}")
-    if missing:
-        print(f"  missing: {missing}")
-    if waiver:
-        print(f"  waiver:  {waiver.get('ticket','?')}")
+    for f in findings:
+        if f.get("severity") in ("ERROR", "WAIVED"):
+            print(f"  [{f['severity']}] {f['rule']}: {f['message']}")
     return rc
 
 

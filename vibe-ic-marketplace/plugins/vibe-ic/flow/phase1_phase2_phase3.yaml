@@ -512,6 +512,7 @@ steps:
       # Integrated 2026-04-22 to eliminate the "no commercial ATPG" waiver
       # per LL feedback_plugin_usage_discipline.md.
       - fault_atpg_run
+      - dft_atpg_coverage_check
     required_outputs:
       - "phase2/stage2/dft/scan_netlist.v"
       - "phase2/stage2/dft/atpg_coverage.rpt"
@@ -523,7 +524,16 @@ steps:
     gate:
       all_of:
         - files_exist: ["phase2/stage2/dft/scan_netlist.v", "phase2/stage2/dft/atpg_coverage.rpt"]
-        - json_field_true: {file: "reports/phase2/dft/coverage.json", field: "stuck_at_ge_target", expect: true}
+        # Anti-fab: do NOT trust the self-produced `stuck_at_ge_target`
+        # boolean. dft_atpg_coverage_check independently parses the real
+        # measured stuck-at coverage % + target from coverage.json (both
+        # the fault_atpg_run and runner/skill schemas) — falling back to
+        # atpg_coverage.rpt — and recomputes measured >= target. FAILs on
+        # measured < target (e.g. the sha256 0%-coverage no-scan-chain
+        # DESIGN_DEFICIT), on a fabricated boolean that contradicts the
+        # recomputed number, and on absent/insufficient evidence (honest
+        # FAIL, never a vacuous pass).
+        - program_exit_zero: "dft_atpg_coverage_check . --json reports/phase2/dft/atpg_coverage_gate.json"
     blocks_on: [10]
 
   - id: 12
@@ -543,11 +553,13 @@ steps:
       fallback_to: 9
       trigger: "Non-equivalence: phase2/stage2/synth or DFT changed netlist semantics"
     skills: [equivalence-check]
+    programs:
+      - lec_equivalence_check
     required_outputs:
       - "reports/lec.rpt"
       - "reports/lec.json"
     gate:
-      json_field_true: {file: "reports/lec.json", field: "equivalent", expect: true}
+      program_exit_zero: "lec_equivalence_check . --json reports/lec_equivalence_check.json"
     blocks_on: [12]
 
   # ── Analog Design Pipeline (A1-A8) ─────────────────────────────
@@ -1001,24 +1013,35 @@ steps:
     skills: [drc-fix, lvs-triage, perc-check]
     mcp_tools: [eda_drc_klayout, eda_lvs]
     programs:
-      - density_check
+      - erc_density_check
     required_outputs:
       - "reports/phase3/drc_signoff.rpt"
       - "reports/phase3/lvs.rpt"
       - "reports/phase3/erc.rpt"
-    gate:
-      all_of:
-        - program_exit_zero: "drc_report_check . --mode drc --json reports/phase3/drc_signoff.json"
-        - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
-        # Provenance required: sign-off DRC / LVS reports must come
-        # from real tool runs (klayout / magic for DRC; netgen for LVS).
-        - program_exit_zero: "provenance_check . --output reports/phase3/drc_signoff.rpt --tool klayout,magic,openroad"
-        - program_exit_zero: "provenance_check . --output reports/phase3/lvs.rpt --tool netgen,magic"
-        # Density check: metal density must be within foundry limits
-        # (typically 20-80% per layer). Fires only when density report exists.
-        - optional_program_exit_zero:
-            command: "density_check . --json reports/phase2/gates/density.json"
-            condition_files_exist: ["reports/density.rpt"]
+    all_of:
+      - program_exit_zero: "drc_report_check . --mode drc --json reports/phase3/drc_signoff.json"
+      - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
+      # Provenance required: sign-off DRC / LVS reports must come
+      # from real tool runs (klayout / magic for DRC; netgen for LVS).
+      - program_exit_zero: "provenance_check . --output reports/phase3/drc_signoff.rpt --tool klayout,magic,openroad"
+      - program_exit_zero: "provenance_check . --output reports/phase3/lvs.rpt --tool netgen,magic"
+      # Step-30 ERC + sign-off density substance (replaces the dangling
+      # density_check that referenced a non-existent program). This is a
+      # DIFFERENT check from metal_fill_density_check (Step 33): Step 30 runs
+      # BEFORE metal fill, so filled.def / metal_fill.done do not exist yet.
+      # erc_density_check (a) verifies any PER-LAYER metal CMP density is in
+      # the foundry 20-80% window (foundry rejects at CMP otherwise), (b) when
+      # the artefact only carries OpenROAD filler_placement std-cell ROW
+      # utilization it requires a real, sane number + tool provenance and does
+      # NOT mis-apply the per-LAYER 20-80% rule to it (that rule is screened by
+      # the KLayout DRC deck, verified by drc_report_check above), and (c)
+      # parses reports/phase3/erc.rpt — floating signal nets / "ERC clean: NO"
+      # are a real electrical-rule failure -> FAIL. Missing/empty/provenance-
+      # less/metric-less artefact => honest FAIL (never a vacuous pass).
+      # Fires when either the density report or the ERC report exists.
+      - optional_program_exit_zero:
+          command: "erc_density_check . --json reports/phase2/gates/erc_density.json"
+          condition_files_exist: ["reports/density.rpt", "reports/density.json", "reports/phase3/erc.rpt", "reports/phase3/density.rpt"]
     blocks_on: [23, 24, 25, 26, 27, 28, 29]
 
   # ── Step 31: ECO ─────────────────────────────────────────────
@@ -1209,9 +1232,9 @@ steps:
       - "reports/analog/mixed_signal/isolation.json"
     gate:
       all_of:
-        - json_field_true: {file: "reports/analog/mixed_signal/power_domain.json", field: "all_crossings_protected", expect: true}
-        - json_field_true: {file: "reports/analog/mixed_signal/level_shifter.json", field: "all_required_inserted", expect: true}
-        - json_field_true: {file: "reports/analog/mixed_signal/isolation.json", field: "all_required_inserted", expect: true}
+        - program_exit_zero: "power_domain_crossing_check . --json reports/analog/mixed_signal/power_domain_crossing_audit.json"
+        - program_exit_zero: "level_shifter_required_check . --json reports/analog/mixed_signal/level_shifter_audit.json"
+        - program_exit_zero: "isolation_cell_required_check . --json reports/analog/mixed_signal/isolation_audit.json"
     blocks_on: [M1]
     notes: |
       For each net crossing analog/digital power domain boundary:
@@ -1233,8 +1256,8 @@ steps:
       - "reports/analog/mixed_signal/interface_si.json"
     gate:
       all_of:
-        - json_field_true: {file: "phase3/mixed_signal/cosim/mixed_signal_results.json", field: "all_scenarios_passed", expect: true}
-        - json_field_true: {file: "reports/analog/mixed_signal/interface_si.json", field: "all_interfaces_clean", expect: true}
+        - program_exit_zero: "mixed_signal_cosim_check . --json reports/analog/mixed_signal/cosim_audit.json"
+        - program_exit_zero: "mixed_signal_interface_si_check . --json reports/analog/mixed_signal/interface_si_audit.json"
     blocks_on: [M2]
 
   - id: M4
@@ -1248,7 +1271,7 @@ steps:
     required_outputs:
       - "reports/analog/mixed_signal/signoff.json"
     gate:
-      json_field_true: {file: "reports/analog/mixed_signal/signoff.json", field: "ready_for_tapeout", expect: true}
+      program_exit_zero: "mixed_signal_signoff_check . --json reports/analog/mixed_signal/signoff_audit.json"
     blocks_on: [M3]
 
   - id: 36
@@ -1302,7 +1325,7 @@ steps:
       - "phase3/stage5_manufacturing/wafer_sort_yield.json"
       - "phase3/stage5_manufacturing/wafer_map.csv"
     gate:
-      json_field_true: {file: "phase3/stage5_manufacturing/wafer_sort_yield.json", field: "yield_meets_target", expect: true}
+      program_exit_zero: "wafer_sort_yield_check . --json reports/manufacturing/wafer_sort.json"
     blocks_on: [38]
 
   - id: 40
@@ -1329,7 +1352,7 @@ steps:
       - "phase3/stage5_manufacturing/final_test_yield.json"
       - "phase3/stage5_manufacturing/burn_in_results.json"
     gate:
-      json_field_true: {file: "phase3/stage5_manufacturing/final_test_yield.json", field: "shippable", expect: true}
+      program_exit_zero: "final_test_attestation_check . --json reports/manufacturing/final_test.json"
     blocks_on: [40]
     notes: |
       Final-test sign-off before product ship. Functional test
