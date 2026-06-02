@@ -35,6 +35,19 @@ net_delay_limited / logic_depth_limited / clock_skew_limited /
 hold_violation) plus the fix strategy per category. **Do not author
 these counts by reading the report.**
 
+```bash
+# 3. (when reviewing a PnR Tcl script) confirm the mandatory
+#    setup-timing-repair sequence is present, not hold-fix-only:
+python3 plugins/vibe-ic/programs/pnr_timing_repair_completeness_check.py \
+    <pnr.tcl> --json /tmp/pnr_repair.json
+```
+
+`pnr_timing_repair_completeness_check.py` FAILs any OpenROAD PnR script
+that runs only `repair_timing -hold` without `set_wire_rc` +
+`repair_design` + `repair_timing -setup` (the sha256 silicon-DOA
+anti-pattern). The phase3 runner already emits the full chain; this
+gate is the static backstop when reviewing a hand-authored script.
+
 ## When to use
 
 - After synthesis, after CTS, after routing, after ECO
@@ -102,25 +115,21 @@ elements are the single largest source of skill-execution non-determinism
 across different agents.
 
 
-## Captured by benchmark-enhancement-capture — 2026-05-28 (RTLLM Shape B + benchmark_clean + CVDP cross-step capture)
+## Captured rule — PnR must run set_wire_rc + repair_design + repair_timing -setup (not hold-fix-only)
 
-### Skill: PnR must run set_wire_rc + repair_design + repair_timing -setup, not just hold-fix
+**Enforced by two programs — no longer prose judgment:**
+- The full deterministic command sequence (`set_wire_rc -signal/-clock` with
+  NONFATAL fallbacks → `estimate_parasitics` → `repair_design` →
+  `repair_timing -setup` → `detailed_placement`; then post-CTS `repair_timing -hold`;
+  then post-global-route re-estimate + repair) is **emitted by
+  `programs/phase3_one_shot_runner.py`** (phase3 PnR template).
+- **`programs/pnr_timing_repair_completeness_check.py`** is the static gate that
+  FAILs any PnR script missing that chain (the hold-only silicon-DOA shape).
 
-**Pattern**: After yosys synth, OpenROAD PnR with ONLY `repair_timing -hold` leaves high-fanout control nets (reset_n, FSM state-decode, enable nets driving hundreds of flops) on zero-strength gates with no buffer tree. Result: post-route critical path can show single-gate delays of TENS-to-HUNDREDS of ns from interconnect-RC alone — even when synth was fine. Worse, without `set_wire_rc`, STA also ignores wire delay, so the violation may not surface until silicon.
+Worked example (kept for context): benchmark_clean/sha256 v0.1.25 post-route
+WNS = -102.76 ns, mis-blamed on the SHA round; real cause was the missing
+`set_wire_rc` / `repair_design` / `repair_timing -setup` (STA optimistic,
+RSZ-0089). After adding the chain (v0.1.26): WNS = +10.95 ns MET on the same RTL.
+General across all OpenROAD-driven PnR — template-level, not chip-specific.
 
-**When to apply**: Authoring or reviewing any PnR script that targets OpenROAD on sky130 / gf180 (or any PDK without commercial-DC sign-off). Whenever a runner template only has `repair_timing -hold`.
-
-**What to do**: After `read_liberty` + `read_verilog` + `link_design` + `read_sdc`, ALWAYS run, in this order:
-  - `set_wire_rc -signal -layer met1` (with fallback to bare `set_wire_rc -layer met1` if `-signal` unsupported; NONFATAL guard)
-  - `set_wire_rc -clock -layer met5` (NONFATAL guard)
-  - `estimate_parasitics -placement`
-  - `repair_design`
-  - `repair_timing -setup`
-  - `detailed_placement` (legalize after repair)
-Then post-CTS run `repair_timing -hold` as usual. After global_route, re-run `estimate_parasitics -global_routing` + `repair_design` + `repair_timing -setup` + `repair_timing -hold`.
-
-**Worked example** (from sha256): benchmark_clean/sha256 v0.1.25: post-route WNS = -102.76 ns (VIOLATED) attributed (wrongly) to single-cycle SHA round. Real root cause: PnR template had no `set_wire_rc` (STA optimistic, repair_timing -setup aborted with RSZ-0089) and no `repair_design`/`repair_timing -setup` at all. After adding the chain above (v0.1.26), WNS = +10.95 ns MET on the SAME RTL.
-
-**Why this is GENERAL**: Universal across OpenROAD-driven PnR. Every IC class (digital primitive, SoC, DSP, FSM-heavy) suffers from unbuffered high-fanout nets when only hold-repair runs. The fix is template-level, not chip-specific.
-
-_Captured by benchmark-enhancement-capture 2026-05-28._
+_Captured by benchmark-enhancement-capture 2026-05-28; extracted to programs in M4._

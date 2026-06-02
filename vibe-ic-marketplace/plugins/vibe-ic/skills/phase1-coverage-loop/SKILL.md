@@ -54,21 +54,31 @@ Schema:
 }
 ```
 
-`ic_rotation` is the sorted list of immediate subdirectories of
-`<target>` that contain a `README.md` (or `input/prompt.md`).
-`current_ic_index` is the next IC to run. Rotation advances
-deterministically; `rotation_passes_completed` increments every
-time `current_ic_index` wraps back to 0.
+`ic_rotation` construction and advance/wrap are **enforced by
+`programs/phase1_rotation_state_advance.py`** (no longer hand-rolled):
+
+```bash
+# build the rotation (sorted immediate subdirs with README.md or input/prompt.md)
+python3 programs/phase1_rotation_state_advance.py build --target <target> --json rot.json
+# advance the index by one; wrap → rotation_passes_completed += 1
+python3 programs/phase1_rotation_state_advance.py advance \
+    --current-index <i> --count <len> --passes <p> --json adv.json
+```
+
+`current_ic_index` is the next IC to run.
 
 ## The four-step loop
 
 ### Step 0 — verify-debt check (mandatory, before Step 1)
 
+The OPEN-ORGANIC-with-`wait-for-verification` `gh`-query + substring
+filter is **enforced by
+`field-agent-loop/programs/check_wait_for_verification.sh`** (reused
+unchanged):
+
 ```bash
 plugins/vibe-ic/skills/field-agent-loop/programs/check_wait_for_verification.sh
 ```
-
-(Same script as field-agent-loop — reused unchanged.)
 
 For every OPEN ORGANIC issue with `wait-for-verification` whose
 title contains `phase1` or `Phase 1` or `ORGANIC-phase1`:
@@ -124,9 +134,15 @@ When the review agent reports concrete systematic gaps:
 
 1. For the top gap, write
    `<plugin_root>/community/backlogs/ORGANIC-phase1-<YYYYMMDD>-<slug>.yaml`
-   using the schema in the `community-backlog-submit` skill. Set
-   `severity: HIGH` if the missing tokens are in an L3/L4/L8/L9
-   layer (structural-RTL-affecting), `MEDIUM` otherwise.
+   using the schema in the `community-backlog-submit` skill. The
+   `severity` field is **enforced by
+   `programs/backlog_severity_classify.py`** (HIGH iff any affected
+   layer is L3/L4/L8/L9 structural-RTL, MEDIUM otherwise):
+   ```bash
+   python3 programs/backlog_severity_classify.py --layers <L4,L2,...>
+   ```
+   (the *which layer should have caught this token* call is the Step 1
+   review's job; the HIGH/MEDIUM verdict is mechanical).
 2. Sanitize:
    ```bash
    python3 <plugin_root>/programs/backlog_sanitize_check.py \
@@ -181,16 +197,20 @@ Two outcomes:
 
 ### STOP CONDITION
 
-At Step 1, before dispatching: if BOTH
-- `state.rotation_passes_completed >= 2` (every IC has been
-  audited at least twice — first pass to find gaps, second pass
-  to confirm fixes landed), AND
-- no OPEN `ORGANIC-phase1-*` issue exists
-  (`gh issue list --search "ORGANIC-phase1 in:title" --state open`
-  returns empty), AND
-- last full rotation's per-IC verdict was PASS or SKIP for every IC
+The three-clause STOP boolean (`rotation_passes_completed >= 2` AND
+zero OPEN `ORGANIC-phase1-*` issues AND last rotation all-PASS/SKIP) is
+**enforced by `programs/phase1_loop_stop_condition_check.py`**. Run the
+`gh` query to get the open-issue count, then let the program decide:
 
-then:
+```bash
+N=$(gh issue list --search "ORGANIC-phase1 in:title" --state open \
+      --json number -q 'length')
+python3 programs/phase1_loop_stop_condition_check.py \
+    --state <state.json> --open-organic-issues "$N"
+# exit 0 = STOP, exit 1 = CONTINUE, exit 2 = bad state
+```
+
+On STOP (exit 0):
 
 ```bash
 CronList     # find this cron's id
@@ -205,38 +225,37 @@ Set `state.step = "STOPPED"` and exit.
 - **NO RTL ORACLE**: never inspect `<ic>/rtl/` when scoring Phase 1
   coverage. The Phase 1 ingester must derive structure from the
   prompt alone.
-- **Chip-AGNOSTIC backlog**: every YAML must pass
-  `backlog_sanitize_check`. No `picorv32`, `ibex`, `cv32e40p`,
-  `neorv32`, `darkriscv`, `serv`, `VexRiscv`, `EE628`,
-  `DeltaSigma`, vendor IC names, or project paths in the
-  title/pattern/suggested_fix. Cite the missing token *pattern*
-  (e.g. "register-table row of form `<addr> | <name> | <desc>`"),
-  not the specific token (`0x40 | PWR_CTRL | ...`).
+- **Chip-AGNOSTIC backlog**: the literal-ban deny-list is **enforced
+  by `programs/backlog_sanitize_check.py`** — every YAML must pass it
+  before filing. Cite the missing token *pattern* (e.g. "register-table
+  row of form `<addr> | <name> | <desc>`"), not the specific token
+  (`0x40 | PWR_CTRL | ...`). (Backlog note: the sanitizer's deny-list
+  does not yet include the open-source RISC-V core codenames
+  picorv32 / ibex / cv32e40p / neorv32 / darkriscv / serv / VexRiscv
+  nor EE628 / DeltaSigma — these are still caught only by author
+  discipline until that augment lands.)
 - **File GENERAL ingester gaps**, never chip-specific bugs. The
   user owns chip-specific fixes; the field-agent owns Phase 1
   ingester generality.
 - **No y/n confirmation**: file issues directly. Do not ask.
 - **Sanitize before file**: every YAML, every time.
-- **Honour reference-doc skip**: if the gate returns
-  `SKIP_REFERENCE` (DE10-Lite / vendor PDK manual), the IC is
-  recorded as SKIP for the rotation; do not file an issue.
-- **Honour low-tokens skip**: if a README has <10 design tokens
-  (e.g. the `U_Hawaii_EE628_DeltaSigma_ADC/README.md` is 7 lines),
-  treat as SKIP; do not file an issue blaming the ingester for
-  insufficient input.
+- **Honour the gate's SKIP verdicts**: the `SKIP_REFERENCE`
+  (reference / vendor PDK manual) and `SKIP_LOW_TOKENS`
+  (<10 design tokens) verdicts are **emitted by
+  `phase1_input_vs_generated_completeness_check.py`**. When the gate
+  returns either, record the IC as SKIP for the rotation and do NOT
+  file an issue — the loop consumes the gate's verdict, it does not
+  re-derive the skip rule.
 
 ## Coverage gate thresholds
 
-The deterministic gate
-(`phase1_input_vs_generated_completeness_check.py`) uses:
-
-- FAIL if captured_pct < 50% AND distinct_tokens >= 10
-- WARN if 50% <= captured_pct < 80%
-- PASS if captured_pct >= 80%
-
-These are looser than phase1's 100% (Phase 1 is interpretation,
-not extraction — see program file header for rationale). The
-loop files ORGANIC backlog only when:
+The verdict thresholds (FAIL < 50% with >=10 tokens, WARN 50–80%,
+PASS >= 80%, plus the SKIP family) are **enforced by
+`programs/phase1_input_vs_generated_completeness_check.py`** — the loop
+consumes its JSON `verdict`/`captured_pct` rather than re-stating the
+numeric bounds. (Looser than phase1's 100% because Phase 1 is
+interpretation, not extraction — see that program's file header for the
+rationale.) The loop files ORGANIC backlog only when:
 
 - Verdict is FAIL (clearly broken), OR
 - Verdict is WARN AND missing tokens cluster around a recognisable
@@ -279,10 +298,24 @@ Save the prompt as the CronCreate `prompt` field; pick a 5–7
 minute interval (Phase 1 NL ingest + render takes longer than
 phase1 — give the dispatched agent room to finish).
 
+## Deterministic programs this loop drives
+
+The orchestration mechanics are deterministic and live in programs —
+the prose above defers to them, it does not re-implement them:
+
+- `programs/phase1_rotation_state_advance.py` — rotation build +
+  index advance/wrap.
+- `programs/phase1_loop_stop_condition_check.py` — three-clause STOP
+  boolean.
+- `programs/backlog_severity_classify.py` — HIGH/MEDIUM layer lookup.
+- `programs/phase1_input_vs_generated_completeness_check.py` — coverage
+  verdict + thresholds + SKIP_REFERENCE / SKIP_LOW_TOKENS.
+- `programs/backlog_sanitize_check.py` — chip-AGNOSTIC literal-ban.
+- `field-agent-loop/programs/check_wait_for_verification.sh` — Step 0
+  verify-debt scan.
+
 ## Reference
 
-- Reused helper: `field-agent-loop/programs/check_wait_for_verification.sh`
-- Paired deterministic gate: `programs/phase1_input_vs_generated_completeness_check.py`
 - Backlog YAML schema + sanitize: `vibe-ic:community-backlog-submit`
 - Sibling skill (Phase 2a / 2b / 3): `vibe-ic:field-agent-loop`
 - Phase 1 entry point: `vibe-ic:phase1`

@@ -56,13 +56,13 @@ numeric thresholds; let the program own them.
 
 ### MANDATORY first gate: all 10 L-layer docs
 
-Before anything else, run:
+The L1..L9 layer-presence set-membership check is **enforced by
+`programs/phase1_doc_presence_check.py`** (folded into
+`checkpoint_gate_check.py --checkpoint 1`):
 ```
 python3 vibe-ic-d/programs/phase1_doc_presence_check.py generated_docs/
 ```
-MUST exit 0. Required layers: L1 datasheet, L2 FRS, L3 cmd protocol, L4 regmap,
-L5 ADI spec, L6 control logic, L7 test/debug, L8 timing, L8 rtl-constants,
-L9 integration. **Skipping any L-layer is a known regression class**:
+MUST exit 0. **Skipping any L-layer is a known regression class**:
 when intermediate layers (L2/L4/L5/L6/L7/L8R) are skipped, fresh
 agents produce a simplified L9 that drops mandatory submodule pins,
 and the project's `<host_tester>` then FAILs at integration.
@@ -98,32 +98,20 @@ and the project's `<host_tester>` then FAILs at integration.
 
 ### Automated Quality Gate Commands
 
-Run these commands from the project root (all must pass):
+The DS≥70 / AN≥56 / spec-0-ERROR thresholds are **enforced by
+`checkpoint_gate_check.py --checkpoint 1`** (run that single command first —
+do not hand-eyeball the numbers). Two extra commands remain useful at this
+gate:
 
 ```bash
-# 1. Datasheet quality score (must be >= 70/100)
-python3 tools/vibe_ic_tools/ds_quality_check.py phase1_spec/04_datasheet.md --json
-# Check: .total_score >= 70
-
-# 2. Application note quality score (must be >= 56/80)
-python3 tools/vibe_ic_tools/an_validator.py phase1_spec/05_appnote.md --json
-# Check: .total_score >= 56
-
-# 3. Cross-consistency check (must have 0 errors)
-python3 tools/vibe_ic_tools/spec_validator.py \
-    --ds phase1_spec/04_datasheet.md \
-    --an phase1_spec/05_appnote.md \
-    --spec phase1_spec/03_spec_confirmed.md \
-    --json
-# Check: .consistent == true (i.e., .summary.errors == 0)
-
-# 3b. Spec↔RTL contract conformance (only if RTL already exists; must have 0 ERROR)
+# Spec↔RTL contract conformance — enforced by spec_conformance_check.py
+# (only when RTL already exists; the checkpoint program triggers this case).
 python3 programs/spec_conformance_check.py \
     --spec phase1_spec/04_datasheet.md \
     --rtl-dir phase2/stage1/rtl --top <module> --json /tmp/conf.json
-# Check: 0 ERROR findings (port-missing/extra/dir/width, reset-*-spec-mismatch)
+# 0 ERROR findings (port-missing/extra/dir/width, reset-*-spec-mismatch).
 
-# 4. Log results (unified JSONL)
+# Log results (unified JSONL).
 python3 tools/vibe_ic_tools/vibe_ic_log.py log \
     --ic <IC_NAME> --phase 1 --stage checkpoint1 \
     --tool checkpoint-gate --status PASS \
@@ -169,32 +157,19 @@ Decision: PROCEED TO PHASE 2 / REVISE
 
 ### Automated Quality Gate Commands
 
-Run these commands from the project root (all must pass):
+The synth-doctor-not-MANUAL_REVIEW verdict, cell_count>0, SVA≥8 and DRC≤5
+thresholds are **enforced by `checkpoint_gate_check.py --checkpoint 2`** (run
+that first — do not hand-grep the counts). For deeper triage when that gate
+FAILs, the underlying doctors give per-pattern diagnostics:
 
 ```bash
-# 1. Synth doctor — log must not classify to an un-fixable error pattern
+# Synth log classification — verdict CLEAN/DIAGNOSED ok; MANUAL_REVIEW => triage.
 python3 programs/synth_doctor.py phase2_design/synth/synth.log --json
-# Check: .verdict is "CLEAN" or "DIAGNOSED" (MANUAL_REVIEW => human triage needed)
-# Check: cell count > 0 separately (grep synth.log; synth_doctor only classifies errors)
 
-# 2. SVA assertion count (must be >= 8)
-grep -c 'assert\s*property\|assert\s*(' phase2_design/rtl/*_formal.sv
-# Check: count >= 8
-# Alternative one-liner:
-ASSERT_COUNT=$(grep -c -E 'assert\s+property|assert\s*\(' phase2_design/rtl/*_formal.sv 2>/dev/null || echo 0)
-if [ "$ASSERT_COUNT" -lt 8 ]; then echo "FAIL: Only $ASSERT_COUNT assertions (need >=8)"; fi
-
-# 3. DRC violations check (if DRC report exists)
-if [ -f phase2_design/signoff/drc_report.rpt ]; then
-    DRC_COUNT=$(grep -c -i 'violation' phase2_design/signoff/drc_report.rpt 2>/dev/null || echo 0)
-    if [ "$DRC_COUNT" -gt 5 ]; then echo "FAIL: $DRC_COUNT DRC violations (max 5)"; fi
-fi
-
-# 4. P&R doctor (optional, for additional diagnostics)
+# P&R log classification — same verdict semantics.
 python3 programs/pnr_doctor.py phase2_design/pnr/pnr.log --json
-# Check: .verdict is "CLEAN" or "DIAGNOSED" (MANUAL_REVIEW => human triage needed)
 
-# 5. Log results
+# Log results.
 python3 tools/vibe_ic_tools/vibe_ic_log.py log \
     --ic <IC_NAME> --phase 2 --stage checkpoint2 \
     --tool checkpoint-gate --status PASS \

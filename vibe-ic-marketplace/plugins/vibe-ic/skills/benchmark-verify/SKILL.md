@@ -22,16 +22,21 @@ Read `benchmark_clean/METHODOLOGY.md` first. Non-negotiable:
   applies only to GENERATED content; reused content is reported separately.
 - **No vacuous result counts as PASS** (e.g. a Magic `gds read` that dropped geometry and
   reports "0 DRC" is INCONCLUSIVE, not clean). A missing input is **PENDING**, never a silent PASS.
+  *Enforced by `programs/drc_vacuous_pass_check.py`* — flips a 0-violation DRC verdict to
+  INCONCLUSIVE unless the log proves geometry was loaded; SKIPs (never PASSes) when no DRC log exists.
 - The upstream open-source IP is the **golden oracle for cross-check only** — never a Phase-1/2 input.
 
 ## The five pillars (== report sections == hard gates)
 
 ### Pillar 1 — Functional Verification Coverage  ▸ gate: **== 100%**
-Go back to the Design Documents and enumerate **every requirement** (walk L1–L13:
-functional spec, interface, register map, command/protocol, timing, behavioral sequences,
-test cases). For each requirement, bind a verification item (directed test, assertion,
-golden-vector check, or formal property) and confirm it PASSES against the generated RTL.
-- `Functional Coverage = verified_requirements / total_requirements` → **must be 100%**.
+**LLM judgment (irreducible):** walk L1–L13 (functional spec, interface, register map,
+command/protocol, timing, behavioral sequences, test cases) and enumerate **every requirement** —
+a program cannot reliably know that a prose timing sentence in L8 is a distinct *testable*
+requirement (vs a restatement) nor author the directed test that covers it. For each requirement,
+bind a verification item (directed test, assertion, golden-vector check, or formal property) and
+confirm it PASSES against the generated RTL.
+- `Functional Coverage = verified_requirements / total_requirements` → **must be 100%**
+  (*the == 100% gate is enforced by `programs/benchmark_verify_report.py`*).
 - Emit `reports/functional_coverage.json`: `{"requirements":[{"id","source","desc","status":"PASS|FAIL|PENDING"}]}`.
 - **Closed-loop:** if < 100%, write the missing tests and/or fix the RTL (use `rtl-repair`)
   and re-verify until 100%. Do not waive a requirement; if a doc requirement is genuinely
@@ -39,28 +44,33 @@ golden-vector check, or formal property) and confirm it PASSES against the gener
 
 ### Pillar 2 — 56-step Output Comparison vs open-source reference  ▸ gate: **every applicable step PASS**
 For each of the 56 canonical flow steps (`flow/phase1_phase2_phase3.yaml`, which now includes
-the Design-for-ECO spare-cell insertion step), compare OUR
-step output against the open-source reference's corresponding output. Comparison is
-**step-appropriate, not byte-identical**:
-- **equivalence steps** (RTL, sim, formal, LEC, post-layout sim): LEC / co-sim / proof → MATCH/EQUIVALENT.
-- **metric steps** (synth cells/area, SDC, DEF area/utilization, CTS skew, STA slack, SPEF R/C,
-  power): compare **magnitude / trend in a sensible range** → IN-RANGE.
-- **clean steps** (lint, CDC, DRC, LVS, IR, EM, antenna, SI): **both independently clean** → BOTH-CLEAN.
-- **layout endpoints** (GDS): a different micro-architecture (e.g. our carry-save vs the ref's
-  array) means GDS/netlist are **NOT pixel/structure-comparable** — the correct cross-check is
-  **"both independently pass DRC/LVS/STA + functionally equivalent"**. "Different" is expected,
-  not a failure.
-- **N/A**: analog A1–A9 / mixed-signal M1–M4 for a pure-digital IC; manufacturing 37–40 (no silicon).
+the Design-for-ECO spare-cell insertion step), compare OUR step output against the open-source
+reference's corresponding output. Comparison is **step-appropriate, not byte-identical**.
+
+*The step→class→comparison-method dispatch table and the legal verdict-token enum
+(MATCH / EQUIVALENT / IN-RANGE / BOTH-CLEAN / DIFFERENT-BUT-OK / N/A / GAP / NO-TOOL / FAIL) and
+which tokens count as PASS are enforced by `programs/benchmark_verify_report.py`* (its
+`STEP_METHOD`, `VERDICT_TOKENS`, `PASS_TOKENS`). The step classes are:
+**equivalence** (RTL/sim/formal/LEC/post-layout — LEC/co-sim/proof), **metric** (synth/SDC/DEF/
+CTS/STA/SPEF/power — magnitude in range), **clean** (lint/CDC/DRC/LVS/IR/EM/antenna/SI — both
+independently clean), **layout-endpoint** (GDS — both DRC/LVS/STA-clean + functional-equiv), **N/A**
+(analog A1–A9 / mixed-signal M1–M4 for a pure-digital IC; manufacturing for no-silicon).
+
+**LLM judgment (irreducible):** for a *metric* step, deciding whether two magnitudes are in a
+*sensible* range (vs a hard threshold) requires understanding WHY they diverge; for a
+*layout-endpoint* step, deciding that a different micro-architecture (our carry-save vs the ref's
+array) is a *benign* divergence rather than a failure is design judgment, not a fixed compare.
 
 Produce one `cross_check/**/step_<id>.md` per step (what ran, OUR result, REF result, verdict
-token: MATCH / EQUIVALENT / IN-RANGE / BOTH-CLEAN / DIFFERENT-BUT-OK / N/A / GAP / NO-TOOL / FAIL).
+token from the enum above).
 **Close runnable GAPs** (e.g. run SPEF/IR/EM/antenna/power if the flow skipped them). Genuine
 NO-TOOL items (e.g. open-source full-chip fast-SPICE) are recorded honestly — and noted if the
 reference shares the same limitation. No step may be left unresolved.
 
 ### Pillar 3 — Test Cases & Code Coverage  ▸ gate: **line coverage >= 90%**
 Author unit-test-style test cases (cocotb / SV testbench, via `eda_cocotb` / `eda_simulate`)
-for the generated RTL and measure coverage (`coverage_metric_check.py` / `coverage_closure.py`).
+for the generated RTL. *The coverage measurement + the >= 90% line-coverage gate are enforced by
+`programs/coverage_metric_check.py` / `coverage_closure.py` / `verilator_coverage_measure.py`.*
 - **Line coverage >= 90%** (report branch + toggle too). Emit `reports/code_coverage.json`:
   `{"line_pct","branch_pct","toggle_pct"}`.
 - **Closed-loop:** below 90% → add test cases targeting the uncovered lines until >= 90%.
@@ -134,6 +144,7 @@ A benchmark IC passes `benchmark-verify` iff its `BENCHMARK_VERIFICATION_REPORT.
 Anything short of that is **NOT complete** — keep working (closed-loop), do not claim done.
 
 > **Plugin-test hard rule.** If the verification run modified any plugin code (e.g. a chip-agnostic fix to `benchmark_verify_report.py` or a checker), re-run the FULL suite before claiming done: `cd <plugin> && pytest -q` (pytest.ini collects BOTH `programs/tests/` AND `tests/`). Never validate with only `programs/tests/` — the integration/regression gates (INDEX freshness, every-skill-has-compliance, orchestrator branch tests) live in `tests/`. See `_shared/TESTING_STRATEGY.md`.
+> *Enforced by `programs/plugin_change_pytest_gate.py`* — detects changed plugin `*.py` (git or an explicit `--changed-files` list) and FAILs DONE unless `--pytest-log` attests a clean run that collected BOTH test trees; ERRORs (never silent-PASSes) when the change state can't be determined.
 
 ## Worked example
 `benchmark_clean/spm/` — first IC verified under this skill: RTL 100% GENERATED, functional

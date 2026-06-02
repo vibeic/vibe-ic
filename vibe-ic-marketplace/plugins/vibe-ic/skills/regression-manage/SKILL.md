@@ -42,29 +42,56 @@ without the program's PASS.
 
 ## Workflow
 
-1. **Aggregate results**: pass / fail / error / timeout per job
-2. **Deduplicate** — group identical failures into one issue
-3. **Classify severity**:
-   - P0: tape-out blocker (regression was green, now red)
-   - P1: new failure on feature branch
-   - P2: flaky (passes on retry)
-   - P3: environmental (tool license, disk, network)
-4. **Auto-triage**:
-   - Timing fail → `/sta-review`
-   - DRC fail → `/drc-fix`
-   - Functional fail → `/rtl-repair` or `/testbench-gen`
-   - Formal fail → `/formal-verify`
-5. **Flaky test quarantine**: move to a separate suite with a ticket, don't let them hide real regressions
-6. **Generate report**: daily Slack / email summary with actionable items
+The five mechanical steps are deterministic and are now **programs**,
+not prose. Run them in order; each emits a JSON report (`--json <out>`):
+
+1. **Aggregate results** (pass/fail/error/timeout per job, pass %, trend,
+   P0 count) — enforced by `programs/regression_report_aggregate.py`.
+2. **Deduplicate** (normalize-and-hash the failure signature so identical
+   failures collapse to one issue) — enforced by
+   `programs/regression_failure_dedup.py`.
+3. **Classify severity** (P0 was-green-now-red on protected/release;
+   P1 new failure on feature branch; P2 flaky passes-on-retry;
+   P3 environmental license/disk/network) — enforced by
+   `programs/regression_severity_classify.py`.
+4. **Auto-triage** (failing-step → target skill: timing→`/sta-review`,
+   DRC→`/drc-fix`, functional→`/rtl-repair`, formal→`/formal-verify`, …)
+   — enforced by `programs/regression_failure_route.py`.
+5. **Flaky-test quarantine** (pass-on-retry AND fail → quarantine + open
+   ticket so flakes don't hide real regressions) — enforced by
+   `programs/regression_flaky_quarantine.py`.
+
+```bash
+python3 programs/regression_report_aggregate.py   --jobs-json jobs.json --json agg.json
+python3 programs/regression_failure_dedup.py      --failures-json fails.json --json dedup.json
+python3 programs/regression_severity_classify.py  --failures-json fails.json --json sev.json
+python3 programs/regression_failure_route.py      --failures-json fails.json --json route.json
+python3 programs/regression_flaky_quarantine.py   --tests-json retries.json --json flaky.json
+```
+
+6. **Owner-assignment narrative (LLM)**: deciding *which* human / team
+   should own a novel failure and writing the human-readable daily
+   Slack / email summary requires judgment about org structure, recent
+   code authorship, and tone that no fixed table captures. This is the
+   single genuine LLM residual — the programs hand you the structured
+   facts (severity, route, dedup group, flaky list); you compose the
+   actionable owner + narrative on top.
 
 ## Output format
 
 - `regression/<date>_report.md`:
-  - Summary dashboard (pass %, trend, P0 count)
-  - New failures with suggested owner + skill
-  - Flaky list with retry count
-  - Known issues still open
-- Structured handoff tickets for each failure
+  - Summary dashboard (pass %, trend, P0 count) — emit with
+    `regression_report_aggregate.py --md <out.md>` (deterministic
+    arithmetic; do not hand-narrate the numbers).
+  - New failures with suggested owner + skill — the *skill* column comes
+    from `regression_failure_route.py`; the *owner* + narrative is the
+    LLM residual (Workflow step 6).
+  - Flaky list with retry count — from `regression_flaky_quarantine.py`.
+  - Known issues still open.
+- Structured handoff tickets for each failure (severity from
+  `regression_severity_classify.py`, route from
+  `regression_failure_route.py`, dedup group from
+  `regression_failure_dedup.py`).
 
 ## Technical basis
 

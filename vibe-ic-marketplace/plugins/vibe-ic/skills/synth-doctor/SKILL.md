@@ -153,7 +153,10 @@ setundef -zero; hilomap -hicell <TIE_CELL> <HI_PIN> -locell <TIE_CELL> <LO_PIN>;
 ```
 
 **Recipe refinement (v0.1.98, learned on the HDLC pilot — the v0.1.95 recipe was
-INSUFFICIENT on a complex design):** two extra rules are load-bearing, not optional:
+INSUFFICIENT on a complex design):** two extra ordering rules are load-bearing, not optional.
+Both are **enforced deterministically by `programs/yosys_tiecell_recipe_order_check.py`**
+(run it on any `.ys` synth script before yosys runs; `--json` for machine output; SKIP on
+non-synth scripts, exit 1 on violation, exit 2 on missing file):
 1. **`setundef -zero` BEFORE `hilomap`.** A function with don't-care output bits (yosys emits
    `1'hx` for unreachable/dead bits — common in framing/CRC logic) survives `hilomap` as a
    bare `zero_`/`x` net that TritonRoute still rejects with DRT-0305. `setundef -zero` resolves
@@ -164,6 +167,11 @@ INSUFFICIENT on a complex design):** two extra rules are load-bearing, not optio
    fire (0 surviving tie cells); `setundef -zero; hilomap; splitnets; clean` kept all 1780
    `conb_1` cells and PnR ran clean. (This also satisfies the ECO spare-cell rule above —
    never `opt_clean` away inserted cells.)
+
+> The complementary **presence + techmap→hilomap→write_verilog ordering** is enforced by
+> `programs/yosys_hilomap_required_check.py`. Run both before synth: the hilomap-required
+> check asserts the tie-cell pass exists in the right place; the tiecell-recipe-order check
+> asserts the two v0.1.98 refinements above. Do not re-derive either by hand.
 
 **Path note (the recurring trap):** `phase3_one_shot_runner.py` ALREADY does a tie-cell pass
 automatically (it discovers the tie cell from the liberty and inserts hilomap). But the

@@ -16,13 +16,14 @@ Ensures that Datasheet, Application Note, and Specification are internally consi
 
 ## Tools
 
-> The three scoring/consistency rubrics below are **deterministic programs**, not
-> prose to grade by hand. The exact criteria, weights and thresholds live in the
-> programs (`programs/ds_quality_check.py`, `programs/an_validator.py`,
-> `programs/spec_validator.py`) so every agent gets the identical score. **Run
-> the program — do not re-grade the table mentally.** All three are
-> chip-AGNOSTIC, pure-stdlib, and degrade to `MISSING`/`SKIP` (never a false
-> FAIL) on absent or unexpected input.
+> All four checks below are **enforced by deterministic programs**, not prose to
+> grade by hand. The exact criteria, weights and thresholds live in
+> `programs/ds_quality_check.py`, `programs/an_validator.py`,
+> `programs/spec_validator.py` and `programs/spec_conformance_check.py` so every
+> agent gets the identical verdict. **Run the program — do not re-grade the table
+> mentally.** All four are chip-AGNOSTIC, pure-stdlib, follow the
+> `main(argv)->int` 0/1/2 contract, and degrade to `MISSING`/`SKIP` (never a
+> false FAIL) on absent or unexpected input.
 
 ### 1. ds_quality_check.py — Datasheet (L1) Scoring (0-100)
 

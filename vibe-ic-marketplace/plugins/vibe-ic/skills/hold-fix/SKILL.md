@@ -47,36 +47,37 @@ Collect:
 
 The fix is always the same: **slow down the data path** by inserting buffers or delay cells.
 
-Strategy selection:
-| Violation severity | Strategy |
-|--------------------|----------|
-| Slack > -50 ps | Single buffer insertion |
-| Slack -50 to -200 ps | Buffer chain (2-3 buffers) |
-| Slack < -200 ps | Delay cell insertion or path restructure |
+Strategy selection (slack-bucket → strategy) is a pure numeric-threshold lookup —
+**enforced by `programs/hold_fix_planner.py`** (`pick_strategy`: `> -50 ps` →
+single buffer; `-200..-50 ps` → 2-3 buffer chain; `< -200 ps` → delay cell /
+restructure). Feed it the per-endpoint hold-slack list; do not re-read a prose
+table.
 
-Buffer selection from library:
-- Prefer minimum-drive buffers (smallest area, most delay)
-- Use delay cells if available in the PDK (e.g., `gf180mcu_fd_sc_mcu7t5v0__dlygate`)
-- Avoid high-drive buffers — they add less delay per area
+Buffer cell selection from the PDK Liberty list (prefer minimum-drive buffers,
+prefer delay-gate cells, reject clock buffers / inverters / high-drive cells) is
+a deterministic library-cell ranking — **enforced by
+`programs/hold_buffer_cell_picker.py`**. Pass it the candidate cell-name list; it
+returns the SKILL-preferred minimum-drive delay/buffer and FAILs honestly when no
+safe buffer/delay cell exists.
 
 ### Step 3: Execute Hold Fix in OpenROAD
 
-```tcl
-# OpenROAD hold fix
-repair_timing -hold \
-    -slack_margin <margin_ps> \
-    -allow_setup_violations false \
-    -max_buffer_percent <area_budget_%>
+Do not hand-copy the `repair_timing -hold` block — **emit it via
+`programs/openroad_hold_repair_tcl_gen.py`**, which bakes in the two hard
+guardrails (`-allow_setup_violations false`, never tradeable; `-max_buffer_percent`
+capped at 5%) and the post-fix verification reports. It FAILs rather than emit a
+budget over the cap or a `true` setup-violation flag:
 
-# Check results
-report_worst_slack -min
-report_tns -min
+```bash
+python3 ../../programs/openroad_hold_repair_tcl_gen.py \
+    --margin-ps <margin_ps> --max-buffer-percent <area_budget_%> --out hold_repair.tcl
 ```
 
 Key parameters:
 - `-slack_margin`: target hold slack (0 for exact, positive for guardband)
-- `-allow_setup_violations false`: **critical** — never trade setup for hold
-- `-max_buffer_percent`: cap area overhead (default 5%)
+- `-allow_setup_violations false`: **critical** — never trade setup for hold (the
+  emitter refuses any other value)
+- `-max_buffer_percent`: cap area overhead (default 5%; emitter rejects > 5%)
 
 ### Step 4: Verify — No Setup Regression
 
@@ -104,29 +105,49 @@ Iteration 3: WHS = +5 ps, THS = 0 ps, 0 endpoints
   -> CLEAN. Hold fixed.
 ```
 
-Convergence criteria:
-- WHS >= 0 ps (or >= margin target)
-- THS = 0 ps
-- Setup WNS has not degraded beyond acceptable limit
-- Area overhead within budget
+Convergence criteria (WHS >= margin AND THS == 0 AND setup WNS not degraded AND
+area within budget) and the iterate-until-clean loop are **enforced by
+`programs/iterative_search.py` + `programs/loop_admission_guard.py`** (the
+`ConvergenceChecker` classifies `CONVERGED` / `PLATEAU` / `REGRESSION` /
+`EXHAUSTED`). Do **not** hand-roll an iteration counter — see "Canonical loop
+infrastructure" below for the wiring.
 
 Typical iteration count: 2-4 rounds for a clean design.
 
 ### Step 6: Corner Coverage
 
-Hold must be verified across all fast corners:
-- FF, high voltage, low temperature (worst hold)
-- FF, nominal voltage, low temperature
-- TT at all temperatures (sanity check)
+Hold must be verified at the FAST (FF, high-V, low-T) corner — the worst-case
+corner for hold. That the hold (min-path) analysis is actually driven by the FF
+Liberty / operating condition (not SS/TT) is **enforced by
+`programs/hold_corner_coverage_check.py`**, which FAILs if the hold view reads a
+non-fast corner or if no hold analysis is present at all:
 
-If using MCMM, the hold analysis view must use the FF corner.
+```bash
+python3 ../../programs/hold_corner_coverage_check.py <hold_analysis.tcl_or_log>
+```
+
+Broader SS/TT/FF Liberty presence across the whole tree is audited separately by
+`programs/corner_coverage_audit.py`. Sanity checks at TT across temperatures are
+still good practice.
 
 ## Constraints and Guardrails
 
-1. **Never violate setup while fixing hold**: this is a hard rule. `-allow_setup_violations false`.
-2. **Area budget**: hold buffers should not exceed 5% of total cell area. If exceeded, investigate why — possible CTS imbalance.
-3. **Don't fix false paths**: verify that hold-violating paths are real (not async crossings marked as false_path in SDC).
-4. **Clock gating paths**: hold fix near ICG cells needs special care — the enable timing must remain correct.
+The two numeric/template guardrails are enforced by programs (not prose):
+
+1. **Never violate setup while fixing hold** (`-allow_setup_violations false`) —
+   enforced by `programs/openroad_hold_repair_tcl_gen.py` (refuses `true`).
+2. **Area budget** (hold buffers <= 5% of total cell area) — enforced by
+   `programs/hold_area_budget_check.py`. If it FAILs (budget exceeded), THEN apply
+   the LLM judgment below: investigate WHY (possible CTS imbalance / over-skewed
+   clock tree) rather than just inserting more buffers.
+
+The remaining guardrails need LLM intent/spec judgment and stay here:
+
+3. **Don't fix false paths**: verify that hold-violating paths are real (not async
+   crossings that SHOULD be `false_path` / `set_clock_groups -asynchronous` in the
+   SDC). A path missing its constraint vs a genuinely fast path is a spec judgment.
+4. **Clock gating paths**: hold fix near ICG cells needs special care — the enable
+   timing must remain correct.
 5. **Scan chain**: DFT scan paths also need hold clean at scan clock frequency.
 
 ## Output format

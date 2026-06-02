@@ -40,6 +40,10 @@ the v0.1.49 doctrine sweep:
 # 5. Waiver schema + content gate (HONESTY: refuses 'ai'/'agent' approver):
 python3 plugins/vibe-ic/programs/signoff_waiver_emit.py \
     --validate-only --strict < signoff/waivers/*.json
+
+# 6. Static IR-drop numeric BUDGET gate (max drop < pct*Vdd):
+python3 plugins/vibe-ic/programs/ir_drop_budget_check.py \
+    <ir_report_or_dir> --vdd <V> --budget-pct 10
 ```
 
 **Refuse to claim tape-out-ready if any of these returns non-zero or
@@ -81,46 +85,71 @@ and paste the output into `FINAL_REPORT.md`. If `PASS_WITH_WAIVERS`, also enumer
 
 ## Checklist categories (must all be green or waived)
 
+Every mechanical row below is a **deterministic program** — the integer
+counts, numeric thresholds, corner-slack comparisons and file-presence
+assertions are NOT re-judged in prose. Run the program; read its JSON.
+
 1. **Functional**
-   - RTL regression 100% pass
-   - Coverage ≥ target (code, functional, assertion)
-   - Formal properties all proven or bounded
-   - LEC RTL↔netlist clean
+   - RTL regression 100% pass + coverage ≥ target (code/functional/assertion)
+     — *enforced by* `programs/coverage_metric_check.py` (and the analog/
+     state variants) + `programs/signoff_audit.py`.
+   - Formal properties all proven or bounded — *enforced by* `programs/
+     assertion_property_check.py`.
+   - LEC RTL↔netlist clean — *enforced by* `programs/lec_equivalence_check.py`.
 2. **Timing**
-   - STA setup/hold/recovery/removal clean across all MCMM corners
-   - Min-pulse-width, max-transition, max-capacitance clean
+   - STA setup/hold/recovery/removal + min-pulse-width / max-transition /
+     max-cap clean across all MCMM corners — *enforced by* `programs/
+     sta_report_check.py` (+ `programs/corner_coverage_audit.py` for MCMM
+     completeness).
 3. **Power integrity**
-   - Static IR-drop < budget (typical 5–10% Vdd)
-   - Dynamic IR-drop clean
-   - EM current density < library limit
+   - Static IR-drop < budget (typical 5–10% Vdd) — *enforced by* `programs/
+     ir_drop_budget_check.py` (numeric `max_drop < pct·Vdd` gate; presence/
+     authenticity by `programs/ir_drop_report_check.py`; hotspot causes by
+     `programs/ir_drop_triage_classify.py`).
+   - EM current density < library limit — *enforced by* `programs/
+     em_report_check.py`.
 4. **Physical**
-   - DRC 0 errors (or waivers signed)
-   - LVS clean
-   - Antenna DRC clean
-   - Density rules clean (min/max metal density)
-   - ERC (electrical rule check) clean
+   - DRC 0 errors (or waivers signed) — *enforced by* `programs/
+     drc_report_check.py`.
+   - LVS clean — *enforced by* `programs/lvs_report_check.py` /
+     `programs/lvs_signoff_guard.py`.
+   - Antenna DRC clean — *enforced by* `programs/antenna_report_check.py`.
+   - Density rules clean (min/max metal density) — *enforced by* `programs/
+     metal_fill_density_check.py`.
+   - ERC clean — *enforced by* `programs/erc_density_check.py`.
 5. **Test** (DFT data missing = FAIL, not SKIP — v0.100 K3)
-   - Scan ATPG coverage ≥ 99% stuck-at (if no DFT report exists, this category is FAIL)
-   - MBIST integrated and simulated
-   - Boundary scan BSDL file generated
+   - Scan ATPG coverage ≥ target stuck-at; **missing DFT report = FAIL** —
+     *enforced by* `programs/dft_atpg_coverage_check.py` (no SKIP path).
+   - MBIST integrated/simulated + boundary-scan BSDL present.
 6. **Power intent**
    - UPF consistency across synth / P&R / STA / sim
    - All isolation + level-shifter cells in place
 7. **Documentation**
-   - Pin list frozen
-   - Package / bond diagram matches pad ring
-   - Release notes, change log, and waiver log complete
+   - Pin list frozen; package / bond diagram matches pad ring; release notes,
+     change log, waiver log complete — file-presence inventory *enforced by*
+     `programs/tapeout_checklist_gen.py`.
 8. **Release**
-   - GDS stream-out tested in both Calibre and KLayout
-   - Md5 checksum recorded
-   - Fab-specific deliverables (IP blocks, fill, cell list) bundled
+   - GDS stream-out (Calibre + KLayout), md5 checksum recorded, fab-specific
+     deliverables bundled — *enforced by* `programs/signoff_audit.py` +
+     `programs/foundry_handoff_package_check.py`.
 
 ## Workflow
 
-1. Pull latest results for every item
-2. Red/yellow/green each row with evidence link
-3. Block tape-out if any red without waiver
-4. Produce sign-off packet for management review
+The mechanical green/red verdict for every row above is produced by the
+programs (run them first). The AI's residual job — the part that stays
+**judgment**, not a program — is:
+
+1. **Waiver risk assessment.** The waiver *schema/honesty* gate (id +
+   reason + ticket present, approver not `ai`/`agent`/`self`) is the
+   program `waiver_legitimacy_check.py` / `signoff_waiver_emit.py`. Whether
+   a waiver's *mitigation is technically credible* and the *residual risk
+   is acceptable for fab* is a substantive engineering judgment that no
+   regex can make — assess it here.
+2. **Route each red item** back to its owning sub-skill (`/sta-review`,
+   `/drc-fix`, `/ir-drop-triage`, `/lvs-triage`, …) and decide ordering.
+3. **Author the management-facing go/no-go narrative** that synthesizes
+   the heterogeneous program JSON into one sign-off recommendation.
+4. Block tape-out if any red without an accepted waiver.
 
 ## Output format
 

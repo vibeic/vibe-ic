@@ -44,6 +44,13 @@ and lets an agent author RTL directly tests only "the LLM under our roof", not "
 
 ## § 2 — Decision matrix: which run-shape for which benchmark
 
+> **Enforced by `programs/benchmark_shape_classify.py`** — derives the shape (A/B/C/D/E) for a
+> NEW benchmark from its on-disk layout (module count, PDK/constraints target, prompt line-count,
+> dataset cardinality, cocotb harness, oracle-gated flag). For a benchmark already in
+> `benchmark-harness/BENCHMARK_REGISTRY.json`, `programs/benchmark_dispatch.py` reads the recorded
+> shape directly. The prose tree below is the human-readable spec the program implements — do not
+> hand-pick a shape by feel; run the classifier.
+
 For every new benchmark, answer these questions in order:
 
 1. **Is the benchmark a full IC** (multiple modules, register map, FSM, SoC integration, with a
@@ -168,23 +175,34 @@ Examples: `benchmark_clean/subservient_v0125_fresh` (REUSED-IP SoC path).
 ## § 3 — Tool-substitution disclosure (mandatory in every RESULT)
 
 Open benchmarks frequently mandate commercial EDA tools we don't have. Every RESULT.md MUST
-state the substitution explicitly:
+state the substitution explicitly.
 
-| Benchmark mandates | We substitute | Caveat |
-|---|---|---|
-| Synopsys VCS sim | iverilog 12 | Some VCS-only TB constructs (array-aggregate init, `break;`) reject under iverilog → pure tool-gap floor |
-| Synopsys Design Compiler PPA | yosys + OpenROAD (sky130/gf180) | NOT reported as PPA in benchmark RESULT (not apples-to-apples). If you DO report, label clearly |
-| Cadence Xcelium | iverilog | Same iverilog-vs-commercial gap as VCS |
-| `nvidia/cvdp-sim:v1.0.0` Docker image | `hpretl/iic-osic-tools` (iverilog 13 + cocotb 2.0.1) | Note the substitution + cocotb version delta |
+> **Enforced by `programs/tool_substitution_disclose.py`** — holds the canonical lookup (Synopsys
+> VCS→iverilog 12, Design Compiler→yosys+OpenROAD, Xcelium→iverilog, `nvidia/cvdp-sim`→`hpretl/iic-osic-tools`)
+> and (a) emits the mandatory RESULT.md disclosure block (`--all` / `--mandated <csv>`) and
+> (b) verifies a produced RESULT.md actually carries the disclosure for the tools it used
+> (`--verify RESULT.md --mandated <csv>`, FAILs on an undisclosed substitution or an unknown tool).
 
-**Run the host scorer FROM the design directory** (`cwd=<design>`) so the TB's relative-path
-`$readmemh("reference.txt")` etc. resolves correctly. RTLLM's own `auto_run.py` does this
-(`os.chdir(design); make vcs`). Forgetting this caused 3 false fails in our 2026-05-28 RTLLM run.
+> **`cwd=design_dir` rule — enforced by `programs/benchmark_score_cwd_guard.py`.** Run the host
+> scorer FROM the design directory (`cwd=<design>`) so the TB's relative-path
+> `$readmemh("reference.txt")` etc. resolves; the guard asserts `cwd==design` and that every
+> relative `$readmemh/$readmemb/$fopen` target exists under cwd before the TB runs. RTLLM's own
+> `auto_run.py` does `os.chdir(design); make vcs`; forgetting this caused 3 false fails in our
+> 2026-05-28 RTLLM run.
 
 ## § 4 — Triage rubric: agent-fixable vs FLOOR
 
 Every benchmark run produces residual fails. Categorize each into ONE of these buckets BEFORE
-spending compute on close-loop:
+spending compute on close-loop. **This A-H classification is the irreducible LLM core of this
+skill** — separating a genuine spec ambiguity (E, FLOOR) from a missed-clue (F), a genre
+convention (G), or a real RTL bug (H) requires reading the spec prose against the RTL+TB and
+making a meaning judgment; no regex does that.
+
+> One mechanical sub-case is extracted: **Category D (tool-substitution gap) detection is
+> enforced by `programs/tb_vcs_only_construct_detect.py`** — it scans the failing TB for the
+> iverilog-rejecting VCS/Xcelium-only constructs (array-aggregate `'{...}` init, `break;`/`continue;`,
+> `std::randomize`, `$urandom_range`, `unique/priority case`, `join_none`, queue ops) and reports
+> the offending line as FLOOR-D evidence. Use it to auto-classify D; A/B/C/E-H stay judgment.
 
 | Category | Description | Action |
 |---|---|---|
@@ -202,6 +220,9 @@ re-read the description top-to-bottom** for clues (Category F/G). The 2026-05-28
 under-estimated the recoverable fails (radix2_div, adder_pipe_64bit, LFSR) by failing this check.
 
 ### § 4.1 — Default action on previously-flagged FLOOR cases (user directive 2026-05-29)
+
+> **Enforced by `programs/benchmark_dispatch.py --reattempt-floor` (default-on)** — the run-mode
+> default is to re-run the failing set blind, never to inherit a prior FLOOR label.
 
 > **User policy (binding)**: "ALWAYS go [re-attempt FLOOR] by default. DON'T CARE ABOUT PREVIOUS RESULT."
 
@@ -229,6 +250,12 @@ This rule overrides any "skip, it's a known FLOOR" instinct. Encoded in
 
 ## § 5 — Per-benchmark cheat sheet (current as of v0.1.26)
 
+> **Enforced by `benchmark-harness/BENCHMARK_REGISTRY.json`**, loaded by
+> `programs/benchmark_dispatch.py` (`--list` / `--show <bench>`). The table below is a
+> human-readable snapshot — the registry JSON is the source of truth that drives dispatch; if the
+> two ever disagree, the registry wins. Do not hand-edit run plans from this table; consult the
+> program.
+
 | Benchmark | Shape | Authoring entry | Scoring | Status | Notes |
 |---|---|---|---|---|---|
 | VerilogEval-v2 (156) | **C** | `gates.py` + LLM | host iverilog + `<Prob>_test.sv` | Done 152/156 = 97.44% | Floor: 062/093/099/149 dataset defects |
@@ -244,6 +271,10 @@ This rule overrides any "skip, it's a known FLOOR" instinct. Encoded in
 | ChipAgentsBench | Not yet public | n/a | n/a | Plan to re-evaluate when subset releases | |
 
 ## § 6 — The benchmark RESULT.md must include
+
+> **Section-presence enforced by `programs/benchmark_result_md_lint.py <RESULT.md>`** — fails the
+> run if any of the seven mandatory sections below is missing. (It checks *presence* of each
+> concept; the *quality* of the residual-triage content is still the § 4 LLM judgment.)
 
 For honesty + reproducibility, every benchmark RESULT.md MUST contain:
 
@@ -293,8 +324,8 @@ When the user asks to "run X benchmark" with no qualifier:
 - The DEFAULT action is execute the floor-case re-attempt without asking permission. Surface
   the result; if the user wanted something narrower they will say so.
 
-Encoded in `programs/benchmark_dispatch.py` as the implicit run mode when no `--smoke` / `--floor`
-/ `--skip-rerun` flag is given.
+> **Enforced by `programs/benchmark_dispatch.py`** as the implicit run mode when no `--smoke` /
+> `--floor` / `--skip-rerun` flag is given (same default as § 4.1).
 
 
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)

@@ -66,14 +66,16 @@ For each actionable issue:
    - `vibe-ic-marketplace/plugins/vibe-ic/programs/` (gates)
    - `vibe-ic-marketplace/plugins/vibe-ic/programs/phase*_one_shot_runner.py` (runners)
    - `tools/` (one-off helpers)
-3. Write a chip-AGNOSTIC fix:
-   - **NO chip-specific path literals** as detection logic.
-     Forbidden tokens in any new code hunk:
-     `IC-A`, `BENCH-A`, `Vendor`, `usb_hid_tester`, `aid` (word-bounded).
-   - Heuristics need **deny-list / length-floor / structural
-     check**, not chip-class string literals.
-   - Fix must work across **every benchmark chip**, not just the
-     one filed in the issue.
+3. Write a chip-AGNOSTIC fix. This is the **one genuinely
+   LLM step** in the loop — open-ended root-cause analysis +
+   code authoring that cannot reduce to a regex/threshold. The
+   chip-AGNOSTIC discipline itself, however, IS a deterministic
+   gate: the forbidden-token scan (`IC-A`, `BENCH-A`, `Vendor`,
+   `usb_hid_tester`, `aid`, etc.) is **enforced by
+   `programs/source_chip_agnostic_check.py`** (deny-list sourced
+   from `tests/chip_deny_list.txt`). Heuristics must use deny-list
+   / length-floor / structural checks, not chip-class string
+   literals; the fix must work across **every** benchmark chip.
 4. Add tests covering BOTH the new path AND a regression-guard for
    the prior behaviour. Convention: `tests/test_v1_<MAJOR>_<MINOR>_<PATCH>_<slug>.py`.
 
@@ -83,12 +85,20 @@ For each actionable issue:
 # Bump patch version in BOTH locations:
 #   plugins/vibe-ic/.claude-plugin/plugin.json     ("version": ...)
 #   .claude-plugin/marketplace.json                 (.plugins[0].version)
+# Version invariants are DETERMINISTIC gates, not prose:
+#   - equality (plugin.json == marketplace.json)  -> enforced by
+#     programs/marketplace_version_sync_check.py
+#   - strict monotonic bump (new > previous commit) + equality re-assert
+#     -> enforced by programs/version_bump_monotonic_check.py
+#        (e.g. version_bump_monotonic_check.py --plugin-json <pj> \
+#              --marketplace-json <mj> --base HEAD)
 
-# Verify locally — HARD RULE: run the FULL suite (BOTH test trees), not just the
-# "relevant" unit tests. programs/tests/ = unit tests; tests/ = integration/regression
-# GATES (INDEX.md freshness, every-skill-has-compliance, orchestrator branch regressions).
-# A subset run once let a real regression onto main. pytest.ini pins both trees:
-( cd "$PLUGIN_ROOT" && python3 -m pytest -q )   # collects programs/tests/ + tests/
+# Verify locally — HARD RULE: run the FULL suite (BOTH test trees), not a
+# subset. A subset run once let a real regression onto main. That "did the
+# agent run the full suite, not a -k/single-file subset" check is enforced by
+# programs/full_suite_run_check.py (feed it the pytest command you ran).
+# pytest.ini testpaths pins the trees:
+( cd "$PLUGIN_ROOT" && python3 -m pytest -q )   # collects the full suite
 python3 -m pytest -q mcp-eda-server/test        # if MCP server touched
 # (added a program? -> programs/INDEX.md via tools/gen_programs_index.py;
 #  added a skill? -> compliance.yaml + tests/test_compliance.py. The tests/ gates enforce both.)
@@ -98,7 +108,8 @@ bash tools/sync_opensource.sh --no-test     # mirror to opensource_repo/
 git add <specific files>
 git commit -m "vX.Y.Z — for #<num> <one-line summary>"
 
-# Push (NEVER --force, NEVER --no-verify):
+# Push (NEVER --force, NEVER --no-verify — see §Hard prohibitions,
+# enforced by programs/git_prohibition_guard.py):
 git push origin main
 ```
 
@@ -141,15 +152,22 @@ is a healthy idle state, not a stop signal.
 
 ## Hard prohibitions (non-negotiable)
 
-| # | Rule | Reason |
-|---|------|--------|
-| 1 | NEVER `git push --force` | Loss of upstream history |
-| 2 | NEVER `git reset --hard` on tracked branches | Loss of local work |
-| 3 | NEVER `git commit --no-verify` | Bypasses pre-commit gates that catch chip-specific literals |
-| 4 | NEVER `git checkout .` or similar discard | Loss of work-in-progress |
-| 5 | NEVER close a GitHub issue | Verification belongs to field-agent |
-| 6 | NEVER use chip-specific string literals as detection logic | Fix must be general; chip-AGNOSTIC enforced by `chip_agnostic` test convention |
-| 7 | Use term "field agent" (not "debug agent") in external text | Project terminology decided 2026-05-10 |
+These are no longer prose-only — each is a DETERMINISTIC gate. Rules
+1–5 are enforced by **`programs/git_prohibition_guard.py`** (feed it the
+command strings before running them); rule 6 by
+**`programs/source_chip_agnostic_check.py`**; rule 7 by
+**`programs/field_agent_terminology_scan.py`** (feed it the comment /
+external text before publishing).
+
+| # | Rule | Reason | Enforced by |
+|---|------|--------|-------------|
+| 1 | NEVER `git push --force` (`--force-with-lease` is the safe sibling, allowed) | Loss of upstream history | `git_prohibition_guard.py` |
+| 2 | NEVER `git reset --hard` on tracked branches | Loss of local work | `git_prohibition_guard.py` |
+| 3 | NEVER `git commit --no-verify` | Bypasses pre-commit gates that catch chip-specific literals | `git_prohibition_guard.py` |
+| 4 | NEVER `git checkout .` or similar discard | Loss of work-in-progress | `git_prohibition_guard.py` |
+| 5 | NEVER close a GitHub issue (`gh issue close`) | Verification belongs to field-agent | `git_prohibition_guard.py` |
+| 6 | NEVER use chip-specific string literals as detection logic | Fix must be general | `source_chip_agnostic_check.py` |
+| 7 | Use term "field agent" (not "debug agent") in external text | Project terminology decided 2026-05-10 | `field_agent_terminology_scan.py` |
 
 ## State
 
@@ -204,8 +222,18 @@ and re-run until PASS, THEN post the comment.
 
 ## Reference
 
-- Helper program: `programs/poll.py`
-- Output compliance gate: `compliance.yaml`
+Deterministic gates backing this skill (the loop SCAFFOLD is fully
+programmable; only Step 2 fix-authoring is genuine LLM judgment):
+
+- Poll / actionability partition: `programs/poll.py`
+- Fix-comment 5-section shape: `compliance.yaml`
+  (+ `_shared/skill_compliance_check.py`)
+- Forbidden git/gh ops (prohibitions 1–5): `programs/git_prohibition_guard.py`
+- Chip-AGNOSTIC source scan (prohibition 6): `programs/source_chip_agnostic_check.py`
+- Terminology guard (prohibition 7): `programs/field_agent_terminology_scan.py`
+- Version equality: `programs/marketplace_version_sync_check.py`
+- Version strict-monotonic bump: `programs/version_bump_monotonic_check.py`
+- Full-suite (not subset) pytest run: `programs/full_suite_run_check.py`
 - Field-agent counterpart: `vibe-ic:field-agent-loop`
 - Backwards-compat thin wrapper:
   `tools/core_agent/poll_open_issues.py` (re-exports `poll()`
