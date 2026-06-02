@@ -268,6 +268,33 @@ def _content_skipped(line: str) -> bool:
     return False
 
 
+# A program-internal version CONSTANT in a .py file — `VERSION = "1.0.0"`,
+# `__version__ = "1.0.0"`, or a report dict's `"version": "1.0.0"` — is the
+# program's OWN semver, a namespace DISTINCT from the plugin's version, so it
+# is never a forward plugin claim. The motivating 9d4e984a leak was a prose
+# COMMENT claim (`# … added v1.6.19`), which does not match this assignment
+# shape, so this carve-out does not reopen that hole.
+_PROG_VER_CONST_RE = re.compile(
+    r"""(?:^|[^.\w])(?:VERSION|__version__)\s*=\s*["']\d+\.\d+\.\d+"""
+    r"""|["']version["']\s*:\s*["']\d+\.\d+\.\d+["']"""
+)
+
+
+def _is_program_version_constant(path: str, line: str) -> bool:
+    return path.endswith(".py") and bool(_PROG_VER_CONST_RE.search(line))
+
+
+def _is_filename_version(body: str, match) -> bool:
+    """A version embedded in a FILENAME token (e.g. `ALL_STEPS_v2.2.0.md`,
+    `CANONICAL_FLOW_v2.2.0.pdf`) is a doc/file version namespace, not a
+    plugin-version claim: the match is immediately followed by a file
+    extension and preceded by a filename connector / alphanumeric char."""
+    if not re.match(r"\.[A-Za-z]{1,6}\b", body[match.end():]):
+        return False
+    before_ch = body[match.start() - 1] if match.start() > 0 else ""
+    return before_ch in "_-/" or before_ch.isalnum()
+
+
 def check(diff_text: str,
           plugin_version: Tuple[int, int, int]
           ) -> List[Tuple[str, int, str, Tuple[int, int, int]]]:
@@ -279,8 +306,12 @@ def check(diff_text: str,
             continue
         if _content_skipped(body):
             continue
+        if _is_program_version_constant(path, body):
+            continue
         for m in _VER_RE.finditer(body):
             if _looks_historical(body, m.start()):
+                continue
+            if _is_filename_version(body, m):
                 continue
             try:
                 claimed = (int(m.group(1)), int(m.group(2)), int(m.group(3)))

@@ -218,3 +218,60 @@ def test_empty_diff_passes(tmp_path):
     _make_plugin_json(tmp_path, "1.6.18")
     cp = _run(tmp_path, "")
     assert cp.returncode == 0
+
+
+# ────────────────────────────────────────────────────────────────
+# Program-internal version constants (.py) — separate semver namespace
+# ────────────────────────────────────────────────────────────────
+def test_program_version_constant_assignment_skipped(tmp_path):
+    # A program's own `VERSION = "1.0.0"` is its semver, not a plugin claim,
+    # even though 1.0.0 > the plugin's 0.2.27.
+    _make_plugin_json(tmp_path, "0.2.27")
+    cp = _run(tmp_path, _diff(
+        "vibe-ic-marketplace/plugins/vibe-ic/programs/ams_analysis_select.py",
+        'VERSION = "1.0.0"'))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_program_version_dict_field_skipped(tmp_path):
+    # A report dict's `"version": "1.0.0",` inside a .py is the program's
+    # own report-schema version, not a plugin claim.
+    _make_plugin_json(tmp_path, "0.2.27")
+    cp = _run(tmp_path, _diff(
+        "vibe-ic-marketplace/plugins/vibe-ic/programs/gds_topcell_name_check.py",
+        '        "version": "1.0.0",'))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_comment_claim_in_py_still_fails_despite_const_carveout(tmp_path):
+    # The .py carve-out covers ONLY the assignment shape; a prose COMMENT
+    # claim (the 9d4e984a motivating leak) in a .py must STILL fail.
+    _make_plugin_json(tmp_path, "0.2.27")
+    cp = _run(tmp_path, _diff(
+        "vibe-ic-marketplace/plugins/vibe-ic/programs/foo.py",
+        "    # Schema v2 field — added v9.9.9. Honoured before legacy"))
+    assert cp.returncode == 1, cp.stdout + cp.stderr
+    assert "claimed v9.9.9" in cp.stdout
+
+
+# ────────────────────────────────────────────────────────────────
+# Filename-embedded doc versions — separate version namespace
+# ────────────────────────────────────────────────────────────────
+def test_filename_embedded_doc_version_skipped(tmp_path):
+    # A reference to a doc filename like ALL_STEPS_v2.2.0.md is the doc's
+    # version, not a plugin claim (v2.2.0 > plugin 0.2.27 numerically).
+    _make_plugin_json(tmp_path, "0.2.27")
+    cp = _run(tmp_path, _diff(
+        "docs/architecture/FLOW_STEPS_GENERATED.md",
+        "> (`CANONICAL_FLOW_v2.2.0.md`, `ALL_STEPS_v2.2.0.md`) link here."))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_real_claim_alongside_filename_version_still_fails(tmp_path):
+    # The filename carve-out is PER-MATCH: a genuine forward claim on the
+    # same line as a filename-version reference must still fail.
+    _make_plugin_json(tmp_path, "0.2.27")
+    cp = _run(tmp_path, _diff(
+        "src/x.py", "see ALL_STEPS_v2.2.0.md ; now bumping to v9.9.9"))
+    assert cp.returncode == 1, cp.stdout + cp.stderr
+    assert "claimed v9.9.9" in cp.stdout
