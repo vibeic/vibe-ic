@@ -65,11 +65,41 @@ jobs:
 
       - name: Validate JSON
         run: |
-          find . -name "*.json" -not -path "*/node_modules/*" -not -path "*/.git/*" \
-            -exec python3 -c "import json, sys; json.load(open(sys.argv[1]))" {} \;
+          python3 - <<'PY'
+          import json, pathlib, sys
+          bad = []
+          for p in pathlib.Path(".").rglob("*.json"):
+              if "node_modules" in p.parts or ".git" in p.parts:
+                  continue
+              try:
+                  json.load(open(p))
+              except Exception as e:
+                  bad.append(f"{p}: {e}")
+          if bad:
+              print("INVALID JSON (%d):" % len(bad))
+              for b in bad:
+                  print("  " + b)
+              sys.exit(1)
+          print("all JSON valid")
+          PY
 
       - name: Validate YAML
         run: |
           python3 -m pip install pyyaml
-          find . \( -name "*.yml" -o -name "*.yaml" \) -not -path "*/node_modules/*" -not -path "*/.git/*" \
-            -exec python3 -c "import yaml, sys; yaml.safe_load(open(sys.argv[1]))" {} \;
+          python3 - <<'PY'
+          import yaml, pathlib, sys
+          bad = []
+          for p in list(pathlib.Path(".").rglob("*.yml")) + list(pathlib.Path(".").rglob("*.yaml")):
+              if "node_modules" in p.parts or ".git" in p.parts:
+                  continue
+              try:
+                  yaml.safe_load(open(p))
+              except Exception as e:
+                  bad.append(f"{p}: {e}")
+          if bad:
+              print("INVALID YAML (%d):" % len(bad))
+              for b in bad:
+                  print("  " + b)
+              sys.exit(1)
+          print("all YAML valid")
+          PY

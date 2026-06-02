@@ -21,7 +21,7 @@
   "configuration_handover_sequences": [
     {
       "name": "Transmitter-as-Controller",
-      "steps": "Transmitter generates SCK + WS + SD. Receiver synchronizes to incoming clock; no handshake needed.",
+      "steps": "Transmitter generates SCK + WS + SD. Receiver synchronizes to incoming clock; no handshake needed."
     },
     {
       "name": "Receiver-as-Controller",
