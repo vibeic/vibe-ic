@@ -320,7 +320,7 @@ def check(diff_text: str,
             # an ASCII letter other than v/V is an identifier or spec-section
             # anchor (e.g. `A3.1.1`, `C3.4.1`, `FR3.1` source citations in the
             # protocol-synth requirement tables), NOT a semver. The `v?`
-            # prefix is consumed by _VER_RE, so a real `v1.6.18` is unaffected.
+            # prefix is consumed by _VER_RE, so a real `vX.Y.Z` is unaffected.
             before_ch = body[m.start() - 1] if m.start() > 0 else ""
             if before_ch.isalpha() and before_ch not in "vV":
                 continue
