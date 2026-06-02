@@ -42,6 +42,52 @@ XMN1 out in vss vss nfet_03v3 W=0.5u L=1u
 .ends
 """
 
+# --- KNOWN_MODELS (UNKNOWN_PDK_MODEL) fixtures ---
+
+# sky130 netlist using ONLY real registry device models — must PASS clean.
+SKY130_GOOD_KNOWN_MODELS = """\
+* diff pair — sky130, all real device models
+.lib /foss/pdks/sky130A/libs.tech/ngspice/sky130.lib.spice tt
+.subckt diffpair vip vin vop vss vdd nbias
+xm5 ntail nbias vss vss   sky130_fd_pr__nfet_01v8 w=8  l=1
+xm1 nd1   vip   ntail vss  sky130_fd_pr__nfet_01v8 w=16 l=0.5
+xm3 nd1   nd1   vdd  vdd   sky130_fd_pr__pfet_01v8 w=8  l=0.5
+xm6 vop   nd2   vdd  vdd   sky130_fd_pr__pfet_01v8_hvt w=32 l=0.5
+.ends
+"""
+
+# sky130 netlist with a genuinely-fake (typo'd) device model in-namespace.
+# `sky130_fd_pr__nfet_01v9` does NOT exist — must flag UNKNOWN_PDK_MODEL.
+SKY130_BAD_UNKNOWN_MODEL = """\
+* diff pair — sky130, one typo'd model
+.lib /foss/pdks/sky130A/libs.tech/ngspice/sky130.lib.spice tt
+.subckt diffpair vip vin vop vss vdd nbias
+xm5 ntail nbias vss vss  sky130_fd_pr__nfet_01v8 w=8 l=1
+xm1 nd1   vip   ntail vss sky130_fd_pr__nfet_01v9 w=16 l=0.5
+.ends
+"""
+
+# A netlist that calls a USER-DEFINED subckt (out-of-namespace token).
+# Must NOT flag UNKNOWN_PDK_MODEL — only the PDK namespace is validated.
+SKY130_USER_SUBCKT_NO_FLAG = """\
+* design instantiating a custom subckt + a real PDK device
+.lib /foss/pdks/sky130A/libs.tech/ngspice/sky130.lib.spice tt
+.subckt top vin vout vdd vss
+xbias nbias vss vss my_custom_bias_block
+xm1 nd1 vin vss vss sky130_fd_pr__nfet_01v8 w=16 l=0.5
+.ends
+"""
+
+# Unknown PDK (no recognized .lib marker) — KNOWN_MODELS must honest-skip,
+# never flag a model it cannot validate.
+UNKNOWN_PDK_NO_VALIDATE = """\
+* netlist with a model include but no recognized PDK marker
+.include /opt/my_private_pdk/models.spice
+.subckt blk a b c
+xm1 a b c c some_private_model w=1 l=1
+.ends
+"""
+
 
 def _run(tmp_path: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -113,3 +159,101 @@ def test_exit2_bad_dir(tmp_path):
         capture_output=True, text=True,
     )
     assert r.returncode == 2
+
+
+# ===================================================================
+# KNOWN_MODELS / UNKNOWN_PDK_MODEL validation (registry-driven)
+# ===================================================================
+
+# -- PASS: all device models are real sky130 registry devices --
+
+def test_known_models_pass(tmp_path):
+    d = tmp_path / "phase3" / "analog" / "diffpair"
+    d.mkdir(parents=True)
+    (d / "diffpair.sp").write_text(SKY130_GOOD_KNOWN_MODELS)
+    r = _run(tmp_path)
+    assert r.returncode == 0
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is True
+    assert rpt["summary"]["unknown_pdk_model_errors"] == 0
+    assert not any(f["rule"] == "UNKNOWN_PDK_MODEL" for f in rpt["findings"])
+
+
+# -- FAIL: a genuinely-fake in-namespace model token is flagged --
+
+def test_known_models_fail_unknown(tmp_path):
+    d = tmp_path / "phase3" / "analog" / "diffpair"
+    d.mkdir(parents=True)
+    (d / "diffpair.sp").write_text(SKY130_BAD_UNKNOWN_MODEL)
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is False
+    errors = [f for f in rpt["findings"] if f["severity"] == "ERROR"]
+    unknown = [f for f in errors if f["rule"] == "UNKNOWN_PDK_MODEL"]
+    assert len(unknown) == 1
+    assert "sky130_fd_pr__nfet_01v9" in unknown[0]["message"]
+    assert rpt["summary"]["unknown_pdk_model_errors"] == 1
+
+
+# -- No false positive on user-defined (out-of-namespace) subckt calls --
+
+def test_known_models_no_flag_user_subckt(tmp_path):
+    d = tmp_path / "phase3" / "analog" / "top"
+    d.mkdir(parents=True)
+    (d / "top.sp").write_text(SKY130_USER_SUBCKT_NO_FLAG)
+    r = _run(tmp_path)
+    assert r.returncode == 0
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is True
+    assert not any(f["rule"] == "UNKNOWN_PDK_MODEL" for f in rpt["findings"])
+
+
+# -- Missing data: unknown PDK => honest skip of KNOWN_MODELS, no flag --
+
+def test_known_models_unknown_pdk_skips(tmp_path):
+    d = tmp_path / "phase3" / "analog" / "blk"
+    d.mkdir(parents=True)
+    (d / "blk.sp").write_text(UNKNOWN_PDK_NO_VALIDATE)
+    r = _run(tmp_path)
+    # Model include present + no body error + unknown PDK => no UNKNOWN_PDK_MODEL
+    assert r.returncode == 0
+    rpt = _load_report(tmp_path)
+    assert not any(f["rule"] == "UNKNOWN_PDK_MODEL" for f in rpt["findings"])
+    assert rpt["summary"]["unknown_pdk_model_errors"] == 0
+
+
+# -- GF180 existing good netlist still passes (bare nfet_03v3/pfet_03v3) --
+
+def test_known_models_gf180_bare_pass(tmp_path):
+    d = tmp_path / "phase3" / "analog" / "ldo"
+    d.mkdir(parents=True)
+    (d / "ldo.sp").write_text(GF180_GOOD_NETLIST)
+    r = _run(tmp_path)
+    assert r.returncode == 0
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is True
+    assert rpt["summary"]["unknown_pdk_model_errors"] == 0
+
+
+# -- MANDATORY corpus sweep: the REAL adc pilot must stay 0 UNKNOWN_PDK_MODEL --
+
+CORPUS = Path(
+    "/home/reyerchu/vibe-ic/.claude/worktrees/cap-crc/benchmark_clean/"
+    "u_hawaii_adc_v0125_fresh"
+)
+
+
+@pytest.mark.skipif(not CORPUS.is_dir(), reason="real adc corpus not present")
+def test_corpus_sweep_zero_false_positive(tmp_path):
+    out = tmp_path / "corpus.json"
+    r = subprocess.run(
+        [sys.executable, str(PROG), str(CORPUS), "--json", str(out)],
+        capture_output=True, text=True,
+    )
+    rpt = json.loads(out.read_text())
+    fp = [f for f in rpt["findings"] if f["rule"] == "UNKNOWN_PDK_MODEL"]
+    assert fp == [], f"false positives on real corpus: {fp}"
+    assert rpt["summary"]["unknown_pdk_model_errors"] == 0
+    assert rpt["passed"] is True
+    assert r.returncode == 0

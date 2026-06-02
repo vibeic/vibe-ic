@@ -5,6 +5,13 @@ Validates that analog SPICE netlists follow correct PDK conventions:
   1. Model include present (.include/.lib with recognized PDK model path)
   2. Body connections correct (PMOS→VDD, NMOS→VSS/0)
   3. Device names match PDK (nfet_03v3/pfet_03v3 for GF180, etc.)
+  4. KNOWN_MODELS: every X-line model token that belongs to the detected
+     PDK's device-model namespace is a real device for that PDK. A token in
+     the namespace but absent from the registry => UNKNOWN_PDK_MODEL (a
+     stray / typo'd model name). Tokens OUTSIDE the namespace (user-defined
+     subckts) are not validated — zero false positives by construction. The
+     known-model set is sourced from programs/pdk_registry.json (per-PDK
+     `device_models`), NOT a hardcoded literal in this file.
 
 Self-skips (exit 0 + INFO) when:
   - No .sp files under analog/
@@ -51,6 +58,104 @@ INCLUDE_RE = re.compile(
     r"^\s*\.(include|lib)\s+(\S+)",
     re.MULTILINE | re.IGNORECASE,
 )
+
+# Map the short PDK token returned by _detect_pdk() to the registry entry name.
+_PDK_REGISTRY_NAME = {"sky130": "sky130A", "gf180": "gf180mcuD"}
+
+_REGISTRY_PATH = Path(__file__).resolve().parent / "pdk_registry.json"
+
+
+def _load_device_model_registry() -> dict:
+    """Read programs/pdk_registry.json → {short_pdk: {prefix, bare_re, models:set}}.
+
+    Honest-skip on any IO/parse problem: returns {} so the KNOWN_MODELS check
+    is silently disabled rather than emitting garbage findings. The model set
+    is NEVER hardcoded here — it lives in the registry data file.
+    """
+    out: dict = {}
+    try:
+        data = json.loads(_REGISTRY_PATH.read_text())
+    except (OSError, ValueError):
+        return out
+    for pdk in data.get("pdks", []):
+        models = pdk.get("device_models")
+        if not models:
+            continue
+        # find the short token that maps to this registry name
+        short = next(
+            (s for s, name in _PDK_REGISTRY_NAME.items() if name == pdk.get("name")),
+            None,
+        )
+        if short is None:
+            continue
+        out[short] = {
+            "prefix": pdk.get("device_model_prefix", ""),
+            "bare_re": pdk.get("device_model_bare_re"),
+            "models": {m.lower() for m in models},
+        }
+    return out
+
+
+def _in_pdk_namespace(model: str, reg: dict) -> bool:
+    """True iff `model` looks like it belongs to this PDK's device-model
+    namespace (and is therefore validated against the known-model set).
+
+    A token is in-namespace when EITHER it carries the canonical PDK prefix
+    (e.g. ``sky130_fd_pr__``) OR it matches the optional bare-form regex
+    (e.g. GF180 ``nfet_03v3``). Everything else (user subckt calls) is
+    out-of-namespace and never flagged — this is the zero-false-positive
+    guarantee.
+    """
+    ml = model.lower()
+    prefix = (reg.get("prefix") or "").lower()
+    if prefix and ml.startswith(prefix):
+        return True
+    bare_re = reg.get("bare_re")
+    if bare_re and re.search(bare_re, ml, re.IGNORECASE):
+        return True
+    return False
+
+
+def _check_known_models(
+    text: str, rel_path: str, pdk: Optional[str], findings: List[Finding]
+) -> int:
+    """For the detected PDK, verify each X-line model token that belongs to
+    that PDK's device-model namespace is a known device. Emit
+    UNKNOWN_PDK_MODEL for a stray/typo token. Returns the error count.
+
+    Honest-skip when PDK is unknown or the registry has no entry for it
+    (returns 0, no findings) — never a vacuous pass and never a false flag.
+    """
+    if pdk is None:
+        return 0
+    registry = _load_device_model_registry()
+    reg = registry.get(pdk)
+    if not reg or not reg.get("models"):
+        return 0
+
+    known = reg["models"]
+    errors = 0
+    for m in DEVICE_RE.finditer(text):
+        inst = m.group(1)
+        model = m.group(6)
+        if not _in_pdk_namespace(model, reg):
+            continue  # user subckt or foreign token — not our concern
+        if model.lower() not in known:
+            line_num = text[: m.start()].count("\n") + 1
+            findings.append(Finding(
+                rule="UNKNOWN_PDK_MODEL",
+                severity="ERROR",
+                message=(
+                    f"Device X{inst} references model '{model}' which is in the "
+                    f"{pdk} device-model namespace but is not a known {pdk} device "
+                    f"(stray or typo'd model name). Check programs/pdk_registry.json "
+                    f"device_models for the valid set."
+                ),
+                file=rel_path,
+                line=line_num,
+            ))
+            errors += 1
+    return errors
 
 
 @dataclass
@@ -168,6 +273,7 @@ def run_audit(project: Path) -> AuditResult:
     files_pass = 0
     files_stub = 0   # v1.6.177 (#72 P1-6)
     total_body_errors = 0
+    total_model_errors = 0
 
     for sp in sp_files:
         try:
@@ -208,6 +314,12 @@ def run_audit(project: Path) -> AuditResult:
             file_ok = False
             total_body_errors += body_errs
 
+        pdk = _detect_pdk(text)
+        model_errs = _check_known_models(text, rel, pdk, result.findings)
+        if model_errs > 0:
+            file_ok = False
+            total_model_errors += model_errs
+
         if file_ok:
             files_pass += 1
             result.findings.append(Finding(
@@ -236,6 +348,7 @@ def run_audit(project: Path) -> AuditResult:
         "files_stub": files_stub,
         "files_fail": files_checked - files_pass,
         "body_connection_errors": total_body_errors,
+        "unknown_pdk_model_errors": total_model_errors,
         "pass": result.passed,
         "verdict_tier": verdict_tier,
     }

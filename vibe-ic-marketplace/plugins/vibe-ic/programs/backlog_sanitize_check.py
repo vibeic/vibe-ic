@@ -108,6 +108,54 @@ SOFT_RULES: List[Tuple[str, str, str]] = [
      "Specific frequency — ensure it's a general protocol requirement, not one IC's clock"),
 ]
 
+# --- OSS-core codename SOFT registry (general-not-keyword doctrine) ---------
+#
+# Open-source IP-core codenames (picorv32, ibex, serv, ...) are LEGITIMATE in
+# most places: ip_catalog_* programs reuse OSS IP, and a backlog's
+# session_context / pattern / suggested_fix legitimately records WHICH design
+# was run or lists a corpus by name.  The one place a codename should NOT
+# stand in for a generic description is the backlog's one-line ``title`` — the
+# generic gap summary, which must describe the IC CLASS ("a bit-serial RISC-V
+# core"), not a specific core ("serv").
+#
+# So this is a SOFT (WARN) rule, scoped to the generic-description field set
+# below, keyed on a MAINTAINED DATA FILE (oss_core_registry.json), NOT a regex
+# literal baked into the detector.
+OSS_REGISTRY_PATH = Path(__file__).resolve().parent / "oss_core_registry.json"
+
+# Fields where a codename should describe the IC class generically.  Scoped to
+# ``title`` only: ``pattern`` / ``suggested_fix`` legitimately carry a codename
+# as provenance ("catalog-glue-author pulls cpu/serv@1.4.0") or as a corpus
+# list ("subservient → darkriscv → picorv32 → …"), and ``session_context``
+# records what was actually run, so neither is flagged.
+OSS_GENERIC_DESC_FIELDS = ("title",)
+
+
+def _load_oss_cores(path: Path = OSS_REGISTRY_PATH) -> List[str]:
+    """Load the curated OSS-core codename registry. Missing/garbage => []
+    (honest skip — the rule simply does not fire), never a fabricated list."""
+    try:
+        data = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return []
+    cores = data.get("cores", [])
+    if not isinstance(cores, list):
+        return []
+    return [c for c in cores if isinstance(c, str) and c.strip()]
+
+
+def _build_oss_pattern(cores: List[str]) -> str:
+    """Whole-word, case-insensitive alternation over the registry tokens.
+    Returns '' when the registry is empty so the caller skips the rule."""
+    if not cores:
+        return ""
+    alts = "|".join(re.escape(c) for c in sorted(set(cores), key=len, reverse=True))
+    return r"\b(?:" + alts + r")\b"
+
+
+_OSS_CORES = _load_oss_cores()
+_OSS_PATTERN = _build_oss_pattern(_OSS_CORES)
+
 REQUIRED_FIELDS = ["type", "component", "title", "pattern", "plugin_version"]
 VALID_TYPES = {"bug", "issue", "enhancement"}
 COMPONENT_RE = re.compile(
@@ -147,6 +195,16 @@ def _check_text(text: str, fname: str, field: str) -> List[Finding]:
         for m in re.finditer(pattern, text, re.IGNORECASE):
             findings.append(Finding(
                 "WARN", rule_id, desc,
+                file=fname, field=field, matched=m.group(),
+            ))
+    # OSS-core codename SOFT rule — scoped to generic-description fields only.
+    if _OSS_PATTERN and field in OSS_GENERIC_DESC_FIELDS:
+        for m in re.finditer(_OSS_PATTERN, text, re.IGNORECASE):
+            findings.append(Finding(
+                "WARN", "oss_core_codename",
+                "Open-source-core codename in the generic-description "
+                f"'{field}' — describe the IC class instead "
+                "(e.g. 'a bit-serial RISC-V core', not the core's name)",
                 file=fname, field=field, matched=m.group(),
             ))
     return findings
@@ -275,7 +333,7 @@ def main(argv: List[str] = None) -> int:
 
     report = {
         "program": "backlog_sanitize_check",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "summary": {"pass": is_pass, "findings_count": len(findings), **summary},
         "findings": [asdict(f) for f in findings],
     }

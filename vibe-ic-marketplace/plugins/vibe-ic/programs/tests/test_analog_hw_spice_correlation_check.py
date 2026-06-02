@@ -82,3 +82,88 @@ def test_exit2_bad_dir(tmp_path):
         capture_output=True, text=True,
     )
     assert r.returncode == 2
+
+
+# --- Item 3: <10% IDEAL classification tier (INFO-only, verdict unchanged) ---
+
+def test_ideal_tier_under_10pct_passes(tmp_path):
+    """A <10% discrepancy yields HW_SPICE_IDEAL + ideal_count>=1 AND still PASSES."""
+    ad = tmp_path / "phase3" / "analog" / "ldo"
+    ad.mkdir(parents=True)
+    # 3.27 vs 3.3 => 0.9% discrepancy (well under 10%)
+    (ad / "hw_measurements.json").write_text(json.dumps({
+        "measurements": {"vout": 3.27}
+    }))
+    (ad / "corner_results.json").write_text(json.dumps({
+        "pvt_results": {"TT_25C": {"vout": 3.3}}
+    }))
+    r = _run(tmp_path)
+    assert r.returncode == 0
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is True
+    assert rpt["summary"]["measurements_compared"] == 1
+    assert rpt["summary"]["ideal_count"] >= 1
+    assert rpt["summary"]["ideal_pct"] == 100.0
+    rules = [f["rule"] for f in rpt["findings"]]
+    assert "HW_SPICE_IDEAL" in rules
+    # The ideal finding must be INFO severity (granularity only, not a verdict change)
+    ideal_findings = [f for f in rpt["findings"] if f["rule"] == "HW_SPICE_IDEAL"]
+    assert all(f["severity"] == "INFO" for f in ideal_findings)
+
+
+def test_15pct_is_acceptable_but_not_ideal(tmp_path):
+    """A 15% case is INFO/acceptable (CORRELATED) but NOT ideal; still PASSES."""
+    ad = tmp_path / "phase3" / "analog" / "ldo"
+    ad.mkdir(parents=True)
+    # 2.805 vs 3.3 => exactly 15% discrepancy (between 10% and 20%)
+    (ad / "hw_measurements.json").write_text(json.dumps({
+        "measurements": {"vout": 2.805}
+    }))
+    (ad / "corner_results.json").write_text(json.dumps({
+        "pvt_results": {"TT_25C": {"vout": 3.3}}
+    }))
+    r = _run(tmp_path)
+    assert r.returncode == 0
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is True
+    assert rpt["summary"]["measurements_compared"] == 1
+    assert rpt["summary"]["ideal_count"] == 0
+    assert rpt["summary"]["ideal_pct"] == 0.0
+    rules = [f["rule"] for f in rpt["findings"]]
+    assert "HW_SPICE_CORRELATED" in rules
+    assert "HW_SPICE_IDEAL" not in rules
+
+
+def test_verdict_invariant_ideal_vs_acceptable(tmp_path):
+    """Verdict (passed/rc) is identical for the <10% and 15% cases — INFO granularity only."""
+    # <10% case
+    ad1 = tmp_path / "ideal" / "phase3" / "analog" / "ldo"
+    ad1.mkdir(parents=True)
+    (ad1 / "hw_measurements.json").write_text(json.dumps({"measurements": {"vout": 3.27}}))
+    (ad1 / "corner_results.json").write_text(json.dumps({"pvt_results": {"TT_25C": {"vout": 3.3}}}))
+    r1 = _run(tmp_path / "ideal")
+    rpt1 = _load_report(tmp_path / "ideal")
+
+    # 15% case
+    ad2 = tmp_path / "accept" / "phase3" / "analog" / "ldo"
+    ad2.mkdir(parents=True)
+    (ad2 / "hw_measurements.json").write_text(json.dumps({"measurements": {"vout": 2.805}}))
+    (ad2 / "corner_results.json").write_text(json.dumps({"pvt_results": {"TT_25C": {"vout": 3.3}}}))
+    r2 = _run(tmp_path / "accept")
+    rpt2 = _load_report(tmp_path / "accept")
+
+    # Verdict invariant across both INFO tiers
+    assert r1.returncode == r2.returncode == 0
+    assert rpt1["passed"] == rpt2["passed"] is True
+    # but the IDEAL granularity differs
+    assert rpt1["summary"]["ideal_count"] == 1
+    assert rpt2["summary"]["ideal_count"] == 0
+
+
+def test_ideal_summary_fields_present_on_skip_paths(tmp_path):
+    """ideal_count/ideal_pct are summary-only on the compare path; skip paths keep their shape."""
+    # no analog dir -> skipped summary unchanged (no ideal fields required)
+    r = _run(tmp_path)
+    rpt = _load_report(tmp_path)
+    assert rpt["summary"]["skipped"] is True
+    assert "ideal_count" not in rpt["summary"]

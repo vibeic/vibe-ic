@@ -6,9 +6,13 @@ correlate with SPICE simulation predictions within acceptable tolerance.
 
 For each measurement in hw_measurements.json that has a matching SPICE
 measurement in corner_results.json:
+  - <10 % discrepancy → INFO (IDEAL — HW_SPICE_IDEAL)
   - ≤20 % discrepancy → INFO (acceptable)
   - >20 % discrepancy → WARNING
   - >30 % discrepancy → ERROR (model accuracy critical)
+
+The IDEAL tier is INFO-only granularity: <10 % was already acceptable, so
+adding it does NOT change the PASS/FAIL verdict.
 
 Self-skips (exit 0 + INFO) when:
   - No analog/*/hw_measurements.json files found
@@ -45,7 +49,7 @@ class Finding:
 @dataclass
 class AuditResult:
     program: str = "analog_hw_spice_correlation_check"
-    version: str = "1.0.0"
+    version: str = "1.1.0"
     passed: bool = True
     findings: List[Finding] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
@@ -85,6 +89,7 @@ def run_audit(project: Path) -> AuditResult:
 
     total_compared = 0
     errors = 0
+    ideal = 0
     max_discrepancy = 0.0
 
     for hw_path in hw_files:
@@ -149,6 +154,17 @@ def run_audit(project: Path) -> AuditResult:
                             f"({pct:.1f}% discrepancy)"
                         ),
                     ))
+                elif pct < 10:
+                    ideal += 1
+                    result.findings.append(Finding(
+                        rule="HW_SPICE_IDEAL",
+                        severity="INFO",
+                        message=(
+                            f"Block '{block}' measurement '{name}': "
+                            f"HW={hw_val} vs SPICE={spice_val} "
+                            f"({pct:.1f}% — ideal correlation). OK."
+                        ),
+                    ))
                 else:
                     result.findings.append(Finding(
                         rule="HW_SPICE_CORRELATED",
@@ -189,11 +205,15 @@ def run_audit(project: Path) -> AuditResult:
     if errors:
         result.passed = False
 
+    ideal_pct = (ideal / total_compared * 100) if total_compared else 0.0
+
     result.summary = {
         "skipped": False,
         "hw_files_found": len(hw_files),
         "measurements_compared": total_compared,
         "max_discrepancy_pct": max_discrepancy,
+        "ideal_count": ideal,
+        "ideal_pct": ideal_pct,
         "errors": errors,
         "pass": result.passed,
     }
