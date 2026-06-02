@@ -1,9 +1,9 @@
 {
   "ic_name": "Automotive Ethernet (single-pair, 100BASE-T1 / 1000BASE-T1 / 10BASE-T1S / 10BASE-T1L; IEEE 802.3bw / 802.3bp / 802.3cg)",
   "crc_parameters": {
-    "polynomial_hex": "0x04",
-    "polynomial_reflected_hex": "0x20",
-    "init_hex": "0xFF",
+    "polynomial_hex": "0x04C11DB7",
+    "polynomial_reflected_hex": "0xEDB88320",
+    "init_hex": "0xFFFFFFFF",
     "bit_order": "lsb_first",
     "xorout_hex": "0x00",
     "residue_check_hex": "0x00",

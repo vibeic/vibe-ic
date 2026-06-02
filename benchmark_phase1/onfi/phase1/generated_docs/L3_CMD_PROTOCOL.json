@@ -9,7 +9,7 @@
   "crc_parameters": {
     "polynomial_hex": null,
     "polynomial_reflected_hex": null,
-    "init_hex": "0x4F",
+    "init_hex": "0x4F4E",
     "bit_order": "lsb_first",
     "xorout_hex": "0x00",
     "residue_check_hex": "0x00",
@@ -28,7 +28,7 @@
   "extraction_evidence": {
     "input/docs/ONFI_Spec.pdf": [
       {
-        "literal": "0x4F",
+        "literal": "0x4F4E",
         "label": "CRC init"
       }
     ]

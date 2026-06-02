@@ -7,9 +7,9 @@
   "placeholder_opcode_count": 0,
   "no_opcode_names_in_input": false,
   "crc_parameters": {
-    "polynomial_hex": "0x04",
-    "polynomial_reflected_hex": "0x20",
-    "init_hex": "0xFF",
+    "polynomial_hex": "0x04C11DB7",
+    "polynomial_reflected_hex": "0xEDB88320",
+    "init_hex": "0xFFFFFFFF",
     "bit_order": "lsb_first",
     "xorout_hex": "0x00",
     "residue_check_hex": "0x00",
@@ -28,11 +28,11 @@
   "extraction_evidence": {
     "input/docs/automotive_ethernet_spec.txt": [
       {
-        "literal": "0x04",
+        "literal": "0x04C11DB7",
         "label": "CRC polynomial (extracted regex)"
       },
       {
-        "literal": "0xFF",
+        "literal": "0xFFFFFFFF",
         "label": "CRC init"
       }
     ]

@@ -133,7 +133,7 @@
   "extraction_evidence": {
     "input/docs/USB_Power_Delivery_Specification.txt": [
       {
-        "literal": "0x04",
+        "literal": "0x04C11DB7",
         "label": "CRC polynomial (extracted regex)"
       }
     ]

@@ -18726,6 +18726,34 @@ def _v1_6_552_extract_rst_instruction_grid_opcodes(
     return out
 
 
+def _reflect_crc_poly(poly_hex: Optional[str]) -> Optional[str]:
+    """Reflect (bit-reverse) a CRC polynomial at its ACTUAL bit-width.
+
+    v0.2.14 capture (usb_pd / interlaken / automotive_ethernet): the
+    reflected-poly was previously computed with a fixed 8-bit reversal,
+    silently truncating CRC-16/24/32. The width is inferred from the
+    hex-digit count (4 bits/digit, floored at 8) so:
+      * CRC-8  0x07       -> 8-bit  reflect 0xE0
+      * CRC-8  0x31       -> 8-bit  reflect 0x8C
+      * CRC-16 0x1021     -> 16-bit reflect 0x8408
+      * CRC-24 0x328B63   -> 24-bit reflect 0xC6D14C
+      * CRC-32 0x04C11DB7 -> 32-bit reflect 0xEDB88320 (canonical IEEE-802.3)
+    Returns None on empty/garbage input (caller keeps reflected = None).
+    """
+    if not poly_hex:
+        return None
+    try:
+        _hexd = poly_hex[2:] if poly_hex.lower().startswith("0x") else poly_hex
+        if not _hexd:
+            return None
+        v = int(_hexd, 16)
+        width = max(8, len(_hexd) * 4)
+        rv = int(format(v, f"0{width}b")[::-1], 2)
+        return f"0x{rv:0{width // 4}X}"
+    except Exception:
+        return None
+
+
 def gen_l3_cmd_protocol(project: Path,
                         extracted: Dict[str, str],
                         l2: dict) -> LDocResult:
@@ -19200,11 +19228,28 @@ def gen_l3_cmd_protocol(project: Path,
     # CRC parameters: scan for CRC-8 polynomial hints (multi-form regex).
     crc_poly_hex: Optional[str] = None
     crc_init_hex: Optional[str] = None
+    # v0.2.14 capture (usb_pd / interlaken / automotive_ethernet): the poly,
+    # init and reflected-poly handling were all hard-coded to CRC-8 width
+    # (2 hex digits / 8-bit reflect), TRUNCATING any wider CRC — the IEEE-802.3
+    # CRC-32 polynomial 0x04C11DB7 became 0x04, the Interlaken CRC-24 0x328B63
+    # became 0x32, and the reflected poly was computed with a fixed 8-bit
+    # reversal (wrong for CRC-16/24/32). Accept 2..8 hex digits and reflect at
+    # the polynomial's actual bit-width. CRC-8 (0x07 / 0x31) is unchanged when
+    # no further hex follows the prefix.
+    # The named-CRC fallback (2nd pattern) MUST NOT cross an '=' sign: a
+    # polynomial is DECLARED ("CRC-32, polynomial 0x04C11DB7" / "CRC-32
+    # (0x04C11DB7"), whereas "CRC16 = 0x7FA1" is a worked-example RESULT
+    # value (the CRC OF some data), not the generator polynomial. Real
+    # "polynomial = 0x..." declarations are still caught by the 1st pattern
+    # (which intentionally allows '='). Restricting the fallback to
+    # [^=\n] kills the SD/MMC false-positive (512×0xFF -> CRC16 = 0x7FA1)
+    # generally, with no loss on any real poly declaration in the corpus.
     crc_poly_patterns = [
-        re.compile(r"poly(?:nomial)?\s*[\-—:=]?\s*0x([0-9a-fA-F]{2})",
+        re.compile(r"poly(?:nomial)?\s*[\-—:=]?\s*0x([0-9a-fA-F]{2,8})",
                    re.IGNORECASE),
-        re.compile(r"CRC[\s\-]?8.{0,40}?0x([0-9a-fA-F]{2})", re.IGNORECASE),
-        re.compile(r"poly[\s\-]?(?:form|reflected)?[\s:=\-]+0x([0-9a-fA-F]{2})",
+        re.compile(r"CRC[\s\-]?(?:8|16|24|32)\b[^=\n]{0,40}?0x([0-9a-fA-F]{2,8})",
+                   re.IGNORECASE),
+        re.compile(r"poly[\s\-]?(?:form|reflected)?[\s:=\-]+0x([0-9a-fA-F]{2,8})",
                    re.IGNORECASE),
     ]
     for fname, text in extracted.items():
@@ -19219,10 +19264,19 @@ def gen_l3_cmd_protocol(project: Path,
                 break
         if crc_poly_hex:
             break
+    # CRC init regex MUST require an explicit 0x prefix. The old `0?x?`
+    # (0x optional) silently fabricated a CRC init from any "init"-bearing
+    # token followed by digits/letters — e.g. DDR "tZQinit 512" (a timing
+    # value -> 0x51), PCIe "InitFC1" (a flow-control packet -> 0xFC), TPM
+    # "_TPM_Init before" (the word 'before' -> 0xBE). None of those ICs even
+    # has a CRC, yet a bogus crc_parameters was emitted. Requiring 0x keeps
+    # the real inits ("init 0xFFFFFFFF", eSPI "initial value 0x00", ONFI
+    # "crcinit = 0x4F4E") and drops every bare-token false-positive.
     for fname, text in extracted.items():
         ev = evidence.setdefault(f"input/docs/{fname}", [])
-        for m in re.finditer(r"init\s*[:=]?\s*0?x?([0-9a-fA-F]{2})", text,
-                              re.IGNORECASE):
+        for m in re.finditer(
+                r"init(?:ial)?(?:\s+value)?\s*[:=]?\s*0x([0-9a-fA-F]{2,8})\b",
+                text, re.IGNORECASE):
             crc_init_hex = "0x" + m.group(1).upper()
             if len(ev) < 24:
                 ev.append({"literal": crc_init_hex,
@@ -19258,15 +19312,9 @@ def gen_l3_cmd_protocol(project: Path,
     if not _crc_extracted:
         crc_params = None
     else:
-        # Compute reflected polynomial only when we have a real poly.
-        poly_reflected: Optional[str] = None
-        if crc_poly_hex:
-            try:
-                v = int(crc_poly_hex, 16)
-                rv = int(f"{v:08b}"[::-1], 2)
-                poly_reflected = f"0x{rv:02X}"
-            except Exception:
-                pass
+        # Compute reflected polynomial only when we have a real poly,
+        # at the polynomial's ACTUAL bit-width (see _reflect_crc_poly).
+        poly_reflected: Optional[str] = _reflect_crc_poly(crc_poly_hex)
         crc_params = {
             "polynomial_hex": crc_poly_hex,
             "polynomial_reflected_hex": poly_reflected,

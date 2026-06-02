@@ -6,17 +6,8 @@
   "no_opcodes_in_input": true,
   "placeholder_opcode_count": 0,
   "no_opcode_names_in_input": false,
-  "crc_parameters": {
-    "polynomial_hex": null,
-    "polynomial_reflected_hex": null,
-    "init_hex": "0xBE",
-    "bit_order": "lsb_first",
-    "xorout_hex": "0x00",
-    "residue_check_hex": "0x00",
-    "reset_at_break": true,
-    "golden_vectors": []
-  },
-  "no_crc_parameters_in_input": false,
+  "crc_parameters": null,
+  "no_crc_parameters_in_input": true,
   "verdict_byte_offset": null,
   "verdict_byte_hex": null,
   "no_verdict_byte_in_input": true,
@@ -26,12 +17,7 @@
   "no_payload_semantics_in_input": true,
   "opcode_synthesis_skipped_reason": "L2.protocol_overview.half_duplex is not True and no explicit opcode/command-table heading was found in input/docs/. Free-form hex bytes in prose, SVG labels, or PDF text do not constitute opcode evidence.",
   "extraction_evidence": {
-    "input/docs/TPM_Spec.pdf": [
-      {
-        "literal": "0xBE",
-        "label": "CRC init"
-      }
-    ]
+    "input/docs/TPM_Spec.pdf": []
   },
   "class_path": "digital_arithmetic_primitive",
   "protocol_type": "Host-mastered command-response over LPC / SPI / I2C MMIO FIFO; commands are octet streams that begin with a 10-byte header (TPM_ST + commandSize + commandCode) followed by handle area, authorization session area, and parameter area; responses mirror the framing.",

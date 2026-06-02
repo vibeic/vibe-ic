@@ -48,8 +48,8 @@
   "placeholder_opcode_count": 0,
   "no_opcode_names_in_input": false,
   "crc_parameters": {
-    "polynomial_hex": "0x32",
-    "polynomial_reflected_hex": "0x4C",
+    "polynomial_hex": "0x328B63",
+    "polynomial_reflected_hex": "0xC6D14C",
     "init_hex": null,
     "bit_order": "lsb_first",
     "xorout_hex": "0x00",
@@ -69,7 +69,7 @@
   "extraction_evidence": {
     "input/docs/Interlaken_Protocol_Definition.txt": [
       {
-        "literal": "0x32",
+        "literal": "0x328B63",
         "label": "CRC polynomial (extracted regex)"
       }
     ]

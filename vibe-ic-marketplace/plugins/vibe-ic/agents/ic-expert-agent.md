@@ -1034,3 +1034,31 @@ _Captured by benchmark-enhancement-capture 2026-06-01._
 **Why this is GENERAL**: Aligning declared bit-direction to the spec's own variable naming is a faithful-transcription rule, not a hidden-oracle peek.
 
 _Captured by benchmark-enhancement-capture 2026-06-01._
+
+### Skill: Cross-module producer→consumer handshakes — latch-on-arrival, never re-check a 1-cycle strobe
+
+**Pattern**: When you author a protocol controller as a core that emits a 1-cycle `*_valid` / `*_strobe` to a separate PHY/shifter module, do NOT make the consumer act on the pulse by RE-checking `valid && ready` at the end of a wait/countdown. The pulse is one cycle wide; if the consumer is still busy that cycle the byte is silently lost, and the pulse can phase-lock with a periodic producer on a shared bidirectional wire. (`handshake_check` flags this as a potential handshake race; it has no comment-silence — it wants the real fix.)
+
+**When to apply**: Any producer-in-module-A / consumer-in-module-B handshake where the producer's `valid` is a single-cycle strobe (assigned 1 then 0 in the same always block) and the consumer has its own busy/countdown state.
+
+**What to do**: Latch-on-arrival in the consumer — the moment `valid` pulses, set a `pending` flag and capture the payload into a hold register; then drive the datapath from `pending && !busy` and clear `pending`. The capture is unconditional on `valid` (one cycle); the drain is gated on the datapath being free.
+
+**Worked pattern** (anonymized): An eSPI-style slave loaded its TX shifter with `if (tx_valid && tx_ready) ...` at the end of its bit loop — a re-checked 1-cycle strobe near the `tx_cnt` countdown. Restructuring to `if (tx_valid) begin tx_pending<=1; tx_hold<=tx_byte; end` + `if (tx_pending && !tx_busy) begin <load>; tx_pending<=0; end` removed the race with no change to the byte stream.
+
+**Why this is GENERAL**: latch-on-arrival is the canonical single-clock producer-consumer handshake; it encodes no hidden-testbench behavior, only correct pulse handling.
+
+_Captured by benchmark-enhancement-capture 2026-06-02._
+
+### Skill: Annotate FSM error-assertions with recoverable/fatal intent
+
+**Pattern**: When an FSM asserts an error/fault output (`*_error`, `*_fault`, `crc_error`, …) inside a deep (non-idle) state, a downstream consumer cannot tell whether to tolerate-and-continue or halt. (`fsm_error_invariant` flags every such site and is silenced ONLY by an inline intent comment — it asks a real design question, not a style nit.)
+
+**When to apply**: Any `err_sig <= 1'b1;` (or equivalent) assigned inside an FSM state that is not the idle/reset state.
+
+**What to do**: Add an inline `// fsm_error: recoverable` or `// fsm_error: fatal` (also accepted: `intentional` / `tolerated`) next to the assignment, chosen from the PROTOCOL's own error semantics — and only when it is genuinely true. A protocol whose spec defines a non-fatal error response (receiver re-issues / retries) is `recoverable`; one that mandates a link re-init / reset is `fatal`.
+
+**Worked pattern** (anonymized): An eSPI slave asserted `crc_error_o` in its CRC-check state. eSPI defines a CRC mismatch as a non-fatal error response (code 0x02) — the master simply re-issues — so the honest annotation is `// fsm_error: recoverable`. (Do NOT annotate `recoverable` just to silence the gate if the spec treats the error as fatal — that would be a false annotation.)
+
+**Why this is GENERAL**: the recoverable/fatal classification comes from the protocol's published error-response semantics, not from any testbench; documenting it is faithful transcription.
+
+_Captured by benchmark-enhancement-capture 2026-06-02._

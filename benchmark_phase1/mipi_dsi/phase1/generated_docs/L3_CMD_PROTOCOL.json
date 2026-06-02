@@ -6,8 +6,17 @@
   "no_opcodes_in_input": true,
   "placeholder_opcode_count": 0,
   "no_opcode_names_in_input": false,
-  "crc_parameters": null,
-  "no_crc_parameters_in_input": true,
+  "crc_parameters": {
+    "polynomial_hex": "0x1021",
+    "polynomial_reflected_hex": "0x8408",
+    "init_hex": null,
+    "bit_order": "lsb_first",
+    "xorout_hex": "0x00",
+    "residue_check_hex": "0x00",
+    "reset_at_break": true,
+    "golden_vectors": []
+  },
+  "no_crc_parameters_in_input": false,
   "verdict_byte_offset": null,
   "verdict_byte_hex": null,
   "no_verdict_byte_in_input": true,
@@ -17,7 +26,12 @@
   "no_payload_semantics_in_input": true,
   "opcode_synthesis_skipped_reason": "L2.protocol_overview.half_duplex is not True and no explicit opcode/command-table heading was found in input/docs/. Free-form hex bytes in prose, SVG labels, or PDF text do not constitute opcode evidence.",
   "extraction_evidence": {
-    "input/docs/MIPI_DSI_Spec.pdf": []
+    "input/docs/MIPI_DSI_Spec.pdf": [
+      {
+        "literal": "0x1021",
+        "label": "CRC polynomial (extracted regex)"
+      }
+    ]
   },
   "class_path": "serial_peripheral_protocol",
   "protocol_type": "Packet-based half-duplex display-traffic protocol on top of source-synchronous DDR D-PHY. Two transaction styles coexist: (a) command/parameter transactions (Command Mode) using DCS and Generic Read/Write Short/Long Packets, and (b) real-time pixel-stream transactions (Video Mode) using Sync Event Short Packets + Packed/Loosely-Packed RGB Long Packets + Blanking/Null Long Packets.",

@@ -126,6 +126,10 @@
       {
         "literal": "0x07",
         "label": "CRC polynomial (extracted regex)"
+      },
+      {
+        "literal": "0x00",
+        "label": "CRC init"
       }
     ]
   },
