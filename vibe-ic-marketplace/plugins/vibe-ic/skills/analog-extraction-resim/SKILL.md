@@ -22,15 +22,21 @@ After analog layout in Magic, extracts parasitic RC and re-simulates across PVT 
 
 ## Workflow
 
-1. **Extract parasitics**:
-   - `eda_extraction` with `gds_file` or via Magic TCL:
-     ```tcl
-     load <block>
-     extract all
-     ext2spice lvs
-     ext2spice
-     ```
-   - Output: `analog/<block>/<block>_extracted.spice`
+1. **Extract parasitics** — emit/validate the Magic parasitic-RC TCL with
+   `programs/magic_extract_spice_emit.py` (do not hand-write the recipe):
+   ```bash
+   # emit the deterministic .mag -> RC-annotated .subckt extraction TCL
+   python3 programs/magic_extract_spice_emit.py --block <block> \
+       --out-spice analog/<block>/<block>_extracted.spice --out extract.tcl
+   # or validate an existing extraction TCL (FAILs if it omits `extract all`
+   # or `ext2spice lvs` — the two silent causes of a vacuous 0% degradation)
+   python3 programs/magic_extract_spice_emit.py --validate extract.tcl
+   ```
+   Then run it via `eda_extraction` (or magic). Output:
+   `analog/<block>/<block>_extracted.spice`.
+   > The fixed `load / extract all / ext2spice lvs / ext2spice` recipe is
+   > enforced by `programs/magic_extract_spice_emit.py` (distinct from the
+   > GDS-read + port-promote LVS recipe in `magic_port_extract_emit.py`).
 
 2. **Re-simulate with extracted netlist**:
    - Replace ideal subcircuit with extracted netlist in testbench
@@ -70,12 +76,10 @@ After analog layout in Magic, extracts parasitic RC and re-simulates across PVT 
 
 ## Degradation thresholds
 
-**Owned by `programs/analog_pre_vs_post_layout_check.py` (single source of truth).**
-As of the current program: `≤20%` = OK, `>20%` = WARNING (note for review, may
-proceed), `>30%` = ERROR (re-layout required — improve routing, add shielding). Do
-not restate a conflicting cutoff here or in the skill body; if the policy needs to
-change, change it in the program (one place) so the SKILL.md and the runtime never
-drift again.
+Enforced by `programs/analog_pre_vs_post_layout_check.py` (single source of
+truth — `≤20%` OK / `>20%` WARNING / `>30%` ERROR→NEEDS_RELAYOUT). Quote the
+program's verdict; do not restate a conflicting cutoff. If the policy must
+change, change it in the program (one place) so SKILL.md and runtime never drift.
 
 ## Do not
 
@@ -85,8 +89,11 @@ drift again.
 
 ## Handoff
 
-- If overall_status == "OK" or "WARNING" → `analog-hardmacro-gen` (Step A8)
-- If overall_status == "NEEDS_RELAYOUT" → back to `analog-layout` (Step A5)
+Branch on the `overall_status` field emitted by
+`programs/analog_pre_vs_post_layout_check.py` (deterministic, not a judgment call):
+
+- `OK` / `WARNING` → `analog-hardmacro-gen` (Step A8)
+- `NEEDS_RELAYOUT` → back to `analog-layout` (Step A5)
 - `post_layout_corner_results.json` → `analog_pre_vs_post_layout_check` gate
 
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)

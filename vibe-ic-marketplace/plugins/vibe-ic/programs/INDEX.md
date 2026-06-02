@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 597
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 597)
+- **Total programs (excluding helpers / shims):** 618
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 618)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 588 |
+| `any` | 609 |
 
 ## Alphabetical listing
 
@@ -36,6 +36,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `aid_class_rtl_gen` | aid_class_half_duplex, aid_class_half_duplex_single_wire, mixed_signal_otp, digital_cmd_driven | Wave 56 | Vibe-IC plugin Phase 2 RTL generator for AID-class half-duplex protocol. |
 | `aid_class_sdc_gen` | any | Wave 73 | to be removed in v0.130. |
 | `an_validator` | any | — | Application-Note (AN) validator / quality scorer, 0-80. |
+| `analog_a0_skip_forbidden_check` | any | Wave 47 | forbidden-artefact gate (Wave 47). |
 | `analog_a1_spec_extract_check` | any | — | A1 deterministic gate (v1.6.35). |
 | `analog_a2_topology_select_check` | any | — | A2 deterministic gate (v1.6.35). |
 | `analog_a3_netlist_gen_check` | any | — | A3 deterministic gate (v1.6.35). |
@@ -43,24 +44,39 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_a5_layout_check` | any | — | A5 deterministic gate (v1.6.35). |
 | `analog_a6_block_pv_check` | any | — | A6 deterministic gate |
 | `analog_a7_post_layout_resim_check` | any | — | A7 deterministic gate. |
+| `analog_a8_before_floorplan_check` | any | — | analog/digital ordering gate. |
 | `analog_a8_hardmacro_gen_check` | any | — | A8 deterministic gate. |
 | `analog_a9_hw_verify_check` | any | — | A9 deterministic gate (Co-Sim / HW Verify). |
 | `analog_artefact_substance_check` | any | — | catch substance-less analog |
 | `analog_block_coverage_check` | any | — | deterministic gate for analog block design coverage |
+| `analog_block_list_emit_check` | any | — | master block-list schema gate. |
+| `analog_block_type_classify` | any | — | deterministic name→type taxonomy lookup. |
 | `analog_content_detected_must_emit_l5_check` | any | Wave 47 | Wave 47 / v0.120.1 |
 | `analog_corner_margin_check` | any | — | A4 strict PVT-margin gate. |
 | `analog_corner_sweep_check` | any | — | deterministic gate for PVT corner coverage |
 | `analog_digital_interface_check` | any | — | deterministic gate for digital-analog interface validation |
 | `analog_flow_compliance_check` | any | — | analog track compliance gate (A1-A9) |
 | `analog_hardmacro_check` | any | — | deterministic gate for analog hardmacro deliverables |
+| `analog_hardmacro_pinname_consistency_check` | any | — | deterministic 3-way pin-name gate. |
 | `analog_hil_convergence_log_check` | any | — | verify that at least one analog |
+| `analog_hil_iteration_cap_check` | any | — | deterministic hard-cap on HIL iterations. |
+| `analog_hil_report_schema_check` | any | — | structural validation of hw_tuning_report.json. |
+| `analog_hil_single_knob_check` | any | — | one-knob-per-iteration discipline. |
+| `analog_hil_three_way_verdict` | any | — | deterministic three-way HIL verdict table. |
 | `analog_hw_spice_correlation_check` | any | — | deterministic gate for HW-vs-SPICE correlation |
+| `analog_lef_gds_outline_check` | any | — | A8 LEF-vs-GDS outline gate. |
+| `analog_liberty_nonzero_delay_check` | any | — | deterministic Liberty non-degeneracy gate. |
+| `analog_meas_from_spec_gen` | any | — | deterministic `.meas` statement generator |
+| `analog_netlist_connectivity_check` | any | — | deterministic floating-node / |
+| `analog_netlist_include_order_check` | any | — | deterministic SPICE model-include |
+| `analog_netlist_path_lint` | any | — | deterministic absolute-path lint for SPICE |
 | `analog_netlist_pdk_check` | any | — | deterministic gate for SPICE netlist PDK compliance |
 | `analog_one_shot_runner` | any | Wave 90 | A1-A9 analog flow (parallel to Phase 2 digital). |
 | `analog_oracle_compare` | any | — | deterministic analog-benchmark comparator. |
 | `analog_per_block_pv_completeness_check` | any | Wave 93 | strict per-block deliverable |
 | `analog_pre_vs_post_layout_check` | any | — | deterministic gate for pre/post-layout comparison |
 | `analog_real_corner_sweep` | any | — | v1.6.207 (ORGANIC-20260512). |
+| `analog_tb_supply_pdk_check` | any | — | deterministic testbench supply-vs-PDK |
 | `antenna_report_check` | any | — | wrapper for eda_report_audit --mode antenna. |
 | `arbiter_starvation_check` | any | v0.116 | BACKLOG-v11 P0.6. |
 | `arch_dse_pareto` | any | — | arch_dse_pareto.py -- Deterministic micro-architecture design-space exploration. |
@@ -127,6 +143,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `constants_validation` | any | — | Deterministic compliance check for rtl-constants-gen. |
 | `coresight_protocol_synth` | any | — | ARM CoreSight on-chip debug & trace architecture synth helper (protocol #64). |
 | `corner_coverage_audit` | any | — | Audit PVT corner coverage in IC design flows. |
+| `corner_schedule_policy` | any | — | deterministic corner-schedule policy for |
+| `corner_yield_vs_spec_check` | any | — | independent yield-vs-spec.json gate |
 | `coverage_closure` | any | — | read coverage report; identify gaps. |
 | `coverage_metric_check` | any | — | coverage_metric_check.py -- Deterministic coverage report metric checker. |
 | `crc_bitorder_check` | any | — | Detect CRC bit-ordering mismatches in TX data loading. |
@@ -331,6 +349,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lvs_report_check` | any | — | wrapper for eda_report_audit --mode lvs. |
 | `lvs_signoff_guard` | any | v0.2.1 | defensive check against a SILENT FALSE-POSITIVE LVS match. |
 | `lvs_triage_classify` | any | v0.1.50 | LVS triage classifier (Pattern-B → program). |
+| `magic_extract_spice_emit` | any | — | Magic parasitic-RC extraction TCL emitter + validator. |
 | `magic_port_extract_emit` | any | v0.1.114 | Magic port-labeled GDS-extraction TCL generator. |
 | `manifest_leak_check` | any | v0.47.6 | Detect benchmark-value leaks in fact manifests. |
 | `manufacturing_fab_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
@@ -532,6 +551,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `signoff_waiver_emit` | any | v0.1.49 | Chipignite/foundry signoff-waiver scaffold emitter. |
 | `signoff_waiver_md_emit` | any | v0.1.49 | Submitter-facing waiver Markdown emitter. |
 | `single_bus_driver_check` | any | Wave 10 | structural-RTL gate that catches the |
+| `sizing_adjust_policy` | any | — | the fixed failure-mode → parameter-delta |
+| `sizing_history_emit` | any | — | fixed-schema validator/emitter for the |
 | `slave_tx_no_device_break_check` | any | Wave 25 | Wave 25/34 silent-bug gate. |
 | `smbus_pmbus_protocol_synth` | any | v0.1.91 | System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3) |
 | `soundwire_protocol_synth` | any | v0.1.84 | MIPI SoundWire-class protocol synth helper. |
@@ -669,7 +690,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (588 programs)
+### `any` (609 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -681,6 +702,7 @@ _(no programs in this group)_
 - `aid_class_qsf_gen` — to be removed in v0.130.  _[Wave 73]_
 - `aid_class_sdc_gen` — to be removed in v0.130.  _[Wave 73]_
 - `an_validator` — Application-Note (AN) validator / quality scorer, 0-80.
+- `analog_a0_skip_forbidden_check` — forbidden-artefact gate (Wave 47).  _[Wave 47]_
 - `analog_a1_spec_extract_check` — A1 deterministic gate (v1.6.35).
 - `analog_a2_topology_select_check` — A2 deterministic gate (v1.6.35).
 - `analog_a3_netlist_gen_check` — A3 deterministic gate (v1.6.35).
@@ -688,24 +710,39 @@ _(no programs in this group)_
 - `analog_a5_layout_check` — A5 deterministic gate (v1.6.35).
 - `analog_a6_block_pv_check` — A6 deterministic gate
 - `analog_a7_post_layout_resim_check` — A7 deterministic gate.
+- `analog_a8_before_floorplan_check` — analog/digital ordering gate.
 - `analog_a8_hardmacro_gen_check` — A8 deterministic gate.
 - `analog_a9_hw_verify_check` — A9 deterministic gate (Co-Sim / HW Verify).
 - `analog_artefact_substance_check` — catch substance-less analog
 - `analog_block_coverage_check` — deterministic gate for analog block design coverage
+- `analog_block_list_emit_check` — master block-list schema gate.
+- `analog_block_type_classify` — deterministic name→type taxonomy lookup.
 - `analog_content_detected_must_emit_l5_check` — Wave 47 / v0.120.1  _[Wave 47]_
 - `analog_corner_margin_check` — A4 strict PVT-margin gate.
 - `analog_corner_sweep_check` — deterministic gate for PVT corner coverage
 - `analog_digital_interface_check` — deterministic gate for digital-analog interface validation
 - `analog_flow_compliance_check` — analog track compliance gate (A1-A9)
 - `analog_hardmacro_check` — deterministic gate for analog hardmacro deliverables
+- `analog_hardmacro_pinname_consistency_check` — deterministic 3-way pin-name gate.
 - `analog_hil_convergence_log_check` — verify that at least one analog
+- `analog_hil_iteration_cap_check` — deterministic hard-cap on HIL iterations.
+- `analog_hil_report_schema_check` — structural validation of hw_tuning_report.json.
+- `analog_hil_single_knob_check` — one-knob-per-iteration discipline.
+- `analog_hil_three_way_verdict` — deterministic three-way HIL verdict table.
 - `analog_hw_spice_correlation_check` — deterministic gate for HW-vs-SPICE correlation
+- `analog_lef_gds_outline_check` — A8 LEF-vs-GDS outline gate.
+- `analog_liberty_nonzero_delay_check` — deterministic Liberty non-degeneracy gate.
+- `analog_meas_from_spec_gen` — deterministic `.meas` statement generator
+- `analog_netlist_connectivity_check` — deterministic floating-node /
+- `analog_netlist_include_order_check` — deterministic SPICE model-include
+- `analog_netlist_path_lint` — deterministic absolute-path lint for SPICE
 - `analog_netlist_pdk_check` — deterministic gate for SPICE netlist PDK compliance
 - `analog_one_shot_runner` — A1-A9 analog flow (parallel to Phase 2 digital).  _[Wave 90]_
 - `analog_oracle_compare` — deterministic analog-benchmark comparator.
 - `analog_per_block_pv_completeness_check` — strict per-block deliverable  _[Wave 93]_
 - `analog_pre_vs_post_layout_check` — deterministic gate for pre/post-layout comparison
 - `analog_real_corner_sweep` — v1.6.207 (ORGANIC-20260512).
+- `analog_tb_supply_pdk_check` — deterministic testbench supply-vs-PDK
 - `antenna_report_check` — wrapper for eda_report_audit --mode antenna.
 - `arbiter_starvation_check` — BACKLOG-v11 P0.6.  _[v0.116]_
 - `arch_dse_pareto` — arch_dse_pareto.py -- Deterministic micro-architecture design-space exploration.
@@ -770,6 +807,8 @@ _(no programs in this group)_
 - `constants_validation` — Deterministic compliance check for rtl-constants-gen.
 - `coresight_protocol_synth` — ARM CoreSight on-chip debug & trace architecture synth helper (protocol #64).
 - `corner_coverage_audit` — Audit PVT corner coverage in IC design flows.
+- `corner_schedule_policy` — deterministic corner-schedule policy for
+- `corner_yield_vs_spec_check` — independent yield-vs-spec.json gate
 - `coverage_closure` — read coverage report; identify gaps.
 - `coverage_metric_check` — coverage_metric_check.py -- Deterministic coverage report metric checker.
 - `crc_bitorder_check` — Detect CRC bit-ordering mismatches in TX data loading.
@@ -971,6 +1010,7 @@ _(no programs in this group)_
 - `lvs_report_check` — wrapper for eda_report_audit --mode lvs.
 - `lvs_signoff_guard` — defensive check against a SILENT FALSE-POSITIVE LVS match.  _[v0.2.1]_
 - `lvs_triage_classify` — LVS triage classifier (Pattern-B → program).  _[v0.1.50]_
+- `magic_extract_spice_emit` — Magic parasitic-RC extraction TCL emitter + validator.
 - `magic_port_extract_emit` — Magic port-labeled GDS-extraction TCL generator.  _[v0.1.114]_
 - `manifest_leak_check` — Detect benchmark-value leaks in fact manifests.  _[v0.47.6]_
 - `manufacturing_fab_intake_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
@@ -1170,6 +1210,8 @@ _(no programs in this group)_
 - `signoff_waiver_emit` — Chipignite/foundry signoff-waiver scaffold emitter.  _[v0.1.49]_
 - `signoff_waiver_md_emit` — Submitter-facing waiver Markdown emitter.  _[v0.1.49]_
 - `single_bus_driver_check` — structural-RTL gate that catches the  _[Wave 10]_
+- `sizing_adjust_policy` — the fixed failure-mode → parameter-delta
+- `sizing_history_emit` — fixed-schema validator/emitter for the
 - `slave_tx_no_device_break_check` — Wave 25/34 silent-bug gate.  _[Wave 25]_
 - `smbus_pmbus_protocol_synth` — System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3)  _[v0.1.91]_
 - `soundwire_protocol_synth` — MIPI SoundWire-class protocol synth helper.  _[v0.1.84]_

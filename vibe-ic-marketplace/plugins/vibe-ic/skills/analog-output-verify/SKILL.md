@@ -17,69 +17,53 @@ paired_program: analog_one_shot_runner.py
 
 For each analog block in `<project>/analog/<block>/`:
 
-### A1 spec_extract
-- A1_spec.json should match L5_ADI_SPEC.json's block entry
-- Confirm specs are silicon-realistic (no V > 5V on 1.8V devices, etc.)
+**Run the deterministic gates first**, then apply the AI judgment
+below. Every fixed threshold / file-existence / structural rule on this
+track is enforced by a program — do not re-assert them by eye:
 
-### A2 topology_select
-- A2_topology.json names a real topology (cascode / two-stage / Miller / etc.)
-- Topology choice consistent with A1 spec (e.g. high-gain → two-stage, low-power → folded cascode)
-
-### A3 netlist_gen
-- `<block>.sp` is valid SPICE netlist
-- All transistor names cite a real model from `input/pdk/spice/*.lib`
-- No floating nodes / dangling pins
-
-### A4 corner_sweep
-- All PVT corners run (TT/SS/FF + temp + voltage) — A4_corners.json covers ≥27 corners
-- All corners' verdict columns parse and are numeric
-- Margin to spec on every corner ≥10%
-
-**Run the deterministic gate first** — the ≥27-corner count and the
-≥10% per-corner margin floor are fixed thresholds, so let the program
-assert them (it accepts both `A4_corners.json` and the runner's
-`corner_results.json`, self-skips when no corner artefact / stub data
-exists, and never over-flags informational corners with no numeric
-margin):
+| Step | Gate | Enforces |
+|------|------|----------|
+| A3 | `programs/analog_a3_netlist_gen_check.py` + `programs/analog_netlist_pdk_check.py` | `.sp` substance (`.subckt`, size), PDK model/body/device-name compliance |
+| A4 | `programs/analog_corner_margin_check.py` | ≥27-corner PVT cube + ≥10% margin/corner (stricter than the 9-corner `analog_corner_sweep_check.py`); accepts `A4_corners.json` or `corner_results.json`, self-skips on stub |
+| A5 | `programs/analog_a5_layout_check.py` | `layout.mag`/`<block>.gds` reference exists + DRC/LVS flags present |
+| A6 | `programs/analog_per_block_pv_completeness_check.py` + `programs/analog_a6_block_pv_check.py` | full per-block deliverable set + DRC=0 / LVS=match evidence |
+| A7 | `programs/analog_pre_vs_post_layout_check.py` (+ `analog_a7_post_layout_resim_check.py`) | post-vs-pre degradation bands (≤20% INFO / >20% WARN / >30% FAIL) |
+| A8 | `programs/analog_a8_hardmacro_gen_check.py` + `programs/analog_hardmacro_check.py` | LEF+lib+GDS+Verilog present & non-stub |
+| A8 outline | `programs/analog_lef_gds_outline_check.py` | **LEF `SIZE w BY h ;` matches the GDS bounding box** (the "LEF matches GDS outline" + "cross-check LEF outline vs A5 extents" spot-check, now a numeric gate; honest FAIL on mismatch / missing-half / garbage GDS) |
+| A9 | `programs/analog_hw_spice_correlation_check.py` | HW-vs-SPICE error bands (<5% PASS / 5-15% WARN / >15% FAIL) |
 
 ```bash
 python3 ../../programs/analog_corner_margin_check.py <project> \
     --json <project>/reports/gates/analog_corner_margin.json
+python3 ../../programs/analog_lef_gds_outline_check.py <project> \
+    --json <project>/reports/gates/analog_lef_gds_outline.json
+# (the A1-A9 gates above run inside analog_one_shot_runner; re-run any
+#  individually if a verdict is in doubt)
 ```
 
-Exit 0 = PASS (or self-skip), 1 = FAIL (count < 27 or a corner < 10%).
-Note this is *stricter* than `analog_corner_sweep_check.py` (which only
-enforces the lighter 9-corner 3×3 matrix). After the gate is green,
-apply AI judgment to the items below.
+Exit 0 = PASS (or self-skip / VACUOUS_PASS), 1 = FAIL. After every gate
+is green, apply the AI judgment below — these are the residual checks
+the programs **cannot** make.
 
-### A5 layout
-- A5_layout.json references a Magic .mag file that exists
-- DRC clean (or has waivers list)
-- LVS-ready
+### A1 spec_extract — AI judgment
+- A1_spec.json should match L5_ADI_SPEC.json's block entry
+- **Confirm specs are silicon-realistic** (e.g. V > 5V on a 1.8V device,
+  a bandwidth implausible for the chosen process). Needs device-class
+  limits + physical reading of the spec — KEEP-JUDGMENT.
 
-### A6 per_block_pv
-- `analog/<block>/{drc_clean.flag, lvs_match.flag}` both present
-- DRC + LVS log evidence retained for audit
+### A2 topology_select — AI judgment
+- A2_topology.json names a real topology (cascode / two-stage / Miller / etc.)
+- **Topology choice consistent with A1 spec** (high-gain → two-stage,
+  low-power → folded cascode). A soft heuristic mapping, not a strict
+  table — KEEP-JUDGMENT.
 
-### A7 post_layout_resim
-- A7_postsim.json has same metrics as A4 corners + extracted parasitic
-- Performance degradation 5-20% is normal; >30% indicates layout bug
+## Spot-check actions (AI judgment over green-gate data)
 
-### A8 hardmacro_gen
-- LEF + lib + GDS + Verilog all generated
-- LEF matches GDS outline
-- Liberty timing data complete
-- Verilog blackbox or behavioral
-
-### A9 hw_verify
-- Real breadboard measurement vs SPICE — error <5% PASS, 5-15% WARN, >15% FAIL
-- Required for tapeout sign-off
-
-## Spot-check actions
-
-- Eyeball A4_corners.json for corner outliers
-- Cross-check A8 LEF outline width × height vs A5 layout extents
-- Compare A9 measurements to A7 simulation; flag systematic offsets
+- **Eyeball A4_corners.json / A7 / A9 data for outliers and systematic
+  offsets** that the numeric gates pass (e.g. one corner consistently
+  off in the same direction). Pattern-recognition over data already
+  within threshold — KEEP-JUDGMENT.
+- The LEF-vs-GDS outline numeric cross-check is now `analog_lef_gds_outline_check.py`.
 
 ## When to escalate
 

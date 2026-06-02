@@ -36,36 +36,37 @@ For each iteration:
      - Display component BOM derived from sizing_final.json
      - Show wiring diagram from hw_test/README.md
   4. analog-hw-measure → scope capture + ADC readings
-  5. Three-way comparison:
-     ┌───────────┬────────────┬──────────┐
-     │ Spec      │ SPICE      │ Hardware │
-     │ vout: 1.8V│ vout: 1.80V│ vout: ?  │
-     └───────────┴────────────┴──────────┘
-  6. Decide:
-     - All within 20% → CONVERGED ✅
-     - HW ≠ SPICE but both within spec → SPICE model conservative (OK, note it)
-     - HW out of spec, SPICE in spec → model inaccuracy → calibrate
-     - Both out of spec → sizing problem → back to Phase 1
+  5. Three-way comparison + verdict — enforced by `programs/analog_hil_three_way_verdict.py`
+  6. Iterate per the verdict; single-knob + iteration-cap discipline enforced by program (see below)
 ```
 
-## Three-way comparison logic
+## Three-way comparison logic (enforced by program)
 
-| SPICE vs Spec | HW vs Spec | HW vs SPICE | Action |
+The four-row decision table (SPICE-vs-Spec, HW-vs-Spec, HW-vs-SPICE-discrepancy)
+→ {CONVERGED | CONVERGED_WARNING | MODEL_INACCURACY | BACK_TO_PHASE1} is a pure
+lookup — **enforced by `programs/analog_hil_three_way_verdict.py`** (PASS on a
+CONVERGED variant, FAIL on MODEL_INACCURACY / BACK_TO_PHASE1, SKIP on no data).
+
+| SPICE vs Spec | HW vs Spec | HW vs SPICE | Verdict |
 |:---:|:---:|:---:|---|
 | PASS | PASS | <20% | CONVERGED — ideal |
-| PASS | PASS | >20% | CONVERGED with model-accuracy WARNING |
-| PASS | FAIL | — | Model inaccuracy — adjust sizing to add margin, re-sim + re-measure |
-| FAIL | — | — | Should not reach Phase 2 — back to Phase 1 |
+| PASS | PASS | >=20% | CONVERGED_WARNING (model-accuracy) |
+| PASS | FAIL | — | MODEL_INACCURACY — add margin, re-sim + re-measure |
+| FAIL | — | — | BACK_TO_PHASE1 — should not reach Phase 2 |
 
 ## Convergence criteria
 
 - **MUST**: Hardware measurement within spec limits
-- **TARGET**: Hardware vs SPICE discrepancy < 20% per metric
+- **TARGET**: Hardware vs SPICE discrepancy < 20% per metric — enforced by `programs/analog_hw_spice_correlation_check.py`
 - **IDEAL**: All three (hardware, SPICE, spec) agree within 10%
 
 ## Output format
 
 ### `analog/<block>/hw_tuning_report.json`
+Schema (block_name, converged, total_iterations.{spice,hardware}, per-metric
+final_comparison.{spec,spice,hw,discrepancy_pct}, convergence_status ∈
+{IDEAL,CONVERGED,WARNING}) is **structurally validated by
+`programs/analog_hil_report_schema_check.py`**.
 ```json
 {
   "block_name": "ldo_1v8",
@@ -82,9 +83,9 @@ For each iteration:
 ## Do not
 
 - Do not skip Phase 1 (SPICE) — always converge in simulation before going to hardware
-- Do not exceed 3 hardware iterations — if not converging, escalate model accuracy issue
-- Do not assume breadboard is pre-built — always display wiring guide and wait for user confirmation
-- Do not adjust more than 1 component per hardware iteration — debugging is harder than in SPICE
+- Do not exceed 3 hardware iterations — enforced by `programs/analog_hil_iteration_cap_check.py` (escalate a model-accuracy issue instead of iterating)
+- Do not assume breadboard is pre-built — always display wiring guide and wait for user confirmation (interactive human-in-the-loop gate — kept as judgment)
+- Do not adjust more than 1 component per hardware iteration — enforced by `programs/analog_hil_single_knob_check.py` (records sizing-per-iteration in `analog/<block>/hw_sizing_history.json`)
 
 ## Handoff
 

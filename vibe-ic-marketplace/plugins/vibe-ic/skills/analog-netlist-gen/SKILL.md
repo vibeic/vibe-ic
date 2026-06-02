@@ -36,10 +36,10 @@ XM1 drain gate source 0 nfet_03v3 W=20u L=2u
 XMP1 drain gate source VDD pfet_03v3 W=20u L=4u
 ```
 
-**Body connection rules**:
-- NMOS body → VSS (ground, node `0`)
-- PMOS body → VDD (supply)
-- Getting this wrong is the #1 SPICE simulation failure
+**Body connection rules** (NMOS body → VSS/`0`, PMOS body → VDD — the #1 SPICE
+simulation failure): enforced deterministically by `programs/analog_netlist_pdk_check.py`
+(`PMOS_BODY_TO_VSS` / `NMOS_BODY_TO_VDD`). Model-include presence is also enforced
+there (`NO_MODEL_INCLUDE`).
 
 ## SKY130 device instantiation
 
@@ -55,7 +55,11 @@ XMP1 drain gate source VDD sky130_fd_pr__pfet_01v8 W=2u L=0.15u
 
 ## Workflow
 
-1. Read topology schematic → identify all devices and their connections
+1. Read topology schematic → identify all devices and their connections.
+   **KEEP-JUDGMENT:** resolving a free-form/ASCII topology description into the
+   device-to-net connectivity graph is comprehension, not parsing — only an LLM can
+   do this reliably. (Once the graph exists, `analog_netlist_connectivity_check.py`
+   verifies it has no floating nodes / unused ports.)
 2. Read sizing table → get W, L for each device
 3. Generate subcircuit definition:
    ```spice
@@ -64,15 +68,17 @@ XMP1 drain gate source VDD sky130_fd_pr__pfet_01v8 W=2u L=0.15u
    .ends
    ```
 4. Generate testbench:
-   - Power supply: `Vdd VDD 0 DC 3.3` (GF180) or `DC 1.8` (SKY130)
-   - Stimulus: DC sweep, AC source, transient pulse (depends on block type)
+   - Power supply: `Vdd VDD 0 DC 3.3` (GF180) or `DC 1.8` (SKY130). The supply value
+     must match the PDK + device flavor — enforced by
+     `programs/analog_tb_supply_pdk_check.py` (`SUPPLY_PDK_MISMATCH` /
+     `SUPPLY_DEVICE_MISMATCH` / `DEVICE_FLAVOR_PDK_MISMATCH`).
+   - Stimulus: DC sweep, AC source, transient pulse — **choosing the stimulus class
+     and load network requires understanding the block's function (KEEP-JUDGMENT).**
    - Load: resistive/capacitive per spec
-5. Generate `.meas` statements from spec.json:
-   ```spice
-   .meas DC vout_dc FIND V(vout) AT=3.3
-   .meas AC gain_db FIND VDB(vout) AT=1k
-   .meas TRAN tpd TRIG V(in) VAL=1.65 RISE=1 TARG V(out) VAL=1.65 FALL=1
-   ```
+5. Generate `.meas` statements from spec.json — **deterministic; do not hand-author.**
+   Run `programs/analog_meas_from_spec_gen.py <block>/spec.json --out meas.inc`. It
+   classifies each spec key into DC / AC / TRAN and emits the templated `.meas` lines
+   (FAILs honestly if spec.json is missing or has no measurable keys).
 6. Add `.control` block for ngspice batch mode
 
 ## Output format
@@ -104,12 +110,23 @@ Vdd VDD 0 DC 3.3
 .end
 ```
 
+## Deterministic gates (run these — do not eyeball)
+
+These rules are enforced by programs, not by prose. Run them after emitting `.sp`/`tb_*.sp`:
+
+| Rule | Program | FAIL codes |
+|------|---------|------------|
+| Body connections + model-include presence | `programs/analog_netlist_pdk_check.py` | `PMOS_BODY_TO_VSS`, `NMOS_BODY_TO_VDD`, `NO_MODEL_INCLUDE` |
+| Include order (design.ngspice before .lib, GF180) | `programs/analog_netlist_include_order_check.py` | `LIB_BEFORE_DESIGN_INCLUDE` |
+| No hardcoded absolute paths (except `/foss/pdks/...`) | `programs/analog_netlist_path_lint.py` | `NON_WHITELISTED_ABSOLUTE_PATH` |
+| No floating nodes / unused ports | `programs/analog_netlist_connectivity_check.py` | `FLOATING_NODE`, `UNUSED_PORT` |
+| Supply value matches PDK + device flavor | `programs/analog_tb_supply_pdk_check.py` | `SUPPLY_PDK_MISMATCH`, `SUPPLY_DEVICE_MISMATCH`, `DEVICE_FLAVOR_PDK_MISMATCH` |
+| `.meas` lines from spec.json | `programs/analog_meas_from_spec_gen.py` | (generator) |
+
 ## Do not
 
-- Do not hardcode absolute PDK paths — use the standard include patterns above
-- Do not forget body connections (4th terminal)
-- Do not mix model include order (design.ngspice MUST come before .lib)
 - Do not use `.param` for device sizes unless doing a sweep — use literal values for clarity
+  (style preference; not gated).
 
 ## Handoff
 

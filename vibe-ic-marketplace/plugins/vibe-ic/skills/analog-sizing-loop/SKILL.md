@@ -31,29 +31,51 @@ Iteration 0:
 
 Iteration 1-N (max 5):
   eda_spice_corner (all corners: TT/SS/FF × -40/25/125°C)
-  Parse yield table vs spec.json limits
+  yield-vs-spec + worst-corner   → enforced by programs/corner_yield_vs_spec_check.py
   If all PASS → done
   If FAIL:
-    1. Identify worst-case corner (e.g., SS @ -40°C)
-    2. Identify dominant failure (e.g., gain too low)
-    3. Identify sensitive device (e.g., M1 gm too small)
-    4. Adjust: increase W (for more gm) or decrease L (for more speed)
-    5. Re-generate netlist with new sizes
-    6. Re-simulate
+    1. (deterministic) worst corner is reported by corner_yield_vs_spec_check.py
+    2. (JUDGMENT) identify the DOMINANT failure at that corner — gain shortfall
+       vs the spec it violates may live in M1's gm, the load impedance, or the
+       bias point; the canned table only approximates this.
+    3. (JUDGMENT) identify the SENSITIVE device — which transistor's
+       gm/parameter actually drives the failing spec for THIS topology.
+    4. once the failure mode is named, the canonical parameter delta is a
+       table lookup → enforced by programs/sizing_adjust_policy.py
+    5. Re-generate netlist with new sizes; re-simulate
 ```
 
-## Convergence strategy
+- **TT-only on iteration 0, full PVT sweep on iter ≥1** — enforced by
+  `programs/corner_schedule_policy.py` (policy emit + sizing_history audit).
+- **Yield-table vs spec.json limits + worst-corner argmin** — enforced by
+  `programs/corner_yield_vs_spec_check.py` (re-derives PASS/FAIL from spec.json
+  min/max, independent of any pre-computed `status` field).
+- **Convergence-strategy table** (named failure mode → canonical sizing delta)
+  — enforced by `programs/sizing_adjust_policy.py`:
 
-| Failure mode | Adjustment | Typical fix |
-|-------------|------------|-------------|
-| Gain too low | Increase gm/Id (↑W or ↑L) | +50% W on input pair |
-| Bandwidth too low | Decrease parasitic C (↓W) or ↑bias current | Trade gain for BW |
-| Phase margin too low | Increase Cc or add nulling Rz | +50% Cc |
-| Noise too high | Increase W×L product on input devices | +2× area on input pair |
-| Power too high | Reduce bias current | ↓Ibias by 30% |
-| Output swing too small | Reduce Vdsat (↑W at same Id) | Cascode → folded-cascode |
+| Failure mode | Canonical delta (sizing_adjust_policy.py) |
+|-------------|--------------------------------------------|
+| `gain_low` | +50% W on input pair (`W_in ×1.5`) |
+| `bandwidth_low` | ↓W (less parasitic C) + ↑Ibias (`W_in ×0.7`, `Ibias ×1.3`) |
+| `phase_margin_low` | +50% Cc (`Cc ×1.5`) |
+| `noise_high` | +2× input-pair area (`area_in ×2.0`) |
+| `power_high` | −30% Ibias (`Ibias ×0.7`) |
+| `output_swing_low` | ↑W at same Id (`W_in ×1.4`) |
+
+  The LOOKUP is deterministic; the upstream **mapping of a failing-spec-at-a-corner
+  to the named failure mode and the sensitive device** is the JUDGMENT step (2-3
+  above). An unknown failure mode FAILs the policy — that is the cue to do real
+  circuit analysis or escalate to a topology change (see Stopping conditions §3).
 
 ## Output format
+
+The two output artefacts below have a **fixed schema** — their emission and
+schema/cross-field validation are enforced by `programs/sizing_history_emit.py`
+(`validate-final` / `validate-history` / `emit-final`). It checks required
+fields + types, that every `final_sizing` device carries W & L, that
+`sizing_final.iterations` equals the `sizing_history` record count, and that
+`converged: true` is only claimed when the terminal history record carries
+`all_corners_pass: true`.
 
 ### `analog/<block>/sizing_final.json`
 ```json
@@ -86,16 +108,26 @@ Written by `eda_spice_corner` — PVT matrix with per-spec pass/fail.
 
 ## Stopping conditions
 
-1. **All specs pass across all corners** → SUCCESS
-2. **5 iterations without convergence** → STOP, report best-so-far + remaining failures
-3. **Fundamental topology limitation** (e.g., single-stage gain capped at 40dB but spec requires 60dB) → STOP, recommend topology change
+1. **All specs pass across all corners** → SUCCESS (gate:
+   `corner_yield_vs_spec_check.py`)
+2. **5 iterations without convergence** → STOP, report best-so-far + remaining
+   failures (the 5-iteration cap is enforced in code by
+   `iterative_search.py` `max_rounds=5` + `loop_admission_guard.py`)
+3. **Fundamental topology limitation** (JUDGMENT) — e.g. single-stage gain
+   capped at ~40dB but the spec requires 60dB. Recognising an *architectural
+   ceiling* (vs a sizing miss the table can still fix) needs LLM analysis;
+   `sizing_adjust_policy.py` returning UNKNOWN_FAILURE_MODE or the loop
+   plateauing despite valid deltas is the signal → STOP, recommend a topology
+   change (`/analog-topology-select`).
 
 ## Do not
 
-- Do not run all corners on iteration 0 — TT-only is sufficient for initial sanity
-- Do not make more than 2 simultaneous changes per iteration — hard to debug
-- Do not exceed 5 iterations — if not converging, the topology is likely wrong
-- Do not adjust a device that has no sensitivity to the failing spec
+- Do not run all corners on iteration 0 — TT-only suffices for initial sanity
+  (enforced by `corner_schedule_policy.py`).
+- Do not make more than 2 simultaneous changes per iteration — hard to debug.
+- Do not exceed 5 iterations — enforced by `iterative_search.py` `max_rounds`.
+- (JUDGMENT) Do not adjust a device that has no sensitivity to the failing spec —
+  picking the sensitive device is the causal-analysis step the table cannot do.
 
 ## Handoff
 

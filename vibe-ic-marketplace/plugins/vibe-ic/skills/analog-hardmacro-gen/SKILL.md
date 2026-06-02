@@ -22,26 +22,52 @@ Takes a verified analog block (SPICE corner sweep passed, optionally hardware-ve
 
 ## Four deliverables
 
+> Deliverable PRESENCE + non-degeneracy is enforced deterministically:
+> `programs/analog_hardmacro_check.py` (all 4 files exist; LEF has
+> MACRO/PIN, LIB has cell, V has module) and
+> `programs/analog_liberty_nonzero_delay_check.py` (the "no zero-delay
+> Liberty" rule — area-only / all-zero `.lib` => FAIL). Cross-file
+> pin-name equality is enforced by
+> `programs/analog_hardmacro_pinname_consistency_check.py`.
+
 ### 1. GDS (`hardmacro/<block>/<block>.gds`)
 - Source: Magic layout → `eda_gds` or `eda_run_tcl` with Magic `gds write`
+- The `gds write` / `lef write` Magic TCL is a fixed command template —
+  emitted deterministically alongside the port-extraction TCL in
+  `programs/magic_port_extract_emit.py`.
 - Must include all metal layers, vias, device layers
 
 ### 2. LEF abstract (`hardmacro/<block>/<block>.lef`)
-- Generated via Magic `lef write` command (via `eda_run_tcl engine=magic`)
+- Generated via Magic `lef write` (see `magic_port_extract_emit.py`)
 - Contains: MACRO definition, PIN locations (with DIRECTION + USE), OBS layer, SIZE
-- Pin names must match the RTL port names exactly
+- Pin names must match the RTL port names exactly — enforced by
+  `programs/analog_hardmacro_pinname_consistency_check.py` (3-way
+  set-equality: spec.json `interface.pins` ↔ LEF PINs ↔ Verilog ports;
+  portless LEF + ported Verilog => FAIL).
 
 ### 3. Liberty timing model (`hardmacro/<block>/<block>.lib`)
-- Derived from SPICE corner results (worst-case SS corner):
-  - Input→output propagation delay → `cell_rise` / `cell_fall`
-  - Setup/hold times for digital control inputs
-  - Leakage power from DC operating point
-- Simplified single-corner model (SS worst case) is sufficient for v0.108
-- Format: standard Liberty `.lib` with one cell definition
+- Derived from SPICE corner results (worst-case SS corner).
+- Non-degeneracy enforced by
+  `programs/analog_liberty_nonzero_delay_check.py`: the `.lib` must carry
+  at least one timing/leakage attribute and every timing value must be
+  non-zero (an area-only or all-zero `.lib` is the documented vacuous-STA
+  defect and FAILs). The check also reports the corner-sweep provenance
+  (`real_ngspice` vs stub) read from `corner_results.json`.
+- **Judgment residual (NOT a program):** which arcs to model and what
+  delay value to assign — `corner_results.json` carries the analog spec
+  value (e.g. `vout_v`, `ota_ugbw_hz`) per PVT corner, NOT pre-computed
+  `cell_rise`/`cell_fall`/`setup`/`hold`/`leakage` timing arcs. Mapping
+  a measured analog metric onto Liberty timing arcs for a given control
+  interface is an analog-modeling decision; only the SS-worst-corner
+  selection and the non-zero formatting are deterministic.
 
 ### 4. Behavioral Verilog (`hardmacro/<block>/<block>.v`)
 - For gate-level simulation (digital TB can instantiate this)
-- Simplified model with correct port list and basic behavior:
+- The **port list** must match the spec interface — enforced by
+  `programs/analog_hardmacro_pinname_consistency_check.py`.
+- **Judgment residual (NOT a program):** HOW MUCH analog behavior to
+  model in the integration Verilog — which ports matter for digital sim,
+  what minimal behavior keeps gate-level sim meaningful:
   ```verilog
   module ldo_1v8 (input vin, input en, input [2:0] trim, output vout);
     assign vout = en ? 1'b1 : 1'bz;  // simplified: high when enabled
@@ -51,11 +77,17 @@ Takes a verified analog block (SPICE corner sweep passed, optionally hardware-ve
 
 ## Workflow
 
-1. **GDS**: If `layout.mag` exists, run Magic `gds write`; else run `eda_analog_layout` first
+1. **GDS**: If `layout.mag` exists, run Magic `gds write` (template via
+   `magic_port_extract_emit.py`); else run `eda_analog_layout` first
 2. **LEF**: Run Magic `lef write` with correct pin definitions
-3. **Liberty**: Parse `corner_results.json` for SS corner → extract worst-case delays → generate `.lib`
-4. **Behavioral Verilog**: Parse `spec.json` for ports → generate simplified behavioral module
-5. Validate: LEF pin names match Verilog port names match spec.json interface
+3. **Liberty**: Pick the SS (worst) corner from `corner_results.json` and
+   author the `.lib` with non-zero arcs (modeling judgment per § 3 above);
+   non-degeneracy gate = `analog_liberty_nonzero_delay_check.py`
+4. **Behavioral Verilog**: Emit a module whose port list matches
+   `spec.json` `interface.pins`; behavior-modeling is judgment (§ 4 above)
+5. **Validate** (deterministic, do not hand-check): run
+   `analog_hardmacro_check.py` + `analog_hardmacro_pinname_consistency_check.py`
+   + `analog_liberty_nonzero_delay_check.py` on the project dir
 
 ## Output format
 
@@ -69,9 +101,13 @@ hardmacro/<block>/
 
 ## Do not
 
-- Do not generate Liberty with zero delays — use actual SPICE-measured values
-- Do not mismatch pin names between LEF and Verilog (causes LVS failure at integration)
-- Do not include internal device-level detail in LEF — only pins and obstruction
+- Do not generate Liberty with zero delays — use actual SPICE-measured
+  values (enforced by `programs/analog_liberty_nonzero_delay_check.py`)
+- Do not mismatch pin names between LEF and Verilog — causes LVS failure
+  at integration (enforced by
+  `programs/analog_hardmacro_pinname_consistency_check.py`)
+- Do not include internal device-level detail in LEF — only pins and
+  obstruction (modeling judgment, left to the agent)
 
 ## Handoff
 

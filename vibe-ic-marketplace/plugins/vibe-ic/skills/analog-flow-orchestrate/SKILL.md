@@ -24,6 +24,10 @@ python3 plugins/vibe-ic/programs/analog_a6_block_pv_check.py
 python3 plugins/vibe-ic/programs/analog_a7_post_layout_resim_check.py
 python3 plugins/vibe-ic/programs/analog_a8_hardmacro_gen_check.py
 python3 plugins/vibe-ic/programs/analog_a9_hw_verify_check.py
+
+# 3. Ordering gate — A8 must finish before digital Step 15 floorplan
+#    (Hard rules #1 + #2), enforced deterministically:
+python3 plugins/vibe-ic/programs/analog_a8_before_floorplan_check.py <project>
 ```
 
 The skill is the CANONICAL REFERENCE for A1-A9 semantics. **The runner
@@ -66,10 +70,20 @@ The analog counterpart to `flow-orchestrate`. Manages the complete analog design
 
 ## Hard rules
 
-1. **A8 must complete BEFORE digital Step 15 (Floorplan).** Digital PnR needs the LEF/Liberty/GDS to place analog blocks.
-2. **A9 can run in parallel with digital Steps 15+.** Hardware verification doesn't block physical design.
+1. **A8 must complete BEFORE digital Step 15 (Floorplan).** Digital PnR
+   needs the LEF/Liberty/GDS to place analog blocks. *Enforced by
+   `programs/analog_a8_before_floorplan_check.py`* — FAILs when a floorplan
+   DEF exists but any analog block is still missing its A8 hardmacro LEF.
+2. **A9 (and only A9) can run in parallel with digital Steps 15+.** Hardware
+   verification doesn't block physical design. *Corollary enforced by the
+   same `analog_a8_before_floorplan_check.py` ordering gate* (every step ≤ A8
+   must precede floorplan; A9 is the sole exception).
 3. **No step is optional.** If hardware is unavailable for A9, write a waiver.
-4. **Emit the 9-row plan table BEFORE any step runs.** User must see all 9 steps up front.
+   *Enforced by `programs/analog_flow_compliance_check.py`* (every step is
+   PASS or carries a waiver in `analog/waivers.json`).
+4. **Emit the 9-row plan table BEFORE any step runs.** User must see all 9
+   steps up front. This is an interaction/presentation rule (LLM-driven) —
+   the deliverable-presence half is covered by `analog_flow_compliance_check.py`.
 
 ## Orchestration workflow
 
@@ -79,12 +93,32 @@ plan → execute_step_AN → gate_AN → observe → (retry ≤3 or abort) → n
                                        final: analog_flow_compliance_check
 ```
 
-1. **Detect**: Read `generated_docs/L5_ADI_SPEC.json` or scan RTL for analog modules
-2. **Plan**: Emit 9-row table with all blocks × 9 steps
+1. **Detect**: Read `generated_docs/L5_ADI_SPEC.json` or scan RTL for analog
+   modules. *Enforced by `programs/analog_block_coverage_check.py` +
+   `programs/analog_content_detected_must_emit_l5_check.py`* (deterministic
+   JSON-read / module-scan; FAILs if docs document analog content but L5 omits it).
+2. **Plan**: Emit 9-row table with all blocks × 9 steps (LLM presentation step).
 3. **Execute**: Walk A1→A9 in order. For each block, run the named skill.
-4. **Gate**: After each step, run its gate program. 3 retries on failure.
-5. **Report**: Write `analog/status.json` with per-step per-block status.
-6. **Final gate**: `analog_flow_compliance_check` must exit 0.
+   The A1→A9 dispatch table + state machine is the deterministic
+   `programs/analog_one_shot_runner.py` (source of truth, not this prose).
+4. **Gate**: After each step, run its A-step gate program. **Retry decision
+   on failure — what to change before retry, and abort-vs-continue — is the
+   LLM backstop (see "Per-step retry / abort" below).**
+5. **Report**: Write `analog/status.json` (program-emittable) +
+   `analog/flow_summary.md` (LLM narrative).
+6. **Final gate**: `programs/analog_flow_compliance_check.py` must exit 0,
+   and the ordering gate `programs/analog_a8_before_floorplan_check.py`
+   must not FAIL.
+
+### Per-step retry / abort (LLM backstop — KEEP)
+
+When an A-step gate FAILs, the deterministic runner reports *which* gate
+failed; deciding *what to change* before the retry (resize a device, pick a
+different topology, relax a corner, loosen a layout constraint) and *whether
+to abort vs continue* after ≤3 retries is genuine engineering judgment that
+cannot be reduced to a fixed program. The same applies to the **STOP-and-ask**
+branch under "Inputs to gather" — clarifying ambiguous / missing PDK, block
+list, HW availability or target specs from a human is interaction, not a check.
 
 ## Timing integration with digital track
 
