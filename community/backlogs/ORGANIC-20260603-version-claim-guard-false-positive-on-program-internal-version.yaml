@@ -1,48 +1,73 @@
 type: tool-gap
 severity: P3
-component: tools/ci/pre_commit_check.sh (Staged-diff version-claim guard)
+component: tools/ci/staged_version_claim_check.py (Staged-diff version-claim guard)
 
-plugin_version: "0.2.26"
+plugin_version: "0.2.27"
+status: partially-fixed
 
 title: >-
   The pre-commit "version-claim guard" false-positives on each program's INTERNAL
-  `version: str = "1.x.y"` dataclass field (and historical `v1.6.x` provenance
-  comments), reading them as a plugin-version claim ahead of plugin.json.
+  `version` field, on filename-embedded doc versions, on spec-section source
+  citations, and (the dominant residual) on historical `v1.6.x` provenance
+  comments left over from the 1.6.x -> 0.2.x version-scheme RESET — all read as a
+  plugin-version claim ahead of plugin.json.
 
 pattern: |
-  Surfaced syncing the public vibe-ic 0.2.26 plugin tree into the AI_IC_design
-  monorepo (which installs pre_commit_check.sh as a git pre-commit hook; the
-  public GitHub CI does NOT install it). The guard scanned 758 staged additions
-  and FAILed with e.g.:
-    analog_hw_spice_correlation_check.py:52: claimed v1.1.0 > plugin 0.2.26
-      (the line is `version: str = "1.1.0"` — the program's OWN dataclass
-       version field, a DIFFERENT namespace from the plugin version)
-    analog_a8_hardmacro_gen_check.py:11: claimed v1.6.30 > plugin 0.2.26
-      (a historical "aligned with v1.6.30 thresholds" provenance comment)
-  18+ programs carry `version: str = "1.0.0"/"1.1.0"` per-program version fields.
-  Because "1.1.0" / "1.6.30" sort numerically ABOVE "0.2.26", the guard treats
-  them as premature plugin-version claims. There is no non-breaking way to satisfy
-  it on a byte-identical upstream sync: rephrasing the 758 upstream lines would
-  break the sync, and bumping plugin.json to >1.6.30 is wrong (the plugin is 0.2.x).
-  The sync commit had to use --no-verify.
+  Surfaced syncing the public vibe-ic plugin tree into the AI_IC_design monorepo
+  (which installs the guard as a git pre-commit hook; the public GitHub worktree
+  does NOT install it, so public commits never ran it). The guard treats any
+  X.Y.Z numerically greater than plugin.json.version as a forward plugin claim.
+  Several DISTINCT namespaces collide with that assumption:
+    (a) program-internal version constants:  VERSION = "1.0.0" / "version": "1.0.0"
+    (b) dataclass-annotated version fields:   version: str = "1.1.0"
+    (c) filename-embedded doc versions:       ALL_STEPS_v2.2.0.md / CANONICAL_FLOW_v2.2.0.pdf
+    (d) spec-section source citations:        {"source": "A3.1.1"}  (letter-prefixed)
+    (e) HISTORICAL provenance comments to the OLD 1.6.x scheme, e.g.
+          # Per the v1.6.30 anti-fabrication doctrine (rule #5)
+          # v1.6.607 — v2-rename cascade leftover
+        The plugin RESET its version from 1.6.x to 0.2.x; every backward
+        reference to a 1.6.x version now sorts ABOVE 0.2.27.
+  A full-tree-as-additions sweep (initial AID import / large resync) raised
+  ~4897 findings; a normal DELTA commit (e.g. the v0.2.27 sync) raised 10.
+
+resolution: |
+  PARTIALLY FIXED in vibe-ic 0.2.27 (public commits 0a64299 + 01c2193 + the
+  follow-up that landed classes b/d; AID mirror 4c1972095). The guard now
+  exempts, with GENERAL structural carve-outs (no keyword) + regression tests
+  (27/27 pass):
+    (a) VERSION / __version__ = "X.Y.Z" and "version": "X.Y.Z"   [FIXED]
+    (b) version[: type] = "X.Y.Z" annotated/plain field          [FIXED]
+    (c) filename-embedded version (X.Y.Z followed by a file ext)  [FIXED]
+    (d) letter-prefixed numeric triple (A3.1.1 section anchor)    [FIXED]
+  These remove the false-positives that block NORMAL delta commits (the v0.2.27
+  sync's pre-commit now passes cleanly with NO --no-verify).
+
+residual: |
+  OPEN — class (e), historical v1.6.x provenance comments. This is the dominant
+  remaining false-positive on a FULL-TREE resync (~4850 of the 4897). It cannot
+  be closed by a structural carve-out because these lines ARE free-prose version
+  mentions of the exact shape the guard exists to catch — the only thing that
+  makes them benign is domain knowledge that 1.6.x PRE-DATES the 0.2.x reset.
+  A correct fix needs a version-scheme-reset-aware heuristic (e.g. a configured
+  "historical band" 1.0.0–1.6.999 that is always treated as backward when the
+  plugin major is 0), designed carefully so it does NOT create a false-NEGATIVE
+  hole for a genuine future 1.x claim. Deferred: the guard mis-fires ONLY on a
+  full-tree resync (not normal commits), and the wrong heuristic would weaken
+  the guard's core purpose, so this is left for a dedicated design pass.
 
 suggested_fix: |
-  Make the guard distinguish a PLUGIN-version claim from a PROGRAM-INTERNAL version:
-  - EXCLUDE `version: str = "..."` / `"version": "..."` dataclass/report-field
-    assignments inside programs/*.py (these are per-program versions, an
-    independent namespace from plugin.json).
-  - EXCLUDE comments carrying a historical marker the guard already documents
-    (was/supersedes/since/pre-/from/aligned with) — extend the recogniser to the
-    `vMAJOR.MINOR.PATCH` old-scheme prefix.
-  - Only flag a literal that is presented AS the plugin version (near
-    plugin.json/marketplace.json `"version"` keys, or a "plugin vX.Y.Z" phrase).
-  Corpus-sweep: re-stage the full 0.2.26 plugin tree and confirm the guard raises
-  ZERO findings (currently 758 false-positives).
+  Add an opt-in historical-band config to staged_version_claim_check.py:
+  versions within a declared pre-reset range are always historical. Acceptance:
+  re-stage the full plugin tree and confirm the guard raises ZERO findings
+  while the 27 regression tests (incl. the forward-claim catches) still pass.
 
 id: "ORGANIC-20260603-version-claim-guard-false-positive-on-program-internal-version"
 submitted_at: "2026-06-03T00:00:00+08:00"
+updated_at: "2026-06-03T00:00:00+08:00"
 session_context: >-
-  Found while pushing the 0.2.26 plugin to its 3 homes (vibeic/vibe-ic +
-  AI_IC_design vibe-ic-marketplace + opensource_repo). The guard mis-fires only in
-  AI_IC_design (where the hook is installed); the public repo's GitHub CI is green.
-  Honoring the --no-verify commit message's promise to file this follow-up.
+  Filed while pushing 0.2.26 to its 3 homes; classes (a)-(d) fixed while pushing
+  0.2.27 to the same 3 homes (vibeic/vibe-ic + AI_IC_design vibe-ic-marketplace +
+  opensource_repo). The 0.2.27 commit messages said "Closes ORGANIC-20260603" —
+  that was premature: classes (a)-(d) are closed, class (e) (1.6.x historical
+  provenance, the version-scheme-reset residual) remains OPEN. Status corrected
+  to partially-fixed here.

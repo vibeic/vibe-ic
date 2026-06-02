@@ -277,6 +277,9 @@ def _content_skipped(line: str) -> bool:
 _PROG_VER_CONST_RE = re.compile(
     r"""(?:^|[^.\w])(?:VERSION|__version__)\s*=\s*["']\d+\.\d+\.\d+"""
     r"""|["']version["']\s*:\s*["']\d+\.\d+\.\d+["']"""
+    # lowercase attribute / dataclass-annotated field: `version = "1.1.0"`
+    # or `version: str = "1.1.0"` (the program's own semver field).
+    r"""|(?:^|[^.\w])version(?:\s*:\s*\w+)?\s*=\s*["']\d+\.\d+\.\d+"""
 )
 
 
@@ -312,6 +315,14 @@ def check(diff_text: str,
             if _looks_historical(body, m.start()):
                 continue
             if _is_filename_version(body, m):
+                continue
+            # A numeric triple whose first digit is immediately preceded by
+            # an ASCII letter other than v/V is an identifier or spec-section
+            # anchor (e.g. `A3.1.1`, `C3.4.1`, `FR3.1` source citations in the
+            # protocol-synth requirement tables), NOT a semver. The `v?`
+            # prefix is consumed by _VER_RE, so a real `v1.6.18` is unaffected.
+            before_ch = body[m.start() - 1] if m.start() > 0 else ""
+            if before_ch.isalpha() and before_ch not in "vV":
                 continue
             try:
                 claimed = (int(m.group(1)), int(m.group(2)), int(m.group(3)))

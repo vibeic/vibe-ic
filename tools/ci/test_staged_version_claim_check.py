@@ -275,3 +275,33 @@ def test_real_claim_alongside_filename_version_still_fails(tmp_path):
         "src/x.py", "see ALL_STEPS_v2.2.0.md ; now bumping to v9.9.9"))
     assert cp.returncode == 1, cp.stdout + cp.stderr
     assert "claimed v9.9.9" in cp.stdout
+
+
+def test_annotated_version_field_in_py_skipped(tmp_path):
+    # A dataclass-annotated `version: str = "1.1.0"` is the program's own
+    # semver field, not a plugin claim.
+    _make_plugin_json(tmp_path, "0.2.27")
+    cp = _run(tmp_path, _diff(
+        "vibe-ic-marketplace/plugins/vibe-ic/programs/foo.py",
+        '    version: str = "1.1.0"'))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_letter_prefixed_section_ref_skipped(tmp_path):
+    # `A3.1.1` / `C3.4.1` are spec-section anchors (source citations in the
+    # protocol-synth requirement tables), not semver — a digit triple whose
+    # first digit is immediately preceded by a non-v letter is excluded.
+    _make_plugin_json(tmp_path, "0.2.27")
+    cp = _run(tmp_path, _diff(
+        "vibe-ic-marketplace/plugins/vibe-ic/programs/ace_protocol_synth.py",
+        '    {"id": "FR-CLOCK-01", "text": "rising-edge", "source": "A3.1.1"},'))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_v_prefixed_version_still_fails_not_treated_as_identifier(tmp_path):
+    # The letter-prefix exclusion must NOT swallow a real `v`-prefixed claim:
+    # `v` is consumed by the version regex, so the char before is whitespace.
+    _make_plugin_json(tmp_path, "0.2.27")
+    cp = _run(tmp_path, _diff("src/x.py", "# bumping to v9.9.9 now"))
+    assert cp.returncode == 1, cp.stdout + cp.stderr
+    assert "claimed v9.9.9" in cp.stdout
