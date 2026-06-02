@@ -35,16 +35,25 @@ After runner reports PASS, AI invokes this skill to spot-check.
 
 For each L*.json produced:
 
-1. **Completeness**: open every L doc, count `__TODO__` strings. >0 means incomplete extraction. Action: re-run phase1 runner with patched extractor, or fall back to corresponding NL doc-gen skill.
+1. **Completeness** — enforced by `programs/l_doc_todo_stub_count_check.py`
+   (counts `__TODO__` across all L docs; FAILs on count>0; VACUOUS_PASS when
+   generated_docs absent). Do NOT re-count by eye. On FAIL, re-run phase1
+   with patched extractor or fall back to the corresponding NL doc-gen skill.
 
 2. **Schema**: confirm L1 has `pin_table[]`, L3 has `opcodes[]`, L4 has `registers[]` or `otp_layout`, L8 has `rx_classifier_ticks` + `timing_constants`, L9 has `top_module` + `ports` + `submodules`, etc. Fields cited by `phase1_doc_content_implementation_completeness_check`.
 
-3. **Cross-doc consistency**:
-   - L3.opcodes hex set ⊂ L9.fsm_states transitions
-   - L3.verdict_byte_offset matches rig_topology fingerprint_byte_index
-   - L1.pin_table names ⊂ L9.ports names (or aliased)
-   - L11.otp_bytes addresses ⊂ L4.otp_layout fields
-   - L8.rx_classifier_ticks values match RTL parameters when phase2 is run
+3. **Cross-doc consistency** — the structural set-membership relations are
+   enforced by `programs/l_doc_cross_consistency_check.py` (honors the
+   `no_<field>_in_input` escape valves; FAILs on a real subset violation):
+   - L1.pin_table names ⊂ L9.ports names (or aliased) — program-enforced
+   - L11.otp_bytes addresses ⊂ L4.otp_layout fields — program-enforced
+   The remaining two relations stay AI-judgment (the typed corpus carries
+   no `fsm_states.transitions` sub-structure nor any
+   `rig_topology.fingerprint_byte_index`, so encoding them would require
+   inventing a field the spec never gives):
+   - L3.opcodes hex set ⊂ L9 FSM transitions — judgment
+   - L3.verdict_byte_offset matches the rig-topology fingerprint byte — judgment
+   - L8.rx_classifier_ticks values match RTL parameters when phase2 is run — judgment
 
 4. **Anti-fabrication**: scan input_doc/*.txt for every L doc value. Confirm every numeric / hex / opcode / pin name has a citation. Use `extraction_evidence` blocks.
 
@@ -71,6 +80,16 @@ Append findings to `<project>/reports/phase1_verify.md`. If all checks pass, wri
 - `programs/phase1_doc_content_implementation_completeness_check.py` — citation gate
 - `programs/extraction_coverage_check.py` — typed-field coverage
 - `programs/l_doc_structured_field_count_check.py` — typed-depth gate
+- `programs/l_doc_todo_stub_count_check.py` — checklist item 1 (`__TODO__` count == 0)
+- `programs/l_doc_cross_consistency_check.py` — checklist item 3 (pin_table⊂ports, otp_bytes⊂otp_layout)
+
+Run the two delegated gates directly (both accept a project dir, a phase1
+dir, or a generated_docs dir; add `--json` for a machine report):
+
+```bash
+python3 plugins/vibe-ic/programs/l_doc_todo_stub_count_check.py <project_dir>
+python3 plugins/vibe-ic/programs/l_doc_cross_consistency_check.py <project_dir>
+```
 
 
 ## Compliance gate (mandatory — not optional)

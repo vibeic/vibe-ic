@@ -24,19 +24,27 @@ Power integrity failures can turn a timing-clean chip into a field failure. This
 
 ## Workflow
 
-1. **Hotspot map**: list cells exceeding IR-drop budget (typical: 5–10% of nominal Vdd)
-2. **Classify cause**:
-   - Too few power straps in the region
-   - High-switching block clustered without decap
-   - Narrow metal width for current density
-   - Via-array too small / high resistance
-3. **Fix options**:
-   - Add power straps / widen existing
-   - Insert decap cells near aggressors
-   - Spread high-activity flops
-   - Add via arrays on hotspot straps
-4. **EM-specific fixes**: wider metal, shorter runs, bigger via arrays
-5. **Re-run guidance**: minimum P&R steps needed to re-evaluate
+1. **Hotspot map + budget pass/fail** — DETERMINISTIC, enforced by
+   `programs/ir_drop_budget_check.py`. It computes `budget_mV = pct·Vdd·1000`
+   (the 5–10%-of-Vdd budget; 10% permissive default) and FAILs iff the
+   worst-case measured drop ≥ budget. Do NOT re-derive the budget by hand —
+   call the program.
+2. **Classify cause** — DETERMINISTIC, enforced by
+   `programs/ir_drop_triage_classify.py`. It runs the fixed 4-cause table with
+   the threshold ladder (via_count<4 → weak_via; strap_pitch_um>100 →
+   strap_sparse; activity_density>0.7 → switching_cluster; metal_width_um<0.4 →
+   narrow_metal; else strap_sparse). Do NOT classify hotspots by hand.
+3. **Fix options** — DETERMINISTIC 1:1 cause→fix map, enforced by the same
+   `programs/ir_drop_triage_classify.py` (`CAUSE_TO_FIX`): strap_sparse→add_straps,
+   switching_cluster→add_decap, narrow_metal→widen_metal, weak_via→add_via_array.
+   The program emits both the JSON triage and the markdown fix table; use them
+   directly rather than reproducing the mapping in prose.
+4. **EM-specific judgment**: beyond the deterministic widen_metal fix, weigh the
+   trade-off between widening metal vs shortening run length vs upsizing via
+   arrays for the specific EM-limited net (a JUDGMENT call — depends on routing
+   resources, congestion, and which net is most critical).
+5. **Re-run guidance**: minimum P&R steps needed to re-evaluate (JUDGMENT —
+   depends on whether the fix touched PDN only vs placement/routing).
 
 ## Output format
 

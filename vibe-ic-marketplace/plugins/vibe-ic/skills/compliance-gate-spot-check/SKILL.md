@@ -52,16 +52,38 @@ shared cross-project ledger). Steps:
    - Open the project's relevant artifact the gate inspects
    - Manually verify the artifact actually satisfies the gate's INTENT, not just its REGEX
 
-2. **Waiver scan**: read `<project>/waivers.json`. For each waiver:
-   - Confirm rationale is ≥40 chars (gate enforces) AND substantive (not boilerplate)
-   - Confirm `review_required: true`
-   - Confirm linked ticket id / evidence path
-   - Cross-check waiver isn't stacked: one waiver should not enable multiple gates' PASS
+2. **Waiver scan**: the deterministic half is enforced by
+   `programs/waivers_schema_check.py` (reason length ≥ `MIN_REASON_LEN`
+   chars + placeholder rejection + `review_required` + linked-ticket
+   presence + no-stacking via `cascades_to` per-target accountability)
+   and `programs/waiver_legitimacy_check.py` (boilerplate / lazy-reason
+   anti-pattern detection). Run both instead of eyeballing the
+   numeric/boolean rules:
 
-3. **Gameability scan** — known gameable patterns:
-   - L docs with `__TODO__` or `<unknown>` strings (extraction completeness gameability)
-   - All gen-time `aliases: [name.lower(), name.replace("_","")]` heuristic same as name (alias gameability)
-   - `expected_verdict_byte_hex` literal `0x__todo__` (<half-duplex-tester> gameability)
+   ```bash
+   python3 programs/waivers_schema_check.py <project> --strict-review-required
+   python3 programs/waiver_legitimacy_check.py <project> --strict
+   ```
+
+   The only residual judgment left to you: is each rationale *substantive
+   and correct* (vs. plausible-but-wrong)? Read the rationale against the
+   underlying defect; the programs cannot tell a true reason from a
+   well-formed false one.
+
+3. **Gameability scan** — the three literal token / structural
+   anti-patterns are enforced by `programs/gameable_placeholder_scan.py`
+   (raw `__TODO__` / `<unknown>` strings in any `generated_docs/L*.json`;
+   gen-time `aliases` equal to `name.lower()` / `name.replace("_","")`;
+   `expected_verdict_byte_hex` literal `0x__todo__`). Run it instead of
+   grepping by hand (it FAILs honestly on a project with no generated
+   docs rather than vacuous-passing):
+
+   ```bash
+   python3 programs/gameable_placeholder_scan.py <project>
+   ```
+
+   The two remaining gameability patterns genuinely need an LLM and stay
+   here:
    - Sim transcript with copy-pasted `BR_PULSE / rx_byte / TX_RESP` tokens not actually exercised
    - Reference TB scenarios that always print PASS regardless of input
 

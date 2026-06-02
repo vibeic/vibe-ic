@@ -16,9 +16,13 @@ Given a block's `spec.json` (from `analog-spec-extract`) and PDK device characte
 ## Inputs
 
 1. `analog/<block>/spec.json` — from `analog-spec-extract`
-2. PDK device characteristics:
-   - GF180: Vth≈0.65V (nfet_03v3), Vth≈0.70V (pfet_03v3), 3.3V supply
-   - SKY130: Vth≈0.45V (nfet_01v8), Vth≈0.47V (pfet_01v8), 1.8V supply
+2. PDK device characteristics — do NOT retype Vth/supply constants here.
+   They are a single deterministic source-of-truth in
+   `programs/pdk_registry.json` under the per-PDK `analog_device_params`
+   block (`vth_n_v`, `vth_p_v`, `nominal_supply_v`). Look them up by PDK
+   name; the A2 gate (`programs/analog_a2_topology_select_check.py`) and
+   `analog-sizing-loop` consume the same registry field.
+   (canonical reference: GF180 nfet≈0.65V/pfet≈0.70V/3.3V; SKY130 nfet≈0.45V/pfet≈0.47V/1.8V.)
 3. Constraints: power budget, area budget, accuracy requirements
 
 ## Proven topologies (GF180, verified via SPICE)
@@ -61,7 +65,15 @@ These templates are from `analog-sizing/PRACTICAL_NOTES.md` — all verified wor
 1. Load `spec.json` and identify block type
 2. Map to 2-3 candidate topologies from the library above
 3. Evaluate each against:
-   - Supply voltage headroom (Vdd - 2×Vth for stacked devices)
+   - Supply voltage headroom. Vth and the nominal supply are deterministic
+     PDK constants — read `vth_n_v` / `vth_p_v` / `nominal_supply_v` from
+     `programs/pdk_registry.json` (`analog_device_params`), do NOT guess.
+     The *headroom feasibility* itself stays judgment: you must read each
+     candidate's schematic to count how many devices are stacked between
+     the rails and pick realistic Vdsat/Vov margins (the spec gives no
+     `n_stacked` or `Vdsat` field, so there is no deterministic value to
+     program — see "Do not / headroom" below). Then check
+     `available = Vdd - Σ(Vth + Vdsat over the stack) ≥ 0` per candidate.
    - Power budget vs. required performance
    - Area constraints
    - PDK device availability (e.g., no inductors in GF180)
@@ -98,15 +110,23 @@ These templates are from `analog-sizing/PRACTICAL_NOTES.md` — all verified wor
 | PMOS-input OTA | Lower noise | CM range too narrow | Rejected |
 
 ## PDK constraints applied
-- Vth(N) = 0.65V, Vth(P) = 0.70V → requires ...
+- Vth(N), Vth(P), Vdd — quote the exact values you looked up from
+  pdk_registry.json analog_device_params for this PDK → requires ...
 - No inductors → ring oscillator instead of LC
 ```
 
 ## Do not
 
 - Do not skip the trade-off analysis — topology selection without justification is the #1 cause of wasted iterations
-- Do not assume textbook Vth (0.3-0.5V) — GF180 is 0.65V, which invalidates many textbook topologies
+- Do not assume textbook Vth (0.3-0.5V) — read the real per-PDK Vth from
+  `programs/pdk_registry.json` (`analog_device_params`); GF180's ≈0.65V
+  invalidates many textbook topologies
 - Do not recommend topologies that require devices not in the PDK
+- **headroom:** Do not invent a fixed `n_stacked` or Vdsat margin to make
+  the headroom check a program. The Vth/supply constants are programmatic
+  (registry), but how many devices stack between the rails and the per-device
+  Vdsat depend on the candidate schematic and bias point — that is genuine
+  analog judgment, not a deterministic table lookup.
 
 ## Handoff
 

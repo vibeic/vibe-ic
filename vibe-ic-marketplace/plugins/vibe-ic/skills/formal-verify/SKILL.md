@@ -47,23 +47,28 @@ property "obviously holds" without the tool's PROVEN verdict.
 
 ## Why Large Modules Fail k-induction
 
-k-induction requires depth ≥ longest counter/timer path. When a module has:
-- **Deep counters** (100-1650 cycles): k must be ≥ counter max value
-- **Large memory arrays** (47 bytes = 376 bits): state space explodes
-- **Complex FSMs** (10+ states with nested cases): solver can't prune
+k-induction requires depth ≥ longest counter/timer path; deep counters, large
+memory arrays, and many-FF state spaces all defeat unbounded proof — the
+**state explosion problem**, fundamental to model checking.
 
-This is the **state explosion problem** — fundamental to model checking.
+**Do not eyeball the module to decide prove-vs-bmc.** The per-module
+feasibility decision (FF count, deepest counter/timer terminal, memory-array
+bit width, FSM state count → `recommended_mode` + `min_k_bound` +
+`infeasible_reason`) is **enforced by `programs/formal_complexity_classify.py`**.
+Run it and treat its verdict as ground truth:
 
-### Concrete example from <benchmark>:
+```bash
+python3 programs/formal_complexity_classify.py <rtl_dir> --json
+```
 
-| Module | States | FFs | Memory | Timer depth | k-induction feasible? |
-|--------|--------|-----|--------|-------------|----------------------|
-| timer_block | 3 | 4 | 0 | 0 | ✅ Yes (k=20) |
-| crc8_engine | 2 | 3 | 0 | 0 | ✅ Yes (k=20) |
-| aid_transceiver | 8 | ~15 | 0 | 135 cycles | ❌ Needs k≥135 |
-| aid_protocol | 9 | ~10 | 0 | 110 cycles | ❌ Needs k≥110 |
-| cmd_processor | 10 | 29 | 336 bits | N/A | ❌ State space too large |
-| otp_controller | 7 | ~20 | 376 bits | 1650 cycles | ❌ Needs k≥1650 |
+- `recommended_mode: "prove"` → k-induction feasible; use it at `min_k_bound`.
+- `recommended_mode: "bmc"`  → exceeds the prove envelope; run `mode bmc
+  depth>=min_k_bound` and apply Solutions B-F below to chase a complete proof.
+- exit 2 (NO_MODULE / NO_RTL) → honest missing-data; do **not** claim proven.
+
+The classifier reproduces the worked benchmark table (timer_block / crc8_engine
+prove-feasible at k=20; aid_transceiver k≥135; otp_controller 376 mem-bits +
+k≥1650; cmd_processor 336-bit memory) directly from the RTL — no hand table.
 
 ## Solutions for Complex Modules
 
@@ -163,7 +168,8 @@ For `otp_controller`'s 47-byte array:
 
 ## Workflow
 
-1. **Classify module complexity** — choose k-induction (simple) or BMC (complex)
+1. **Classify module complexity** — run `programs/formal_complexity_classify.py`
+   to choose k-induction (prove) vs BMC per module (do not eyeball it)
 2. **Generate assertions** — via `/assertion-gen` or manual
 3. **Write `.sby` config** with appropriate mode and depth
 4. **Run engine** — `sby -f module.sby`

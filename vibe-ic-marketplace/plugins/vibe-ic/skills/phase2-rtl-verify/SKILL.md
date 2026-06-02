@@ -51,7 +51,7 @@ But the RTL itself may still:
 
 2. **State-machine coverage**: open `rtl/main_fsm.sv`. List declared states. Confirm every L9.fsm_states[].name appears. Run `fsm_state_coverage_check.py`.
 
-3. **Dead-RTL audit**: search rtl/ for `reg X` declarations where X is never read; for `wire X` declarations where X is never assigned; for case-arms that are unreachable.
+3. **Dead-RTL audit** — *enforced by `programs/rtl_hygiene_lint.py`* (already wired into the Mandatory Deterministic Preflight aggregator above). Its `rule_undriven_and_unread` emits `undriven-wire` (ERROR: `wire X` never driven) and `unread-reg` (WARN: `reg/logic X` written but never read); its `rule_case_coverage` flags missing case-default / un-covered case-arms. Do NOT hand-grep — read the aggregator's `rtl_hygiene_lint` verdict. AI only adjudicates a flagged signal as *intentional* (e.g. spare-cell tie-off) vs a real regression.
 
 4. **Wave-34 device-BR forbidden**: scan rtl/tx_phy.sv + rtl/main_fsm.sv for any state that drives id_bus low for >= BR_MIN ticks. Use `slave_tx_no_device_break_check.py`.
 
@@ -59,7 +59,18 @@ But the RTL itself may still:
 
 6. **OTP image cite**: confirm L11.otp_bytes[] addresses + values match what altsyncram / behavioral RAM is loading from `input/otp/<name>.{hex,mif}`.
 
-7. **Reference TB transcript inspection**: open `sim/reference_tb/ref_tb.log`. Confirm it includes ALL scenarios the L10 test_cases prescribe, not just the canonical 5. If L10 has 18 opcodes × happy + addr_max + len_max + pre_wake_false cases, transcript should show ≥40 PASS lines.
+7. **Reference TB transcript completeness** — *enforced by `programs/l10_tb_conformance_check.py`* + *`programs/l10_test_cases_cover_l3_constraints_check.py`*. The first FAILs unless EVERY case in `generated_docs/L10_TEST_CASES.json` has TB evidence (opcode literal driven in `sim/tb/*.v` AND a matching PASS record in the sim summary) — i.e. it counts the full prescribed scenario set, not just the canonical 5. The second FAILs unless every L3.opcodes[] constraint (addr_max / len_max / `pre_wake_allowed=false` / response template) has both a positive AND a negative L10 case (the "18 opcodes × {happy, addr_max, len_max, pre_wake_false}" expansion). Run both and read their verdicts:
+
+```bash
+python3 plugins/vibe-ic/programs/l10_tb_conformance_check.py \
+    --l10 generated_docs/L10_TEST_CASES.json \
+    --tb-dir phase2/stage1/sim/tb \
+    --summary phase2/stage1/sim/work/summary.txt \
+    --out reports/gates/l10_tb_conformance.json
+python3 plugins/vibe-ic/programs/l10_test_cases_cover_l3_constraints_check.py <project_dir>
+```
+
+AI does NOT eyeball PASS-line counts — it only reviews any case the gates list as lacking evidence to confirm it is a genuine gap (re-spin) vs a documented waiver.
 
 8. **byte[6]=0xF2 across SOF rebuild stress**: verify byte[6] PASS persists across at least 5 rebuild + reburn cycles (not just 5 connect_test runs of one SOF).
 

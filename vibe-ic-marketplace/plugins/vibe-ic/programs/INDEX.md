@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 620
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 620)
+- **Total programs (excluding helpers / shims):** 631
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 631)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 611 |
+| `any` | 622 |
 
 ## Alphabetical listing
 
@@ -35,6 +35,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `aid_class_qsf_gen` | any | Wave 73 | to be removed in v0.130. |
 | `aid_class_rtl_gen` | aid_class_half_duplex, aid_class_half_duplex_single_wire, mixed_signal_otp, digital_cmd_driven | Wave 56 | Vibe-IC plugin Phase 2 RTL generator for AID-class half-duplex protocol. |
 | `aid_class_sdc_gen` | any | Wave 73 | to be removed in v0.130. |
+| `ams_analysis_select` | any | — | deterministic spec -> SPICE-analysis selector. |
 | `an_validator` | any | — | Application-Note (AN) validator / quality scorer, 0-80. |
 | `analog_a0_skip_forbidden_check` | any | Wave 47 | forbidden-artefact gate (Wave 47). |
 | `analog_a1_spec_extract_check` | any | — | A1 deterministic gate (v1.6.35). |
@@ -64,6 +65,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_hil_single_knob_check` | any | — | one-knob-per-iteration discipline. |
 | `analog_hil_three_way_verdict` | any | — | deterministic three-way HIL verdict table. |
 | `analog_hw_spice_correlation_check` | any | — | deterministic gate for HW-vs-SPICE correlation |
+| `analog_hw_tb_de10lite_budget_check` | any | — | DE10-Lite board-budget gate. |
 | `analog_lef_gds_outline_check` | any | — | A8 LEF-vs-GDS outline gate. |
 | `analog_liberty_nonzero_delay_check` | any | — | deterministic Liberty non-degeneracy gate. |
 | `analog_meas_from_spec_gen` | any | — | deterministic `.meas` statement generator |
@@ -220,6 +222,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_compliance_check` | any | Wave 91 | Strict Vibe-IC phase 2+3 gate (40 main-track |
 | `flow_doc_emit` | any | — | auto-generate the RUNNER-MARKER view of the Vibe-IC flow. |
 | `flow_stage_check` | any | — | wrapper for signoff_audit --mode flow. |
+| `formal_complexity_classify` | any | — | deterministic k-induction feasibility |
 | `foundry_handoff_pack_gen` | any | — | emit Step 35 foundry handoff package skeleton. |
 | `foundry_handoff_package_check` | any | Wave 88 | gate (v1.6.13 Wave 88, integerised |
 | `foundry_signoff_plan_check` | any | v0.113 | v0.113 (BACKLOG-v10 P1.2). |
@@ -254,6 +257,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `full_suite_run_check` | any | — | full-suite (not subset) pytest gate for the |
 | `function_void_with_output_check` | any | Wave 29 | Wave 29 (v0.119.61) gate. |
 | `functional_state_transition_coverage_check` | any | — | Verify TBs exercise the |
+| `gameable_placeholder_scan` | any | — | deterministic half of the |
 | `gap_reset_granularity_check` | any | — | deterministic compliance check derived from |
 | `gate_evidence_completeness_check` | any | v0.100 | v0.100 L1 |
 | `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
@@ -263,6 +267,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gddr6_protocol_synth` | any | — | GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory). |
 | `gds_ip_attribution` | any | — | Embed IP attribution metadata into the foundry |
 | `gds_size_check` | any | — | Deterministic GDS file existence and size checker. |
+| `gds_topcell_name_check` | any | — | Deterministic GDSII top-cell-name verifier. |
 | `gen_skill_inventory` | any | — | single source of truth for the AI-skill count. |
 | `git_prohibition_guard` | any | — | deterministic guard for the core-agent loop |
 | `half_duplex_frame_end_idle_reset_check` | any | — | structural-RTL gate for |
@@ -331,9 +336,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l9_rtl_pin_consistency_check` | any | Wave 79 | Wave 79 cross-layer integrity gate. |
 | `l9_submodule_conformance_check` | any | Wave 79 | cross-check the SUBMODULE half of the |
 | `l_doc_aggregated_blob_size_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
+| `l_doc_cross_consistency_check` | any | — | D3 program-first capture of the |
 | `l_doc_parity_diff` | any | v0.1.51 | L-doc parity diff (program-extracted vs fresh-agent-extracted). |
 | `l_doc_structured_field_count_check` | any | Wave 31 | gate (Wave 31/32, v0.119.64). |
 | `l_doc_taxonomy` | any | v0.1.51 | L-doc taxonomy single source of truth. |
+| `l_doc_todo_stub_count_check` | any | — | D3 program-first capture of the |
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `layer_extension_presence_check` | any | v0.50 | v0.50 plugin gate |
 | `lec_equivalence_check` | any | — | Step 13 deterministic LEC substance gate. |
@@ -448,6 +455,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `picker_fixture_thrash_guard` | any | — | v1.6.63 |
 | `placement_legality_check` | any | — | Step 17 (Placement) SUBSTANCE gate. |
 | `plugin_change_pytest_gate` | any | — | plugin_change_pytest_gate.py -- "Plugin-test hard rule" pre-claim-DONE gate. |
+| `plugin_full_audit` | any | — | deterministic D1 + D2 of the "have full test" audit. |
 | `png_ocr_extractor` | any | — | for #36 Bug 3: PNG OCR Tier-2 fallback. |
 | `pnr_doctor` | any | v0.1.96 | OpenROAD P&R-log error classifier (synth-doctor Pattern-B → program). |
 | `pnr_timing_repair_completeness_check` | any | v0.1.26 | chip-AGNOSTIC static audit of an |
@@ -622,11 +630,13 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `usb4_protocol_synth` | any | v0.1.89 | USB4 protocol synth helper. |
 | `usb_pd_protocol_synth` | any | — | USB Power Delivery (USB-PD) protocol synth helper. |
 | `usb_protocol_synth` | any | v0.1.82 | USB-class protocol synth helper. |
+| `utilization_band_check` | any | — | Floorplan/placement utilization band classifier. |
 | `vector_op_rtl_gen` | any | v0.1.8 | deterministic vector-operation → RTL generator. |
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that |
 | `verilator_coverage_measure` | any | v0.53 | v0.53 plugin gate |
 | `version_bump_monotonic_check` | any | — | strict version-bump gate for the |
 | `vibe_ic_one_shot_runner` | any | — | full Vibe-IC flow orchestrator. |
+| `wafer_map_pattern_classify` | any | — | D3 program-first extraction of the |
 | `wafer_sort_yield_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
 | `waiver_growth_check` | any | v0.112 | v0.112 release-gate (BACKLOG-v10 P0 follow-up). |
 | `waiver_legitimacy_check` | any | v0.116 | v0.116 (BACKLOG-v11 candidate). |
@@ -641,6 +651,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `warn_acceptance_policy_check` | any | — | O3: Enforce that every WARN finding from |
 | `wishbone_protocol_synth` | any | v0.1.85 | Wishbone B4 protocol synth helper. |
 | `xlsx_extract` | any | — | Extract tables from .xlsx spec documents into JSON. |
+| `yield_fix_cost_rank` | any | — | D3 program-first extraction of the |
 | `yosys_hilomap_required_check` | any | — | Assert a Yosys .ys script's commands occur |
 | `yosys_script_template_check` | any | — | Audit a Yosys .ys script for the three |
 | `yosys_tiecell_recipe_order_check` | any | v0.1.98 | Enforce the two v0.1.98 LOAD-BEARING |
@@ -692,7 +703,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (611 programs)
+### `any` (622 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -703,6 +714,7 @@ _(no programs in this group)_
 - `ahb_apb_protocol_synth` — AHB + APB-class protocol synth helper.  _[v0.1.84]_
 - `aid_class_qsf_gen` — to be removed in v0.130.  _[Wave 73]_
 - `aid_class_sdc_gen` — to be removed in v0.130.  _[Wave 73]_
+- `ams_analysis_select` — deterministic spec -> SPICE-analysis selector.
 - `an_validator` — Application-Note (AN) validator / quality scorer, 0-80.
 - `analog_a0_skip_forbidden_check` — forbidden-artefact gate (Wave 47).  _[Wave 47]_
 - `analog_a1_spec_extract_check` — A1 deterministic gate (v1.6.35).
@@ -732,6 +744,7 @@ _(no programs in this group)_
 - `analog_hil_single_knob_check` — one-knob-per-iteration discipline.
 - `analog_hil_three_way_verdict` — deterministic three-way HIL verdict table.
 - `analog_hw_spice_correlation_check` — deterministic gate for HW-vs-SPICE correlation
+- `analog_hw_tb_de10lite_budget_check` — DE10-Lite board-budget gate.
 - `analog_lef_gds_outline_check` — A8 LEF-vs-GDS outline gate.
 - `analog_liberty_nonzero_delay_check` — deterministic Liberty non-degeneracy gate.
 - `analog_meas_from_spec_gen` — deterministic `.meas` statement generator
@@ -884,6 +897,7 @@ _(no programs in this group)_
 - `flow_compliance_check` — Strict Vibe-IC phase 2+3 gate (40 main-track  _[Wave 91]_
 - `flow_doc_emit` — auto-generate the RUNNER-MARKER view of the Vibe-IC flow.
 - `flow_stage_check` — wrapper for signoff_audit --mode flow.
+- `formal_complexity_classify` — deterministic k-induction feasibility
 - `foundry_handoff_pack_gen` — emit Step 35 foundry handoff package skeleton.
 - `foundry_handoff_package_check` — gate (v1.6.13 Wave 88, integerised  _[Wave 88]_
 - `foundry_signoff_plan_check` — v0.113 (BACKLOG-v10 P1.2).  _[v0.113]_
@@ -918,6 +932,7 @@ _(no programs in this group)_
 - `full_suite_run_check` — full-suite (not subset) pytest gate for the
 - `function_void_with_output_check` — Wave 29 (v0.119.61) gate.  _[Wave 29]_
 - `functional_state_transition_coverage_check` — Verify TBs exercise the
+- `gameable_placeholder_scan` — deterministic half of the
 - `gap_reset_granularity_check` — deterministic compliance check derived from
 - `gate_evidence_completeness_check` — v0.100 L1  _[v0.100]_
 - `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
@@ -927,6 +942,7 @@ _(no programs in this group)_
 - `gddr6_protocol_synth` — GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory).
 - `gds_ip_attribution` — Embed IP attribution metadata into the foundry
 - `gds_size_check` — Deterministic GDS file existence and size checker.
+- `gds_topcell_name_check` — Deterministic GDSII top-cell-name verifier.
 - `gen_skill_inventory` — single source of truth for the AI-skill count.
 - `git_prohibition_guard` — deterministic guard for the core-agent loop
 - `half_duplex_frame_end_idle_reset_check` — structural-RTL gate for
@@ -994,9 +1010,11 @@ _(no programs in this group)_
 - `l9_rtl_pin_consistency_check` — Wave 79 cross-layer integrity gate.  _[Wave 79]_
 - `l9_submodule_conformance_check` — cross-check the SUBMODULE half of the  _[Wave 79]_
 - `l_doc_aggregated_blob_size_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
+- `l_doc_cross_consistency_check` — D3 program-first capture of the
 - `l_doc_parity_diff` — L-doc parity diff (program-extracted vs fresh-agent-extracted).  _[v0.1.51]_
 - `l_doc_structured_field_count_check` — gate (Wave 31/32, v0.119.64).  _[Wave 31]_
 - `l_doc_taxonomy` — L-doc taxonomy single source of truth.  _[v0.1.51]_
+- `l_doc_todo_stub_count_check` — D3 program-first capture of the
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `layer_extension_presence_check` — v0.50 plugin gate  _[v0.50]_
 - `lec_equivalence_check` — Step 13 deterministic LEC substance gate.
@@ -1111,6 +1129,7 @@ _(no programs in this group)_
 - `picker_fixture_thrash_guard` — v1.6.63
 - `placement_legality_check` — Step 17 (Placement) SUBSTANCE gate.
 - `plugin_change_pytest_gate` — plugin_change_pytest_gate.py -- "Plugin-test hard rule" pre-claim-DONE gate.
+- `plugin_full_audit` — deterministic D1 + D2 of the "have full test" audit.
 - `png_ocr_extractor` — for #36 Bug 3: PNG OCR Tier-2 fallback.
 - `pnr_doctor` — OpenROAD P&R-log error classifier (synth-doctor Pattern-B → program).  _[v0.1.96]_
 - `pnr_timing_repair_completeness_check` — chip-AGNOSTIC static audit of an  _[v0.1.26]_
@@ -1283,11 +1302,13 @@ _(no programs in this group)_
 - `usb4_protocol_synth` — USB4 protocol synth helper.  _[v0.1.89]_
 - `usb_pd_protocol_synth` — USB Power Delivery (USB-PD) protocol synth helper.
 - `usb_protocol_synth` — USB-class protocol synth helper.  _[v0.1.82]_
+- `utilization_band_check` — Floorplan/placement utilization band classifier.
 - `vector_op_rtl_gen` — deterministic vector-operation → RTL generator.  _[v0.1.8]_
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that  _[v0.119.30]_
 - `verilator_coverage_measure` — v0.53 plugin gate  _[v0.53]_
 - `version_bump_monotonic_check` — strict version-bump gate for the
 - `vibe_ic_one_shot_runner` — full Vibe-IC flow orchestrator.
+- `wafer_map_pattern_classify` — D3 program-first extraction of the
 - `wafer_sort_yield_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
 - `waiver_growth_check` — v0.112 release-gate (BACKLOG-v10 P0 follow-up).  _[v0.112]_
 - `waiver_legitimacy_check` — v0.116 (BACKLOG-v11 candidate).  _[v0.116]_
@@ -1301,6 +1322,7 @@ _(no programs in this group)_
 - `warn_acceptance_policy_check` — O3: Enforce that every WARN finding from
 - `wishbone_protocol_synth` — Wishbone B4 protocol synth helper.  _[v0.1.85]_
 - `xlsx_extract` — Extract tables from .xlsx spec documents into JSON.
+- `yield_fix_cost_rank` — D3 program-first extraction of the
 - `yosys_hilomap_required_check` — Assert a Yosys .ys script's commands occur
 - `yosys_script_template_check` — Audit a Yosys .ys script for the three
 - `yosys_tiecell_recipe_order_check` — Enforce the two v0.1.98 LOAD-BEARING  _[v0.1.98]_

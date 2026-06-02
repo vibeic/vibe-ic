@@ -1,5 +1,5 @@
 {
-  "_comment": "PDK registry — phase3_one_shot_runner consults this for site / metal_prefix / clock-buffer / DRC-deck conventions per PDK. Third-party PDK plugins append entries here.",
+  "_comment": "PDK registry \u2014 phase3_one_shot_runner consults this for site / metal_prefix / clock-buffer / DRC-deck conventions per PDK. Third-party PDK plugins append entries here.",
   "schema_version": 1,
   "pdks": [
     {
@@ -18,7 +18,7 @@
       "drc_deck": "libs.tech/klayout/drc/sky130A.lydrc",
       "lvs_deck": "libs.tech/netgen/sky130A_setup.tcl",
       "owner_plugin": "vibe-ic",
-      "_device_models_comment": "Curated from the sky130_fd_pr (SkyWater open-source PDK) primitive-device cell library — the SPICE subckt model names a netlist X-line legally references. analog_netlist_pdk_check.py validates X-line model tokens carrying the `device_model_prefix` namespace against this set; a token in-namespace but not listed => UNKNOWN_PDK_MODEL (stray/typo). Tokens outside the namespace (user subckts) are not validated.",
+      "_device_models_comment": "Curated from the sky130_fd_pr (SkyWater open-source PDK) primitive-device cell library \u2014 the SPICE subckt model names a netlist X-line legally references. analog_netlist_pdk_check.py validates X-line model tokens carrying the `device_model_prefix` namespace against this set; a token in-namespace but not listed => UNKNOWN_PDK_MODEL (stray/typo). Tokens outside the namespace (user subckts) are not validated.",
       "device_model_prefix": "sky130_fd_pr__",
       "device_models": [
         "sky130_fd_pr__nfet_01v8",
@@ -67,7 +67,13 @@
         "sky130_fd_pr__pnp_05v5_W3p40L3p40",
         "sky130_fd_pr__npn_05v5_W1p00L1p00",
         "sky130_fd_pr__npn_05v5_W1p00L2p00"
-      ]
+      ],
+      "analog_device_params": {
+        "vth_n_v": 0.45,
+        "vth_p_v": 0.47,
+        "nominal_supply_v": 1.8,
+        "note": "nfet_01v8 / pfet_01v8 typical Vth"
+      }
     },
     {
       "name": "gf180mcuD",
@@ -133,7 +139,13 @@
         "gf180mcu_fd_pr__pfet_06v0",
         "gf180mcu_fd_pr__cap_mim_2p0fF",
         "gf180mcu_fd_pr__res_generic_po"
-      ]
+      ],
+      "analog_device_params": {
+        "vth_n_v": 0.65,
+        "vth_p_v": 0.7,
+        "nominal_supply_v": 3.3,
+        "note": "nfet_03v3 / pfet_03v3 typical Vth"
+      }
     },
     {
       "name": "ihp-sg13g2",
@@ -150,11 +162,17 @@
       "clk_buf_root_cell": "sg13g2_buf_16",
       "drc_deck": null,
       "lvs_deck": null,
-      "owner_plugin": "vibe-ic"
+      "owner_plugin": "vibe-ic",
+      "analog_device_params": {
+        "vth_n_v": 0.42,
+        "vth_p_v": 0.47,
+        "nominal_supply_v": 1.8,
+        "note": "lv nfet/pfet typical Vth (HV sg13_hv_* available)"
+      }
     },
     {
       "name": "custom_auto_detect",
-      "_comment": "Generic placeholder — phase3_one_shot_runner.py auto-detects site/metal_prefix/clk_buf from project's input/pdk/ when no named PDK matches. This entry just documents the auto-detect heuristics.",
+      "_comment": "Generic placeholder \u2014 phase3_one_shot_runner.py auto-detects site/metal_prefix/clk_buf from project's input/pdk/ when no named PDK matches. This entry just documents the auto-detect heuristics.",
       "open_source": false,
       "site": "(auto from cell LEF SITE statement)",
       "metal_prefix": "(auto from tech LEF first ROUTING layer)",

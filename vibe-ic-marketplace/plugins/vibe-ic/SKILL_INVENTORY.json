@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "_comment": "AUTHORITATIVE AI-skill inventory \u2014 generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
-  "total": 57,
+  "total": 58,
   "by_tier": {
     "debug": 13,
     "judgment": 6,
     "nl_primary": 31,
-    "verification": 7
+    "verification": 8
   },
   "skills": [
     "ams-sim",
@@ -40,6 +40,7 @@
     "fpga-hps-bridge",
     "fpga-led-probe-allocation",
     "fpga-signaltap",
+    "full-test-audit",
     "hls-c2rtl",
     "hold-fix",
     "hw-debug-loop",
@@ -222,6 +223,11 @@
       "name": "fpga-signaltap",
       "frontmatter_name": "fpga-signaltap",
       "tier": "debug"
+    },
+    {
+      "name": "full-test-audit",
+      "frontmatter_name": "full-test-audit",
+      "tier": "verification"
     },
     {
       "name": "hls-c2rtl",

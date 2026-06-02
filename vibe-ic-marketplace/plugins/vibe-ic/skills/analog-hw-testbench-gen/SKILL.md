@@ -63,7 +63,21 @@ altera_adc_control u_adc (
 
 - Do not generate testbenches that require commercial FPGA IP (use only free Quartus Lite primitives)
 - Do not assume specific breadboard wiring — always generate a wiring guide
-- Do not exceed DE10-Lite GPIO count (36 GPIO + 10 Arduino header)
+- DE10-Lite board budget (36 GPIO + 10 Arduino header = 46 external-I/O pins)
+  and pin double-assignment (board short) are **enforced by
+  `programs/analog_hw_tb_de10lite_budget_check.py`** — run it on the emitted
+  `.qsf`:
+
+  ```bash
+  python3 programs/analog_hw_tb_de10lite_budget_check.py \
+      analog/<block>/hw_test/pin_assignments.qsf --json
+  ```
+  Exit 0 = PASS, 1 = FAIL (>46 GPIO_0+Arduino pins, or a pin shorted to two
+  signals), 2 = QSF missing or not a DE10-Lite (MAX10 10M50DAF484C7G) board
+  (out of scope — cannot judge). The check only fires on DE10-Lite QSFs.
+  (Full-board physical-pin-map validation — HEX/VGA/SDRAM/G-sensor pins — is
+  still your judgment: the program intentionally does not flag "unknown" pins
+  to avoid false-firing on legitimate peripheral assignments.)
 
 ## Handoff
 

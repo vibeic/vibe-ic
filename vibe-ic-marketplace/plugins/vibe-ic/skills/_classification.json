@@ -9,6 +9,7 @@
         "analog-output-verify",
         "benchmark-verify",
         "compliance-gate-spot-check",
+        "full-test-audit",
         "phase1-completeness-deep-review",
         "phase1-output-verify",
         "phase2-rtl-verify",
