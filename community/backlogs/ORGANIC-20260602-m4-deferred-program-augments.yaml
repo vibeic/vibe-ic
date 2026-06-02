@@ -1,0 +1,62 @@
+type: enhancement
+severity: P3
+component: programs (analog_netlist_pdk_check, magic_port_extract_emit, analog_hw_spice_correlation_check, backlog_sanitize_check)
+
+plugin_version: "0.2.25"
+
+title: >-
+  Four deterministic program-augments deferred from the M4 skills->programs extraction
+  (v0.2.20/0.2.21): each is a real-but-low-priority enhancement to an EXISTING shared program
+  that was reported (not rushed) to avoid parallel-edit conflict / a fabricated hardcode.
+
+pattern: |
+  During the M4 program-first extraction (D3 audit: 20 MOSTLY_EXTRACTABLE skills -> 49 new
+  programs), four flagged rules were AUGMENT-EXISTING (belong in a shared program, not yet there).
+  Per the parallel-sweep doctrine they were reported for central apply rather than letting N agents
+  edit the same shared program. On review they were judged genuine-but-low-priority and deferred
+  rather than rushed (3 are minor / no current caller; 1 is borderline benchmark-keyword and needs
+  a curated registry, not a hardcoded list). The skills do NOT dangle on them (they reference the
+  existing/related programs); this backlog exists so the deferral is tracked, not forgotten.
+
+  1. analog_netlist_pdk_check — KNOWN_MODELS validation. Verify each device line's model token is a
+     real PDK device for the detected PDK and emit UNKNOWN_PDK_MODEL on a stray token. Deferred:
+     hardcoding a gf180/sky130 model list is a maintenance burden + false-positive risk; should
+     read a PDK model registry, not a literal list.
+  2. magic_port_extract_emit — add sibling builders build_gds_write_tcl(top, mag, out_gds) and
+     build_lef_write_tcl(top, mag, out_lef, [pin_layers]) next to build_extraction_tcl(). Deferred:
+     no current caller needs them (additive, harmless, but unexercised).
+  3. analog_hw_spice_correlation_check — add a <10% IDEAL classification tier (HW_SPICE_IDEAL INFO
+     + ideal_count/ideal_pct in summary) alongside the existing 20%/30% WARNING/ERROR bands.
+     Deferred: INFO-only, does not change the PASS/FAIL verdict.
+  4. backlog_sanitize_check (phase1-coverage-loop deny-list) — the chip-AGNOSTIC guard catches
+     commercial part numbers + vendor names but NOT open-source-core codenames (picorv32, ibex,
+     cv32e40p, neorv32, serv, VexRiscv, ...) that phase1-coverage-loop's prose deny-list
+     enumerates. Deferred: hardcoding the codename list is borderline benchmark-keyword
+     (general-not-keyword doctrine); the honest form is a curated, separately-maintained OSS-core
+     registry the guard reads — not literals baked into the detector.
+
+suggested_fix: |
+  When picked up:
+  - (1) author a small PDK-model registry (per-PDK device-name set, sourced from the PDK's own
+    cell list) and have analog_netlist_pdk_check read it; emit UNKNOWN_PDK_MODEL only against the
+    registry (zero false-positive on real PDK devices). Corpus-sweep: every benchmark_clean /
+    analog pilot netlist must stay clean.
+  - (2) add the two builders + a test each; wire a caller (the analog-hardmacro-gen flow) only when
+    a GDS/LEF emit step actually needs them.
+  - (3) add the INFO tier + ideal_pct field + a test; keep the verdict unchanged.
+  - (4) build an OSS-core-name registry (a maintained data file, NOT a regex literal in the
+    detector) and have backlog_sanitize_check / source_chip_agnostic_check consult it. Verify it
+    fires zero false-positives on the current plugin source (the chip-AGNOSTIC guard already runs
+    in CI).
+
+related: "ORGANIC-20260528-null-rtl-gen-classes-need-bridge"
+
+id: "ORGANIC-20260602-m4-deferred-program-augments"
+submitted_at: "2026-06-02T00:00:00+08:00"
+session_context: >-
+  Filed in the benchmark-enhancement-capture pass for the 3-dimension-audit session
+  (v0.2.16->0.2.25). M4 shipped 49 new Bucket-A programs across the 20 MOSTLY_EXTRACTABLE skills;
+  these 4 AUGMENT-EXISTING items were the honest deferred residual (noted in the M4a/M4b commits).
+  The session's two biggest learnings WERE shipped as self-enforcing guards
+  (gate_self_assertion_check, single_testpath_guard, v0.2.24). This backlog tracks the small
+  deferred augments so they compound rather than evaporate.
