@@ -49,6 +49,42 @@ recovery in the right place.
 - **STRONGLY ENCOURAGED** at the end of any session where multiple
   AI-judgment fixes accumulated, even if individual fixes were small.
 
+## Program-First — the binding priority order (read BEFORE classifying)
+
+> **User directive (binding): "benchmark-enhancement-capture 一定要強調 Program-First."**
+> Every recovery is presumed Bucket A until proven otherwise. The buckets are a
+> priority LADDER, not a menu: A > B > C > D. You do not get to pick the bucket
+> you find easiest — you must climb DOWN the ladder only when the rung above is
+> genuinely impossible, and you must say WHY in writing.
+
+For EVERY recovery, answer these in order and stop at the first YES:
+
+1. **Can a deterministic Python rule (regex / width / structural pattern /
+   table lookup) detect-and-fix this without any LLM judgment?** → **Bucket A.**
+   This is the default. A "judgment call" that is really just an unwritten
+   regex (e.g. "the reflected CRC poly must be width-aware", "an `init` value
+   needs an explicit `0x` or it's a stray token") is Bucket A, NOT Bucket B.
+2. **Only if 1 is genuinely impossible** — the fix needs natural-language /
+   convention pattern-recognition that no regex captures — → **Bucket B**, AND
+   you MUST record `why_not_bucket_a` (one honest sentence: what judgment a
+   program cannot make here).
+3. **Only if A and B are both right but the engineering is large** (new program,
+   corpus, fixtures) → **Bucket C**, AND record `why_not_bucket_a` too.
+4. **Only if neither generalizes** → **Bucket D** with `why_discard`.
+
+**Anti-laziness rule:** "this needs judgment" is the single most over-used
+excuse to skip the program work. Before writing it, name the EXACT input the
+program would see and the EXACT decision it cannot make from that input. If you
+can name a regex/threshold/structure that decides it, it is Bucket A. The
+v0.2.15 CRC capture is the worked example: every "the model should just know
+the right poly width" instinct reduced to three regexes + one width-aware
+helper — four Bucket-A rules, zero backlog.
+
+**Enforcement:** `enhancement_emit.py` REFUSES any Bucket B/C record that lacks
+a non-empty `why_not_bucket_a` (run it; exit 1 lists the offenders). The gate
+exists so "I'll just append a skill paragraph" can never silently bypass the
+program-first question.
+
 ## The three buckets — every recovery goes into ONE
 
 For each `(design, before-RTL, after-RTL, AI-reasoning)` recovery record:

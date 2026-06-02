@@ -61,7 +61,7 @@ def test_bucket_A_routes_per_step(tmp_path):
 def test_bucket_B_routes_per_step(tmp_path):
     rec = [{
         "step": "phase3.pnr_setup_repair",
-        "design": "sha256", "bucket": "B",
+        "design": "sha256", "bucket": "B", "why_not_bucket_a": "needs NL/convention pattern recognition no regex captures", 
         "skill_title": "PnR setup repair pattern",
         "pattern": "PnR must run `repair_design` + `repair_timing` -setup, not just hold-fix.",
         "when": "any OpenROAD PnR template",
@@ -81,7 +81,7 @@ def test_bucket_B_routes_per_step(tmp_path):
 def test_bucket_C_emits_backlog_yaml(tmp_path):
     rec = [{
         "step": "analog.A4_corner_sweep",
-        "design": "u_hawaii_adc", "bucket": "C",
+        "design": "u_hawaii_adc", "bucket": "C", "why_not_bucket_a": "needs NL/convention pattern recognition no regex captures", 
         "title": "Add converter-family templates",
         "pattern": "no ngspice template for adc / `delta_sigma`",
         "suggested_fix": "ship templates",
@@ -118,10 +118,10 @@ def test_bucket_D_records_discard(tmp_path):
 # ── 5. Same-bucket DIFFERENT-step records land in DIFFERENT output files ──
 def test_same_bucket_different_steps_split(tmp_path):
     rec = [
-        {"step": "phase3.pnr_setup_repair", "design": "sha256", "bucket": "B",
+        {"step": "phase3.pnr_setup_repair", "design": "sha256", "bucket": "B", "why_not_bucket_a": "needs NL/convention pattern recognition no regex captures", 
          "skill_title": "PnR repair", "pattern": "x", "when": "y",
          "what": "z", "example": "e", "generality": "g"},
-        {"step": "analog.A2_topology", "design": "u_hawaii_adc", "bucket": "B",
+        {"step": "analog.A2_topology", "design": "u_hawaii_adc", "bucket": "B", "why_not_bucket_a": "needs NL/convention pattern recognition no regex captures", 
          "skill_title": "ΔΣ topology", "pattern": "x", "when": "y",
          "what": "z", "example": "e", "generality": "g"},
     ]
@@ -135,10 +135,10 @@ def test_same_bucket_different_steps_split(tmp_path):
 # ── 6. Same-bucket SAME-step records concatenate into ONE output file ──
 def test_same_bucket_same_step_concatenate(tmp_path):
     rec = [
-        {"step": "phase2.rtl_gen", "design": "A", "bucket": "B",
+        {"step": "phase2.rtl_gen", "design": "A", "bucket": "B", "why_not_bucket_a": "needs NL/convention pattern recognition no regex captures", 
          "skill_title": "Skill A", "pattern": "p", "when": "w",
          "what": "x", "example": "e", "generality": "g"},
-        {"step": "phase2.rtl_gen", "design": "B", "bucket": "B",
+        {"step": "phase2.rtl_gen", "design": "B", "bucket": "B", "why_not_bucket_a": "needs NL/convention pattern recognition no regex captures", 
          "skill_title": "Skill B", "pattern": "p", "when": "w",
          "what": "x", "example": "e", "generality": "g"},
     ]
@@ -154,7 +154,7 @@ def test_same_bucket_same_step_concatenate(tmp_path):
 # ── 7. Unknown step ID falls back to default_routing.bucket_B_skill_file ──
 def test_unknown_step_falls_back_to_default(tmp_path):
     rec = [{
-        "step": "made.up.step", "design": "X", "bucket": "B",
+        "step": "made.up.step", "design": "X", "bucket": "B", "why_not_bucket_a": "needs NL/convention pattern recognition no regex captures", 
         "skill_title": "Default fallback test", "pattern": "p", "when": "w",
         "what": "x", "example": "e", "generality": "g",
     }]
@@ -169,10 +169,10 @@ def test_unknown_step_falls_back_to_default(tmp_path):
 # ── 8. Summary records every target file the session would touch (audit trail) ──
 def test_summary_records_routing_used(tmp_path):
     rec = [
-        {"step": "phase3.pnr_setup_repair", "design": "sha256", "bucket": "B",
+        {"step": "phase3.pnr_setup_repair", "design": "sha256", "bucket": "B", "why_not_bucket_a": "needs NL/convention pattern recognition no regex captures", 
          "skill_title": "X", "pattern": "p", "when": "w",
          "what": "x", "example": "e", "generality": "g"},
-        {"step": "phase3.drc", "design": "sha256", "bucket": "B",
+        {"step": "phase3.drc", "design": "sha256", "bucket": "B", "why_not_bucket_a": "needs NL/convention pattern recognition no regex captures", 
          "skill_title": "Y", "pattern": "p", "when": "w",
          "what": "x", "example": "e", "generality": "g"},
     ]
@@ -500,3 +500,61 @@ def test_scrub_design_leak_idempotent_on_clean_text():
     s = _emit_mod._scrub_design_leak(clean)
     assert s == clean, f"clean text should be unchanged; got: {s}"
     assert "anonymized" not in s
+
+
+# ---------------------------------------------------------------------------
+# v0.2.15 — PROGRAM-FIRST gate (user directive: capture must enforce
+# program-first). Bucket B/C downgrades require a non-empty why_not_bucket_a.
+# ---------------------------------------------------------------------------
+def test_program_first_bucket_a_and_d_need_no_justification():
+    recs = [{"bucket": "A", "rule_name": "crc_width"},
+            {"bucket": "D", "why_discard": "overfit to one TB"}]
+    assert _emit_mod.check_program_first(recs) == []
+
+
+def test_program_first_refuses_bucket_b_without_justification():
+    off = _emit_mod.check_program_first([{"bucket": "B", "skill_title": "foo"}])
+    assert len(off) == 1
+    assert "why_not_bucket_a" in off[0]
+    assert "foo" in off[0]
+
+
+def test_program_first_refuses_bucket_c_without_justification():
+    off = _emit_mod.check_program_first(
+        [{"bucket": "C", "title": "ship rtl_gen", "why_not_bucket_a": "no"}])
+    assert len(off) == 1
+
+
+def test_program_first_accepts_justified_downgrade():
+    recs = [{"bucket": "B", "skill_title": "handshake",
+             "why_not_bucket_a": "requires NL convention recognition no regex captures"},
+            {"bucket": "C", "title": "big",
+             "why_not_bucket_a": "needs a new template library + corpus fixtures"}]
+    assert _emit_mod.check_program_first(recs) == []
+
+
+def test_program_first_gate_exits_nonzero(tmp_path):
+    import subprocess
+    rec = tmp_path / "r.json"
+    rec.write_text(json.dumps([{"bucket": "B", "skill_title": "x"}]))
+    prog = SCRIPT
+    r = subprocess.run(
+        [sys.executable, str(prog), "--records", str(rec),
+         "--out-dir", str(tmp_path / "out")],
+        capture_output=True, text=True)
+    assert r.returncode == 1
+    assert "PROGRAM-FIRST GATE FAILED" in r.stderr
+
+
+def test_program_first_gate_bypass_flag(tmp_path):
+    import subprocess
+    rec = tmp_path / "r.json"
+    rec.write_text(json.dumps([{"bucket": "B", "skill_title": "x", "step": "",
+                                "pattern": "p", "when": "w", "what": "wh",
+                                "example": "e", "generality": "g"}]))
+    prog = SCRIPT
+    r = subprocess.run(
+        [sys.executable, str(prog), "--records", str(rec),
+         "--out-dir", str(tmp_path / "out"), "--allow-unjustified-downgrade"],
+        capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr

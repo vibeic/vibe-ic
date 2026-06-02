@@ -23,6 +23,11 @@ recoveries.json schema (v0.1.35+):
     "step": "phase3.pnr_setup_repair",     # canonical step ID (see CAPTURE_ROUTING.json)
     "design": "sha256",
     "bucket": "A" | "B" | "C" | "D",
+    # PROGRAM-FIRST gate: Bucket B and C records MUST carry a non-empty
+    # `why_not_bucket_a` (one honest sentence: the exact decision a
+    # deterministic program could not make). Missing/empty -> emit refuses
+    # (exit 1). Bucket A and D do not need it.
+    "why_not_bucket_a": "...",
     # Bucket-B (skill section) fields:
     "skill_title": "...",
     "pattern": "...",
@@ -578,13 +583,47 @@ def emit_discard_note(rec: dict) -> str:
             f"{_scrub_design_leak(rec.get('why_discard', 'no reason given'))}\n")
 
 
+def check_program_first(recs: list) -> list:
+    """PROGRAM-FIRST gate (user directive: capture must enforce program-first).
+
+    Bucket B (skill) and Bucket C (backlog) are a DOWNGRADE from the default
+    Bucket A (deterministic program rule). A downgrade is only honest if the
+    author states why a program could not do it. Returns a list of human
+    -readable offender strings; empty list == pass.
+    """
+    offenders = []
+    for i, r in enumerate(recs):
+        b = (r.get("bucket") or "D").upper()
+        if b in ("B", "C"):
+            why = (r.get("why_not_bucket_a") or "").strip()
+            if len(why) < 10:
+                who = r.get("skill_title") or r.get("title") or r.get(
+                    "design") or f"record[{i}]"
+                offenders.append(
+                    f"Bucket {b} '{who}' lacks a non-empty why_not_bucket_a "
+                    f"(>=10 chars). Program-first: justify why no deterministic "
+                    f"program rule (Bucket A) can make this fix, or reclassify.")
+    return offenders
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--records", required=True)
     ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--allow-unjustified-downgrade", action="store_true",
+                    help="bypass the program-first why_not_bucket_a gate "
+                         "(discouraged; for migrating legacy record sets only)")
     a = ap.parse_args()
 
     recs = json.loads(Path(a.records).read_text())
+
+    offenders = check_program_first(recs)
+    if offenders and not a.allow_unjustified_downgrade:
+        print("PROGRAM-FIRST GATE FAILED — Bucket B/C downgrades need "
+              "why_not_bucket_a:", file=sys.stderr)
+        for o in offenders:
+            print("  - " + o, file=sys.stderr)
+        sys.exit(1)
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     today = datetime.date.today().isoformat()
