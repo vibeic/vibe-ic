@@ -6,7 +6,7 @@ description: Canonical reference doc for the Analog A1-A9 track — spec extract
 # Analog Flow Orchestrate — **9-STEP ANALOG TRACK**
 
 > **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt.
-> Programs first (runner + 8 A-step check gates); AI is the backstop.
+> Programs first (runner + 9 A-step check gates); AI is the backstop.
 
 ## Mandatory Deterministic Preflight
 
@@ -20,13 +20,14 @@ python3 plugins/vibe-ic/programs/analog_a2_topology_select_check.py
 python3 plugins/vibe-ic/programs/analog_a3_netlist_gen_check.py
 python3 plugins/vibe-ic/programs/analog_a4_corner_sweep_check.py
 python3 plugins/vibe-ic/programs/analog_a5_layout_check.py
-python3 plugins/vibe-ic/programs/analog_a6_post_layout_resim_check.py
-python3 plugins/vibe-ic/programs/analog_a7_hardmacro_gen_check.py
-python3 plugins/vibe-ic/programs/analog_a8_hw_verify_check.py
+python3 plugins/vibe-ic/programs/analog_a6_block_pv_check.py
+python3 plugins/vibe-ic/programs/analog_a7_post_layout_resim_check.py
+python3 plugins/vibe-ic/programs/analog_a8_hardmacro_gen_check.py
+python3 plugins/vibe-ic/programs/analog_a9_hw_verify_check.py
 ```
 
 The skill is the CANONICAL REFERENCE for A1-A9 semantics. **The runner
-+ 8 step-check programs are the source of truth for PASS / FAIL.**
++ 9 step-check programs are the source of truth for PASS / FAIL.**
 Refuse to override their verdicts.
 
 > **Merged into `/vibe-ic-analog` slash command (v1.6.13+).** This skill
@@ -54,7 +55,7 @@ The analog counterpart to `flow-orchestrate`. Manages the complete analog design
 | A3 | Netlist Generation | `analog-netlist-gen` | `analog_netlist_pdk_check` exits 0 |
 | A4 | Corner Sweep + Optimization | `analog-sizing-loop` | `analog_corner_sweep_check` exits 0 |
 | A5 | Analog Layout | `analog-layout` + `eda_analog_layout` | `layout.mag` per block |
-| A6 | Per-Block Physical Verification (DRC + LVS) | `drc-fix` + `lvs-triage` | `analog_block_pv_check` exits 0 |
+| A6 | Per-Block Physical Verification (DRC + LVS) | `drc-fix` + `lvs-triage` | `analog_a6_block_pv_check` exits 0 |
 | A7 | Post-Layout Extraction + Resim | `analog-extraction-resim` | `analog_pre_vs_post_layout_check` exits 0 |
 | A8 | Hardmacro Generation | `analog-hardmacro-gen` | `analog_hardmacro_check` exits 0 |
 | A9 | HW Verification + Mixed-Signal | `analog-hw-tuning-loop` + `mixed-signal-cosim` | `analog_hw_spice_correlation_check` + `mixed_signal_cosim_check` exit 0 |

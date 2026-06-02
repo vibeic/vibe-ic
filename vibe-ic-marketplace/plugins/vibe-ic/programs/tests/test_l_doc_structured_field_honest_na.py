@@ -75,10 +75,25 @@ def test_l3_bare_missing_crc_still_fails():
 # ---------------------------------------------------------------------------
 
 def test_l11_otp_present_false_passes():
-    """Explicit otp_present:false (lpc/espi shape) → PASS."""
-    data = {"otp_present": False, "behavioral_sequences": []}
+    """Real lpc/espi shape → PASS. v0.2.19: L11 jointly owns
+    behavioral_sequences + calibration_tables + OTP, so a BARE otp_present:false
+    no longer escapes on its own (see test_l11_bare_otp_present_false_fails);
+    the real lpc/espi N/A stub carries the EXPLICIT no_otp_fsm_in_input:true
+    flag, which is the honest layer-level "no OTP FSM in input" declaration."""
+    data = {"otp_present": False, "no_otp_fsm_in_input": True,
+            "behavioral_sequences": []}
     ok, reason = _check(11, data)
     assert ok, reason
+
+
+def test_l11_bare_otp_present_false_fails():
+    """v0.2.19: otp_present:false ALONE (no explicit no_otp/applicable flag,
+    empty behavioral+calibration) is NOT a sufficient L11 escape — L11 also
+    owns behavioral/calibration, so the ≥3 floor stays in force. Mirrors
+    test_l_doc_digital_extractors_v0182::test_l11_still_required_without_escape."""
+    data = {"otp_present": False, "behavioral_sequences": []}
+    ok, _ = _check(11, data)
+    assert ok is False
 
 
 def test_l11_applicable_false_passes():

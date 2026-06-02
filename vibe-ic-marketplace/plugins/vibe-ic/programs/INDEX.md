@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 561
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 561)
+- **Total programs (excluding helpers / shims):** 569
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 569)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 552 |
+| `any` | 560 |
 
 ## Alphabetical listing
 
@@ -41,22 +41,22 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_a3_netlist_gen_check` | any | — | A3 deterministic gate (v1.6.35). |
 | `analog_a4_corner_sweep_check` | any | — | A4 deterministic gate (v1.6.35). |
 | `analog_a5_layout_check` | any | — | A5 deterministic gate (v1.6.35). |
-| `analog_a6_post_layout_resim_check` | any | — | A6 deterministic gate (v1.6.35). |
-| `analog_a7_hardmacro_gen_check` | any | — | A7 deterministic gate (v1.6.35). |
-| `analog_a8_hw_verify_check` | any | — | A8 deterministic gate (v1.6.35). |
+| `analog_a6_block_pv_check` | any | — | A6 deterministic gate |
+| `analog_a7_post_layout_resim_check` | any | — | A7 deterministic gate. |
+| `analog_a8_hardmacro_gen_check` | any | — | A8 deterministic gate. |
+| `analog_a9_hw_verify_check` | any | — | A9 deterministic gate (Co-Sim / HW Verify). |
 | `analog_artefact_substance_check` | any | — | catch substance-less analog |
 | `analog_block_coverage_check` | any | — | deterministic gate for analog block design coverage |
-| `analog_block_pv_check` | any | Wave 88 | gate (v1.6.13 Wave 88, integerised in |
 | `analog_content_detected_must_emit_l5_check` | any | Wave 47 | Wave 47 / v0.120.1 |
 | `analog_corner_margin_check` | any | — | A4 strict PVT-margin gate. |
 | `analog_corner_sweep_check` | any | — | deterministic gate for PVT corner coverage |
 | `analog_digital_interface_check` | any | — | deterministic gate for digital-analog interface validation |
-| `analog_flow_compliance_check` | any | — | analog track compliance gate (A1-A8) |
+| `analog_flow_compliance_check` | any | — | analog track compliance gate (A1-A9) |
 | `analog_hardmacro_check` | any | — | deterministic gate for analog hardmacro deliverables |
 | `analog_hil_convergence_log_check` | any | — | verify that at least one analog |
 | `analog_hw_spice_correlation_check` | any | — | deterministic gate for HW-vs-SPICE correlation |
 | `analog_netlist_pdk_check` | any | — | deterministic gate for SPICE netlist PDK compliance |
-| `analog_one_shot_runner` | any | — | A1..A8 analog flow (parallel to Phase 2 digital). |
+| `analog_one_shot_runner` | any | Wave 90 | A1-A9 analog flow (parallel to Phase 2 digital). |
 | `analog_oracle_compare` | any | — | deterministic analog-benchmark comparator. |
 | `analog_per_block_pv_completeness_check` | any | Wave 93 | strict per-block deliverable |
 | `analog_pre_vs_post_layout_check` | any | — | deterministic gate for pre/post-layout comparison |
@@ -110,6 +110,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `chip_top_open_drain_polarity_check` | any | — | v1.6.225. |
 | `clock_cascade_synthesis_check` | any | — | refuse a top-level RTL that ties |
 | `clock_divider_period_check` | any | v0.116 | BACKLOG-v11 P0.2. |
+| `clock_plan_check` | any | — | Step 16 (Clock planning) substance gate. |
 | `clock_scale_consistency_check` | any | — | Catch un-rescaled threshold values. |
 | `cmd_arg_range_validation_check` | any | — | M4: Verify that command argument fields |
 | `cmd_argument_validation_present_check` | any | — | every opcode in |
@@ -141,6 +142,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cross_constant_invariant_check` | any | — | Verify named timing/protocol constants |
 | `cross_module_1cycle_handshake_check` | any | v0.116 | BACKLOG-v11 P0.3. |
 | `crypto_arch_extractor` | any | — | Extract crypto architecture parameters from README/text docs. |
+| `cts_quality_check` | any | — | Step 19 CTS substance gate. |
 | `cxl_protocol_synth` | any | v0.1.89 | Compute Express Link (CXL) cache-coherent interconnect synth helper. |
 | `dali_protocol_synth` | any | v0.1.84 | DALI-class protocol synth helper. |
 | `ddr4_protocol_synth` | any | — | protocol class #58. |
@@ -153,6 +155,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `design_complexity_estimator` | any | — | design_complexity_estimator.py -- Heuristic design-complexity score and |
 | `deterministic_rtl_dispatcher` | any | v0.1.9 | Phase-2 program-first RTL router. |
 | `device_response_no_br_check` | any | — | deterministic compliance check derived from |
+| `dft_atpg_coverage_check` | any | — | REAL stuck-at coverage gate (Step 11 DFT/ATPG). |
 | `dispatch_fetch_loop_population_check` | any | — | Stub multi-frame fetch loop detector. |
 | `dispatch_handler_completeness` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 58 | Wave 58 / BACKLOG-v12 P0.2 plugin gate. |
 | `dispatch_register_default_reset_check` | any | — | Response register reset at frame boundaries. |
@@ -174,6 +177,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `emitter_failure_mode_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `emmc_protocol_synth` | any | v0.1.84 | Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth. |
 | `enhancement_emit` | any | v0.1.35 | driver for the benchmark-enhancement-capture skill. |
+| `erc_density_check` | any | — | Step-30 ERC + sign-off density-rule verification (real substance). |
 | `espi_protocol_synth` | any | — | Enhanced Serial Peripheral Interface (eSPI) protocol synth helper. |
 | `ethercat_protocol_synth` | any | v0.1.84 | EtherCAT-class protocol synth helper. |
 | `ethernet_800g_protocol_synth` | any | v0.1.89 | IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper. |
@@ -188,6 +192,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `final_test_attestation_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
 | `fix_fault_cut_names` | any | v0.63 | Rewrite Fault-cut netlist so escaped identifiers with embedded dots |
 | `flexray_protocol_synth` | any | — | FlexRay Communications System protocol synth helper (protocol #49). |
+| `floorplan_pdn_check` | any | — | Step 15 (Floorplan + PDN) SUBSTANCE gate. |
 | `flow_compliance_check` | any | Wave 91 | Strict Vibe-IC phase 2+3 gate (40 main-track |
 | `flow_doc_emit` | any | — | auto-generate the RUNNER-MARKER view of the Vibe-IC flow. |
 | `flow_stage_check` | any | — | wrapper for signoff_audit --mode flow. |
@@ -241,6 +246,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `hbm3_protocol_synth` | any | v0.1.89 | HBM3-class protocol synth helper. |
 | `hdlc_protocol_synth` | any | v0.1.84 | HDLC / SDLC-class protocol synth helper. |
 | `hdmi_protocol_synth` | any | v0.1.84 | HDMI / DVI TMDS protocol synth helper. |
+| `hold_closure_check` | any | — | Step 20 (Post-CTS hold fixing) substance gate. |
 | `hold_fix_planner` | any | v0.1.50 | Hold-fix planner (Pattern-B → program). |
 | `host_soft_reset_unwake_path_check` | any | — | Verify that any soft-reset / abort |
 | `hw_acceptance_test_passed_check` | any | v0.119.15 | final-step gate for the closed |
@@ -265,7 +271,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ip_catalog_validate` | any | — | Validate catalog manifests against schema + |
 | `ir_drop_report_check` | any | — | wrapper for eda_report_audit --mode ir_drop. |
 | `ir_drop_triage_classify` | any | v0.1.50 | IR-drop triage classifier (Pattern-B → program). |
-| `isolation_cell_required_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
+| `isolation_cell_required_check` | any | — | M2 gate (substance-verifying). |
 | `iterative_search` | any | — | iterative_search.py -- Generic bounded iterative-search primitive. |
 | `jesd204_protocol_synth` | any | v0.1.91 | JESD204B / JESD204C converter-to-logic serial-interface protocol synth. |
 | `json_schema_check` | any | — | Deterministic JSON schema key checker. |
@@ -299,7 +305,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_taxonomy` | any | v0.1.51 | L-doc taxonomy single source of truth. |
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `layer_extension_presence_check` | any | v0.50 | v0.50 plugin gate |
-| `level_shifter_required_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
+| `lec_equivalence_check` | any | — | Step 13 deterministic LEC substance gate. |
+| `level_shifter_required_check` | any | — | M2 gate (substance-verifying). |
 | `lin_protocol_synth` | any | v0.1.84 | LIN-class protocol synth helper. |
 | `literal_verdict_keyword_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `llm_semantic_confirm` | any | — | LLM double-confirm for program-extracted SEMANTIC fields. |
@@ -330,9 +337,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `mipi_protocol_synth` | any | v0.1.84 | MIPI D-PHY / CSI-2 protocol synth helper. |
 | `mipi_spmi_rffe_protocol_synth` | any | v0.1.89 | MIPI System Power Management Interface (SPMI) + RF Front-End Control |
 | `mixed_signal_cosim_check` | any | — | deterministic gate for mixed-signal co-simulation |
-| `mixed_signal_interface_si_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
+| `mixed_signal_interface_si_check` | any | — | M3 interface signal-integrity gate. |
 | `mixed_signal_merge_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
-| `mixed_signal_signoff_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
+| `mixed_signal_signoff_check` | any | — | gate M4 (hardened, anti-fabrication). |
 | `modbus_protocol_synth` | any | v0.1.84 | Modbus-class protocol synth helper. |
 | `module_port_audit` | any | v0.36 | Deterministic port-name mismatch detector for multi-module |
 | `mpw_precheck_cleanup` | any | v0.1.51 | mpw_precheck cleanup automator (B4 from spm pilot). |
@@ -404,11 +411,12 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase3_verify_aggregate` | any | v0.1.50 | Phase 3 backend verification aggregator (Pattern-C → program). |
 | `phy_counter_audit` | any | — | Detect bus-state-sampling anti-pattern in TX PHY counters. |
 | `picker_fixture_thrash_guard` | any | — | v1.6.63 |
+| `placement_legality_check` | any | — | Step 17 (Placement) SUBSTANCE gate. |
 | `png_ocr_extractor` | any | — | for #36 Bug 3: PNG OCR Tier-2 fallback. |
 | `pnr_doctor` | any | v0.1.96 | OpenROAD P&R-log error classifier (synth-doctor Pattern-B → program). |
 | `pnr_via_stack_completeness_check` | any | — | chip-AGNOSTIC audit of how |
 | `post_layout_sim_check` | any | — | Verify post-layout gate-level simulation with SDF back-annotation. |
-| `power_domain_crossing_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
+| `power_domain_crossing_check` | any | — | M2 gate (substance-verifying). |
 | `power_report_check` | any | — | wrapper for eda_report_audit --mode power. |
 | `power_report_gen` | any | — | emit Step 31 reports/phase3/power.rpt skeleton. |
 | `ppa_predict_aggregate` | any | v0.1.50 | PPA predict aggregator (Pattern-B → program). |
@@ -633,7 +641,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (552 programs)
+### `any` (560 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -650,22 +658,22 @@ _(no programs in this group)_
 - `analog_a3_netlist_gen_check` — A3 deterministic gate (v1.6.35).
 - `analog_a4_corner_sweep_check` — A4 deterministic gate (v1.6.35).
 - `analog_a5_layout_check` — A5 deterministic gate (v1.6.35).
-- `analog_a6_post_layout_resim_check` — A6 deterministic gate (v1.6.35).
-- `analog_a7_hardmacro_gen_check` — A7 deterministic gate (v1.6.35).
-- `analog_a8_hw_verify_check` — A8 deterministic gate (v1.6.35).
+- `analog_a6_block_pv_check` — A6 deterministic gate
+- `analog_a7_post_layout_resim_check` — A7 deterministic gate.
+- `analog_a8_hardmacro_gen_check` — A8 deterministic gate.
+- `analog_a9_hw_verify_check` — A9 deterministic gate (Co-Sim / HW Verify).
 - `analog_artefact_substance_check` — catch substance-less analog
 - `analog_block_coverage_check` — deterministic gate for analog block design coverage
-- `analog_block_pv_check` — gate (v1.6.13 Wave 88, integerised in  _[Wave 88]_
 - `analog_content_detected_must_emit_l5_check` — Wave 47 / v0.120.1  _[Wave 47]_
 - `analog_corner_margin_check` — A4 strict PVT-margin gate.
 - `analog_corner_sweep_check` — deterministic gate for PVT corner coverage
 - `analog_digital_interface_check` — deterministic gate for digital-analog interface validation
-- `analog_flow_compliance_check` — analog track compliance gate (A1-A8)
+- `analog_flow_compliance_check` — analog track compliance gate (A1-A9)
 - `analog_hardmacro_check` — deterministic gate for analog hardmacro deliverables
 - `analog_hil_convergence_log_check` — verify that at least one analog
 - `analog_hw_spice_correlation_check` — deterministic gate for HW-vs-SPICE correlation
 - `analog_netlist_pdk_check` — deterministic gate for SPICE netlist PDK compliance
-- `analog_one_shot_runner` — A1..A8 analog flow (parallel to Phase 2 digital).
+- `analog_one_shot_runner` — A1-A9 analog flow (parallel to Phase 2 digital).  _[Wave 90]_
 - `analog_oracle_compare` — deterministic analog-benchmark comparator.
 - `analog_per_block_pv_completeness_check` — strict per-block deliverable  _[Wave 93]_
 - `analog_pre_vs_post_layout_check` — deterministic gate for pre/post-layout comparison
@@ -718,6 +726,7 @@ _(no programs in this group)_
 - `chip_top_open_drain_polarity_check` — v1.6.225.
 - `clock_cascade_synthesis_check` — refuse a top-level RTL that ties
 - `clock_divider_period_check` — BACKLOG-v11 P0.2.  _[v0.116]_
+- `clock_plan_check` — Step 16 (Clock planning) substance gate.
 - `clock_scale_consistency_check` — Catch un-rescaled threshold values.
 - `cmd_arg_range_validation_check` — M4: Verify that command argument fields
 - `cmd_argument_validation_present_check` — every opcode in
@@ -747,6 +756,7 @@ _(no programs in this group)_
 - `cross_constant_invariant_check` — Verify named timing/protocol constants
 - `cross_module_1cycle_handshake_check` — BACKLOG-v11 P0.3.  _[v0.116]_
 - `crypto_arch_extractor` — Extract crypto architecture parameters from README/text docs.
+- `cts_quality_check` — Step 19 CTS substance gate.
 - `cxl_protocol_synth` — Compute Express Link (CXL) cache-coherent interconnect synth helper.  _[v0.1.89]_
 - `dali_protocol_synth` — DALI-class protocol synth helper.  _[v0.1.84]_
 - `ddr4_protocol_synth` — protocol class #58.
@@ -759,6 +769,7 @@ _(no programs in this group)_
 - `design_complexity_estimator` — design_complexity_estimator.py -- Heuristic design-complexity score and
 - `deterministic_rtl_dispatcher` — Phase-2 program-first RTL router.  _[v0.1.9]_
 - `device_response_no_br_check` — deterministic compliance check derived from
+- `dft_atpg_coverage_check` — REAL stuck-at coverage gate (Step 11 DFT/ATPG).
 - `dispatch_fetch_loop_population_check` — Stub multi-frame fetch loop detector.
 - `dispatch_register_default_reset_check` — Response register reset at frame boundaries.
 - `dispatcher_awake_gate_check` — v0.114 (BACKLOG-v7 P2.2).  _[v0.114]_
@@ -779,6 +790,7 @@ _(no programs in this group)_
 - `emitter_failure_mode_check` — anti-fabrication gate (v1.6.38).
 - `emmc_protocol_synth` — Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth.  _[v0.1.84]_
 - `enhancement_emit` — driver for the benchmark-enhancement-capture skill.  _[v0.1.35]_
+- `erc_density_check` — Step-30 ERC + sign-off density-rule verification (real substance).
 - `espi_protocol_synth` — Enhanced Serial Peripheral Interface (eSPI) protocol synth helper.
 - `ethercat_protocol_synth` — EtherCAT-class protocol synth helper.  _[v0.1.84]_
 - `ethernet_800g_protocol_synth` — IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper.  _[v0.1.89]_
@@ -793,6 +805,7 @@ _(no programs in this group)_
 - `final_test_attestation_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
 - `fix_fault_cut_names` — Rewrite Fault-cut netlist so escaped identifiers with embedded dots  _[v0.63]_
 - `flexray_protocol_synth` — FlexRay Communications System protocol synth helper (protocol #49).
+- `floorplan_pdn_check` — Step 15 (Floorplan + PDN) SUBSTANCE gate.
 - `flow_compliance_check` — Strict Vibe-IC phase 2+3 gate (40 main-track  _[Wave 91]_
 - `flow_doc_emit` — auto-generate the RUNNER-MARKER view of the Vibe-IC flow.
 - `flow_stage_check` — wrapper for signoff_audit --mode flow.
@@ -846,6 +859,7 @@ _(no programs in this group)_
 - `hbm3_protocol_synth` — HBM3-class protocol synth helper.  _[v0.1.89]_
 - `hdlc_protocol_synth` — HDLC / SDLC-class protocol synth helper.  _[v0.1.84]_
 - `hdmi_protocol_synth` — HDMI / DVI TMDS protocol synth helper.  _[v0.1.84]_
+- `hold_closure_check` — Step 20 (Post-CTS hold fixing) substance gate.
 - `hold_fix_planner` — Hold-fix planner (Pattern-B → program).  _[v0.1.50]_
 - `host_soft_reset_unwake_path_check` — Verify that any soft-reset / abort
 - `hw_acceptance_test_passed_check` — final-step gate for the closed  _[v0.119.15]_
@@ -870,7 +884,7 @@ _(no programs in this group)_
 - `ip_catalog_validate` — Validate catalog manifests against schema +
 - `ir_drop_report_check` — wrapper for eda_report_audit --mode ir_drop.
 - `ir_drop_triage_classify` — IR-drop triage classifier (Pattern-B → program).  _[v0.1.50]_
-- `isolation_cell_required_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
+- `isolation_cell_required_check` — M2 gate (substance-verifying).
 - `iterative_search` — iterative_search.py -- Generic bounded iterative-search primitive.
 - `jesd204_protocol_synth` — JESD204B / JESD204C converter-to-logic serial-interface protocol synth.  _[v0.1.91]_
 - `json_schema_check` — Deterministic JSON schema key checker.
@@ -903,7 +917,8 @@ _(no programs in this group)_
 - `l_doc_taxonomy` — L-doc taxonomy single source of truth.  _[v0.1.51]_
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `layer_extension_presence_check` — v0.50 plugin gate  _[v0.50]_
-- `level_shifter_required_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
+- `lec_equivalence_check` — Step 13 deterministic LEC substance gate.
+- `level_shifter_required_check` — M2 gate (substance-verifying).
 - `lin_protocol_synth` — LIN-class protocol synth helper.  _[v0.1.84]_
 - `literal_verdict_keyword_check` — anti-fabrication gate (v1.6.38).
 - `llm_semantic_confirm` — LLM double-confirm for program-extracted SEMANTIC fields.
@@ -934,9 +949,9 @@ _(no programs in this group)_
 - `mipi_protocol_synth` — MIPI D-PHY / CSI-2 protocol synth helper.  _[v0.1.84]_
 - `mipi_spmi_rffe_protocol_synth` — MIPI System Power Management Interface (SPMI) + RF Front-End Control  _[v0.1.89]_
 - `mixed_signal_cosim_check` — deterministic gate for mixed-signal co-simulation
-- `mixed_signal_interface_si_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
+- `mixed_signal_interface_si_check` — M3 interface signal-integrity gate.
 - `mixed_signal_merge_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
-- `mixed_signal_signoff_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
+- `mixed_signal_signoff_check` — gate M4 (hardened, anti-fabrication).
 - `modbus_protocol_synth` — Modbus-class protocol synth helper.  _[v0.1.84]_
 - `module_port_audit` — Deterministic port-name mismatch detector for multi-module  _[v0.36]_
 - `mpw_precheck_cleanup` — mpw_precheck cleanup automator (B4 from spm pilot).  _[v0.1.51]_
@@ -1008,11 +1023,12 @@ _(no programs in this group)_
 - `phase3_verify_aggregate` — Phase 3 backend verification aggregator (Pattern-C → program).  _[v0.1.50]_
 - `phy_counter_audit` — Detect bus-state-sampling anti-pattern in TX PHY counters.
 - `picker_fixture_thrash_guard` — v1.6.63
+- `placement_legality_check` — Step 17 (Placement) SUBSTANCE gate.
 - `png_ocr_extractor` — for #36 Bug 3: PNG OCR Tier-2 fallback.
 - `pnr_doctor` — OpenROAD P&R-log error classifier (synth-doctor Pattern-B → program).  _[v0.1.96]_
 - `pnr_via_stack_completeness_check` — chip-AGNOSTIC audit of how
 - `post_layout_sim_check` — Verify post-layout gate-level simulation with SDF back-annotation.
-- `power_domain_crossing_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
+- `power_domain_crossing_check` — M2 gate (substance-verifying).
 - `power_report_check` — wrapper for eda_report_audit --mode power.
 - `power_report_gen` — emit Step 31 reports/phase3/power.rpt skeleton.
 - `ppa_predict_aggregate` — PPA predict aggregator (Pattern-B → program).  _[v0.1.50]_

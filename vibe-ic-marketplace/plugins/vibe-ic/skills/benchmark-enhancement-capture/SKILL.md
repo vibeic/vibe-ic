@@ -30,7 +30,8 @@ program (Bucket A) and target skill (Bucket B), declared in
 | Phase 3 IR-drop | `phase3_one_shot_runner.py` | `ir-drop-triage` |
 | Analog A2 topology | `analog_a2_topology_select_check.py` | `analog-topology-select` |
 | Analog A4 corner sweep | `analog_real_corner_sweep.py` | `ams-sim` |
-| Analog A6 post-layout resim | `analog_a6_post_layout_resim_check.py` | `analog-extraction-resim` |
+| Analog A6 per-block PV (DRC+LVS) | `analog_a6_block_pv_check.py` | `drc-fix` + `lvs-triage` |
+| Analog A7 post-layout resim | `analog_a7_post_layout_resim_check.py` | `analog-extraction-resim` |
 | Mixed-signal M1-M4 | `mixed_signal_m1_top_merge_check.py` | `mixed-signal-cosim` |
 | MCP-EDA tool behavior | `mcp-eda-server/src/tools/*.js` | per-skill (`synth-doctor`, etc.) |
 | Benchmark harness | `benchmark-harness/score_*.py` | `open-benchmark-methodology` |

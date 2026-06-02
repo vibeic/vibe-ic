@@ -58,7 +58,7 @@ from typing import List, Optional, Set, Tuple
 # Add new vendor / SKU / IC / foundry names by editing that .txt file;
 # this loader will pick them up at runtime.
 _DENY_PATH = (
-    Path(__file__).resolve().parent.parent
+    Path(__file__).resolve().parent
     / "tests" / "chip_deny_list.txt"
 )
 

@@ -23,7 +23,7 @@ def _load_mod():
 
 
 def _all_step_ids(mod):
-    flow = GEN.parent.parent / "flow" / "phase1_phase2_phase3.yaml"
+    flow = GEN.parent.parent.parent / "flow" / "phase1_phase2_phase3.yaml"
     return [sid for sid, _, _ in mod._load_steps(flow)]
 
 

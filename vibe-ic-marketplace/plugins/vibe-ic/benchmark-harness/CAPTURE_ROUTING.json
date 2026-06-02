@@ -108,16 +108,20 @@
       "bucket_A_program": "programs/analog_a5_layout_check.py",
       "bucket_B_skill_file": "skills/analog-layout/SKILL.md"
     },
-    "analog.A6_post_layout_resim": {
-      "bucket_A_program": "programs/analog_a6_post_layout_resim_check.py",
+    "analog.A6_block_pv": {
+      "bucket_A_program": "programs/analog_a6_block_pv_check.py",
+      "bucket_B_skill_file": "skills/drc-fix/SKILL.md"
+    },
+    "analog.A7_post_layout_resim": {
+      "bucket_A_program": "programs/analog_a7_post_layout_resim_check.py",
       "bucket_B_skill_file": "skills/analog-extraction-resim/SKILL.md"
     },
-    "analog.A7_hardmacro": {
-      "bucket_A_program": "programs/analog_a7_hardmacro_gen_check.py",
+    "analog.A8_hardmacro": {
+      "bucket_A_program": "programs/analog_a8_hardmacro_gen_check.py",
       "bucket_B_skill_file": "skills/analog-hardmacro-gen/SKILL.md"
     },
-    "analog.A8_hw_verify": {
-      "bucket_A_program": "programs/analog_a8_hw_verify_check.py",
+    "analog.A9_hw_verify": {
+      "bucket_A_program": "programs/analog_a9_hw_verify_check.py",
       "bucket_B_skill_file": "skills/analog-hw-measure/SKILL.md"
     },
     "analog.sizing_loop": {

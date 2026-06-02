@@ -1227,12 +1227,12 @@ steps:
       files_exist: ["phase1/analog/analog_block_list.json"]
     skills: [drc-fix, lvs-triage]
     programs:
-      - analog_block_pv_check
+      - analog_a6_block_pv_check
     required_outputs:
       - "phase3/analog/*/drc_clean.flag"
       - "phase3/analog/*/lvs_match.flag"
     gate:
-      program_exit_zero: "analog_block_pv_check . --json reports/phase2/gates/analog_block_pv.json"
+      program_exit_zero: "analog_a6_block_pv_check . --json reports/phase2/gates/analog_block_pv.json"
     blocks_on: [A5]
     notes: |
       Each analog block must have DRC-clean + LVS-match BEFORE A7

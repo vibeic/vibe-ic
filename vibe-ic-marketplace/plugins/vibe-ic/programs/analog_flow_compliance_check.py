@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""analog_flow_compliance_check.py — analog track compliance gate (A1-A8)
+"""analog_flow_compliance_check.py — analog track compliance gate (A1-A9)
 
-Validates that all 8 analog track steps have been completed for every
+Validates that all 9 analog track steps have been completed for every
 block listed in analog/analog_block_list.json:
 
   A1: analog/<block>/spec.json
@@ -9,9 +9,10 @@ block listed in analog/analog_block_list.json:
   A3: analog/<block>/*.sp
   A4: analog/<block>/corner_results.json
   A5: analog/<block>/layout.mag OR analog/<block>/*.gds
-  A6: analog/<block>/pre_vs_post.json
-  A7: hardmacro/<block>/<block>.lef
-  A8: cosim/<block>_cosim_results.json OR analog/<block>/hw_measurements.json
+  A6: analog/<block>/drc_clean.flag AND analog/<block>/lvs_match.flag
+  A7: analog/<block>/pre_vs_post.json
+  A8: hardmacro/<block>/<block>.lef
+  A9: cosim/<block>_cosim_results.json OR analog/<block>/hw_measurements.json
 
 Steps may be waived via analog/waivers.json.
 
@@ -62,9 +63,10 @@ ANALOG_STEPS = [
     ("A3", "Netlist Generation"),
     ("A4", "Corner Sweep"),
     ("A5", "Analog Layout"),
-    ("A6", "Post-Layout Resim"),
-    ("A7", "Hardmacro Gen"),
-    ("A8", "Co-Sim / HW Verify"),
+    ("A6", "Per-Block Physical Verification (DRC+LVS)"),
+    ("A7", "Post-Layout Resim"),
+    ("A8", "Hardmacro Gen"),
+    ("A9", "Co-Sim / HW Verify"),
 ]
 
 
@@ -115,11 +117,16 @@ def _check_step(project: Path, block: str, step_id: str) -> bool:
         return ((analog_dir / "layout.mag").exists() or
                 bool(list(analog_dir.glob("*.gds"))))
     elif step_id == "A6":
-        return (analog_dir / "pre_vs_post.json").exists()
+        # Per-block physical verification: BOTH a DRC-clean marker AND
+        # an LVS-match marker must be present.
+        return ((analog_dir / "drc_clean.flag").exists() and
+                (analog_dir / "lvs_match.flag").exists())
     elif step_id == "A7":
+        return (analog_dir / "pre_vs_post.json").exists()
+    elif step_id == "A8":
         hm = _pl.hardmacro_dir(project) / block / f"{block}.lef"
         return hm.exists()
-    elif step_id == "A8":
+    elif step_id == "A9":
         cosim = _pl.mixed_signal_cosim_dir(project) / f"{block}_cosim_results.json"
         hw = analog_dir / "hw_measurements.json"
         return cosim.exists() or hw.exists()

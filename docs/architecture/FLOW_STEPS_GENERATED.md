@@ -80,20 +80,21 @@
 | 56 | `step_lvs` |
 | 57 | `step_canonicalize_artefacts` |
 
-## Analog — `analog_one_shot_runner.py` (8 steps, PARALLEL to Phase 2)
+## Analog — `analog_one_shot_runner.py` (9 steps, PARALLEL to Phase 2)
 
 | Step | Name | Output |
 |---|---|---|
-| A1 | `spec_extract` | analog/<block>/A1_spec.json |
-| A2 | `topology_select` | analog/<block>/A2_topology.json |
+| A1 | `spec_extract` | analog/<block>/spec.json |
+| A2 | `topology_select` | analog/<block>/topology.md |
 | A3 | `netlist_gen` | analog/<block>/<block>.sp |
-| A4 | `corner_sweep` | analog/<block>/A4_corners.json |
-| A5 | `layout` | analog/<block>/A5_layout.json (Magic) |
-| A6 | `post_layout_resim` | analog/<block>/A6_postsim.json |
-| A7 | `hardmacro_gen` | analog/<block>/{<block>.lef,.lib,.gds,.v} |
-| A8 | `hw_verify` | analog/<block>/A8_hw_verify.json (HIL) |
+| A4 | `corner_sweep` | analog/<block>/corner_results.json |
+| A5 | `layout` | analog/<block>/layout.mag (Magic) |
+| A6 | `block_pv` | analog/<block>/{drc,lvs} per-block DRC+LVS |
+| A7 | `post_layout_resim` | analog/<block>/pre_vs_post.json |
+| A8 | `hardmacro_gen` | analog/hardmacro/<block>/{<block>.lef,.lib,.v} |
+| A9 | `hw_verify` | analog/<block>/hw_measurements.json (HIL/co-sim) |
 
 ## Totals
 
-Sequential global steps: 57 (Phase 1: 1-35 · Phase 2: 36-51 · Phase 3: 52-57) · Analog (parallel): 8
+Sequential global steps: 57 (Phase 1: 1-35 · Phase 2: 36-51 · Phase 3: 52-57) · Analog (parallel): 9
 

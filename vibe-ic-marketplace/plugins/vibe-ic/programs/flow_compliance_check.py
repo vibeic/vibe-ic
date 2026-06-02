@@ -241,9 +241,9 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "analog_pre_vs_post_layout_check",
     "analog_flow_compliance_check",
     "analog_digital_interface_check",
-    # v1.6.35: per-block A1-A8 deterministic artefact-presence +
+    # v1.6.35: per-block A1-A9 deterministic artefact-presence +
     # substance gates. Closes the v10632/v10634 escape where the
-    # runner declared every A1-A8 step WAIVED for every block (no
+    # runner declared every A1-A9 step WAIVED for every block (no
     # gate shipped). Each gate is chip-AGNOSTIC, VACUOUS_PASSes when
     # `analog/analog_block_list.json` is missing or empty (digital-
     # only project), and FAILs only when the artefact is present
@@ -255,9 +255,10 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "analog_a3_netlist_gen_check",
     "analog_a4_corner_sweep_check",
     "analog_a5_layout_check",
-    "analog_a6_post_layout_resim_check",
-    "analog_a7_hardmacro_gen_check",
-    "analog_a8_hw_verify_check",
+    "analog_a6_block_pv_check",
+    "analog_a7_post_layout_resim_check",
+    "analog_a8_hardmacro_gen_check",
+    "analog_a9_hw_verify_check",
     # v0.108: half-duplex protocol RTL invariant gates
     "break_framing_vs_l3_check",
     "break_handler_safety_check",

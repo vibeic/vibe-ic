@@ -219,6 +219,29 @@ def _has_honest_no_otp(data: dict) -> bool:
     return False
 
 
+def _has_explicit_no_otp_flag(data: dict) -> bool:
+    """L11 N/A escape — STRICTER than _has_honest_no_otp. L11 jointly owns
+    behavioral_sequences + calibration_tables + OTP, so a bare
+    `otp_present: false` (which only addresses the OTP sub-component) is NOT a
+    sufficient escape — the doc could still be expected to carry behavioral /
+    calibration content. Only an EXPLICIT layer-level declaration counts: an
+    explicit no_otp* / no_fuse* True flag (e.g. `no_otp_fsm_in_input: true`,
+    the runner's honest "no OTP FSM in the input doc" signal) OR an explicit
+    `applicable == false` (whole layer N/A). Protocol controllers
+    (mdio/espi/usb_pd) carry no_otp_fsm_in_input: true and pass; a doc with
+    only otp_present:false + empty behavioral/calibration fails the ≥3 floor."""
+    if _explicit_false(data.get("applicable")):
+        return True
+    for k, v in data.items():
+        if not isinstance(k, str):
+            continue
+        kl = k.lower()
+        if (kl.startswith("no_otp") or kl == "no_fuse"
+                or kl.startswith("no_fuse")) and _explicit_true(v):
+            return True
+    return False
+
+
 def _has_honest_no_lab(data: dict) -> bool:
     """L13: doc explicitly declares it has NO lab-bench calibration. Accept an
     explicit `lab_calibration_present == false`, an explicit `applicable ==
@@ -645,16 +668,16 @@ def _check_l_doc(layer: int, data: dict,
         elif isinstance(otp_fields, list):
             n_otp_fields = _list_len_of_dicts(otp_fields)
         best = max(n_seqs, n_cal, n_otp, n_otp_fields)
-        # v0.2.16 — honest no-OTP escape (completing the set begun by
-        # L5.no_analog / L12.no_calibration). A pure-digital protocol IC
-        # genuinely has NO OTP fuse content. ACCEPT the required behavioral/
-        # calibration entries OR the doc's OWN explicit honest no-OTP signal
-        # already emitted by the runner (otp_present==false / applicable==false
-        # / no_otp_fsm_in_input==true). Guarded: only an explicit True no_X
-        # flag or explicit False otp_present/applicable counts — a bare
-        # missing/empty field never does, and a genuinely-OTP IC keeps the
-        # ≥3-typed-entry requirement in force.
-        if best < 3 and not _has_honest_no_otp(data):
+        # v0.2.16 — honest no-OTP escape, TIGHTENED v0.2.19. The escape requires
+        # an EXPLICIT typed no-OTP declaration (no_otp_fsm_in_input: true /
+        # no_otp*: true / applicable: false) — a BARE `otp_present: false` is NOT
+        # sufficient on its own, because L11 jointly owns behavioral_sequences +
+        # calibration_tables too: a doc that merely lacks OTP but is otherwise
+        # expected to carry behavioral/calibration content must still meet the
+        # ≥3 floor. Protocol controllers (mdio/espi/usb_pd) carry an explicit
+        # no_otp_fsm_in_input flag (their behavioral sequences live in L12), so
+        # they pass; a bare otp_present:false with empty content fails.
+        if best < 3 and not _has_explicit_no_otp_flag(data):
             return False, (
                 f"L11 must carry ≥3 typed entries across "
                 f"`behavioral_sequences` + `calibration_tables` "
