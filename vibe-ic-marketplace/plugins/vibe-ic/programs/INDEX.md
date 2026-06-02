@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 618
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 618)
+- **Total programs (excluding helpers / shims):** 620
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 620)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 609 |
+| `any` | 611 |
 
 ## Alphabetical listing
 
@@ -258,6 +258,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_evidence_completeness_check` | any | v0.100 | v0.100 L1 |
 | `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
 | `gate_reliability_register` | any | — | gate_reliability_register.py -- Self-calibrating per-gate reliability ledger. |
+| `gate_self_assertion_check` | any | v0.2.24 | anti-fabrication gate-hole detector. |
 | `gate_utils` | any | v0.117 | Shared helpers for v0.117+ structural-RTL gates. |
 | `gddr6_protocol_synth` | any | — | GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory). |
 | `gds_ip_attribution` | any | — | Embed IP attribution metadata into the foundry |
@@ -551,6 +552,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `signoff_waiver_emit` | any | v0.1.49 | Chipignite/foundry signoff-waiver scaffold emitter. |
 | `signoff_waiver_md_emit` | any | v0.1.49 | Submitter-facing waiver Markdown emitter. |
 | `single_bus_driver_check` | any | Wave 10 | structural-RTL gate that catches the |
+| `single_testpath_guard` | any | v0.2.24 | pytest.ini must declare ONE test tree. |
 | `sizing_adjust_policy` | any | — | the fixed failure-mode → parameter-delta |
 | `sizing_history_emit` | any | — | fixed-schema validator/emitter for the |
 | `slave_tx_no_device_break_check` | any | Wave 25 | Wave 25/34 silent-bug gate. |
@@ -690,7 +692,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (609 programs)
+### `any` (611 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -920,6 +922,7 @@ _(no programs in this group)_
 - `gate_evidence_completeness_check` — v0.100 L1  _[v0.100]_
 - `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
 - `gate_reliability_register` — gate_reliability_register.py -- Self-calibrating per-gate reliability ledger.
+- `gate_self_assertion_check` — anti-fabrication gate-hole detector.  _[v0.2.24]_
 - `gate_utils` — Shared helpers for v0.117+ structural-RTL gates.  _[v0.117]_
 - `gddr6_protocol_synth` — GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory).
 - `gds_ip_attribution` — Embed IP attribution metadata into the foundry
@@ -1210,6 +1213,7 @@ _(no programs in this group)_
 - `signoff_waiver_emit` — Chipignite/foundry signoff-waiver scaffold emitter.  _[v0.1.49]_
 - `signoff_waiver_md_emit` — Submitter-facing waiver Markdown emitter.  _[v0.1.49]_
 - `single_bus_driver_check` — structural-RTL gate that catches the  _[Wave 10]_
+- `single_testpath_guard` — pytest.ini must declare ONE test tree.  _[v0.2.24]_
 - `sizing_adjust_policy` — the fixed failure-mode → parameter-delta
 - `sizing_history_emit` — fixed-schema validator/emitter for the
 - `slave_tx_no_device_break_check` — Wave 25/34 silent-bug gate.  _[Wave 25]_

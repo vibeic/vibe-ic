@@ -86,6 +86,36 @@ a non-empty `why_not_bucket_a` (run it; exit 1 lists the offenders). The gate
 exists so "I'll just append a skill paragraph" can never silently bypass the
 program-first question.
 
+### Bucket A is a LADDER of four, not two (v0.2.21 / M4 lesson)
+
+When the source is a *skill* whose prose hides a rule, "extract to a program"
+splits FOUR ways — decide per rule, in this order:
+
+1. **ALREADY-PROGRAM** — the rule is *already* implemented in an existing
+   `programs/*.py`; the skill is just documentation over it. Action: **none to
+   code** — trim the skill prose to a one-line `enforced by programs/<x>.py`
+   reference. **Check this FIRST.** In the v0.2.21 sweep of 20 skills, ~63% of
+   "extractable rules" were already programs (82 candidates → 49 genuinely new).
+   Creating a new program for a rule that already exists is duplication, not
+   program-first — and risks a *fabricated* near-duplicate. Grep `programs/` for
+   an existing checker before writing a new one.
+2. **EXTRACT-NEW** — a genuine gap: write `programs/<name>.py` + a dedicated
+   test (PASS + the real defect it guards + honest FAIL/SKIP on missing data).
+3. **AUGMENT-EXISTING** — the rule belongs in an existing *shared* program but
+   isn't there yet. When sweeping skills in parallel, **report** the augment for
+   central apply (don't let N agents edit the same shared program and conflict).
+4. **KEEP-JUDGMENT** — genuinely needs an LLM; leave in the skill with
+   `why_not_bucket_a`.
+
+**Corpus-sweep is mandatory and literal:** a new Bucket-A *guard* program must
+run CLEAN on the current repo before it ships — `python3 <new_check>.py` exit 0.
+If it fires on legitimate existing state it is a false-positive and MUST be
+narrowed or dropped (v0.2.24: an "orphan test file" guard fired on the
+mcp-eda-server / per-skill compliance suites that legitimately live outside
+`pytest.ini` testpaths — it was narrowed to "testpaths must be a single tree",
+which is the real invariant and fires zero false-positives). A guard that
+flags the very state you just shipped is not a guard, it's a bug.
+
 ## The three buckets — every recovery goes into ONE
 
 For each `(design, before-RTL, after-RTL, AI-reasoning)` recovery record:
