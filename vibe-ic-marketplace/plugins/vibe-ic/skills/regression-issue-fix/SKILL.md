@@ -65,35 +65,50 @@ generator). Constraints:
   `tests/test_phase1_fixtures_regression.py::_EXPECTED` once the
   fix passes.
 
-## Step 4 — Push, label, NEVER self-close
+## Step 4 — Self-verify, push, close with `core-closed`
+
+The core agent now SELF-VERIFIES and CLOSES the issue. Before
+closing, run the FULL plugin test suite the CI way and reproduce
+the original failure to confirm it is gone (the `本機驗證`
+evidence below).
 
 ```bash
+# 1) self-verify the CI way (reproduce + full suite)
+python3 -m pytest tests/test_phase1_fixtures_regression.py -k <project> -v
+cd vibe-ic-marketplace/plugins/vibe-ic && python3 -m pytest   # full suite
+
+# 2) push the chip-AGNOSTIC fix + version bump
 git push origin main
-# Apply wait-for-verification label via POST /labels (does NOT
-# touch state). DO NOT use PATCH /issues/<N> with state:"open"
-# — that field has caused agents to issue redundant
-# state-flip-flops (close→reopen within seconds), polluting the
-# issue timeline and triggering false notifications.
-GITHUB_TOKEN=$(cat ~/.config/github/token)
-curl -sS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
-  -H "Accept: application/vnd.github+json" \
-  -d '{"labels":["wait-for-verification"]}' \
-  "https://api.github.com/repos/reyerchu/AI_IC_design/issues/<N>/labels"
+
+# 3) close + tag core-closed (the field-audit target marker)
+gh issue close <N> --repo reyerchu/AI_IC_design
+gh issue edit <N> --repo reyerchu/AI_IC_design --add-label core-closed
 ```
 
-Per durable user feedback (memory:
-`feedback_dont_close_github_issues.md`): the core agent never
-closes a regression issue itself. Only the field agent's
-real-benchmark sweep closes it.
+Post a 繁體中文 close comment in the canonical 5-section shape
+(see below), then close + add the `core-closed` label.
 
-**Hard rule** (added 2026-05-10 after #8 / #11 close-reopen
-incidents): the ONLY issue mutations a core agent performs after
-a fix push are POST `/comments` and POST `/labels`. Never use
-PATCH `/issues/<N>` with a `state` field, never `gh issue close`,
-never `gh issue reopen`. Even if the issue is currently in a
-state you'd "fix" by closing-then-reopening, that flip-flop shows
-up in the GitHub timeline and the cron classifier — leave the
-state alone.
+**New backlog lifecycle** (replaces the retired
+`wait-for-verification` limbo): the default terminal state of a
+fixed issue is CLOSED with `core-closed`. The field agent audits
+CLOSED `core-closed` issues against the real benchmark every tick
+— on success it adds `field-verified` (terminal); if the fix is
+inadequate it `gh issue reopen`s, removes `core-closed`, and posts
+counter-evidence, putting the issue back in the core agent's queue.
+
+`wait-for-verification` is RETIRED — never apply, poll, or
+cross-check it.
+
+### Core close-comment shape (5 sections, 繁體中文)
+
+```
+Core agent 已推送修復：<sha>
+**問題**：<重述 field-agent 的問題>
+**根因**：<root cause>
+**修法**：<chip-AGNOSTIC fix + files>
+**本機驗證**：<gates/tests run + result, e.g. N/N PASS>
+Core agent 已自行驗證並關閉此 issue（已加 core-closed 標籤）。field agent 複查若發現未完整，請 reopen 並補反證。
+```
 
 ## What this skill enforces
 
@@ -106,8 +121,12 @@ state alone.
    downstream artefact.
 3. **No silent thrash.** The pre-commit guard refuses fixture
    `_EXPECTED` flips without explicit acknowledgment.
-4. **No self-close.** The verifier is the only authority on
-   whether a real-benchmark sweep passed.
+4. **Self-verify then close with `core-closed`.** The core agent
+   self-verifies (reproduce + full CI suite) and closes the issue,
+   tagging `core-closed`. The field-agent's real-benchmark audit is
+   the safety net: it adds `field-verified` on success or `gh issue
+   reopen`s (removing `core-closed`) with counter-evidence on
+   failure. `wait-for-verification` is retired.
 
 ## Cross-references
 

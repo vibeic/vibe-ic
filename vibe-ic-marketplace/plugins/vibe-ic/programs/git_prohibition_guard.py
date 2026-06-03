@@ -3,8 +3,7 @@
 (extracted from vibe-ic:core-agent-loop §Hard prohibitions).
 
 The core-agent loop has a non-negotiable deny-list of destructive git
-operations (and one GitHub operation) that must NEVER appear in the
-commands it runs:
+operations that must NEVER appear in the commands it runs:
 
   1. `git push --force` / `git push -f`     — loses upstream history.
   2. `git reset --hard`                      — loses local work.
@@ -12,9 +11,14 @@ commands it runs:
                                                that catch chip-specific
                                                literals.
   4. `git checkout .` / `git checkout --`    — discards work-in-progress.
-  5. `gh issue close`                        — verification belongs to the
-                                               field-agent; the core-agent
-                                               NEVER closes an issue.
+
+NOTE — `gh issue close` is NOT forbidden. Under the core<->field backlog
+state machine, the core-agent CLOSES an issue after it self-verifies
+(reproduce + full plugin test suite the CI way), bumps the version, pushes,
+and posts the 5-section 繁中 comment with `core-closed`. The field-agent is
+the audit/reopen safety net (`gh issue reopen` when a closed issue is found
+inadequate on the real benchmark). Neither `gh issue close` nor
+`gh issue reopen` is flagged by this guard.
 
 The skill stated these as English prose "NEVER do X". This program makes
 them a real, deterministic pre-commit / pre-run gate: feed it the command
@@ -85,11 +89,6 @@ _RULES = [
         "git checkout . / -- (discards work-in-progress)",
         # `git checkout` followed by a bare `.` or a `--` path-discard.
         re.compile(r"\bgit\b[^\n]*\bcheckout\b\s+(?:\.\s|\.$|--\s)"),
-    ),
-    (
-        "gh_issue_close",
-        "gh issue close (verification belongs to the field-agent)",
-        re.compile(r"\bgh\b[^\n]*\bissue\b[^\n]*\bclose\b"),
     ),
 ]
 

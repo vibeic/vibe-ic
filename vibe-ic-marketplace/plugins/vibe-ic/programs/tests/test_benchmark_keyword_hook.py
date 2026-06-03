@@ -85,12 +85,12 @@ class TestReminderShape:
         assert "/vibe-ic-benchmark" in out
 
     def test_includes_decision_matrix_section(self):
-        out = _run_with_prompt("benchmark")
+        out = _run_with_prompt("run benchmark")
         assert "decision matrix" in out
 
     def test_includes_anti_handroll_directive(self):
         # Doctrine guardrail: programs-first, NOT a hand-rolled harness.
-        out = _run_with_prompt("benchmark")
+        out = _run_with_prompt("run benchmark")
         assert "hand-rolled" in out
         assert "DO NOT" in out
 
@@ -98,3 +98,44 @@ class TestReminderShape:
         out = _run_with_prompt("plain text")
         assert "Benchmark keyword detected" not in out
         assert "/vibe-ic-benchmark" not in out
+
+
+class TestSensitivity:
+    """Regression for the 2026-06-03 over-sensitivity fix: bare/incidental
+    mentions of 'benchmark', internal path/compound forms, and matches that
+    live only in the envelope (not the user's `prompt` field) must NOT fire."""
+
+    def test_bare_benchmark_without_action_verb_does_not_trigger(self):
+        # the literal message that exposed the over-sensitivity
+        assert not _triggers("remove or modify benchmark hook")
+
+    def test_benchmark_noun_phrase_does_not_trigger(self):
+        assert not _triggers("commit the benchmark candidate doc to community")
+
+    def test_benchmark_harness_path_does_not_trigger(self):
+        assert not _triggers("edit benchmark-harness/score_iverilog_tb.py")
+
+    def test_benchmark_phase1_path_does_not_trigger(self):
+        assert not _triggers("the benchmark_phase1/espi L12 json changed")
+
+    def test_benchmark_enhancement_compound_does_not_trigger(self):
+        assert not _triggers("invoke the benchmark-enhancement-capture skill")
+
+    def test_action_verb_plus_standalone_benchmark_triggers(self):
+        # genuine intent must still fire
+        assert _triggers("please run the benchmark suite now")
+        assert _triggers("score the benchmark")
+
+    def test_keyword_only_in_non_prompt_envelope_field_does_not_trigger(self):
+        # "benchmark-harness" appears only in a tool-result field, not in prompt
+        envelope = ('{"prompt": "are the 3 places synced?", '
+                    '"tool_result": "benchmark-harness/score_iverilog_tb.py ran; '
+                    'benchmark_phase1 fixtures present"}\n')
+        proc = subprocess.run(
+            ["bash", str(HOOK)],
+            input=envelope, capture_output=True, text=True, timeout=5,
+        )
+        assert "Benchmark keyword detected" not in proc.stdout
+
+    def test_specific_name_in_prompt_still_triggers(self):
+        assert _triggers("how did VerilogEval do")

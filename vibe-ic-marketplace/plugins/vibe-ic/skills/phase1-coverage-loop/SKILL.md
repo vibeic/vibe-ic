@@ -69,26 +69,36 @@ python3 programs/phase1_rotation_state_advance.py advance \
 
 ## The four-step loop
 
-### Step 0 — verify-debt check (mandatory, before Step 1)
+### Step 0 — field-audit of core-closed issues (mandatory, before Step 1)
 
-The OPEN-ORGANIC-with-`wait-for-verification` `gh`-query + substring
-filter is **enforced by
-`field-agent-loop/programs/check_wait_for_verification.sh`** (reused
-unchanged):
+The core-agent now SELF-VERIFIES and CLOSES issues, tagging them
+`core-closed`. The field-agent's job is to audit those closed issues
+against the REAL benchmark and reopen any that do not hold up. Run
+this BEFORE Step 1 every tick.
+
+List CLOSED ORGANIC issues authored by me that carry `core-closed`
+and LACK `field-verified` (these are the audit targets):
 
 ```bash
-plugins/vibe-ic/skills/field-agent-loop/programs/check_wait_for_verification.sh
+gh issue list --repo reyerchu/AI_IC_design --state closed \
+    --author "@me" --label core-closed \
+    --search "ORGANIC-phase1 in:title" --json number,title,labels \
+  | python3 -c 'import sys,json; \
+print("\n".join(str(i["number"]) for i in json.load(sys.stdin) \
+  if "field-verified" not in [l["name"] for l in i["labels"]]))'
 ```
 
-For every OPEN ORGANIC issue with `wait-for-verification` whose
-title contains `phase1` or `Phase 1` or `ORGANIC-phase1`:
+For each such issue, dispatch a fresh verify agent scoped to it,
+run against the REAL benchmark, then:
 
-1. Dispatch a verify agent scoped to that issue.
-2. On VERIFIED → close + remove label.
-3. On NOT VERIFIED → comment counter-evidence + remove label.
+1. **VERIFIED ok** → add label `field-verified` (issue stays CLOSED).
+   Terminal — do not re-audit on later ticks.
+2. **NOT adequate** → `gh issue reopen` + post the counter-evidence
+   comment + remove the `core-closed` label. The issue is now OPEN
+   and the core-agent is actionable on it again.
 
-Non-negotiable. Unattended `wait-for-verification` = stalled
-core-agent slice.
+Non-negotiable. An un-audited `core-closed` issue is the only thing
+standing between a claimed fix and a verified one.
 
 ### Step 1 — review
 
@@ -164,7 +174,8 @@ First filed becomes primary; rest go into `tracking_secondary`.
 ### Step 3 — monitor
 
 `gh issue view <issue_number>` and watch for any of:
-- label `wait-for-verification` appears
+- the issue becomes CLOSED with label `core-closed` (the core-agent
+  self-verified and closed it)
 - plugin version advances past `state.last_plugin_version`
 - maintainer comment
 
@@ -186,14 +197,17 @@ that:
 - spot-checks one OTHER IC in the rotation for regression
   (re-run the gate; verdict must not have got worse)
 
+The core-agent has already self-verified and CLOSED the issue with
+`core-closed`. This step is the field-audit of that closed issue.
 Two outcomes:
 
-- **VERIFIED** → post verify comment, `gh issue close`, remove
-  `wait-for-verification` label, `state.step = 1`,
-  `state.agent_task_id = null`.
-- **NOT VERIFIED** → post counter-evidence comment with the exact
-  failing token AND a concrete suggested-fix line, remove
-  `wait-for-verification` label, keep issue OPEN, `state.step = 3`.
+- **VERIFIED** → post a verify comment ending with the line
+  `Adding `field-verified`.`, add label `field-verified` (issue stays
+  CLOSED — terminal), `state.step = 1`, `state.agent_task_id = null`.
+- **NOT VERIFIED** → `gh issue reopen`, post a counter-evidence
+  comment with the exact failing token AND a concrete suggested-fix
+  line, ending with `Reopening; removing `core-closed`.`, remove the
+  `core-closed` label, keep issue OPEN, `state.step = 3`.
 
 ### STOP CONDITION
 
@@ -311,8 +325,11 @@ the prose above defers to them, it does not re-implement them:
 - `programs/phase1_input_vs_generated_completeness_check.py` — coverage
   verdict + thresholds + SKIP_REFERENCE / SKIP_LOW_TOKENS.
 - `programs/backlog_sanitize_check.py` — chip-AGNOSTIC literal-ban.
-- `field-agent-loop/programs/check_wait_for_verification.sh` — Step 0
-  verify-debt scan.
+
+Step 0's audit-target list (CLOSED ORGANIC issues carrying
+`core-closed` but lacking `field-verified`) is a plain `gh issue list`
+query — see the Step 0 snippet above; there is no dedicated program for
+it.
 
 ## Reference
 

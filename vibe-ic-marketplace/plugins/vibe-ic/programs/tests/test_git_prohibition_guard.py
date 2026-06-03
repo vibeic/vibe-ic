@@ -31,7 +31,19 @@ def test_pass_normal_commit():
 
 def test_pass_gh_issue_edit_label():
     assert gpg.main(["--command",
-                     "gh issue edit 41 --add-label wait-for-verification"]) == 0
+                     "gh issue edit 41 --add-label core-closed"]) == 0
+
+
+def test_pass_gh_issue_close_is_allowed():
+    # Core CLOSES after self-verify under the new state machine; closing
+    # an issue must NOT be flagged.
+    assert gpg.main(["--command", "gh issue close 41 --comment done"]) == 0
+
+
+def test_pass_gh_issue_reopen_is_allowed():
+    # Field REOPENS when its audit finds a closed issue inadequate; reopen
+    # must NOT be flagged.
+    assert gpg.main(["--command", "gh issue reopen 41"]) == 0
 
 
 # ---- FAIL cases ---------------------------------------------------------
@@ -53,10 +65,6 @@ def test_fail_commit_no_verify():
 
 def test_fail_checkout_dot():
     assert gpg.main(["--command", "git checkout ."]) == 1
-
-
-def test_fail_gh_issue_close():
-    assert gpg.main(["--command", "gh issue close 41"]) == 1
 
 
 # ---- file scan + JSON + edge --------------------------------------------

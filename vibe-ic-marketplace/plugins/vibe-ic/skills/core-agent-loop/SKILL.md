@@ -1,6 +1,6 @@
 ---
 name: core-agent-loop
-description: Closed-loop core-agent that fixes plugin issues filed by the field-agent. Invoke as a cron prompt; the loop polls the repo for any OPEN non-PR issue without `wait-for-verification` label, reproduces and fixes the bug chip-AGNOSTIC-ally, bumps the patch version, pushes to main, posts a 繁體中文 fix comment in the canonical 5-section shape, and re-applies the `wait-for-verification` label. NEVER closes issues — verification is the field-agent's job.
+description: Closed-loop core-agent that fixes plugin issues filed by the field-agent. Invoke as a cron prompt; the loop polls the repo for ANY OPEN non-PR issue (new OR reopened — no label gating, no comment classifier), reproduces and fixes the bug chip-AGNOSTIC-ally, SELF-VERIFIES (reproduce + run the full plugin test suite the CI way), bumps the patch version, pushes to main, posts a 繁體中文 fix comment in the canonical 5-section shape (incl 本機驗證 evidence), then `gh issue close` + adds the `core-closed` label. CLOSED is the terminal state; the field-agent audits closed issues on the real benchmark and reopens any it finds inadequate.
 ---
 
 
@@ -19,13 +19,20 @@ description: Closed-loop core-agent that fixes plugin issues filed by the field-
 
 ## Purpose
 
-The core-agent is the **fix-and-push** half of the Vibe-IC quality
-loop. The field-agent (see `vibe-ic:field-agent-loop`) runs the
-plugin against real benchmark IC projects, finds systematic gaps,
-and files them as `ORGANIC:` GitHub issues. The core-agent picks
-those up at every cron wake-up, ships a deterministic
-chip-AGNOSTIC fix, hands back via the `wait-for-verification`
-label, and waits for the field-agent to verify on real hardware.
+The core-agent is the **fix-verify-and-close** half of the Vibe-IC
+quality loop. The field-agent (see `vibe-ic:field-agent-loop`) runs
+the plugin against real benchmark IC projects, finds systematic
+gaps, and files them as `ORGANIC:` GitHub issues. The core-agent
+picks those up at every cron wake-up, ships a deterministic
+chip-AGNOSTIC fix, **self-verifies** (reproduce + run the full
+plugin test suite the CI way), then **closes** the issue and adds
+the `core-closed` label. CLOSED is the terminal state. The
+field-agent is the audit/reopen safety net: each cron tick it
+re-checks closed `core-closed` issues on the REAL benchmark, marks
+the good ones `field-verified` (stays closed), and `gh issue
+reopen`s any it finds inadequate (which makes the issue actionable
+to the core-agent again). This replaces the old
+`wait-for-verification` limbo — that label is RETIRED.
 
 The loop is **chip-AGNOSTIC**: fixes describe general plugin
 behaviour (regex broadens, schema accepts more synonyms, gate
@@ -43,8 +50,7 @@ Run **before** any other action, deterministically:
 python3 plugins/vibe-ic/skills/core-agent-loop/programs/poll.py
 ```
 
-The program lists every open non-PR issue partitioned into
-`actionable` (no `wait-for-verification` label) vs `waiting`. Exit
+The program lists every open non-PR issue as `actionable`. Exit
 codes are the cron driver's signal:
 
 | rc | Meaning | Core-agent action |
@@ -53,9 +59,12 @@ codes are the cron driver's signal:
 | 1  | ≥1 actionable | Process each issue listed |
 | 2  | I/O / auth error | Log + exit; retry next tick (do NOT treat as actionable) |
 
-No LLM classification — the label state is the sole source of
-truth. `NEW` / `FEEDBACK` / `WAITING` collapse into one rule:
-**actionable iff `wait-for-verification` absent.**
+No LLM classification, no label gating, no comment classifier. One
+rule: **actionable = ANY open non-PR issue (new OR reopened).** A
+reopened issue is just an open issue again, so the field-agent's
+reopen automatically puts the issue back in front of the
+core-agent — no special-casing. (`waiting` is always empty; the
+key is retained in the report shape for backwards compatibility.)
 
 ### Step 2 — reproduce + fix
 
@@ -78,6 +87,13 @@ For each actionable issue:
    literals; the fix must work across **every** benchmark chip.
 4. Add tests covering BOTH the new path AND a regression-guard for
    the prior behaviour. Convention: `tests/test_v1_<MAJOR>_<MINOR>_<PATCH>_<slug>.py`.
+5. **Self-verify** before closing: reproduce the original failing
+   scenario and confirm it now passes, AND run the FULL plugin test
+   suite the CI way (see Step 3 — both test trees, not a `-k`/single
+   file subset). Capture the result (e.g. `N/N PASS`) — it becomes
+   the `本機驗證` evidence in the Step 4 close comment. Closing is
+   the core-agent's responsibility precisely because the core-agent
+   self-verifies first; the field-agent is the downstream audit net.
 
 ### Step 3 — push
 
@@ -113,10 +129,11 @@ git commit -m "vX.Y.Z — for #<num> <one-line summary>"
 git push origin main
 ```
 
-### Step 4 — comment + label
+### Step 4 — self-verify + CLOSE
 
 Post a 繁體中文 fix comment on the issue. **5 mandatory sections
-in this exact shape**:
+in this exact shape** (the `本機驗證` section carries the Step-2.5
+self-verify evidence; the trailing line is the field-audit anchor):
 
 ```
 Core agent 已推送修復：<commit_sha_short>
@@ -126,22 +143,28 @@ Core agent 已推送修復：<commit_sha_short>
 **修法**：<chip-AGNOSTIC fix description + files changed>
 **本機驗證**：<gates/tests run + result, e.g. "N/N PASS">
 
-請 field agent 在實機 benchmark 驗證；通過請關閉此 issue，不通過請補留言。
+Core agent 已自行驗證並關閉此 issue（已加 core-closed 標籤）。field agent 複查若發現未完整，請 reopen 並補反證。
 ```
 
-Then apply the `wait-for-verification` label:
+Then **close** the issue and apply the `core-closed` label:
 
 ```bash
-gh issue edit <num> --add-label wait-for-verification
+gh issue close <num>
+gh issue edit <num> --add-label core-closed
 # OR via curl:
 curl -sH "Authorization: Bearer $TOKEN" \
      -H "Accept: application/vnd.github+json" \
      -X POST https://api.github.com/repos/<owner>/<repo>/issues/<num>/labels \
-     -d '{"labels":["wait-for-verification"]}'
+     -d '{"labels":["core-closed"]}'
 ```
 
-**DO NOT close the issue.** Verification is the field-agent's
-responsibility. The label is the hand-off signal.
+**CLOSE the issue after self-verify.** CLOSED is the terminal
+state. The `core-closed` label marks the issue as a field-audit
+target. Do NOT apply `wait-for-verification` (RETIRED) and do NOT
+apply `field-verified` (that is the field-agent's marker). If the
+field-agent's audit finds the fix inadequate it removes
+`core-closed`, reopens the issue, and posts counter-evidence —
+which makes the issue actionable to the core-agent again.
 
 ### STOP CONDITION
 
@@ -153,9 +176,9 @@ is a healthy idle state, not a stop signal.
 ## Hard prohibitions (non-negotiable)
 
 These are no longer prose-only — each is a DETERMINISTIC gate. Rules
-1–5 are enforced by **`programs/git_prohibition_guard.py`** (feed it the
-command strings before running them); rule 6 by
-**`programs/source_chip_agnostic_check.py`**; rule 7 by
+1–4 are enforced by **`programs/git_prohibition_guard.py`** (feed it the
+command strings before running them); rule 5 by
+**`programs/source_chip_agnostic_check.py`**; rule 6 by
 **`programs/field_agent_terminology_scan.py`** (feed it the comment /
 external text before publishing).
 
@@ -165,9 +188,16 @@ external text before publishing).
 | 2 | NEVER `git reset --hard` on tracked branches | Loss of local work | `git_prohibition_guard.py` |
 | 3 | NEVER `git commit --no-verify` | Bypasses pre-commit gates that catch chip-specific literals | `git_prohibition_guard.py` |
 | 4 | NEVER `git checkout .` or similar discard | Loss of work-in-progress | `git_prohibition_guard.py` |
-| 5 | NEVER close a GitHub issue (`gh issue close`) | Verification belongs to field-agent | `git_prohibition_guard.py` |
-| 6 | NEVER use chip-specific string literals as detection logic | Fix must be general | `source_chip_agnostic_check.py` |
-| 7 | Use term "field agent" (not "debug agent") in external text | Project terminology decided 2026-05-10 | `field_agent_terminology_scan.py` |
+| 5 | NEVER use chip-specific string literals as detection logic | Fix must be general | `source_chip_agnostic_check.py` |
+| 6 | Use term "field agent" (not "debug agent") in external text | Project terminology decided 2026-05-10 | `field_agent_terminology_scan.py` |
+
+**Closing is REQUIRED, not forbidden.** The old "NEVER close a
+GitHub issue" prohibition is REMOVED. Under the core<->field
+backlog state machine the core-agent MUST `gh issue close` (and add
+`core-closed`) after self-verifying its fix — CLOSED is the terminal
+state. `gh issue close` / `gh issue reopen` are NOT flagged by
+`git_prohibition_guard.py`. The field-agent's reopen, not a label
+limbo, is the audit safety net.
 
 ## State
 
@@ -178,7 +208,8 @@ comments). Every tick is independent — no `state.json` file.
 This is the inverse of the field-agent (which carries
 `_field_agent_state.json`). The reason: core-agent reacts to one
 issue at a time and the response is fully captured by the
-label-state transition. No multi-step LLM dispatch to track.
+open→closed transition (+ `core-closed` label). No multi-step LLM
+dispatch to track.
 
 ## Cron-invocation template
 
@@ -194,10 +225,12 @@ Each tick must:
      c. Bump patch version (plugin.json + marketplace.json),
         commit (`vX.Y.Z — for #<num> <summary>`), push origin main
         (NO --force, NO --no-verify).
-     d. Post 繁體中文 fix comment in the canonical 5-section shape
-        (see SKILL.md §Step 4).
-     e. Apply label `wait-for-verification`.
-     f. Do NOT close the issue.
+     d. Self-verify: reproduce the original failure now passes AND
+        run the FULL plugin test suite the CI way; capture the
+        result as the `本機驗證` evidence.
+     e. Post 繁體中文 fix comment in the canonical 5-section shape
+        (see SKILL.md §Step 4), then `gh issue close` <num> and add
+        label `core-closed`.
 4. If rc=2 → log + exit. Retry next tick.
 
 Hard prohibitions: see SKILL.md §Hard prohibitions.
@@ -225,16 +258,14 @@ and re-run until PASS, THEN post the comment.
 Deterministic gates backing this skill (the loop SCAFFOLD is fully
 programmable; only Step 2 fix-authoring is genuine LLM judgment):
 
-- Poll / actionability partition: `programs/poll.py`
-- Fix-comment 5-section shape: `compliance.yaml`
+- Poll / actionability (every open non-PR issue): `programs/poll.py`
+- Close-comment 5-section shape: `compliance.yaml`
   (+ `_shared/skill_compliance_check.py`)
-- Forbidden git/gh ops (prohibitions 1–5): `programs/git_prohibition_guard.py`
-- Chip-AGNOSTIC source scan (prohibition 6): `programs/source_chip_agnostic_check.py`
-- Terminology guard (prohibition 7): `programs/field_agent_terminology_scan.py`
+- Forbidden git/gh ops (prohibitions 1–4): `programs/git_prohibition_guard.py`
+  (`gh issue close` / `gh issue reopen` are NOT flagged)
+- Chip-AGNOSTIC source scan (prohibition 5): `programs/source_chip_agnostic_check.py`
+- Terminology guard (prohibition 6): `programs/field_agent_terminology_scan.py`
 - Version equality: `programs/marketplace_version_sync_check.py`
 - Version strict-monotonic bump: `programs/version_bump_monotonic_check.py`
 - Full-suite (not subset) pytest run: `programs/full_suite_run_check.py`
 - Field-agent counterpart: `vibe-ic:field-agent-loop`
-- Backwards-compat thin wrapper:
-  `tools/core_agent/poll_open_issues.py` (re-exports `poll()`
-  from `programs/poll.py` so legacy invocations still work)

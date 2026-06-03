@@ -1,6 +1,6 @@
 ---
 name: field-agent-loop
-description: Closed-loop field-agent that drives plugin quality improvements by running phase1/phase2/phase3 on benchmark IC projects, filing ORGANIC backlog issues for systematic plugin gaps, and verifying fixes the core-agent ships back. Invoke as a cron prompt with a target benchmark folder and an LLM-review prompt; the loop self-advances through review → file → monitor → verify until STOP CONDITION (no new gaps + no open primary/secondary issue).
+description: Closed-loop field-agent that drives plugin quality improvements by running phase1/phase2/phase3 on benchmark IC projects, filing ORGANIC backlog issues for systematic plugin gaps, and AUDITING the fixes the core-agent self-verifies and CLOSES. Invoke as a cron prompt with a target benchmark folder and an LLM-review prompt; every tick the loop first audits CLOSED `core-closed` issues against the real benchmark (VERIFIED → add `field-verified`, NOT adequate → `gh issue reopen` + remove `core-closed`), then self-advances through review → file → monitor → audit until STOP CONDITION (no new gaps + no open primary/secondary issue + no un-audited closed issue).
 ---
 
 
@@ -25,9 +25,19 @@ The field-agent is the **organic improvement engine** for the
 vibe-ic plugin. It treats real IC benchmark projects as a test
 harness: re-run the plugin at HEAD, ask a fresh LLM to compare
 source docs against generated output, and convert every
-systematic gap it finds into a structured backlog issue. When the
-core-agent ships a fix, the field-agent verifies it on the actual
-benchmark — not on the unit test fixtures — and closes the loop.
+systematic gap it finds into a structured backlog issue.
+
+The core-agent now **self-verifies and CLOSES** each issue it
+fixes (adding the `core-closed` label). The default terminal
+state is therefore **CLOSED**. The field-agent is the
+**audit/reopen safety net**: at every cron tick it re-checks the
+core-agent's closed issues on the actual benchmark — not on the
+unit test fixtures. If the fix holds on real silicon it stamps
+`field-verified` (terminal); if it does not, the field-agent
+**reopens** the issue (`gh issue reopen`), posts counter-evidence,
+and removes `core-closed` so the core-agent re-engages. This
+audit/reopen model is what kills the old wait-for-verification
+limbo where a fixed issue sat un-confirmed forever.
 
 The loop is **chip-AGNOSTIC**: filed issues describe general
 plugin gaps (e.g. "extractor X doesn't match canonical pattern Y"),
@@ -110,45 +120,72 @@ When the dispatched agent reports concrete quality gaps:
 For multiple gaps in one review: file each as a separate issue.
 First filed becomes primary; rest go into `tracking_secondary`.
 
-### Step 3 — monitor
+### Step 3 — monitor (until core closes)
 
 `gh issue view <issue_number>` and watch for any of:
-- label `wait-for-verification` appears
+- the issue transitions to **CLOSED** with label `core-closed`
+  (the core-agent self-verified + closed it)
 - plugin version advances past `state.last_plugin_version`
 - maintainer comment
 
-Either trigger → `state.step = 4`.
+The issue going CLOSED+`core-closed` is the primary trigger →
+`state.step = 4` (the audit step). The closed-audit rule below
+will pick the issue up regardless, but advancing the tracked
+issue's step keeps the state file honest.
 
 If plugin version bumps for an unrelated track (e.g. PnR fixes
 on a phase1 issue), just update `state.last_plugin_version` to
 the new version and stay in step 3.
 
-### Step 4 — verify
+### Step 4 — audit (verify the closed fix, reopen if inadequate)
 
 **Re-dispatch a fresh general-purpose Agent** (not the original
-task — must be a clean context) with a verify prompt that:
+task — must be a clean context) with an audit prompt that:
 - names the specific issue + the v1.6.x test file that ships the
   fix
 - clean-wipes the affected benchmark IC(s) and re-runs phase1/
-  phase2/phase3 as needed
+  phase2/phase3 as needed against the **real benchmark**
 - inspects the load-bearing fields the fix touches
 - reports PASS criteria objectively
 - spot-checks the unaffected ICs for regression
 
 Two outcomes:
 
-- **VERIFIED** → post a verify comment, `gh issue close`, remove
-  `wait-for-verification` label, `state.step = 1`,
+- **VERIFIED ok** → post a verify comment, add label
+  `field-verified` (the issue STAYS CLOSED — this is the terminal
+  do-not-re-audit marker), `state.step = 1`,
   `state.agent_task_id = null`.
-- **NOT VERIFIED** → post a counter-evidence comment with the
-  exact failing field/value AND a concrete suggested-fix line,
-  remove `wait-for-verification` label (so core-agent re-engages
-  on a fresh slice), keep issue OPEN, `state.step = 3`.
+  ```bash
+  gh issue edit <num> --repo "$REPO" --add-label field-verified
+  ```
+- **NOT adequate** → `gh issue reopen` + post a counter-evidence
+  comment (see the FIELD reopen-comment shape below) with the
+  exact failing field/value on the real benchmark AND a concrete
+  suggested-fix line, then remove `core-closed` so the core-agent
+  treats it as actionable again. The issue is now OPEN; track it
+  as the primary and go to `state.step = 3`.
+  ```bash
+  gh issue reopen <num> --repo "$REPO"
+  gh issue comment <num> --repo "$REPO" --body-file reopen_comment.md
+  gh issue edit <num> --repo "$REPO" --remove-label core-closed
+  ```
+
+**FIELD reopen-comment shape** (post on NOT-adequate):
+
+```
+Field agent 複查未通過，已 reopen：
+**複查對象**：#<num> <title>
+**實機證據**：<failing field/value on the real benchmark>
+**建議修法**：<concrete suggested-fix line>
+（已移除 core-closed 標籤；等待 core agent 重新處理。）
+```
 
 ### STOP CONDITION
 
 At Step 1: if the fresh review agent reports **STOP_RECOMMENDATION: YES**
-(no new gaps AND no open primary/secondary issue), then:
+(no new gaps AND no open primary/secondary issue AND the closed-audit
+rule below returns an empty list — i.e. no un-audited `core-closed`
+issue remains), then:
 
 ```bash
 CronList  # find this cron's id
@@ -158,31 +195,49 @@ echo "STOP cron."
 
 Exit.
 
-## The deterministic wait-for-verification rule
+## The deterministic closed-audit rule
 
-The cron MAY have filed issues across multiple field-agent
-sessions (e.g. one cron's verify shipped the slice for a
-neighbouring cron's umbrella issue). Without an explicit cross-
-check, the loop drifts: it monitors only its own primary issue
-and misses `wait-for-verification` on others.
+The core-agent now self-verifies, CLOSES, and stamps `core-closed`
+on every issue it fixes. The cron MAY have filed issues across
+multiple field-agent sessions (e.g. one cron's audit shipped the
+slice for a neighbouring cron's umbrella issue). Without an
+explicit cross-check, the loop drifts: it tracks only its own
+primary issue and never re-checks the core-agent's other closed
+fixes on real silicon.
 
 **Therefore: at every cron tick, BEFORE Step 1, run:**
 
 ```bash
-plugins/vibe-ic/skills/field-agent-loop/programs/check_wait_for_verification.sh
+plugins/vibe-ic/skills/field-agent-loop/programs/check_closed_for_field_audit.sh
 ```
 
 (The script is bundled with this skill.)
 
-It returns the list of all OPEN ORGANIC issues authored by you
-that currently carry `wait-for-verification`. For each:
+It returns the list of all **CLOSED** ORGANIC issues authored by
+you that carry `core-closed` and **LACK** `field-verified`. For
+each, dispatch a fresh verify agent against the **real benchmark**:
 
-1. Dispatch a verify agent scoped to that issue.
-2. On VERIFIED → close + remove label.
-3. On NOT VERIFIED → comment counter-evidence + remove label.
+1. Dispatch a verify agent scoped to that issue (clean context).
+2. On **VERIFIED ok** → add label `field-verified`; the issue
+   **stays CLOSED** (terminal do-not-re-audit marker).
+   ```bash
+   gh issue edit <num> --repo "$REPO" --add-label field-verified
+   ```
+3. On **NOT adequate** → `gh issue reopen` + post the FIELD
+   reopen-comment (counter-evidence) + remove `core-closed` so the
+   issue returns to OPEN and the core-agent treats it as
+   actionable again.
+   ```bash
+   gh issue reopen <num> --repo "$REPO"
+   gh issue comment <num> --repo "$REPO" --body-file reopen_comment.md
+   gh issue edit <num> --repo "$REPO" --remove-label core-closed
+   ```
 
-This is **non-negotiable**: an unattended `wait-for-verification`
-label means a core-agent slice is stalled waiting for your gate.
+This is **non-negotiable**: an un-audited `core-closed` issue
+means a core-agent fix has never been confirmed on real silicon.
+The field-agent no longer waits for any `wait-for-verification`
+label — that label is **RETIRED**; the field audits CLOSED issues
+instead.
 
 ## Constraints (non-negotiable)
 
@@ -209,6 +264,13 @@ label means a core-agent slice is stalled waiting for your gate.
 You are the field-agent loop for <target>. State at
 <target>/_field_agent_state.json.
 
+At EVERY tick, BEFORE Step 1, run the deterministic closed-audit
+rule (programs/check_closed_for_field_audit.sh): for each CLOSED
+`core-closed` issue lacking `field-verified`, dispatch a verify
+agent against the real benchmark — VERIFIED → add `field-verified`
+(stays closed); NOT adequate → `gh issue reopen` + counter-evidence
+comment + remove `core-closed`.
+
 [paste the four-step loop above, adapted to the target intent]
 
 LLM-review prompt body (Step 1):
@@ -221,7 +283,7 @@ minute interval; field-agent self-paces from there.
 
 ## Reference
 
-- Helper script: `programs/check_wait_for_verification.sh`
+- Helper script: `programs/check_closed_for_field_audit.sh`
 - Backlog YAML schema + sanitize: `vibe-ic:community-backlog-submit`
 - Phase2a deep review: `vibe-ic:phase1-completeness-deep-review`
 - Compliance gate: `compliance.yaml` (run after producing

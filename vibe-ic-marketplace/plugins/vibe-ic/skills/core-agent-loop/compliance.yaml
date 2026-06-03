@@ -56,12 +56,15 @@ requirements:
       gates / tests run and result (e.g. "N/N PASS").
     pattern: '\*\*本機驗證\*\*：'
 
-  - id: R6_handback_closing_line
+  - id: R6_self_close_trailing_line
     description: >-
-      Comment must contain a hand-back instruction in the canonical
-      form: ask field agent to verify on benchmark, with
-      conditional close / re-comment guidance.
-    pattern: '請 field agent 在實機 benchmark 驗證'
+      Comment must contain the canonical self-close trailing line:
+      core agent has self-verified + closed the issue (core-closed
+      label applied) and invites the field agent to reopen + post
+      counter-evidence if its audit finds the fix inadequate. This
+      is the field-audit anchor that REPLACES the retired
+      wait-for-verification hand-back line.
+    pattern: 'Core agent 已自行驗證並關閉此 issue（已加 core-closed 標籤）。field agent 複查若發現未完整，請 reopen 並補反證。'
 
   - id: R7_chip_agnostic_language
     description: >-

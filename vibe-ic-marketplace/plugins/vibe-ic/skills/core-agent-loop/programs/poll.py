@@ -6,14 +6,16 @@ The core-agent calls this FIRST at every cron wake-up. The rule is
 intentionally simple so the agent doesn't drift into LLM-judgement
 loops:
 
-    ACTIONABLE = any open non-PR issue that has NO `wait-for-verification`
-                 label.
+    ACTIONABLE = ANY open non-PR issue (new OR reopened).
 
-`NEW`, `FEEDBACK`, `WAITING` classifications are collapsed into this one
-predicate: an issue is actionable iff the verification flag is absent.
-Once the core-agent fixes the issue and re-applies the label, the issue
-becomes non-actionable until the field-agent removes the flag (signalling
-counter-evidence).
+There is NO label gating and NO comment classifier. The
+`wait-for-verification` flag is RETIRED: an open issue is always
+actionable, because the new state machine makes CLOSED the terminal
+state. The core-agent self-verifies + closes each issue (adding the
+`core-closed` label); the field-agent audits closed issues and
+reopens any it finds inadequate. A reopened issue is just an open
+issue again — so it is actionable by the same predicate, with no
+special-casing.
 
 Usage
 -----
@@ -43,7 +45,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 import urllib.error
 import urllib.request
@@ -51,7 +52,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 _DEFAULT_REPO = "reyerchu/AI_IC_design"
-_WAIT_LABEL = "wait-for-verification"
 _API_BASE = "https://api.github.com"
 
 
@@ -112,141 +112,18 @@ def _list_open_issues(repo: str, token: str) -> List[Dict[str, Any]]:
     return out
 
 
-_FEEDBACK_MARKERS = (
-    "not verified",
-    "removing wait-for-verification",
-    "round-2 verify",
-    "round-3 verify",
-    "round-4 verify",
-    "round-5 verify",
-)
-
-# v1.6.276 — feedback-override false-positive guard. Any comment
-# starting with one of these prefixes is a core-agent self-emitted
-# fix-summary template (the canonical 繁體中文 5-section comment).
-# Such comments routinely QUOTE the field-agent's prior NOT VERIFIED
-# marker in their root-cause / round-N text, which previously tripped
-# the v1.6.268 feedback override and kept already-labelled issues
-# falsely actionable. Skip override when latest comment is clearly
-# the core agent's own self-acknowledgement.
-_CORE_AGENT_SELF_COMMENT_PREFIXES = (
-    "core agent 已推送修復",
-    "core agent 已推送 round",
-    # v1.6.276 — alternative round-N fix-summary template the
-    # core agent emits. Match optional leading `**` markdown bold
-    # the strip-lstrip in the caller does not remove.
-    "**v1.6.",
-    "v1.6.",
-    "修復摘要",
-)
-
-
-_CORE_AGENT_SELF_SIGNATURE_RE = re.compile(
-    # Match a comment that opens with any canonical core-agent
-    # fix-announcement template. Case-insensitive; leading
-    # markdown markers (#, *, whitespace combos) tolerated.
-    #
-    # Variants observed in the wild (any one is sufficient):
-    #   * "Core agent 已推送修復" / "Core agent 已推送 round-N"
-    #     — the 5-section 繁體中文 canonical template
-    #   * "**v1.6.X 修復摘要 ..."
-    #     — round-N alt template (issue-prefixed)
-    #   * "**Fixed — v1.6.X 已 push**"
-    #     — v1.6.278 worktree-agent variant (English "Fixed" +
-    #       Chinese "已 push" + commit SHA)
-    #   * "**修復完成 v1.6.X** / **修復完成 vX.Y.Z（round-N）**"
-    #     — alternative round-N template
-    #   * "**修復摘要**"
-    #     — bare 修復摘要 opener
-    #   * "## v1.6.X 修復 — round-N ..." (v1.6.282)
-    #     — ATX-heading round-N self-acknowledgement form
-    #   * "## 修復確認 — v1.6.X 已發佈" (v1.6.282)
-    #     — ATX-heading initial fix confirmation form
-    #   * "## v1.6.X 修復報告（#NNN round-N）" (v1.6.292)
-    #     — ATX-heading round-N detailed-report variant
-    # v1.6.282 widening — prefix changed from `\s*\*{0,2}\s*` to
-    # `[\s#*]*` so leading `##` ATX-heading markers are consumed;
-    # added `v\d+\.\d+\.\d+\s+修復` (no 摘要 required) and
-    # `修復確認` variants. Existing alternatives retained.
-    # v1.6.292 widening — added `修復報告` variant and extended
-    # `v\d+\.\d+\.\d+\s+修復` continuation set to also accept
-    # `報告` / `（` (full-width paren) for the round-N report form.
-    r"^[\s#*]*"
-    r"(?:core[-\s]+agent\s*已推送|"
-    r"fixed\s*[—-]+\s*v\d+\.\d+\.\d+|"
-    r"修復完成\s+v\d+\.\d+\.\d+|"
-    r"v\d+\.\d+\.\d+\s+修復(?:摘要|報告|\s*[—\-（(])|"
-    r"#\d+\s+round|"
-    r"修復確認|"
-    r"修復報告|"
-    r"修復摘要)",
-    re.IGNORECASE,
-)
-
-
-def _classify(issue: Dict[str, Any],
-              latest_comment_body: Optional[str] = None) -> Dict[str, Any]:
-    """Classify an issue as actionable or waiting.
-
-    Primary rule: actionable iff `wait-for-verification` label absent.
-
-    v1.6.268 — for #123/#124/#125 round-2 shared-login blind spot.
-    Secondary rule (race-condition guard): when `latest_comment_body`
-    is provided and contains a feedback marker (e.g. `NOT VERIFIED`,
-    `Removing wait-for-verification`, `Round-N verify`), force the
-    issue actionable even if the label is still present. This catches
-    the race where the field-agent has posted counter-evidence but
-    label removal lagged, AND the legacy case where both core-agent
-    and field-agent share the same GitHub login (login-based
-    classifiers cannot distinguish them, but the comment body still
-    carries the field-agent's verdict markers).
-
-    v1.6.276 — false-positive guard. When the latest comment opens
-    with the core-agent self-template prefix
-    (`Core agent 已推送修復` / `Core agent 已推送 round-N`), the
-    feedback override is SUPPRESSED even if the comment quotes
-    `NOT VERIFIED` in its root-cause narrative. The label state
-    alone governs actionability for this case — quoting the
-    field-agent's prior feedback in a fix-summary must not flip the
-    issue back to actionable until the field-agent themself posts a
-    fresh verdict.
-    """
+def _to_entry(issue: Dict[str, Any]) -> Dict[str, Any]:
+    """Project a raw GitHub issue into the report entry shape."""
     labels = [lbl.get("name") for lbl in (issue.get("labels") or [])]
     labels = [l for l in labels if l]
-    waiting = _WAIT_LABEL in labels
-    feedback_override = False
-    if latest_comment_body:
-        body_low = latest_comment_body.lower()
-        is_core_self_template = (
-            _CORE_AGENT_SELF_SIGNATURE_RE.match(latest_comment_body)
-            is not None
-        )
-        if not is_core_self_template:
-            for marker in _FEEDBACK_MARKERS:
-                if marker in body_low:
-                    feedback_override = True
-                    break
-    actionable = (not waiting) or feedback_override
     return {
         "number":   issue.get("number"),
         "title":    issue.get("title") or "",
         "labels":   labels,
-        "actionable": actionable,
-        "feedback_override": feedback_override,
+        "actionable": True,
         "updated_at": issue.get("updated_at"),
         "html_url":  issue.get("html_url"),
     }
-
-
-def _latest_comment_body(repo: str, issue_number: int,
-                        token: str) -> Optional[str]:
-    """Fetch the most recent comment body on an issue (or None)."""
-    url = (f"{_API_BASE}/repos/{repo}/issues/{issue_number}/comments"
-           f"?per_page=100")
-    status, data = _api_get(url, token)
-    if status != 200 or not isinstance(data, list) or not data:
-        return None
-    return data[-1].get("body") or ""
 
 
 def _print_text(report: Dict[str, Any]) -> None:
@@ -258,53 +135,35 @@ def _print_text(report: Dict[str, Any]) -> None:
         print("(no actionable issues)")
         return
     print()
-    print("ACTIONABLE_ISSUES (no `wait-for-verification` label):")
+    print("ACTIONABLE_ISSUES (every open non-PR issue):")
     for it in report["actionable"]:
         labels_s = ",".join(it["labels"]) or "-"
         print(f"  #{it['number']}\t[{labels_s}]\t{it['updated_at']}\t"
               f"{it['title'][:80]}")
-    if report["waiting"]:
-        print()
-        print("WAITING (skipped — has `wait-for-verification`):")
-        for it in report["waiting"]:
-            print(f"  #{it['number']}\t{it['title'][:80]}")
 
 
 def poll(repo: str = _DEFAULT_REPO,
          token: Optional[str] = None) -> Dict[str, Any]:
     """Public entry point. Returns the report dict shape used by both
-    the CLI and any downstream programmatic caller (e.g. cron wrapper)."""
+    the CLI and any downstream programmatic caller (e.g. cron wrapper).
+
+    New rule: every open non-PR issue is actionable. No label gating,
+    no comment classifier. `waiting` is always empty (kept in the
+    report shape for backwards compatibility)."""
     tok = token or _load_pat()
     if not tok:
         raise RuntimeError(
             "no GitHub PAT found — set $GITHUB_TOKEN, $GH_TOKEN, "
             "or place at ~/.config/github/token")
     issues = _list_open_issues(repo, tok)
-    classified: List[Dict[str, Any]] = []
-    for it in issues:
-        # v1.6.268 — for #123/#124/#125 round-2. Cross-check the
-        # latest-comment body for feedback markers when the label
-        # is present, so a stale `wait-for-verification` doesn't
-        # mask fresh field-agent counter-evidence (shared-login
-        # blind spot).
-        labels = [lbl.get("name") for lbl in (it.get("labels") or [])]
-        labels = [l for l in labels if l]
-        body: Optional[str] = None
-        if _WAIT_LABEL in labels:
-            try:
-                body = _latest_comment_body(repo, it.get("number") or 0, tok)
-            except Exception:
-                body = None
-        classified.append(_classify(it, latest_comment_body=body))
-    actionable = [c for c in classified if c["actionable"]]
-    waiting = [c for c in classified if not c["actionable"]]
+    actionable = [_to_entry(it) for it in issues]
     return {
         "repo":             repo,
-        "total_open":       len(classified),
+        "total_open":       len(actionable),
         "actionable_count": len(actionable),
-        "waiting_count":    len(waiting),
+        "waiting_count":    0,
         "actionable":       actionable,
-        "waiting":          waiting,
+        "waiting":          [],
     }
 
 
