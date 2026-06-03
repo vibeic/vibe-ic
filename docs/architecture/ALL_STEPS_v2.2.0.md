@@ -9,7 +9,7 @@ auto-generated in `FLOW_STEPS_GENERATED.md`.
 
 **Phase → Stage map**
 
-- **Phase 1** — Spec & Documents → D1–D5
+- **Phase 1** — Spec & Documents → two convergent input paths: **Agent path** (PM Agent · IC Expert Agent) · **doc-gen path** (D1–D5)
 - **Phase 2** — RTL → Synthesis → Stage 1 (RTL+Verify) · Stage 2 (Synthesis+DFT)
 - **Phase 3** — Physical → Tapeout → Stage 3 (Physical+Sign-off) · Stage 4 (Output+Tapeout)
 - **Parallel** — Analog A1–A9 · Mixed-signal M1–M4
@@ -18,7 +18,33 @@ auto-generated in `FLOW_STEPS_GENERATED.md`.
 
 ## Phase 1 — Spec & Documents
 
-### D1–D5 (pre-flow · not in the 1→33 count)
+Phase 1 has **two convergent input paths** that both yield the same L1–L23 layer
+documents. There is intentionally **no Phase 1a/1b sub-numbering** — per RFC v2.0
+§8.2 the entry difference is just an input subdirectory, not a phase split, since
+both paths produce L1–L13:
+
+- `phase1/input_prompt/` — free text / natural language → the **Agent path** (PM Agent + IC Expert Agent).
+- `phase1/input_doc/` — vendor docs / structured YAML → the **deterministic doc-gen path** (D1–D5).
+
+Both converge on the L1–L23 docs that feed Phase 2.
+
+### Agent path — `phase1/input_prompt/` · 2 Agent Skills
+
+When the input is free text, two agents drive Phase 1. The PM Agent faces the user;
+the IC Expert Agent works behind it and never talks to the user directly.
+
+| # | Agent Skill | Role | Faces user? |
+|---|---|---|---|
+| 1 | **PM Agent** (`agents/pm-agent.md`) | Natural-language front door: NL-ingest → gap dialogue (one question at a time, in the user's own words) → confirm the fact graph → hand off. Turns user product-talk into L1–L9 facts. | ✅ yes |
+| 2 | **IC Expert Agent** (`agents/ic-expert-agent.md`) | Silicon reviewer behind the PM Agent: reviews every layer for technical completeness, fills auto-decided defaults (with `auto_decided` + `reasoning` trace), cross-checks layers (L5↔L4 pins, L6↔L5 signals, L9↔L5+L6+L8), applies design conservatism. **This is the plugin's IC-expertise store** — its per-layer review checklists are where domain knowledge accumulates (every `benchmark-enhancement-capture` Bucket-B recovery lands here). | ❌ no — only via PM Agent |
+
+> Hand-off chain: user free-text → **PM Agent** (NL-ingest + gap dialogue) → fact graph
+> → **IC Expert Agent** (review / fill / cross-layer consistency) → finalized L-docs.
+> The IC Expert Agent is where the plugin compounds silicon knowledge over time; the
+> PM Agent keeps the non-expert user in plain language throughout. The handed-off facts
+> then flow through the same doc-gen extractors below.
+
+### Deterministic doc-gen path — `phase1/input_doc/` · D1–D5 (pre-flow · not in the 1→33 count)
 
 | # | Step | Tool / How |
 |---|---|---|
@@ -122,13 +148,14 @@ auto-generated in `FLOW_STEPS_GENERATED.md`.
 
 | Phase | Stages | Steps |
 |---|---|---|
-| Phase 1 — Spec & Documents | (pre-flow) | D1–D5 |
+| Phase 1 — Spec & Documents | two input paths (Agent · doc-gen) | D1–D5 + PM Agent · IC Expert Agent |
 | Phase 2 — RTL → Synthesis | Stage 1 · Stage 2 | 1–13 |
 | Phase 3 — Physical → Tapeout | Stage 3 · Stage 4 | 14–33 |
 | Parallel | Analog · Mixed-signal | A1–A9 · M1–M4 |
 
 **33 sequential steps** (Stage 1: 1–6 · Stage 2: 7–13 · Stage 3: 14–28 · Stage 4: 29–33),
-plus lettered **Phase 1 pre-flow (D1–D5)** and the two parallel tracks.
+plus **Phase 1** (two input paths: the Agent path — PM Agent · IC Expert Agent — and the
+doc-gen path D1–D5) and the two parallel tracks.
 
 Pre-flight: P0 (`mcp_server_health_check`, `eda_doctor`). Orchestrator
 `vibe_ic_one_shot_runner.py` runs Phase 1 → Phase 2 → Analog → Phase 3.
