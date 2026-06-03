@@ -1529,3 +1529,304 @@ END DESIGN
         xd = runner._xdomain_levelshifter_check(f, comps)
         assert xd["status"] == "N/A"                   # was a false XDOMAIN_GAP
         assert xd["result"] == "N/A"
+
+
+# ---------------------------------------------------------------------------
+# v0.2.30 — SI TIMING-WINDOW-AWARE ADVISORY upgrade wired into
+# _emit_si_crosstalk_report. The advisory watch-list is MERGED into the SI
+# report WITHOUT touching violations_count / max_crosstalk_noise (the gate-read
+# schema). It NEVER blocks the build (advisory). Container-free: we pre-stage
+# the OpenSTA timing JSON (the exact shape build_opensta_si_tcl emits) so the
+# merge skips the container producer and runs the pure scorer.
+# ---------------------------------------------------------------------------
+def _si_timing_json(pins: dict) -> dict:
+    return {"tool": "OpenSTA", "design": "chip_top", "time_unit": "ns",
+            "vdd_v": 1.8, "pins": pins}
+
+
+class TestSiTimingAwareAdvisory:
+    def _setup(self, tmp_path, spef_text, timing_pins):
+        project = _mk_project(tmp_path)
+        # STA + SDC + netlist present → the advisory upgrade is eligible.
+        pnr = runner._pl.pnr_dir(project)
+        (pnr / "sta.rpt").write_text("worst slack 0.10\n")
+        (pnr / "constraint.sdc").write_text("create_clock -period 10 [get_ports clk]\n")
+        synth = runner._pl.synth_dir(project)
+        synth.mkdir(parents=True, exist_ok=True)
+        (synth / "chip_top_synth.v").write_text("module chip_top(); endmodule\n")
+        extracted = runner._pl.extracted_dir(project)
+        extracted.mkdir(parents=True, exist_ok=True)
+        # pre-stage the timing JSON (skip the container producer entirely)
+        (extracted / "chip_top_si_timing.json").write_text(
+            json.dumps(_si_timing_json(timing_pins)))
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        rpt3.mkdir(parents=True, exist_ok=True)
+        spef = tmp_path / "chip_top.spef"
+        spef.write_text(spef_text)
+        return project, rpt3, spef
+
+    def test_advisory_fields_merged_and_gate_passes(self, tmp_path, monkeypatch):
+        # _docker_exec must NOT be called (timing JSON pre-staged).
+        monkeypatch.setattr(runner, "_docker_exec",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("container ran despite pre-staged JSON")))
+        # *1 pin window present; the SPEF couples *1 and *2.
+        pins = {"x/Y": {"arr_rise_min": 0.1, "arr_rise_max": 0.2,
+                        "arr_fall_min": 0.1, "arr_fall_max": 0.2,
+                        "slew_rise_max": 0.05, "slew_fall_max": 0.05}}
+        project, rpt3, spef = self._setup(tmp_path, _SPEF_SAMPLE, pins)
+        ok = runner._emit_si_crosstalk_report(
+            project, "chip_top", spef, rpt3 / "ir_drop.rpt",
+            rpt3 / "si_crosstalk.rpt", [], pdk=_fake_pdk(), container="x")
+        assert ok
+        j = json.loads((rpt3 / "si_crosstalk.json").read_text())
+        # Existing schema preserved (gate reads these).
+        assert "max_crosstalk_noise" in j
+        assert j["violations_count"] == 0          # advisory NEVER manufactures
+        # Advisory block merged, always the advisory verdict (never PASS/FAIL).
+        ta = j["timing_aware_advisory"]
+        assert ta["verdict"] == "SI_TIMING_AWARE_SCREEN"
+        for key in ("pairs_decoupled_by_window", "watchlist_high_count",
+                    "watchlist_low_count", "max_base_noise_mv",
+                    "max_gated_noise_mv"):
+            assert key in ta
+        assert "ADVISORY" in ta["honesty"]
+        assert "NOT a commercial pass/fail" in ta["honesty"]
+        assert j["si_timing_aware_verdict"] == "SI_TIMING_AWARE_SCREEN"
+        # rpt carries the advisory tail + honesty.
+        rpt = (rpt3 / "si_crosstalk.rpt").read_text()
+        assert "TIMING-WINDOW-AWARE ADVISORY" in rpt
+        assert "NOT a commercial pass/fail" in rpt or "NOT a proven failure" in rpt
+        # ADVISORY → the gate still PASSES (build not blocked).
+        import si_crosstalk_check as sic
+        assert sic.main([str(project)]) == 0
+
+    def test_advisory_does_not_block_even_with_high_watchlist(self, tmp_path,
+                                                              monkeypatch):
+        # Force a HIGH watch entry: overlapping windows on a coupling-dominated
+        # FLOATING victim (no driver → undriven → full divider step > 100 mV).
+        monkeypatch.setattr(runner, "_docker_exec",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("container ran")))
+        # Both nets undriven (no pin windows) → _windows_overlap returns True
+        # (unknown windows conservatively overlap) → floating divider noise.
+        project, rpt3, spef = self._setup(tmp_path, _SPEF_SAMPLE, {})
+        runner._emit_si_crosstalk_report(
+            project, "chip_top", spef, rpt3 / "ir_drop.rpt",
+            rpt3 / "si_crosstalk.rpt", [], pdk=_fake_pdk(), container="x")
+        j = json.loads((rpt3 / "si_crosstalk.json").read_text())
+        ta = j["timing_aware_advisory"]
+        # *1<->*2 couple at ratio ~0.99 of 1.8V => >100 mV undriven => HIGH.
+        assert ta["watchlist_high_count"] >= 1
+        assert ta["verdict"] == "SI_TIMING_AWARE_SCREEN"
+        # CRITICAL: even with a non-empty HIGH watch-list, violations_count stays
+        # 0 and the gate PASSES — the advisory NEVER blocks the build.
+        assert j["violations_count"] == 0
+        import si_crosstalk_check as sic
+        assert sic.main([str(project)]) == 0
+
+    def test_falls_back_to_floating_screen_without_sta(self, tmp_path, monkeypatch):
+        # No sta.rpt → the advisory upgrade is withheld (no fabricated windows);
+        # the floating-victim screen stands and the gate still PASSES.
+        monkeypatch.setattr(runner, "_docker_exec",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("container ran without STA")))
+        project = _mk_project(tmp_path)
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        rpt3.mkdir(parents=True, exist_ok=True)
+        spef = tmp_path / "chip_top.spef"
+        spef.write_text(_SPEF_SAMPLE)
+        notes = []
+        ok = runner._emit_si_crosstalk_report(
+            project, "chip_top", spef, rpt3 / "ir_drop.rpt",
+            rpt3 / "si_crosstalk.rpt", notes, pdk=_fake_pdk(), container="x")
+        assert ok
+        j = json.loads((rpt3 / "si_crosstalk.json").read_text())
+        assert "timing_aware_advisory" not in j     # withheld, no over-claim
+        assert j["violations_count"] == 0
+        assert any("no post-route STA" in n for n in notes)
+        import si_crosstalk_check as sic
+        assert sic.main([str(project)]) == 0
+
+    def test_no_pdk_keeps_legacy_screen(self, tmp_path):
+        # Called the legacy way (no pdk/container) → pure floating screen, no
+        # advisory block. Back-compat with the existing 6-arg call sites/tests.
+        project = _mk_project(tmp_path)
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        rpt3.mkdir(parents=True, exist_ok=True)
+        spef = tmp_path / "chip_top.spef"
+        spef.write_text(_SPEF_SAMPLE)
+        runner._emit_si_crosstalk_report(
+            project, "chip_top", spef, rpt3 / "ir_drop.rpt",
+            rpt3 / "si_crosstalk.rpt", [])
+        j = json.loads((rpt3 / "si_crosstalk.json").read_text())
+        assert "timing_aware_advisory" not in j
+
+
+# ---------------------------------------------------------------------------
+# v0.2.30 — PERC GEOMETRY-LAYER (CONCLUSIVE-FAIL-ONLY) wired into
+# _emit_perc_equivalent via latchup_esd_spacing_check.run_geometry_layer.
+#   * a status in GAP_STATUSES is a CONCLUSIVE geometry FAIL (real gap);
+#   * a SPACING_OK / GUARDRING_PRESENT / CLAMP_OK is SEMI_AUTOMATED
+#     "necessary-but-not-sufficient" — NEVER an automated device-physics PASS;
+#   * INCOMPLETE never over-claims;
+#   * device-physics (ESD/latch-up/x-domain) stays MANUAL; the memo states the
+#     foundry-data residual VERBATIM.
+# ---------------------------------------------------------------------------
+def _routed_def(n_std: int, taps: list, units: int = 1000,
+                die_um: int = 100000) -> str:
+    """Build a routed DEF with n_std std cells laid on a grid + the given taps
+    [(x_um, y_um), ...]. Used to exercise the geometry tap-spacing screen."""
+    lines = [f"VERSION 5.8 ;", "DESIGN chip_top ;",
+             f"UNITS DISTANCE MICRONS {units} ;",
+             f"DIEAREA ( 0 0 {die_um} {die_um} ) ;",
+             f"COMPONENTS {n_std + len(taps)} ;"]
+    # std cells on a 10um grid
+    side = int(n_std ** 0.5) + 1
+    k = 0
+    for i in range(side):
+        for jj in range(side):
+            if k >= n_std:
+                break
+            x = (5 + i * 10) * units
+            y = (5 + jj * 10) * units
+            lines.append(f"- c{k} sky130_fd_sc_hd__nor3_1 + PLACED ( {x} {y} ) N ;")
+            k += 1
+    for ti, (tx, ty) in enumerate(taps):
+        lines.append(f"- t{ti} sky130_fd_sc_hd__tapvpwrvgnd_1 + PLACED "
+                     f"( {int(tx * units)} {int(ty * units)} ) N ;")
+    lines.append("END COMPONENTS")
+    lines.append("SPECIALNETS 2 ;")
+    lines.append("    - VGND ( c0 VNB ) + USE GROUND ;")
+    lines.append("    - VPWR ( c0 VPB ) + USE POWER ;")
+    lines.append("END SPECIALNETS")
+    lines.append("END DESIGN")
+    return "\n".join(lines) + "\n"
+
+
+class TestPercGeometryLayerIntegration:
+    def _seed(self, project):
+        rpt3 = runner._pl.reports_phase3_dir(project)
+        rpt3.mkdir(parents=True, exist_ok=True)
+        for name in ("antenna", "ir_drop", "em", "erc"):
+            (rpt3 / f"{name}.json").write_text(json.dumps({"verdict": "PASS"}) + "\n")
+        return rpt3
+
+    def _run(self, project):
+        return runner._emit_perc_equivalent(project, "chip_top", _fake_pdk(), "x", [])
+
+    def test_geometry_subchecks_present_in_categories(self, tmp_path):
+        # ~120 std cells, 0 taps → conclusive ZERO_TAPS spacing GAP present.
+        project = _mk_project(tmp_path, _routed_def(120, taps=[]))
+        rpt3 = self._seed(project)
+        assert self._run(project)
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        cats = {c["category"] for c in j["categories"]}
+        assert "Latch-up tap spacing (geometry)" in cats
+        assert "Guard-ring topology (geometry)" in cats
+
+    def test_conclusive_gap_surfaces_and_fails_overall(self, tmp_path):
+        # 120 placed std cells, 0 taps → WELLTAP_SPACING_GAP (in GAP_STATUSES) →
+        # AUTOMATED FAIL → conclusive geometry gap drops the overall verdict.
+        project = _mk_project(tmp_path, _routed_def(120, taps=[]))
+        rpt3 = self._seed(project)
+        self._run(project)
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        sp = next(c for c in j["categories"]
+                  if c["category"] == "Latch-up tap spacing (geometry)")
+        assert sp["status"] == "AUTOMATED" and sp["result"] == "FAIL"
+        assert sp["geometry_status"] in runner_geo().GAP_STATUSES
+        assert "Latch-up tap spacing (geometry)" in j["automated_failed"]
+        assert j["verdict"] == "PERC_EQUIV_FAIL"
+
+    def test_spacing_ok_is_necessary_not_sufficient_not_automated_pass(self, tmp_path):
+        # 120 std cells on a 10um grid + a dense lattice of taps (every 20um) so
+        # every std cell is within the 30um screen radius → SPACING_OK. It must
+        # be SEMI_AUTOMATED / REVIEW (necessary-but-not-sufficient), NEVER an
+        # automated device-physics PASS, and must NOT block the build.
+        taps = [(x, y) for x in range(5, 130, 20) for y in range(5, 130, 20)]
+        project = _mk_project(tmp_path, _routed_def(120, taps=taps))
+        rpt3 = self._seed(project)
+        self._run(project)
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        sp = next(c for c in j["categories"]
+                  if c["category"] == "Latch-up tap spacing (geometry)")
+        assert sp["geometry_status"] == "SPACING_OK_NECESSARY_NOT_SUFFICIENT"
+        assert sp["status"] == "SEMI_AUTOMATED"
+        assert sp["result"] == "REVIEW"            # NOT "PASS"
+        # not counted as a passing automated category
+        assert "Latch-up tap spacing (geometry)" not in j["automated_pass"]
+        # listed under the honest semi-automated rollup
+        assert "Latch-up tap spacing (geometry)" in j["semi_automated"]
+        # OK does NOT fail or block; overall still PASS (manual items pending).
+        assert j["verdict"] == "PERC_EQUIV_PASS"
+        assert "NECESSARY-BUT-NOT-SUFFICIENT" in sp["note"].upper().replace("_", "-") \
+            or "necessary-but-not-sufficient" in sp["note"].lower()
+
+    def test_incomplete_does_not_over_claim_or_block(self, tmp_path):
+        # < 50 std cells → TOO_FEW_STD_CELLS INCOMPLETE: honest, no over-claim,
+        # must NOT fail nor drag the overall verdict to INCOMPLETE (that tier is
+        # reserved for a missing AUTOMATED tool report).
+        project = _mk_project(tmp_path, _routed_def(3, taps=[(5, 5)]))
+        rpt3 = self._seed(project)
+        self._run(project)
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        sp = next(c for c in j["categories"]
+                  if c["category"] == "Latch-up tap spacing (geometry)")
+        assert sp["status"] == "SEMI_AUTOMATED"
+        assert sp["geometry_status"] == "INCOMPLETE"
+        assert sp["result"] == "INCOMPLETE"
+        assert j["verdict"] == "PERC_EQUIV_PASS"     # not blocked, not over-claimed
+
+    def test_device_physics_stays_manual_alongside_geometry(self, tmp_path):
+        # The geometry layer must NOT turn any device-physics category into an
+        # automated PASS: the Latch-up (spacing+device-physics) MANUAL category
+        # and the ESD-presence MANUAL category still stand.
+        project = _mk_project(tmp_path, _routed_def(120, taps=[]))
+        rpt3 = self._seed(project)
+        self._run(project)
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        man = [c for c in j["categories"]
+               if c["category"].startswith("Latch-up / well-tap (spacing")]
+        assert man and man[0]["status"] == "MANUAL_REVIEW"
+        assert any("Latch-up / well-tap" in c for c in j["manual_review_pending"])
+
+    def test_foundry_residual_in_json_and_memo_verbatim(self, tmp_path):
+        project = _mk_project(tmp_path, _routed_def(120, taps=[(5, 5)]))
+        rpt3 = self._seed(project)
+        self._run(project)
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        residual = j.get("geometry_foundry_data_residual")
+        assert residual == runner_geo().FOUNDRY_DATA_RESIDUAL   # verbatim
+        memo = (rpt3 / "PERC_SIGNOFF_MEMO.md").read_text()
+        assert "PERC geometry-layer foundry-data residual" in memo
+        # the verbatim residual text lands in the memo
+        assert runner_geo().FOUNDRY_DATA_RESIDUAL in memo
+        # honesty: it states this is NOT commercial-tool lock-in
+        assert "NOT commercial-tool lock-in" in residual
+
+    def test_clamp_connectivity_subcheck_when_netlist_present(self, tmp_path):
+        # When an extracted netlist with a dangling ESD clamp exists, the
+        # geometry/netlist clamp-connectivity sub-check surfaces a CONCLUSIVE
+        # gap (CLAMP_CONNECTIVITY_GAP ∈ GAP_STATUSES) as AUTOMATED FAIL.
+        project = _mk_project(tmp_path, _routed_def(120, taps=[(5, 5)]))
+        rpt3 = self._seed(project)
+        extracted = runner._pl.extracted_dir(project)
+        extracted.mkdir(parents=True, exist_ok=True)
+        # a clamp subckt tied only to a power net (no ground) → dangling.
+        (extracted / "chip_top_pex.v").write_text(
+            "Xclamp0 VPWR sig sky130_fd_io__top_xres4v2\n")
+        self._run(project)
+        j = json.loads((rpt3 / "perc_equivalent.json").read_text())
+        clamp = [c for c in j["categories"]
+                 if c["category"].startswith("ESD clamp connectivity")]
+        assert clamp, "clamp connectivity sub-check missing when netlist present"
+        assert clamp[0]["status"] == "AUTOMATED" and clamp[0]["result"] == "FAIL"
+        assert clamp[0]["geometry_status"] == "CLAMP_CONNECTIVITY_GAP"
+        assert j["verdict"] == "PERC_EQUIV_FAIL"
+
+
+def runner_geo():
+    """Import the standalone geometry program the runner wires in."""
+    import importlib
+    return importlib.import_module("latchup_esd_spacing_check")

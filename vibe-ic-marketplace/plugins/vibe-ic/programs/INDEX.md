@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 632
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 632)
+- **Total programs (excluding helpers / shims):** 634
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 634)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 623 |
+| `any` | 625 |
 
 ## Alphabetical listing
 
@@ -342,6 +342,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_taxonomy` | any | v0.1.51 | L-doc taxonomy single source of truth. |
 | `l_doc_todo_stub_count_check` | any | — | D3 program-first capture of the |
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
+| `latchup_esd_spacing_check` | any | v0.2.30 | the OPEN-SOURCE GEOMETRY-LAYER half of PERC |
 | `layer_extension_presence_check` | any | v0.50 | v0.50 plugin gate |
 | `lec_equivalence_check` | any | — | Step 13 deterministic LEC substance gate. |
 | `level_shifter_required_check` | any | — | M2 gate (substance-verifying). |
@@ -553,6 +554,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `sent_protocol_synth` | any | — | Single Edge Nibble Transmission (SENT) protocol synth helper. |
 | `sgmii_protocol_synth` | any | — | Serial-GMII (SGMII) protocol synth helper. |
 | `si_crosstalk_check` | any | — | Verify signal integrity / crosstalk analysis was performed. |
+| `si_signoff_timing_aware` | any | — | OPEN-SOURCE timing-window-aware SI ADVISORY screen. |
 | `signaltap_recompile_sequence_check` | any | — | Validate that the Quartus |
 | `signaltap_stp_completeness_check` | any | — | Validate that a generated Quartus |
 | `signoff_audit` | any | v0.52 | signoff_audit.py -- Multi-mode signoff evidence checker (LEGACY gate). |
@@ -704,7 +706,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (623 programs)
+### `any` (625 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -1017,6 +1019,7 @@ _(no programs in this group)_
 - `l_doc_taxonomy` — L-doc taxonomy single source of truth.  _[v0.1.51]_
 - `l_doc_todo_stub_count_check` — D3 program-first capture of the
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
+- `latchup_esd_spacing_check` — the OPEN-SOURCE GEOMETRY-LAYER half of PERC  _[v0.2.30]_
 - `layer_extension_presence_check` — v0.50 plugin gate  _[v0.50]_
 - `lec_equivalence_check` — Step 13 deterministic LEC substance gate.
 - `level_shifter_required_check` — M2 gate (substance-verifying).
@@ -1226,6 +1229,7 @@ _(no programs in this group)_
 - `sent_protocol_synth` — Single Edge Nibble Transmission (SENT) protocol synth helper.
 - `sgmii_protocol_synth` — Serial-GMII (SGMII) protocol synth helper.
 - `si_crosstalk_check` — Verify signal integrity / crosstalk analysis was performed.
+- `si_signoff_timing_aware` — OPEN-SOURCE timing-window-aware SI ADVISORY screen.
 - `signaltap_recompile_sequence_check` — Validate that the Quartus
 - `signaltap_stp_completeness_check` — Validate that a generated Quartus
 - `signoff_audit` — signoff_audit.py -- Multi-mode signoff evidence checker (LEGACY gate).  _[v0.52]_

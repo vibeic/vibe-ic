@@ -4118,7 +4118,12 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # --- ORGANIC-20260531: Step 27 SI / crosstalk (real SPEF coupling caps) --
     si_rpt = rpt_phase3 / "si_crosstalk.rpt"
     if not si_rpt.is_file():
-        if _emit_si_crosstalk_report(project, top, spef_out, ir_rpt, si_rpt, notes):
+        # v0.2.35: pass pdk + container so the SI emitter can ALSO run the
+        # timing-window-aware ADVISORY upgrade (OpenSTA SI timing JSON →
+        # window-gated watch-list) when a routed SPEF + post-route STA exist.
+        # It is ADVISORY and never blocks the build.
+        if _emit_si_crosstalk_report(project, top, spef_out, ir_rpt, si_rpt,
+                                     notes, pdk=pdk, container=container):
             written.append(str(si_rpt))
             written.append(str(rpt_phase3 / "si_crosstalk.json"))
 
@@ -5590,8 +5595,158 @@ def _si_coupling_metrics(cg: dict, cc: dict, vdd_mv: float = 1800.0) -> dict:
     }
 
 
+def _si_timing_aware_module():
+    """Lazy import of the standalone si_signoff_timing_aware program.
+
+    Imported lazily (NOT at module top) because the SI program is an optional
+    advisory upgrade and we never want its absence to break phase3 import.
+    Returns the module or None if it can't be imported."""
+    try:
+        import importlib
+        return importlib.import_module("si_signoff_timing_aware")
+    except Exception:  # pragma: no cover - defensive (advisory layer only)
+        return None
+
+
+def _emit_si_timing_json(project: Path, top: str, pdk: PdkConfig, container: str,
+                         spef: Path, sdc: Path, netlist: Path, out_json: Path,
+                         notes: List[str], vdd_v: float = 1.8) -> bool:
+    """Produce the OpenSTA per-pin arrival-window + slew JSON the timing-aware
+    SI screen consumes, by running build_opensta_si_tcl's recipe in the
+    container (Step 27 advisory upgrade — ADVISORY, never blocks the build).
+
+    Best-effort: if the SI program / sta tool / inputs are unavailable, logs a
+    note and returns False so the caller keeps the floating-victim fallback.
+    chip-AGNOSTIC: all paths come from the runner's pdk / project layout."""
+    mod = _si_timing_aware_module()
+    if mod is None:
+        notes.append("SI timing-aware: si_signoff_timing_aware module "
+                     "unavailable — keeping floating-victim screen.")
+        return False
+    if not (spef.is_file() and sdc.is_file() and netlist.is_file()):
+        notes.append("SI timing-aware: SPEF / SDC / netlist missing — "
+                     "keeping floating-victim screen (no over-claim).")
+        return False
+    # All Liberty / LEF paths are already container paths in PdkConfig; the
+    # translator is a passthrough for paths no mount covers (idempotent).
+    liberty_c = _to_container_path(str(pdk.liberty), container)
+    netlist_c = _to_container_path(str(netlist), container)
+    sdc_c = _to_container_path(str(sdc), container)
+    spef_c = _to_container_path(str(spef), container)
+    out_json_c = _to_container_path(str(out_json), container)
+    extra_lefs = [pdk.tech_lef, pdk.cell_lef] + list(pdk.macro_lefs)
+    extra_lefs_c = [_to_container_path(str(f), container) for f in extra_lefs]
+    extra_libs_c = [_to_container_path(str(f), container)
+                    for f in pdk.macro_libs]
+    tcl = mod.build_opensta_si_tcl(
+        liberty_c, netlist_c, top, sdc_c, spef_c, out_json_c,
+        vdd_v=vdd_v, extra_lefs=extra_lefs_c, extra_liberties=extra_libs_c)
+    tcl_path = out_json.parent / f"si_timing_{top}.tcl"
+    tcl_path.parent.mkdir(parents=True, exist_ok=True)
+    tcl_path.write_text(tcl)
+    tcl_c = _to_container_path(str(tcl_path), container)
+    log_c = _to_container_path(str(out_json.parent / "si_timing.log"), container)
+    cmd = (
+        f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+        f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+        f"sta -no_init -exit {tcl_c} 2>&1 | tee {log_c}"
+    )
+    rc, out, err = _docker_exec(container, cmd, timeout=900)
+    if not out_json.is_file() or out_json.stat().st_size == 0:
+        notes.append(
+            f"SI timing-aware: OpenSTA did not produce the timing JSON "
+            f"(rc={rc}; sta may be unavailable) — keeping floating-victim "
+            "screen. Install OpenSTA in the container to enable the "
+            "window-gated advisory watch-list.")
+        return False
+    return True
+
+
+def _merge_si_timing_aware(project: Path, top: str, pdk: PdkConfig,
+                           container: str, spef: Path, sbody: dict,
+                           notes: List[str], vdd_v: float = 1.8) -> None:
+    """ADVISORY upgrade: when a routed SPEF + STA run are available, ALSO
+    produce the OpenSTA SI timing JSON and run the timing-window-aware SI
+    screen, then MERGE its watch-list fields into the SI report body `sbody`
+    IN PLACE.
+
+    HONESTY (the whole point): this is an ADVISORY SCREEN UPGRADE (switching-
+    window gating of the floating-victim coupling bound), NOT a commercial
+    pass/fail SI sign-off. It NEVER touches `violations_count` /
+    `max_crosstalk_noise` (the fields the si_crosstalk_check gate reads), so
+    the gate still PASSES (advisory). On any unavailability it leaves `sbody`
+    untouched and the floating-victim screen stands as the fallback.
+
+    Requires an STA run to exist (the per-pin arrival windows come from STA);
+    `<pnr>/sta.rpt` is the runner's post-route STA artefact. Without it we do
+    NOT fabricate windows — the floating screen stays."""
+    mod = _si_timing_aware_module()
+    if mod is None:
+        return
+    primary_sta = _pl.pnr_dir(project) / "sta.rpt"
+    if not primary_sta.is_file():
+        notes.append("SI timing-aware: no post-route STA report — the "
+                     "switching-window advisory needs arrival windows; "
+                     "keeping the floating-victim screen (no over-claim).")
+        return
+    sdc = _pl.pnr_dir(project) / "constraint.sdc"
+    netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    extracted = _pl.extracted_dir(project)
+    extracted.mkdir(parents=True, exist_ok=True)
+    out_json = extracted / f"{top}_si_timing.json"
+    if not out_json.is_file():
+        if not _emit_si_timing_json(project, top, pdk, container, spef, sdc,
+                                    netlist, out_json, notes, vdd_v=vdd_v):
+            return
+    try:
+        adv = mod.run_si_signoff_timing_aware(
+            spef, out_json,
+            vdd_v=vdd_v, noise_margin_mv=100.0,
+            out_json=str(extracted / f"{top}_si_timing_aware.json"),
+            out_rpt=str(_pl.reports_phase3_dir(project)
+                        / "si_crosstalk_timing_aware.rpt"),
+        )
+    except Exception as exc:  # pragma: no cover - defensive (advisory layer)
+        notes.append(f"SI timing-aware: screen errored ({exc}) — keeping the "
+                     "floating-victim screen (advisory, non-blocking).")
+        return
+    # MERGE advisory fields WITHOUT disturbing the gate-read schema. The
+    # gate reads `violations_count` + `max_crosstalk_noise`; we leave both
+    # exactly as the floating screen set them (violations_count stays 0).
+    sbody["timing_aware_advisory"] = {
+        "tool": adv.get("tool"),
+        "verdict": adv.get("verdict"),          # always SI_TIMING_AWARE_SCREEN
+        "scope": adv.get("scope"),
+        "method": adv.get("method"),
+        "vdd_v": adv.get("vdd_v"),
+        "noise_margin_mv": adv.get("noise_margin_mv"),
+        "pairs_decoupled_by_window": adv.get("pairs_decoupled_by_window"),
+        "watchlist_high_count": adv.get("watchlist_high_count"),
+        "watchlist_low_count": adv.get("watchlist_low_count"),
+        "max_base_noise_mv": adv.get("max_base_noise_mv"),
+        "max_gated_noise_mv": adv.get("max_gated_noise_mv"),
+        "watchlist": adv.get("watchlist", [])[:50],
+        "timing_json": str(out_json),
+        "honesty": (
+            "ADVISORY screen UPGRADE (switching-window gating of the "
+            "floating-victim coupling bound), NOT a commercial pass/fail SI "
+            "sign-off. It is conclusive ONLY in the decoupled-safe direction; "
+            "the HIGH watch-list is flagged-for-review, NOT a proven failure. "
+            "It does NOT change violations_count and never blocks the build."),
+    }
+    sbody["si_timing_aware_verdict"] = adv.get("verdict")
+    notes.append(
+        "SI timing-aware (ADVISORY): "
+        f"{adv.get('pairs_decoupled_by_window', 0)} pairs decoupled by window, "
+        f"{adv.get('watchlist_high_count', 0)} HIGH / "
+        f"{adv.get('watchlist_low_count', 0)} LOW advisory watch — "
+        "violations_count unchanged (build not blocked).")
+
+
 def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
-                              ir_rpt: Path, si_rpt: Path, notes: List[str]) -> bool:
+                              ir_rpt: Path, si_rpt: Path, notes: List[str],
+                              pdk: Optional[PdkConfig] = None,
+                              container: Optional[str] = None) -> bool:
     """Signal-integrity / crosstalk sign-off (Step 27).
 
     v0.2.6: when the real OpenRCX SPEF (v0.2.5) is present, run a REAL
@@ -5599,6 +5754,14 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
     coupling capacitances → worst-case capacitive-divider noise + a coupling-
     dominated (ratio>0.90) violation count. Falls back to the decoupled-C
     structural screen only when no SPEF / no coupling caps are available.
+
+    v0.2.35 ADVISORY upgrade: when a routed SPEF AND a post-route STA run are
+    both available (and `pdk`/`container` are supplied), ALSO produce the
+    OpenSTA SI timing JSON and run the timing-window-aware SI screen, then
+    merge its switching-window-gated watch-list into the SI report as ADVISORY
+    fields. This NEVER changes `violations_count` and NEVER blocks the build —
+    the si_crosstalk_check gate still PASSES (advisory). If the SI program /
+    STA / SPEF is unavailable the floating-victim screen stands as fallback.
     chip-AGNOSTIC. Returns True if a report was written."""
     si_rpt.parent.mkdir(parents=True, exist_ok=True)
     # --- preferred: real SPEF coupling-cap SI screen ---
@@ -5637,8 +5800,37 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
                 "violations_count": 0,
                 "verdict": "SI_SPEF_SCREEN_PASS",
             }
+            # v0.2.35 ADVISORY upgrade: when a post-route STA run is available,
+            # ALSO produce the OpenSTA SI timing JSON and merge the
+            # switching-window-gated watch-list as ADVISORY fields. This NEVER
+            # touches violations_count / max_crosstalk_noise (the gate-read
+            # schema), so the si_crosstalk_check gate still PASSES. Pure
+            # fall-through if pdk/container/STA are unavailable.
+            if pdk is not None and container is not None:
+                _merge_si_timing_aware(project, top, pdk, container, spef,
+                                       sbody, notes)
             (si_rpt.parent / "si_crosstalk.json").write_text(
                 json.dumps(sbody, indent=2) + "\n")
+            # Advisory timing-window tail (only present when the upgrade ran).
+            ta = sbody.get("timing_aware_advisory")
+            ta_tail = ""
+            if ta is not None:
+                ta_tail = (
+                    "#\n"
+                    "# --- TIMING-WINDOW-AWARE ADVISORY (switching-window gating) ---\n"
+                    "# ADVISORY screen UPGRADE, NOT a commercial pass/fail SI sign-off.\n"
+                    "# Conclusive ONLY in the decoupled-safe direction; the HIGH\n"
+                    "# watch-list is flagged-for-review, NOT a proven failure. Does\n"
+                    "# NOT change violations_count and never blocks the build.\n"
+                    f"si_timing_aware_verdict: {ta.get('verdict')}\n"
+                    f"pairs_decoupled_by_window (CONCLUSIVELY SAFE): "
+                    f"{ta.get('pairs_decoupled_by_window')}\n"
+                    f"watchlist_high_count (overlap+over-margin; flagged, NOT "
+                    f"proven-fail): {ta.get('watchlist_high_count')}\n"
+                    f"watchlist_low_count (floating-bound over margin, gating "
+                    f"cleared): {ta.get('watchlist_low_count')}\n"
+                    f"max_gated_noise_mv (driven+window): "
+                    f"{ta.get('max_gated_noise_mv')}\n")
             si_rpt.write_text(
                 "# Signal-integrity / crosstalk — REAL SPEF coupling-cap screen\n"
                 "# phase3_one_shot_runner (Step 27). Source: OpenRCX SPEF coupling caps.\n"
@@ -5654,7 +5846,8 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
                 "violations_count: 0 (screen — coupling ratio alone is not a proven "
                 "failure; full SI sign-off needs a timing-window/driver-strength tool)\n"
                 "crosstalk: SI_SPEF_SCREEN_PASS\n"
-                "# end of si_crosstalk.rpt\n")
+                + ta_tail
+                + "# end of si_crosstalk.rpt\n")
             notes.append(
                 f"SI: REAL SPEF coupling-cap screen — {m['nets']} nets, max ratio "
                 f"{m['max_coupling_ratio']}, mean {m['mean_coupling_ratio']}, "
@@ -6469,6 +6662,89 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
         ]
     categories.append(xdomain_cat)
 
+    # --- v0.2.35: PERC GEOMETRY-LAYER screen (CONCLUSIVE-FAIL-ONLY) --------
+    # Append the open-source geometry-layer sub-checks read from the routed DEF
+    # (+ optional extracted netlist): tap-SPACING coverage, guard-ring topology,
+    # ESD clamp connectivity. Run via the standalone latchup_esd_spacing_check
+    # program (single source of the DEF geometry parsers).
+    #
+    # HONESTY (the whole point — do NOT relax):
+    #   * A status in GAP_STATUSES is a CONCLUSIVE geometry FAIL → surfaced as a
+    #     real automated gap (status AUTOMATED, result FAIL) that drops the
+    #     overall verdict, exactly like the conclusive presence/topology gaps.
+    #   * A SPACING_OK / GUARDRING_PRESENT / CLAMP_CONNECTIVITY_OK is
+    #     SEMI_AUTOMATED "necessary-but-not-sufficient" — NEVER an automated
+    #     device-physics PASS. We mark it status SEMI_AUTOMATED / result REVIEW
+    #     so it neither counts as a passing automated category nor blocks.
+    #   * INCOMPLETE / NA / GUARDRING_ABSENT must NOT over-claim — recorded as
+    #     SEMI_AUTOMATED with the honest sub-status; they do NOT drag the whole
+    #     verdict INCOMPLETE (that tier is reserved for a missing AUTOMATED tool
+    #     report). The device-physics layer (ESD HBM/CDM sizing, latch-up
+    #     Vhold/SCR, guard-ring efficacy) genuinely still needs foundry-
+    #     calibrated models and STAYS in the MANUAL categories above.
+    geometry_residual: Optional[str] = None
+    try:
+        import importlib
+        _geo = importlib.import_module("latchup_esd_spacing_check")
+        # Use an extracted netlist for the clamp-connectivity sub-check when one
+        # exists (optional — the DEF-NETS ESD topology check above already
+        # covers the routed-DEF case).
+        extracted_dir = _pl.extracted_dir(project)
+        netlist_for_clamp = None
+        if extracted_dir.is_dir():
+            for cand in sorted(extracted_dir.glob("*.spice")) + \
+                    sorted(extracted_dir.glob("*.cir")) + \
+                    sorted(extracted_dir.glob("*_pex.v")):
+                if cand.is_file():
+                    netlist_for_clamp = str(cand)
+                    break
+        geo = _geo.run_geometry_layer(
+            str(def_file),
+            netlist_file=netlist_for_clamp)
+        geometry_residual = geo.get("foundry_data_residual")
+
+        def _geo_category(name, sub, tool):
+            """Map one geometry sub-check dict to a PERC category, honestly.
+            CONCLUSIVE gap → AUTOMATED/FAIL; OK → SEMI_AUTOMATED/REVIEW
+            (necessary-but-not-sufficient); everything else → SEMI_AUTOMATED
+            with its honest sub-status (no over-claim)."""
+            st = sub.get("status", "INCOMPLETE")
+            if st in _geo.GAP_STATUSES:
+                result, status = "FAIL", "AUTOMATED"
+            elif st in ("SPACING_OK_NECESSARY_NOT_SUFFICIENT",
+                        "GUARDRING_PRESENT", "CLAMP_CONNECTIVITY_OK"):
+                # necessary-but-not-sufficient — NEVER an automated PASS.
+                result, status = "REVIEW", "SEMI_AUTOMATED"
+            else:  # INCOMPLETE / NA / GUARDRING_ABSENT — honest, no over-claim.
+                result, status = st, "SEMI_AUTOMATED"
+            return {
+                "category": name,
+                "status": status,
+                "result": result,
+                "tool": tool,
+                "geometry_status": st,
+                "note": sub.get("note", ""),
+                "evidence": ("open-source PERC GEOMETRY layer (routed DEF). "
+                             "CONCLUSIVE-FAIL-ONLY: a gap is a real structural "
+                             "exposure; an OK is NECESSARY-BUT-NOT-SUFFICIENT "
+                             "(device physics unverified — see foundry residual)."),
+            }
+
+        categories.append(_geo_category(
+            "Latch-up tap spacing (geometry)", geo["spacing"],
+            "DEF tap/std-cell placement coverage screen (open-source)"))
+        categories.append(_geo_category(
+            "Guard-ring topology (geometry)", geo["guardring"],
+            "DEF guard-ring master + IO/high-current proximity screen"))
+        if "clamp_netlist" in geo:
+            categories.append(_geo_category(
+                "ESD clamp connectivity (geometry/netlist)",
+                geo["clamp_netlist"],
+                "extracted-netlist ESD clamp dual-rail connectivity"))
+    except Exception as exc:  # pragma: no cover - defensive (geometry layer)
+        notes.append(f"PERC geometry layer: not run ({exc}); presence / "
+                     "topology / x-domain categories above are unaffected.")
+
     # --- Overall verdict (HONEST) -----------------------------------------
     automated = [c for c in categories if c["status"] == "AUTOMATED"]
     automated_failed = [c for c in automated if c["result"] == "FAIL"]
@@ -6494,6 +6770,10 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
         "automated_incomplete": [c["category"] for c in automated_incomplete],
         "guardband": [c["category"] for c in categories
                       if c["status"] == "GUARDBAND"],
+        # v0.2.35: geometry-layer "necessary-but-not-sufficient" / no-over-claim
+        # categories are SEMI_AUTOMATED — neither an automated PASS nor a block.
+        "semi_automated": [c["category"] for c in categories
+                           if c["status"] == "SEMI_AUTOMATED"],
         "manual_review_pending": [c["category"] for c in manual_pending],
         "not_applicable": [c["category"] for c in categories
                            if c["status"] == "N/A"],
@@ -6504,6 +6784,11 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
             "cross-voltage-domain require the listed MANUAL confirmation and "
             "are NOT reported as automated PASS."),
     }
+    # v0.2.35: state the open-source PERC geometry-layer foundry-data residual
+    # VERBATIM when the geometry layer ran. The geometry screen is
+    # CONCLUSIVE-FAIL-ONLY; an OK never becomes an automated device-physics PASS.
+    if geometry_residual:
+        summary["geometry_foundry_data_residual"] = geometry_residual
 
     # --- perc_equivalent.json ---------------------------------------------
     (rpt3 / "perc_equivalent.json").write_text(json.dumps(summary, indent=2) + "\n")
@@ -6605,6 +6890,15 @@ def _emit_perc_signoff_memo(project: Path, top: str,
                  "ESD / latch-up / cross-voltage-domain require the listed "
                  "manual confirmation.")
     lines.append("")
+    # v0.2.35: the open-source PERC geometry-layer foundry-data residual, stated
+    # VERBATIM. The geometry screen is CONCLUSIVE-FAIL-ONLY; a geometry OK is
+    # NECESSARY-BUT-NOT-SUFFICIENT and is NEVER an automated device-physics PASS.
+    geo_residual = summary.get("geometry_foundry_data_residual")
+    if geo_residual:
+        lines.append("## PERC geometry-layer foundry-data residual")
+        lines.append("")
+        lines.append("> " + geo_residual)
+        lines.append("")
     lines.append("_Program-generated by `phase3_one_shot_runner._emit_perc_"
                  "signoff_memo` — do not hand-edit; re-run phase3 to refresh._")
     lines.append("")

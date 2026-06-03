@@ -167,7 +167,7 @@ session_context: >-
   table. Complements the §5 LVS chain already shipped (device-level netgen / powered-netlist /
   port-label Route A/B / sign-off guard).
 
-status: partially-fixed
+status: open-source-maximized
 residual: >-
   Re-verified against the current 0.2.29 plugin: 6 of the 7 actionable open-source gaps are FIXED
   end-to-end and the named emitters all exist in programs/phase3_one_shot_runner.py — _emit_spef
@@ -183,4 +183,39 @@ residual: >-
   §5 device-level netgen LVS, but the latch-up/ESD PERC deck needs commercial Calibre; (b) a true
   pass/fail SI sign-off for Step 27 — the v0.2.6 SPEF coupling-ratio screen is an advisory watch-list
   (floating-victim bound), not a timing-window + driver-strength noise sign-off, which needs a
-  commercial SI tool. Neither residual is an open-source-implementable gap.
+  commercial SI tool.
+
+open_source_substitute: >-
+  v0.2.35 CHALLENGED and largely overturned the "neither residual is
+  open-source-implementable" claim, per the user directive "do not be locked to
+  commercial tools — find open-source substitutes / tool combinations". Both
+  residuals NOW have an open-source substitute, scoped HONESTLY (a screen/advisory,
+  not a fidelity-equivalent sign-off):
+    (a) SI (Step 27): NEW programs/si_signoff_timing_aware.py — a timing-window-aware
+        crosstalk SCREEN combining OpenSTA (read_spef + report_arrival/report_slews →
+        per-pin switching windows) + OpenRCX SPEF coupling (Cc/Cg) + a lumped
+        capacitive-divider noise model. It UPGRADES the floating-victim advisory by
+        CONCLUSIVELY decoupling pairs whose switching windows do not overlap
+        (timing-impossible coupling), and flags the overlapping coupling-dominated
+        pairs as an ADVISORY watch-list (high/low priority). Verdict is ALWAYS
+        advisory (SI_TIMING_AWARE_SCREEN) — it NEVER blocks the build, because the
+        lumped bound over-claims on driven dense routing and a true pass/fail needs
+        foundry CCS-Noise / RLC(K). Wired into _emit_si_crosstalk_report (advisory,
+        does not touch the gate keys). Container-verified on the real mdio sky130
+        routed SPEF (OpenSTA 2.7.0). 26 unit tests.
+    (b) PERC latch-up/ESD (Step 30): NEW programs/latchup_esd_spacing_check.py — an
+        open-source GEOMETRY-LAYER screen from the routed DEF: well-tap spacing
+        (CONCLUSIVE-FAIL-ONLY — only a demonstrable gap fails; degenerate DIEAREA →
+        INCOMPLETE, never an over-claimed PASS), guard-ring topology, ESD-clamp
+        netlist connectivity. Wired into _emit_perc_equivalent as SEMI_AUTOMATED
+        categories (an OK is necessary-but-not-sufficient, never an automated
+        device-physics PASS). 40 unit tests + integration tests.
+  HONEST RESIDUAL (genuinely NOT open-source — a PHYSICAL need for foundry-calibrated
+  models, NOT commercial-tool lock-in): ESD clamp HBM/CDM device sizing (needs TLP /
+  foundry ESD device models), latch-up holding-voltage Vhold + parasitic-SCR beta,
+  guard-ring efficacy under substrate-current injection (needs foundry-calibrated
+  substrate RC; ngspice lacks them), and full SI sign-off fidelity (per-receiver
+  CCS-Noise immunity curves + distributed RLC(K) field-solver). These stay MANUAL and
+  are stated VERBATIM in the SI report + PERC_SIGNOFF_MEMO. The open-source layer
+  screens/decouples what it honestly can; it does not fake the device-physics it cannot.
+open_source_substitute_at: "2026-06-03"
