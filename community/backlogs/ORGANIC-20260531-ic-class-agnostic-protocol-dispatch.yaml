@@ -39,3 +39,26 @@ session_context: >-
   Filed during the v0.1.92/v0.1.93 Tier-E/F enhancement-capture pass, from the Avalon
   digital_arithmetic_primitive routing surprise (worked around by wiring Avalon into BOTH the
   R55 and [14e2/15] blocks). Companion to ORGANIC-20260531-inline-protocol-detectors-not-importable.
+
+status: partially-fixed
+triaged_at: "2026-06-03"
+triaged_against: "vibe-ic 0.2.29"
+residual: >-
+  The silent-skip hazard is MITIGATED but NOT closed by either suggested option. (1) The R55
+  [14e/15] block in programs/phase1_doc_one_shot_runner.py was broadened (v0.1.84-v0.1.89) to
+  fire for serial_peripheral_protocol, digital_cmd_driven, digital_arithmetic_primitive,
+  bus_interconnect_protocol, pure_analog AND unknown (lines ~49989-49991) — so most built-in
+  protocols' inline detectors are now reached across nearly all ic_classes, and the Avalon
+  digital_arithmetic_primitive case the backlog was filed on is now in-scope. (2) A NEW generic
+  [14e2b/15] drop-in path (line ~51531) auto-dispatches any *_protocol_synth.py that opts in with
+  module-level AUTO_DISPATCH=True + is_<base>/apply_<base>_synth, regardless of ic_class. BUT
+  neither suggested fix is fully implemented: Option A (run EVERY registered detector
+  unconditionally) is only realized for AUTO_DISPATCH opt-in modules — the ~80 built-ins are still
+  ic_class-gated (the R55 set is broad but not literally agnostic, and the separate [14e2/15]
+  bus_interconnect block remains class-gated, which is why Avalon is STILL double-wired per the
+  workaround comment at ~51341-51344). Option B is not met: there is NO startup assertion / test
+  that every <proto>_protocol_synth.py is reachable for the ic_class its own benchmark classifies
+  as, and NO per-protocol end-to-end "synth applied" regression assertion. test_program_reachability_check.py
+  is a generic import/reference audit (not protocol-dispatch-specific), and
+  test_all_protocol_synth_overlay.py pins the apply-function OVERLAY CONTRACT only (it explicitly
+  notes ~47 protocols keep inline detectors), not dispatch reachability.

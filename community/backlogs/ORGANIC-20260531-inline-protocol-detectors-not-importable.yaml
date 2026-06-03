@@ -40,3 +40,20 @@ session_context: >-
   Filed during the v0.1.92/v0.1.93 Tier-E/F protocol sweeps' enhancement-capture pass.
   The universal no-misfire guard was shipped (Bucket A) but honestly covers only the 9
   module-level detectors; this backlog tracks extending it to full coverage.
+
+status: partially-fixed
+triaged_at: "2026-06-03"
+triaged_against: "vibe-ic 0.2.29"
+residual: >-
+  Substantial progress, gap not closed. At filing only 9 of the protocol synths exported a
+  module-level is_<base>; in 0.2.29 that count is 39 (measured: 39 of 86
+  programs/*_protocol_synth.py define `def is_<base>`), so the v0.1.93 universal guard
+  programs/tests/test_protocol_detector_no_misfire.py (which glob-auto-discovers module-level
+  is_<stem>) now auto-covers 39, not 9. BUT the suggested_fix's goal — lift ALL ~47 remaining
+  inline detectors out of phase1_doc_one_shot_runner.py into importable is_<proto> so the guard
+  covers all ~57(+) — is NOT met: ~47 older protocols (spi/i2c/uart/can/usb/pcie/ddr/...) still
+  keep their detector logic INLINE in the runner and expose no module-level predicate. This is
+  explicitly acknowledged IN the current plugin: test_protocol_detector_no_misfire.py's coverage
+  note (lines ~21-24) and test_all_protocol_synth_overlay.py's docstring both state "~47 older
+  protocols keep their detector INLINE" and the former names THIS backlog
+  (ORGANIC-20260531-inline-protocol-detectors-not-importable) as the open tracker to lift them.

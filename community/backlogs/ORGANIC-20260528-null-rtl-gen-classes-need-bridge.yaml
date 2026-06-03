@@ -73,3 +73,26 @@ session_context: >-
   invocation path is under-specified at the plugin/skill/instructions
   boundary, so disciplined agents (correctly) refuse to bypass and end up
   emitting nothing.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "vibe-ic 0.2.29 — skills/spec-to-rtl/SKILL.md (option A, the recommended 'cleanest' / medium-term fix)"
+resolution: >-
+  Option (A) is implemented: an ACTUAL plugin skill now exists at
+  vibe-ic-marketplace/plugins/vibe-ic/skills/spec-to-rtl/SKILL.md (with
+  skills/spec-to-rtl/compliance.yaml + skills/spec-to-rtl/tests/test_compliance.py).
+  Its description names exactly the 5 null-rtl_gen classes from the backlog
+  (digital_arithmetic_primitive, digital_cmd_driven, bare_fpga, processor_cpu,
+  unknown_protocol_class) and its 'Invocation contract' section spells out the
+  full pattern the agents were missing: read the L docs the runner just emitted
+  (L1/L2/L3/L7/L9) + the original prompt at input/phase1_prompt.md, respect the
+  blind rule, determine top_module from L9, author synthesizable RTL into the
+  runner's expected phase2/stage1/rtl/<top>.v path, then let the runner's
+  downstream gates fire — and it explicitly states 'THIS IS THE RUNNER'S
+  INTENDED PATH — NOT BYPASS', the exact disambiguation the 0/50 RTLLM agents
+  needed. phase2_one_shot_runner.step_rtl_gen (programs/phase2_one_shot_runner.py
+  lines ~754-817) WAIVES with fallback_skill='spec-to-rtl' (or catalog-glue-author
+  when ip_catalog has matches), so the WAIVE now points at a real invokable skill.
+  ic_class_registry.json confirms all 5 classes carry fallback_skill='spec-to-rtl'.
+  The documented gap (WAIVE points at a non-existent skill so disciplined agents
+  emit nothing) no longer holds.

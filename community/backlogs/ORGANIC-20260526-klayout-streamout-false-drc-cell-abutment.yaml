@@ -61,3 +61,25 @@ session_context: >-
   were sub-0.05um cell-abutment gaps; re-streaming the same DEF via Magic and
   re-running the identical KLayout deck produced 0 violations, proving the
   layout clean and the KLayout streamout path the root cause.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "vibe-ic 0.2.29 / program:phase3_one_shot_runner (Fix #3a + #3b/c + #2)"
+resolution: >-
+  All three suggested-fix options are implemented in
+  programs/phase3_one_shot_runner.py. Option 1 (default Magic DEF->GDS):
+  step_gds() (line ~3026) calls _magic_def_to_gds() FIRST (lines ~2987-3023)
+  via the _MAGIC_STREAMOUT_TCL deck (lines ~2969-2984) which `lef read` +
+  `def read` + `gds write` so Magic merges abutting same-layer geometry, and
+  only falls back to the KLayout stream_out.py path (line ~3050) when Magic is
+  absent or dropped geometry; the chosen engine is recorded in
+  extras["streamout_engine"]. Option 3 (the dominance re-stream heuristic) is
+  in the DRC step (lines ~3681-3718): _klayout_streamout_false_positive_dominated()
+  flags when >90% of the KLayout-deck violations are min-spacing/min-width
+  edge-pairs, then re-streams via Magic + re-runs DRC and records BOTH counts,
+  treating the Magic count as authoritative only when geometry actually loaded.
+  Fix #2 (_detect_vacuous_magic, line ~3346) guards against a Magic stream that
+  silently dropped geometry being mistaken for a clean pass. Tested in
+  programs/tests/test_phase3_backend_fixes.py::TestVacuousMagic and
+  ::TestStreamoutFalsePositive. The false-positive cell-abutment wall no longer
+  holds for any layer-merge-sensitive PDK.

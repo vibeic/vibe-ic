@@ -55,3 +55,40 @@ session_context: >-
   also fixed real general phase3 gaps (L9 -period regex ignored 25.9ns→fell back to
   20.0; PnR ran no set_wire_rc / no repair_design / no repair_timing -setup, only
   hold) — those are validated in phase3_one_shot_runner.py (WNS -102.76→+10.95 MET).
+
+status: partially-fixed
+partially_fixed_at: "2026-06-03"
+partially_fixed_in: "vibe-ic 0.2.29 — bit_level_full_stack_tb_oracle_check.py (Wave 12, v0.119.44+)"
+partial_resolution: >-
+  A NEW gate programs/bit_level_full_stack_tb_oracle_check.py (Wave 12,
+  v0.119.44) was added specifically to close the 'fabricate the green verdict'
+  gameability hole and is wired into flow_compliance_check.py (registered at
+  line 577 in REQUIRED_CHECKS). It raises the bar substantially over the legacy
+  bit_level_full_stack_tb_check: it FAILs unless results.json carries a
+  per_vector[] array (>=8 entries) with expected_bytes/actual_bytes/match,
+  requires a non-empty input_doc_evidence naming the L doc the vectors derive
+  from, requires the named tb_module and rtl_top to be real files under sim/ and
+  rtl/, requires vectors_passed==vectors_total, and CRC-cross-checks per-vector
+  CRC bytes against L3-declared CRC params (crc_compute_done + Wave-13
+  enhancement). For the AID/protocol-chip family this catches the
+  fabricate-distinct-bytes and arbitrary-CRC-variant variants of the bug.
+residual: >-
+  The three specific fixes the backlog requested are NOT implemented and the
+  original sha256 (digital_arithmetic_primitive) failure mode is still open:
+  (1) Neither gate rejects a placeholder expected_bytes=="XX" — the oracle
+  gate's _parse_byte_list simply skips non-hex tokens and the CRC cross-check
+  only fires when valid CRC bytes exist, so a per_vector entry with
+  expected_bytes="XX", actual_bytes="XX", verdict="PASS" passes every rule.
+  Worse, phase2_one_shot_runner.py STILL EMITS expected_bytes:"XX" + verdict:
+  "PASS" placeholder vectors (lines 1092, 1102, and the >=8 padding loop at
+  line 1454) — exactly the false-PASS shape this item flagged. (2) There is no
+  golden/KAT population for arithmetic primitives: oracle_vector_gen.py derives
+  vectors only from L9 opcodes + L11 OTP + L8 CRC (the protocol path); there is
+  no L7-KAT / FIPS-180-4 (SHA-256) / spec-derived behavioral-golden source, so a
+  generic full-stack TB on a hash/cipher core still has no real golden to score
+  against. (3) No functional_coverage:{scored_with_golden, placeholder} field is
+  emitted by the full-stack TB gate (the only functional_coverage.json producer
+  is benchmark_verify_report.py, a separate report consumer). Net: the
+  gameability hole is narrowed for protocol chips but the
+  digital_arithmetic_primitive false-functional-PASS (the run's
+  'most consequential finding') remains reproducible.

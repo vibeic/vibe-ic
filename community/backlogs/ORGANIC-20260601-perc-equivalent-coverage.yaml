@@ -189,3 +189,26 @@ xdomain_v0_2_11:
     vswitch, zero-crossing GAP, LS-present MANUAL, iso whole-segment guard, unresolved INCOMPLETE).
   residual_now: "per-crossing level-shifter correctness (every crossing shifted? direction lo->hi/hi->lo?) + isolation-clamp efficacy under power-gating = device physics, commercial PERC."
   tests_added: "+10 (domain-count incl. the Caravel-NETS-only fix + conservative-collapse + vswitch + unresolved-not-NA; level-shifter zero-crossing GAP + present-MANUAL + iso whole-segment + single-supply-NA)."
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "vibe-ic 0.2.29 — programs/phase3_one_shot_runner.py PERC-equivalent emitter chain + programs/tests/test_phase3_signoff_chain_organic.py"
+resolution: >-
+  Re-verified against the current 0.2.29 plugin: every function the suggested_fix
+  named is present in programs/phase3_one_shot_runner.py — _parse_def_components
+  (:5975), _esd_pad_ring_presence (:6024), _emit_perc_equivalent (:6296),
+  _emit_perc_signoff_memo (:6569), _read_verdict (:6287) — plus the hardening
+  additions _classify_io_cell (:5998), _esd_discharge_topology (:6206),
+  _parse_def_net_terminals (:6180), _welltap_presence_check (:6105),
+  _discover_power_domains (:5043), _xdomain_levelshifter_check (:5127) and
+  _net_pg_class (:6168). _emit_perc_equivalent is wired into the phase3 sign-off
+  path (:4168, after the ERC emitter) and aggregates the 4 AUTOMATED verdicts
+  (antenna/IR/EM/floating via _read_verdict), the EM-J/via GUARDBAND, the ESD
+  presence + discharge-path topology, well-tap latch-up presence and the
+  cross-voltage-domain conclusive-FAIL screen, ending in _emit_perc_signoff_memo.
+  programs/tests/test_phase3_signoff_chain_organic.py carries 146 perc/welltap/
+  esd/xdomain assertions across the v0.2.7-v0.2.11 hardening rounds. The gap the
+  backlog opened (no single PERC-equivalent report + no honest semi-automated ESD/
+  latch-up/x-domain screen) no longer holds; the listed residual_now items are
+  device-physics that intentionally stay MANUAL (commercial PERC/TLP), not gaps in
+  the suggested_fix.

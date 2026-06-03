@@ -60,3 +60,30 @@ session_context: >-
   core and authored a pass-through chip_top wrapper; yosys synthesis PASSED
   (gate-level netlist, ~10.5k cells, correct top). reference_tb and qsf_gen
   FAILed solely on interface-family template mismatch.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "vibe-ic 0.2.29 (v1.6.523); programs/phase2_one_shot_runner.py + programs/ic_class_profile.py"
+resolution: >-
+  The runner is now class-aware about which IC families verify via the
+  hardcoded AID single-wire reference TB. programs/ic_class_profile.py adds
+  class_verification_flags() (lines 863-892) + is_aid_protocol_track()
+  (lines 894-904) which expose per-class `verification_track`
+  ("aid_protocol" vs "generic_full_stack") and `half_duplex_bus`;
+  processor_cpu / soc / digital_arithmetic_primitive are registered as
+  generic_full_stack. programs/phase2_one_shot_runner.py adds
+  _class_uses_aid_reference_tb() (lines 1273-1306, fail-closed to AID for
+  unknown classes) and step_reference_tb (lines 1309-1330) routes
+  generic_full_stack classes to _reference_tb_generic_full_stack() (lines
+  1147-1271) which uses the generic full-stack TB as the functional gate or
+  SKIPs/WAIVEs (NOT FAIL) with reason "interface family not covered by AID
+  reference TB" — exactly suggested_fix points 1-2. step_qsf_gen (lines
+  2093-2119) SKIPs DE10 board-pin generation for memory-bus / generic
+  classes unless a board harness top is supplied — suggested_fix point 3.
+  Pinned by programs/tests/test_phase2_class_aware_gating.py:
+  test_predicate_skips_aid_tb_for_generic_class,
+  test_generic_class_reference_tb_skips_when_no_full_stack_tb,
+  test_generic_class_reference_tb_runs_full_stack_tb,
+  test_generic_class_real_compile_failure_still_fails (real DUT failure
+  still FAILs — honesty preserved), test_qsf_gen_skips_for_generic_class_without_board_top,
+  test_board_harness_top_reenables_qsf (34 pass total).

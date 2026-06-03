@@ -47,3 +47,24 @@ session_context: >-
   but real: it's the reason batch00 emitted 0/10 even before the rtl_gen
   WAIVE — the runner never got past phase1 because input/phase1_prompt.md
   alone isn't consumed.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "vibe-ic 0.2.29 — phase1_one_shot_runner.py v0.1.32 auto-bridge (option A)"
+resolution: >-
+  Option (A) is implemented verbatim. programs/phase1_one_shot_runner.py
+  step_ingest_render (lines 150-162) now has an explicit else-branch — its
+  comment cites this exact backlog ID ('v0.1.32 fix
+  (ORGANIC-20260528-phase1-prompt-md-not-ingested)') — that, when neither
+  input/phase1_structured.yaml nor input/docs/ is present, checks for
+  input/phase1_prompt.md and, if found, mkdir(input/docs/) +
+  writes input/phase1_prompt.md content to input/docs/design_description.md,
+  then sets src=docs_dir and proceeds through the normal phase1_engine
+  'run-all' doc-ingest path (so L1-L13 actually get emitted). Only when even
+  the prompt.md is absent does it SKIP — and now with a CLEAR error message
+  naming all three accepted input layouts (suggested-fix C as the fallback).
+  Regression coverage: programs/tests/test_vibe_ic_one_shot_runner.py::
+  test_need_phase1_auto_detects_prompt_input stages only input/phase1_prompt.md
+  and asserts phase1 is NOT top-level SKIPPED; it PASSES on the current tree
+  (verified: '1 passed in 0.80s'). The mode-detector/ingest-step disagreement
+  that produced silent PASS_WITH_WAIVERS + 0/13 L docs is closed.

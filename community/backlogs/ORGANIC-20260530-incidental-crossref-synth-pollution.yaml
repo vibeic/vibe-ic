@@ -28,3 +28,35 @@ suggested_fix: >
 session_context: >
   Found by the v0.1.89 C/D adversarial code-review workflow (finding M1, verified).
   usb4 instance fixed; JTAG/MIPI-on-pcie_gen5 instance documented here.
+
+status: partially-fixed
+resolved_at: "2026-06-03"
+resolved_in: "usb4 v0.1.89; JTAG PRIMARY-SUBJECT guard v0.1.90; present in 0.2.29"
+resolution: >-
+  Two of the three documented instances are fixed via suggested_fix option (a)
+  PRIMARY-SUBJECT weighting. (1) usb4-on-pcie5 fixed v0.1.89 (32 GT/s mutex +
+  dropped weak "tunnel" clause). (2) JTAG-on-pcie_gen5 fixed v0.1.90 in
+  programs/phase1_doc_one_shot_runner.py lines 50130-50186 (commit/comment cites
+  this exact backlog ORGANIC-20260530): the is_jtag detector now requires TAP
+  STATE-MACHINE tokens (Capture-DR / Shift-IR/DR / Test-Logic-Reset /
+  Run-Test-Idle / "TAP controller") read from an input_doc-augmented content blob,
+  NOT merely the four TCK/TMS/TDI/TDO pins. Measured jtag=13, swd=87 such tokens
+  vs pcie_gen5=0, so JTAG synth no longer pollutes pcie_gen5's L-docs; pcie_gen5
+  synth line 491-495 documents it must now set byte_oriented itself because the
+  guard suppresses JTAG.
+residual: >-
+  The MIPI-on-pcie_gen5 (and ufs) instance is STILL OPEN by an explicit, documented
+  design decision. Lines 50194-50209 of phase1_doc_one_shot_runner.py record that a
+  CSI-2-packet-structure PRIMARY-SUBJECT guard was ATTEMPTED and REVERTED: the real
+  `mipi` benchmark's TI SLLA414 source is a D-PHY layout guide whose fresh extraction
+  carries NO CSI-2 packet vocabulary (Long/Short Packet / Data Identifier = 0) and
+  even raw MIPI/DPHY tokens are absent from its body — the firing signal comes from
+  inferred L1/L2 content. Any packet-structure guard therefore suppresses MIPI synth
+  on the real mipi benchmark and regresses it (mipi → 165 gated). No clean structural
+  separator keeps mipi firing while stopping the incidental pcie_gen5/ufs M-PHY
+  mention. Per doctrine the pollution is parity-NEUTRAL (additive keys land in
+  SHAPE_MISMATCH, excluded from the gated total per R28/R32), so the v0.1.84 MIPI
+  detector is deliberately kept unchanged and the MIPI half is left OPEN. Not
+  quick-fixable: suggested_fix option (b) defensive .pop() in pcie_gen5 synth would
+  also need to enumerate every sub-feature key per protocol and is the larger of the
+  two options the item itself flagged.

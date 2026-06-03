@@ -77,3 +77,35 @@ session_context: >-
   remainder rules were mis-bucketed as user-routing violations, flipping the
   DRC step (and the overall phase3 verdict) to FAIL despite a genuinely clean,
   timing-closed layout.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "vibe-ic 0.2.29 (v1.6.604 + Fix #1 broadening); programs/phase3_one_shot_runner.py"
+resolution: >-
+  programs/phase3_one_shot_runner.py implements BOTH suggested-fix options.
+  Option 1 (broadened prefix table): _V1_6_604_STDCELL_LAYER_RULE_PREFIXES
+  (lines 3192-3202) now extends the sky130A/sky130/sky130B allowlist beyond
+  the local-interconnect family to include the contact/licon family and the
+  lowest-metal (met1) family — ("li.", "ct.", "licon", "m1.", "met1.",
+  "mcon") — because on sky130 the detailed router's signal stack begins at
+  met2 and the li/contact/met1 layers are never emitted by the router
+  (gf180mcuD keeps li-only pending field evidence). The honesty gate is
+  preserved by _V1_6_604_USER_ROUTING_RULE_PREFIXES (lines 3211-3217, met2+
+  and the bridging vias) + _v1_6_604_rule_is_user_routing (lines 3220-3226)
+  which takes PRECEDENCE so any genuine met2+ routing defect ALWAYS keeps the
+  verdict at FAIL (_v1_6_604_classify_stdcell_violations, lines 3229-3268).
+  Option 2 (geometry-aware): _classify_geometry_inside_cells (lines
+  3271-3312+) cross-references each violation's bbox against placed-cell DEF
+  instance bboxes and returns the set of rules whose EVERY violation lies
+  wholly inside a cell (a rule with even one violation outside is NOT
+  waived). The OpenROAD-detailed_route-vs-KLayout-deck discrepancy is
+  surfaced explicitly in the DRC StepResult detail via
+  _format_drc_engine_discrepancy (lines 3466-3479) +
+  _read_openroad_drt_count (lines 3514+). Pinned by
+  programs/tests/test_phase3_backend_fixes.py:
+  test_contact_licon_waivable_on_sky130, test_m1_met1_waivable_on_sky130,
+  test_met2_is_user_routing_FAIL, test_mixed_met1_and_met2_keeps_user_routing,
+  test_via2_and_above_is_user_routing, test_user_routing_prefix_overrides_table,
+  test_unknown_pdk_no_autowaiver, test_gf180_li_only,
+  test_geometry_inside_cells_classifies, test_geometry_one_outside_not_waived,
+  test_geometry_never_overrides_honesty_gate (50 pass total).

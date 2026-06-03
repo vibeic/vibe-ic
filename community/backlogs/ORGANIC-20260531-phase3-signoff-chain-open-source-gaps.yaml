@@ -166,3 +166,21 @@ session_context: >-
   informational). Documented in docs/architecture/CANONICAL_FLOW_v2.2.0.md § 5b with the severity
   table. Complements the §5 LVS chain already shipped (device-level netgen / powered-netlist /
   port-label Route A/B / sign-off guard).
+
+status: partially-fixed
+residual: >-
+  Re-verified against the current 0.2.29 plugin: 6 of the 7 actionable open-source gaps are FIXED
+  end-to-end and the named emitters all exist in programs/phase3_one_shot_runner.py — _emit_spef
+  (:4635, real OpenRCX extract_parasitics -ext_model_file path), _emit_ir_em_reports (:5189,
+  analyze_power_grid -enable_em), _emit_antenna_report (:5363, check_antennas), _emit_si_crosstalk_report
+  (:5615) backed by _parse_spef_caps (:5542) + _si_coupling_metrics (:5586), _emit_metal_fill (:5722,
+  filler_placement -> filled.def), _emit_erc_report (report_floating_nets), and _build_spare_cells_plan
+  (:1999) which now derives the rows[] field; all wired into the sign-off path (:4113-4157). Tests:
+  programs/tests/test_phase3_signoff_chain_organic.py (102 test functions) pins the SPEF-captable +
+  SPEF-SI coupling behaviour. STILL OPEN (both explicitly env-deferred to a commercial tool, per the
+  file's own still_open list): (a) full Calibre PERC latch-up / ESD topology in Step 30's DRC/LVS/ERC
+  bundle — the open-source side ships DRC (KLayout sky130A.lydrc) + ERC (report_floating_nets) + the
+  §5 device-level netgen LVS, but the latch-up/ESD PERC deck needs commercial Calibre; (b) a true
+  pass/fail SI sign-off for Step 27 — the v0.2.6 SPEF coupling-ratio screen is an advisory watch-list
+  (floating-victim bound), not a timing-window + driver-strength noise sign-off, which needs a
+  commercial SI tool. Neither residual is an open-source-implementable gap.

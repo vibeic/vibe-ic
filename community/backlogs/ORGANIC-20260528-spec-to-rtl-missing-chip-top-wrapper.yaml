@@ -53,3 +53,25 @@ session_context: >-
   took spm + subservient to PASS_WITH_WAIVERS with real routed GDS + timing MET. The
   fix must live in the spec-to-rtl emit + a phase2 pre-yosys post-check, not in a
   per-run manual wrapper.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "v0.1.32 (initial auto-emit) → v0.1.62 (multi-module + commented-port hardening); present in 0.2.29"
+resolution: >-
+  Implemented as the deterministic auto-emit in
+  programs/phase2_one_shot_runner.py:_autoemit_chip_top_if_needed (lines
+  1688-1849), invoked at line 1847 right before yosys synth. When L9.top_module
+  ("chip_top") differs from the authored inner module, the runner scans rtl/ for
+  the single non-helper candidate (disambiguated by L9.top_module for multi-module
+  designs like sha256), then auto-generates a thin pass-through wrapper that
+  declares EXACTLY the inner module's port list (comment-masked paren walker so
+  commented `(LSB-first)` parens can't truncate the list), instantiates it once
+  with named-port connections (.a(a),…), and propagates parameters by name
+  (#(.size(size))). This is precisely suggested_fix items 1-3 (L9-port wrapper
+  authored chip-AGNOSTICally before yosys, with param pinning). It respects a
+  manually-authored chip_top and fails-open if generation fails. Pinned by
+  programs/tests/test_chip_top_wrapper_portlist.py (10 tests pass, includes the
+  exact spm commented-port case from this backlog) plus
+  test_chip_top_gate_wrapper_gen.py and test_chip_top_wrapper_portlist. The gap
+  no longer holds: spm/sha256/subservient-class designs with rtl_gen=null reach
+  yosys with a valid chip_top top without any per-run manual wrapper.

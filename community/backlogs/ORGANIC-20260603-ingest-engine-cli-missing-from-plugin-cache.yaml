@@ -16,3 +16,21 @@ id: "ORGANIC-20260603-ingest-engine-cli-missing-from-plugin-cache"
 submitted_at: "2026-06-03T00:00:00+08:00"
 session_context: >-
   Atomic spec-to-RTL benchmark (both tracks) 0.2.27 floor re-attempt. Each blind agent worked around it by deterministically rendering its own spec's integration layer doc into the gate-expected path (audited honest: no fabrication, no oracle leak, scoring-neutral). Does NOT affect the score because the host scorer is independent of the phase1 gate, but it blocks a clean out-of-box atomic-gate run.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "vibe-ic 0.2.29 — benchmark-harness/gates_atomic.py (_l9_rendered dual-path probe + bundled phase1_one_shot_runner.py fallback) + programs/tests/test_gates_atomic_l9_dual_path.py"
+resolution: >-
+  Implemented via the second option in suggested_fix (probe the fallback runner's
+  actual layer-doc output path). benchmark-harness/gates_atomic.py now: (1) tries
+  the primary `python -m tools.phase1_engine.cli run-all` with a PYTHONPATH/env
+  pointed at whichever candidate root actually carries tools/phase1_engine/cli.py,
+  (2) on rc!=0 falls back to the bundled programs/phase1_one_shot_runner.py with a
+  staged positional project dir (phase1_proj/input/docs/design_description.md), and
+  (3) checks the L9 hard step via _l9_rendered(wd) (lines 64-77) which probes BOTH
+  <wd>/out/generated_docs AND <wd>/phase1_proj/phase1/generated_docs — so the
+  fallback's actual output location now satisfies the gate. The header comment at
+  line 74 cites this ORGANIC id. programs/tests/test_gates_atomic_l9_dual_path.py
+  is named for this item and its 4 cases (primary out/, fallback phase1_proj/,
+  absent-both, dir-but-no-L9) all pass — the clean-install phase1 hard gate now
+  passes self-contained without the manual per-spec render workaround.

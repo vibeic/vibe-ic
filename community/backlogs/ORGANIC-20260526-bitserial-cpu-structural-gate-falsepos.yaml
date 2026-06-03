@@ -67,3 +67,33 @@ session_context: >-
   reference-TB mismatch) were the only things blocking the pre-burn audit;
   fixes 1 and 2 were applied and verified PASS this session, fix 3 is the
   remaining false-positive on validated bit-serial IP.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "vibe-ic 0.2.29 (fix 3 = v1.6.523); programs/l9_submodule_conformance_check.py, programs/ip_catalog_pull.py, programs/nba_shift_register_same_cycle_read_check.py"
+resolution: >-
+  All three structural false-positives are fixed and pinned by tests in the
+  current plugin (0.2.29). Fix 1: programs/l9_submodule_conformance_check.py
+  _INSTANTIATION_TEMPLATE (line 296-310) now places the optional `#(...)`
+  param-override BEFORE the instance name and allows one level of nested
+  parens — `r"(?<!module\s)\b{name}\b\s+(?:#\s*\((?:[^()]|\([^()]*\))*\)\s*)?\w+\s*\("` —
+  which matches SERV-style `serv_alu #(.W (W)) alu (...)` and multi-line
+  `serv_decode\n decode\n (...)` instantiations (verified by direct regex
+  exec) while still excluding the module-declaration header; covered by
+  programs/tests/test_l9_submodule_conformance_check.py (15 pass). Fix 2:
+  programs/ip_catalog_pull.py (lines 192-219) now emits an `outputs` dict
+  {project_rel_path: "sha256:<hex>"} on each provenance.jsonl event and keeps
+  `outputs_sha256` as a back-compat alias, satisfying
+  provenance_output_hash_completeness_check; asserted by
+  programs/tests/test_ip_catalog_pull.py lines 71-72 (`rec["outputs"][k]`
+  starts with "sha256:"). Fix 3: programs/nba_shift_register_same_cycle_read_check.py
+  adds the bit-serial-family evidence-based suppression
+  (_bit_serial_evidence, lines 116-148; waiver key
+  `bit_serial_core_lookahead_intentional`; W==1 / bit_serial marker
+  detection) that downgrades the same-cycle look-ahead read FAIL → WARN
+  (lines 561-578); covered by programs/tests/test_phase2_class_aware_gating.py
+  tests test_bit_serial_marker_downgrades_to_warn /
+  test_bit_serial_width1_marker_downgrades /
+  test_bit_serial_evidence_waiver_downgrades /
+  test_bit_serial_evidence_helper_fail_closed (4 pass). 30 of the cited tests
+  pass green.

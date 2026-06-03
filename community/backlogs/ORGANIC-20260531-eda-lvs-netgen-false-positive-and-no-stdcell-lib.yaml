@@ -62,3 +62,21 @@ interim_defense: >-
   top-level ports to anchor against. 14 pytest. The permanent fix (real verdict parse +
   did-not-run guard + std-cell-lib load) per suggested_fix above is still required in the MCP
   server; the guard is the safety net until then.
+
+status: partially-fixed
+triaged_at: "2026-06-03"
+triaged_against: "vibe-ic 0.2.29"
+residual: >-
+  The plugin-side interim defense SHIPPED and is verified: programs/lvs_signoff_guard.py
+  (assert_lvs_trustworthy / PortlessExtractionError) RAISES on a portless extracted top
+  .subckt, the exact vacuous-match condition that produced the silent false positive, and
+  programs/tests/test_lvs_signoff_guard.py passes 14/14 in 0.2.29. BUT the actual
+  suggested_fix — which lives in the packaged mcp-eda-server, not the plugin — has NOT landed.
+  In /home/reyerchu/vibe-ic/mcp-eda-server/src/index.js the legacy netgen mode still derives
+  the verdict from the naive `result.output.match(/uniquely/i) || result.output.match(/match/i)`
+  (line 1655) with no real "Circuits match uniquely" / "do not match" verdict parse, NO
+  DID-NOT-RUN guard (a "Cannot find cell" / no-report-written run still yields matched != null),
+  NO auto-name-align for Magic's `_flat` top subckt, and NO `readnet spice <stdcell.spice>`
+  load into the schematic circuit — and it still writes a PASS manifest (matched: match != null
+  && !fail) on that basis (lines 1655-1695). The permanent MCP-server fix + the corpus-sweep
+  re-validation (i2s/sent/qspi/hdlc + benchmark_clean/sha256) per suggested_fix remain open.

@@ -55,3 +55,38 @@ session_context: >-
   RISC-V SoC benchmark; catalog-glue-author path required manual IP
   selection + spurious-match pruning because the SoC-top IP did not
   auto-match and two incidental IPs over-matched.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "vibe-ic 0.2.29 (v-orch 4a/4b/4c); programs/ip_catalog_query.py"
+resolution: >-
+  The under-match-SoC-top / over-match-incidental gap is closed in
+  programs/ip_catalog_query.py via the query-side fixes that make the
+  catalog-glue path run unattended on SoC-class designs. (4a) When a
+  matches_when predicate keys on a structured L2 field that the L2 doc does
+  not expose as a discrete key, the matcher falls back to a SCOPED keyword
+  search over the relevant L2 SECTION ONLY (_scoped_section_text, lines
+  411-419; _structured_field_name, lines 392-409) and caps substring-only
+  hits below structured-field hits via the confidence ceilings (lines
+  377-390, _evaluate_match_rule lines 518-557) — this is the load-bearing
+  change that fixes the SoC-top miss WITHOUT requiring Phase 1 to emit
+  discrete keys, superseding suggested_fix point 1. (4b) _is_soc_top()
+  (lines 674-715) detects integration tops (manifest is_soc_top /
+  top_module / *_top.v rtl), query_catalog auto-includes transitive
+  depends_on IPs even when they do not independently match (lines 762-783)
+  and applies a SoC-top rank bias so the integration top precedes leaf
+  cores at equal confidence (lines 785-787) — suggested_fix point 3.
+  (4c) _extension_excluded() (lines 432-471) suppresses an
+  "ISA contains '<ext>'" rule when the spec is integer-only / explicitly
+  excludes the extension — suggested_fix point 4. Pinned by
+  programs/tests/test_orch_phase1_catalog_fixes.py:
+  test_fix4a_discrete_key_beats_substring, test_fix4a_scoped_substring_lowered,
+  test_fix4a_scoped_does_not_leak_other_layers, test_fix4b_is_soc_top_detection,
+  test_fix4b_soc_top_preferred_over_leaf, test_fix4b_depends_on_auto_included,
+  test_fix4c_integer_only_suppresses_f, test_fix4c_explicit_no_f_excludes,
+  test_fix4c_f_present_still_matches (23 pass total). Residual note:
+  suggested_fix point 1 (Phase-1 emitting discrete cpu_family /
+  memory_topology keys) is NOT implemented, but it is rendered unnecessary
+  by the 4a scoped-section fallback which makes the predicates resolve
+  against the raw L2 section text — the net-effect gap (cannot run
+  unattended) is fully closed.

@@ -35,3 +35,25 @@ submitted_at: "2026-05-28T03:16:00+08:00"
 session_context: >-
   Manual analog close-loop on a switched-capacitor converter front-end;
   authored the OTA/quantizer/feedback-DAC topology by hand to clear A2.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "vibe-ic 0.2.29 / skill:analog-topology-select (ΔΣ modulator topology section)"
+resolution: >-
+  skills/analog-topology-select/SKILL.md now ships a dedicated proven SC
+  data-converter topology family (lines ~154-166, "Skill: ΔΣ modulator
+  topology — 2nd-order SC CIFB with 1-bit quantizer + feedback DAC", captured
+  by benchmark-enhancement-capture 2026-05-28). It names all three building
+  blocks the backlog asked for: (a) the SC integrator amplifier as a two-stage
+  Miller NMOS-input OTA (PMOS load + class-AB output) with Cs/Ci sized for
+  stability+gain, (b) the 1-bit quantizer as a StrongARM-style preamp+latch
+  comparator, and (c) the 1-bit feedback DAC as a ±Vref CMOS-mux select-switch
+  pair — i.e. transistor-level named primitives the A2 primitive panel
+  recognises. It states the cap-ratio = loop-coefficient mapping and the
+  verifiable per-corner metric (OTA UGBW must exceed the modulator clock so the
+  integrator settles), and explicitly defers ENOB/SNDR to mixed-signal cosim,
+  exactly as suggested. The worked example (u_hawaii_adc) shows the prior A2
+  delta_sigma rejection cleared to A2 PASS with real ngspice UGBW 1.81-14.93
+  MHz across 9 corners. analog_block_type_classify.py also recognises
+  'sigma delta' → ADC. The "no proven SC-converter template" gap no longer
+  holds for any IC containing a switched-capacitor converter core.

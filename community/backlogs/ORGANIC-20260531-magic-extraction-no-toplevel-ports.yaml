@@ -79,3 +79,23 @@ session_context: >-
   ordered ports + netgen seed + .subckt injection, 22 pytest). Empirically validated in-container:
   env-prepped docker-exec magic runs `port makeall` correctly; relabel-to-MET3PIN advanced the
   netgen verdict past the pin-match-seed stage. Companion Bucket-B note added to skills/lvs-triage.
+
+status: partially-fixed
+triaged_at: "2026-06-03"
+triaged_against: "vibe-ic 0.2.29"
+residual: >-
+  The two GENERAL plugin programs SHIPPED and are verified in 0.2.29:
+  programs/magic_port_extract_emit.py (Route A: env-PDK preamble + flatten + `port makeall`
+  ext2spice TCL emitter) and programs/lvs_def_port_seed.py (Route B: DEF PINS -> ordered ports
+  + .subckt port injection + netgen seed) — programs/tests/test_magic_port_extract_emit.py (27)
+  and programs/tests/test_lvs_def_port_seed.py (25) pass 52/52. BUT the suggested_fix's primary
+  target — the PACKAGED mcp-eda-server — is NOT patched, so the tool itself still emits a
+  portless .subckt: (1) eda_run_tcl engine=magic still has NO `export PDK=`/`PDK_ROOT=` in its
+  PATH_PREFIX (index.js line ~4168) and does NOT pass a foundry `-rcfile` (magic case line ~4211),
+  so the env(PDK) startup-abort the backlog proved is unfixed; (2) eda_extraction has NO
+  `promote_ports`/`port_makeall` param (schema lines ~3826-3840) and its magic script (~3877-3887)
+  never injects `port makeall`, so the emitted `.subckt <top>` is still portless; (3) the label
+  layer / write_gds MET*PIN snapping (fix #3) is not addressed. The plugin programs are the
+  emitter/fallback helpers, but they cannot fix the tool's own env-export or add the
+  eda_extraction param. The corpus-sweep re-validation (i2s/hdlc/sha256) of a patched
+  eda_extraction(promote_ports=true) per suggested_fix remains open.

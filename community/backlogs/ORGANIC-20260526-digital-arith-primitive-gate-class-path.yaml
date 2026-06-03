@@ -125,3 +125,46 @@ corroborating_reproductions:
       reference-TB template — confirming fix (c) (non-protocol clk/rst/data
       reference TB for this family) is the load-bearing change. Phase 3 was
       never reached (orchestrator halts at phase2).
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "vibe-ic 0.2.29 (v1.6.523); programs/flow_compliance_check.py + programs/analog_content_detected_must_emit_l5_check.py + programs/phase2_one_shot_runner.py + programs/ic_class_profile.py"
+resolution: >-
+  The Phase 2 structural-gate suite is now class-aware for the pure-digital
+  data-transform primitive family, closing all three failure clusters.
+  Fix (a) — negated/excluded-keyword awareness: programs/analog_content_detected_must_emit_l5_check.py
+  adds per-keyword negation detection (_keyword_is_negated lines 203-224;
+  _PRE_NEGATION_RE lines 184-191 incl. Chinese 不需要/無需/沒有/無/不含;
+  strikethrough markers) so an analog term appearing ONLY inside a negation
+  or exclusion no longer counts as analog content; applied per-hit at lines
+  314-325. Pinned by programs/tests/test_l5_analog_negation_guard.py (9 pass)
+  and test_phase2_class_aware_gating.py::test_negated_keyword_not_counted /
+  test_positive_keyword_still_counted / test_negated_analog_gate_skips_full_run /
+  test_positive_analog_gate_still_fails_without_l5. Fix (b) — class-aware
+  gate skip-set: programs/flow_compliance_check.py adds
+  _CLASS_SKIPPABLE_PROTOCOL_GATES (lines 1945-1950:
+  l3_opcode_argument_constraints_check, l1_electrical_specs_typed_depth_check,
+  l12_behavioral_sequences_steps_typed_check, protocol_ip_simulation_required_check)
+  and _CLASS_SKIPPABLE_ANALOG_GATES (lines 1951-1973: analog_block_coverage,
+  hardmacro, mixed_signal_cosim, analog_content_must_emit, spice_correlation)
+  plus _class_skipped_gates() (lines 1976+) which SKIPs (not FAILs) these when
+  the registry-matched class marks command_protocol_applicable=false /
+  analog_applicable=false; fail-closed for unknown classes (lines 2002-2003).
+  Pinned by test_phase2_class_aware_gating.py::test_class_skipped_gates_for_arithmetic_primitive /
+  test_class_skipped_gates_fail_closed_for_unknown /
+  test_structural_gates_skip_protocol_for_generic_class /
+  test_spice_gate_skipped_for_each_digital_class. Fix (c) — non-protocol
+  reference TB: same v1.6.523 change as the sibling backlog
+  ORGANIC-20260526-catalog-glue-cpu-reference-tb-mismatch —
+  programs/phase2_one_shot_runner.py _class_uses_aid_reference_tb (lines
+  1273-1306) routes digital_arithmetic_primitive (generic_full_stack track)
+  to _reference_tb_generic_full_stack (clk/rst/data full-stack TB, lines
+  1147-1330) instead of the AID single-wire protocol TB; this is the
+  load-bearing change the SPM corroborating reproduction called out. All 34
+  test_phase2_class_aware_gating.py + 9 test_l5_analog_negation_guard.py
+  tests pass green. The two orchestration defects (Path-B vendor-docs-only
+  auto-runs Phase 1 in docs mode; Markdown vendor docs route to the
+  doc-extraction track) are also closed and pinned by
+  programs/tests/test_orch_phase1_catalog_fixes.py fix1_* / fix2_* (e.g.
+  test_fix1_pathb_vendor_docs_triggers_phase1_docs,
+  test_fix2_raw_docs_is_docs_mode).

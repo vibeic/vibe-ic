@@ -45,3 +45,26 @@ session_context: >-
   read_verilog -sv aborted at the first package named-field struct literal,
   and iverilog likewise rejected the same line, forcing a synth/ref-TB FAIL
   that was a frontend gap, not a design defect.
+
+status: partially-fixed
+residual: >-
+  PARTIAL as of vibe-ic 0.2.29. The Phase-3 synth step IS fixed:
+  programs/phase3_one_shot_runner.py has Fix #5 — _decide_synth_frontend()
+  (lines ~1279-1305) detects an SV error signature or .sv inputs after the
+  default read_verilog -sv attempt and falls through to `yosys -m slang` /
+  read_slang (lines ~1442-1468, preserves hierarchy) and then to an sv2v
+  pre-pass emitting Verilog-2005 (lines ~1470-1499), recording the chosen
+  frontend in extras['synth_frontend']. Tested in
+  programs/tests/test_phase3_backend_fixes.py::TestSynthFrontendSelection.
+  HOWEVER the backlog names THREE steps, and the other two are still on the
+  built-in frontends with NO slang/sv2v/verilator fallback: (a) the Phase-2
+  yosys-synth step in programs/phase2_one_shot_runner.py (line ~1862) still
+  builds cmds=[f"read_verilog -sv -DSIMULATION {f}" ...] only — grep for
+  slang|sv2v|verilator in that file returns 0; (b) the iverilog reference-TB /
+  simulation step (programs/phase2_one_shot_runner.py, the "3. iverilog
+  reference TB" block ~line 1145) compiles with `iverilog -g2012`, the exact
+  frontend the session reported rejecting the package named-field struct
+  literal, with no SV-2017 fallback. To fully close: lift _decide_synth_frontend
+  (or an equivalent slang/sv2v fall-through) into the Phase-2 synth step and
+  add a verilator/slang-elaborated path to the reference-TB step, recording the
+  frontend in those steps' extras as the Phase-3 step already does.

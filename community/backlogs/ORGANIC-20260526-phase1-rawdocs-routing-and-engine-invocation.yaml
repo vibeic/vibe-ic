@@ -66,3 +66,24 @@ session_context: >-
   runner and fixing the engine invocation, Phase 1 produced 14 L docs at
   100% input-coverage. Fixes were applied locally to the runner to unblock
   the run; recording the general defect class here for upstream absorption.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "vibe-ic 0.2.29 / program:phase1_one_shot_runner"
+resolution: >-
+  All four compounding defects are fixed in
+  programs/phase1_one_shot_runner.py. (1) Input-mode mis-routing:
+  _detect_input_mode() (lines ~93-107) now routes a populated input/docs/ to
+  mode='docs' (delegated to phase1_doc_one_shot_runner, the raw-corpus
+  ingester) UNLESS the dir already holds L*.json layer files, in which case it
+  is the reverse-extract/prompt path — exactly the suggested fix. (2) Script
+  vs module: step_ingest_render() invokes the engine as a module,
+  cmd=[python, "-m", f"{pkg_dir.name}.{cli.stem}", "run-all", ...] with
+  PYTHONPATH=pkg_parent (lines ~171-184), eliminating the relative-import
+  crash. (3) Unsupported --facts arg: dropped — the comment at lines ~177-179
+  documents that run-all writes facts internally and --facts triggers an
+  argparse rc=2, so it is no longer passed. (4) Wrong cwd: the engine is run
+  with cwd=repo_root discovered by walking up for the 'vibe-ic-marketplace'
+  dir (lines ~186-196), so the relative DEFAULT_CLASS_KB resolves. Covered by
+  programs/tests/test_phase1_one_shot_runner.py::test_input_docs_directory_changes_branch
+  (asserts a populated input/docs/ with no layer-JSON routes to mode='docs').

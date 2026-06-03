@@ -50,3 +50,20 @@ session_context: >-
   Complements ORGANIC-20260601-perc-equivalent-coverage (the PERC chain itself). The sweep is the
   first corpus-scale exercise of the v0.2.4-2.11 PERC sign-off chain; it proved the checks' value +
   zero-false-positive behavior at scale, and the fresh control proved the current runner is sound.
+
+status: partially-fixed
+residual: >-
+  Only the DISCLOSURE half (suggested_fix #3) shipped: benchmark_ic/RESULT_PERC_CORPUS_v0211.md
+  fully states the 14 corpus DEFs are pre-tapcell-fix stale and must be regenerated before any of
+  their PERC numbers are cited as a current-quality signal, and programs/perc_corpus_sweep.py carries
+  the stale-artifact lesson (deprioritises floorplan/pre-tapcell DEFs at :53 and prints the honesty
+  note, pinned by programs/tests/test_perc_corpus_sweep.py:97). STILL OPEN: (1) the core fix —
+  regenerating the 14 benchmark_ic/ corpus DEFs through the current runner so future PERC sweeps
+  measure today's tapcell+PDN output — is NOT done; RESULT_PERC_CORPUS_v0211.md's own Reproduce
+  section still shows `grep tapvpwrvgnd|__tap ... -> 0 across the 14 DEF-bearing ICs` and its
+  Follow-up notes only a 2nd fresh control "is being run" (no committed regenerated corpus DEFs; the
+  cap-crc worktree contains zero .def files). (2) The optional artifact-vintage GUARD CHECK
+  (suggested_fix #4 — warn when a routed DEF with >N std cells has 0 taps AND an older-version 0-tap
+  sibling exists) was NOT implemented: no vintage/stale-artifact guard function exists in
+  programs/perc_corpus_sweep.py or elsewhere (only the prose lesson). Hygiene-only (P3, no functional
+  plugin bug); the well-tap presence check correctly flags the stale 0-tap artifacts today.
