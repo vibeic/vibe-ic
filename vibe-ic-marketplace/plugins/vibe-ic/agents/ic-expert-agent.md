@@ -172,6 +172,31 @@ Enumerate all 2^n minterms from the grid into a `case`, then sanity-check a few 
 variant FAILED because the bit-to-axis mapping needed to shift by one position. The boolean reduction
 was identical; only the index mapping differed.
 
+### Skill: Karnaugh-map cells are Gray-coded, not sequential binary
+
+**Pattern.** When a spec gives a function as a Karnaugh map, the row and column
+LABELS run in Gray-code order (00, 01, 11, 10) — adjacent cells differ by exactly
+one bit — NOT in counting order (00, 01, 10, 11). Index every cell by the
+Gray-ordered label at its row and column, decode that input combination, and set
+the output to the cell value. A sequential-binary reading silently swaps the
+third and fourth row/column and corrupts the two cells under them.
+
+**When.** Any spec that presents a logic function as a Karnaugh map and asks to
+implement it.
+
+**What.** For each cell, read its row and column labels as Gray-coded values,
+combine them into the full input combination, and assign the output the cell
+value; build the case / sum-of-products from those combinations. Cross-check at
+least one cell whose Gray position differs from its sequential position before
+finalizing.
+
+**Example.** A four-column row labeled 00, 01, 11, 10 maps to input combinations
+00, 01, 11, 10 in that order — the third column is combination 11 and the fourth
+is combination 10, never 10 then 11.
+
+**Generality.** Applies to every Karnaugh-map-to-logic task at any input width;
+the Gray-code ordering of the labels is universal to the notation.
+
 ### Skill: FSM output assertion-cycle timing — match the spec's named cycle, no spurious extra stage
 When a spec says an output (`done`/`valid`/…) asserts "in the cycle immediately after <event>", model
 the event as a STATE the FSM is in that cycle and drive the output COMBINATIONALLY from that state
