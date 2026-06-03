@@ -153,7 +153,7 @@ _SKIP_PATH_PATTERNS = (
     "docs/architecture/RENAME_MAPPING_",
     "docs/architecture/CANONICAL_FLOW_",
     # Versioned architecture summary/reference docs carry their OWN doc/flow
-    # version (the v2.2.0 doc scheme), a namespace distinct from plugin semver,
+    # version (the vX.Y.Z doc scheme), a namespace distinct from plugin semver,
     # in their title + filename — same exemption as CANONICAL_FLOW_ above.
     "docs/architecture/ALL_STEPS_",
     "docs/architecture/FLOW_STEPS_GENERATED",
