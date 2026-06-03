@@ -1625,3 +1625,31 @@ def _l23(gd: Path) -> None:
         "equivalent at the simplified spec level.")
     d["fields"] = f
     _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_sdmmc(blob: str) -> bool:
+    """Content-only `sdmmc` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    return bool(
+        ("CMD0" in blob and "ACMD41" in blob
+            and "CID" in blob and "CSD" in blob
+            and "OCR" in blob)
+        or ("SD Card" in blob and "CMD line" in blob
+            and "DAT" in blob)
+        or ("MultiMediaCard" in blob
+            and "CMD line" in blob)
+        or ("SD Memory Card" in blob
+            and ("CID" in blob or "CSD" in blob)))

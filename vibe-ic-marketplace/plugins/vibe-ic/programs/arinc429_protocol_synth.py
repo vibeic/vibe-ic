@@ -1196,3 +1196,27 @@ def apply_arinc429_synth(generated_docs_dir: Path, is_arinc429: bool,
             "replaces ARINC 429 — not part of ARINC 429 itself.")
         d["fields"] = f
         _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_arinc429(blob: str) -> bool:
+    """Content-only `arinc429` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    return bool(
+        ("ARINC 429" in blob and "Label" in blob
+         and ("SSM" in blob or "Sign/Status" in blob))
+        or ("Mark 33" in blob and "DITS" in blob)
+        or ("avionics" in blob.lower()
+            and "32-bit word" in blob and "Label" in blob))

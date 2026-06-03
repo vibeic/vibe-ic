@@ -1887,3 +1887,30 @@ def _l23(gd: Path) -> None:
         "mandatory Lane Margining feature is a signal-integrity diagnostic, "
         "not a security feature.")
     _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_pcie_gen5(blob: str) -> bool:
+    """Content-only `pcie_gen5` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    pcie5_phy = (
+        "retimer" in blob.lower()
+        or "lane margining" in blob.lower()
+        or "equalization" in blob.lower())
+    return bool(
+        pcie5_phy and (
+            ("32 GT/s" in blob and "PCI Express" in blob)
+            or ("PCIe 5.0" in blob)
+            or ("PCI Express Base 5" in blob)))

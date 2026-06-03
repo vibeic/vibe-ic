@@ -133,8 +133,15 @@ def test_generic_class_reference_tb_runs_full_stack_tb(tmp_path):
            f"output data_out); assign data_out = data_in; endmodule\n")
     proj = _make_project_with_l9(tmp_path, rtl, top)
     # Emit the generic full-stack TB skeleton like the runner does.
+    # ORGANIC-20260528: with no concrete L3 golden, the TB-gen now
+    # honestly returns SKIP (connectivity-only, functional UNVERIFIED)
+    # rather than a fabricated functional PASS. The TB file is still
+    # emitted, which is all step_reference_tb needs.
     gen = p2.step_full_stack_tb_gen(proj, top)
-    assert gen.status == "PASS"
+    assert gen.status in ("PASS", "SKIP")
+    tb = (proj / "phase2" / "stage1" / "sim_full_stack"
+          / f"tb_{top}_full.v")
+    assert tb.is_file()
     sr = p2.step_reference_tb(proj, top, "processor_cpu")
     # PASS (iverilog present + compiles) or PASS (results.json fallback)
     # — never an AID-TB false FAIL.
@@ -156,7 +163,9 @@ def test_generic_class_real_compile_failure_still_fails(tmp_path):
            f"output data_out); assign data_out = $$$ data_in endmodule\n")
     proj = _make_project_with_l9(tmp_path, rtl, top)
     gen = p2.step_full_stack_tb_gen(proj, top)
-    assert gen.status == "PASS"
+    # ORGANIC-20260528: TB-gen verdict is honest (SKIP without a golden),
+    # but the TB file is still emitted so step_reference_tb can compile it.
+    assert gen.status in ("PASS", "SKIP")
     sr = p2.step_reference_tb(proj, top, "processor_cpu")
     assert sr.status == "FAIL"
     assert "defect" in sr.detail.lower() or "compile" in sr.detail.lower()

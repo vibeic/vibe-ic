@@ -1285,3 +1285,30 @@ def apply_lin_synth(generated_docs_dir: Path, is_lin: bool,
             "guard.")
         d["fields"] = f
         _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_lin(blob: str) -> bool:
+    """Content-only `lin` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    return bool(
+        ("LIN bus" in blob
+         or "Local Interconnect Network" in blob
+         or "LIN Consortium" in blob
+         or "LIN 2." in blob)
+        and (("BREAK" in blob.upper()
+              and "SYNC" in blob.upper())
+             or ("master" in blob.lower()
+                 and "schedule" in blob.lower())))

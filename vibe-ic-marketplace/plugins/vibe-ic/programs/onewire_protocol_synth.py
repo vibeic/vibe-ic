@@ -1358,3 +1358,31 @@ def _l23(gd: Path) -> None:
         "cryptographic guarantee.")
     d["fields"] = f
     _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_onewire(blob: str) -> bool:
+    """Content-only `onewire` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    return bool(
+        (("1-Wire" in blob or "1Wire" in blob)
+            and ("iButton" in blob
+                 or "Maxim" in blob
+                 or "Dallas Semiconductor" in blob))
+        or ("1-Wire" in blob and "DQ" in blob)
+        or ("1-Wire" in blob
+            and "parasitic power" in blob.lower())
+        or ("Match ROM" in blob and "Skip ROM" in blob
+            and "Search ROM" in blob))

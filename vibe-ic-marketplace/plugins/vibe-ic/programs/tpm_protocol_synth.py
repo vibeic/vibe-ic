@@ -1903,3 +1903,28 @@ def _l23(gd: Path) -> None:
         "vice versa) at the wire-format level.")
     d["fields"] = f
     _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_tpm(blob: str) -> bool:
+    """Content-only `tpm` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    return bool(
+        ("TPM 2.0" in blob and "PCR" in blob
+         and "commandCode" in blob)
+        or ("TPM" in blob and "TCG" in blob
+            and "PCR" in blob and "hierarchy" in blob.lower())
+        or ("Trusted Platform Module" in blob
+            and "TPM2_" in blob))

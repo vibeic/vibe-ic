@@ -2448,3 +2448,24 @@ def _l23(gd: Path) -> None:
         "links also narrows the physical attack surface compared with "
         "board-level interconnects.")
     _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Re-exports the canonical single-source predicate (same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+# Single source of truth: tier_d_interconnect_detect (the runner imports the
+# same callable). We empty-guard then delegate, so behaviour is identical and
+# the no-misfire guard auto-discovers is_ucie here.
+from tier_d_interconnect_detect import is_ucie as _det_ucie  # noqa: E402
+
+
+def is_ucie(blob: str) -> bool:
+    """Content-only `ucie` detector (re-export of the canonical predicate)."""
+    if not blob:
+        return False
+    return bool(_det_ucie(blob))

@@ -52,6 +52,19 @@ Rules
    "raised bar" companion of the legacy gate; legacy gate handles the
    missing-file case).
 8. Honors waiver ``bit_level_oracle_skipped`` (>= 40 chars).
+9. (ORGANIC-20260528) FAIL if ANY scored vector lacks a concrete golden
+   ``expected_bytes`` — i.e. it is missing / null / empty, or it
+   contains a placeholder token such as ``XX`` (the canonical
+   "no golden" marker the runner used to emit). A functional PASS may
+   only be claimed when every scored vector compares the DUT output
+   against a concrete expected value. A placeholder / stub testbench
+   must NEVER report a functional PASS; it FAILs honestly here. The
+   gate ALSO emits a ``functional_coverage`` summary
+   ``{scored_with_golden: N, placeholder: M}`` so a downstream auditor
+   can see at a glance whether the PASS is real. Honors waiver
+   ``functional_unverified_connectivity_only`` (>= 40 chars) which
+   DOWNGRADES the FAIL to an explicit "connectivity-only, functional
+   UNVERIFIED" WARN (never a silent green).
 
 Usage
 -----
@@ -77,9 +90,18 @@ import _path_layout as _pl
 
 WAIVER_KEY = "bit_level_oracle_skipped"
 WAIVER_KEY_CRC = "tb_crc_variant_intentional_mismatch"
+# ORGANIC-20260528 — explicit connectivity-only downgrade waiver. When set,
+# placeholder-golden vectors do NOT FAIL the gate but the verdict is reported
+# as "connectivity-only, functional UNVERIFIED" (never a silent green PASS).
+WAIVER_KEY_CONNECTIVITY = "functional_unverified_connectivity_only"
 WAIVER_MIN = 40
 MIN_VECTORS_FAIL = 8
 MIN_VECTORS_WARN = 16
+
+# Placeholder tokens the runner historically emitted in place of a real
+# golden expected value. CHIP-AGNOSTIC: these are structural "no golden"
+# sentinels, not chip/vendor/benchmark literals.
+_PLACEHOLDER_TOKENS = {"XX", "??", "--", "TODO", "TBD", "NONE", "NULL", "N/A"}
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +292,52 @@ def _vector_crc_position(vec: dict, expected_bytes: list[int]
     return None
 
 
+def _is_placeholder_token(tok: str) -> bool:
+    """True if a single byte token is a structural 'no golden' sentinel
+    (e.g. ``XX``), not a concrete hex byte. CHIP-AGNOSTIC."""
+    t = tok.strip()
+    if not t:
+        return True
+    if t.upper() in _PLACEHOLDER_TOKENS:
+        return True
+    # A bare run of one or more 'X' / '?' / '-' chars is a placeholder
+    # nibble pattern (XX / X / ?? / --) regardless of length.
+    if re.fullmatch(r"[xX?\-]+", t):
+        return True
+    return _to_int_hex(t) is None
+
+
+def classify_expected_bytes(expected) -> bool:
+    """Return True iff ``expected`` is a concrete golden byte value (a
+    non-empty list/string of hex bytes with NO placeholder token).
+
+    A vector whose expected_bytes is missing / null / empty, or that
+    contains ANY placeholder token (``XX`` / ``??`` / blank / non-hex)
+    is NOT a golden — comparing the DUT against it cannot establish a
+    functional PASS. CHIP-AGNOSTIC: classification is purely structural.
+    """
+    if expected is None:
+        return False
+    if isinstance(expected, list):
+        if not expected:
+            return False
+        return all(
+            isinstance(x, (str, int))
+            and not (isinstance(x, str) and _is_placeholder_token(x))
+            and _to_int_hex(x) is not None
+            for x in expected
+        )
+    if isinstance(expected, str):
+        s = expected.strip()
+        if not s:
+            return False
+        parts = [p for p in re.split(r"[,\s]+", s) if p]
+        if not parts:
+            return False
+        return not any(_is_placeholder_token(p) for p in parts)
+    return False
+
+
 def waived(project_dir: Path) -> tuple[bool, str]:
     waivers = project_dir / "waivers.json"
     if not waivers.exists():
@@ -277,6 +345,21 @@ def waived(project_dir: Path) -> tuple[bool, str]:
     try:
         d = json.loads(waivers.read_text())
         text = d.get(WAIVER_KEY)
+        if isinstance(text, str) and len(text.strip()) >= WAIVER_MIN:
+            return True, text.strip()
+    except Exception:
+        pass
+    return False, ""
+
+
+def _waiver_connectivity(project_dir: Path) -> tuple[bool, str]:
+    """ORGANIC-20260528 — the explicit connectivity-only downgrade waiver."""
+    waivers = project_dir / "waivers.json"
+    if not waivers.exists():
+        return False, ""
+    try:
+        d = json.loads(waivers.read_text())
+        text = d.get(WAIVER_KEY_CONNECTIVITY)
         if isinstance(text, str) and len(text.strip()) >= WAIVER_MIN:
             return True, text.strip()
     except Exception:
@@ -446,8 +529,71 @@ def check(project: Path, results_path: Path) -> dict:
                 ),
             })
 
-    # Rule 6: WARN under-tested
     warnings: list[dict] = []
+
+    # ------------------------------------------------------------------
+    # Rule 9 (ORGANIC-20260528): refuse a functional PASS built on
+    # placeholder goldens. The historical false-PASS shape was every
+    # vector carrying expected_bytes="XX" + verdict="PASS" — the TB
+    # never compared the DUT output against a concrete expected value,
+    # so a real RTL functional bug shipped as "8/8 PASS". A PASS may
+    # only be claimed when EVERY scored vector has a concrete golden.
+    # ------------------------------------------------------------------
+    scored_with_golden = 0
+    placeholder = 0
+    placeholder_samples: list[str] = []
+    if isinstance(per_vector, list):
+        for idx, vec in enumerate(per_vector):
+            if not isinstance(vec, dict):
+                placeholder += 1
+                continue
+            if classify_expected_bytes(vec.get("expected_bytes")):
+                scored_with_golden += 1
+            else:
+                placeholder += 1
+                if len(placeholder_samples) < 5:
+                    nm = vec.get("name") or vec.get("vector_id") or f"#{idx}"
+                    placeholder_samples.append(
+                        f"{nm}: expected_bytes="
+                        f"{vec.get('expected_bytes')!r}"
+                    )
+    # Fix 3 — surface the coverage breakdown so an auditor sees at a
+    # glance whether the green verdict is backed by real goldens.
+    info["functional_coverage"] = {
+        "scored_with_golden": scored_with_golden,
+        "placeholder": placeholder,
+    }
+
+    conn_waived, conn_why = _waiver_connectivity(project)
+    if placeholder > 0:
+        msg = (
+            f"{placeholder}/{scored_with_golden + placeholder} scored "
+            f"vector(s) have NO concrete golden expected_bytes "
+            f"(placeholder/missing/non-hex such as 'XX'). A placeholder "
+            f"testbench can report '{vp if isinstance(vp, int) else '?'}"
+            f"/{vt if isinstance(vt, int) else '?'} PASS' regardless of "
+            f"the DUT output, so a real functional bug ships green. "
+            f"Functional PASS requires a concrete golden for every "
+            f"scored vector. Sample: {'; '.join(placeholder_samples)}."
+        )
+        if conn_waived:
+            warnings.append({
+                "rule": "FUNCTIONAL_UNVERIFIED_CONNECTIVITY_ONLY",
+                "severity": "WARN",
+                "message": (
+                    msg + " DOWNGRADED to connectivity-only per waiver "
+                    f"`{WAIVER_KEY_CONNECTIVITY}`: {conn_why[:80]}"
+                ),
+                "waived": True,
+            })
+        else:
+            findings.append({
+                "rule": "PLACEHOLDER_GOLDEN_NO_FUNCTIONAL_PASS",
+                "severity": "FAIL",
+                "message": msg,
+            })
+
+    # Rule 6: WARN under-tested
     if isinstance(per_vector, list) and \
             MIN_VECTORS_FAIL <= len(per_vector) < MIN_VECTORS_WARN:
         warnings.append({

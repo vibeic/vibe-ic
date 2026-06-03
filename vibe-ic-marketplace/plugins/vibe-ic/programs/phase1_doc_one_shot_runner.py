@@ -154,6 +154,64 @@ class _V1_6_580_StepTimeout(Exception):
     pass
 
 
+def protocol_dispatch_decision(ic_class: str):
+    """ORGANIC-20260531 (v0.2.32) — fail-closed protocol-synth dispatch gate.
+
+    The [14e/15] R55 block dispatches the ~80 hand-wired built-in protocol
+    synths only if the detected ``ic_class`` is in the reachability set. If
+    ``detect_ic_class`` ever returns a class that NO dispatch block fires for,
+    the whole protocol-synth chain was SILENTLY skipped (the inline structural
+    detectors — the real gate — never ran). This pure helper makes the decision
+    EXPLICIT and testable:
+
+    Returns a dict::
+
+        {
+          "reachable": bool,        # True  -> run the synth chain
+          "ic_class": str,
+          "dispatch_classes": sorted list,
+          "all_ic_classes": sorted list,
+          "signal": None | dict,    # explicit skip signal when NOT reachable
+        }
+
+    ``signal`` (a JSON-serialisable payload) is non-None ONLY when the class is
+    unreachable — the caller writes it to ``reports/phase1/
+    protocol_dispatch_skipped.json`` so the skip surfaces loudly instead of
+    being masked. General: keyed purely on the class-taxonomy string, never on
+    a chip / vendor / benchmark name.
+    """
+    from ic_class_profile import (
+        protocol_synth_dispatch_classes as _dc,
+        ALL_IC_CLASSES as _all,
+    )
+    dispatch = _dc()
+    reachable = ic_class in dispatch
+    signal = None
+    if not reachable:
+        signal = {
+            "_schema_version": "1",
+            "_comment": (
+                "Phase-1 protocol-synth dispatch was SKIPPED because "
+                "detect_ic_class returned an ic_class that is not in the "
+                "dispatch reachability set. This is an EXPLICIT fail-closed "
+                "signal (ORGANIC-20260531): the ~80 built-in protocol synths "
+                "did not run for this class. Either the class is genuinely "
+                "non-protocol (benign) or it must be added to "
+                "PROTOCOL_SYNTH_DISPATCH_CLASSES in ic_class_profile.py."),
+            "ic_class": ic_class,
+            "dispatch_classes": sorted(dispatch),
+            "all_ic_classes": sorted(_all),
+            "unreachable": True,
+        }
+    return {
+        "reachable": reachable,
+        "ic_class": ic_class,
+        "dispatch_classes": sorted(dispatch),
+        "all_ic_classes": sorted(_all),
+        "signal": signal,
+    }
+
+
 def _v1_6_580_log_runner_event(project, line: str) -> None:
     """v1.6.580 — for #396 P2. Append a single event line to the
     runner.log file under <project>/reports/phase1/. Best-effort:
@@ -49971,24 +50029,40 @@ def main() -> int:
         _profile_r55 = _detect_r55(project)
         _ic_r55 = (_profile_r55.get("ic_class", "unknown")
                    if isinstance(_profile_r55, dict) else "unknown")
-        # v0.1.84 — also fire for digital_cmd_driven / digital_arithmetic_primitive /
-        # unknown classes, because each protocol synth helper's INLINE structural
+        # v0.1.84-v0.1.89 broadened this gate one class at a time (digital_cmd_driven
+        # / digital_arithmetic_primitive / unknown / bus_interconnect_protocol /
+        # pure_analog) because each protocol synth helper's INLINE structural
         # sub-detector is the actual gate (only fires if the protocol's specific
-        # wire-level signature matches). This lets 1-Wire / JTAG / MIPI / SDMMC /
-        # PCIe (which classify differently) still reach their synth helpers.
-        # v0.1.87 — also fire for bus_interconnect_protocol so AHB+APB and ACE
-        # inline structural sub-detectors can run. detect_ic_class universal
-        # detector classifies AMBA AXI/ACE/AHB/APB as bus_interconnect_protocol
-        # (rightly so); the universal R46-R52 synth runs there but Tier-2
-        # protocol-specific synths (ACE / AHB+APB) were gated out before.
-        # v0.1.89 — also fire for pure_analog. The USB4 spec (SerDes-heavy
-        # 40 Gbps PHY) classifies as pure_analog under detect_ic_class, but is a
-        # genuine protocol. As with every other class here, the INLINE structural
-        # sub-detector is the real gate — a true analog IC matches no protocol
-        # wire-signature, so broadening the class set cannot cause a false fire.
-        if _ic_r55 in ("serial_peripheral_protocol", "digital_cmd_driven",
-                       "digital_arithmetic_primitive",
-                       "bus_interconnect_protocol", "pure_analog", "unknown"):
+        # wire-level signature matches), so widening the class set can never cause a
+        # false fire — only a NARROW set can SILENTLY skip a protocol whose benchmark
+        # classifies outside it (ORGANIC-20260531, the Avalon digital_arithmetic_primitive
+        # surprise). v0.2.32 ROOT-CAUSE FIX (Option A): the gate now delegates to the
+        # pure, testable `protocol_dispatch_decision()` helper, which consults the single
+        # source of truth `protocol_synth_dispatch_classes()` (== the closed set
+        # ALL_IC_CLASSES). Every class `detect_ic_class` can return reaches dispatch, so
+        # no protocol synth is silently skipped; if a FUTURE class is ever left out, the
+        # decision surfaces an EXPLICIT fail-closed signal instead of dropping the chain.
+        # Pinned by test_protocol_synth_dispatch_reachability.py.
+        _disp_dec_r55 = protocol_dispatch_decision(_ic_r55)
+        if not _disp_dec_r55["reachable"]:
+            # Fail-closed: surface the skip loudly (explicit signal file + stderr)
+            # rather than silently dropping the whole protocol-synth chain.
+            try:
+                _reports_disp = project / "reports" / "phase1"
+                _reports_disp.mkdir(parents=True, exist_ok=True)
+                (_reports_disp / "protocol_dispatch_skipped.json").write_text(
+                    json.dumps(_disp_dec_r55["signal"], indent=2,
+                               ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            print(
+                "      ⚠ protocol-synth dispatch SKIPPED — ic_class "
+                f"'{_ic_r55}' is NOT in the dispatch set "
+                f"{_disp_dec_r55['dispatch_classes']}; wrote "
+                "reports/phase1/protocol_dispatch_skipped.json "
+                "(ORGANIC-20260531 fail-closed signal)",
+                file=sys.stderr)
+        if _disp_dec_r55["reachable"]:
             _gd_r55 = _pl.generated_docs_dir(project)
             _spi_blob = ""
             for _n in ("L1_DATASHEET.json", "L2_FRS.json"):

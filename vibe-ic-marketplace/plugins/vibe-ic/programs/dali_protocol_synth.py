@@ -1967,3 +1967,28 @@ def apply_dali_synth(generated_docs_dir: Path, is_dali: bool,
             "Some vendors layer encryption via User-Defined ranges or signed memory-bank writes. There is no IEC-published 'DALI Secure' analogue to Modbus-Secure or BACnet-Secure as of IEC 62386-2014.")
         d["fields"] = f
         _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_dali(blob: str) -> bool:
+    """Content-only `dali` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    return bool(
+        ("DALI" in blob and "IEC 62386" in blob
+         and "lighting" in blob.lower())
+        or ("DALI" in blob and "control gear" in blob.lower()
+            and "control device" in blob.lower())
+        or ("DALI" in blob and "forward frame" in blob.lower()
+            and "backward frame" in blob.lower()))

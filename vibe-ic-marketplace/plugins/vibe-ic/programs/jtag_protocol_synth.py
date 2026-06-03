@@ -1656,3 +1656,39 @@ def _l23(gd: Path, ic_name: Optional[str]) -> None:
     ])
     d["fields"] = f
     _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_jtag(blob: str) -> bool:
+    """Content-only `jtag` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    tap_fsm = (
+        "ShiftDR" in blob or "ShiftIR" in blob
+        or "Shift-DR" in blob or "Shift-IR" in blob
+        or "Capture-DR" in blob or "CaptureDR" in blob
+        or "Update-DR" in blob or "UpdateDR" in blob
+        or "TestLogicReset" in blob
+        or "Test-Logic-Reset" in blob
+        or "RunTestIdle" in blob or "Run-Test/Idle" in blob
+        or "TAP controller" in blob
+        or "SelectDRScan" in blob)
+    return bool(tap_fsm and (
+        ("TCK" in blob and "TMS" in blob
+            and "TDI" in blob and "TDO" in blob)
+        or ("TestLogicReset" in blob
+            and "ShiftIR" in blob
+            and "ShiftDR" in blob)
+        or ("IEEE 1149.1" in blob
+            and "boundary scan" in blob.lower())))

@@ -277,8 +277,11 @@ def test_step_full_stack_tb_emits_tb_full_v(tmp_path):
         ],
     }))
     result = step_full_stack_tb_gen(project)
-    assert result.status == "PASS", (
-        f"step_full_stack_tb_gen should PASS; got "
+    # ORGANIC-20260528: with no concrete L3 golden, the TB-gen emits a
+    # connectivity-only skeleton and HONESTLY returns SKIP — it must NOT
+    # fabricate a green functional PASS. The TB file is still emitted.
+    assert result.status in ("PASS", "SKIP"), (
+        f"step_full_stack_tb_gen should PASS/SKIP; got "
         f"status={result.status} detail={result.detail}"
     )
     tb = (project / "phase2" / "stage1" / "sim_full_stack"
@@ -293,6 +296,21 @@ def test_step_full_stack_tb_emits_tb_full_v(tmp_path):
     assert "id_bus_drive" in body, (
         "inout port must carry _drive reg + tri-state assign in TB skel"
     )
+    # The emitted results.json must NOT claim a functional PASS off
+    # placeholder goldens: no concrete L3 golden → functional_verified
+    # is False and no per_vector carries a concrete expected value.
+    res = json.loads(
+        (project / "phase2" / "stage1" / "sim_full_stack"
+         / "results.json").read_text())
+    assert res.get("functional_verified") is False, (
+        "skeleton with no golden must not report functional_verified")
+    assert res["functional_coverage"]["scored_with_golden"] == 0
+    for v in res["per_vector"]:
+        eb = v.get("expected_bytes")
+        assert eb in (None, "") or "XX" not in str(eb).upper(), (
+            f"placeholder golden leaked into per_vector: {v}")
+        assert v.get("verdict") != "PASS", (
+            "no vector may claim PASS without a concrete golden")
 
 
 def test_step_full_stack_tb_skip_when_l9_missing(tmp_path):
@@ -305,6 +323,81 @@ def test_step_full_stack_tb_skip_when_l9_missing(tmp_path):
     assert result.status == "SKIP", (
         f"missing L9 should SKIP, not FAIL; got {result.status}"
     )
+
+
+# ---------------------------------------------------------------------------
+# ORGANIC-20260528 — full-stack TB-gen golden population + honesty.
+# ---------------------------------------------------------------------------
+
+def test_full_stack_tb_gen_populates_concrete_golden(tmp_path):
+    """When L3 provides concrete response_payload_template hex values,
+    the TB-gen populates expected_bytes with the real golden (never
+    'XX'), and the results.json scores those vectors with a golden."""
+    from programs.phase2_one_shot_runner import step_full_stack_tb_gen
+    project = tmp_path
+    docs = project / "phase1" / "generated_docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": "chip_top",
+        "top_ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "reset_n", "direction": "input", "width": 1},
+            {"name": "id_bus", "direction": "inout", "width": 1},
+        ],
+    }))
+    # Every opcode carries a fully-concrete golden response template.
+    (docs / "L3_CMD_PROTOCOL.json").write_text(json.dumps({
+        "opcodes": [
+            {"hex": f"0x{0x70 + i:02X}",
+             "response_payload_template": [
+                 {"byte_offset": 0, "value": f"0x{0x75 + i:02X}"},
+                 {"byte_offset": 1, "value": "0x10"},
+             ]}
+            for i in range(5)
+        ],
+    }))
+    step_full_stack_tb_gen(project)
+    res = json.loads(
+        (project / "phase2" / "stage1" / "sim_full_stack"
+         / "results.json").read_text())
+    # No 'XX' placeholder anywhere.
+    assert "XX" not in json.dumps(res["per_vector"]).upper()
+    # The 5 L3 opcodes are scored with a concrete golden.
+    assert res["functional_coverage"]["scored_with_golden"] >= 5
+    # Concrete-golden vectors carry the real expected bytes.
+    golden_vecs = [v for v in res["per_vector"]
+                   if isinstance(v.get("expected_bytes"), str)
+                   and v["expected_bytes"]]
+    assert golden_vecs, "expected at least one concrete-golden vector"
+    assert golden_vecs[0]["expected_bytes"] == "75,10"
+
+
+def test_full_stack_tb_gen_never_emits_placeholder_pass(tmp_path):
+    """Regression: the runner must NEVER write a per_vector entry with
+    expected_bytes='XX' + verdict='PASS' (the original false-PASS shape)
+    — not even in the >=8 padding loop."""
+    from programs.phase2_one_shot_runner import step_full_stack_tb_gen
+    project = tmp_path
+    docs = project / "phase1" / "generated_docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": "chip_top",
+        "top_ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "id_bus", "direction": "inout", "width": 1},
+        ],
+    }))
+    # No L3 → no golden at all → every vector must be UNVERIFIED.
+    step_full_stack_tb_gen(project)
+    res = json.loads(
+        (project / "phase2" / "stage1" / "sim_full_stack"
+         / "results.json").read_text())
+    assert res["functional_verified"] is False
+    for v in res["per_vector"]:
+        eb = str(v.get("expected_bytes")).upper()
+        assert not (eb == "XX" and v.get("verdict") == "PASS"), (
+            f"false-PASS placeholder shape leaked: {v}")
+        assert v.get("verdict") != "PASS"
 
 
 # ---------------------------------------------------------------------------

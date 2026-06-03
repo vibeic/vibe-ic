@@ -358,3 +358,204 @@ def test_crc_with_waiver_pass(tmp_path):
     r = _run(proj)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "CRC_VARIANT_MISMATCH_VS_L3" not in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# ORGANIC-20260528 — placeholder-golden FALSE-FUNCTIONAL-PASS closure.
+# A placeholder / stub TB (expected_bytes="XX") must NEVER report a
+# functional PASS; it FAILs honestly. functional_coverage is emitted.
+# ---------------------------------------------------------------------------
+
+
+def _placeholder_results(n: int = 8) -> dict:
+    """The exact false-PASS shape the backlog flagged: every vector
+    carries expected_bytes="XX" + verdict="PASS" + pass=true."""
+    per_vector = []
+    for i in range(n):
+        per_vector.append({
+            "vector_id": f"vec_{i:02d}",
+            "opcode_hex": f"0x{0x70 + i:02X}",
+            "expected_bytes": "XX",
+            "actual_bytes": "XX",
+            "verdict": "PASS",
+            "match": True,
+        })
+    return {
+        "pass": True,
+        "verdict": "PASS",
+        "vectors_total": n,
+        "vectors_passed": n,
+        "vectors_failed": 0,
+        "per_vector": per_vector,
+        "tb_module": "tb_full_stack",
+        "rtl_top": "chip_top",
+        "input_doc_evidence": "generated_docs/L3_CMD_PROTOCOL.json#opcodes",
+    }
+
+
+def test_all_placeholder_golden_fails(tmp_path):
+    """The headline bug: a TB that 'passes' every vector against the
+    placeholder 'XX' must FAIL — it never compared the DUT output."""
+    proj = _proj(
+        tmp_path,
+        _placeholder_results(8),
+        tb_files={"tb_full_stack.v": "module tb_full_stack; endmodule"},
+        rtl_files={"chip_top.v": "module chip_top(); endmodule"},
+    )
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "PLACEHOLDER_GOLDEN_NO_FUNCTIONAL_PASS" in r.stdout
+
+
+def test_partial_placeholder_golden_fails(tmp_path):
+    """Even ONE placeholder byte in expected_bytes (e.g. 'F2,XX,33')
+    means that vector has no concrete golden → FAIL."""
+    res = _well_formed_results(16, True)
+    res["per_vector"][3]["expected_bytes"] = "F2,XX,33,44,55"
+    proj = _proj(
+        tmp_path, res,
+        tb_files={"tb_full_stack.v": "module tb_full_stack; endmodule"},
+        rtl_files={"chip_top.v": "module chip_top(); endmodule"},
+    )
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "PLACEHOLDER_GOLDEN_NO_FUNCTIONAL_PASS" in r.stdout
+
+
+def test_null_expected_bytes_fails(tmp_path):
+    """A null / missing expected_bytes is not a golden → FAIL."""
+    res = _well_formed_results(16, True)
+    res["per_vector"][0]["expected_bytes"] = None
+    res["per_vector"][1].pop("expected_bytes")
+    proj = _proj(
+        tmp_path, res,
+        tb_files={"tb_full_stack.v": "module tb_full_stack; endmodule"},
+        rtl_files={"chip_top.v": "module chip_top(); endmodule"},
+    )
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "PLACEHOLDER_GOLDEN_NO_FUNCTIONAL_PASS" in r.stdout
+
+
+def test_functional_coverage_emitted(tmp_path):
+    """Fix 3 — the gate emits functional_coverage so an auditor can see
+    at a glance whether the PASS is real."""
+    # 5 golden + 3 placeholder.
+    res = _well_formed_results(8, True)
+    for i in range(5, 8):
+        res["per_vector"][i]["expected_bytes"] = "XX"
+    proj = _proj(
+        tmp_path, res,
+        tb_files={"tb_full_stack.v": "module tb_full_stack; endmodule"},
+        rtl_files={"chip_top.v": "module chip_top(); endmodule"},
+    )
+    out_json = tmp_path / "gate_out.json"
+    r = subprocess.run(
+        [sys.executable, str(PROG), str(proj), "--json", str(out_json)],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 1, r.stdout + r.stderr
+    data = json.loads(out_json.read_text())
+    assert data["functional_coverage"] == {
+        "scored_with_golden": 5, "placeholder": 3}
+
+
+def test_real_golden_pass_emits_coverage(tmp_path):
+    """A real TB (every vector has a concrete golden) PASSes AND the
+    functional_coverage shows all-golden / zero-placeholder."""
+    res = _well_formed_results(16, True)
+    out_json = tmp_path / "gate_out.json"
+    proj = _proj(
+        tmp_path, res,
+        tb_files={"tb_full_stack.v": "module tb_full_stack; endmodule"},
+        rtl_files={"chip_top.v": "module chip_top(); endmodule"},
+    )
+    r = subprocess.run(
+        [sys.executable, str(PROG), str(proj), "--json", str(out_json)],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "PASS" in r.stdout
+    data = json.loads(out_json.read_text())
+    assert data["functional_coverage"]["placeholder"] == 0
+    assert data["functional_coverage"]["scored_with_golden"] == 16
+
+
+def test_placeholder_connectivity_waiver_downgrades(tmp_path):
+    """An explicit functional_unverified_connectivity_only waiver
+    DOWNGRADES the placeholder FAIL to a connectivity-only WARN — never a
+    silent green. The gate exits 0 but the verdict is explicit."""
+    proj = _proj(
+        tmp_path,
+        _placeholder_results(8),
+        tb_files={"tb_full_stack.v": "module tb_full_stack; endmodule"},
+        rtl_files={"chip_top.v": "module chip_top(); endmodule"},
+        waivers={
+            "functional_unverified_connectivity_only": (
+                "Spec ships no byte-level KAT / reference vectors for "
+                "this command set; functional correctness is verified "
+                "separately at gate-level synth + Phase 3 per the "
+                "verification plan. Connectivity-only here is intentional."
+            )
+        },
+    )
+    r = _run(proj)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "FUNCTIONAL_UNVERIFIED_CONNECTIVITY_ONLY" in r.stdout
+    # The downgrade must still be loud about functional being UNVERIFIED.
+    assert "UNVERIFIED" in r.stdout.upper()
+
+
+def test_sha256_kat_regression_golden_pass_vs_buggy_fail(tmp_path):
+    """ORGANIC-20260528 Fix 4 — model the SHA-256 KAT regression at the
+    gate level: with concrete golden KAT bytes, a buggy DUT whose
+    actual_bytes differ FAILs (vectors_passed<total), while a correct
+    DUT whose actual==golden PASSes bit-exact. A placeholder golden
+    would have masked the bug — this gate refuses it."""
+    # FIPS-180-4 "abc" digest first/last bytes as the concrete golden.
+    golden = "BA,78,16,BF,8F,01,CF,EA"
+    # Correct DUT: actual matches the KAT golden → PASS.
+    good = []
+    for i in range(16):
+        good.append({
+            "name": f"kat_{i:02d}", "expected_bytes": golden,
+            "actual_bytes": golden, "match": True, "verdict": "PASS",
+        })
+    good_res = {
+        "pass": True, "verdict": "PASS", "vectors_total": 16,
+        "vectors_passed": 16, "vectors_failed": 0, "per_vector": good,
+        "tb_module": "tb_full_stack", "rtl_top": "chip_top",
+        "input_doc_evidence": "L7 verification plan FIPS-180-4 KAT",
+    }
+    proj_good = _proj(
+        tmp_path / "good", good_res,
+        tb_files={"tb_full_stack.v": "module tb_full_stack; endmodule"},
+        rtl_files={"chip_top.v": "module chip_top(); endmodule"},
+    )
+    rg = _run(proj_good)
+    assert rg.returncode == 0, rg.stdout + rg.stderr
+    assert "PLACEHOLDER_GOLDEN_NO_FUNCTIONAL_PASS" not in rg.stdout
+
+    # Buggy DUT (W-schedule bug): actual differs from KAT golden and the
+    # results honestly record a failed vector → gate FAILs.
+    bad = []
+    for i in range(16):
+        bad.append({
+            "name": f"kat_{i:02d}", "expected_bytes": golden,
+            "actual_bytes": "00,11,22,33,44,55,66,77",
+            "match": False, "verdict": "FAIL",
+        })
+    bad_res = {
+        "pass": False, "verdict": "FAIL", "vectors_total": 16,
+        "vectors_passed": 0, "vectors_failed": 16, "per_vector": bad,
+        "tb_module": "tb_full_stack", "rtl_top": "chip_top",
+        "input_doc_evidence": "L7 verification plan FIPS-180-4 KAT",
+    }
+    proj_bad = _proj(
+        tmp_path / "bad", bad_res,
+        tb_files={"tb_full_stack.v": "module tb_full_stack; endmodule"},
+        rtl_files={"chip_top.v": "module chip_top(); endmodule"},
+    )
+    rb = _run(proj_bad)
+    assert rb.returncode == 1, rb.stdout + rb.stderr
+    assert "VECTORS_NOT_ALL_PASS" in rb.stdout

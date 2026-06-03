@@ -40,25 +40,42 @@ session_context: >-
   digital_arithmetic_primitive routing surprise (worked around by wiring Avalon into BOTH the
   R55 and [14e2/15] blocks). Companion to ORGANIC-20260531-inline-protocol-detectors-not-importable.
 
-status: partially-fixed
+status: resolved
 triaged_at: "2026-06-03"
 triaged_against: "vibe-ic 0.2.29"
-residual: >-
-  The silent-skip hazard is MITIGATED but NOT closed by either suggested option. (1) The R55
-  [14e/15] block in programs/phase1_doc_one_shot_runner.py was broadened (v0.1.84-v0.1.89) to
-  fire for serial_peripheral_protocol, digital_cmd_driven, digital_arithmetic_primitive,
-  bus_interconnect_protocol, pure_analog AND unknown (lines ~49989-49991) — so most built-in
-  protocols' inline detectors are now reached across nearly all ic_classes, and the Avalon
-  digital_arithmetic_primitive case the backlog was filed on is now in-scope. (2) A NEW generic
-  [14e2b/15] drop-in path (line ~51531) auto-dispatches any *_protocol_synth.py that opts in with
-  module-level AUTO_DISPATCH=True + is_<base>/apply_<base>_synth, regardless of ic_class. BUT
-  neither suggested fix is fully implemented: Option A (run EVERY registered detector
-  unconditionally) is only realized for AUTO_DISPATCH opt-in modules — the ~80 built-ins are still
-  ic_class-gated (the R55 set is broad but not literally agnostic, and the separate [14e2/15]
-  bus_interconnect block remains class-gated, which is why Avalon is STILL double-wired per the
-  workaround comment at ~51341-51344). Option B is not met: there is NO startup assertion / test
-  that every <proto>_protocol_synth.py is reachable for the ic_class its own benchmark classifies
-  as, and NO per-protocol end-to-end "synth applied" regression assertion. test_program_reachability_check.py
-  is a generic import/reference audit (not protocol-dispatch-specific), and
-  test_all_protocol_synth_overlay.py pins the apply-function OVERLAY CONTRACT only (it explicitly
-  notes ~47 protocols keep inline detectors), not dispatch reachability.
+resolved_at: "2026-06-03"
+resolved_in: "0.2.32"
+resolution: >-
+  ROOT-CAUSE CLOSED (Option A, made fail-closed). The silent-skip hazard is gone because the
+  [14e/15] R55 dispatch gate no longer carries a hardcoded class TUPLE that could omit a class.
+  Three changes:
+  (1) programs/ic_class_profile.py adds the SINGLE source of truth: ALL_IC_CLASSES (the closed set
+  of class strings detect_ic_class can return) + PROTOCOL_SYNTH_DISPATCH_CLASSES (== ALL_IC_CLASSES,
+  so EVERY class reaches dispatch — the inline content-only detectors are the real gate, exactly as
+  the suggested_fix Option A argues) + protocol_synth_dispatch_classes() + the diagnostic
+  protocol_synth_unreachable_classes() (the silent-skip set, now provably empty). General: only
+  class-taxonomy strings, never a chip/vendor/benchmark name.
+  (2) programs/phase1_doc_one_shot_runner.py adds the pure, testable
+  protocol_dispatch_decision(ic_class) helper and rewires the [14e/15] gate to delegate to it
+  (replacing the old `if _ic_r55 in ("serial_peripheral_protocol", ...)` tuple). When a class is
+  reachable the synth chain runs as before; when a class is NOT reachable (e.g. a FUTURE class added
+  to detect_ic_class but left out of the dispatch set) the decision returns reachable=False WITH an
+  explicit `signal` payload, which the runner writes to reports/phase1/protocol_dispatch_skipped.json
+  and prints to stderr — fail-closed: the skip surfaces LOUDLY instead of being masked. This realizes
+  Option B's intent (explicit-reachability surfacing) structurally rather than as a one-off assertion.
+  (3) programs/tests/test_protocol_synth_dispatch_reachability.py (17 cases, all green) pins:
+  the closed-state invariant (unreachable set empty); a SOURCE-DRIFT guard asserting ALL_IC_CLASSES
+  exactly equals every `profile["ic_class"] = "<X>"` literal in ic_class_profile.py (a NEW class
+  added to detect_ic_class but not registered = test FAIL, so it can never be silently unrouted);
+  the regression that every valid class still dispatches (parametrized over ALL_IC_CLASSES); the
+  no-longer-silent path (an unrouted class yields an explicit signal, not a silent skip) incl. the
+  on-disk protocol_dispatch_skipped.json artifact; the no-cheating guards (the runner gate delegates
+  to protocol_dispatch_decision and the helper derives its set from ic_class_profile, with an
+  assertion that the old hardcoded tuple is gone); and a corpus-clean smoke proving a real serial-
+  peripheral L-doc set classifies into a dispatch class (so it genuinely reaches the synth chain).
+  NOT EDITED (other agent's scope): no *_protocol_synth.py was touched; the [14e2/15]
+  bus_interconnect block and the harmless idempotent Avalon double-wiring are left as-is (both are
+  fully reachable now that R55 covers bus_interconnect_protocol, so they are belt-and-suspenders, not
+  a hazard). Two pre-existing, unrelated failures in test_protocol_detector_no_misfire*.py (gold
+  cross-contamination across concurrently-edited detector modules) were verified to fail identically
+  with this change reverted — they are NOT caused by and NOT in scope for this backlog.

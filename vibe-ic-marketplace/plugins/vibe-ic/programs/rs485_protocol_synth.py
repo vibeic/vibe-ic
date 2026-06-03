@@ -1227,3 +1227,30 @@ def apply_rs485_synth(generated_docs_dir: Path, is_rs485: bool,
                 "BACnet/SC, secure DL/T645) is layered ON TOP of the PHY — not part of the RS-485 "
                 "standard itself.")
         _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_rs485(blob: str) -> bool:
+    """Content-only `rs485` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    return bool(
+        ("TI SLLA272" in blob)
+        or ("RS-485 Design Guide" in blob)
+        or ("SLLA272" in blob and "RS-485" in blob)
+        or ("RS-485 transceiver" in blob
+            and ("120 Ω" in blob or "120 ohm" in blob.lower()
+                 or "32 unit load" in blob.lower()
+                 or "TIA/EIA-485" in blob
+                 or "TIA-485" in blob)))

@@ -2368,3 +2368,28 @@ def _l23(gd: Path) -> None:
         "by upper layers (TrustZone, MMU/SMMU, crypto IP, secure boot).")
     d["fields"] = f
     _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_ace(blob: str) -> bool:
+    """Content-only `ace` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    return bool(
+        ("AxBAR" in blob and "AxDOMAIN" in blob
+            and "AxSNOOP" in blob)
+        or ("ACE" in blob and "ReadShared" in blob
+            and "ReadUnique" in blob)
+        or ("DVM" in blob and "TLB" in blob
+            and ("AXI" in blob or "AMBA" in blob)))

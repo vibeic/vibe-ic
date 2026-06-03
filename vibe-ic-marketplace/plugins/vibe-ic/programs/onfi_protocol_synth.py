@@ -2211,3 +2211,28 @@ def _l23(gd: Path) -> None:
         "erase (key destruction) is a higher-layer operation.")
     d["fields"] = f
     _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_onfi(blob: str) -> bool:
+    """Content-only `onfi` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    return bool(
+        ("ONFI" in blob and "NAND" in blob
+            and "CLE" in blob and "ALE" in blob)
+        or ("NAND" in blob and "DQ" in blob
+            and "WE#" in blob and "RE#" in blob)
+        or ("Parameter Page" in blob and "R/B#" in blob
+            and "ONFI" in blob))

@@ -3166,3 +3166,27 @@ def _apply_l23(gd: Path) -> None:
         "for customer-specific bits (functionality outside this spec).")
     d["fields"] = f
     _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_canfd(blob: str) -> bool:
+    """Content-only `canfd` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    return bool(
+        ("BRS" in blob and "FDF" in blob and "ESI" in blob)
+        or ("CAN-FD" in blob and "64" in blob
+            and "payload" in blob.lower())
+        or ("Bosch" in blob and "M_CAN" in blob
+            and "CCCR" in blob))

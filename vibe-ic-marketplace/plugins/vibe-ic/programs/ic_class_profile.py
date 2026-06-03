@@ -1007,6 +1007,74 @@ def class_verification_flags(ic_class: str) -> Dict[str, Any]:
     return flags
 
 
+# ---------------------------------------------------------------------
+# Protocol-synth dispatch reachability (ORGANIC-20260531, v0.2.32)
+# ---------------------------------------------------------------------
+# `detect_ic_class` is the routing key for the Phase-1 protocol-synth
+# dispatch blocks in phase1_doc_one_shot_runner.py ([14e/15] R55 + the
+# post-R55 [14e2/15] bus_interconnect block). Those blocks gate the ~80
+# hand-wired built-in `*_protocol_synth` calls behind an `if ic_class in
+# (...)` test. If `detect_ic_class` returns a class that NO dispatch block
+# fires for, every built-in protocol synth is SILENTLY skipped (the inline
+# structural detectors — the real gate — never even run). That is the
+# silent-skip hazard ORGANIC-20260531 was filed on (the Avalon
+# digital_arithmetic_primitive routing surprise).
+#
+# ROOT-CAUSE FIX (Option A from the backlog): the inline protocol detectors
+# are content-only and self-gating (each carries its own mutex), so the
+# ic_class gate adds NO safety — only the silent-skip hazard. We therefore
+# make the dispatch reachable for EVERY class `detect_ic_class` can return.
+# `ALL_IC_CLASSES` is the closed set of class strings the function assigns;
+# `test_protocol_synth_dispatch_reachability.py` pins it against the source
+# so it cannot drift. `PROTOCOL_SYNTH_DISPATCH_CLASSES` is the SINGLE source
+# of truth the runner imports for its gate, and equals `ALL_IC_CLASSES` so
+# no class is silently unrouted. If a future class is ever deliberately left
+# out of the dispatch set, the runner's reachability self-check surfaces an
+# EXPLICIT `protocol_dispatch_skipped.json` signal (fail-closed) instead of
+# silently dropping the protocol synths.
+#
+# General, not benchmark-keyword: these are class TAXONOMY strings (the same
+# tokens `detect_ic_class` assigns), never a chip / vendor / benchmark name.
+ALL_IC_CLASSES: frozenset = frozenset({
+    "unknown",
+    "bare_fpga",
+    "aid_class_half_duplex",
+    "pure_analog",
+    "mixed_signal_otp",
+    "digital_cmd_driven",
+    "bus_interconnect_protocol",
+    "serial_peripheral_protocol",
+    "digital_arithmetic_primitive",
+})
+
+# Every class reaches the protocol-synth dispatch (Option A). Kept as a
+# distinct name (not a literal `= ALL_IC_CLASSES` inline at the call site)
+# so a future narrowing is a one-line, test-covered change here rather than
+# an edit buried in the 51k-line runner.
+PROTOCOL_SYNTH_DISPATCH_CLASSES: frozenset = frozenset(ALL_IC_CLASSES)
+
+
+def protocol_synth_dispatch_classes() -> frozenset:
+    """ic_classes for which the runner's protocol-synth dispatch fires.
+
+    The runner imports this as the gate for its hand-wired protocol-synth
+    chain so the gate has ONE source of truth instead of a tuple literal
+    copied into the runner. Equals `ALL_IC_CLASSES` (every class reachable)
+    per the ORGANIC-20260531 root-cause fix.
+    """
+    return PROTOCOL_SYNTH_DISPATCH_CLASSES
+
+
+def protocol_synth_unreachable_classes() -> frozenset:
+    """Classes `detect_ic_class` can return that NO dispatch block fires for.
+
+    This is the silent-skip set. Empty == the dispatch is fully reachable
+    (the closed state). A non-empty result means a class is silently dropped
+    and the runner's self-check must surface it as an explicit signal.
+    """
+    return frozenset(ALL_IC_CLASSES) - frozenset(PROTOCOL_SYNTH_DISPATCH_CLASSES)
+
+
 def is_aid_protocol_track(ic_class: str) -> bool:
     """True iff the class verifies via the AID half-duplex reference TB.
 
@@ -1025,6 +1093,10 @@ __all__ = [
     "required_layers",
     "class_verification_flags",
     "is_aid_protocol_track",
+    "ALL_IC_CLASSES",
+    "PROTOCOL_SYNTH_DISPATCH_CLASSES",
+    "protocol_synth_dispatch_classes",
+    "protocol_synth_unreachable_classes",
 ]
 
 

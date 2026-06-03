@@ -2047,3 +2047,28 @@ def _l23(gd: Path) -> None:
         "included NVMHCI hooks (CAP2.NVMP).")
     d["fields"] = f
     _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_sata(blob: str) -> bool:
+    """Content-only `sata` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    return bool(
+        ("COMRESET" in blob and "COMINIT" in blob
+            and "COMWAKE" in blob)
+        or ("SATA" in blob and "FIS" in blob
+            and "AHCI" in blob)
+        or ("Serial ATA" in blob
+            and ("ALIGN" in blob or "primitive" in blob.lower())))

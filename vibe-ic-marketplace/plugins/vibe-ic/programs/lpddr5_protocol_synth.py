@@ -1883,3 +1883,31 @@ def _l23(gd: Path) -> None:
     f["comparison_to_sibling_standards"] = "DDR3 (JESD79-3) has no on-bus CRC/parity and no Rowhammer mitigation (Rowhammer was first demonstrated on DDR3). DDR4 added CA parity, optional data CRC, and TRR hooks. DDR5 added on-die ECC and Refresh Management. LPDDR5 brings link ECC and (in 5B) Adaptive Refresh Management, leaving confidentiality/authentication to the controller/SoC."
     f["notes"] = "Security at the LPDDR5 layer is intentionally minimal — JESD209-5 is a high-throughput, low-power mobile memory standard whose protocol-level protections are transport-integrity (Link ECC) and reliability (RFM), not cryptographic."
     _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_lpddr5(blob: str) -> bool:
+    """Content-only `lpddr5` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    has_ddr3_only_signature = (
+        ("DDR3" in blob or "JESD79-3" in blob)
+        and not ("LPDDR5" in blob or "JESD209-5" in blob
+                 or "WCK" in blob))
+    return bool((not has_ddr3_only_signature) and (
+        ("LPDDR5" in blob)
+        or ("JESD209-5" in blob)
+        or ("WCK" in blob
+            and "bank group" in blob.lower()
+            and "low-power" in blob.lower())))

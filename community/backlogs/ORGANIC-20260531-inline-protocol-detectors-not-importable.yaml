@@ -44,16 +44,42 @@ session_context: >-
 status: partially-fixed
 triaged_at: "2026-06-03"
 triaged_against: "vibe-ic 0.2.29"
+resolved_at: "2026-06-03"
+resolved_in: "0.2.32"
+importability_closed_in: "0.2.32"
+resolution: >-
+  IMPORTABILITY GAP CLOSED (the filed title). All 86 programs/*_protocol_synth.py now export an
+  importable module-level `def is_<stem>(blob: str) -> bool`. The ~46 detectors that lived INLINE
+  in phase1_doc_one_shot_runner.py (spi/i2c/uart/can/usb/pcie/ddr/...) were lifted into their
+  synth modules BYTE-FOR-BYTE (the inline boolean with `_spi_blob` -> `blob`); the 3 Tier-D ones
+  (nvlink/ucie/ethernet_800g) re-export the canonical tier_d_interconnect_detect predicate
+  (single source of truth, same callable the runner uses). Verified byte-identical to the inline
+  logic across all 87 benchmark_phase1 benchmarks (0 mismatches), and empty/None-safe.
+  The runner (phase1_doc_one_shot_runner.py — owned by another agent) was NOT edited, so its
+  ordering + force-overwrite behaviour is unchanged. The v0.1.93 universal no-misfire guard now
+  AUTO-DISCOVERS all 86 (count went 9 → 40 → 86). New registry coverage test
+  programs/tests/test_all_protocol_synth_detectors_importable.py pins the 1:1
+  <stem>_protocol_synth.py -> is_<stem> invariant (175 cases incl. a real-FAIL negative control
+  and the missing-data honesty contract). Stale "~47 inline" notes in
+  test_protocol_detector_no_misfire.py + test_all_protocol_synth_overlay.py updated.
 residual: >-
-  Substantial progress, gap not closed. At filing only 9 of the protocol synths exported a
-  module-level is_<base>; in 0.2.29 that count is 39 (measured: 39 of 86
-  programs/*_protocol_synth.py define `def is_<base>`), so the v0.1.93 universal guard
-  programs/tests/test_protocol_detector_no_misfire.py (which glob-auto-discovers module-level
-  is_<stem>) now auto-covers 39, not 9. BUT the suggested_fix's goal — lift ALL ~47 remaining
-  inline detectors out of phase1_doc_one_shot_runner.py into importable is_<proto> so the guard
-  covers all ~57(+) — is NOT met: ~47 older protocols (spi/i2c/uart/can/usb/pcie/ddr/...) still
-  keep their detector logic INLINE in the runner and expose no module-level predicate. This is
-  explicitly acknowledged IN the current plugin: test_protocol_detector_no_misfire.py's coverage
-  note (lines ~21-24) and test_all_protocol_synth_overlay.py's docstring both state "~47 older
-  protocols keep their detector INLINE" and the former names THIS backlog
-  (ORGANIC-20260531-inline-protocol-detectors-not-importable) as the open tracker to lift them.
+  NOT a full resolve of suggested_fix's END-GOAL ("the universal guard covers all ~57 with ZERO
+  foreign fire"). Lifting the 46 detectors SURFACED — exactly as the backlog predicted — that 36
+  of them are ORDERING-DEPENDENT: as STANDALONE superset predicates they over-fire on foreign
+  benchmarks (the runner's generic interface vocabulary injects sibling tokens into other docs'
+  generated L-docs / gold), and they are runner-safe ONLY because a more-specific sibling synth
+  runs AFTER them and FORCE-OVERWRITES (cross-protocol force-overwrite doctrine) and because the
+  runner's actual L1+L2 blob is far narrower than the guard superset. The 36 (ace arinc429 ble
+  can canfd cxl ddr ethercat ethernet ethernet_800g hbm3 hdlc hdmi i2c jtag lpddr5 milstd1553
+  mipi_dsi modbus nvme pcie pcie_gen5 rs485 sata sdmmc soundwire spdif spi swd tilelink uart ucie
+  ufs usb usb4 wishbone) are enumerated as the OPEN residual in
+  test_protocol_detector_no_misfire.py::NEWLY_LIFTED_ORDERING_DEPENDENT (single canonical source;
+  the gold matrix guard imports it). They are NOT silenced wholesale: they still get the
+  callable/empty-safe + own-fire assertions, their cross-fires are reported, and ANY NEW
+  regression among the 50 standalone-clean detectors still FAILS the strict sweep. To finish:
+  harden each of the 36 standalone-clean with the is_mipi/is_avalon subject-dominance +
+  sibling-MUTEX pattern, removing it from the set as it goes (set shrinks toward empty). Some of
+  the over-fires originate in NON-assigned files this task could not touch — the canonical
+  tier_d_interconnect_detect.is_ucie (bare "UCIe" token over-fires on jesd204's comparison
+  mention) and the DERIVED_SIBLING_CROSS_FIRES allowlist in protocol_detector_lib.py — so the
+  hardening must span those plus the runner-ordering model, not just programs/*_protocol_synth.py.

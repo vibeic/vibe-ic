@@ -880,3 +880,25 @@ def _apply_spi_specific(gd: Path, spi_ic_name: Optional[str]) -> None:
         f.setdefault("notes", "Power domain partitioning is deferred to SoC integration. The peripheral block has no internal voltage domains.")
         d["fields"] = f
         _write(p, d)
+
+
+# ---------------------------------------------------------------------------
+# Module-level importable detector (lifted from the inline detector in
+# phase1_doc_one_shot_runner.py — ORGANIC-20260531). Byte-for-byte the same
+# boolean the runner used inline (`_spi_blob` -> `blob`), so behaviour is
+# identical; exposing it module-level lets the universal no-misfire guard
+# (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
+# Reads ONLY the spec text `blob` — never a filename or benchmark name.
+# ---------------------------------------------------------------------------
+def is_spi(blob: str) -> bool:
+    """Content-only `spi` detector (importable, lifted from the runner).
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
+    same boolean the runner used inline.
+    """
+    if not blob:
+        return False
+    return bool(
+        ("MOSI" in blob and "MISO" in blob
+            and "SCK" in blob)
+        or ("CPOL" in blob and "CPHA" in blob))

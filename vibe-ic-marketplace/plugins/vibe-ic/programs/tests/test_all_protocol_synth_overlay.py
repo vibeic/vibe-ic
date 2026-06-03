@@ -12,16 +12,16 @@ Per discovered module ``<base>_protocol_synth.py`` (parametrized over the
 discovered list) we seed a ``tmp_path/generated_docs`` with minimal empty
 L1..L23 JSON stubs and assert:
 
-  (1) the module exports ``apply_<base>_synth`` callable. The companion
-      content detector ``is_<base>`` is a module-level callable for the
-      auto-dispatch-convention protocols; ~47 OLDER protocols keep their
-      detector INLINE in ``phase1_doc_one_shot_runner.py`` (see the note in
-      ``test_protocol_detector_no_misfire.py``) and so expose no module-level
-      ``is_<base>`` — for those we record the count and skip clauses keyed on
-      the detector (1-detector + 4) rather than hard-error. Where the module
-      opts into the generic auto-dispatch (``AUTO_DISPATCH`` / ``IC_NAME``
-      present), ``AUTO_DISPATCH`` must be a ``bool`` and ``IC_NAME`` a
-      non-empty ``str``.
+  (1) the module exports ``apply_<base>_synth`` callable. As of v0.2.32
+      (ORGANIC-20260531 CLOSED for importability) the companion content
+      detector ``is_<base>`` is a module-level callable for EVERY protocol —
+      the ~47 older detectors that used to live INLINE in
+      ``phase1_doc_one_shot_runner.py`` were lifted into importable predicates
+      (pinned by ``test_all_protocol_synth_detectors_importable.py``), so the
+      ``detector_inline`` census below should now be 0. The clause-4 detector
+      contract therefore applies to every module. Where the module opts into
+      the generic auto-dispatch (``AUTO_DISPATCH`` / ``IC_NAME`` present),
+      ``AUTO_DISPATCH`` must be a ``bool`` and ``IC_NAME`` a non-empty ``str``.
   (2) ``apply_<base>_synth(gd, False, None)`` is a NO-OP — every L-doc byte
       unchanged (the contract the 7 good tests pin). Documented exceptions
       (a synth whose flag-False path legitimately writes class-universal
