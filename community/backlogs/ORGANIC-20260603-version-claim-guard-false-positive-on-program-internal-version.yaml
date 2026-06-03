@@ -3,7 +3,7 @@ severity: P3
 component: tools/ci/staged_version_claim_check.py (Staged-diff version-claim guard)
 
 plugin_version: "0.2.27"
-status: partially-fixed
+status: resolved
 
 title: >-
   The pre-commit "version-claim guard" false-positives on each program's INTERNAL
@@ -71,3 +71,16 @@ session_context: >-
   that was premature: classes (a)-(d) are closed, class (e) (1.6.x historical
   provenance, the version-scheme-reset residual) remains OPEN. Status corrected
   to partially-fixed here.
+
+resolved_at: "2026-06-03"
+resolution: >-
+  Residual class (e) closed in tools/ci/staged_version_claim_check.py via a
+  reset-aware HISTORICAL VERSION BAND. The plugin reset its scheme from the 1.6.x
+  dev series to 0.2.x; _HISTORICAL_VERSION_RANGES = [((1,6,0),(1,6,999))] +
+  _in_historical_band(claimed, plugin) exempt any 1.6.x reference ONLY when the
+  plugin has reset to BELOW the band (plugin < 1.6.0) — so 1.6.x provenance
+  comments at 0.2.x no longer false-fire, while a genuine same-scheme forward
+  claim (1.6.19 when the plugin IS 1.6.18, or 0.3.0 when at 0.2.x) is still caught.
+  Verified: AID plugin/mcp syncs carrying v1.6.596/v1.6.598 provenance now pass the
+  guard WITHOUT --no-verify; 31/31 guard tests pass incl. the no-weakening + future-1.0.x
+  regression cases. Classes (a)-(d) were closed earlier; (e) now closed → fully resolved.

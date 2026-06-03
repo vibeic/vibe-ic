@@ -303,6 +303,30 @@ def _is_filename_version(body: str, match) -> bool:
     return before_ch in "_-/" or before_ch.isalnum()
 
 
+# Pre-reset historical version bands. vibe-ic's version scheme RESET from the old
+# 1.6.x development series down to the current 0.2.x series. The 1.6.x numbers now
+# live on ONLY as backward provenance references in code comments / docstrings
+# (e.g. "ported from v1.6.596", "v1.6.523 tightened X") — they sort numerically
+# above 0.2.x but are references to a SUPERSEDED scheme, never a forward claim of
+# the current artifact's version. Any version inside a declared historical band is
+# exempt. The band is the 1.6.x dev series SPECIFICALLY — it does NOT cover the
+# future 1.0.x release line, so a genuine forward 1.0.x claim is still caught.
+_HISTORICAL_VERSION_RANGES = (
+    ((1, 6, 0), (1, 6, 999)),
+)
+
+
+def _in_historical_band(claimed: Tuple[int, int, int],
+                        plugin_version: Tuple[int, int, int]) -> bool:
+    """A version is a backward provenance ref (not a forward claim) iff it falls
+    in a superseded historical band AND the plugin has since reset to BELOW that
+    band — so those numbers can only be backward references. When the plugin is
+    still within/above the band (e.g. the plugin genuinely IS 1.6.18), a higher
+    1.6.x is a real forward claim and stays flagged."""
+    return any(lo <= claimed <= hi and plugin_version < lo
+               for lo, hi in _HISTORICAL_VERSION_RANGES)
+
+
 def check(diff_text: str,
           plugin_version: Tuple[int, int, int]
           ) -> List[Tuple[str, int, str, Tuple[int, int, int]]]:
@@ -333,6 +357,8 @@ def check(diff_text: str,
                 claimed = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
             except (TypeError, ValueError):
                 continue
+            if _in_historical_band(claimed, plugin_version):
+                continue   # backward provenance ref to the superseded 1.6.x scheme
             if claimed > plugin_version:
                 violations.append((path, lineno, body.rstrip("\n"), claimed))
     return violations

@@ -307,6 +307,34 @@ def test_v_prefixed_version_still_fails_not_treated_as_identifier(tmp_path):
     assert "claimed v9.9.9" in cp.stdout
 
 
+def test_historical_1_6_x_provenance_exempt(tmp_path):
+    # The plugin RESET from the 1.6.x dev series to 0.2.x; a bare `v1.6.596`
+    # provenance comment is a BACKWARD ref to the superseded scheme, not a
+    # forward claim — must NOT fire (this is the recurring AID-sync false-positive).
+    _make_plugin_json(tmp_path, "0.2.31")
+    cp = _run(tmp_path, _diff(
+        "vibe-ic-marketplace/plugins/vibe-ic/mcp-eda-server/src/index.js",
+        "  // ported from phase3_one_shot_runner v1.6.596 tie-cell discovery"))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_historical_band_does_not_cover_future_1_0_x(tmp_path):
+    # The band is the 1.6.x dev series only — a genuine forward 1.0.x claim
+    # (the future release line) is still caught.
+    _make_plugin_json(tmp_path, "1.0.0")
+    cp = _run(tmp_path, _diff("src/x.py", "# bumping to v1.0.1 release"))
+    assert cp.returncode == 1, cp.stdout + cp.stderr
+    assert "claimed v1.0.1" in cp.stdout
+
+
+def test_forward_claim_in_current_scheme_still_fails_with_band(tmp_path):
+    # The historical band must not weaken same-scheme forward-claim detection.
+    _make_plugin_json(tmp_path, "0.2.31")
+    cp = _run(tmp_path, _diff("src/x.py", "# Wave NN / v0.3.0 — next minor"))
+    assert cp.returncode == 1, cp.stdout + cp.stderr
+    assert "claimed v0.3.0" in cp.stdout
+
+
 def test_versioned_arch_doc_path_skipped(tmp_path):
     # ALL_STEPS_v2.2.0.md / FLOW_STEPS_GENERATED.md carry the doc/flow version
     # (2.2.0 scheme) in their title — a namespace distinct from plugin semver,
