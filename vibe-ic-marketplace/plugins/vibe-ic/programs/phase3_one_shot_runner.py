@@ -127,12 +127,29 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800
                  ) -> Tuple[int, str, str]:
     """Run shell cmd inside a Docker container."""
     full = ["docker", "exec", container, "bash", "-lc", cmd]
+
+    # v0.2.36 — on TimeoutExpired, subprocess may hand back partial
+    # `stdout`/`stderr` as BYTES even though `text=True` was requested
+    # (the streams are killed mid-decode). A bytes partial then poisons
+    # every downstream `out + err` string concat (e.g. step_pnr's
+    # `_extract_overutil_pct(out + err)` → `TypeError: can't concat str
+    # to bytes`, which crashed the runner AFTER OpenROAD had already
+    # launched a long route). Normalize any bytes → str so all callers
+    # always receive `str`. Chip-AGNOSTIC: pure I/O-type hygiene.
+    def _as_text(v) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, (bytes, bytearray)):
+            return bytes(v).decode("utf-8", errors="replace")
+        return v
+
     try:
         cp = subprocess.run(full, capture_output=True, text=True,
                             timeout=timeout)
-        return cp.returncode, cp.stdout, cp.stderr
+        return cp.returncode, _as_text(cp.stdout), _as_text(cp.stderr)
     except subprocess.TimeoutExpired as e:
-        return 124, e.stdout or "", f"TIMEOUT after {timeout}s: {e}"
+        return (124, _as_text(e.stdout),
+                f"TIMEOUT after {timeout}s: {e}")
     except FileNotFoundError as e:
         return 127, "", f"COMMAND_NOT_FOUND: {e}"
 

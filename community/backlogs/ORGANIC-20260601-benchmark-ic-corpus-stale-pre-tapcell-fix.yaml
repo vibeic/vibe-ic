@@ -51,9 +51,31 @@ session_context: >-
   first corpus-scale exercise of the v0.2.4-2.11 PERC sign-off chain; it proved the checks' value +
   zero-false-positive behavior at scale, and the fresh control proved the current runner is sound.
 
-status: partially-fixed
+status: resolved
 partially_fixed_at: "2026-06-03T00:00:00+08:00"
 partially_fixed_in: "0.2.33"
+resolved_at: "2026-06-04T00:00:00+08:00"
+resolved_in: "0.2.36"
+core_regen_resolution: >-
+  CORE fix (suggested_fix #1/#2) DONE v0.2.36 — the 14 DEF-bearing benchmark_ic ICs were
+  REGENERATED through the current tapcell+PDN phase3 runner (container-serial in the iic-eda
+  mount /foss/designs, since main-checkout benchmark_ic is NOT mounted). ALL 14 now produce a
+  tap-bearing routed DEF (was 0 taps across the board): cv32e40p 2nd/4th=11121, darkriscv
+  2nd/4th=3900, VexRiscv 2nd/4th=4751, picorv32 4th=5497 (2nd ≡ same IC), sha256_v2/variant=6125,
+  subservient=384, serv=8379, ibex=5952, neorv32=32144 — every routed.def has END DESIGN + real
+  FIXED sky130_fd_sc_hd__tapvpwrvgnd_1 placement records (independently grep-verified, NOT
+  fabricated; DEFs are gitignored runtime artefacts, not committed). The tapcell+PDN fix
+  (v0.1.46/0.1.49) is thus proven on EVERY corpus IC. Three ICs (serv/ibex/neorv32) initially
+  failed only because the corpus runner defaulted --top-name chip_top while their real synthesizable
+  top is serv_chip_top / ibex_chip_top / neorv32_chip_top — a wrong-default, not a missing-RTL gap;
+  re-running with the correct --top-name regenerated them cleanly. SIDE-FIX (general, chip-AGNOSTIC,
+  Bucket-A): the neorv32 large-SoC run surfaced a real PLUGIN BUG — `_docker_exec` returned BYTES
+  partial stdout on subprocess TimeoutExpired (text=True streams killed mid-decode), poisoning the
+  downstream `out + err` concat in step_pnr (`TypeError: can't concat str to bytes`) and crashing the
+  runner AFTER OpenROAD had already launched a long route. Fixed by normalizing any bytes→str in
+  `_docker_exec` (both the normal + TimeoutExpired paths) so a timeout yields a clean FAIL StepResult
+  instead of a mid-flow crash. +4 pytest (test_docker_exec_timeout_bytes.py). RESULT_PERC_CORPUS doc
+  updated with the regen welltap table. plugin 0.2.35 → 0.2.36.
 resolution: >-
   IMPLEMENTABLE half DONE. suggested_fix #4 (artifact-vintage GUARD CHECK) is now a deterministic,
   chip-AGNOSTIC, structural program — `artifact_vintage_guard()` in programs/perc_corpus_sweep.py.

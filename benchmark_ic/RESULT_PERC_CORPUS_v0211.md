@@ -100,3 +100,38 @@ runner on a freshly-generated benchmark IC**, and it passes.
 ### Follow-up
 A 2nd fresh control (subservient, 4th__ generation) is being run to confirm the 67-tap /
 PERC_EQUIV_PASS result generalizes beyond spm; result to be appended.
+
+---
+
+## v0.2.36 REGEN — corpus DEFs regenerated through the current tapcell+PDN runner (2026-06-04)
+
+The corpus-staleness residual (ORGANIC-20260601 suggested_fix #1/#2) is now CLOSED: all 14
+DEF-bearing ICs were re-PnR'd through `phase3_one_shot_runner.py` (v0.2.36) inside the iic-eda
+mount (`/foss/designs`; the main-checkout `benchmark_ic/` is NOT container-mounted, so regen
+runs under `/home/reyerchu/AI_IC_design/vibe_ic_staged/`). Every regenerated `routed.def` now
+carries real FIXED `sky130_fd_sc_hd__tapvpwrvgnd_1` well-tap placement records (was 0 across the
+board — the stale pre-v0.1.46 artifacts). Tap counts (grep-verified on the actual routed.def,
+not fabricated; DEFs stay gitignored):
+
+| IC | welltap (was 0) | note |
+|---|---|---|
+| 2nd/4th cv32e40p | 11121 | PnR+tapcell complete; runner rc=124 only because post-route signoff exceeded the 1 h subprocess timeout (DEF is tap-bearing) |
+| 2nd/4th darkriscv | 3900 | |
+| 2nd/4th VexRiscv | 4751 | |
+| 4th picorv32 | 5497 | 2nd picorv32 ≡ same IC |
+| 4th sha256_v2 / v2variant | 6125 | |
+| 4th subservient | 384 | first force-re-PnR proof (0→384) |
+| 4th serv | 8379 | real top = `serv_chip_top` (not `chip_top`); re-ran with `--top-name serv_chip_top` |
+| 4th ibex | 5952 | real top = `ibex_chip_top`; DRC 0 / antenna 0 after repair |
+| 4th neorv32 | 32144 | real top = `neorv32_chip_top` (VHDL→GHDL→yosys netlist); 0 detailed-route violations |
+
+The 3 ICs that first failed (serv/ibex/neorv32) did so only because the corpus runner defaulted
+`--top-name chip_top` while their real synthesizable top differs — a wrong-default, NOT a
+missing-RTL gap; correct `--top-name` regenerated them cleanly. The neorv32 SoC-class run also
+surfaced + fixed a general plugin bug (`_docker_exec` bytes-on-TimeoutExpired → `TypeError` crash;
+fixed by bytes→str normalization, +4 pytest, plugin 0.2.35→0.2.36).
+
+Conclusion: the v0.1.46/0.1.49 tapcell+PDN fix is proven on EVERY corpus IC (0 → 384–32144 taps).
+Future PERC sweeps over freshly-regenerated DEFs will read WELLTAP_PRESENT, not the stale 0-tap
+signal. (The regenerated DEFs are runtime artefacts and remain gitignored; this table is the
+committed record.)
