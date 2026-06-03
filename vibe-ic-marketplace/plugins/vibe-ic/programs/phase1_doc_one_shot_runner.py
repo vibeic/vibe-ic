@@ -50191,32 +50191,36 @@ def main() -> int:
             # protocol detail, the Clock-Lane/Data-Lane/Long-Packet
             # signatures lock in.
             #
-            # v0.1.90 — a CSI-2-packet-structure PRIMARY-SUBJECT guard was
-            # ATTEMPTED here (backlog ORGANIC-20260530-incidental-crossref-
-            # synth-pollution, MIPI side) and REVERTED. Empirically, the
-            # `mipi` benchmark's TI SLLA414 source is a D-PHY layout guide
-            # whose FRESH extraction carries NO CSI-2 packet vocabulary at
-            # all (Long Packet / Short Packet / Data Identifier = 0, and even
-            # raw "MIPI"/"DPHY" tokens are absent from its 50 KB body) — the
-            # MIPI/D-PHY signal that fires the synth comes from inferred
-            # L1/L2 content, not raw body tokens. So ANY packet-structure
-            # guard suppresses MIPI synth on the real mipi benchmark and
-            # regresses it (mipi → 165 gated). There is no clean structural
-            # separator that keeps mipi firing while stopping the incidental
-            # ufs / pcie_gen5 M-PHY mention. Per doctrine, the incidental
-            # pollution is parity-NEUTRAL (SHAPE-excluded per R28/R32), so a
-            # broken guard is worse than the status quo: the backlog item is
-            # left OPEN and the v0.1.84 detector is kept unchanged.
-            _is_mipi = (
-                ("MIPI" in _spi_blob
-                    and ("D-PHY" in _spi_blob or "DPHY" in _spi_blob))
-                or ("CSI-2" in _spi_blob and "Long Packet" in _spi_blob
-                    and "Short Packet" in _spi_blob)
-                or ("D-PHY" in _spi_blob and "Clock Lane" in _spi_blob
-                    and "Data Lane" in _spi_blob)
-                or ("MIPI" in _spi_blob and "HS" in _spi_blob
-                    and "LP" in _spi_blob
-                    and ("D-PHY" in _spi_blob or "CSI" in _spi_blob)))
+            # v0.1.90 — a CSI-2-packet-STRUCTURE primary-subject guard was
+            # ATTEMPTED here (backlog ORGANIC-20260530, MIPI side) and
+            # REVERTED, because the `mipi` benchmark's TI SLLA414 source is a
+            # D-PHY layout guide whose FRESH extraction carries NO CSI-2 packet
+            # vocabulary, so a packet-structure guard regressed it. That
+            # observation is still true.
+            #
+            # v0.1.94 / ORGANIC-20260531-incidental-csi2-mentions-in-pcie-ufs-
+            # ldocs — the clean separator is NOT a packet-structure guard but a
+            # FOREIGN-PRIMARY DEFER (the same doctrine `is_mipi_csi2` and the
+            # AHB+APB `_axi_primary` guard already use). UFS is built on MIPI
+            # UniPro + M-PHY ("based on D-PHY") and PCIe specs cite CSI-2 as an
+            # incidental example, so the bare structural signature trips on
+            # ufs / pcie_gen5 and injected CSI-2 camera-pipeline example text
+            # into their L-docs. The detector now lives in
+            # mipi_protocol_synth.is_mipi(blob): it defers when the blob's
+            # dominant subject is PCIe (TLP/DLLP/LTSSM | dense "pci express" |
+            # 32 GT/s+LTSSM), UFS (UniPro+M-PHY | JESD220+UFS | dense "ufs"), or
+            # DisplayPort/eDP (Main Link + AUX + DPCD + CR/EQ|RBR/HBR — display
+            # specs that name-drop MIPI DSI in a comparison).
+            # Empirically corpus-clean: mipi / mipi_csi2 / mipi_dsi fire (stay
+            # True); pcie_gen5 / ufs / displayport / edp are suppressed.
+            # Pinned by test_mipi_foreign_primary_defer.py.
+            try:
+                from mipi_protocol_synth import is_mipi as _is_mipi_fn
+                _is_mipi = _is_mipi_fn(_spi_blob)
+            except Exception as _mipi_det_err:
+                print(f"      MIPI detector FAILED (fail-open=False): "
+                      f"{_mipi_det_err}", file=sys.stderr)
+                _is_mipi = False
             if _is_mipi:
                 _mipi_ic_name = "MIPI D-PHY / CSI-2 (TI SLLA414 application note)"
                 try:

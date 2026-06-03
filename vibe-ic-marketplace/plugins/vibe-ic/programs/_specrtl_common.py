@@ -222,11 +222,16 @@ class SpecContract:
     reset_signal: Optional[str] = None      # if the spec names it
     latency_registered: Optional[bool] = None
     fsm_output_style: Optional[str] = None  # 'moore'/'mealy' if the spec declares one
-    source: str = ''                        # how ports were parsed: nl/verilog/json
+    source: str = ''                        # how ports were parsed: nl/verilog/json/md-table
     # LLM double-confirm records for the prose-inferred SEMANTIC fields above
     # (asdict of llm_semantic_confirm.Confirmation). Empty when no semantic field
     # was declared or no LLM backend was reachable to confirm.
     semantic_confirmations: List[dict] = field(default_factory=list)
+    # Advisory notes the extractor surfaces to the caller (e.g. a datasheet
+    # interface TABLE was detected but only partially parsed). These never fail a
+    # gate on their own; spec_conformance_check re-emits them as INFO findings so a
+    # silent 0-port skip on a table-only interface spec is visible.
+    notes: List[str] = field(default_factory=list)
 
 
 # Natural-language interface bullet:  " - input  d   (8 bits)"  /  " - output q"
@@ -246,6 +251,190 @@ def _parse_nl_ports(text: str) -> List[Port]:
         width = int(m.group(3)) if m.group(3) else 1
         ports.append(Port(name, direction, width))
     return ports
+
+
+# ---------------------------------------------------------------------------
+# Markdown PIN-CONFIGURATION / interface TABLE port parser
+# ---------------------------------------------------------------------------
+# Most *datasheets* declare the interface only as a markdown table:
+#     | Signal | Dir   | Width | Description |
+#     |--------|-------|-------|-------------|
+#     | clk    | input | 1     | clock       |
+#     | d      | in    | [7:0] | data        |
+# extract_spec_contract previously returned 0 ports for that shape (port
+# conformance silently skipped). This parser detects such a table and emits
+# Port(name, direction, width) rows.
+#
+# chip-AGNOSTIC + corpus-clean by construction: a table is accepted ONLY when
+# it has BOTH a name-shaped header column (Signal/Pin/Port/Name) AND a direction
+# header column, AND that direction column's DATA cells actually hold direction
+# tokens (input/output/inout or in/out/io). Generic report tables in the corpus
+# (e.g. "| Protocol | Authored RTL | ... |", "| L1_DATASHEET | 102407 | ... |")
+# have no direction column with direction-valued cells, so they never match.
+# Only table CELLS — never sentence words — drive ports (the "no raw prose scan"
+# rule is preserved).
+
+# A normalised direction value -> canonical direction.
+_DIR_TOKEN = {
+    'input': 'input', 'in': 'input', 'i': 'input',
+    'output': 'output', 'out': 'output', 'o': 'output',
+    'inout': 'inout', 'io': 'inout', 'bidir': 'inout',
+    'bidirectional': 'inout', 'in/out': 'inout',
+}
+
+# Header-cell predicates (column-role detection by header text).
+_NAME_HDR = re.compile(r'^\s*(signal|pin|port|name|signal\s*name|port\s*name)\s*$', re.I)
+_DIR_HDR = re.compile(r'^\s*(dir|direction|i\s*/\s*o|i/o|io|mode|type)\s*$', re.I)
+_WIDTH_HDR = re.compile(r'^\s*(width|bits?|size|\[?\s*msb\s*:\s*lsb\s*\]?|range)\s*$', re.I)
+
+
+def _split_md_row(line: str) -> List[str]:
+    """Split a markdown table row `| a | b | c |` into trimmed cells."""
+    s = line.strip()
+    if s.startswith('|'):
+        s = s[1:]
+    if s.endswith('|'):
+        s = s[:-1]
+    return [c.strip() for c in s.split('|')]
+
+
+def _is_md_delim_row(cells: List[str]) -> bool:
+    """A markdown header/body delimiter row: every cell is dashes (with optional
+    leading/trailing colons for alignment): `---`, `:--`, `--:`, `:-:`."""
+    if not cells:
+        return False
+    return all(re.fullmatch(r':?-{2,}:?', c.replace(' ', '')) for c in cells if c != '')
+
+
+def _strip_md_emphasis(cell: str) -> str:
+    """Remove markdown decoration WITHOUT corrupting identifiers.
+
+    Backticks are code-span markers (never inside an identifier) so strip them
+    anywhere; `*`/`_` are emphasis markers only when they WRAP the token, so
+    strip them only at the cell's leading/trailing edge. This preserves an
+    internal underscore (`data_in`, `rst_n`) that a naive `[`*_]→''` would eat."""
+    c = cell.replace('`', '').strip()
+    c = re.sub(r'^[*_]+', '', c)
+    c = re.sub(r'[*_]+$', '', c)
+    return c.strip()
+
+
+def _norm_dir(cell: str) -> Optional[str]:
+    """Map a direction data-cell to canonical direction, else None.
+
+    Strips markdown emphasis/backticks so `` `input` `` / `**in**` still match.
+    Rejects anything that is not a pure direction token (so a Description cell
+    that merely *contains* the word 'input' does not count as a direction)."""
+    c = _strip_md_emphasis(cell).lower()
+    return _DIR_TOKEN.get(c)
+
+
+def _parse_width_cell(cell: str) -> Optional[int]:
+    """Parse a width data-cell to an int bit count, else None.
+
+    Accepts `8`, `[7:0]`, `7:0`, `8 bits`, `1` (scalar). Backtick/emphasis
+    tolerant. Returns None for unparseable / empty cells (caller defaults to 1)."""
+    c = _strip_md_emphasis(cell).lower()
+    if not c or c in ('-', '--', 'n/a', 'na'):
+        return None
+    m = re.fullmatch(r'\[?\s*(\d+)\s*:\s*(\d+)\s*\]?', c)
+    if m:
+        return abs(int(m.group(1)) - int(m.group(2))) + 1
+    m = re.fullmatch(r'(\d+)\s*(?:bits?)?', c)
+    if m:
+        v = int(m.group(1))
+        return v if v >= 1 else None
+    return None
+
+
+def _parse_md_table_ports(text: str) -> Tuple[List[Port], List[str]]:
+    """Parse a markdown PIN/interface table into ports.
+
+    Returns (ports, notes). `notes` carries an advisory string when a qualifying
+    table header was found but some body rows could not be parsed into ports, so
+    the caller can surface it (a partial parse must never be a silent 0-port skip).
+    """
+    lines = text.splitlines()
+    best_ports: List[Port] = []
+    notes: List[str] = []
+    i = 0
+    n = len(lines)
+    while i < n - 1:
+        line = lines[i]
+        if line.count('|') < 2:
+            i += 1
+            continue
+        header = _split_md_row(line)
+        # need a header followed by a markdown delimiter row to be a real table
+        delim = _split_md_row(lines[i + 1]) if i + 1 < n else []
+        if not _is_md_delim_row(delim) or len(delim) != len(header):
+            i += 1
+            continue
+        name_col = next((k for k, h in enumerate(header) if _NAME_HDR.match(h)), None)
+        dir_col = next((k for k, h in enumerate(header) if _DIR_HDR.match(h)), None)
+        width_col = next((k for k, h in enumerate(header) if _WIDTH_HDR.match(h)), None)
+        if name_col is None or dir_col is None:
+            i += 1
+            continue
+        # walk body rows
+        j = i + 2
+        ports: List[Port] = []
+        body_rows = 0
+        dir_valued_rows = 0
+        unparsed = 0
+        while j < n:
+            row = lines[j]
+            if row.count('|') < 2 and not row.strip().startswith('|'):
+                break
+            if row.count('|') < 1:
+                break
+            cells = _split_md_row(row)
+            if _is_md_delim_row(cells):     # closing/interior delimiter — skip
+                j += 1
+                continue
+            if all(c == '' for c in cells):
+                break
+            body_rows += 1
+            if len(cells) <= max(name_col, dir_col):
+                unparsed += 1
+                j += 1
+                continue
+            direction = _norm_dir(cells[dir_col])
+            if direction is None:
+                unparsed += 1
+                j += 1
+                continue
+            dir_valued_rows += 1
+            name = _strip_md_emphasis(cells[name_col])
+            # a bare identifier name only (no spaces / link markup / prose)
+            m = re.fullmatch(r'[A-Za-z_]\w*', name)
+            if not m:
+                unparsed += 1
+                j += 1
+                continue
+            width = 1
+            if width_col is not None and len(cells) > width_col:
+                w = _parse_width_cell(cells[width_col])
+                if w is not None:
+                    width = w
+            ports.append(Port(name, direction, width))
+            j += 1
+        # Accept this table ONLY if its direction column truly holds direction
+        # tokens (≥2 direction-valued body rows, and the majority of body rows are
+        # direction-valued) — this is what distinguishes an interface table from a
+        # generic report/regmap table that happens to share a header word.
+        if (ports and dir_valued_rows >= 2
+                and dir_valued_rows * 2 >= body_rows):
+            if len(ports) >= len(best_ports):
+                best_ports = ports
+                notes = []
+                if len(ports) < dir_valued_rows or unparsed:
+                    notes = [
+                        f"spec interface present as a table but only {len(ports)} "
+                        f"port(s) parsed from {body_rows} row(s) — verify the "
+                        f"interface table is fully captured."]
+        i = j if j > i else i + 1
+    return best_ports, notes
 
 
 def _module_port_region(text: str, prefer: str = "TopModule") -> Optional[str]:
@@ -275,16 +464,46 @@ def _module_port_region(text: str, prefer: str = "TopModule") -> Optional[str]:
     return None
 
 
+# An active-low-shaped reset name: trailing `_n`/`n`, or a leading `n` on a
+# reset root (nrst / nreset). Used to INFER active-low polarity from the signal
+# name when the prose gives no explicit "active-low" word. Conservative — only
+# names that are unambiguously a reset.
+_ACTIVE_LOW_RST_NAME = re.compile(
+    r'^(?:'
+    r'rst_?n|reset_?n|resetn'        # rst_n / rstn / reset_n / resetn
+    r'|n_?rst|n_?reset|nrst|nreset'  # nrst / n_rst / nreset
+    r'|[a-z]+_rst_n|[a-z]+_reset_n'  # <prefix>_rst_n / <prefix>_reset_n
+    r')$', re.I)
+
+
 def _detect_reset(text: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Return (mode, polarity, signal) the spec declares for reset, if any."""
     low = text.lower()
     mode = None
-    # Look only in sentences that mention reset, to avoid false matches.
-    reset_ctx = ' '.join(s for s in re.split(r'(?<=[.\n])', low) if 'reset' in s) or low
+    # Look only in sentences that mention reset, to avoid false matches.  POR
+    # (power-on reset) is a reset even when the literal word "reset" is absent
+    # from its sentence, so admit POR-bearing sentences too.
+    reset_ctx = ' '.join(
+        s for s in re.split(r'(?<=[.\n])', low)
+        if 'reset' in s or re.search(r'\bpor\b|power[\s-]*on[\s-]*reset', s)) or low
     if re.search(r'asynchronous(?:ly)?', reset_ctx):
         mode = 'asynchronous'
     elif re.search(r'synchronous(?:ly)?', reset_ctx):
         mode = 'synchronous'
+    # Conservative phrase inference, only when no explicit sync/async word fixed
+    # the mode above. A power-on reset / edge-triggered reset is asynchronous; a
+    # reset "registered to the clock" / "sampled on the clock" is synchronous.
+    if mode is None:
+        if (re.search(r'power[\s-]*on[\s-]*reset', reset_ctx)
+                or re.search(r'\bpor\b\s+holds?\b', reset_ctx)
+                or re.search(r'(?:rising|falling)\s+edge\s+of\s+'
+                             r'`?\b\w*(?:rst|reset|nrst|por)\w*\b`?', reset_ctx)):
+            mode = 'asynchronous'
+        elif (re.search(r'reset\s+is\s+registered', reset_ctx)
+                or re.search(r'registered\s+(?:to|on|by|against)\s+the\s+clock', reset_ctx)
+                or re.search(r'reset\s+is\s+sampled\s+(?:on|by|at)\s+the\s+clock', reset_ctx)
+                or re.search(r'synchronized\s+to\s+the\s+clock', reset_ctx)):
+            mode = 'synchronous'
     polarity = None
     if re.search(r'active[\s-]*high', reset_ctx) or re.search(r'\bactive\s+high\b', reset_ctx):
         polarity = 'active-high'
@@ -292,9 +511,15 @@ def _detect_reset(text: str) -> Tuple[Optional[str], Optional[str], Optional[str
         polarity = 'active-low'
     # named reset signal (best-effort): a reset-shaped token near "reset"
     signal = None
-    m = re.search(r'`?\b(rst_n|resetn|reset_n|nrst|arst|srst|rst|reset)\b`?', reset_ctx)
+    m = re.search(r'`?\b(\w*rst_n|resetn|reset_n|nrst|nreset|arst|srst|rst_n|rst|reset|por)\b`?',
+                  reset_ctx)
     if m:
         signal = m.group(1)
+    # Polarity inference from an active-low-shaped reset NAME, only when no
+    # explicit polarity word was found. `nrst`/`rst_n`/`reset_n` are asserted low
+    # by convention. Kept conservative: never overrides an explicit word.
+    if polarity is None and signal and _ACTIVE_LOW_RST_NAME.match(signal):
+        polarity = 'active-low'
     return mode, polarity, signal
 
 
@@ -385,18 +610,28 @@ def extract_spec_contract(text: str, is_json: bool = False,
     clean = strip_comments(text)
     ports = _parse_nl_ports(clean)
     source = 'nl'
+    table_notes: List[str] = []
     if not ports:
         region = _module_port_region(clean)
         if region is not None:                      # ANSI markdown module header
             ports = parse_verilog_ports(region)
             source = 'verilog'
-        elif re.search(r'\bmodule\b', clean):       # non-ANSI module declaration
-            # Prefer the TopModule target if the spec embeds several module decls.
-            _, ports = parse_rtl_ports(clean, "TopModule")
-            source = 'verilog'
-        else:                                       # pure prose: no interface
-            ports = []                               # declared — never scan raw
-            source = 'none'                          # prose for "input/output" words
+        else:
+            # Datasheet PIN-CONFIGURATION / interface TABLE (parsed from the raw
+            # text — markdown cells are not Verilog, so they pre-empt comment
+            # stripping). Tried after NL bullets + the ANSI header, before a
+            # non-ANSI module decl / prose, per the contract-extractor coverage plan.
+            tbl_ports, table_notes = _parse_md_table_ports(text)
+            if tbl_ports:
+                ports = tbl_ports
+                source = 'md-table'
+            elif re.search(r'\bmodule\b', clean):   # non-ANSI module declaration
+                # Prefer the TopModule target if the spec embeds several module decls.
+                _, ports = parse_rtl_ports(clean, "TopModule")
+                source = 'verilog'
+            else:                                   # pure prose: no interface
+                ports = []                           # declared — never scan raw
+                source = 'none'                      # prose for "input/output" words
     # Module name: prefer the target `TopModule` when a spec embeds several module
     # headers (a reference/buggy example before the real target), else the first.
     mod = None
@@ -413,7 +648,8 @@ def extract_spec_contract(text: str, is_json: bool = False,
     contract = SpecContract(module=mod, ports=ports, reset_mode=mode,
                             reset_polarity=polarity, reset_signal=signal,
                             latency_registered=_detect_latency(text),
-                            fsm_output_style=_detect_fsm_output_style(text), source=source)
+                            fsm_output_style=_detect_fsm_output_style(text), source=source,
+                            notes=table_notes)
     if confirm:
         # program PROPOSES (above) -> LLM CONFIRMS/CORRECTS the semantic candidates.
         try:

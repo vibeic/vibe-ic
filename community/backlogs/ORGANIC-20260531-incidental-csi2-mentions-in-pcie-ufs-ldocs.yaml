@@ -35,3 +35,48 @@ session_context: >-
   Surfaced by the v0.1.94 Tier-G Wave 3 universal no-misfire sweep. Companion to the
   v0.1.92/v0.1.93 detector-authoring captures: tokens scattered across a 24-doc blob
   trip a loose detector even when the protocol is not the subject (v0.1.89 KEY LESSON).
+
+status: partially-fixed
+partially_fixed_at: "2026-06-03"
+partially_fixed_in: "0.2.30"
+resolution: >-
+  ACTION 1 (recurrence root-cause) DONE + tested. The actual contaminator was the
+  runner's INLINE `_is_mipi` detector in phase1_doc_one_shot_runner.py (~L50210):
+  its bare "MIPI"+"D-PHY" branch fired on ufs (built on MIPI UniPro + M-PHY, spec
+  says M-PHY "based on D-PHY") and pcie_gen5 (cites CSI-2 as a vendor/pipeline
+  example), so the generic mipi_protocol_synth.apply_mipi_synth injected its CSI-2
+  camera-pipeline example text ("consumes CSI-2 packets", "CSI-2 RX IP cores",
+  "decodes CSI-2 packets") into their L-docs. A fresh phase1 run would have
+  RE-contaminated them. Fix: extracted the detector into a pure, importable
+  `mipi_protocol_synth.is_mipi(blob)` that adds a content-only FOREIGN-PRIMARY
+  DEFER (same doctrine as is_mipi_csi2 and the AHB+APB _axi_primary guard) for
+  PCIe (TLP/DLLP/LTSSM | dense "pci express" | 32 GT/s+LTSSM), UFS (UniPro+M-PHY |
+  JESD220+UFS | dense "ufs"), and DisplayPort/eDP (Main Link+AUX+DPCD+CR/EQ|HBR —
+  display specs name-drop MIPI DSI). The runner now imports is_mipi instead of the
+  inline expression. No chip/vendor/SKU literal as detection logic. The two
+  genuine MIPI derived siblings (mipi_csi2, mipi_dsi — both ride MIPI D-PHY and
+  have dedicated synths that run last + force-overwrite) were added to the
+  canonical protocol_detector_lib.DERIVED_SIBLING_CROSS_FIRES so the universal
+  no-misfire guard stays honest. Verified corpus-clean against the real
+  benchmark_phase1/: is_mipi fires on EXACTLY {mipi, mipi_csi2, mipi_dsi} on both
+  the runner's L1+L2 blob AND the stricter superset blob; pcie_gen5 / ufs /
+  displayport / edp are all suppressed. Tests: programs/tests/
+  test_mipi_foreign_primary_defer.py (9 cases: PASS path real-MIPI fires; FAIL
+  path PCIe/UFS/DP-primary-with-incidental-CSI2 defers; per-anchor independence;
+  empty/None/garbage honesty; real-corpus fires-only-on-mipi-family) — all green;
+  shared tests/test_protocol_detector_no_misfire.py (full superset sweep) green;
+  test_protocol_detector_lib.py + test_phase1_large_doc_and_mipi_guard.py green.
+  Programs changed: mipi_protocol_synth.py (new is_mipi + _wb helper),
+  phase1_doc_one_shot_runner.py (use importable detector), protocol_detector_lib.py
+  (2 derived-sibling pairs).
+residual: >-
+  ACTION 2 (scrub the ALREADY-COMMITTED stale CSI-2 example text from the existing
+  pcie_gen5 / ufs generated L-docs — 24 hits in pcie_gen5, 18 in ufs across
+  L1/L2/L5/L6/L8/L9/L14/L15/L18/L20/L23) is NOT done. It requires re-running
+  phase1 on both benchmarks (heavy fixture regeneration, out of scope per the task
+  "Do not regenerate giant fixtures"); a hand-scrub would require inventing the
+  correct pcie/ufs replacement field values (the spec does not provide them), which
+  the no-fabrication rule forbids. The pollution is parity-NEUTRAL for pcie_gen5/
+  ufs own-gold (SHAPE/list-excluded per R28/R32). With action 1 in place, a future
+  fresh phase1 run on pcie_gen5/ufs will regenerate clean L-docs (is_mipi now
+  defers on them), at which point this backlog can be closed.

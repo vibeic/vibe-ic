@@ -12,15 +12,100 @@ Any D-PHY / CSI-2 family variant (D-PHY v1.x / v2.x base spec, CSI-2
 v1.x / v2.x, DSI sharing D-PHY) exhibits the same structural signature.
 
 Public entry: `apply_mipi_synth(generated_docs_dir, is_mipi, mipi_ic_name)`.
+Public detector: `is_mipi(blob)` — structural MIPI signature WITH a
+foreign-primary defer (the v0.1.94 ORGANIC-csi2-mentions guard).
 """
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
 
 # ----- helpers --------------------------------------------------------------
+
+def _wb(tok: str, blob: str) -> bool:
+    """Word-boundary token match (avoids substring false-positives)."""
+    return re.search(r"\b" + re.escape(tok) + r"\b", blob) is not None
+
+
+def is_mipi(blob: str) -> bool:
+    """CONTENT-ONLY MIPI D-PHY / CSI-2 detector with a FOREIGN-PRIMARY DEFER.
+
+    The structural signature (raw "MIPI"+"D-PHY", or CSI-2 Long/Short Packet,
+    or D-PHY Clock/Data Lane, or MIPI+HS+LP) is necessary but NOT sufficient:
+    UFS (built on MIPI UniPro + M-PHY, which the spec calls "based on D-PHY")
+    and PCIe specs that cite MIPI/CSI-2 as an incidental pipeline / vendor
+    example would otherwise trip it and have the generic-MIPI synth inject
+    CSI-2 camera-pipeline example text ("consumes CSI-2 packets", "CSI-2 RX
+    IP cores") into their L-docs (the v0.1.94 ORGANIC-csi2-mentions backlog).
+
+    Guard (mirrors `is_mipi_csi2`'s foreign-primary defer doctrine and the
+    AHB+APB `_axi_primary` doctrine — general, content-only, no chip/SKU
+    literal as detection logic): if the blob's DOMINANT subject is a foreign
+    protocol, defer (False), so the generic MIPI synth never fires on a
+    foreign spec that only mentions MIPI / D-PHY / CSI-2 incidentally:
+      - PCIe (TLP/DLLP/LTSSM, or dense "pci express", or 32 GT/s + LTSSM)
+      - UFS  (UniPro+M-PHY, or JESD220+UFS, or dense "ufs")
+      - DisplayPort / eDP (the VESA DP structural signature: Main Link + AUX
+        + DPCD + CR/EQ training or RBR/HBR rate vocabulary). DisplayPort is a
+        display interface that cites MIPI DSI as a comparison; its generated
+        L-docs carry incidental "MIPI"/"D-PHY" tokens that trip the loose
+        structural branches below. The DP signature is absent from every real
+        MIPI benchmark, so deferring on it is safe.
+
+    Empirically verified corpus-clean: the three real MIPI benchmarks
+    (mipi / mipi_csi2 / mipi_dsi) trip NONE of these defers and stay True;
+    pcie_gen5 trips pcie_primary, ufs trips ufs_primary, displayport/edp trip
+    dp_primary, so all are suppressed. See test_mipi_foreign_primary_defer.py.
+    """
+    if not blob:
+        return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT MIPI). ---
+    pcie_primary = (
+        low.count("pci express") >= 20
+        or ("32 gt/s" in low and "ltssm" in low)
+        or (_wb("LTSSM", blob) and _wb("TLP", blob) and _wb("DLLP", blob)))
+    ufs_primary = (
+        low.count("ufs") >= 20
+        or ("unipro" in low and ("m-phy" in low or "mphy" in low))
+        or ("jesd220" in low and ("universal flash storage" in low
+                                  or _wb("UFS", blob))))
+    # DisplayPort-primary: the VESA DP structural signature (Main Link + AUX +
+    # DPCD + a DP-only discriminator). Mirrors displayport_protocol_synth.
+    _dp_main_link = "main link" in low
+    _dp_aux = ("aux ch" in low or "aux channel" in low
+               or "i2c-over-aux" in low)
+    _dp_dpcd = ("dpcd" in low
+                or "displayport configuration data" in low)
+    _dp_cr_eq = (
+        (("clock recovery" in low or "clock-recovery" in low)
+         and ("channel equalization" in low
+              or "channel-equalization" in low))
+        or ("link training" in low and "training_pattern_set" in low))
+    _dp_rate = (("rbr" in low and "hbr" in low) or "hbr2" in low
+                or "hbr3" in low or "link_bw_set" in low)
+    dp_primary = (_dp_main_link and _dp_aux and _dp_dpcd
+                  and (_dp_cr_eq or _dp_rate))
+    if pcie_primary or ufs_primary or dp_primary:
+        return False
+
+    # --- STRUCTURAL MIPI D-PHY / CSI-2 signature (unchanged from the runner's
+    #     v0.1.84 inline detector). ---
+    return (
+        ("MIPI" in blob
+            and ("D-PHY" in blob or "DPHY" in blob))
+        or ("CSI-2" in blob and "Long Packet" in blob
+            and "Short Packet" in blob)
+        or ("D-PHY" in blob and "Clock Lane" in blob
+            and "Data Lane" in blob)
+        or ("MIPI" in blob and "HS" in blob
+            and "LP" in blob
+            and ("D-PHY" in blob or "CSI" in blob)))
+
 
 def _empty(v) -> bool:
     return v in (None, {}, []) or (isinstance(v, str) and not v.strip())

@@ -23,6 +23,11 @@ Findings:
     reset-polarity-spec-mismatch : spec says active-high, RTL active-low (or v.v.)
   WARN:
     reset-not-found              : spec declares a reset but no reset block found
+    pipelined-width-not-parameterized : spec says "pipelined N-bit adder/mul" but
+                                   the RTL hardcodes N with no parameter (the
+                                   canonical TB's `#(.DATA_WIDTH(N))` won't elaborate)
+    onebased-port-range          : prompt references S[k] up to k==width while the
+                                   port is declared zero-based [W-1:0]; declare [W:1]
   INFO (advisory; never fails):
     latency-mismatch             : spec says registered/1-cycle, RTL output looks
                                    combinational (or vice-versa) — confirm timing
@@ -156,9 +161,111 @@ def _mealy_outputs(body: str, ports: List[Port]) -> List[tuple]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# WARN: pipelined arithmetic module hardcodes its data width instead of
+# parameterizing it (ORGANIC-20260528-pipelined-adder-canonical-params).
+# RTLLM-style pipelined adder/multiplier benchmarks canonically parameterize
+# DATA_WIDTH (+ a stage width); the TB then instantiates `#(.DATA_WIDTH(N))`.
+# A from-scratch RTL that hardcodes the width fails TB elaboration. This is
+# advisory: a hardcoded width is functionally valid, only a portability nit.
+# ---------------------------------------------------------------------------
+def _pipelined_width_not_parameterized(spec_text: str, rtl_body: str,
+                                       rtl_ports: List[Port]) -> Optional[tuple]:
+    """Return (width, msg_widths) when the spec calls the design a *pipelined*
+    N-bit arithmetic block AND the RTL hardcodes that width N on a port WITHOUT
+    declaring any module parameter; else None.
+
+    Conservative / corpus-clean:
+      • The canonical RTLLM construction — '<N>-bit pipelined <arith>' or
+        'pipelined <N>-bit <arith>' — must appear as ONE tight phrase. Requiring
+        co-location (not just the three tokens scattered across a multi-KB
+        protocol datasheet) is what keeps a JTAG/USB/SD spec that merely happens
+        to contain "pipeline", "adder" and "64-bit" in unrelated sentences from
+        false-firing. The arithmetic vocabulary is chip-AGNOSTIC, never a literal.
+      • Requires the module to declare NO parameter at all — if a `parameter`
+        exists the design is already parameterized (do not second-guess its name).
+      • Requires the named width N to actually be hardcoded on a port (so we are
+        sure the RTL pinned that exact figure rather than computing it).
+    """
+    import re
+    low = spec_text.lower()
+    arith = r'(?:adder|multiplier|subtractor|subtracter|alu|accumulator|mac|multiply|divider)'
+    bit = r'(\d{1,4})[\s-]*bits?'
+    # Two canonical orderings, each requiring the width, "pipelined" and the
+    # arithmetic noun within one short phrase (≤~24 chars of filler between).
+    pats = [
+        re.compile(bit + r'[\s-]{0,3}pipelined?[\w\s,-]{0,24}?' + arith),   # "64-bit pipelined adder"
+        re.compile(r'\bpipelined?[\s-]{0,3}' + bit + r'[\w\s,-]{0,24}?' + arith),  # "pipelined 64-bit adder"
+    ]
+    widths = set()
+    for pat in pats:
+        for m in pat.finditer(low):
+            widths.add(int(m.group(1)))
+    if not widths:
+        return None
+    # If the RTL already declares any parameter, it IS parameterized -> no WARN.
+    if re.search(r'\bparameter\b', rtl_body):
+        return None
+    port_widths = {p.width for p in rtl_ports if p.width > 1}
+    hit = sorted(widths & port_widths)
+    if not hit:
+        return None
+    return (hit[0], sorted(hit))
+
+
+# ---------------------------------------------------------------------------
+# WARN: 1-based bit indexing — the prompt references S[k] up to k == width but
+# the port is declared zero-based [W-1:0] instead of [W:1]
+# (ORGANIC-20260528-spec-conformance-onebased-port-range). Declaring [W-1:0]
+# then shifts every index, so a K-map / bit-mapping comes out wrong even though
+# the RTL "looks" right. Advisory: pin the convention without blocking emit.
+# ---------------------------------------------------------------------------
+def _rtl_port_is_zero_based(rtl_body: str, name: str, width: int) -> bool:
+    """True iff port `name` is declared with an explicit zero-based range whose
+    span is `width` (i.e. `[width-1:0]`). Parsed straight from the RTL so we
+    know the *declared* low bound (the Port dataclass keeps only the span)."""
+    import re
+    for m in re.finditer(
+            r'\b(?:input|output|inout)\b[^;,()]*?\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*'
+            r'(?:reg|wire|logic|signed|unsigned|\s)*\b' + re.escape(name) + r'\b',
+            rtl_body):
+        hi, lo = int(m.group(1)), int(m.group(2))
+        if lo == 0 and (hi - lo + 1) == width and hi == width - 1:
+            return True
+    return False
+
+
+def _onebased_index_warnings(spec_text: str, rtl_body: str,
+                             rtl_ports: List[Port]) -> List[tuple]:
+    """Return [(name, width, maxidx)] for each port whose declared width is W,
+    is declared zero-based [W-1:0] in the RTL, yet the spec body references the
+    signal up to S[k] with maxidx == W (a clean 1-based signal → should be
+    [W:1]). Conservative: fires only when maxidx is EXACTLY the bit-count W."""
+    import re
+    out: List[tuple] = []
+    seen = set()
+    for p in rtl_ports:
+        if p.width <= 1 or p.name in seen:
+            continue
+        seen.add(p.name)
+        # collect every literal single-bit index S[k] referenced in the prose
+        idxs = [int(m) for m in re.findall(
+            r'\b' + re.escape(p.name) + r'\s*\[\s*(\d+)\s*\]', spec_text)]
+        if not idxs:
+            continue
+        maxidx = max(idxs)
+        # Only the clean 1-based case: the largest index equals the bit-COUNT
+        # (not width-1). e.g. width 4 and x[4] referenced -> 1-based.
+        if maxidx != p.width:
+            continue
+        if _rtl_port_is_zero_based(rtl_body, p.name, p.width):
+            out.append((p.name, p.width, maxidx))
+    return out
+
+
 def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
           rtl_resets: dict, rtl_registered: Optional[bool],
-          path: str, rtl_body: str = '') -> List[Finding]:
+          path: str, rtl_body: str = '', spec_text: str = '') -> List[Finding]:
     f: List[Finding] = []
 
     # ---- port conformance --------------------------------------------------
@@ -232,6 +339,34 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
                 f"spec declares a Moore FSM but output '{nm}' is combinationally "
                 f"dependent on input(s) {', '.join(refd)} (Mealy). A Moore output "
                 f"must be a function of state only — register it as f(state)."))
+
+    # ---- pipelined data-width parameterization (advisory) ------------------
+    # Spec calls it a pipelined N-bit adder/multiplier but the RTL hardcodes N
+    # with no parameter — the canonical TB's `#(.DATA_WIDTH(N))` won't elaborate.
+    if spec_text and rtl_body:
+        pw = _pipelined_width_not_parameterized(spec_text, rtl_body, rtl_ports)
+        if pw:
+            width, all_widths = pw
+            stg = max(1, width // 4)
+            f.append(Finding(path, 'WARN', 'pipelined-width-not-parameterized',
+                rtl_name or 'module',
+                f"spec describes a pipelined {('/'.join(str(w) for w in all_widths))}-bit "
+                f"arithmetic block but the RTL hardcodes width {width} with no module "
+                f"parameter — add `parameter DATA_WIDTH = {width}` (+ canonical "
+                f"`parameter STG_WIDTH = {stg}`) so a testbench instantiating "
+                f"`#(.DATA_WIDTH({width}))` elaborates. (Defaulting to the hardcoded "
+                f"width keeps behavior unchanged.)"))
+
+    # ---- 1-based bit-indexing port range (advisory) -----------------------
+    # Prompt references S[k] up to k == width while the port is declared
+    # zero-based [W-1:0]; that shifts every index → declare it [W:1] instead.
+    if spec_text and rtl_body:
+        for name, width, maxidx in _onebased_index_warnings(spec_text, rtl_body, rtl_ports):
+            f.append(Finding(path, 'WARN', 'onebased-port-range', name,
+                f"'{name}' is referenced up to {name}[{maxidx}] with width {width} "
+                f"(1-based indexing) but the RTL declares it zero-based [{width-1}:0] "
+                f"— declare the port as [{width}:1], not [{width-1}:0], or every bit "
+                f"index is off by one (K-map / bit-mapping comes out wrong)."))
     return f
 
 
@@ -255,8 +390,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f'spec_conformance_check: FAIL — spec not found: {args.spec}',
               file=sys.stderr)
         return 2
-    spec = extract_spec_contract(spec_path.read_text(errors='replace'),
-                                 is_json=spec_path.suffix == '.json')
+    spec_raw = spec_path.read_text(errors='replace')
+    spec = extract_spec_contract(spec_raw, is_json=spec_path.suffix == '.json')
+    # The two advisory body-scan WARNs (pipelined-width / 1-based index) need the
+    # prompt prose, not just the extracted contract. A JSON contract carries no
+    # prose body, so pass it only for natural-language / markdown / Verilog specs.
+    spec_body = '' if spec_path.suffix == '.json' else spec_raw
 
     top = args.top or spec.module
     files = collect_rtl_files(args.paths, args.rtl_dir)
@@ -279,7 +418,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     rtl_resets = classify_rtl_resets(rtl_body)
     rtl_registered = _rtl_output_is_registered(rtl_body, rtl_ports)
-    findings = check(spec, rtl_name, rtl_ports, rtl_resets, rtl_registered, chosen, rtl_body)
+    findings = check(spec, rtl_name, rtl_ports, rtl_resets, rtl_registered, chosen,
+                     rtl_body, spec_text=spec_body)
 
     # Per the semantic-confirm rule: a finding resting on a prose-inferred field that an
     # LLM has NOT confirmed is a CANDIDATE, not truth — annotate it so the agent confirms.

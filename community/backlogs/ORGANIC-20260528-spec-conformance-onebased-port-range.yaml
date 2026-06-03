@@ -49,3 +49,25 @@ session_context: >-
   rest (waveform truth tables, K-map answers) are inherently non-deterministic
   without the hidden spec and would be overfitting to force. Deferred to a
   corpus-swept implementation rather than rushed into v0.1.26.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "0.2.30"
+resolution: >-
+  programs/spec_conformance_check.py gains a WARN-level (advisory, never hard-FAIL)
+  rule `onebased-port-range` via the new helpers `_onebased_index_warnings()` +
+  `_rtl_port_is_zero_based()`. For each RTL port S of declared width W it scans the
+  prompt BODY for single-bit references S[k], takes maxidx = largest literal index,
+  and — only when maxidx is EXACTLY W (the clean 1-based case, never W-1 or a
+  partial-select) AND the RTL declares the port zero-based [W-1:0] — emits a WARN to
+  declare it [W:1] instead. The zero-based check is parsed straight from the RTL so
+  the *declared* low bound is known (the Port dataclass keeps only the span).
+  Corpus-swept exactly as rule-7 was: 0 false-fires across all 65 real
+  benchmark_phase1 spec+RTL pairs plus the real_benchmark fixtures, including the
+  width-100 in[99] (==W-1) legitimate-zero-based case which correctly does NOT warn.
+  Tested by programs/tests/test_spec_conformance_advisory_warns.py
+  (PASS path test_onebased_index_with_zerobased_port_warns, no-fire paths
+  test_onebased_index_with_onebased_port_no_warn / _zerobased_index /
+  _partial_select / _json_contract, plus shared missing-data honesty cases). The
+  conservative maxidx==W guard the backlog specified is implemented verbatim; no
+  threshold invented.

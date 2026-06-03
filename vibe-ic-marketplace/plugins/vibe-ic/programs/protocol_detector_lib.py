@@ -57,6 +57,16 @@ from typing import Iterable
 # --------------------------------------------------------------------------- #
 DERIVED_SIBLING_CROSS_FIRES = {
     ("displayport", "edp"),   # Embedded DisplayPort extends DisplayPort (v0.1.94)
+    # MIPI D-PHY base ⟶ its packet-layer / display-layer derivatives. CSI-2 and
+    # DSI BOTH ride on the MIPI D-PHY physical layer, so the generic D-PHY
+    # `is_mipi` detector legitimately fires on the mipi_csi2 / mipi_dsi
+    # benchmarks; the runner resolves it by running the dedicated
+    # mipi_csi2 / mipi_dsi synths LAST and force-overwriting (the same
+    # cross-protocol force-overwrite doctrine as NVMe-on-PCIe). Made visible to
+    # the no-misfire guards when `is_mipi` became a module-level detector
+    # (ORGANIC-20260531-incidental-csi2-mentions-in-pcie-ufs-ldocs).
+    ("mipi", "mipi_csi2"),    # CSI-2 packet layer rides on MIPI D-PHY
+    ("mipi", "mipi_dsi"),     # DSI display layer rides on MIPI D-PHY
 }
 
 

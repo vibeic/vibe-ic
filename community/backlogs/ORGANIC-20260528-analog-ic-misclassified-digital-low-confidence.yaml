@@ -51,3 +51,34 @@ session_context: >-
   missing real-ngspice templates for adc/delta_sigma block types) are downstream and
   worth separate entries; this P1 is the routing gate that prevents an analog IC from
   ever reaching the analog track.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "0.2.30"
+resolution: >-
+  Fixed in programs/ic_class_profile.py — detect_ic_class's has_analog no longer
+  zeroes out on per-block low_confidence. New helpers _is_parity_stub /
+  _block_is_analog_marker / _l5_has_analog treat low_confidence as "specs are
+  figure-only", NOT "maybe not analog": a low_confidence L5 block with a concrete
+  extracted instance count (count / multiplicity, populated only from a real
+  "N copies of <block>" statement) is a genuine analog marker, while v1.6.269
+  parity-stub artifacts (extraction_strategy=l5_parity_stub*, or bare token-only
+  blocks with no instance count) stay suppressed. Added independent
+  _l1_declares_analog_class so an L1-declared analog/mixed-signal class
+  (class / class_path canonical taxonomy token, chip-AGNOSTIC, with word-boundary
+  match; description text deliberately ignored) forces has_analog regardless of L5.
+  Live reproduction confirmed fixed: the real benchmark_ic/4th__U_Hawaii_DeltaSigma_ADC
+  now detects has_analog=True / ic_class=pure_analog (was digital_arithmetic_primitive),
+  i.e. routes to the analog A1..A9 track per regression line #39. CORPUS-CLEAN: a
+  full sweep of benchmark_ic/ + benchmark_phase1/ L5+L1 docs shows ONLY the two
+  U_Hawaii ADCs change (False->True); every digital benchmark (sha256/spm/subservient/
+  RISC-V cores) and the spdif / ethernet specs whose L5 carries only token-only
+  low_confidence stubs stay digital — zero false positives. Dedicated test:
+  programs/tests/test_ic_class_analog_low_confidence.py (8 cases: figure-only-ADC PASS
+  path + L1-declared-class PASS + spurious-stub digital FAIL path + marker-helper
+  discrimination + missing-data fail-closed honesty + a live-corpus anchor).
+  NOTE (residual, out of THIS backlog's scope): suggested_fix #2 (the
+  phase2_one_shot_runner DISPATCH-to-analog_one_shot_runner wiring) was NOT touched —
+  this task was scoped to ic_class_profile.detect_ic_class only. The routing signal
+  (has_analog / is_pure_analog / ic_class=pure_analog) is now correct upstream; a
+  separate runner-dispatch entry should consume it.

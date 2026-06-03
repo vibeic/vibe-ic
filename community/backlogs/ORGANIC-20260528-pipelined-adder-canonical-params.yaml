@@ -19,3 +19,26 @@ id: "ORGANIC-20260528-pipelined-adder-canonical-params"
 submitted_at: "2026-05-28T00:00:00+08:00"
 session_context: >-
   Captured by benchmark-enhancement-capture from RTLLM Shape B v0.1.33 final run. adder_pipe_64bit recovered via AI judgment by adding parameter DATA_WIDTH=64 + STG_WIDTH=16 (canonical pipelined-adder convention even though prose omitted them). Promoting this to a spec_conformance_check WARN would catch the class deterministically.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "0.2.30"
+resolution: >-
+  programs/spec_conformance_check.py gains a WARN-level (advisory, never hard-FAIL)
+  rule `pipelined-width-not-parameterized` via the new helper
+  `_pipelined_width_not_parameterized()`. It fires only when the spec prose carries
+  the canonical RTLLM construction '<N>-bit pipelined <arith>' or
+  'pipelined <N>-bit <arith>' as ONE tight co-located phrase (arith =
+  adder/multiplier/subtractor/alu/accumulator/mac/divider — chip-AGNOSTIC vocab),
+  the RTL declares NO module parameter, AND the named width N is hardcoded on a
+  port. The WARN suggests `parameter DATA_WIDTH = N` plus the canonical
+  `parameter STG_WIDTH = N//4` so a TB instantiating `#(.DATA_WIDTH(N))` elaborates.
+  Co-location (vs. the three tokens scattered across a multi-KB datasheet) was the
+  fix that made it corpus-clean: the first loose draft false-fired on jtag/sdmmc/swd/
+  usb protocol specs; tightening to a tight-phrase regex drove the corpus sweep to
+  0 false-fires across all 65 real benchmark_phase1 spec+RTL pairs and the
+  real_benchmark fixtures. Tested by programs/tests/test_spec_conformance_advisory_warns.py
+  (PASS path test_pipelined_hardcoded_width_warns, no-fire paths
+  test_pipelined_parameterized_does_not_warn / _no_pipeline_word / _non_arithmetic /
+  _json_contract, plus the shared missing-data honesty cases). NO threshold invented:
+  STG_WIDTH = N//4 is the convention the original recovery used (16 for N=64).

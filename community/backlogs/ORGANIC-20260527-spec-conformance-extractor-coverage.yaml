@@ -54,3 +54,60 @@ session_context: >-
   gaps above are the honest known-limitations of the extractor as shipped —
   recorded so a future iteration absorbs datasheet-table interfaces and richer
   reset phrasings rather than relying only on bullets / ANSI headers / JSON.
+
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "0.2.30"
+resolution: >-
+  Implemented both missing extractors in programs/_specrtl_common.py.
+
+  (1) Markdown PIN-CONFIGURATION / interface TABLE parser
+  (_parse_md_table_ports + _split_md_row / _is_md_delim_row / _norm_dir /
+  _parse_width_cell / _strip_md_emphasis). It detects a markdown table whose
+  header has BOTH a name-shaped column (Signal/Pin/Port/Name) AND a direction
+  column (Dir/Direction/I-O/Mode/Type), with an optional Width / [msb:lsb]
+  column, and emits Port(name, direction, width) rows from the table CELLS only
+  (the "no raw prose scan" rule is preserved — sentence words never become
+  ports). extract_spec_contract now tries it AFTER NL bullets and the ANSI
+  ```verilog module(...)``` header, BEFORE the non-ANSI module / pure-prose
+  fallback, and tags the contract source 'md-table'. Acceptance is gated so it
+  is corpus-clean: a table is taken only when the direction column's DATA cells
+  actually hold direction tokens (>=2 direction-valued body rows AND the
+  majority of body rows are direction-valued), so a generic report table
+  ("| Protocol | Authored RTL | ... |") or a register-map table
+  ("| Address | Name | Access | ... |", Access=RW/RO) yields 0 ports and never
+  fabricates an interface. _strip_md_emphasis strips backticks/bold/italic
+  WITHOUT eating an internal underscore (rst_n / data_in survive). A partial
+  parse (a table is detected but some rows are unparseable) surfaces an advisory
+  on SpecContract.notes ("spec interface present as a table but only N port(s)
+  parsed ...") so a 0-/partial-port table is never a silent skip; the note is the
+  INFO advisory item-3 asked for, carried on the contract for the gate to re-emit.
+
+  (2) Broadened _detect_reset: (a) active-low polarity inference from an
+  active-low-shaped reset NAME (rst_n / resetn / reset_n / nrst / nreset /
+  <prefix>_rst_n) via _ACTIVE_LOW_RST_NAME, only when no explicit "active-low"
+  word is present (never overrides an explicit polarity word); (b) a small,
+  conservative phrase set for mode — power-on-reset / "POR holds ... in reset" /
+  "(rising|falling) edge of <reset-signal>" => asynchronous; "reset is
+  registered to the clock" / "sampled on the clock" / "synchronized to the
+  clock" => synchronous — applied only when the explicit synchronous/asynchronous
+  keyword did not already fix the mode. A bare "there is a reset" still yields
+  mode=None/polarity=None (no fabrication).
+
+  Tests: programs/tests/test_spec_contract_markdown_table_extract.py (14 cases)
+  covers the PASS path (real datasheet pin table -> exact 6 ports + reset, msb:lsb
+  + plain widths, short in/out/io tokens + backticks), the real FAIL path
+  (table-extracted contract drives a port-width-mismatch end-to-end through
+  spec_conformance_check.py — previously a silent 0-port skip), and the
+  missing-data honesty cases (generic report table + regmap table -> 0 ports;
+  partial pin table -> advisory note) plus the 6 broadened reset phrasings. New
+  real fixture: programs/tests/fixtures/real_benchmark/datasheet_pin_table_interface.md.
+  Corpus-clean: _parse_md_table_ports returns 0 ports on all 6 fixture md/adoc
+  files, all 141 benchmark_phase1/ generated .md docs, and 173 .txt/.adoc/.markdown
+  docs (zero false fires). chip-AGNOSTIC: 0 chip_deny_list hits in source + test +
+  fixture; chip-agnostic guards green. Full program test suite: 7187 passed with
+  these edits (the only flicker, two mipi parent-vs-derived detector cross-fires,
+  is the documented open MIPI-guard backlog driven by the concurrently-mutating
+  live benchmark_phase1/ corpus — proven independent of this change by reverting
+  _specrtl_common.py and re-running: same mipi behavior, and these edits' own
+  81-test focused run is green).

@@ -306,12 +306,70 @@ def _l13_has_lab_calibration(l13: Optional[dict]) -> bool:
     return False
 
 
+# ORGANIC-20260528 (v0.2.30) — analog/mixed-signal misclassification fix.
+# The Phase-1 L5 ingester emits two structurally-different kinds of
+# low_confidence block:
+#   (a) GENUINE figure-only analog blocks — the canonical ΔΣ/SAR
+#       teaching-chip pattern where the datasheet publishes its numeric
+#       specs as figures, so `spec` is null and the block is flagged
+#       low_confidence, BUT a concrete extracted instance count
+#       (`count` / `multiplicity` from a "N copies of X" statement) is
+#       present.  e.g. the University-of-Hawaii incremental ΔΣ ADC:
+#       {name: delta_sigma, count: 6, low_confidence: true}.
+#   (b) PARITY STUBS — emitted by the v1.6.269 parity gate when a token
+#       like "DAC"/"ESD" is seen only in N/A / negative context
+#       ("Plugin 不需產生 ... analog trim DAC", "ESD by PDK default") or
+#       when the analog-context window guard rejected it.  These carry
+#       `extraction_strategy` == "l5_parity_stub*" and NO instance count.
+# The legacy v1.6.523 rule dropped EVERY low_confidence block, which
+# correctly suppressed (b) but ALSO zeroed out (a) — so an analog
+# datasheet whose specs are figure-only was misclassified
+# digital_arithmetic_primitive (has_analog=False) and never reached the
+# analog A1..A9 track.  We now keep the stub suppression but recover the
+# genuine figure-only blocks: low_confidence is treated as "specs are
+# figure-only", NOT "maybe not analog".
+def _is_parity_stub(b: Any) -> bool:
+    """True iff the L5 block is a v1.6.269 parity-stub artifact (token
+    seen only in N/A / negative context), NOT a real analog block."""
+    if not isinstance(b, dict):
+        return False
+    return str(b.get("extraction_strategy") or "").startswith(
+        "l5_parity_stub")
+
+
+def _pos_int(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v > 0
+
+
+def _block_is_analog_marker(b: Any) -> bool:
+    """True iff an L5 block is a positive analog marker.
+
+    A parity stub is never a marker.  A high-confidence block is always
+    a marker (legacy behavior preserved).  A low_confidence block counts
+    ONLY when it carries a concrete extracted instance count (count /
+    multiplicity) — i.e. the ingester found a real "N copies of <block>"
+    statement in the doc, distinguishing a genuine figure-only analog
+    block (specs published as figures) from a spurious token match whose
+    surrounding context is unrelated to an actual analog block.
+    """
+    if not isinstance(b, dict):
+        return False
+    if _is_parity_stub(b):
+        return False
+    if not b.get("low_confidence", False):
+        return True
+    return _pos_int(b.get("count")) or _pos_int(b.get("multiplicity"))
+
+
 def _l5_has_analog(l5: Optional[dict]) -> bool:
-    """v1.6.523 — for #358 P2 root fix. Filter low_confidence stubs
-    (v1.6.269 emitter behavior) so docs that legitimately mention
-    'no DAC needed' / 'ESD by PDK default' as N/A context don't
-    falsely classify the chip as pure_analog. Only high-confidence
-    analog blocks count as positive analog markers.
+    """v0.2.30 (ORGANIC-20260528) — recover figure-only analog blocks.
+
+    Keeps the v1.6.523 parity-stub suppression (so docs that mention
+    'no DAC needed' / 'ESD by PDK default' as N/A context don't falsely
+    classify the chip as analog) but no longer drops a low_confidence
+    block merely because its specs are figure-only: a low_confidence
+    block with a concrete extracted instance count is a genuine analog
+    marker.  High-confidence analog blocks count as before.
     """
     if not isinstance(l5, dict):
         return False
@@ -321,11 +379,62 @@ def _l5_has_analog(l5: Optional[dict]) -> bool:
              "wake_modes", "rx_event_pipeline_summary"):
         v = l5.get(k)
         if isinstance(v, list) and v:
-            high_conf = [b for b in v
-                         if not (isinstance(b, dict) and b.get("low_confidence", False))]
-            if high_conf:
+            if any(_block_is_analog_marker(b) for b in v):
                 return True
         elif v and not isinstance(v, list):
+            return True
+    return False
+
+
+# ORGANIC-20260528 (v0.2.30) — L1-declared analog/mixed-signal class.
+# Independent of L5: when L1 itself declares an analog/mixed-signal class
+# (canonical taxonomy token, NOT a chip/vendor name), the IC is analog
+# regardless of whether L5 blocks survived the figure-only filter.  The
+# Phase-1 ingester writes the class into `class` (synthetic / Path-A
+# skeleton) or `class_path` (Path-B README detector).  Chip-AGNOSTIC:
+# only generic class-taxonomy substrings.
+_L1_ANALOG_CLASS_TOKENS: tuple[str, ...] = (
+    "mixed_signal",
+    "mixed-signal",
+    "pure_analog",
+    "pure-analog",
+    "analog_block",
+    "sar_adc",
+    "delta_sigma",
+    "delta-sigma",
+    "sigma_delta",
+    "adc",
+    "dac",
+    "ldo",
+    "bandgap",
+    "pll",
+)
+
+
+def _l1_declares_analog_class(l1: Optional[dict]) -> bool:
+    """True iff L1 explicitly declares an analog / mixed-signal class.
+
+    Reads the canonical class field(s) only (`class`, `class_path`,
+    `ic_class`, `device_class`) — never the free-text description, so a
+    digital chip whose datasheet merely *mentions* an ADC does not get
+    flipped.  Matches generic taxonomy tokens with word-ish boundaries to
+    avoid e.g. 'adc' inside an unrelated identifier."""
+    if not isinstance(l1, dict):
+        return False
+    raw_parts: list[str] = []
+    for key in ("class", "class_path", "ic_class", "device_class",
+                "product_class"):
+        v = l1.get(key)
+        if isinstance(v, str) and v.strip():
+            raw_parts.append(v.strip().lower())
+    if not raw_parts:
+        return False
+    blob = " ".join(raw_parts).replace("-", "_")
+    for tok in _L1_ANALOG_CLASS_TOKENS:
+        t = tok.replace("-", "_")
+        # word-boundary match so 'adc' does not hit inside 'roadcaster'
+        if re.search(r"(?:^|[^a-z0-9])" + re.escape(t) + r"(?:$|[^a-z0-9])",
+                     blob):
             return True
     return False
 
@@ -438,7 +547,14 @@ def detect_ic_class(project_dir: Path) -> Dict[str, Any]:
     profile["has_otp"] = _l4_has_otp(l4, l11, l14_otp)
     profile["has_calibration"] = _l11_has_calibration(l11, l12)
     profile["has_lab_calibration"] = _l13_has_lab_calibration(l13)
-    profile["has_analog"] = _l5_has_analog(l5)
+    # ORGANIC-20260528 (v0.2.30) — analog iff L5 has a genuine analog
+    # marker (figure-only blocks recovered, parity stubs suppressed) OR
+    # L1 explicitly declares an analog/mixed-signal class. low_confidence
+    # in L5 means "specs are figure-only", NOT "maybe not analog", so it
+    # must not zero out has_analog for a declared analog datasheet.
+    profile["has_analog"] = (
+        _l5_has_analog(l5) or _l1_declares_analog_class(l1)
+    )
     profile["has_fsm"] = _l6_has_fsm(l6)
 
     raw_proto = _l2_protocol_type(l2)
