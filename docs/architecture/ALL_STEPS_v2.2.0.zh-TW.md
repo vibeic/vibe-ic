@@ -1,16 +1,22 @@
-# Vibe-IC — 全部步驟，按 Stage、依順序（v2.2.0・繁體中文）
+# Vibe-IC — 全部步驟：Phase → Stage → Step（v2.2.0・繁體中文）
 
-一份清單：整條流程的每一步，按 stage 分組、依執行順序，**單一連續編號 1 → 33，自 Stage 1
-（Spec-to-RTL）起算**。Phase 1 文件生成是字母前置步（**D1–D5**，不計入 1→33）。兩條並行支線
-—— Analog（A1–A9）與 Mixed-signal（M1–M4）—— 列在主流程之後。真實來源 = runner；更細的
-程式層標記自動產生於 `FLOW_STEPS_GENERATED.md`。
+一份清單：整條流程的每一步，以 **Phase → Stage → Step** 階層組織，**單一連續編號
+1 → 33（跨 Stage 1–4，自 Stage 1 的 Spec-to-RTL 起算）**。Phase 1 的文件生成步驟以字母
+**D1–D5** 標示（前置，不計入 1→33）。兩條並行支線 —— Analog（A1–A9）與 Mixed-signal
+（M1–M4）—— 同時進行。真實來源 = runner；更細的程式層標記自動產生於 `FLOW_STEPS_GENERATED.md`。
 
-Stage 對照：**D** 規格/文件（Phase 1）· **1** RTL+驗證 · **2** 合成+DFT ·
-**3** 實體+簽核 · **4** 輸出+Tapeout。
+**Phase → Stage 對照**
+
+- **Phase 1** — 規格與文件 → D1–D5
+- **Phase 2** — RTL → 合成 → Stage 1（RTL+驗證）· Stage 2（合成+DFT）
+- **Phase 3** — 實體 → Tapeout → Stage 3（實體+簽核）· Stage 4（輸出+Tapeout）
+- **並行** — Analog A1–A9 · Mixed-signal M1–M4
 
 ---
 
-## Phase 1（前置）— 規格與文件 · D1–D5（不計入 1→33）
+## Phase 1 — 規格與文件
+
+### D1–D5（前置 · 不計入 1→33）
 
 | # | 步驟 | 工具 / 方式 |
 |---|---|---|
@@ -20,7 +26,11 @@ Stage 對照：**D** 規格/文件（Phase 1）· **1** RTL+驗證 · **2** 合�
 | D4 | 協定類別合成 dispatch（81 類） | `is_<proto>` + `<proto>_synth` |
 | D5 | Coverage / parity 報告 | `phase1` parity 報告 |
 
-## Stage 1 — RTL 產生與驗證
+---
+
+## Phase 2 — RTL → 合成
+
+### Stage 1 — RTL 產生與驗證
 
 | # | 步驟 | 工具 / 方式 |
 |---|---|---|
@@ -31,7 +41,7 @@ Stage 對照：**D** 規格/文件（Phase 1）· **1** RTL+驗證 · **2** 合�
 | 5 | Formal verification | `formal-verify` + `assertion-gen` |
 | 6 | FPGA early prototype | `eda_fpga_compile` / `eda_fpga_program` → `.sof` |
 
-## Stage 2 — 合成與 DFT
+### Stage 2 — 合成與 DFT
 
 | # | 步驟 | 工具 / 方式 |
 |---|---|---|
@@ -43,7 +53,11 @@ Stage 對照：**D** 規格/文件（Phase 1）· **1** RTL+驗證 · **2** 合�
 | 12 | Post-DFT optimization | resynth / buffering |
 | 13 | Equivalence check（LEC） | `equivalence-check` + Yosys `equiv` |
 
-## Stage 3 — 實體設計與簽核
+---
+
+## Phase 3 — 實體設計 → Tapeout
+
+### Stage 3 — 實體設計與簽核
 
 | # | 步驟 | 工具 / 方式 |
 |---|---|---|
@@ -63,7 +77,7 @@ Stage 對照：**D** 規格/文件（Phase 1）· **1** RTL+驗證 · **2** 合�
 | 27 | Physical verification（DRC / LVS / ERC + PERC-equivalent） | KLayout DRC + LVS 簽核鏈 + Magic ERC + `perc_equivalent` |
 | 28 | ECO repair loop | `eco-plan` |
 
-## Stage 4 — 輸出與 Tapeout
+### Stage 4 — 輸出與 Tapeout
 
 | # | 步驟 | 工具 / 方式 |
 |---|---|---|
@@ -75,7 +89,9 @@ Stage 對照：**D** 規格/文件（Phase 1）· **1** RTL+驗證 · **2** 合�
 
 ---
 
-## 並行支線 — Analog A1–A9（`analog_one_shot_runner.py`，與 Stage 1–3 並行）
+## 並行支線
+
+### Analog A1–A9（`analog_one_shot_runner.py`，與 Stage 1–3 並行）
 
 | # | 步驟 | 工具 / 方式 |
 |---|---|---|
@@ -89,7 +105,7 @@ Stage 對照：**D** 規格/文件（Phase 1）· **1** RTL+驗證 · **2** 合�
 | A8 | hardmacro_gen | → `{.lef,.lib,.gds,.v}`（餵回 Stage 3） |
 | A9 | hw_verify（HIL）/ co-sim | → `A9_hw_verify.json` |
 
-## 並行支線 — Mixed-signal M1–M4（`mixed-signal-cosim` skill，無專屬 runner）
+### Mixed-signal M1–M4（`mixed-signal-cosim` skill，無專屬 runner）
 
 | # | 步驟 | 工具 / 方式 |
 |---|---|---|
@@ -102,8 +118,15 @@ Stage 對照：**D** 規格/文件（Phase 1）· **1** RTL+驗證 · **2** 合�
 
 ## 總計
 
-**33 個循序步驟** —— Stage 1：1–6 · Stage 2：7–13 · Stage 3：14–28 · Stage 4：29–33 ——
-前置 **Phase 1（D1–D5）**，外加 **9 個 Analog（A1–A9）** 與 **4 個 Mixed-signal（M1–M4）** 並行步驟。
+| Phase | Stages | Steps |
+|---|---|---|
+| Phase 1 — 規格與文件 | （前置） | D1–D5 |
+| Phase 2 — RTL → 合成 | Stage 1 · Stage 2 | 1–13 |
+| Phase 3 — 實體 → Tapeout | Stage 3 · Stage 4 | 14–33 |
+| 並行 | Analog · Mixed-signal | A1–A9 · M1–M4 |
+
+**33 個循序步驟**（Stage 1：1–6 · Stage 2：7–13 · Stage 3：14–28 · Stage 4：29–33），
+外加字母 **Phase 1 前置（D1–D5）** 與兩條並行支線。
 
 預檢：P0（`mcp_server_health_check`、`eda_doctor`）。編排器 `vibe_ic_one_shot_runner.py`
 跑 Phase 1 → Phase 2 → Analog → Phase 3。

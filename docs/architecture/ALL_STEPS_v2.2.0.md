@@ -1,17 +1,24 @@
-# Vibe-IC — ALL Steps, by Stage, in Order (v2.2.0)
+# Vibe-IC — ALL Steps: Phase → Stage → Step (v2.2.0)
 
-One ordered list of every flow step, grouped by stage, with a single continuous
-number **1 → 33 starting at Stage 1 (Spec-to-RTL)**. Phase 1 doc-generation is the
-lettered pre-flow (**D1–D5**, not in the 1→33 count). Two parallel tracks — Analog
-(A1–A9) and Mixed-signal (M1–M4) — follow the main flow. Source of truth = the
-runners; finer code-level markers are auto-generated in `FLOW_STEPS_GENERATED.md`.
+One ordered list of every flow step, organized as **Phase → Stage → Step**, with a
+single continuous number **1 → 33 across Stages 1–4** (starting at Stage 1,
+Spec-to-RTL). Phase 1's doc-generation steps are lettered **D1–D5** (pre-flow, not
+in the 1→33 count). Two parallel tracks — Analog (A1–A9) and Mixed-signal (M1–M4) —
+run alongside. Source of truth = the runners; finer code-level markers are
+auto-generated in `FLOW_STEPS_GENERATED.md`.
 
-Stage map: **D** Spec/Docs (Phase 1) · **1** RTL+Verify · **2** Synthesis+DFT ·
-**3** Physical+Sign-off · **4** Output+Tapeout.
+**Phase → Stage map**
+
+- **Phase 1** — Spec & Documents → D1–D5
+- **Phase 2** — RTL → Synthesis → Stage 1 (RTL+Verify) · Stage 2 (Synthesis+DFT)
+- **Phase 3** — Physical → Tapeout → Stage 3 (Physical+Sign-off) · Stage 4 (Output+Tapeout)
+- **Parallel** — Analog A1–A9 · Mixed-signal M1–M4
 
 ---
 
-## Phase 1 (pre-flow) — Spec & Documents · D1–D5 (not in the 1→33 count)
+## Phase 1 — Spec & Documents
+
+### D1–D5 (pre-flow · not in the 1→33 count)
 
 | # | Step | Tool / How |
 |---|---|---|
@@ -21,7 +28,11 @@ Stage map: **D** Spec/Docs (Phase 1) · **1** RTL+Verify · **2** Synthesis+DFT 
 | D4 | Protocol-class synthesis dispatch (81 classes) | `is_<proto>` + `<proto>_synth` |
 | D5 | Coverage / parity report | `phase1` parity report |
 
-## Stage 1 — RTL Generation & Verification
+---
+
+## Phase 2 — RTL → Synthesis
+
+### Stage 1 — RTL Generation & Verification
 
 | # | Step | Tool / How |
 |---|---|---|
@@ -32,7 +43,7 @@ Stage map: **D** Spec/Docs (Phase 1) · **1** RTL+Verify · **2** Synthesis+DFT 
 | 5 | Formal verification | `formal-verify` + `assertion-gen` |
 | 6 | FPGA early prototype | `eda_fpga_compile` / `eda_fpga_program` → `.sof` |
 
-## Stage 2 — Synthesis & DFT
+### Stage 2 — Synthesis & DFT
 
 | # | Step | Tool / How |
 |---|---|---|
@@ -44,7 +55,11 @@ Stage map: **D** Spec/Docs (Phase 1) · **1** RTL+Verify · **2** Synthesis+DFT 
 | 12 | Post-DFT optimization | resynth / buffering |
 | 13 | Equivalence check (LEC) | `equivalence-check` + Yosys `equiv` |
 
-## Stage 3 — Physical Design & Sign-off
+---
+
+## Phase 3 — Physical Design → Tapeout
+
+### Stage 3 — Physical Design & Sign-off
 
 | # | Step | Tool / How |
 |---|---|---|
@@ -64,7 +79,7 @@ Stage map: **D** Spec/Docs (Phase 1) · **1** RTL+Verify · **2** Synthesis+DFT 
 | 27 | Physical verification (DRC / LVS / ERC + PERC-equivalent) | KLayout DRC + LVS sign-off chain + Magic ERC + `perc_equivalent` |
 | 28 | ECO repair loop | `eco-plan` |
 
-## Stage 4 — Output & Tapeout
+### Stage 4 — Output & Tapeout
 
 | # | Step | Tool / How |
 |---|---|---|
@@ -76,7 +91,9 @@ Stage map: **D** Spec/Docs (Phase 1) · **1** RTL+Verify · **2** Synthesis+DFT 
 
 ---
 
-## Parallel track — Analog A1–A9 (`analog_one_shot_runner.py`, runs alongside Stages 1–3)
+## Parallel tracks
+
+### Analog A1–A9 (`analog_one_shot_runner.py`, runs alongside Stages 1–3)
 
 | # | Step | Tool / How |
 |---|---|---|
@@ -90,7 +107,7 @@ Stage map: **D** Spec/Docs (Phase 1) · **1** RTL+Verify · **2** Synthesis+DFT 
 | A8 | hardmacro_gen | → `{.lef,.lib,.gds,.v}` (feeds Stage 3) |
 | A9 | hw_verify (HIL) / co-sim | → `A9_hw_verify.json` |
 
-## Parallel track — Mixed-signal M1–M4 (`mixed-signal-cosim` skill, no dedicated runner)
+### Mixed-signal M1–M4 (`mixed-signal-cosim` skill, no dedicated runner)
 
 | # | Step | Tool / How |
 |---|---|---|
@@ -103,9 +120,15 @@ Stage map: **D** Spec/Docs (Phase 1) · **1** RTL+Verify · **2** Synthesis+DFT 
 
 ## Totals
 
-**33 sequential steps** — Stage 1: 1–6 · Stage 2: 7–13 · Stage 3: 14–28 · Stage 4: 29–33 —
-preceded by the lettered **Phase 1 pre-flow (D1–D5)**, plus **9 Analog (A1–A9)** and
-**4 Mixed-signal (M1–M4)** parallel steps.
+| Phase | Stages | Steps |
+|---|---|---|
+| Phase 1 — Spec & Documents | (pre-flow) | D1–D5 |
+| Phase 2 — RTL → Synthesis | Stage 1 · Stage 2 | 1–13 |
+| Phase 3 — Physical → Tapeout | Stage 3 · Stage 4 | 14–33 |
+| Parallel | Analog · Mixed-signal | A1–A9 · M1–M4 |
+
+**33 sequential steps** (Stage 1: 1–6 · Stage 2: 7–13 · Stage 3: 14–28 · Stage 4: 29–33),
+plus lettered **Phase 1 pre-flow (D1–D5)** and the two parallel tracks.
 
 Pre-flight: P0 (`mcp_server_health_check`, `eda_doctor`). Orchestrator
 `vibe_ic_one_shot_runner.py` runs Phase 1 → Phase 2 → Analog → Phase 3.
