@@ -305,3 +305,14 @@ def test_v_prefixed_version_still_fails_not_treated_as_identifier(tmp_path):
     cp = _run(tmp_path, _diff("src/x.py", "# bumping to v9.9.9 now"))
     assert cp.returncode == 1, cp.stdout + cp.stderr
     assert "claimed v9.9.9" in cp.stdout
+
+
+def test_versioned_arch_doc_path_skipped(tmp_path):
+    # ALL_STEPS_v2.2.0.md / FLOW_STEPS_GENERATED.md carry the doc/flow version
+    # (2.2.0 scheme) in their title — a namespace distinct from plugin semver,
+    # path-skipped like CANONICAL_FLOW_.
+    _make_plugin_json(tmp_path, "0.2.27")
+    cp = _run(tmp_path, _diff(
+        "docs/architecture/ALL_STEPS_v2.2.0.md",
+        "# Vibe-IC — ALL Steps: Phase → Stage → Step (v2.2.0)"))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
