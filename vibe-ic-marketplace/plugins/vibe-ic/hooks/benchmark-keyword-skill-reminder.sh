@@ -8,20 +8,23 @@
 # 2026-05-28 RTLLM methodology mistake (direct-agent authoring vs runner-driven
 # scoring).
 #
-# SENSITIVITY (tightened 2026-06-03 — the old "bare benchmark anywhere in the
-# whole JSON envelope" matched too eagerly: internal paths like
-# `benchmark-harness/` / `benchmark_phase1/`, tool-result / task-notification
-# text, and incidental mentions such as "the benchmark hook" all false-fired).
-# Two changes:
-#   1. Match ONLY the user's `prompt` field, never the surrounding envelope
-#      (tool results, notifications, file paths the agent is discussing).
-#   2. Trigger only on genuine benchmark intent:
-#        - a specific benchmark NAME (VerilogEval / CVDP / RTLLM / PyHDL-Eval /
-#          RTL-Repo / MetRex / ResBench / ChipAgents), or the /vibe-ic-benchmark
-#          command; OR
-#        - the standalone word "benchmark" (NOT the path/compound forms
-#          benchmark-harness / benchmark_phase1 / benchmark-enhancement) together
-#          with a run/score/setup/sweep action verb.
+# SENSITIVITY (tightened 2026-06-03, narrowed again per user directive 2026-06-03:
+# "benchmark hook should be 'vibe-ic benchmark' or 'vibeic benchmark' or 'vibe ic
+# benchmark', …"). The hook now fires ONLY on the explicit project-benchmark
+# phrase / command, in any spelling:
+#     "vibe-ic benchmark"  "vibeic benchmark"  "vibe ic benchmark"
+#     "vibe_ic benchmark"  the /vibe-ic-benchmark slash command
+# It deliberately does NOT fire on:
+#   - a bare standalone "benchmark" (incidental mentions, "the benchmark hook"),
+#   - benchmark NAMES alone (VerilogEval / CVDP / RTLLM / PyHDL-Eval / …),
+#   - "benchmark" + a run/score verb,
+#   - any compound path (benchmark-harness / benchmark_phase1 / benchmark_external).
+# Earlier versions matched all of those and over-fired on tool results, task
+# notifications, and ordinary discussion. The reminder only needs to fire when the
+# user explicitly invokes the project's benchmark front door.
+# Two structural guards remain:
+#   1. Match ONLY the user's `prompt` field, never the surrounding JSON envelope.
+#   2. Require the literal "vibe[ _-]ic … benchmark" phrase (see PHRASE below).
 INPUT=$(cat 2>/dev/null)
 
 # (1) Extract just the user's prompt text. Fall back to the raw input only if the
@@ -37,25 +40,23 @@ except Exception:
 ' 2>/dev/null)
 HAYSTACK="${PROMPT:-$INPUT}"
 
-# (2) Intent match.
-NAMES='verilogeval|cvdp|rtllm|pyhdl[-_]?eval|rtl[-_]?repo|metrex|resbench|chipagents|vibe-?ic-benchmark'
-# standalone "benchmark" = not immediately followed by `-` or `_` (excludes the
-# benchmark-harness / benchmark_phase1 / benchmark-enhancement compound paths).
-BARE='benchmark([^-_a-z]|$)'
-VERB='(^|[^a-z])(run|rerun|re-run|score|scoring|setup|set up|sweep|evaluate|eval|執行|跑|重跑|評測|評分)([^a-z]|$)'
+# (2) Intent match — ONLY the explicit project-benchmark phrase / command.
+#   vibe + optional [ _-] + ic + one-or-more [ _/-] + benchmark
+# matches: "vibe-ic benchmark", "vibeic benchmark", "vibe ic benchmark",
+#          "vibe_ic benchmark", "vibe-ic-benchmark", "/vibe-ic-benchmark".
+# does NOT match: bare "benchmark", "VerilogEval", "run benchmark",
+#          "benchmark-harness", "benchmark_phase1", "benchmark_external".
+PHRASE='vibe[ _-]?ic[ _/-]+benchmark'
 
 FIRE=0
-if printf '%s' "$HAYSTACK" | grep -iqE "$NAMES"; then
-  FIRE=1
-elif printf '%s' "$HAYSTACK" | grep -iqE "$BARE" \
-     && printf '%s' "$HAYSTACK" | grep -iqE "$VERB"; then
+if printf '%s' "$HAYSTACK" | grep -iqE "$PHRASE"; then
   FIRE=1
 fi
 
 if [ "$FIRE" = "1" ]; then
   cat <<'REMINDER'
 <system-reminder>
-Benchmark keyword detected (benchmark / VerilogEval / CVDP / RTLLM / …).
+Project benchmark front-door invoked ("vibe-ic benchmark …").
 
 DO THIS BEFORE RESPONDING (two-step):
 

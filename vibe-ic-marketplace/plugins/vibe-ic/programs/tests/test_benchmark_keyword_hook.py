@@ -1,13 +1,17 @@
 """Regression tests for `hooks/benchmark-keyword-skill-reminder.sh`.
 
-Per user 2026-05-29: "let benchmark, VerilogEval and CVDP be the
-trigger keywords". The hook is an UserPromptSubmit hook that fires when
-any benchmark keyword appears in the user's prompt and injects a
-<system-reminder> directing Claude to load
-`vibe-ic:open-benchmark-methodology` + use `/vibe-ic-benchmark`.
+Per user directive 2026-06-03: "benchmark hook should be 'vibe-ic benchmark'
+or 'vibeic benchmark' or 'vibe ic benchmark', …". The hook is an
+UserPromptSubmit hook that injects a <system-reminder> directing Claude to
+load `vibe-ic:open-benchmark-methodology` + use `/vibe-ic-benchmark`.
 
-These tests run the actual bash script through a subprocess to lock
-the trigger / non-trigger boundary.
+It now fires ONLY on the explicit project-benchmark phrase / command in any
+spelling — NOT on a bare "benchmark", a benchmark NAME alone
+(VerilogEval / CVDP / RTLLM / …), "benchmark" + a run/score verb, or any
+compound path (benchmark-harness / benchmark_phase1 / benchmark_external).
+
+These tests run the actual bash script through a subprocess to lock the
+trigger / non-trigger boundary.
 """
 import subprocess
 from pathlib import Path
@@ -27,39 +31,62 @@ def _run_with_prompt(prompt: str) -> str:
 
 
 def _triggers(prompt: str) -> bool:
-    return "Benchmark keyword detected" in _run_with_prompt(prompt)
+    # The reminder always carries the methodology-skill pointer; use it as the
+    # stable fire signal (independent of the header wording).
+    return "vibe-ic:open-benchmark-methodology" in _run_with_prompt(prompt)
 
 
-class TestTriggerKeywords:
-    def test_bare_benchmark_triggers(self):
-        assert _triggers("run this benchmark")
+class TestTriggerPhrase:
+    """ONLY the explicit 'vibe[ _-]ic … benchmark' phrase / command fires."""
 
-    def test_verilogeval_triggers(self):
-        assert _triggers("score VerilogEval")
+    def test_hyphen_phrase_triggers(self):
+        assert _triggers("vibe-ic benchmark VerilogEval")
 
-    def test_verilogeval_v2_triggers(self):
-        assert _triggers("rerun VerilogEval-v2")
+    def test_squashed_phrase_triggers(self):
+        assert _triggers("vibeic benchmark cvdp")
 
-    def test_verilogeval_human_triggers(self):
-        assert _triggers("VerilogEval-Human is failing")
+    def test_spaced_phrase_triggers(self):
+        assert _triggers("please run the vibe ic benchmark")
 
-    def test_cvdp_triggers(self):
-        assert _triggers("run CVDP benchmark")
+    def test_underscore_phrase_triggers(self):
+        assert _triggers("vibe_ic benchmark rtllm")
 
-    def test_cvdp_lowercase_triggers(self):
-        assert _triggers("score cvdp")
+    def test_slash_command_triggers(self):
+        assert _triggers("/vibe-ic-benchmark --list")
 
-    def test_rtllm_triggers(self):
-        assert _triggers("rerun RTLLM")
+    def test_slash_command_with_args_triggers(self):
+        assert _triggers("run vibe-ic-benchmark RTLLM --score")
 
-    def test_pyhdl_eval_triggers(self):
-        assert _triggers("PyHDL-Eval setup")
+    def test_case_insensitive_triggers(self):
+        assert _triggers("Vibe-IC Benchmark VerilogEval-v2")
 
-    def test_rtl_repo_triggers(self):
-        assert _triggers("RTL-Repo dataset")
 
-    def test_metrex_triggers(self):
-        assert _triggers("score MetRex")
+class TestBenchmarkNamesAloneDoNotTrigger:
+    """Bare benchmark names / bare 'benchmark' no longer fire — only the
+    explicit project phrase does (user directive 2026-06-03)."""
+
+    def test_bare_benchmark_with_verb_does_not_trigger(self):
+        assert not _triggers("run this benchmark")
+        assert not _triggers("please run the benchmark suite now")
+        assert not _triggers("score the benchmark")
+
+    def test_verilogeval_alone_does_not_trigger(self):
+        assert not _triggers("score VerilogEval")
+        assert not _triggers("rerun VerilogEval-v2")
+        assert not _triggers("VerilogEval-Human is failing")
+        assert not _triggers("how did VerilogEval do")
+
+    def test_cvdp_alone_does_not_trigger(self):
+        assert not _triggers("run CVDP benchmark")
+        assert not _triggers("score cvdp")
+
+    def test_rtllm_alone_does_not_trigger(self):
+        assert not _triggers("rerun RTLLM")
+
+    def test_pyhdl_rtlrepo_metrex_alone_do_not_trigger(self):
+        assert not _triggers("PyHDL-Eval setup")
+        assert not _triggers("RTL-Repo dataset")
+        assert not _triggers("score MetRex")
 
 
 class TestNonTriggerInputs:
@@ -72,70 +99,58 @@ class TestNonTriggerInputs:
     def test_design_question_does_not_trigger(self):
         assert not _triggers("how do I close timing")
 
+    def test_vibe_ic_without_benchmark_does_not_trigger(self):
+        # mentioning the plugin without the benchmark front door must not fire
+        assert not _triggers("does vibe-ic support the CVDP benchmark suite")
+        assert not _triggers("the vibe-ic plugin scored well")
+
 
 class TestReminderShape:
     """The injected reminder must contain the canonical pointers."""
 
+    _P = "vibe-ic benchmark VerilogEval"
+
     def test_includes_open_benchmark_methodology_skill(self):
-        out = _run_with_prompt("run benchmark")
-        assert "vibe-ic:open-benchmark-methodology" in out
+        assert "vibe-ic:open-benchmark-methodology" in _run_with_prompt(self._P)
 
     def test_includes_runner_front_door(self):
-        out = _run_with_prompt("CVDP")
-        assert "/vibe-ic-benchmark" in out
+        assert "/vibe-ic-benchmark" in _run_with_prompt(self._P)
 
     def test_includes_decision_matrix_section(self):
-        out = _run_with_prompt("run benchmark")
-        assert "decision matrix" in out
+        assert "decision matrix" in _run_with_prompt(self._P)
 
     def test_includes_anti_handroll_directive(self):
-        # Doctrine guardrail: programs-first, NOT a hand-rolled harness.
-        out = _run_with_prompt("run benchmark")
+        out = _run_with_prompt(self._P)
         assert "hand-rolled" in out
         assert "DO NOT" in out
 
     def test_no_reminder_when_no_keyword(self):
         out = _run_with_prompt("plain text")
-        assert "Benchmark keyword detected" not in out
+        assert "<system-reminder>" not in out
         assert "/vibe-ic-benchmark" not in out
 
 
 class TestSensitivity:
-    """Regression for the 2026-06-03 over-sensitivity fix: bare/incidental
-    mentions of 'benchmark', internal path/compound forms, and matches that
-    live only in the envelope (not the user's `prompt` field) must NOT fire."""
+    """Incidental 'benchmark' mentions, compound paths, and envelope-only
+    matches must NOT fire."""
 
-    def test_bare_benchmark_without_action_verb_does_not_trigger(self):
-        # the literal message that exposed the over-sensitivity
+    def test_bare_benchmark_noun_does_not_trigger(self):
         assert not _triggers("remove or modify benchmark hook")
-
-    def test_benchmark_noun_phrase_does_not_trigger(self):
         assert not _triggers("commit the benchmark candidate doc to community")
 
-    def test_benchmark_harness_path_does_not_trigger(self):
+    def test_benchmark_compound_paths_do_not_trigger(self):
         assert not _triggers("edit benchmark-harness/score_iverilog_tb.py")
-
-    def test_benchmark_phase1_path_does_not_trigger(self):
         assert not _triggers("the benchmark_phase1/espi L12 json changed")
-
-    def test_benchmark_enhancement_compound_does_not_trigger(self):
+        assert not _triggers("stage benchmark_external/interconnect manifests")
         assert not _triggers("invoke the benchmark-enhancement-capture skill")
 
-    def test_action_verb_plus_standalone_benchmark_triggers(self):
-        # genuine intent must still fire
-        assert _triggers("please run the benchmark suite now")
-        assert _triggers("score the benchmark")
-
     def test_keyword_only_in_non_prompt_envelope_field_does_not_trigger(self):
-        # "benchmark-harness" appears only in a tool-result field, not in prompt
+        # "vibe-ic benchmark" appears only in a tool-result field, not in prompt
         envelope = ('{"prompt": "are the 3 places synced?", '
-                    '"tool_result": "benchmark-harness/score_iverilog_tb.py ran; '
+                    '"tool_result": "vibe-ic benchmark VerilogEval ran; '
                     'benchmark_phase1 fixtures present"}\n')
         proc = subprocess.run(
             ["bash", str(HOOK)],
             input=envelope, capture_output=True, text=True, timeout=5,
         )
-        assert "Benchmark keyword detected" not in proc.stdout
-
-    def test_specific_name_in_prompt_still_triggers(self):
-        assert _triggers("how did VerilogEval do")
+        assert "<system-reminder>" not in proc.stdout

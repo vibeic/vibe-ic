@@ -1269,41 +1269,19 @@ def _v1_6_605_remap_surviving_dlatch(
 #       preserves hierarchy) or an `sv2v` pre-pass emitting Verilog-2005.
 # The selected frontend is recorded in the StepResult extras/provenance
 # (`synth_frontend`). Chip-AGNOSTIC: extension + error-signature logic.
+#
+# v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — the decision rule + the
+# yosys error-signature list now live in the SHARED `synth_frontend`
+# sibling module so the Phase-2 yosys-synth step and the Phase-2
+# reference-TB step reuse the EXACT same logic (no divergent copy). The
+# module-level names below are thin re-exports preserved for backward
+# compatibility (`programs/tests/test_phase3_backend_fixes.py`
+# ::TestSynthFrontendSelection imports them off this module).
 # ---------------------------------------------------------------------------
-_SLANG_ERROR_SIGNATURES = ("unexpected TOK_IMPORT", "syntax error",
-                           "Executing Verilog-2005 frontend",
-                           "unsupported SystemVerilog",
-                           "TOK_PACKAGE", "TOK_TYPEDEF")
+import synth_frontend as _sf
 
-
-def _decide_synth_frontend(rtl_files: List[Path],
-                           default_rc: int,
-                           default_netlist_exists: bool,
-                           default_log: str) -> Tuple[bool, str]:
-    """Decide whether to invoke the SV-aware fallback frontend after the
-    default `read_verilog -sv` attempt.
-
-    Returns (need_sv_fallback, reason). `need_sv_fallback` is True when
-    EITHER the default attempt failed/produced no netlist AND its log
-    carries an SV error signature, OR any input file is `.sv` and the
-    default attempt failed/produced no netlist.
-
-    A `.sv` extension alone does NOT force the fallback when the default
-    frontend already succeeded — `read_verilog -sv` handles plenty of
-    `.sv` files, and re-running wastefully would only risk regressions.
-    Chip-AGNOSTIC: extension + error-signature only."""
-    default_failed = (default_rc != 0) or (not default_netlist_exists)
-    has_sv = any(str(f).lower().endswith(".sv") for f in rtl_files)
-    if not default_failed:
-        return False, "default read_verilog -sv frontend succeeded"
-    sig_hit = any(s in (default_log or "") for s in _SLANG_ERROR_SIGNATURES)
-    if sig_hit:
-        return True, "default frontend errored with an SV signature"
-    if has_sv:
-        return True, ("default frontend failed and inputs include "
-                      ".sv files — trying SV-2017 frontend")
-    return False, ("default frontend failed but no SV signature / .sv "
-                   "input — fallback would not help")
+_SLANG_ERROR_SIGNATURES = _sf.SLANG_ERROR_SIGNATURES
+_decide_synth_frontend = _sf.decide_synth_frontend
 
 
 def step_synth(project: Path, top: str, pdk: PdkConfig,

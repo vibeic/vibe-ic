@@ -21,10 +21,19 @@ NECESSARY-BUT-NOT-SUFFICIENT (device-physics stays MANUAL). A corpus-wide GAP is
 current-runner bug — validate against a FRESH same-version control before triaging (the
 stale-artifact lesson from the v0.2.11 sweep, where 14/14 0-tap were pre-tapcell-fix DEFs).
 
+ARTIFACT-VINTAGE GUARD (suggested_fix #4 of ORGANIC-20260601-...-stale-pre-tapcell-fix):
+each sweep also runs `artifact_vintage_guard`, which WARNs when a routed DEF with > N std
+cells has 0 valid taps AND an older/sibling DEF in the same lineage is ALSO 0-tap — the
+structural signature of a STALE pre-tapcell-fix artifact (the whole lineage never ran the
+tapcell step), as opposed to a LIVE current-runner regression. It never fails a build; it is
+a triage WARN so a corpus PERC number is not mis-cited as a current-quality signal.
+
 Usage:
     python3 perc_corpus_sweep.py <design_dir> [<design_dir> ...]   # JSONL per IC + summary
     python3 perc_corpus_sweep.py --json <dir> ...                  # JSON array only, no summary
     python3 perc_corpus_sweep.py --def <routed.def> --name <id>    # single explicit DEF
+    python3 perc_corpus_sweep.py --vintage <routed.def>            # ONLY the vintage guard, JSON
+    python3 perc_corpus_sweep.py --no-vintage <dir> ...           # skip the vintage guard
 """
 from __future__ import annotations
 
@@ -54,8 +63,133 @@ def _pick_routed_def(design_dir: str) -> Optional[str]:
     return sorted(cands, key=_score, reverse=True)[0]
 
 
-def sweep_one(def_path: str, name: Optional[str] = None) -> Dict[str, Any]:
-    """Run the full PERC structural chain on ONE routed DEF. Pure; no container."""
+# --------------------------------------------------------------- artifact-vintage guard
+# suggested_fix #4 of ORGANIC-20260601-benchmark-ic-corpus-stale-pre-tapcell-fix:
+# distinguish a STALE pre-tapcell artifact (a routed DEF whose whole lineage never ran the
+# tapcell step) from a LIVE current-runner regression (a one-off 0-tap in an otherwise
+# tap-bearing pipeline). Purely structural + chip-AGNOSTIC: no design/vendor literal, no
+# version string parsed from the file (none is recorded reliably). The "older-version /
+# sibling 0-tap" signal is derived from the DEF lineage itself.
+_STALE_STD_CELL_MIN = 200   # below this a 0-tap DEF is a legit small block, not a regression
+
+
+def _count_std_cells(components: List["tuple"]) -> int:
+    """Placed transistor-bearing std cells (same exclusion rule as _welltap_presence_check —
+    drop tap/fill/decap/diode/endcap/boundary/antenna physical-only masters)."""
+    return sum(1 for _i, m in components
+               if not _p._WELLTAP_TOKEN_RE.search(m.lower())
+               and not any(t in m.lower() for t in ("decap", "fill", "diode", "tapvpwr",
+                                                     "_endcap", "boundary", "antenna")))
+
+
+def _stage_score(basename: str) -> int:
+    """Pipeline-stage ordinal from a DEF basename (floorplan < placed < cts < hold < routed
+    < chip_top). Used only to order sibling DEFs oldest→newest for the lineage scan."""
+    b = basename.lower()
+    for tok, rank in (("floorplan", 0), ("placed", 1), ("cts", 2), ("post_hold", 3),
+                      ("hold", 3), ("routed", 4), ("chip_top", 5)):
+        if tok in b:
+            return rank
+    return 2   # unknown mid-pipeline
+
+
+def artifact_vintage_guard(routed_def: str,
+                           sibling_defs: Optional[List[str]] = None,
+                           std_cell_min: int = _STALE_STD_CELL_MIN) -> Dict[str, Any]:
+    """WARN when a routed DEF with > std_cell_min placed std cells has 0 valid well/substrate
+    taps AND an *older* sibling DEF (an earlier pipeline stage, or an older-version artifact of
+    the same design) is ALSO 0-tap — the signature of a STALE pre-tapcell-fix artifact whose
+    whole lineage never ran the tapcell step (the v0.1.46/v0.1.49 fix), as opposed to a LIVE
+    current-runner regression.
+
+    DISCRIMINATOR (chip-AGNOSTIC, purely structural):
+      * a CURRENT run inserts taps from the `placed` stage onward (the FRESH spm control:
+        floorplan=0 → placed/cts/hold/routed all=67). So in a healthy lineage the routed DEF
+        is tap-bearing; a 0-tap routed DEF whose *earlier* sibling stages are ALSO 0-tap means
+        the tapcell step never fired anywhere in the lineage = stale pre-fix artifact.
+      * if the routed DEF HAS taps → not stale (verdict OK, never warns).
+      * if std-cell count <= std_cell_min → legit small / floorplan block where 0 taps is not
+        yet a regression signal (a floorplan DEF is pre-tapcell BY DESIGN) → verdict OK.
+      * if there is NO 0-tap sibling (e.g. the only DEF is this one, or every sibling is
+        tap-bearing) → cannot prove stale-vs-regression from lineage alone → verdict
+        SUSPECT_LIVE (treat as a possible live regression: re-run a FRESH control to triage).
+
+    verdict ∈ {OK, STALE_PRE_TAPCELL (warn), SUSPECT_LIVE (warn — needs fresh control), NA}.
+    This NEVER fails a build; it is a triage WARN so a corpus PERC number is not mis-cited as a
+    current-quality signal (the stale-artifact lesson, RESULT_PERC_CORPUS_v0211.md)."""
+    rp = Path(routed_def)
+    out: Dict[str, Any] = {"def": str(routed_def), "verdict": "NA", "warn": False}
+    if not rp.is_file():
+        out["reason"] = "routed DEF not found"
+        return out
+    comps = _p._parse_def_components(rp)
+    wt = _p._welltap_presence_check(comps)
+    n_std = _count_std_cells(comps)
+    out.update({"n_std_cells": n_std, "n_tap": wt["n_tap"], "welltap": wt["status"]})
+
+    if wt["status"] != "WELLTAP_GAP":
+        # PRESENT (taps inserted → not stale) or NA (no std cells → not a placed block)
+        out["verdict"] = "OK"
+        out["reason"] = ("routed DEF is tap-bearing — not a stale pre-tapcell artifact"
+                         if wt["status"] == "WELLTAP_PRESENT"
+                         else "no placed std cells — not a placed block (vintage N/A)")
+        return out
+
+    if n_std <= std_cell_min:
+        out["verdict"] = "OK"
+        out["reason"] = (f"only {n_std} std cell(s) (<= {std_cell_min}) — legit small / "
+                         "floorplan-class block; 0 taps not yet a regression signal")
+        return out
+
+    # routed DEF: many std cells, 0 valid taps. Scan the lineage for an OLDER 0-tap sibling.
+    sibs = sibling_defs if sibling_defs is not None else _sibling_defs_for(routed_def)
+    routed_rank = _stage_score(rp.name)
+    older_zero_tap: List[str] = []
+    for sf in sibs:
+        sp = Path(sf)
+        if sp.resolve() == rp.resolve() or not sp.is_file():
+            continue
+        if _stage_score(sp.name) > routed_rank:
+            continue   # only OLDER-or-equal stages count as the prior-vintage lineage
+        scomps = _p._parse_def_components(sp)
+        if _p._welltap_presence_check(scomps)["n_tap"] == 0:
+            older_zero_tap.append(sp.name)
+
+    if older_zero_tap:
+        out["verdict"] = "STALE_PRE_TAPCELL"
+        out["warn"] = True
+        out["older_zero_tap_siblings"] = sorted(older_zero_tap)
+        out["reason"] = (
+            f"{n_std} std cells, 0 taps, AND {len(older_zero_tap)} older/sibling DEF(s) "
+            f"also 0-tap ({', '.join(sorted(older_zero_tap)[:4])}) — the tapcell step never "
+            "ran anywhere in this lineage = STALE pre-tapcell-fix artifact. Regenerate "
+            "through the current runner before citing its PERC number as a current-quality "
+            "signal; this is NOT proof of a live current-runner bug.")
+        return out
+
+    out["verdict"] = "SUSPECT_LIVE"
+    out["warn"] = True
+    out["reason"] = (
+        f"{n_std} std cells, 0 taps, but NO older 0-tap sibling found in the lineage — cannot "
+        "prove stale-vs-regression structurally. Treat as a POSSIBLE live regression and "
+        "re-run a FRESH same-version control to triage (stale-artifact lesson).")
+    return out
+
+
+def _sibling_defs_for(routed_def: str) -> List[str]:
+    """All other DEFs in the same directory as the routed DEF — the design's pipeline-stage
+    lineage (floorplan/placed/cts/hold/routed/chip_top). Chip-agnostic: just same-dir DEFs."""
+    rp = Path(routed_def)
+    return [str(f) for f in sorted(rp.parent.glob("*.def")) if f.resolve() != rp.resolve()]
+
+
+def sweep_one(def_path: str, name: Optional[str] = None,
+              vintage: bool = True) -> Dict[str, Any]:
+    """Run the full PERC structural chain on ONE routed DEF. Pure; no container.
+
+    When `vintage` is True (default) it also runs the artifact-vintage guard
+    (suggested_fix #4) over the DEF's same-dir lineage and attaches the verdict, so a
+    corpus PERC number is auto-flagged as stale-pre-tapcell vs a possible live regression."""
     p = Path(def_path)
     out: Dict[str, Any] = {"name": name or p.stem, "def": str(def_path)}
     if not p.is_file():
@@ -80,10 +214,15 @@ def sweep_one(def_path: str, name: Optional[str] = None) -> Dict[str, Any]:
                       "n_power_domains": len(xd["power_domains"]),
                       "n_ground_domains": len(xd["ground_domains"]),
                       "n_crossing": xd["n_crossing"], "source": xd["domain_source"]}
+    if vintage:
+        vg = artifact_vintage_guard(str(p))
+        out["vintage"] = {"verdict": vg["verdict"], "warn": vg["warn"],
+                          "reason": vg.get("reason", ""),
+                          "older_zero_tap_siblings": vg.get("older_zero_tap_siblings", [])}
     return out
 
 
-def sweep_dirs(dirs: List[str]) -> List[Dict[str, Any]]:
+def sweep_dirs(dirs: List[str], vintage: bool = True) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for d in dirs:
         name = os.path.basename(d.rstrip("/"))
@@ -91,7 +230,7 @@ def sweep_dirs(dirs: List[str]) -> List[Dict[str, Any]]:
         if dp is None:
             rows.append({"name": name, "def": None, "error": "no routed DEF"})
             continue
-        rows.append(sweep_one(dp, name=name))
+        rows.append(sweep_one(dp, name=name, vintage=vintage))
     return rows
 
 
@@ -110,14 +249,25 @@ def summarize(rows: List[Dict[str, Any]]) -> str:
     na = sum(1 for r in swept if r.get("esd_presence", {}).get("status") == "N/A")
     xna = sum(1 for r in swept if r.get("xdomain", {}).get("status") == "N/A")
     xinc = sum(1 for r in swept if r.get("xdomain", {}).get("status") == "INCOMPLETE")
+    v_stale = sum(1 for r in swept
+                  if r.get("vintage", {}).get("verdict") == "STALE_PRE_TAPCELL")
+    v_susp = sum(1 for r in swept
+                 if r.get("vintage", {}).get("verdict") == "SUSPECT_LIVE")
     lines += [
         "", "=== systemic ===",
         f"  swept: {len(swept)}   no-DEF (excluded): {len(no_def)}",
         f"  welltap WELLTAP_GAP (0-tap latch-up exposure): {gap}/{len(swept)}",
         f"  ESD N/A (core macro, no pad ring): {na}/{len(swept)}",
         f"  xdomain N/A (single supply): {xna}/{len(swept)}   INCOMPLETE: {xinc}/{len(swept)}",
+        f"  vintage STALE_PRE_TAPCELL (whole-lineage 0-tap, regenerate before citing): "
+        f"{v_stale}/{len(swept)}",
+        f"  vintage SUSPECT_LIVE (0-tap routed, no 0-tap sibling — needs fresh control): "
+        f"{v_susp}/{len(swept)}",
         "  NOTE: a corpus-wide GAP is NOT a current-runner bug until checked vs a FRESH",
         "        same-version control (stale-artifact lesson, RESULT_PERC_CORPUS_v0211.md).",
+        "  NOTE: vintage=STALE_PRE_TAPCELL is the structural proof the lineage predates the",
+        "        tapcell-insertion fix; vintage=SUSPECT_LIVE means triage as a possible",
+        "        regression (re-run a fresh control) rather than assume stale.",
     ]
     return "\n".join(lines)
 
@@ -128,12 +278,21 @@ def main(argv=None) -> int:
     ap.add_argument("--def", dest="def_path", help="a single explicit routed DEF")
     ap.add_argument("--name", help="name for the single --def design")
     ap.add_argument("--json", action="store_true", help="emit a JSON array only (no summary)")
+    ap.add_argument("--no-vintage", action="store_true",
+                    help="skip the artifact-vintage (stale-pre-tapcell) guard")
+    ap.add_argument("--vintage", dest="vintage_def",
+                    help="run ONLY the artifact-vintage guard on one routed DEF + print JSON")
     args = ap.parse_args(argv)
 
+    if args.vintage_def:
+        print(json.dumps(artifact_vintage_guard(args.vintage_def), indent=2))
+        return 0
+
+    do_vintage = not args.no_vintage
     if args.def_path:
-        rows = [sweep_one(args.def_path, name=args.name)]
+        rows = [sweep_one(args.def_path, name=args.name, vintage=do_vintage)]
     elif args.dirs:
-        rows = sweep_dirs(args.dirs)
+        rows = sweep_dirs(args.dirs, vintage=do_vintage)
     else:
         ap.error("give one or more design dirs, or --def <routed.def>")
         return 2

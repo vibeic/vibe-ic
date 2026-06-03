@@ -56,6 +56,12 @@ import {
   assertSafePath, assertSafePaths,
   optPath, optIdent, optToken, optNoShellMeta, guardError,
 } from "./lib/shell_safety.mjs";
+// Netgen LVS verdict parser + device-level driver builder (real verdict parse,
+// DID-NOT-RUN guard, std-cell-lib load, `_flat` auto-name-align). Closes
+// ORGANIC-20260531-eda-lvs-netgen-false-positive-and-no-stdcell-lib.
+import {
+  classifyNetgenVerdict, stdcellSpicePath, buildNetgenLvsTcl, resolveLayoutTop,
+} from "./lib/netgen_verdict.mjs";
 
 function _shellSingleQuotedHeredoc(content, sentinel) {
   // Run `<content>` through a `cat << 'SENTINEL' > target` block. The
@@ -456,6 +462,35 @@ function celllefPath(cfg) {
 function cellgdsPath(cfg) {
   if (cfg.custom_cellgds) return cfg.custom_cellgds;
   return `${cfg.pdk_path}/libs.ref/${cfg.scl}/gds/${cfg.scl}.gds`;
+}
+
+// ─── Magic env + foundry-rcfile resolution (ORGANIC-20260531 fix) ────────
+// The system .magicrc reads `$env(PDK)` AT STARTUP — before any -rcfile
+// script runs — so launching magic without `export PDK=...` aborts with
+// `Error parsing user ".magicrc": can't read "env(PDK)": no such variable`,
+// the tech is never loaded ("Using technology minimum"), and the inline
+// script is never read. Setting `set env(PDK)` INSIDE the script is too late.
+// PROVEN FIX (in-container): `export PDK=<key> PDK_ROOT=... ;
+// magic -dnull -noconsole -rcfile <pdk>.magicrc <script>`.
+//
+// Returns { pdkKey, magicrc } for a gf180/sky130 pdk, or null for custom /
+// unknown (caller should pass custom_magicrc explicitly). PDK key is the
+// foundry directory name the magicrc/tech expect in $env(PDK) (sky130A /
+// gf180mcuD), NOT the short "sky130"/"gf180" tool selector.
+function magicPdkEnv(pdk) {
+  if (pdk === "sky130") {
+    return {
+      pdkKey: "sky130A",
+      magicrc: `${PDK_ROOT}/sky130A/libs.tech/magic/sky130A.magicrc`,
+    };
+  }
+  if (pdk === "gf180") {
+    return {
+      pdkKey: "gf180mcuD",
+      magicrc: `${PDK_ROOT}/gf180mcuD/libs.tech/magic/gf180mcuD.magicrc`,
+    };
+  }
+  return null;
 }
 
 // ─── Tie-cell discovery + hilomap clause (ORGANIC-20260531) ──────────────
@@ -1518,7 +1553,7 @@ EOF`;
 // ─── Tool: eda_lvs ───
 server.tool(
   "eda_lvs",
-  "Run LVS. Two modes: (a) `netgen` compares extracted layout SPICE netlist against schematic SPICE — needs foundry netgen setup tcl, currently gf180/sky130 only; (b) `yosys_equiv` (since v0.1.12) compares two structural Verilog netlists (e.g. synth.v vs post-PnR routed.v) using Yosys equiv_simple+equiv_induct — works on ANY PDK, ideal for custom-PDK structural LVS where Magic+Netgen tech files aren't available. since v0.1.12 (#94): when equiv_induct's SAT engine aborts on custom-PDK Liberty primitives lacking a built-in SAT model (e.g. INVD1/NANDxDy/NORxDy), the tool now returns a STRUCTURED verdict with sat_model_unsupported_cells[] + verdict_explanation instead of the ambiguous equiv_cells_unproven=-1 sentinel. Distinguishes 'tool limitation on custom-PDK primitives' from 'netlists genuinely differ'. since v0.1.14 (spm pilot plugin v0.1.49): netgen mode accepts an optional `setup_supplement` TCL path — emitted by `programs/lvs_netgen_setup_emit.py` — that is concatenated AFTER the foundry setup to globalise power nets (vccd1/vssd1/VPWR/VGND etc.) and optionally flatten top circuits. Closes the open-source SkyWater net-level gap when the design's mismatch is dominated by power-net globalisation (vs interconnect-naming, which is a separate open-source limitation).",
+  "Run LVS. Two modes: (a) `netgen` compares extracted layout SPICE netlist against schematic SPICE — needs foundry netgen setup tcl, currently gf180/sky130 only; (b) `yosys_equiv` (since v0.1.12) compares two structural Verilog netlists (e.g. synth.v vs post-PnR routed.v) using Yosys equiv_simple+equiv_induct — works on ANY PDK, ideal for custom-PDK structural LVS where Magic+Netgen tech files aren't available. since v0.1.12 (#94): when equiv_induct's SAT engine aborts on custom-PDK Liberty primitives lacking a built-in SAT model (e.g. INVD1/NANDxDy/NORxDy), the tool now returns a STRUCTURED verdict with sat_model_unsupported_cells[] + verdict_explanation instead of the ambiguous equiv_cells_unproven=-1 sentinel. Distinguishes 'tool limitation on custom-PDK primitives' from 'netlists genuinely differ'. since v0.1.14 (spm pilot plugin v0.1.49): netgen mode accepts an optional `setup_supplement` TCL path — emitted by `programs/lvs_netgen_setup_emit.py` — that is concatenated AFTER the foundry setup to globalise power nets (vccd1/vssd1/VPWR/VGND etc.) and optionally flatten top circuits. Closes the open-source SkyWater net-level gap when the design's mismatch is dominated by power-net globalisation (vs interconnect-naming, which is a separate open-source limitation). since v0.2.33 (ORGANIC-20260531): netgen mode now derives its verdict from a REAL netgen-phrase parse ('Circuits/Netlists match uniquely' for PASS, 'do not match'/'failed pin matching'/'property errors were found' for FAIL) with a DID-NOT-RUN guard ('Cannot find cell' / no report written ⇒ matched:null, NEVER a pass) — replacing a naive `/match/i` boolean that scored property-error mismatches and aborted runs as PASS. Also auto-name-aligns a Magic `<top>_flat` layout subckt, and (load_stdcell_lib=true) loads the PDK std-cell SPICE library into the schematic circuit so a post-PnR GATE netlist expands to transistors for a true device-level compare.",
   {
     mode: z.enum(["netgen", "yosys_equiv"]).default("netgen"),
     layout_netlist: z.string().describe("Layout netlist. mode=netgen: SPICE; mode=yosys_equiv: Verilog (e.g. routed .v)"),
@@ -1527,14 +1562,19 @@ server.tool(
     pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
     custom_lib: z.string().optional().describe("Liberty .lib path for cell semantics (yosys_equiv mode)"),
     setup_supplement: z.string().optional().describe("Optional path to a supplementary Netgen TCL (e.g. from programs/lvs_netgen_setup_emit.py). Concatenated AFTER the foundry setup. netgen mode only; ignored on yosys_equiv."),
+    load_stdcell_lib: z.boolean().default(false).describe("netgen mode: load the PDK std-cell SPICE library (e.g. sky130_fd_sc_hd.spice) INTO the schematic circuit before lvs, so a post-PnR GATE netlist's empty cell placeholders expand to transistors for a true device-level compare. Default false (the schematic side is already transistor-level)."),
+    custom_stdcell_spice: z.string().optional().describe("netgen mode: explicit std-cell SPICE library path to load into the schematic circuit (overrides the PDK default for load_stdcell_lib). Use for custom PDKs."),
+    schematic_top: z.string().optional().describe("netgen mode: schematic-side top subckt name, if it differs from top_module (the layout-side name). Default: same as top_module."),
   },
-  async ({ mode, layout_netlist, schematic_netlist, top_module, pdk, custom_lib, setup_supplement }) => {
+  async ({ mode, layout_netlist, schematic_netlist, top_module, pdk, custom_lib, setup_supplement, load_stdcell_lib, custom_stdcell_spice, schematic_top }) => {
     try {
       assertSafePath(layout_netlist, "layout_netlist");
       assertSafePath(schematic_netlist, "schematic_netlist");
       assertSafeIdent(top_module, "top_module");
       optPath(custom_lib, "custom_lib");
       optPath(setup_supplement, "setup_supplement");
+      optPath(custom_stdcell_spice, "custom_stdcell_spice");
+      optIdent(schematic_top, "schematic_top");
     } catch (e) { return guardError(e); }
     if (mode === "yosys_equiv") {
       const t0 = Date.now();
@@ -1778,9 +1818,11 @@ equiv_status
       });
     }
 
-    // Legacy netgen mode (gf180/sky130 only)
+    // Netgen mode (gf180/sky130 only). t0 is scoped here because the
+    // yosys_equiv branch declared its own t0 inside its own block.
+    const t0 = Date.now();
     if (pdk === "custom") {
-      return wrapResult({ success: false, t0: Date.now(), error: "netgen mode needs gf180/sky130 setup tcl. Use mode=yosys_equiv for custom PDK.", output: "" });
+      return wrapResult({ success: false, t0, error: "netgen mode needs gf180/sky130 setup tcl. Use mode=yosys_equiv for custom PDK.", output: "" });
     }
     const cfg = pdkConfig(pdk);
     const foundrySetup = pdk === "gf180"
@@ -1809,20 +1851,96 @@ equiv_status
       setupFile = combinedPath;
     }
 
-    const lvsCmd = `export PATH=${TOOLS}/netgen/bin:${TOOLS}/bin:$PATH && netgen -batch lvs "${layout_netlist} ${top_module}" "${schematic_netlist} ${top_module}" ${setupFile} /tmp/lvs_report.txt 2>&1 && cat /tmp/lvs_report.txt 2>/dev/null | tail -30`;
+    // ── Auto-name-align (ORGANIC-20260531 fix #2) ──────────────────────
+    // Magic ext2spice appends `_flat` to the top subckt when the layout was
+    // flattened (`flatten <top>` → `.subckt <top>_flat ...`). If the caller
+    // passes `<top>` but only `<top>_flat` exists, netgen aborts with
+    // "Cannot find cell <top>" and NEVER COMPARES. Detect the actual layout
+    // top name up-front so we feed netgen the name that exists.
+    const layCat = dockerExec(`cat ${layout_netlist} 2>/dev/null | grep -i '\\.subckt' | head -40`, 10000);
+    const layoutTopInfo = resolveLayoutTop(layCat.output || "", top_module);
+    const layoutTop = layoutTopInfo.name;
+    const schTop = schematic_top || top_module;
+
+    // ── std-cell-lib load (ORGANIC-20260531 fix #3) ────────────────────
+    // A post-PnR Verilog/SPICE GATE netlist on the schematic side keeps each
+    // cell as an empty placeholder. Device-level netgen LVS needs BOTH sides
+    // at transistor granularity, so load the PDK std-cell SPICE library INTO
+    // the schematic circuit before `lvs` (mirrors the pilot's hand-driven
+    // `readnet spice <stdcell> <schCkt>`).
+    const stdcellSpice = load_stdcell_lib
+      ? (custom_stdcell_spice || stdcellSpicePath(pdk, PDK_ROOT))
+      : null;
+    let stdcellLoadError = null;
+    if (load_stdcell_lib && !stdcellSpice) {
+      stdcellLoadError = "load_stdcell_lib=true but no std-cell SPICE library is known for this PDK; pass custom_stdcell_spice.";
+    } else if (stdcellSpice) {
+      const present = dockerExec(`[ -f ${stdcellSpice} ] && echo OK || echo MISSING`, 5000);
+      if (!(present.output || "").includes("OK")) {
+        stdcellLoadError = `std-cell SPICE library not found in container: ${stdcellSpice}`;
+      }
+    }
+    if (stdcellLoadError) {
+      return wrapResult({
+        success: false, t0,
+        toolVersion: `netgen @ mcp-eda-server@${SERVER_VERSION}`,
+        error: stdcellLoadError, output: "", mode: "netgen",
+        matched: null, parse_error: true,
+      });
+    }
+
+    // Drive netgen via a `source` TCL so we can pre-read the schematic netlist
+    // and load the std-cell lib into it. The foundry setup is consumed as the
+    // 3rd arg of `lvs` (NOT sourced at top level — it runs `cells list` which
+    // needs circuits to exist first). When no std-cell load is requested the
+    // TCL is the plain file-spec `lvs` form (identical to the legacy command).
+    const reportPath = `/tmp/lvs_report_${Date.now()}.txt`;
+    const lvsTcl = buildNetgenLvsTcl({
+      layoutNetlist: layout_netlist,
+      schematicNetlist: schematic_netlist,
+      layoutTop,
+      schematicTop: schTop,
+      setupFile,
+      reportPath,
+      stdcellSpice,
+    });
+    const tclPath = `/tmp/lvs_drive_${Date.now()}.tcl`;
+    const b64 = Buffer.from(lvsTcl, "utf-8").toString("base64");
+    const writeTcl = dockerExec(`echo '${b64}' | base64 -d > ${tclPath}`, 15000);
+    if (!writeTcl.success) {
+      return wrapResult({
+        success: false, t0,
+        toolVersion: `netgen @ mcp-eda-server@${SERVER_VERSION}`,
+        error: `failed to write netgen driver TCL: ${writeTcl.error}`,
+        output: writeTcl.output, mode: "netgen", matched: null, parse_error: true,
+      });
+    }
+    const lvsCmd = `export PATH=${TOOLS}/netgen/bin:${TOOLS}/bin:$PATH && netgen -batch source ${tclPath} 2>&1; echo "===REPORT==="; cat ${reportPath} 2>/dev/null | tail -60`;
     const t0lvs = Date.now();
     const result = dockerExec(lvsCmd, 300000);
     const durationLvsMs = Date.now() - t0lvs;
 
-    const match = result.output.match(/uniquely/i) || result.output.match(/match/i);
-    const fail = result.output.match(/mismatch|NOT match|FAIL/i);
+    // ── real verdict parse + DID-NOT-RUN guard (ORGANIC-20260531 fix #1) ─
+    // Whether the report file was actually written: a netgen run that aborts
+    // on "Cannot find cell" / unreadable netlist writes none. We probe it so
+    // the parser can treat a no-report + no-Final-result run as did-not-run.
+    const reportProbe = dockerExec(`[ -f ${reportPath} ] && echo REPORT_WRITTEN || echo NO_REPORT`, 5000);
+    const reportWritten = (reportProbe.output || "").includes("REPORT_WRITTEN");
+    const verdict = classifyNetgenVerdict(result.output || "", { reportWritten });
 
-    if (result.success && !fail) {
+    // success / matched come ONLY from the parsed verdict — NEVER from a bare
+    // `/match/i` token, and NEVER true when netgen did not run (matched=null).
+    const matched = verdict.matched;          // true | false | null
+    const passed = matched === true;
+
+    if (passed) {
       writeManifest("/tmp", {
         step: "lvs",
         status: "PASS",
         tool: "Netgen",
-        matched: match != null && !fail,
+        matched: true,
+        layout_top: layoutTop,
+        stdcell_lib_loaded: !!stdcellSpice,
       });
     }
 
@@ -1833,13 +1951,14 @@ equiv_status
       projectDir: projLvs,
       tool: "netgen",
       version: `netgen (mcp-eda-server) pdk=${pdk}`,
-      argv: ["netgen", "-batch", "lvs", layout_netlist, schematic_netlist],
+      argv: ["netgen", "-batch", "source", tclPath,
+             `# lvs "${layout_netlist} ${layoutTop}" "${schematic_netlist} ${schTop}"`],
       inputs: {
         [layout_netlist]: sha256File(layout_netlist.replace("/work/", projLvs + "/")),
         [schematic_netlist]: sha256File(schematic_netlist.replace("/work/", projLvs + "/")),
       },
       outputs: {},
-      exitCode: (result.success && !fail) ? 0 : 1,
+      exitCode: passed ? 0 : 1,
       durationMs: durationLvsMs,
       stdoutTail: result.output || "",
       stderrTail: result.error || "",
@@ -1849,9 +1968,21 @@ equiv_status
       content: [{
         type: "text",
         text: JSON.stringify({
-          success: result.success && !fail,
-          matched: match != null && !fail,
-          output: result.output.slice(-3000),
+          // success is PASS only on a parsed clean match. A FAIL, a
+          // did-not-run, or an unparseable run is success:false.
+          success: passed,
+          mode: "netgen",
+          matched,                          // true | false | null (never bare-token true)
+          verdict: verdict.verdict,         // MATCH | FAIL | DID_NOT_RUN | PARSE_ERROR
+          parse_error: verdict.parse_error,
+          did_not_run: verdict.did_not_run,
+          property_errors: verdict.property_errors,
+          verdict_explanation: verdict.reason,
+          layout_top: layoutTop,            // the name actually fed to netgen
+          name_aligned: layoutTopInfo.aligned,  // true if `_flat` fallback used
+          stdcell_lib_loaded: !!stdcellSpice,
+          stdcell_lib_path: stdcellSpice || undefined,
+          output: (result.output || "").slice(-3000),
         }),
       }],
     };
@@ -3984,7 +4115,7 @@ exit
 // ─── Tool: eda_extraction ───
 server.tool(
   "eda_extraction",
-  "Extract parasitics from layout using Magic. Produces SPEF or SPICE extracted netlist.",
+  "Extract parasitics from layout using Magic. Produces SPEF or SPICE extracted netlist. since v0.2.33 (ORGANIC-20260531): set `promote_ports`=true (a.k.a. port_makeall) to inject `port makeall` into the extraction TCL so the emitted `.subckt <top>_flat` carries TOP-LEVEL PORTS — required for device-level netgen LVS to anchor top-level pin matching (a portless .subckt makes any LVS 'match' vacuous). NOTE: `port makeall` only promotes pin labels that sit on a PDK pin/port-purpose layer (sky130 MET3PIN 70/16); if the GDS pin text is on a drawing layer (the common GDS-writer default) rather than the pin-purpose layer, promotion finds nothing and the .subckt stays portless — re-emit the labels on the port-purpose layer first, or DEF-seed via programs/lvs_def_port_seed.py.",
   {
     def_file: z.string().optional().describe("Input DEF file path (provide either def_file or gds_file)"),
     gds_file: z.string().optional().describe("Input GDS file path (provide either def_file or gds_file)"),
@@ -3992,6 +4123,7 @@ server.tool(
     pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
     output_format: z.enum(["spef", "spice"]).default("spef").describe("Output format: spef or spice"),
     output_dir: z.string().default("./extracted").describe("Output directory. v0.123: default changed from /tmp/extraction so artifacts land in the project tree."),
+    promote_ports: z.boolean().default(false).describe("Inject `port makeall` into the extraction TCL so the emitted `.subckt <top>_flat` carries top-level ports (needed for device-level netgen LVS top-level pin matching). Only useful for output_format=spice. Default false (preserves the legacy portless extraction)."),
     custom_lib: z.string().optional().describe("Path to Liberty .lib file (custom PDK)"),
     custom_techlef: z.string().optional().describe("Path to tech LEF file (custom PDK)"),
     custom_celllef: z.string().optional().describe("Path to cell LEF file (custom PDK)"),
@@ -4001,7 +4133,7 @@ server.tool(
     custom_vss: z.string().optional().describe("VSS pin name (custom PDK)"),
     custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for KeyFoundry MET1-6). Default 'met'."),
   },
-  async ({ def_file, gds_file, top_cell, pdk, output_format, output_dir, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
+  async ({ def_file, gds_file, top_cell, pdk, output_format, output_dir, promote_ports, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
     try {
       optPath(def_file, "def_file"); optPath(gds_file, "gds_file");
       assertSafeIdent(top_cell, "top_cell"); optPath(output_dir, "output_dir");
@@ -4036,13 +4168,22 @@ server.tool(
       ? `ext2spef`
       : `ext2spice lvs\next2spice`;
 
+    // ORGANIC-20260531 fix #2: promote_ports injects `port makeall` so the
+    // emitted `.subckt <top>_flat` carries TOP-LEVEL PORTS. Without it the
+    // extracted top subckt is portless and device-level netgen LVS has no
+    // anchor for top-level pin matching (any 'match' on it is vacuous). It
+    // sits AFTER `select top cell` and BEFORE `extract all`, matching the
+    // reference programs/magic_port_extract_emit.py ordering.
+    const promoteClause = (promote_ports && output_format === "spice")
+      ? "port makeall\n" : "";
+
     const magicScript = `
 ${readCmd}
 load ${top_cell}
 flatten ${top_cell}_flat
 load ${top_cell}_flat
 select top cell
-extract all
+${promoteClause}extract all
 ${extractCmd}
 puts "=== EXTRACTION_COMPLETE ==="
 quit
@@ -4310,20 +4451,24 @@ server.tool(
 // ─── Tool: eda_run_tcl (v2.5.0) ───
 server.tool(
   "eda_run_tcl",
-  "Escape hatch — run an arbitrary TCL/script in a backend (openroad / yosys / klayout-python / netgen). Use when stock eda_pnr / eda_synth / eda_drc_klayout don't expose the option you need. The agent supplies the full script content; the server pipes it to the backend in the IIC-OSIC-TOOLS container.",
+  "Escape hatch — run an arbitrary TCL/script in a backend (openroad / yosys / klayout-python / netgen / magic / ngspice). Use when stock eda_pnr / eda_synth / eda_drc_klayout don't expose the option you need. The agent supplies the full script content; the server pipes it to the backend in the IIC-OSIC-TOOLS container. since v0.2.33 (ORGANIC-20260531): engine=magic now EXPORTS PDK + PDK_ROOT in the child env AND passes the foundry `<pdk>.magicrc` via -rcfile when `pdk` is gf180/sky130 (or `custom_magicrc` is given) — fixing the `env(PDK)` startup-abort that left magic on 'technology minimum' and silently skipped the inline script.",
   {
     engine: z.enum(["openroad", "yosys", "klayout_python", "klayout_drc", "netgen", "magic", "ngspice"]).describe("Backend to invoke"),
     script: z.string().describe("Inline script content (e.g. OpenROAD TCL). EITHER `script` OR `script_file` is required."),
     script_file: z.string().optional().describe("Path to script file (alternative to inline script)"),
     extra_args: z.array(z.string()).default([]).describe("Extra CLI args appended after the script"),
     timeout_sec: z.number().default(900).describe("Timeout in seconds (default 15 min)"),
+    pdk: z.enum(["gf180", "sky130", "custom"]).optional().describe("engine=magic: which PDK to export (PDK/PDK_ROOT) and whose foundry .magicrc to load via -rcfile. REQUIRED for magic GDS/extraction scripts — without it magic aborts on env(PDK) and never reads the script. Ignored by other engines."),
+    custom_magicrc: z.string().optional().describe("engine=magic, pdk=custom: explicit path to the foundry .magicrc to pass via -rcfile."),
+    pdk_root: z.string().optional().describe("engine=magic: PDK_ROOT to export (default /foss/pdks)."),
   },
-  async ({ engine, script, script_file, extra_args, timeout_sec }) => {
+  async ({ engine, script, script_file, extra_args, timeout_sec, pdk, custom_magicrc, pdk_root }) => {
     try {
       // script_file is interpolated into the engine command unquoted;
       // guard it. (Inline `script` is base64-transported and extra_args
       // are POSIX single-quote-escaped, both already shell-safe.)
       try { optPath(script_file, "script_file"); } catch (e) { return guardError(e); }
+      optPath(custom_magicrc, "custom_magicrc"); optPath(pdk_root, "pdk_root");
     } catch (e) { return guardError(e); }
     const t0 = Date.now();
     let scriptArg, runCmd;
@@ -4369,9 +4514,28 @@ server.tool(
       case "netgen":
         runCmd = `${PATH_PREFIX} && netgen -batch source ${scriptArg} ${extras} 2>&1`;
         break;
-      case "magic":
-        runCmd = `${PATH_PREFIX} && magic -dnull -noconsole ${extras} ${scriptArg} 2>&1`;
+      case "magic": {
+        // ORGANIC-20260531 fix: the system .magicrc reads $env(PDK) at
+        // STARTUP, before any -rcfile runs. Export PDK + PDK_ROOT in the
+        // child env AND pass the foundry <pdk>.magicrc via -rcfile so the
+        // tech loads (else magic aborts on env(PDK), stays on "technology
+        // minimum", and silently never reads the inline script).
+        const root = pdk_root || PDK_ROOT;
+        let env = "";
+        let rcfileArg = "";
+        const m = pdk ? magicPdkEnv(pdk) : null;
+        if (m) {
+          env = `export PDK=${m.pdkKey} && export PDK_ROOT=${root} && `;
+          rcfileArg = `-rcfile ${m.magicrc} `;
+        } else if (pdk === "custom" && custom_magicrc) {
+          // For a custom PDK, the magicrc itself decides the tech; still
+          // export PDK_ROOT (and PDK best-effort from the rcfile dir name).
+          env = `export PDK_ROOT=${root} && `;
+          rcfileArg = `-rcfile ${custom_magicrc} `;
+        }
+        runCmd = `${PATH_PREFIX} && ${env}magic -dnull -noconsole ${rcfileArg}${extras} ${scriptArg} 2>&1`;
         break;
+      }
       case "ngspice":
         runCmd = `${PATH_PREFIX} && ngspice -b ${scriptArg} ${extras} 2>&1`;
         break;

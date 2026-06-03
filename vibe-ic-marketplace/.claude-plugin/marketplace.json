@@ -9,7 +9,7 @@
       "name": "vibe-ic",
       "source": "./plugins/vibe-ic",
       "description": "AI-Native IC Design plugin for Claude Code. Two-entry-point flow (prompt-dialogue OR existing docs) \u2192 L1-L13 JSON \u2192 RTL \u2192 FPGA SOF + ASIC GDS. Strict canonical-flow compliance gate (54 entities = 40 main + A1-A9 + M1-M4 + P0). Anti-fabrication doctrine enforced as deterministic gates: provenance audit-chain, reports taxonomy, step-FAIL bubble-up, real-file/symlink for canonical artefacts, final-report SHA256 attestation. Plugin-source self-audit: 6 gates wired in tools/ci/run_plugin_self_audit.sh.",
-      "version": "0.2.32",
+      "version": "0.2.33",
       "homepage": "https://vibeic.ai",
       "license": "Apache-2.0",
       "category": "ic-design",

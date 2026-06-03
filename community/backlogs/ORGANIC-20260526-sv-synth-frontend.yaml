@@ -46,25 +46,54 @@ session_context: >-
   and iverilog likewise rejected the same line, forcing a synth/ref-TB FAIL
   that was a frontend gap, not a design defect.
 
-status: partially-fixed
-residual: >-
-  PARTIAL as of vibe-ic 0.2.29. The Phase-3 synth step IS fixed:
-  programs/phase3_one_shot_runner.py has Fix #5 — _decide_synth_frontend()
-  (lines ~1279-1305) detects an SV error signature or .sv inputs after the
-  default read_verilog -sv attempt and falls through to `yosys -m slang` /
-  read_slang (lines ~1442-1468, preserves hierarchy) and then to an sv2v
-  pre-pass emitting Verilog-2005 (lines ~1470-1499), recording the chosen
-  frontend in extras['synth_frontend']. Tested in
-  programs/tests/test_phase3_backend_fixes.py::TestSynthFrontendSelection.
-  HOWEVER the backlog names THREE steps, and the other two are still on the
-  built-in frontends with NO slang/sv2v/verilator fallback: (a) the Phase-2
-  yosys-synth step in programs/phase2_one_shot_runner.py (line ~1862) still
-  builds cmds=[f"read_verilog -sv -DSIMULATION {f}" ...] only — grep for
-  slang|sv2v|verilator in that file returns 0; (b) the iverilog reference-TB /
-  simulation step (programs/phase2_one_shot_runner.py, the "3. iverilog
-  reference TB" block ~line 1145) compiles with `iverilog -g2012`, the exact
-  frontend the session reported rejecting the package named-field struct
-  literal, with no SV-2017 fallback. To fully close: lift _decide_synth_frontend
-  (or an equivalent slang/sv2v fall-through) into the Phase-2 synth step and
-  add a verilator/slang-elaborated path to the reference-TB step, recording the
-  frontend in those steps' extras as the Phase-3 step already does.
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "0.2.33"
+resolution: >-
+  CLOSED. The SV-frontend decision rule is now SHARED across all three
+  named steps via a new sibling module programs/synth_frontend.py
+  (SLANG_ERROR_SIGNATURES + IVERILOG_SV_ERROR_SIGNATURES +
+  decide_synth_frontend() + decide_iverilog_sv_fallback()). No divergent
+  copy — Phase-3 step_synth now DELEGATES to it: phase3_one_shot_runner.py
+  re-exports `_decide_synth_frontend = _sf.decide_synth_frontend` and
+  `_SLANG_ERROR_SIGNATURES = _sf.SLANG_ERROR_SIGNATURES`, so its byte-for-
+  byte behaviour and the legacy
+  test_phase3_backend_fixes.py::TestSynthFrontendSelection are preserved.
+
+  (a) Phase-2 yosys-synth step (phase2_one_shot_runner.step_yosys_synth):
+  after the default `read_verilog -sv` attempt, calls
+  _sf.decide_synth_frontend(); on a positive decision runs the new
+  _phase2_sv_synth_fallback() which invokes, in the iic-osic-tools
+  container (where the SV frontends live — NOT on the host),
+  `yosys -m slang` / read_slang (PREFERRED, preserves hierarchy) then an
+  sv2v pre-pass emitting Verilog-2005, recording extras['synth_frontend']
+  = read_verilog_v2005 | yosys_slang | sv2v_verilog2005. Container path
+  translation + ephemeral /tmp staging (docker cp in/out) added so the
+  fallback works whether or not the project sits under a bind-mount.
+
+  (b) Phase-2 iverilog reference-TB step — BOTH compile sites
+  (step_reference_tb AID-protocol path + _reference_tb_generic_full_stack)
+  now route through the new _iverilog_compile_with_sv_fallback(): on an
+  iverilog SV-construct failure it runs an sv2v pre-pass in the container
+  (sv2v -> one Verilog-2005 file), swaps the .sv RTL for the converted .v,
+  and re-compiles, recording extras['tb_frontend'] = iverilog_g2012 |
+  iverilog_sv2v. `container` is threaded through step_reference_tb +
+  _reference_tb_generic_full_stack (default 'iic-eda') and all 3 caller
+  sites pass args.container.
+
+  HONESTY PRESERVED: a genuine RTL defect with NO SV signature / NO .sv
+  input does NOT trigger any fallback (decide_*_fallback returns False) —
+  the real failure is reported unchanged. End-to-end verified against the
+  live iic-eda container with a package-scoped struct-typed parameter +
+  named-field struct literal that BOTH default frontends genuinely reject
+  (read_verilog -sv: "syntax error, unexpected OP_CAST"; iverilog -g2012:
+  "syntax error") and that read_slang (8 cells) / sv2v handle.
+
+  Tests: programs/tests/test_synth_frontend_shared.py (22 tests: shared
+  decision + iverilog decision + runner-share invariants + chip-AGNOSTIC
+  signature hygiene + 3 docker-gated REAL container end-to-end tests
+  exercising _phase2_sv_synth_fallback, _iverilog_compile_with_sv_fallback,
+  and the real-defect-not-recovered honesty gate). Legacy phase3
+  TestSynthFrontendSelection still green. INDEX.md regenerated for the new
+  program. General (extension + tool-error-signature only), no chip/vendor
+  literal, no-cheating, no-fabrication.

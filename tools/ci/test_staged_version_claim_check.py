@@ -344,3 +344,52 @@ def test_versioned_arch_doc_path_skipped(tmp_path):
         "docs/architecture/ALL_STEPS_v2.2.0.md",
         "# Vibe-IC — ALL Steps: Phase → Stage → Step (v2.2.0)"))
     assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+# ────────────────────────────────────────────────────────────────
+# Dependency-tool-version carve-out (ORGANIC-20260603 follow-up):
+# a third-party tool / PDK / runtime version (netgen 1.5.316, yosys 0.40.0,
+# sky130 1.0.0, …) is NOT a plugin self-claim, even when it sorts above
+# plugin.json — but the carve-out must not open a self-claim hole.
+# ────────────────────────────────────────────────────────────────
+def test_netgen_tool_version_exempt(tmp_path):
+    _make_plugin_json(tmp_path, "0.2.33")
+    cp = _run(tmp_path, _diff(
+        "mcp-eda-server/src/lib/netgen_verdict.mjs",
+        "//   Empirically confirmed in-container (netgen 1.5.316, magic 8.3.x)."))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_yosys_tool_version_exempt(tmp_path):
+    _make_plugin_json(tmp_path, "0.2.33")
+    cp = _run(tmp_path, _diff("src/x.py", "# requires yosys 0.40.0 or newer"))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_pdk_version_exempt(tmp_path):
+    _make_plugin_json(tmp_path, "0.2.33")
+    cp = _run(tmp_path, _diff("src/x.py", "# pinned to sky130 1.0.0 PDK"))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_cocotb_runtime_version_exempt(tmp_path):
+    _make_plugin_json(tmp_path, "0.2.33")
+    cp = _run(tmp_path, _diff("src/x.py", "// substituted cocotb 2.0.1"))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_dependency_carveout_does_not_hole_bare_claim(tmp_path):
+    # A bare forward triple with NO tool-name prefix must still be gated.
+    _make_plugin_json(tmp_path, "0.2.33")
+    cp = _run(tmp_path, _diff("src/x.py", "# v1.5.316 — next release"))
+    assert cp.returncode == 1, cp.stdout + cp.stderr
+    assert "claimed v1.5.316" in cp.stdout
+
+
+def test_dependency_carveout_does_not_hole_plugin_claim(tmp_path):
+    # 'plugin'/'release'/'vibe-ic' before the triple are NOT tool names.
+    _make_plugin_json(tmp_path, "0.2.33")
+    cp = _run(tmp_path, _diff("src/x.py", "# plugin 1.5.316 is the target"))
+    assert cp.returncode == 1, cp.stdout + cp.stderr
+    cp2 = _run(tmp_path, _diff("src/x.py", "# vibe-ic 1.5.316 ships next"))
+    assert cp2.returncode == 1, cp2.stdout + cp2.stderr

@@ -52,18 +52,40 @@ session_context: >-
   zero-false-positive behavior at scale, and the fresh control proved the current runner is sound.
 
 status: partially-fixed
+partially_fixed_at: "2026-06-03T00:00:00+08:00"
+partially_fixed_in: "0.2.33"
+resolution: >-
+  IMPLEMENTABLE half DONE. suggested_fix #4 (artifact-vintage GUARD CHECK) is now a deterministic,
+  chip-AGNOSTIC, structural program — `artifact_vintage_guard()` in programs/perc_corpus_sweep.py.
+  It WARNs (never fails a build) when a routed DEF with > _STALE_STD_CELL_MIN (200) placed std cells
+  has 0 valid well/substrate taps AND an OLDER/sibling DEF in the same lineage is ALSO 0-tap — the
+  structural signature of a stale pre-tapcell-fix artifact (the whole lineage never ran the tapcell
+  step). DISCRIMINATOR (chip-agnostic, no design/vendor literal, no version string parsed — none is
+  recorded reliably in DEF headers or the orchestrator JSON): a CURRENT run inserts taps from the
+  `placed` stage onward (the FRESH spm control: floorplan=0 -> placed/cts/hold/routed all=67), so a
+  0-tap routed DEF whose EARLIER sibling stages are also 0-tap = stale lineage; verdicts are
+  {OK (tap-bearing or legit small <=200-cell / floorplan block), STALE_PRE_TAPCELL (warn — regenerate
+  before citing), SUSPECT_LIVE (warn — 0-tap routed but NO older 0-tap sibling, cannot prove
+  stale-vs-regression so re-run a fresh control), NA}. Wired into sweep_one() (auto-attaches a
+  `vintage` block per IC), summarize() (two systemic counts), and CLI (`--vintage <def>` standalone,
+  `--no-vintage` opt-out). VERIFIED on REAL corpus DEFs (pure DEF-parse, no EDA container needed):
+  ibex/subservient/sha256_v2 -> STALE_PRE_TAPCELL (14798/901/10460 std cells, 0 taps, 4 older 0-tap
+  siblings each); neorv32 -> SUSPECT_LIVE (chip_top is the only DEF in its pnr dir, so no older
+  sibling to prove stale — the guard honestly defers rather than over-claim). Tests: 10 new cases in
+  programs/tests/test_perc_corpus_sweep.py (fires on synthetic stale 0-tap lineage; does NOT fire on a
+  tapped DEF, a small <=200-cell block, or a lone floorplan DEF; SUSPECT_LIVE when an earlier stage
+  HAD taps; sweep_one attach + disable; summary counts; CLI --vintage) — full file 18/18 PASS.
 residual: >-
-  Only the DISCLOSURE half (suggested_fix #3) shipped: benchmark_ic/RESULT_PERC_CORPUS_v0211.md
-  fully states the 14 corpus DEFs are pre-tapcell-fix stale and must be regenerated before any of
-  their PERC numbers are cited as a current-quality signal, and programs/perc_corpus_sweep.py carries
-  the stale-artifact lesson (deprioritises floorplan/pre-tapcell DEFs at :53 and prints the honesty
-  note, pinned by programs/tests/test_perc_corpus_sweep.py:97). STILL OPEN: (1) the core fix —
-  regenerating the 14 benchmark_ic/ corpus DEFs through the current runner so future PERC sweeps
-  measure today's tapcell+PDN output — is NOT done; RESULT_PERC_CORPUS_v0211.md's own Reproduce
-  section still shows `grep tapvpwrvgnd|__tap ... -> 0 across the 14 DEF-bearing ICs` and its
-  Follow-up notes only a 2nd fresh control "is being run" (no committed regenerated corpus DEFs; the
-  cap-crc worktree contains zero .def files). (2) The optional artifact-vintage GUARD CHECK
-  (suggested_fix #4 — warn when a routed DEF with >N std cells has 0 taps AND an older-version 0-tap
-  sibling exists) was NOT implemented: no vintage/stale-artifact guard function exists in
-  programs/perc_corpus_sweep.py or elsewhere (only the prose lesson). Hygiene-only (P3, no functional
-  plugin bug); the well-tap presence check correctly flags the stale 0-tap artifacts today.
+  The DISCLOSURE half (suggested_fix #3) was already shipped (RESULT_PERC_CORPUS_v0211.md +
+  the stale-artifact lesson in programs/perc_corpus_sweep.py, pinned by the test). The GUARD half
+  (suggested_fix #4) is now DONE (see resolution). STILL OPEN — and deliberately NOT faked: the CORE
+  fix (suggested_fix #1/#2) — regenerating the 14 benchmark_ic/ corpus DEFs through the current runner
+  so future PERC sweeps measure today's tapcell+PDN output — is multi-hour OpenROAD PnR x14
+  (container-serial, one iic-eda) and was NOT run; no regenerated/committed corpus .def files exist.
+  This is left as a precise residual rather than fabricating committed DEFs. Hygiene-only (P3, no
+  functional plugin bug): the well-tap presence check + the new vintage guard now AUTOMATICALLY flag
+  the stale 0-tap artifacts (STALE_PRE_TAPCELL) so their PERC numbers cannot be mis-cited as a
+  current-quality signal even before the regen runs. To fully close: pipeline the 14 ICs through
+  phase3_one_shot_runner.py (smallest-first: subservient 901c -> darkriscv -> picorv32 -> ...),
+  re-run the sweep, and expect vintage -> OK + welltap -> WELLTAP_PRESENT, matching the fresh spm
+  control.

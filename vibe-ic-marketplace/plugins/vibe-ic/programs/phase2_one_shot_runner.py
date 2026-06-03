@@ -83,6 +83,15 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
+# v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — shared SV-frontend
+# decision logic (same module Phase-3 step_synth delegates to), so the
+# Phase-2 yosys-synth + reference-TB steps reuse the EXACT same rule
+# rather than carrying a divergent copy.
+import synth_frontend as _sf
+
+# Path inside the iic-osic-tools container where the EDA tools live (yosys
+# + the slang plugin, sv2v, verilator). Mirrors phase3_one_shot_runner.
+TOOLS_IN_CONTAINER = "/foss/tools"
 
 
 # Path resolution — robust against both layouts:
@@ -266,6 +275,93 @@ def _run(cmd: List[str], cwd: Optional[Path] = None,
         return 124, e.stdout or "", f"TIMEOUT after {timeout}s: {e}"
     except FileNotFoundError as e:
         return 127, "", f"COMMAND_NOT_FOUND: {e}"
+
+
+# -------------------------------------------------------------------------
+# v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — Docker container helpers
+# for the SystemVerilog-frontend fallback. The advanced SV frontends
+# (`yosys -m slang` / `read_slang`, `sv2v`, `verilator`) live ONLY in the
+# iic-osic-tools container, NOT on the host, so the synth + reference-TB
+# fallback paths must run inside the container against CONTAINER-side
+# paths. These mirror the proven helpers in phase3_one_shot_runner.py.
+# Chip-AGNOSTIC: pure path/exec plumbing, no chip/PDK literal.
+# -------------------------------------------------------------------------
+_CONTAINER_MOUNTS_CACHE: Dict[str, List[Tuple[str, str]]] = {}
+
+
+def _container_mounts(container: str) -> List[Tuple[str, str]]:
+    """Return [(host_src, container_dst), ...] for the named container,
+    longest-source-first so the most specific mount wins. Cached."""
+    if container in _CONTAINER_MOUNTS_CACHE:
+        return _CONTAINER_MOUNTS_CACHE[container]
+    out: List[Tuple[str, str]] = []
+    try:
+        cp = subprocess.run(
+            ["docker", "inspect", container,
+             "--format",
+             "{{range .Mounts}}{{.Source}}|{{.Destination}}\n{{end}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if cp.returncode == 0:
+            for line in cp.stdout.splitlines():
+                line = line.strip()
+                if not line or "|" not in line:
+                    continue
+                src, dst = line.split("|", 1)
+                if src and dst:
+                    out.append((src.rstrip("/"), dst.rstrip("/")))
+    except Exception:
+        pass
+    out.sort(key=lambda t: len(t[0]), reverse=True)
+    _CONTAINER_MOUNTS_CACHE[container] = out
+    return out
+
+
+def _to_container_path(host_path: str, container: str) -> str:
+    """Translate a host path to the path that resolves inside `container`.
+
+    If no mount covers the path, returns the original (caller must accept
+    that the operation may fail inside the container)."""
+    if not host_path:
+        return host_path
+    p = str(host_path)
+    for src, dst in _container_mounts(container):
+        if p == src:
+            return dst
+        if p.startswith(src + "/"):
+            return dst + p[len(src):]
+    return p
+
+
+def _path_in_container(host_path: str, container: str) -> bool:
+    """True iff `host_path` is covered by a bind-mount of `container`
+    (i.e. the container can actually see the file)."""
+    p = str(host_path)
+    for src, _dst in _container_mounts(container):
+        if p == src or p.startswith(src + "/"):
+            return True
+    return False
+
+
+def _docker_exec(container: str, cmd: str, timeout: int = 600
+                 ) -> Tuple[int, str, str]:
+    """Run a shell command inside a Docker container."""
+    full = ["docker", "exec", container, "bash", "-lc", cmd]
+    try:
+        cp = subprocess.run(full, capture_output=True, text=True,
+                            timeout=timeout)
+        return cp.returncode, cp.stdout, cp.stderr
+    except subprocess.TimeoutExpired as e:
+        return 124, e.stdout or "", f"TIMEOUT after {timeout}s: {e}"
+    except FileNotFoundError as e:
+        return 127, "", f"COMMAND_NOT_FOUND: {e}"
+
+
+def _tool_in_container(container: str, tool: str) -> bool:
+    """True iff `tool` is callable inside the container."""
+    rc, _, _ = _docker_exec(
+        container, f"command -v {tool} >/dev/null 2>&1", timeout=10)
+    return rc == 0
 
 
 # -------------------------------------------------------------------------
@@ -1339,11 +1435,111 @@ def step_full_stack_tb_gen(project: Path,
 
 
 # -------------------------------------------------------------------------
+# v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — SystemVerilog-frontend
+# fallback for the iverilog reference-TB / simulation step. The default
+# `iverilog -g2012` implements only a SystemVerilog SUBSET and rejects the
+# same modern-SV constructs (package-scoped typed parameters/ports,
+# import-before-port-list, named-field struct literals) that the synth
+# step's `read_verilog -sv` rejects. When the default iverilog compile
+# FAILS and the SHARED decision logic says an SV-aware retry would help,
+# we run an `sv2v` pre-pass in the iic-osic-tools container (sv2v lives
+# ONLY there, not on the host) to convert the `.sv` RTL into a single
+# Verilog-2005 file, then re-compile the TB against that converted RTL
+# (plus any plain `.v` RTL) with iverilog. The selected frontend is
+# returned for the caller to record in StepResult extras. Chip-AGNOSTIC:
+# extension + error-signature only; the iverilog SUBSET is universal.
+# -------------------------------------------------------------------------
+def _iverilog_compile_with_sv_fallback(
+        base_cmd: List[str], rtl_files: List[Path], tb_path: Path,
+        run_dir: Path, container: str, top_name: str,
+        ) -> Tuple[int, str, str, str]:
+    """Compile a TB+RTL set with iverilog, falling through to an sv2v
+    pre-pass in the container on a SystemVerilog-construct failure.
+
+    `base_cmd` is the full host iverilog argv (already including the TB and
+    RTL files) for the DEFAULT attempt. On SV-failure we rebuild an
+    equivalent argv that swaps the `.sv` RTL for the sv2v-converted `.v`.
+
+    Returns (rc, out, err, frontend). `frontend` is one of
+    'iverilog_g2012' (default, including the unchanged failure case) or
+    'iverilog_sv2v'. Honesty preserved: a genuine RTL defect that the SV
+    frontend also rejects keeps rc != 0 and 'iverilog_g2012'."""
+    rc, out, err = _run(base_cmd, cwd=run_dir, timeout=120)
+    if rc == 0:
+        return rc, out, err, "iverilog_g2012"
+
+    rtl_strs = [str(p) for p in rtl_files]
+    need_fallback, fe_reason = _sf.decide_iverilog_sv_fallback(
+        rtl_strs, rc, False, out + err)
+    if not need_fallback:
+        # No SV signature / no .sv input — the failure is a real defect,
+        # not a frontend gap. Return the honest failure unchanged.
+        return rc, out, err, "iverilog_g2012"
+
+    sv_files = [p for p in rtl_files if str(p).lower().endswith(".sv")]
+    v_files = [p for p in rtl_files if not str(p).lower().endswith(".sv")]
+    if not sv_files or not _tool_in_container(container, "sv2v"):
+        # Nothing to convert, or sv2v unavailable — honest failure stands.
+        return rc, out, err, "iverilog_g2012"
+
+    # Stage .sv RTL into the container, run sv2v → one Verilog-2005 file,
+    # copy it back next to run_dir, then re-compile with iverilog on host.
+    stage = f"/tmp/vibeic_sv2v_tb_{os.getpid()}_{int(time.time())}"
+    rc_m, _o, _e = _docker_exec(container, f"mkdir -p {stage}", timeout=30)
+    if rc_m != 0:
+        return rc, out, err, "iverilog_g2012"
+    container_sv: List[str] = []
+    for p in sv_files:
+        rc_c, _o, _e = _run(
+            ["docker", "cp", str(p), f"{container}:{stage}/{p.name}"],
+            timeout=60)
+        if rc_c != 0:
+            _docker_exec(container, f"rm -rf {stage}", timeout=30)
+            return rc, out, err, "iverilog_g2012"
+        container_sv.append(f"{stage}/{p.name}")
+    conv_c = f"{stage}/_sv2v_converted.v"
+    sv2v_cmd = (
+        f"cd {stage} && export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
+        f"sv2v -DSIMULATION {' '.join(container_sv)} > {conv_c} 2>sv2v.err")
+    rc_s, out_s, err_s = _docker_exec(container, sv2v_cmd, timeout=300)
+    converted_host = run_dir / "_sv2v_converted.v"
+    if rc_s == 0:
+        rc_cp, _o, e_cp = _run(
+            ["docker", "cp", f"{container}:{conv_c}", str(converted_host)],
+            timeout=60)
+        if rc_cp != 0:
+            rc_s = rc_cp
+    _docker_exec(container, f"rm -rf {stage}", timeout=30)
+    if rc_s != 0 or not converted_host.is_file():
+        # sv2v could not convert — honest iverilog failure stands.
+        return rc, out, err, "iverilog_g2012"
+
+    # Rebuild the iverilog argv: keep all non-file flags + the TB, drop the
+    # original .sv RTL, add the converted .v + the original plain .v RTL.
+    sv_str_set = {str(p) for p in sv_files}
+    new_cmd: List[str] = []
+    skip_set = sv_str_set
+    for tok in base_cmd:
+        if tok in skip_set:
+            continue
+        new_cmd.append(tok)
+    new_cmd.append(str(converted_host))
+    rc2, out2, err2 = _run(new_cmd, cwd=run_dir, timeout=120)
+    if rc2 == 0:
+        return rc2, (out2 + f"\n[sv2v fallback frontend: {fe_reason}]"), \
+            err2, "iverilog_sv2v"
+    # sv2v-converted compile still failed → a genuine defect; return the
+    # converted-attempt diagnostics so the caller's FAIL is informative.
+    return rc2, out2, err2, "iverilog_g2012"
+
+
+# -------------------------------------------------------------------------
 # 3. iverilog reference TB
 # -------------------------------------------------------------------------
 def _reference_tb_generic_full_stack(project: Path, top_name: str,
                                      track_reason: str,
-                                     t0: float) -> StepResult:
+                                     t0: float,
+                                     container: str = "iic-eda") -> StepResult:
     """v1.6.523 — functional gate for generic_full_stack classes.
 
     The AID reference TB cannot bind this class's data/memory-bus top.
@@ -1404,7 +1600,12 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
         cmd = ["iverilog", "-g2012", "-DSIMULATION",
                f"-DDUT_TOP_NAME={top_name}",
                "-o", str(vvp), str(tb_path)] + [str(p) for p in rtl_files]
-        rc, out, err = _run(cmd, cwd=run_dir, timeout=120)
+        # v0.2.33 — SV-frontend fallback: on a SystemVerilog-construct
+        # compile failure, re-try via an sv2v pre-pass in the container
+        # before declaring a defect. Honesty preserved: a genuine RTL bug
+        # the SV frontend also rejects still FAILs.
+        rc, out, err, tb_frontend = _iverilog_compile_with_sv_fallback(
+            cmd, rtl_files, tb_path, run_dir, container, top_name)
         if rc != 0:
             # A genuine compile/elaboration failure of the DUT is a REAL
             # functional/structural defect — FAIL (honesty preserved).
@@ -1415,7 +1616,8 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                  f"compile against rtl/ — real structural defect. "
                  f"iverilog rc={rc} stderr={(err or out)[-1200:]}"),
                 extras={"verification_track": "generic_full_stack",
-                        "aid_tb_skipped_reason": track_reason})
+                        "aid_tb_skipped_reason": track_reason,
+                        "tb_frontend": tb_frontend})
         rc, out, err = _run(["vvp", str(vvp)], cwd=run_dir, timeout=120)
         transcript = run_dir / "full_stack.log"
         transcript.write_text(out + "\n" + err)
@@ -1429,7 +1631,8 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                  f"via L9.top_ports."),
                 [str(tb_path), str(transcript)],
                 extras={"verification_track": "generic_full_stack",
-                        "aid_tb_skipped_reason": track_reason})
+                        "aid_tb_skipped_reason": track_reason,
+                        "tb_frontend": tb_frontend})
         # Ran but did not reach the completion marker → real defect.
         return StepResult(
             "reference_tb", "FAIL",
@@ -1504,7 +1707,8 @@ def _class_uses_aid_reference_tb(ic_class: Optional[str]) -> Tuple[bool, str]:
 
 
 def step_reference_tb(project: Path, top_name: str = "chip_top",
-                      ic_class: Optional[str] = None) -> StepResult:
+                      ic_class: Optional[str] = None,
+                      container: str = "iic-eda") -> StepResult:
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
     if not rtl_dir.is_dir():
@@ -1524,7 +1728,8 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
     uses_aid_tb, track_reason = _class_uses_aid_reference_tb(ic_class)
     if not uses_aid_tb:
         return _reference_tb_generic_full_stack(project, top_name,
-                                                track_reason, t0)
+                                                track_reason, t0,
+                                                container)
 
     if not PROTOCOL_TB.is_file():
         return StepResult("reference_tb", "FAIL",
@@ -1584,11 +1789,17 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
            f"-DDUT_TOP_NAME={top_name}",
            "-o", str(vvp),
            str(PROTOCOL_TB)] + [str(p) for p in rtl_files]
-    rc, out, err = _run(cmd, cwd=sim_dir, timeout=120)
+    # v0.2.33 — SV-frontend fallback: on a SystemVerilog-construct compile
+    # failure, re-try via an sv2v pre-pass in the container before
+    # declaring a defect. Honesty preserved: a genuine RTL bug the SV
+    # frontend also rejects still FAILs.
+    rc, out, err, tb_frontend = _iverilog_compile_with_sv_fallback(
+        cmd, rtl_files, PROTOCOL_TB, sim_dir, container, top_name)
     if rc != 0:
         return StepResult("reference_tb", "FAIL",
                           time.time() - t0,
-                          f"iverilog rc={rc} stderr={(err or out)[-1500:]}")
+                          f"iverilog rc={rc} stderr={(err or out)[-1500:]}",
+                          extras={"tb_frontend": tb_frontend})
     rc, out, err = _run(["vvp", str(vvp)], cwd=sim_dir, timeout=120)
     transcript = (sim_dir / "ref_tb.log")
     transcript.write_text(out + "\n" + err)
@@ -1722,11 +1933,13 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
                           time.time() - t0,
                           "PROTOCOL_REFERENCE_TB_PASS in transcript",
                           [str(transcript),
-                           str(full_stack / "results.json")])
+                           str(full_stack / "results.json")],
+                          extras={"tb_frontend": tb_frontend})
     return StepResult("reference_tb", "FAIL",
                       time.time() - t0,
                       f"transcript_tail={out[-1500:]}",
-                      [str(transcript)])
+                      [str(transcript)],
+                      extras={"tb_frontend": tb_frontend})
 
 
 # -------------------------------------------------------------------------
@@ -1804,6 +2017,151 @@ def _chip_top_extract_param_and_ports(scan: str, start: int):
     if pe < 0:
         return None, None
     return param_block, scan[i:pe + 1]
+
+
+# -------------------------------------------------------------------------
+# v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — SystemVerilog-frontend
+# fallback for the Phase-2 yosys-synth step. Runs inside the iic-osic-tools
+# container because the SV-aware frontends (`yosys -m slang` / `read_slang`,
+# `sv2v`) live ONLY there, not on the host. Stages the RTL into the
+# container under a mount-visible path, runs the fallback, and copies the
+# produced netlist back to the host out_v. Returns (rc, out, err, frontend).
+# Chip-AGNOSTIC: extension + error-signature only; no chip/PDK literal.
+# -------------------------------------------------------------------------
+def _phase2_container_workdir(container: str, project: Path,
+                              synth_dir: Path) -> Tuple[Optional[str], bool]:
+    """Resolve a container-visible working directory for the SV fallback.
+
+    Returns (container_workdir, needs_staging):
+      * If synth_dir is already covered by a container bind-mount, returns
+        (translated_path, False) — operate in place.
+      * Otherwise returns (a fresh /tmp staging dir inside the container,
+        True) — caller must `docker cp` the RTL in and the netlist out.
+      * Returns (None, _) only if a staging dir could not be created.
+    """
+    if _path_in_container(str(synth_dir), container):
+        return _to_container_path(str(synth_dir), container), False
+    # Not mounted — create an ephemeral staging dir inside the container.
+    stage = f"/tmp/vibeic_sv_synth_{os.getpid()}_{int(time.time())}"
+    rc, _o, _e = _docker_exec(container, f"mkdir -p {stage}", timeout=30)
+    if rc != 0:
+        return None, True
+    return stage, True
+
+
+def _phase2_sv_synth_fallback(project: Path, container: str,
+                              synth_dir: Path, out_v: Path,
+                              rtl_file_strs: List[str], synth_top: str,
+                              log: Path, fe_reason: str,
+                              default_rc: int,
+                              default_log: str
+                              ) -> Tuple[int, str, str, str]:
+    """Invoke the SV-aware synth frontend chain in the container.
+
+    Order: `yosys -m slang` / `read_slang` (PREFERRED — full SV-2017,
+    preserves hierarchy) → `sv2v` pre-pass emitting Verilog-2005. The
+    synth backend (synth -top -flatten; techmap; opt; dffunmap; abc) is the
+    SAME as the default path; only the parser changes.
+
+    Returns (rc, out, err, synth_frontend). On total failure returns the
+    last failing (rc, out, err) and synth_frontend='none'."""
+    workdir, needs_staging = _phase2_container_workdir(
+        container, project, synth_dir)
+    if workdir is None:
+        return (default_rc, "", "could not create container workdir for "
+                "SV-frontend fallback", "none")
+
+    # Map host RTL file → the path the container will read.
+    container_rtl: List[str] = []
+    if needs_staging:
+        # Copy each RTL file into the staging dir; container reads by base
+        # name (packages first ordering is preserved by list order).
+        for f in rtl_file_strs:
+            hp = Path(f)
+            if not hp.is_file():
+                continue
+            rc, _o, _e = _run(
+                ["docker", "cp", str(hp), f"{container}:{workdir}/{hp.name}"],
+                timeout=60)
+            if rc != 0:
+                return (rc, "", f"docker cp {hp.name} → container failed: "
+                        f"{_e[-400:]}", "none")
+            container_rtl.append(f"{workdir}/{hp.name}")
+    else:
+        container_rtl = [_to_container_path(f, container)
+                         for f in rtl_file_strs if Path(f).is_file()]
+
+    netlist_name = out_v.name
+    netlist_c = f"{workdir}/{netlist_name}"
+    yosys_path = (f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
+                  f"{TOOLS_IN_CONTAINER}/bin:$PATH")
+    # Technology-independent lowering chain — identical to the default
+    # Phase-2 synth path (synth -flatten; techmap; opt; dffunmap; abc).
+    synth_tail = (f"synth -top {synth_top} -flatten; "
+                  f"techmap; opt; dffunmap; abc -g cmos2; "
+                  f"write_verilog -noexpr -nostr -noattr {netlist_c}; stat")
+    reads_join = " ".join(container_rtl)
+
+    synth_frontend = "none"
+    rc, out, err = default_rc, "", default_log
+
+    # ---- (1) PREFERRED: yosys slang plugin / read_slang -------------------
+    if _tool_in_container(container, "yosys"):
+        slang_cmd = (
+            f"cd {workdir} && {yosys_path} && "
+            f"yosys -p 'plugin -i slang; "
+            f"read_slang {reads_join} --top {synth_top} -DSIMULATION; "
+            f"hierarchy -top {synth_top}; proc; flatten; {synth_tail}'")
+        rc, out, err = _docker_exec(container, slang_cmd, timeout=600)
+        _append_log(log, f"SLANG FALLBACK FRONTEND ({fe_reason})", out, err)
+        if rc == 0 and _phase2_retrieve_netlist(
+                container, netlist_c, out_v, needs_staging):
+            synth_frontend = "yosys_slang"
+
+    # ---- (2) FALLBACK: sv2v pre-pass → Verilog-2005 → default frontend ----
+    if synth_frontend == "none" and _tool_in_container(container, "sv2v"):
+        sv2v_out = f"{workdir}/{synth_top}_sv2v.v"
+        sv2v_cmd = (
+            f"cd {workdir} && export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
+            f"sv2v -DSIMULATION {reads_join} > {sv2v_out} 2>sv2v.err && "
+            f"{yosys_path} && "
+            f"yosys -p 'read_verilog {sv2v_out}; "
+            f"hierarchy -check -top {synth_top}; proc; flatten; {synth_tail}'")
+        rc2, out2, err2 = _docker_exec(container, sv2v_cmd, timeout=600)
+        _append_log(log, "SV2V PRE-PASS FALLBACK FRONTEND", out2, err2)
+        if rc2 == 0 and _phase2_retrieve_netlist(
+                container, netlist_c, out_v, needs_staging):
+            rc, out, err = rc2, out2, err2
+            synth_frontend = "sv2v_verilog2005"
+
+    # Best-effort cleanup of the ephemeral staging dir.
+    if needs_staging:
+        _docker_exec(container, f"rm -rf {workdir}", timeout=30)
+    return rc, out, err, synth_frontend
+
+
+def _append_log(log: Path, banner: str, out: str, err: str) -> None:
+    try:
+        prior = log.read_text(errors="replace") if log.is_file() else ""
+    except OSError:
+        prior = ""
+    log.write_text(prior + f"\n\n=== {banner} ===\n" +
+                   (out or "") + "\n" + (err or ""))
+
+
+def _phase2_retrieve_netlist(container: str, netlist_c: str,
+                             out_v: Path, needs_staging: bool) -> bool:
+    """After a container-side synth, ensure the netlist lands at host
+    out_v. When staging, `docker cp` it back; when mounted, it is already
+    on the host (the container wrote through the bind-mount). Returns True
+    iff out_v now exists and is non-empty."""
+    if needs_staging:
+        rc, _o, _e = _run(
+            ["docker", "cp", f"{container}:{netlist_c}", str(out_v)],
+            timeout=60)
+        if rc != 0:
+            return False
+    return out_v.is_file() and out_v.stat().st_size > 0
 
 
 # -------------------------------------------------------------------------
@@ -2111,6 +2469,30 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             timeout=300)
     log = synth_dir / "yosys.log"
     log.write_text(out + "\n" + err)
+
+    # v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — SystemVerilog
+    # frontend fallback, mirroring phase3_one_shot_runner.step_synth's
+    # Fix #5. The default `read_verilog -sv` (Yosys built-in Verilog-2005
+    # frontend) handles only a SystemVerilog SUBSET; production open-source
+    # CPU/SoC IP pulled by the catalog-glue integrator path uses modern SV
+    # (package-import-before-ANSI-port-list, package-scoped typed
+    # parameters/ports, named-field struct literals) that aborts the
+    # built-in frontend at the first such construct even though the RTL is
+    # fully synthesizable. When the default attempt FAILED (or produced no
+    # netlist) AND the SHARED decision logic says an SV-aware retry would
+    # help, fall through to `yosys -m slang` / `read_slang` (PREFERRED —
+    # full SV-2017, preserves hierarchy) then an `sv2v` pre-pass emitting
+    # Verilog-2005. The selected frontend is recorded in StepResult
+    # extras['synth_frontend']. Chip-AGNOSTIC: extension + error-signature.
+    synth_frontend = "read_verilog_v2005"
+    _rtl_file_strs = [str(f) for f in rtl_files]
+    need_sv_fallback, fe_reason = _sf.decide_synth_frontend(
+        _rtl_file_strs, rc, out_v.is_file(), out + err)
+    if need_sv_fallback:
+        rc, out, err, synth_frontend = _phase2_sv_synth_fallback(
+            project, container, synth_dir, out_v, _rtl_file_strs,
+            synth_top, log, fe_reason, default_rc=rc,
+            default_log=out + err)
     if rc == 0 and out_v.is_file():
         cells = "?"
         for line in out.splitlines():
@@ -2234,16 +2616,21 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                  f"output is a contract violation — RTL emitter "
                  f"likely produced stub modules pruned by `synth "
                  f"-flatten`. Detail: {tail}"),
-                [str(out_v), str(log)])
+                [str(out_v), str(log)],
+                extras={"synth_frontend": synth_frontend})
         return StepResult("yosys_synth", "PASS",
                           time.time() - t0,
                           (f"netlist={out_v.name} cells={cells} "
-                           f"synth_top={synth_top}"),
-                          [str(out_v), str(log)])
+                           f"synth_top={synth_top} "
+                           f"frontend={synth_frontend}"),
+                          [str(out_v), str(log)],
+                          extras={"synth_frontend": synth_frontend})
     return StepResult("yosys_synth", "FAIL",
                       time.time() - t0,
                       f"rc={rc} log_tail={(out + err)[-1500:]}",
-                      [str(log)])
+                      [str(log)],
+                      extras={"synth_frontend": synth_frontend,
+                              "synth_frontend_reason": fe_reason})
 
 
 # -------------------------------------------------------------------------
@@ -3791,7 +4178,8 @@ def main() -> int:
     last_rtl_hash = _rtl_dir_sha256(project)
     eco_remediation_attempted = False  # v1.6.181 (#72 P1-4)
     while True:
-        sr = step_reference_tb(project, args.top_name, ic_class)
+        sr = step_reference_tb(project, args.top_name, ic_class,
+                               args.container)
         plan.append(sr)
         if sr.status in ("PASS", "SKIP") or eco >= args.max_eco:
             break
@@ -3916,7 +4304,8 @@ def main() -> int:
                                 and rehashed != new_rtl_hash):
                             last_rtl_hash = rehashed
                             plan.append(step_reference_tb(
-                                project, args.top_name, ic_class))
+                                project, args.top_name, ic_class,
+                                args.container))
                             plan.append(step_fpga_compile(
                                 project, args.top_name, args.container))
                             _pl.emit_final_summary(project, PROGRAMS_DIR)
@@ -3938,7 +4327,8 @@ def main() -> int:
             # transcript.log} mtimes stay newer than the regenerated RTL —
             # otherwise protocol_ip_simulation_required_check will FAIL with
             # FULL_STACK_SIM_STALE on the next pre-burn audit.
-            plan.append(step_reference_tb(project, args.top_name, ic_class))
+            plan.append(step_reference_tb(project, args.top_name, ic_class,
+                                          args.container))
             plan.append(step_fpga_compile(project, args.top_name, args.container))
             # Same reason as above — regenerate attestation before burn.
             _pl.emit_final_summary(project, PROGRAMS_DIR)

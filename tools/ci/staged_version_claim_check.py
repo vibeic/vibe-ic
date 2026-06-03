@@ -303,6 +303,45 @@ def _is_filename_version(body: str, match) -> bool:
     return before_ch in "_-/" or before_ch.isalnum()
 
 
+# Recognised third-party TOOL / PDK / runtime names that carry their OWN
+# X.Y.Z version. A version-triple whose immediately-preceding word is one of
+# these is a DEPENDENCY version (e.g. `netgen 1.5.316`, `yosys 0.40.0`,
+# `sky130 1.0.0`, `cocotb 2.0.1`), not a claim of the plugin's own version.
+# Distinguishing "my version" from "a dependency's version" is something every
+# version linter must do; this is a structural carve-out parallel to the
+# program-version-constant and filename-version ones. It does NOT reopen a
+# self-claim hole: a bare `v1.5.316`, or one preceded by `plugin` / `vibe-ic`
+# / `release`, is still gated (see the regression tests).
+_DEPENDENCY_TOOL_NAMES = frozenset({
+    # open-source EDA backends in the IIC-OSIC-TOOLS container
+    "netgen", "magic", "yosys", "openroad", "klayout", "ngspice", "ngspyce",
+    "xschem", "iverilog", "icarus", "verilator", "cocotb", "openlane",
+    "openlane2", "gdstk", "gdspy", "padring", "volare", "antmicro", "spice",
+    # runtimes / build tooling
+    "python", "python3", "node", "nodejs", "npm", "pip", "tcl", "tk",
+    "gcc", "clang", "llvm", "make", "cmake", "git", "bash", "docker",
+    # PDKs / foundry process names
+    "sky130", "sky130a", "sky130b", "gf180", "gf180mcu", "gf180mcuc",
+    "gf180mcud", "skywater", "globalfoundries",
+})
+
+# trailing alphanumeric word after stripping the usual separators that sit
+# between a tool name and its version: spaces, `(`, `-`, `/`, `:`, `=`, `@`.
+_TRAILING_WORD_RE = re.compile(r"([A-Za-z][A-Za-z0-9]*)$")
+
+
+def _is_dependency_tool_version(body: str, match) -> bool:
+    """True iff the version-triple is the version of a recognised third-party
+    tool / PDK / runtime — its immediately-preceding word is in
+    `_DEPENDENCY_TOOL_NAMES`. `netgen 1.5.316` -> True; `vibe-ic 1.5.316` -> the
+    trailing word is `ic` (not a tool) -> False (still gated)."""
+    prefix = body[:match.start()].rstrip(" \t([-/:=@")
+    m = _TRAILING_WORD_RE.search(prefix)
+    if not m:
+        return False
+    return m.group(1).lower() in _DEPENDENCY_TOOL_NAMES
+
+
 # Pre-reset historical version bands. vibe-ic's version scheme RESET from the old
 # 1.6.x development series down to the current 0.2.x series. The 1.6.x numbers now
 # live on ONLY as backward provenance references in code comments / docstrings
@@ -345,6 +384,8 @@ def check(diff_text: str,
                 continue
             if _is_filename_version(body, m):
                 continue
+            if _is_dependency_tool_version(body, m):
+                continue   # third-party tool / PDK / runtime version, not a claim
             # A numeric triple whose first digit is immediately preceded by
             # an ASCII letter other than v/V is an identifier or spec-section
             # anchor (e.g. `A3.1.1`, `C3.4.1`, `FR3.1` source citations in the

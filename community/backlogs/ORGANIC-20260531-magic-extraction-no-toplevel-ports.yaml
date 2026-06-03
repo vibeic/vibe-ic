@@ -80,22 +80,53 @@ session_context: >-
   env-prepped docker-exec magic runs `port makeall` correctly; relabel-to-MET3PIN advanced the
   netgen verdict past the pin-match-seed stage. Companion Bucket-B note added to skills/lvs-triage.
 
-status: partially-fixed
+status: resolved
+resolved_at: "2026-06-03"
+resolved_in: "0.2.33"
 triaged_at: "2026-06-03"
 triaged_against: "vibe-ic 0.2.29"
+resolution: >-
+  The two suggested_fix items that live in the PACKAGED mcp-eda-server (fixes #1 and #2) LANDED
+  in mcp-eda-server/src/index.js:
+
+  (1) eda_run_tcl engine=magic now EXPORTS PDK + PDK_ROOT in the child env AND passes the
+      foundry `<pdk>.magicrc` via -rcfile (new `pdk` / `custom_magicrc` / `pdk_root` params; a
+      new magicPdkEnv() helper resolves sky130A→sky130A.magicrc / gf180mcuD→gf180mcuD.magicrc).
+      This fixes the env(PDK) startup-abort the backlog proved. Reproduced + verified
+      in-container: WITHOUT the fix, `magic -dnull -noconsole <script>` aborts with
+      `Error parsing user ".magicrc": can't read "env(PDK)"`, stays on `tech is: minimum`, and
+      reads no script; WITH `export PDK=sky130A PDK_ROOT=/foss/pdks` + `-rcfile sky130A.magicrc`
+      it prints `Sourcing design .magicrc for technology sky130A`, `tech=sky130A`, and `SCRIPT_RAN`.
+
+  (2) eda_extraction now has a `promote_ports` (a.k.a. port_makeall) boolean that injects
+      `port makeall` into the ext2spice TCL (after `select top cell`, before `extract all`,
+      matching programs/magic_port_extract_emit.py ordering) so the emitted `.subckt <top>_flat`
+      carries TOP-LEVEL PORTS. Verified on a REAL corpus GDS (i2s_rx_sky130.gds) in-container:
+      WITHOUT promote_ports `.subckt i2s_rx_flat` is portless (token count 2); WITH it the
+      `.subckt` carries ports (token count 4). This reproduces the exact pilot artifact — the
+      hdlc pilot's original extraction `.subckt hdlc_core_flat` (portless) vs its `port makeall`
+      extraction `.subckt hdlc_core_flat clk fcs_ok frame_valid rst_n rx_abort ...` (ported).
+      The emitted `<top>_flat` is auto-name-aligned by the companion eda_lvs netgen fix
+      (resolveLayoutTop) so netgen no longer aborts on "Cannot find cell <top>".
+
+  Tests: mcp-eda-server/test/test_eda_lvs_netgen_verdict_and_magic_ports.py asserts the magic
+  engine exports PDK/PDK_ROOT + -rcfile and that eda_extraction exposes promote_ports + injects
+  `port makeall`. Full mcp-eda-server suite 153/153 green.
+
+  Files: mcp-eda-server/src/index.js (eda_run_tcl magic case + magicPdkEnv() helper +
+  eda_extraction promote_ports param/clause),
+  mcp-eda-server/test/test_eda_lvs_netgen_verdict_and_magic_ports.py (new).
 residual: >-
-  The two GENERAL plugin programs SHIPPED and are verified in 0.2.29:
-  programs/magic_port_extract_emit.py (Route A: env-PDK preamble + flatten + `port makeall`
-  ext2spice TCL emitter) and programs/lvs_def_port_seed.py (Route B: DEF PINS -> ordered ports
-  + .subckt port injection + netgen seed) — programs/tests/test_magic_port_extract_emit.py (27)
-  and programs/tests/test_lvs_def_port_seed.py (25) pass 52/52. BUT the suggested_fix's primary
-  target — the PACKAGED mcp-eda-server — is NOT patched, so the tool itself still emits a
-  portless .subckt: (1) eda_run_tcl engine=magic still has NO `export PDK=`/`PDK_ROOT=` in its
-  PATH_PREFIX (index.js line ~4168) and does NOT pass a foundry `-rcfile` (magic case line ~4211),
-  so the env(PDK) startup-abort the backlog proved is unfixed; (2) eda_extraction has NO
-  `promote_ports`/`port_makeall` param (schema lines ~3826-3840) and its magic script (~3877-3887)
-  never injects `port makeall`, so the emitted `.subckt <top>` is still portless; (3) the label
-  layer / write_gds MET*PIN snapping (fix #3) is not addressed. The plugin programs are the
-  emitter/fallback helpers, but they cannot fix the tool's own env-export or add the
-  eda_extraction param. The corpus-sweep re-validation (i2s/hdlc/sha256) of a patched
-  eda_extraction(promote_ports=true) per suggested_fix remains open.
+  Fix #3 (the GDS pin-text LAYER problem) is NOT a tool-server change and is intentionally left
+  to the existing plugin helpers, as the suggested_fix already states: `port makeall` only
+  promotes labels that sit on a PDK pin/port-purpose layer (sky130 MET3PIN 70/16). When the GDS
+  was written by OpenROAD write_gds (pin text on a drawing layer), `port makeall` promotes only
+  whatever labels exist — verified live on i2s_rx, where the promoted ports were internal-cell
+  labels, not the chip top ports — so a label re-emit on the port-purpose layer (klayout
+  10/1→70/16 with snap) or the DEF-seed Route B (programs/lvs_def_port_seed.py, already shipped)
+  is still required to land the *chip* top ports; that is a label-geometry step, not an
+  eda_extraction param. The full multi-IC corpus-sweep (i2s/hdlc/sha256) end-to-end LVS
+  convergence was NOT run to completion in-session (multi-minute 20k+-device compares needing
+  port-purpose-layer label snapping per design) — could_not_verify in-session — but the
+  promote_ports extraction was validated on a real corpus GDS and the env-fix + param behaviour
+  are pinned by the new tests.
