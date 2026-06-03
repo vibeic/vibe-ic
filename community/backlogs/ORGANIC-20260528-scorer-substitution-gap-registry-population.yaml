@@ -39,3 +39,18 @@ submitted_at: "2026-05-28T00:00:00+08:00"
 session_context: >-
   Filed alongside v0.1.38's scorer_substitution_gap infrastructure ship.
   Population is per-benchmark sweep work — not blocking the infrastructure ship.
+
+status: deferred
+deferred_at: "2026-06-03"
+deferred_reason: >-
+  CANNOT be done without cheating in the current state. Populating
+  scorer_substitution_gap[] removes the flagged designs from the pass@1
+  DENOMINATOR (pass@1 = passed / (total - skipped)) — a score-affecting change.
+  The benchmark TBs are NOT in the repo (fetched at runtime), so there is nothing
+  to sweep here, and adding entries blind would inflate the reported pass-rate
+  (= the no-cheating violation the maintainer explicitly forbade). To do it
+  honestly: stage each benchmark's real TBs, run `iverilog -g2012 <tb>` per design,
+  flag ONLY genuine tool-substitution gaps (SV-2012 constructs iverilog 12 cannot
+  run), and verify per design that the candidate RTL itself compiles standalone
+  (proving the gap is TB-side, not RTL-side) — i.e. the full open-benchmark-
+  methodology §4 Cat-D triage. Deferred until the datasets are staged.
