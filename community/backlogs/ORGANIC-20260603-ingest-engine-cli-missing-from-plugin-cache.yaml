@@ -1,0 +1,18 @@
+type: bug
+severity: P2
+component: benchmark-harness gate plus plugin packaging of the phase1 engine
+plugin_version: "0.2.27"
+
+title: >-
+  0.2.27 plugin cache omits the phase1 engine command-line entry: the atomic gate's phase1 hard-step is unimportable and the fallback writes its layer doc to a path the gate never probes
+
+pattern: |
+  In the installed 0.2.27 cache, the atomic gate's phase1 hard-step invokes the phase1 engine as a module but the engine package is not in the cache tree, so the primary path always fails; the fallback runner writes the integration layer doc to one directory while the gate probes another. Net: the phase1 hard gate cannot pass from a clean cache install without a manual workaround. Observed across all seven atomic spec-to-RTL floor-reattempt agents.
+
+suggested_fix: |
+  Package the phase1 engine (its command-line entry plus the class knowledge base) into the plugin cache bundle so the module resolves from the installed plugin, OR change the gate to probe the fallback runner's actual layer-doc output path so a clean install passes the phase1 step without intervention. Add a packaging test asserting the cache tree contains every module the gate imports.
+
+id: "ORGANIC-20260603-ingest-engine-cli-missing-from-plugin-cache"
+submitted_at: "2026-06-03T00:00:00+08:00"
+session_context: >-
+  Atomic spec-to-RTL benchmark (both tracks) 0.2.27 floor re-attempt. Each blind agent worked around it by deterministically rendering its own spec's integration layer doc into the gate-expected path (audited honest: no fabrication, no oracle leak, scoring-neutral). Does NOT affect the score because the host scorer is independent of the phase1 gate, but it blocks a clean out-of-box atomic-gate run.

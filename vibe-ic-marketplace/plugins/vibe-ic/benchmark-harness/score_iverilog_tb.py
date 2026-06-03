@@ -354,7 +354,80 @@ def _score_shape_b(design: str, samples: Path, dataset: Path,
                 "reason": "no_pass_marker" + (" (some Test failed)" if fail_re and fail_re.search(out) else "")}
 
 
+def _golden_ref_self_compiles(prob: str, dataset: Path, layout: dict):
+    """Compile the golden reference + hidden testbench ALONE (no candidate DUT)
+    to tell an irreducible benchmark defect from a genuine candidate bug.
+
+    Returns True if iverilog elaborates ref+TB; False if even the official
+    reference cannot satisfy its own testbench (e.g. the TB instantiates ports
+    the reference never declares — unsatisfiable by ANY submission); None when
+    there is no ref/TB to check (determination impossible).
+
+    Deterministic + chip-AGNOSTIC: an exit-code check only — no design-id lookup,
+    no per-problem branch; driven by the registry's module_name_strategy. Honesty:
+    touches the hidden ref/TB at SCORING time only (same as the main scorer),
+    never during blind authoring.
+
+    The TB instantiates BOTH the golden RefModule and the candidate (TopModule),
+    so it cannot compile from ref+TB alone. We provide a stand-in DUT by aliasing
+    the golden ref to the candidate's module name: a well-formed problem then
+    compiles (golden-vs-golden); only a problem whose TB wires ports neither
+    module declares (e.g. TB instantiates .Y2()/.Y4() on a Y1/Y3 module) fails —
+    which is the irreducible defect we want to flag. Scoped to the
+    always_TopModule strategy (VerilogEval-class), where this defect class lives;
+    returns None otherwise (no determination, no flag).
+    """
+    if not layout.get("ref_suffix") or not layout.get("tb_suffix"):
+        return None
+    if layout.get("module_name_strategy") != "always_TopModule":
+        return None
+    dut_name = "TopModule"
+    ref = dataset / f"{prob}{layout['ref_suffix']}"
+    test = dataset / f"{prob}{layout['tb_suffix']}"
+    if not (ref.is_file() and test.is_file()):
+        return None
+    ref_text = ref.read_text(errors="ignore")
+    mm = re.search(r"\bmodule\s+(\w+)", ref_text)
+    if not mm:
+        return None
+    ref_mod = mm.group(1)
+    if ref_mod == dut_name:
+        return None  # ref already IS the DUT name — can't build a distinct alias
+    alias_text = re.sub(rf"\b{re.escape(ref_mod)}\b", dut_name, ref_text)
+    with tempfile.TemporaryDirectory() as td:
+        binp = os.path.join(td, "bin")
+        alias_f = os.path.join(td, "dut_alias.sv")
+        with open(alias_f, "w") as fh:
+            fh.write(alias_text)
+        srcs = [str(ref), alias_f, str(test)]
+        for cmd in (["iverilog", "-g2012", "-s", "tb", "-o", binp] + srcs,
+                    ["iverilog", "-g2012", "-o", binp] + srcs):
+            try:
+                c = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            except subprocess.TimeoutExpired:
+                return None
+            if c.returncode == 0:
+                return True
+        return False
+
+
 def _score_shape_c(prob: str, samples: Path, dataset: Path,
+                   layout: dict, args: dict) -> dict:
+    """Shape-C scorer wrapper: run the core scorer, then on a FAIL annotate
+    whether the failure is an irreducible benchmark defect (the golden reference
+    cannot compile against its own TB) so a provably-unsatisfiable problem is not
+    silently charged to the model. Verdict is NOT changed — flag only (dual
+    report in main()); never inflate the pass rate."""
+    res = _score_shape_c_impl(prob, samples, dataset, layout, args)
+    if res.get("verdict") == "FAIL":
+        gref = _golden_ref_self_compiles(prob, dataset, layout)
+        if gref is False:
+            res["dataset_defect"] = True
+            res["dataset_defect_reason"] = "golden_ref_fails_own_tb"
+    return res
+
+
+def _score_shape_c_impl(prob: str, samples: Path, dataset: Path,
                    layout: dict, args: dict) -> dict:
     sample = samples / f"{prob}_sample01.sv"
     test = dataset / f"{prob}{layout['tb_suffix']}"
@@ -470,6 +543,14 @@ def main():
     # a TB a constant-0 stub passes cannot verify correctness either way.
     npass_disc = npass - nd_pass
     n_eff_disc = n_eff - nd_pass
+    # Irreducible benchmark defects: problems where even the golden reference
+    # cannot compile against its own hidden TB (golden_ref_fails_own_tb) —
+    # unsatisfiable by ANY submission. Flag + DUAL-report (raw pass@1 unchanged
+    # for leaderboard parity, plus a rate that excludes them); never silently
+    # inflate. Mirrors the non-discriminating-TB dual report above.
+    ddef = [r for r in results if r.get("dataset_defect")]
+    n_ddef = len(ddef)
+    n_eff_satisfiable = n_eff - n_ddef
     summary = {
         "benchmark": entry["title"],
         "shape": shape,
@@ -483,6 +564,9 @@ def main():
                                           if r.get("non_discriminating_tb")],
         "passed_discriminating": npass_disc,
         "pass_at_1_discriminating_pct": round(100.0 * npass_disc / n_eff_disc, 2) if n_eff_disc else 0.0,
+        "dataset_defect_count": n_ddef,
+        "dataset_defect_problems": [r[ident].split('/')[-1] for r in ddef],
+        "pass_at_1_excluding_dataset_defects_pct": round(100.0 * npass / n_eff_satisfiable, 2) if n_eff_satisfiable else 0.0,
         "results": results,
     }
     (run / "pass_at_1.json").write_text(json.dumps(summary, indent=2) + "\n")
@@ -498,6 +582,11 @@ def main():
               f"upstream marker metric but flagged): {summary['non_discriminating_tb_designs']}")
         print(f"  rigorous pass@1 (discriminating TBs only) = {npass_disc}/{n_eff_disc} = "
               f"{summary['pass_at_1_discriminating_pct']}%")
+    if n_ddef:
+        print(f"  ⓘ {n_ddef} irreducible benchmark defect(s) — golden ref fails its OWN TB "
+              f"(unsatisfiable by anyone): {summary['dataset_defect_problems']}")
+        print(f"  pass@1 excluding dataset defects = {npass}/{n_eff_satisfiable} = "
+              f"{summary['pass_at_1_excluding_dataset_defects_pct']}%")
     fails = [r for r in results if r["verdict"] not in ("PASS", "SKIP")]
     if fails:
         print(f"  fails ({len(fails)}): " +
