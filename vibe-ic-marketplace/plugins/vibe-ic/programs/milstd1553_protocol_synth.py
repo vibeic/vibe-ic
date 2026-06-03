@@ -1419,11 +1419,46 @@ def apply_milstd1553_synth(generated_docs_dir: Path, is_milstd1553: bool,
 def is_milstd1553(blob: str) -> bool:
     """Content-only `milstd1553` detector (importable, lifted from the runner).
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text).
+
+    FOREIGN-PRIMARY DEFER (mirrors `is_mipi`'s doctrine): the structural
+    MIL-STD-1553 signature below (MIL-STD-1553 + Bus Controller + Remote
+    Terminal) is necessary but NOT sufficient — a SpaceWire spec cites
+    MIL-STD-1553 as a heritage/comparison data bus (its generated L-docs
+    carry incidental "MIL-STD-1553" / "Bus Controller" / "Remote Terminal"
+    tokens) and would otherwise trip the first branch and let the generic
+    1553 synth inject command/status/data-word content into a SpaceWire spec.
+
+    Guard (general, content-only, no chip/SKU/benchmark literal): defer when
+    the blob's DOMINANT subject is SpaceWire — detected by SpaceWire's own
+    distinctive ESA/ECSS-E-ST-50-12C structural signature, which is ABSENT
+    from every genuine MIL-STD-1553 spec:
+      - Data-Strobe (DS) encoding over LVDS (the clock = Data XOR Strobe
+        two-signal scheme; 1553 is Manchester II over twinax, never DS/LVDS);
+      - the SpaceWire control-character set: FCT (Flow Control Token) plus
+        EOP/EEP (End / Error-End of Packet) — 1553 has no token/packet chars.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER: the blob's true subject is SpaceWire. ---
+    _sw_ds = (
+        "data-strobe" in low or "data strobe" in low or "ds encoding" in low
+        or ("data" in low and "strobe" in low
+            and ("xor" in low or "exclusive-or" in low
+                 or "exclusive or" in low)))
+    _sw_lvds = (
+        "lvds" in low or "low-voltage differential" in low
+        or "low voltage differential" in low)
+    _sw_fct = "fct" in low or "flow control token" in low
+    _sw_eop_eep = (
+        "eop" in low or "end of packet" in low
+        or "eep" in low or "error end of packet" in low)
+    spacewire_primary = _sw_ds and _sw_lvds and _sw_fct and _sw_eop_eep
+    if spacewire_primary:
+        return False
+
     return bool(
         ("MIL-STD-1553" in blob
          and "Bus Controller" in blob

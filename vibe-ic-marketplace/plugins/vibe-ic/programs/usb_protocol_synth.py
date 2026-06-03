@@ -15,6 +15,7 @@ Public entry: `apply_usb_synth(generated_docs_dir, is_usb, usb_ic_name)`.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -1068,14 +1069,102 @@ def apply_usb_synth(generated_docs_dir: Path, is_usb: bool,
 # (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
-def is_usb(blob: str) -> bool:
-    """Content-only `usb` detector (importable, lifted from the runner).
+def _wb(tok: str, blob: str) -> bool:
+    """Word-boundary token match (avoids substring false-positives)."""
+    return re.search(r"\b" + re.escape(tok) + r"\b", blob) is not None
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+
+def is_usb(blob: str) -> bool:
+    """Content-only `usb` (USB 2.0) detector with a FOREIGN-PRIMARY DEFER.
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). The original structural
+    USB 2.0 signature (D+/D- differential pair + VBUS, OR USB + NRZI line
+    code, OR USB + endpoint + host controller) is necessary but NOT
+    sufficient: the runner's generic-bus enumeration and the dense USB-2.0
+    spec text bleed "USB"/"D+"/"D-"/"VBUS"/"endpoint"/"host controller"
+    tokens into the L-docs of unrelated specs (BLE / DALI / DisplayPort /
+    I3C / UFS) and of USB's own derived siblings (USB4 / USB-PD), so the
+    three loose branches below would trip on a foreign doc and the generic
+    USB 2.0 synth would inject Universal-Serial-Bus content into a foreign
+    spec's L-docs.
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine — general,
+    content-only, NO chip/SKU/benchmark-name literal as detection logic):
+    if the blob's DOMINANT subject is one of those foreign protocols, defer
+    (False) before the structural USB 2.0 branches run. Each defer keys on
+    the foreign protocol's OWN distinctive structural signature (the same
+    signature its `is_<foreign>` detector keys on):
+      - BLE         — Bluetooth Low Energy + GAP + GATT / advertising
+      - DALI        — DALI + IEC 62386 lighting + control gear/device, or
+                      forward-frame/backward-frame
+      - DisplayPort — VESA Main Link + AUX channel + DPCD
+      - I3C         — I3C + Dynamic Address + IBI / CCC / ENTDAA / Hot-Join
+      - UFS         — UFS + UniPro, or UPIU, or Universal Flash Storage
+      - USB4   (derived CHILD of USB) — sibling-MUTEX on the USB4-only
+                tunneling-router framework (USB4 + router / Connection
+                Manager / 40 Gbps / tunneling); USB 2.0 has none of these.
+      - USB-PD (derived CHILD of USB) — sibling-MUTEX on the Power Delivery
+                BMC line code + Configuration Channel + PDO/RDO power-object
+                contract; USB 2.0 data signalling carries none of these.
+
+    Empirically verified corpus-clean: the real USB benchmark trips NONE of
+    these defers (stays True); ble/dali/displayport/i3c/ufs/usb4/usb_pd each
+    trip their own defer and are suppressed. See
+    test_protocol_detector_no_misfire.py.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT USB 2.0). ---
+    ble_primary = (
+        ("bluetooth low energy" in low
+         and "advertising" in low and "connection" in low)
+        or (_wb("BLE", blob) and _wb("GAP", blob) and _wb("GATT", blob))
+        or (_wb("GATT", blob) and _wb("GAP", blob) and "advertising" in low))
+    dali_primary = (
+        ("dali" in low and "iec 62386" in low and "lighting" in low)
+        or ("dali" in low and "control gear" in low
+            and "control device" in low)
+        or ("forward frame" in low and "backward frame" in low))
+    # DisplayPort-primary: the VESA DP core trio (Main Link + AUX + DPCD).
+    dp_primary = (
+        "main link" in low
+        and ("aux ch" in low or "aux channel" in low or "i2c-over-aux" in low)
+        and ("dpcd" in low or "displayport configuration data" in low))
+    i3c_primary = (
+        (_wb("I3C", blob) and "dynamic address" in low and _wb("IBI", blob))
+        or ("i3c basic" in low and _wb("CCC", blob))
+        or (_wb("I3C", blob) and "hdr-ddr" in low and "hot-join" in low)
+        or (_wb("ENTDAA", blob) and _wb("CCC", blob)))
+    ufs_primary = (
+        (_wb("UFS", blob) and "unipro" in low)
+        or _wb("UPIU", blob)
+        or "universal flash storage" in low
+        or (_wb("UFS", blob) and ("m-phy" in low or "mphy" in low)
+            and "jesd220" in low))
+    # USB4-primary (sibling-MUTEX): USB4 tunneling-router framework that USB
+    # 2.0 never carries.
+    usb4_primary = (
+        _wb("USB4", blob)
+        and ("router" in low or "connection manager" in low
+             or "40 gbps" in low or "tunnel" in low))
+    # USB-PD-primary (sibling-MUTEX): the Power Delivery BMC + CC + PDO/RDO
+    # power-object contract that USB 2.0 data signalling never carries.
+    _pd_name = ("power delivery" in low or "usb-pd" in low
+                or "usb pd" in low or "usb_pd" in low)
+    _pd_bmc = "biphase mark" in low
+    _pd_cc = ("configuration channel" in low
+              or _wb("CC1", blob) or _wb("CC2", blob))
+    _pd_pdo_rdo = (("power data object" in low or _wb("PDO", blob))
+                   and ("request data object" in low or _wb("RDO", blob)))
+    usb_pd_primary = _pd_name and _pd_bmc and (_pd_pdo_rdo or _pd_cc)
+    if (ble_primary or dali_primary or dp_primary or i3c_primary
+            or ufs_primary or usb4_primary or usb_pd_primary):
+        return False
+
+    # --- STRUCTURAL USB 2.0 signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         ("D+" in blob and "D-" in blob
             and "VBUS" in blob)

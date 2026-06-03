@@ -2058,13 +2058,84 @@ def _l23(gd: Path) -> None:
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_sata(blob: str) -> bool:
-    """Content-only `sata` detector (importable, lifted from the runner).
+    """Content-only `sata` detector with a FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text).
+
+    The structural SATA signature below (COMRESET+COMINIT+COMWAKE, or
+    SATA+FIS+AHCI, or Serial ATA + ALIGN/primitive) is necessary but NOT
+    sufficient: SATA shares its OOB handshake (COMRESET/COMINIT/COMWAKE),
+    its 8b/10b primitive vocabulary (ALIGN/SOF/EOF/...) and the literal
+    tokens "SATA"/"FIS"/"AHCI"/"Serial ATA" with several sibling and
+    cross-cited storage / serial transports. Those foreign specs trip the
+    loose branches below when they cite SATA only incidentally as a
+    comparison sibling or a tunneled transport:
+      - sas — Serial Attached SCSI shares the SAS/SATA OOB handshake and
+        carries a full SATA Tunneling Protocol (STP) transport, so a SAS
+        spec literally enumerates COMRESET/COMINIT/COMWAKE, FIS and AHCI.
+        SAS is NOT a child of SATA; it is a SCSI transport that tunnels
+        SATA, so deferring on the SAS-only structure is a true
+        sibling-MUTEX, not an own-kill.
+      - fibre_channel — FC is a SCSI transport whose comprehensive spec
+        enumerates SATA/FIS/AHCI as adjacent storage interfaces.
+      - nvme — NVM Express lists SATA/AHCI as the legacy storage interface
+        it supersedes; its generated L-docs carry "Serial ATA"+"primitive".
+      - pcie — a PCI Express base spec cites SATA/AHCI as a legacy endpoint
+        example; its L-docs carry "Serial ATA"+"primitive"/"ALIGN".
+      - mipi — a MIPI D-PHY/CSI-2 spec cites SATA among serial-link
+        comparisons; its L-docs carry "Serial ATA"+"primitive".
+
+    Guard (mirrors `is_mipi` / `is_nvme` foreign-primary defer doctrine —
+    general, content-only, NO chip/SKU/benchmark-name literal as detection
+    logic): if the blob's DOMINANT subject is one of those foreign
+    protocols, defer (False). Every discriminator below is the foreign's
+    OWN distinctive structural signature (the sibling-MUTEX its own
+    detector relies on), and each one is ABSENT from the real SATA
+    benchmark:
+      - sas-primary: the SSP + SMP transport pair + expander devices + a
+        SAS address / wide-port aggregation (the `is_sas` structural core).
+      - fc-primary: dense "fibre channel" ANDed with the FC fabric
+        signature (FLOGI/PLOGI login, N_Port port type, or the FC-2 layer).
+      - nvme-primary: the SQ+CQ+doorbell queueing model, or "nvm express",
+        or dense "nvme" (the `is_nvme` structural core).
+      - pcie-primary: the TLP+DLLP+LTSSM layering, or dense "pci express"
+        (the `is_pcie` structural core).
+      - mipi-primary: raw "MIPI" + "D-PHY"/"DPHY" (the `is_mipi` core).
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT SATA). ---
+    # SAS: SSP + SMP transport pair + expander + SAS address / wide port.
+    sas_primary = (
+        ("ssp" in low or "serial scsi protocol" in low)
+        and ("smp" in low or "serial management protocol" in low)
+        and "expander" in low
+        and ("sas address" in low or "wide port" in low))
+    # Fibre Channel: dense FC fabric + a login/port-type/layer discriminator.
+    fc_primary = (
+        low.count("fibre channel") >= 10
+        and ("flogi" in low or "plogi" in low
+             or "n_port" in low or "fc-2" in low))
+    # NVMe: the host/controller queueing model, or NVM Express, or dense nvme.
+    nvme_primary = (
+        ("submission queue" in low and "completion queue" in low
+            and "doorbell" in low)
+        or "nvm express" in low
+        or low.count("nvme") >= 20)
+    # PCIe: the TLP/DLLP/LTSSM layering, or a dense "pci express" subject.
+    pcie_primary = (
+        ("TLP" in blob and "DLLP" in blob and "LTSSM" in blob)
+        or low.count("pci express") >= 20)
+    # MIPI: raw MIPI + D-PHY (absent from every SATA AHCI spec).
+    mipi_primary = ("MIPI" in blob and ("D-PHY" in blob or "DPHY" in blob))
+    if (sas_primary or fc_primary or nvme_primary
+            or pcie_primary or mipi_primary):
+        return False
+
+    # --- STRUCTURAL SATA AHCI signature (unchanged from the runner's
+    #     inline detector). ---
     return bool(
         ("COMRESET" in blob and "COMINIT" in blob
             and "COMWAKE" in blob)

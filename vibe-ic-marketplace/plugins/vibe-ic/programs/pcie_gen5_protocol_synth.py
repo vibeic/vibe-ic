@@ -1900,15 +1900,87 @@ def _l23(gd: Path) -> None:
 def is_pcie_gen5(blob: str) -> bool:
     """Content-only `pcie_gen5` detector (importable, lifted from the runner).
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text).
+
+    FOREIGN-PRIMARY DEFER (mirrors `is_mipi`'s foreign-primary doctrine —
+    general, content-only, no chip/SKU/benchmark-name literal as detection
+    logic). The structural Gen5 signature below (32 GT/s + PCI Express, or
+    PCIe 5.0, or PCI Express Base 5, gated on a Gen5 enhanced-PHY token) is
+    NECESSARY but NOT SUFFICIENT: four sibling/foreign families in the
+    PCIe-adjacent interconnect space cite the PCI Express 5.0 32 GT/s
+    physical layer (or carry an incidental "PCIe 5.0" / "equalization"
+    mention) and would otherwise trip it. Each defer keys on the FOREIGN
+    protocol's own PRIMARY structural signature — distinctive multi-token
+    structural features + density counts — so the generic PCIe-Gen5 synth
+    never fires on a foreign spec that only mentions Gen5 incidentally:
+
+      - CXL (Compute Express Link): the CXL.io / CXL.cache / CXL.mem
+        three-sub-protocol stack rides ON PCIe 5.0 Flex-Bus 32 GT/s and a
+        CXL spec is therefore dense in PCIe-Gen5 PHY vocabulary. Its own
+        primary signature is the CXL sub-protocol family + dense "Compute
+        Express Link" / "cxl" usage. A real PCIe-5.0 base spec only cites
+        CXL incidentally (Alternate Protocol Negotiation), so the density
+        cleanly separates subject from citation.
+      - NVLink (NVIDIA): an NVLink doc compares itself to PCIe and cites the
+        PCIe PHY. Its own primary signature is the NVHS sub-link encoding /
+        dense "NVLink" usage — tokens absent from a real PCIe base spec.
+      - NVMe (NVM Express): NVMe is a register-level command set built ON a
+        PCIe controller, so an NVMe spec is dense in PCIe vocabulary. Its
+        own primary signature is the queue model (Submission Queue +
+        Completion Queue + doorbell) and the Admin/I/O Command split — the
+        host/controller command framework that a PHY-layer PCIe spec lacks.
+      - PCIe 1.0 (the base `pcie` sibling, 2.5 GT/s / 8b/10b): PCIe-Gen5
+        EXTENDS this parent and shares its PCI Express structural base, so
+        this is a derived-sibling MUTEX, NOT a foreign defer. The Gen5-vs-
+        Gen1 discriminator is the Gen5 enhanced-PHY FEATURE DENSITY (lane
+        margining at the receiver + retimers, the four-phase enhanced EQ
+        added at 32 GT/s). A doc whose subject is the base spec is
+        overwhelmingly dominated by plain "PCI Express" usage yet carries
+        essentially NONE of the Gen5 enhanced-PHY features; a genuine Gen5
+        spec is saturated with them. Defer when the doc is base-PCIe-
+        dominant AND lacks the Gen5 enhanced-PHY feature density.
+
+    Empirically corpus-clean: pcie_gen5 trips NONE of these (retimer/lane-
+    margining feature density high, CXL/NVLink/NVMe densities low) and stays
+    True; cxl trips cxl_primary, nvlink trips nvlink_primary, nvme trips
+    nvme_primary, the base pcie sibling trips pcie_gen1_primary.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY / SIBLING-MUTEX DEFER (true subject is NOT Gen5). ---
+    # CXL: the .io/.cache/.mem sub-protocol stack + dense brand usage.
+    cxl_primary = (
+        low.count("compute express link") >= 20
+        or low.count("cxl") >= 200
+        or ("CXL.io" in blob and "CXL.mem" in blob and "CXL.cache" in blob
+            and low.count("cxl") >= 100))
+    # NVLink: NVHS sub-link encoding / dense brand usage (absent from PCIe).
+    nvlink_primary = (
+        "NVHS" in blob
+        or low.count("nvlink") >= 20)
+    # NVMe: host/controller queue command framework (PCIe lacks it).
+    nvme_primary = (
+        ("Submission Queue" in blob and "Completion Queue" in blob
+            and "doorbell" in low)
+        or ("Admin Command" in blob and "I/O Command" in blob)
+        or low.count("nvme") >= 50)
+    # PCIe 1.0 sibling-MUTEX: base-spec-dominant yet lacking Gen5 enhanced-PHY
+    # feature density (retimers + lane margining at the receiver).
+    _gen5_phy_feature_density = (
+        low.count("retimer") + low.count("lane margining"))
+    pcie_gen1_primary = (
+        low.count("pci express") >= 600
+        and _gen5_phy_feature_density < 10)
+    if cxl_primary or nvlink_primary or nvme_primary or pcie_gen1_primary:
+        return False
+
+    # --- STRUCTURAL PCI Express 5.0 (Gen5) signature (unchanged). ---
     pcie5_phy = (
-        "retimer" in blob.lower()
-        or "lane margining" in blob.lower()
-        or "equalization" in blob.lower())
+        "retimer" in low
+        or "lane margining" in low
+        or "equalization" in low)
     return bool(
         pcie5_phy and (
             ("32 GT/s" in blob and "PCI Express" in blob)

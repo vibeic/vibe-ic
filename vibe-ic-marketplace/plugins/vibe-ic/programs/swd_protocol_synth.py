@@ -2186,13 +2186,62 @@ def _l23(gd: Path, ic_name: Optional[str]) -> None:
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_swd(blob: str) -> bool:
-    """Content-only `swd` detector (importable, lifted from the runner).
+    """Content-only `swd` detector (importable, lifted from the runner) with a
+    FOREIGN-PRIMARY DEFER for its derived-superset sibling ARM CoreSight.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the same boolean
+    the runner used inline, BELOW the defer.
+
+    FOREIGN-PRIMARY DEFER — ARM CoreSight (a genuine derived-CHILD of the SWD
+    transport). CoreSight is the on-chip debug-and-TRACE ARCHITECTURE that runs
+    ON TOP of an SWD (or JTAG) wire transport: its document names SWD / ADIv5 /
+    SWDIO / SWCLK / DAP / DP / AP as the transport layer, so the bare SWD
+    structural signature below necessarily fires on a CoreSight spec. The
+    correct sibling-MUTEX discriminator (mirrors `is_coresight`'s own
+    SWD-defer, inverted) is the structure that is PRESENT in a CoreSight
+    trace-architecture doc and ABSENT from a pure SWD/ADIv5 Debug-Port doc: the
+    on-chip TRACE FABRIC — an AMBA Trace Bus (ATB) trace transport WITH a trace
+    FUNNEL and a trace REPLICATOR, plus at least one trace SINK
+    (TPIU/ETB/ETF/ETR) and at least one trace SOURCE (ETM/PTM/ITM/STM). A pure
+    SWD/ADIv5 spec describes only the serial-wire Debug Port + MEM-AP + ROM
+    table and lacks the ATB-funnel-replicator trace transport, so this defer
+    fires ONLY when the blob's DOMINANT subject is the CoreSight trace fabric.
+    These are GENERAL protocol-semantic / architectural-block tokens — no
+    benchmark-name / chip / SKU literal.
     """
     if not blob:
         return False
+
+    low = blob.lower()
+    # --- FOREIGN-PRIMARY DEFER: ARM CoreSight trace architecture (superset). ---
+    # ATB used as a TRACE interconnect (parenthetical/standalone forms).
+    _cs_atb = ("amba trace bus" in low or " atb " in f" {low} "
+               or "atb)" in low or "(atb" in low)
+    _cs_funnel = "funnel" in low
+    _cs_replicator = "replicator" in low
+    # Trace sinks (off-chip TPIU / on-chip ETB/ETF/ETR RAM).
+    _cs_sink = sum([
+        ("tpiu" in low or "trace port interface unit" in low),
+        ("etb" in low or "embedded trace buffer" in low),
+        ("etf" in low or "embedded trace fifo" in low),
+        ("etr" in low or "embedded trace router" in low),
+    ])
+    # Trace sources.
+    _cs_src = sum([
+        ("etm" in low or "embedded trace macrocell" in low),
+        ("ptm" in low or "program trace macrocell" in low),
+        ("itm" in low or "instrumentation trace" in low),
+        ("stm" in low or "system trace macrocell" in low
+         or "system trace protocol" in low),
+    ])
+    _cs_trace_transport = _cs_atb and _cs_funnel and _cs_replicator
+    coresight_primary = (
+        _cs_trace_transport and _cs_sink >= 1 and _cs_src >= 1)
+    if coresight_primary:
+        return False
+
+    # --- STRUCTURAL SWD / ADIv5 signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         ("SWDIO" in blob and "SWCLK" in blob
             and "DAP" in blob)

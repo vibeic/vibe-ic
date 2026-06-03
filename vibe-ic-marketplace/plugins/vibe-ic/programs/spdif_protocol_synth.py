@@ -1169,9 +1169,47 @@ def is_spdif(blob: str) -> bool:
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT S/PDIF). ---
+    # The structural S/PDIF signature below — in particular the loose
+    # "IEC 60958" + "audio" branch — is necessary but NOT sufficient: A2B
+    # (Analog Devices Automotive Audio Bus, AD24xx) is an audio-family bus
+    # that cites IEC 60958 / S/PDIF (and AES3) as comparison interfaces and
+    # tunnels local audio, so its generated L-docs carry incidental
+    # "IEC 60958" + "audio" tokens that trip that branch and have the generic
+    # S/PDIF synth inject biphase-mark / subframe / preamble text into an A2B
+    # spec. Defer when the blob's DOMINANT subject is A2B (a sibling MUTEX,
+    # mirroring is_a2b's own S/PDIF-primary defer — general, content-only, no
+    # chip/SKU/benchmark literal as detection logic).
+    #
+    # A2B's distinctive structural signature (absent from every real S/PDIF
+    # spec): a sample-rate-locked SUPERFRAME with downstream + upstream
+    # portions, a MAIN/SUB node hierarchy with node discovery/addressing,
+    # PHANTOM POWER over the bus, and the AD24xx transceiver family. S/PDIF is
+    # a point-to-point biphase-mark link with NONE of these — no superframe,
+    # no node discovery, no phantom power, no daisy-chain transceiver — so
+    # deferring on this conjunction never suppresses a real S/PDIF spec.
+    _a2b_name = "automotive audio bus" in low
+    _a2b_xcvr = ("ad24xx" in low or "ad242x" in low
+                 or "ad2410" in low or "ad2420" in low or "ad2425" in low)
+    _a2b_superframe = ("superframe" in low
+                       and "downstream" in low and "upstream" in low)
+    _a2b_node_hier = (("main node" in low or "master node" in low)
+                      and ("sub node" in low or "sub nodes" in low
+                           or "slave node" in low or "slave nodes" in low)
+                      and ("node discovery" in low or "node address" in low
+                           or "discovery" in low))
+    _a2b_phantom = "phantom power" in low
+    a2b_primary = (
+        (_a2b_name or _a2b_xcvr)
+        and (_a2b_superframe or _a2b_node_hier or _a2b_phantom))
+    if a2b_primary:
+        return False
+
     return bool(
-        ("SPDIF" in blob.upper() and "biphase" in blob.lower()
-         and "subframe" in blob.lower()
-         and "preamble" in blob.lower())
-        or ("IEC 60958" in blob and "audio" in blob.lower())
+        ("SPDIF" in blob.upper() and "biphase" in low
+         and "subframe" in low
+         and "preamble" in low)
+        or ("IEC 60958" in blob and "audio" in low)
         or ("S/PDIF" in blob and "Toslink" in blob))

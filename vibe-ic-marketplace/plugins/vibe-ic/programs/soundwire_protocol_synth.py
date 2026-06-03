@@ -2331,10 +2331,52 @@ def is_soundwire(blob: str) -> bool:
     """Content-only `soundwire` detector (importable, lifted from the runner).
 
     Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    same boolean the runner used inline, with a FOREIGN-PRIMARY DEFER
+    bolted on top (mirrors `is_mipi`'s defer doctrine).
+
+    The structural signature below (SoundWire + Master/Slave/Stream/Data
+    Port) is necessary but NOT sufficient: the A2B (Automotive Audio Bus)
+    spec is an audio-distribution bus that explicitly tunnels and compares
+    itself to SoundWire / I2S, so its L-docs carry incidental "SoundWire"
+    + "Master"/"Slave"/"Stream" tokens that trip the loose branches below
+    and let the generic SoundWire synth fire on an A2B-primary spec.
+
+    Guard (general, content-only, no chip/SKU/benchmark-name literal as
+    detection logic): if the blob's DOMINANT subject is A2B, defer (False).
+    A2B has a unique structural signature absent from every real SoundWire
+    benchmark: a twisted-pair daisy-chain distributing audio+control+POWER,
+    a main/sub node hierarchy with node discovery, a sample-rate-locked
+    superframe with downstream+upstream regions, phantom power over the bus,
+    and an AD24xx transceiver. Mirrors `is_a2b`'s own A2B-structure quorum.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is A2B, not SoundWire).
+    # A2B-only structure: twisted-pair daisy chain + main/sub node hierarchy +
+    # superframe-down/up + (phantom/bus power OR AD24xx transceiver). These
+    # tokens are absent from every real SoundWire spec (count 0). ---
+    _a2b_name = ("automotive audio bus" in low or "a2b" in low)
+    _a2b_line = (("twisted pair" in low or "twisted-pair" in low)
+                 and ("daisy chain" in low or "daisy-chain" in low
+                      or "daisy chained" in low or "daisy-chained" in low))
+    _a2b_nodes = (("main node" in low or "master node" in low)
+                  and ("sub node" in low or "slave node" in low))
+    _a2b_superframe = ("superframe" in low
+                       and "downstream" in low and "upstream" in low)
+    _a2b_power = ("phantom power" in low
+                  or ("bus power" in low and _a2b_line))
+    _a2b_xcvr = ("ad2410" in low or "ad2420" in low or "ad2425" in low
+                 or "ad242x" in low or "ad24xx" in low)
+    a2b_primary = (
+        _a2b_line and _a2b_nodes and _a2b_superframe
+        and (_a2b_power or _a2b_xcvr or _a2b_name))
+    if a2b_primary:
+        return False
+
+    # --- STRUCTURAL SoundWire signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         ("SoundWire" in blob
             and ("MIPI" in blob

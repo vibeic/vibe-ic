@@ -28,11 +28,17 @@ Public entry: `apply_mipi_dsi_synth(generated_docs_dir, is_mipi_dsi,
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
 
 # ----- helpers --------------------------------------------------------------
+
+def _wb(tok: str, blob: str) -> bool:
+    """Word-boundary token match (avoids substring false-positives)."""
+    return re.search(r"\b" + re.escape(tok) + r"\b", blob) is not None
+
 
 def _empty(v) -> bool:
     return v in (None, {}, []) or (isinstance(v, str) and not v.strip())
@@ -1875,13 +1881,73 @@ def apply_mipi_dsi_synth(generated_docs_dir, is_mipi_dsi: bool,
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_mipi_dsi(blob: str) -> bool:
-    """Content-only `mipi_dsi` detector (importable, lifted from the runner).
+    """Content-only `mipi_dsi` detector with a FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text).
+
+    The structural DSI signature below ("DSI"+"DCS"+Command Mode+Video Mode,
+    or MIPI+DSI+Tearing Effect, or DSI+"Display Serial Interface") is
+    necessary but NOT sufficient: DSI shares the MIPI D-PHY physical layer
+    and the Long/Short-Packet + ECC + CRC-16 framing with its CSI-2 camera
+    sibling, and DSI is routinely cited as a comparison interface inside
+    sibling-MIPI / UFS multi-doc blobs. Three foreign benchmarks therefore
+    trip the loose branches even though DSI is not their subject:
+      - generic-MIPI D-PHY / CSI-2 app note (incidental "DSI" + a single
+        "Display Serial Interface" mention),
+      - mipi_csi2 (its DCS / Command-Mode / Video-Mode cross-references trip
+        branch 1), and
+      - UFS (incidental "DSI" + "Display Serial Interface" co-occurrence).
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine — general,
+    content-only, no chip/SKU/benchmark literal as detection logic): if the
+    blob's DOMINANT subject is a foreign protocol, defer (False), so the DSI
+    synth never fires on a foreign spec that only mentions DSI incidentally:
+      - UFS  (UniPro+M-PHY, UPIU, JESD220+UFS, or dense "ufs"),
+      - CSI-2 (the camera serial interface is the running subject: its
+        mention density exceeds DSI's AND the CSI-2-only camera-pipeline
+        structure — image-sensor role and/or the Camera Control Interface
+        sideband — is present). A real DSI display spec is DSI-dominant
+        (DSI mentioned far more than CSI-2) and lacks the image-sensor /
+        CCI camera structure, so it never trips this defer.
+
+    Empirically corpus-clean: mipi_dsi stays True; mipi/mipi_csi2 trip
+    csi2_primary, ufs trips ufs_primary, so all three are suppressed.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT MIPI DSI). ---
+    # UFS-primary: Universal Flash Storage / UniPro / M-PHY / UPIU / JESD220
+    # is the running subject (mirrors is_ufs + the is_mipi ufs_primary defer).
+    ufs_primary = (
+        low.count("ufs") >= 20
+        or _wb("UPIU", blob)
+        or ("unipro" in low and ("m-phy" in low or "mphy" in low))
+        or ("jesd220" in low and ("universal flash storage" in low
+                                  or _wb("UFS", blob))))
+    # CSI-2-primary: the Camera Serial Interface is the running subject. DSI
+    # and CSI-2 share the D-PHY + packet framing, so the discriminator is
+    # SUBJECT DOMINANCE — CSI-2 is mentioned more than DSI — combined with the
+    # CSI-2-only camera-pipeline structure (image-sensor source role and/or the
+    # Camera Control Interface sensor-control sideband, present in NO DSI
+    # display spec). A genuine DSI spec is DSI-dominant and carries neither.
+    csi2_density = (low.count("csi-2") + low.count("csi2")
+                    + low.count("camera serial interface"))
+    dsi_density = low.count("dsi")
+    csi2_camera_struct = (
+        "camera control interface" in low
+        or "image sensor" in low
+        or ("camera" in low and "sensor" in low))
+    csi2_primary = (
+        csi2_density >= 20
+        and csi2_density > dsi_density
+        and csi2_camera_struct)
+    if ufs_primary or csi2_primary:
+        return False
+
+    # --- STRUCTURAL MIPI DSI signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         ("DSI" in blob and "DCS" in blob
             and "Command Mode" in blob and "Video Mode" in blob)

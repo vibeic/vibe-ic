@@ -3177,13 +3177,65 @@ def _apply_l23(gd: Path) -> None:
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_canfd(blob: str) -> bool:
-    """Content-only `canfd` detector (importable, lifted from the runner).
+    """Content-only `canfd` detector (importable) WITH a FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text) — never a filename or
+    benchmark name. The original structural signature (below) is unchanged.
+
+    The structural signature is necessary but NOT sufficient. CAN-FD is a
+    derived-CHILD extension of two sibling protocols that share its base
+    vocabulary, so their specs incidentally carry CAN-FD tokens (every CAN /
+    CANopen spec names "CAN-FD" and "64 ... payload" when describing the FD
+    extension, and the Bosch M_CAN controller is cited by name). Without a
+    guard, the loose ``"CAN-FD" + "64" + "payload"`` branch fires on a
+    Classical-CAN or a CANopen spec whose true subject is NOT CAN-FD. Guard
+    (mirrors the `is_mipi` / `_axi_primary` foreign-primary-defer doctrine —
+    general, content-only, sibling-MUTEX via each foreign's DISTINCTIVE
+    structural signature):
+
+      - CANopen-primary: the CiA-301 application-layer signature absent from a
+        CAN-FD data-link spec — the Object Dictionary PLUS the PDO/SDO/NMT
+        communication-object triple PLUS a COB-ID / Node-ID. (Same signature
+        `is_canopen` keys on.) CANopen layers ON CAN-FD, so it must MUTEX out.
+
+      - Classical-CAN-primary: a CAN data-link spec that names "CAN-FD" only
+        to describe the FD extension but is NOT itself a CAN-FD spec. The
+        sibling-MUTEX discriminator is CAN-FD's own DISTINCTIVE signature: the
+        FD frame-format control bits (BRS + FDF + ESI) OR the Bosch M_CAN
+        register controller (M_CAN + CCCR). A real CAN-FD spec ALWAYS exhibits
+        at least one of these (the strong structural branches below require
+        them); a Classical-CAN-primary doc exhibits NEITHER and only trips the
+        loose incidental-mention branch — so defer when both are absent.
+
+    Empirically corpus-clean: `canfd` carries both FD discriminators and is
+    NOT CANopen-primary, so it stays True; `canopen` trips canopen_primary and
+    `can` carries neither FD discriminator, so both are suppressed.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT CAN-FD). ---
+    # CANopen application-layer structural signature (CiA-301 kernel).
+    _obj_dict = "object dictionary" in low
+    _pdo = ("pdo" in low or "process data object" in low)
+    _sdo = ("sdo" in low or "service data object" in low)
+    _nmt = ("nmt" in low or "network management" in low)
+    _cob_or_node = ("cob-id" in low or "cob id" in low
+                    or "node-id" in low or "node id" in low)
+    canopen_primary = _obj_dict and (_pdo and _sdo and _nmt) and _cob_or_node
+
+    # CAN-FD's DISTINCTIVE discriminators (sibling-MUTEX vs Classical CAN):
+    # the FD frame-format control bits OR the Bosch M_CAN register controller.
+    _fd_frame_bits = ("BRS" in blob and "FDF" in blob and "ESI" in blob)
+    _mcan_controller = ("M_CAN" in blob and "CCCR" in blob)
+    classical_can_primary = not (_fd_frame_bits or _mcan_controller)
+
+    if canopen_primary or classical_can_primary:
+        return False
+
+    # --- STRUCTURAL CAN-FD signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         ("BRS" in blob and "FDF" in blob and "ESI" in blob)
         or ("CAN-FD" in blob and "64" in blob

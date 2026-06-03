@@ -2379,13 +2379,67 @@ def _l23(gd: Path) -> None:
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_ace(blob: str) -> bool:
-    """Content-only `ace` detector (importable, lifted from the runner).
+    """Content-only `ace` detector (importable, lifted from the runner) WITH a
+    FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text). Below the defer it is
+    byte-for-byte the same boolean the runner used inline.
+
+    The structural ACE signature (AxBAR+AxDOMAIN+AxSNOOP, OR ACE+ReadShared+
+    ReadUnique, OR DVM+TLB+AXI/AMBA) is necessary but NOT sufficient. The full
+    *AMBA AXI Protocol Specification* (ARM IHI 0022) describes ACE as one
+    coherency EXTENSION alongside the AXI baseline, so the document carries the
+    ACE signal-name vocabulary in full even though its DOMINANT subject is the
+    comprehensive multi-variant AXI bus protocol (AXI3 / AXI4 / AXI4-Lite /
+    AXI5 / ACE-Lite), not the standalone ACE coherency layer. Without a guard
+    the generic ACE synth FORCE-overwrites those AXI-baseline specs' L-docs
+    with ACE-only gold (ic_name, purpose, key_features), which is wrong: the
+    AXI baseline is handled by the R46-R52 universal protocol-fact path, not
+    the ACE overlay.
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine and the AHB+APB
+    `_axi_primary` doctrine — general, content-only, NO chip/SKU/benchmark-name
+    literal as detection logic): if the blob's DOMINANT subject is the
+    comprehensive AMBA AXI Protocol Specification document, defer (False) so the
+    ACE overlay never fires on an AXI-baseline spec that merely describes ACE as
+    an extension. The signature is the dense ARM IHI 0022 / AMBA AXI document
+    identity (a real ACE-focused spec cites these only incidentally) combined
+    with the COMPLETE AXI baseline: all five AXI channels named AND multiple
+    AXI variants enumerated (AXI3 + AXI4 + AXI4-Lite). A standalone ACE spec
+    focuses on the snoop/coherency layer and does not carry this dense
+    full-baseline AXI-document signature.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is the comprehensive
+    #     AMBA AXI Protocol Specification, ACE is only an extension chapter). ---
+    # Document-identity density: the ARM IHI 0022 AMBA AXI spec repeats its own
+    # title/document-id on every page (header/footer). Incidental ACE citation
+    # never reaches this density.
+    _axi_doc_identity = (
+        low.count("amba axi") >= 20
+        or low.count("ihi 0022") >= 20
+        or low.count("arm ihi") >= 20)
+    # Complete AXI baseline channel enumeration (the five AXI channels).
+    _axi_five_channels = (
+        "write address channel" in low
+        and "read address channel" in low
+        and "write data channel" in low
+        and "read data channel" in low
+        and "write response channel" in low)
+    # Multiple AXI baseline variants enumerated (a hallmark of the full spec,
+    # absent from an extension-only ACE document).
+    _axi_multi_variant = (
+        "axi3" in low and "axi4" in low and "axi4-lite" in low)
+    axi_spec_primary = (
+        _axi_doc_identity and _axi_five_channels and _axi_multi_variant)
+    if axi_spec_primary:
+        return False
+
+    # --- STRUCTURAL ACE coherency-extension signature (unchanged from the
+    #     runner's inline detector). ---
     return bool(
         ("AxBAR" in blob and "AxDOMAIN" in blob
             and "AxSNOOP" in blob)

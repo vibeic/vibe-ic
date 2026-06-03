@@ -39,6 +39,7 @@ Public entry: `apply_usb4_synth(generated_docs_dir, is_usb4, usb4_ic_name)`.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -48,6 +49,15 @@ from typing import Optional
 # ----------------------------------------------------------------------
 def _empty(v) -> bool:
     return v in (None, {}, []) or (isinstance(v, str) and not v.strip())
+
+
+def _wb_low(tok: str, low: str) -> bool:
+    """Whole-word match of a short token in already-lowercased text.
+
+    Avoids substring false-positives for short acronyms (e.g. 'pdo' must
+    not match 'clampdown', 'rdo' must not match 'teardown').
+    """
+    return re.search(r"\b" + re.escape(tok) + r"\b", low) is not None
 
 
 def _read(p: Path) -> dict:
@@ -1221,10 +1231,78 @@ def is_usb4(blob: str) -> bool:
     """Content-only `usb4` detector (importable, lifted from the runner).
 
     Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    same structural boolean the runner used inline, PRECEDED by a
+    FOREIGN-PRIMARY DEFER (the v0.1.95 ORGANIC-usb4-misfire guard).
+
+    The structural signature ("USB4" + a USB4-only structural token:
+    router / 40 Gbps / Connection Manager) is necessary but NOT
+    sufficient. USB4 is the tunneling super-protocol that carries
+    DisplayPort and PCIe tunnels and negotiates power over USB Power
+    Delivery, so a VESA DisplayPort spec or a USB-PD spec that merely
+    NAMES USB4 (DisplayPort cites "alignment with USB4"; USB-PD is the
+    power layer USB4 reuses) carries the loose USB4 structural tokens and
+    would otherwise trip this detector and let the generic USB4 synth
+    inject tunneling-fabric content into a DisplayPort / USB-PD spec.
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine — general,
+    content-only, no chip/SKU/benchmark literal as detection logic): if
+    the blob's DOMINANT subject is a foreign protocol, defer (False):
+
+      - DisplayPort (the VESA DP structural signature: Main Link + AUX +
+        DPCD + a DP-only discriminator [CR/EQ link training OR the
+        RBR/HBR link-rate vocabulary]). This trio+discriminator is the
+        DisplayPort signature; it is absent from a real USB4 spec (which
+        carries DisplayPort only as a tunnel, never the native Main
+        Link + AUX + DPCD wire interface).
+      - USB Power Delivery (the USB-PD power-contract signature: Biphase
+        Mark Coding + the PDO/RDO power-object pair + a Source/Sink
+        contract over VBUS/VCONN). A native USB4 transport spec carries
+        none of BMC + PDO/RDO power-object negotiation; it only mentions
+        PD in passing, so this signature marks a PD-primary doc.
+
+    Empirically corpus-clean: the real `usb4` benchmark trips NEITHER
+    defer (no DP Main-Link+AUX+DPCD trio, no BMC+PDO/RDO power contract)
+    and stays True; `displayport` trips dp_primary and `usb_pd` trips
+    pd_primary, so both are suppressed.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT USB4). ---
+    # DisplayPort-primary: the VESA DP structural signature (Main Link +
+    # AUX + DPCD + a DP-only discriminator). Mirrors displayport_synth's
+    # `is_displayport`.
+    _dp_main_link = "main link" in low
+    _dp_aux = ("aux ch" in low or "aux channel" in low
+               or "i2c-over-aux" in low)
+    _dp_dpcd = ("dpcd" in low
+                or "displayport configuration data" in low)
+    _dp_cr_eq = (
+        (("clock recovery" in low or "clock-recovery" in low)
+         and ("channel equalization" in low
+              or "channel-equalization" in low))
+        or ("link training" in low and "training_pattern_set" in low))
+    _dp_rate = (("rbr" in low and "hbr" in low) or "hbr2" in low
+                or "hbr3" in low or "link_bw_set" in low)
+    dp_primary = (_dp_main_link and _dp_aux and _dp_dpcd
+                  and (_dp_cr_eq or _dp_rate))
+
+    # USB-PD-primary: the USB Power Delivery power-contract signature
+    # (Biphase Mark Coding + PDO/RDO power-object pair + Source/Sink over
+    # VBUS/VCONN). Mirrors usb_pd_synth's `is_usb_pd` structural quorum.
+    _pd_bmc = "biphase mark" in low
+    _pd_pdo_rdo = (("power data object" in low or _wb_low("pdo", low))
+                   and ("request data object" in low or _wb_low("rdo", low)))
+    _pd_source_sink = ("source" in low and "sink" in low
+                       and ("vbus" in low or "vconn" in low))
+    pd_primary = _pd_bmc and _pd_pdo_rdo and _pd_source_sink
+
+    if dp_primary or pd_primary:
+        return False
+
+    # --- STRUCTURAL USB4 signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         ("32 GT/s" not in blob)
         and "USB4" in blob and (

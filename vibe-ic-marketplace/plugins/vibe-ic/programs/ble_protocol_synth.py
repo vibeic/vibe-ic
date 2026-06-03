@@ -1744,13 +1744,53 @@ def apply_ble_synth(generated_docs_dir: Path, is_ble: bool,
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_ble(blob: str) -> bool:
-    """Content-only `ble` detector (importable, lifted from the runner).
+    """Content-only `ble` detector with a FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text). The original structural
+    BLE signature (Bluetooth Low Energy + advertising + connection, OR
+    BLE + GAP + GATT, OR Bluetooth + LE + 2.4 GHz + 40 channels) is
+    necessary but NOT sufficient: a LoRa / LoRaWAN spec routinely cites
+    BLE / GAP / GATT / Bluetooth Low Energy as a coexistence / comparison
+    PAN technology, so all three loose branches below trip on a LoRa doc
+    and the generic BLE synth would inject Bluetooth Core content into a
+    LoRaWAN spec's L-docs.
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine — general,
+    content-only, no chip/SKU/benchmark-name literal as detection logic):
+    if the blob's DOMINANT subject is LoRa / LoRaWAN, defer (False). LoRa's
+    distinctive PHY+MAC structural signature is Chirp Spread Spectrum (CSS)
+    + Spreading Factor SF7-SF12, plus the LoRaWAN MAC framework (dense
+    "lorawan", Class A/B/C device classes, OTAA/ABP activation). None of
+    these tokens appear in a real Bluetooth Core / BLE spec, so deferring
+    on them suppresses LoRa without touching own-fire. See
+    test_protocol_detector_no_misfire.py.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT BLE). ---
+    # LoRa-primary: the Semtech LoRa PHY (Chirp Spread Spectrum + Spreading
+    # Factor) and/or the LoRaWAN MAC framework. A real BLE spec carries
+    # zero of these; a LoRa spec carries them densely (CSS + SF, lorawan
+    # mentions, the Class A/B/C device classes, OTAA/ABP activation).
+    _lora_css = ("chirp spread spectrum" in low
+                 or ("chirp" in low and "spread spectrum" in low))
+    _lora_sf = ("spreading factor" in low
+                or any(("sf" + str(n)) in low for n in range(7, 13)))
+    _lora_phy = _lora_css and _lora_sf
+    _lorawan_mac = (
+        low.count("lorawan") >= 5
+        or (("class a" in low and "class c" in low)
+            and ("otaa" in low or "abp" in low
+                 or "over-the-air activation" in low
+                 or "activation by personalization" in low)))
+    lora_primary = _lora_phy or _lorawan_mac
+    if lora_primary:
+        return False
+
+    # --- STRUCTURAL BLE signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         ("Bluetooth Low Energy" in blob
          and "advertising" in blob.lower()

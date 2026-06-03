@@ -1636,13 +1636,83 @@ def _l23(gd: Path) -> None:
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_sdmmc(blob: str) -> bool:
-    """Content-only `sdmmc` detector (importable, lifted from the runner).
+    """Content-only `sdmmc` detector with a FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text). The original structural
+    SD/MMC signature below (CMD0+ACMD41+CID+CSD+OCR, OR "SD Card"+CMD
+    line+DAT, OR MultiMediaCard+CMD line, OR "SD Memory Card"+CID/CSD)
+    is necessary but NOT sufficient: two foreign benchmarks trip it.
+
+    Guard (mirrors `is_mipi` / `is_ble` foreign-primary defer doctrine —
+    general, content-only, NO chip/SKU/benchmark-name literal as
+    detection logic): if the blob's DOMINANT subject is one of the
+    foreign protocols below, defer (False) so the generic SD/MMC synth
+    never fires on a spec that only mentions SD/MMC card tokens
+    incidentally (e.g. as a referenced base spec).
+
+      - eMMC (JEDEC JESD84): a genuine derived-CHILD of the MMC/SD command
+        protocol. It inherits CID/CSD/OCR/CMD0/MultiMediaCard tokens (the
+        shared base) so it trips the loose SD/MMC branches below, but it
+        carries an EMBEDDED managed-NAND structure a removable SD/MMC card
+        spec never has. The sibling-MUTEX is the eMMC-ONLY structural
+        signature (EXT_CSD / 8-bit DAT[7:0] bus / Data Strobe+HS400 /
+        PARTITION_CONFIG / Boot Area Partition / RST_n pin / RPMB /
+        Command Queuing / FFU / JESD84). Requiring >= 2 of these (mirrors
+        `is_emmc`'s own MUTEX) keeps the defer off a real removable-card
+        doc (which carries ZERO of the hard anchors) while firing on a
+        genuine eMMC doc that carries them densely.
+
+      - BLE (Bluetooth Core / Bluetooth Low Energy): a BLE / SDIO-cite doc
+        references the "SD Memory Card" base spec and carries an unrelated
+        "CID" token (Company ID), so the "SD Memory Card"+CID branch trips.
+        The distinctive Bluetooth structural signature (Bluetooth Low
+        Energy + the L2CAP / HCI / GAP / GATT stack + advertising) is
+        absent from every real SD/MMC spec, so deferring on it is safe.
+
+    Empirically verified corpus-clean: the real `sdmmc` benchmark trips
+    NONE of these defers (0 hard eMMC anchors, 0 Bluetooth-stack tokens)
+    and stays True; `emmc` trips emmc_primary and `ble` trips ble_primary,
+    so both are suppressed. See test_protocol_detector_no_misfire.py.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT SD/MMC). ---
+    # eMMC-primary (sibling-MUTEX): the embedded managed-NAND structure a
+    # removable SD/MMC card spec never has. Each token is eMMC-exclusive
+    # even in the full superset blob; require >= 2 (mirrors `is_emmc`).
+    _emmc_features = [
+        ("EXT_CSD" in blob or "Extended CSD" in blob),
+        ("DAT[7:0]" in blob or "8-bit DAT" in blob
+         or "8-bit data bus" in low),
+        ("Data Strobe" in blob and "HS400" in blob),
+        ("PARTITION_CONFIG" in blob),
+        ("Boot Area Partition" in blob
+         or ("boot partition" in low and "RPMB" in blob)),
+        ("RST_n" in blob or "RST_N" in blob),
+        ("RPMB" in blob or "Replay Protected Memory Block" in blob),
+        ("CMDQ" in blob or "Command Queuing" in blob
+         or "Command Queueing" in blob),
+        ("FFU" in blob or "Field Firmware Update" in blob),
+        ("JESD84" in blob),
+    ]
+    emmc_primary = sum(1 for f in _emmc_features if f) >= 2
+
+    # BLE-primary: the distinctive Bluetooth Core / BLE structural
+    # signature (Bluetooth Low Energy + the L2CAP / HCI host-controller
+    # stack + GAP / GATT + advertising). A real SD/MMC spec carries zero
+    # of these; a BLE doc carries them densely.
+    _ble_le = ("Bluetooth Low Energy" in blob
+               or ("Bluetooth" in blob and "BLE" in blob))
+    _ble_stack = (("L2CAP" in blob and "HCI" in blob)
+                  or ("GAP" in blob and "GATT" in blob))
+    ble_primary = (_ble_le and _ble_stack
+                   and "advertising" in low)
+
+    if emmc_primary or ble_primary:
+        return False
+
     return bool(
         ("CMD0" in blob and "ACMD41" in blob
             and "CID" in blob and "CSD" in blob

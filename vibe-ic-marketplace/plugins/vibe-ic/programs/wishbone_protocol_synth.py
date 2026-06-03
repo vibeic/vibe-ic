@@ -25,6 +25,7 @@ Public entry: `apply_wishbone_synth(generated_docs_dir, is_wishbone,
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -1956,13 +1957,63 @@ def _l23(gd: Path) -> None:
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_wishbone(blob: str) -> bool:
-    """Content-only `wishbone` detector (importable, lifted from the runner).
+    """Content-only `wishbone` detector with a FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text).
+
+    The structural signature (Wishbone + CYC/STB/ACK, or Wishbone +
+    OpenCores + interconnect, or the CLK_I/RST_I/ADR_O/DAT_O master signal
+    set) is necessary but NOT sufficient: sibling SoC-bus specs (Avalon,
+    OCP) enumerate Wishbone in a "comparison to other SoC interconnects"
+    section, so they carry the `Wishbone`+`CYC`+`STB`+`ACK` (and even
+    `OpenCores`+`interconnect`) tokens and would otherwise trip the loose
+    structural branches below and have the generic Wishbone synth inject
+    OpenCores Wishbone B.4 content into their L-docs.
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine and the
+    `is_avalon` / `is_ocp` sibling-MUTEX doctrine — general, content-only,
+    no chip/SKU/benchmark-name literal as detection logic): if the blob's
+    DOMINANT subject is a foreign SoC bus, defer (False), keyed on that
+    foreign protocol's OWN distinctive structural signal signature, which a
+    real Wishbone spec never carries:
+      - Avalon: the Avalon-MM signal pair `waitrequest` + `readdatavalid`
+        (pipelined-read completion + wait-state), or the Avalon-ST framing
+        pair `startofpacket` + `endofpacket`. These signal names are unique
+        to Altera/Intel Avalon among SoC buses (mirrors `is_avalon`'s hard
+        structural gate).
+      - OCP: the M/S-prefixed handshake trio `MCmd` + `SCmdAccept` +
+        `SResp` (master command / slave request-accept / slave response).
+        This mixed-case trio is unique to OCP-IP (mirrors `is_ocp`'s
+        command core); matched word-boundary so an incidental substring
+        cannot fire.
+
+    Empirically verified corpus-clean: the real `wishbone` benchmark trips
+    NEITHER defer (it carries none of the Avalon signal names and none of
+    the OCP M/S handshake names) and stays True; `avalon` trips
+    `avalon_primary`, `ocp` trips `ocp_primary`, so both are suppressed.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT Wishbone). ---
+    # Avalon-primary: the Avalon-MM `waitrequest`+`readdatavalid` signal pair
+    # (wait-state + pipelined-read completion) or the Avalon-ST framing pair
+    # `startofpacket`+`endofpacket` — Avalon-only signal names.
+    avalon_primary = (
+        ("waitrequest" in low and "readdatavalid" in low)
+        or ("startofpacket" in low and "endofpacket" in low))
+    # OCP-primary: the M/S-prefixed handshake trio (master command + slave
+    # request-accept + slave response), word-boundary so a substring cannot
+    # fire. Unique to OCP among the SoC buses.
+    def _wb_tok(tok: str) -> bool:
+        return re.search(r"\b" + re.escape(tok) + r"\b", blob) is not None
+    ocp_primary = _wb_tok("MCmd") and _wb_tok("SCmdAccept") and _wb_tok("SResp")
+    if avalon_primary or ocp_primary:
+        return False
+
+    # --- STRUCTURAL WISHBONE B.4 signature (unchanged from the runner's
+    #     inline detector). ---
     return bool(
         ("Wishbone" in blob and "CYC" in blob
             and "STB" in blob and "ACK" in blob)

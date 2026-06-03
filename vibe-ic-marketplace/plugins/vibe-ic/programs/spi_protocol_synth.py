@@ -890,14 +890,113 @@ def _apply_spi_specific(gd: Path, spi_ic_name: Optional[str]) -> None:
 # (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
-def is_spi(blob: str) -> bool:
-    """Content-only `spi` detector (importable, lifted from the runner).
+def _wb(tok: str, blob: str) -> bool:
+    """Word-boundary token match (avoids substring false-positives)."""
+    import re
+    return re.search(r"\b" + re.escape(tok) + r"\b", blob) is not None
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+
+def is_spi(blob: str) -> bool:
+    """Content-only `spi` detector (importable, lifted from the runner) WITH a
+    FOREIGN-PRIMARY DEFER.
+
+    Empty-safe. Reads ONLY ``blob`` (spec text). The structural signature
+    below (MOSI+MISO+SCK pin triple, OR CPOL+CPHA control-bit pair) is the
+    byte-for-byte original the runner used inline, but it is necessary and NOT
+    sufficient: several neighbouring protocols either ride directly on top of
+    the SPI bus (TPM has an SPI-FIFO transport, the JEDEC xSPI/QSPI/OSPI flash
+    interface is an EXPANSION of classic SPI) or cite SPI signals in passing
+    (the EtherCAT slave's PDI / a LoRa transceiver's host SPI / an MDIO
+    register-access example), so their generated L-docs carry MOSI/MISO/SCK or
+    CPOL/CPHA tokens and would otherwise trip the bare branches below — and the
+    generic SPI synth would then FORCE-OVERWRITE that foreign spec's L-docs
+    with SPI identity.
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine and the AHB+APB
+    `_axi_primary` doctrine — GENERAL, content-only, density / structural
+    signatures only, NEVER a benchmark-name / chip / SKU literal as detection
+    logic): if the blob's DOMINANT subject is one of these foreign protocols,
+    defer (return False) so the generic SPI synth never runs on it:
+
+      - TPM (TCG Trusted Platform Module 2.0): dense Trusted-Platform-Module /
+        TPM2_-command / PCR naming. A TPM doc names TPM2_* commands and PCRs
+        thousands of times; an SPI bus doc names neither.
+      - QSPI / OSPI / xSPI (JEDEC JESD251 Expanded SPI): the SPI-FAMILY flash
+        expansion — multi-IO data lines + the JEDEC xSPI / SFDP / dummy-cycle /
+        DDR-DQS vocabulary. This is a genuine derived-CHILD of SPI, so the
+        defer is a sibling-MUTEX on its distinctive xSPI/flash discriminator
+        (NOT shared by a plain single-IO SPI doc), which is correct hardening.
+      - EtherCAT (IEC 61158 Industrial Ethernet): dense EtherCAT naming + an
+        EtherCAT-only structural feature (the EtherType 0x88A4, the datagram /
+        FMMU / SyncManager / ESC slave-controller model).
+      - LoRa / LoRaWAN: the Chirp-Spread-Spectrum PHY (CSS + spreading factor
+        SF7..SF12) and/or the dense LoRaWAN MAC naming. An SPI bus carries
+        none of the LPWAN PHY/MAC structures.
+      - MDIO (IEEE 802.3 Clause 22/45 Management Data Input/Output): the
+        MDC+MDIO two-wire pair + the MDIO frame-field model (PHYAD / REGAD /
+        turnaround) and/or the Clause-22/45 management vocabulary.
+
+    The real `spi` benchmark trips NONE of these defers (it carries 0 TPM2_ /
+    xSPI / JESD251 / SFDP / EtherCAT / LoRaWAN / MDIO / PHYAD tokens) and stays
+    True; each foreign benchmark trips its own foreign-primary defer and is
+    suppressed. See test_protocol_detector_no_misfire.py.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT SPI). ---
+    # TPM 2.0: dense Trusted-Platform-Module / TPM2_-command / PCR naming.
+    tpm_primary = (
+        blob.count("TPM2_") >= 20
+        or blob.count("Trusted Platform Module") >= 20
+        or (low.count("tpm") >= 50 and "pcr" in low
+            and ("tcg" in low or "commandcode" in low
+                 or "trusted platform module" in low)))
+    # QSPI / OSPI / xSPI (JEDEC JESD251 Expanded SPI): the SPI-family flash
+    # EXPANSION — require at least TWO independent xSPI/flash-only structural
+    # features so a plain single-IO SPI doc (which has none) stays True.
+    _xspi_feats = sum(bool(x) for x in (
+        "jesd251" in low or _wb("xSPI", blob) or "expanded spi" in low,
+        "sfdp" in low or "serial flash discoverable parameter" in low,
+        "dummy cycle" in low or "dummy cycles" in low,
+        ("dqs" in low and ("ddr" in low or "dtr" in low
+                           or "double data rate" in low)),
+        (("octal" in low and ("io" in low or "data lines" in low
+                              or "flash" in low))
+         or ("quad i/o" in low or "quad-io" in low
+             or "io0" in low and "io3" in low)),
+    ))
+    qspi_ospi_primary = _xspi_feats >= 2
+    # EtherCAT: dense EtherCAT naming + an EtherCAT-only structural feature.
+    ethercat_primary = (
+        low.count("ethercat") >= 20
+        and ("0x88a4" in low
+             or "fmmu" in low or "syncmanager" in low
+             or "sync manager" in low
+             or ("datagram" in low and ("esc" in low or "slave" in low))))
+    # LoRa / LoRaWAN: the Chirp-Spread-Spectrum PHY and/or dense LoRaWAN MAC.
+    _css = ("chirp spread spectrum" in low
+            or ("chirp" in low and "spread spectrum" in low))
+    _sf = ("spreading factor" in low
+           or any(_wb("SF" + str(n), blob) for n in range(7, 13)))
+    lora_primary = (
+        (_css and _sf)
+        or (low.count("lorawan") >= 20
+            and ("deveui" in low or "appkey" in low or "otaa" in low
+                 or "network server" in low)))
+    # MDIO: the MDC+MDIO two-wire pair + the Clause-22/45 frame-field model.
+    mdio_primary = (
+        ("mdc" in low and "mdio" in low)
+        and (("phyad" in low or "regad" in low)
+             or ("clause 22" in low or "clause 45" in low)
+             or low.count("mdio") >= 20))
+    if (tpm_primary or qspi_ospi_primary or ethercat_primary
+            or lora_primary or mdio_primary):
+        return False
+
+    # --- STRUCTURAL SPI signature (unchanged byte-for-byte from the runner's
+    #     inline detector). ---
     return bool(
         ("MOSI" in blob and "MISO" in blob
             and "SCK" in blob)

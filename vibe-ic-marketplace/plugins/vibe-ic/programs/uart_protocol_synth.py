@@ -1006,13 +1006,133 @@ def apply_uart_synth(generated_docs_dir: Path, is_uart: bool,
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_uart(blob: str) -> bool:
-    """Content-only `uart` detector (importable, lifted from the runner).
+    """Content-only `uart` detector (importable, lifted from the runner) WITH a
+    FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text). The original structural UART
+    signature below (SIN+SOUT pin pair, 16450/16550 lineage, or
+    UART + start/stop framing) is necessary but NOT sufficient: many serial /
+    fieldbus protocols either (a) physically transport their bytes in async
+    UART start/stop frames (LIN, IO-Link COMx octets, PROFIBUS / Modbus over an
+    async wire, RS-485 transceivers carrying a UART payload) or (b) merely cite
+    UART framing as an incidental comparison (ARINC 429, NFC, BLE, SWD). Those
+    foreign specs trip the loose ``UART`` + ``start bit`` + ``stop bit`` branch
+    (and a few huge superset docs even carry the literal PC16550D text), so the
+    generic UART synth would inject PC16550D register/framing content into a
+    foreign protocol's L-docs.
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine and the
+    sibling-MUTEX pattern of `is_modbus` / `is_profibus` / `is_rs485` — general,
+    content-only, NO chip / SKU / benchmark-directory literal as detection
+    logic): if the blob's DOMINANT subject is one of those foreign protocols
+    (detected by THAT protocol's own distinctive multi-token structural
+    signature — the SAME signature its own ``is_<proto>`` detector keys on, not
+    by the incidental UART mention), defer (False).
+
+    Empirically corpus-clean (test_protocol_detector_no_misfire.py): the real
+    `uart` (PC16550D) benchmark trips NONE of these foreign-primary signatures
+    (it carries no LIN/IO-Link/PROFIBUS/Modbus/RS-485-PHY/ARINC/NFC/BLE/SWD
+    structure) and stays True; the nine foreign superset/incidental specs each
+    trip their own protocol's signature and are suppressed.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT a 16550 UART,
+    #     even though it transports / cites async start/stop framing). ---
+
+    # LIN-primary: the Local Interconnect Network signature (its name anchor +
+    # the BREAK/SYNC frame header or the single-master + schedule-table MAC).
+    # LIN is a UART-framed automotive sub-bus, so it carries UART tokens, but a
+    # 16550 UART spec has no LIN name / BREAK+SYNC / schedule table.
+    lin_primary = (
+        ("LIN bus" in blob or "Local Interconnect Network" in blob
+         or "LIN Consortium" in blob or "LIN 2." in blob)
+        and (("BREAK" in blob.upper() and "SYNC" in blob.upper())
+             or ("master" in low and "schedule" in low)))
+
+    # IO-Link-primary: the SDCI / IEC 61131-9 structural signature (the name
+    # anchor + the C/Q combined communication-and-switching line). IO-Link
+    # exchanges UART 8-E-1 octets but a plain UART has no C/Q dual-mode line.
+    io_link_primary = (
+        ("sdci" in low or "iec 61131-9" in low or "iec61131-9" in low
+         or "io-link" in low or "io link" in low)
+        and ("c/q" in low
+             or "combined communication and switching" in low
+             or "combined communication + switching" in low))
+
+    # PROFIBUS-primary: the PROFIBUS-DP structural signature (name + DP/PA
+    # profile + at least one PROFIBUS-only frame/service feature: SD1-SD4
+    # telegram delimiters, DPV0-2 service levels, or DSAP/SSAP).
+    _pb_name = "profibus" in low or "process field bus" in low
+    _pb_profile = ("profibus-dp" in low or "decentralized periphery" in low
+                   or "decentralised periphery" in low
+                   or "profibus-pa" in low or "process automation" in low)
+    _pb_feature = (
+        sum(t in blob for t in ("SD1", "SD2", "SD3", "SD4")) >= 3
+        or sum(t in blob for t in ("DPV0", "DPV1", "DPV2")) >= 2
+        or ("dsap" in low and "ssap" in low))
+    profibus_primary = _pb_name and _pb_profile and _pb_feature
+
+    # Modbus-primary: the application-layer Modbus PDU framing model, OR the
+    # canonical register/coil access function names. A 16550 UART spec carries
+    # neither (it is the wire below such a protocol, not the protocol).
+    modbus_primary = (
+        ("Modbus" in blob and "Function Code" in blob and "PDU" in blob)
+        or ("Read Holding Registers" in blob and "Read Coils" in blob))
+
+    # RS-485-primary: the transceiver / PHY design-guide signature (TI SLLA272
+    # design guide, OR an RS-485 transceiver with its termination / unit-load /
+    # TIA-485 electrical vocabulary). This is the line-driver layer, not a UART.
+    rs485_primary = (
+        "SLLA272" in blob
+        or "RS-485 Design Guide" in blob
+        or ("RS-485 transceiver" in blob
+            and ("120 Ω" in blob or "120 ohm" in low
+                 or "32 unit load" in low or "TIA/EIA-485" in blob
+                 or "TIA-485" in blob)))
+
+    # ARINC 429-primary: the avionics DITS word signature (Mark 33 + DITS, OR
+    # ARINC 429 + Label + SSM/Sign-Status). A UART spec carries no avionics
+    # 32-bit-word / Label / SSM framing.
+    arinc429_primary = (
+        ("ARINC 429" in blob and "Label" in blob
+         and ("SSM" in blob or "Sign/Status" in blob))
+        or ("Mark 33" in blob and "DITS" in blob))
+
+    # NFC-primary: the ISO 14443 / MIFARE contactless signature. None of its
+    # PCD/PICC/ATQA/UID/SAK tokens appear in a UART spec.
+    nfc_primary = (
+        ("NFC" in blob and "ISO 14443" in blob and "UID" in blob)
+        or ("MIFARE" in blob and "13.56" in blob and "SAK" in blob)
+        or ("PCD" in blob and "PICC" in blob and "ATQA" in blob))
+
+    # BLE-primary: the Bluetooth Low Energy structural signature (Core stack
+    # GAP/GATT, advertising+connection, or the 2.4 GHz 40-channel PHY). A UART
+    # spec has none of the Bluetooth Core vocabulary.
+    ble_primary = (
+        ("Bluetooth Low Energy" in blob and "advertising" in low
+         and "connection" in low)
+        or ("BLE" in blob and "GAP" in blob and "GATT" in blob)
+        or ("Bluetooth" in blob and "LE" in blob
+            and "2.4 GHz" in blob and "40 channels" in blob))
+
+    # SWD-primary: the ARM Serial-Wire Debug / ADIv5 transport signature
+    # (SWDIO+SWCLK+DAP, SWD+ADIv5+DP+AP, or SWJ-DP+ARM+Debug Port). A UART spec
+    # has no serial-wire debug-port structure.
+    swd_primary = (
+        ("SWDIO" in blob and "SWCLK" in blob and "DAP" in blob)
+        or ("SWD" in blob and "ADIv5" in blob and "DP" in blob and "AP" in blob)
+        or ("SWJ-DP" in blob and "ARM" in blob and "Debug Port" in blob))
+
+    if (lin_primary or io_link_primary or profibus_primary or modbus_primary
+            or rs485_primary or arinc429_primary or nfc_primary or ble_primary
+            or swd_primary):
+        return False
+
+    # --- STRUCTURAL UART (16450/16550) signature (unchanged from the runner's
+    #     inline detector). ---
     return bool(
         ("SIN" in blob and "SOUT" in blob)
         or ("16450" in blob and "16550" in blob)

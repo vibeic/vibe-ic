@@ -2006,11 +2006,58 @@ def apply_hdmi_synth(generated_docs_dir, is_hdmi: bool,
 def is_hdmi(blob: str) -> bool:
     """Content-only `hdmi` detector (importable, lifted from the runner).
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text). Largely the same boolean
+    the runner used inline, but with a FOREIGN-PRIMARY DEFER prepended.
+
+    The HDMI structural signature (branch 3 below: HDMI + DDC + EDID + HPD)
+    is necessary but NOT sufficient: a VESA DisplayPort / eDP spec carries
+    EDID over its AUX channel, manages Hot-Plug-Detect, and cites HDMI
+    interop / DDC, so it mentions all four HDMI tokens incidentally and
+    trips branch 3. That would have the generic HDMI / TFP410 synth inject
+    TMDS-PHY datasheet content into a DisplayPort / eDP spec's L-docs.
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer and the AHB+APB
+    `_axi_primary` doctrine — general, content-only, no chip / SKU / dir
+    literal as detection logic): if the blob's DOMINANT subject is a
+    foreign display interface, defer (False). DisplayPort / eDP are
+    distinguished by the VESA DP structural base that HDMI / DVI / TMDS
+    never use — Main Link + AUX channel + DPCD (DisplayPort Configuration
+    Data) — plus at least one DP-only discriminator (CR/EQ link training or
+    the RBR/HBR link-rate vocabulary, or the eDP-exclusive Panel Self
+    Refresh). The real HDMI benchmark has none of these (no Main Link, no
+    AUX, no DPCD), so deferring on the DP base is safe. Mirrors
+    `is_displayport` / `is_edp`.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT HDMI). ---
+    # VESA DisplayPort base: Main Link + AUX channel + DPCD. This trio is
+    # the DisplayPort-family structural fingerprint and never appears in an
+    # HDMI / DVI / TMDS-PHY datasheet.
+    _dp_main_link = "main link" in low
+    _dp_aux = ("aux ch" in low or "aux channel" in low
+               or "i2c-over-aux" in low)
+    _dp_dpcd = ("dpcd" in low
+                or "displayport configuration data" in low)
+    _dp_base = _dp_main_link and _dp_aux and _dp_dpcd
+    # DP-only discriminators (link training CR/EQ, RBR/HBR rate vocabulary).
+    _dp_cr_eq = (
+        (("clock recovery" in low or "clock-recovery" in low)
+         and ("channel equalization" in low
+              or "channel-equalization" in low))
+        or ("link training" in low and "training_pattern_set" in low))
+    _dp_rate = (("rbr" in low and "hbr" in low) or "hbr2" in low
+                or "hbr3" in low or "link_bw_set" in low)
+    # eDP-exclusive discriminator (Panel Self Refresh / Remote Frame Buffer).
+    _edp_psr = (
+        "panel self refresh" in low or "panel self-refresh" in low
+        or "remote frame buffer" in low)
+    dp_primary = _dp_base and (_dp_cr_eq or _dp_rate or _edp_psr)
+    if dp_primary:
+        return False
+
     return bool(
         ("TMDS" in blob and ("HDMI" in blob or "DVI" in blob)
             and "TX0" in blob and "TX1" in blob and "TX2" in blob)

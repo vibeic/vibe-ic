@@ -41,12 +41,13 @@ session_context: >-
   The universal no-misfire guard was shipped (Bucket A) but honestly covers only the 9
   module-level detectors; this backlog tracks extending it to full coverage.
 
-status: partially-fixed
+status: resolved
 triaged_at: "2026-06-03"
 triaged_against: "vibe-ic 0.2.29"
 resolved_at: "2026-06-03"
-resolved_in: "0.2.32"
+resolved_in: "0.2.34"
 importability_closed_in: "0.2.32"
+end_goal_closed_in: "0.2.34"
 resolution: >-
   IMPORTABILITY GAP CLOSED (the filed title). All 86 programs/*_protocol_synth.py now export an
   importable module-level `def is_<stem>(blob: str) -> bool`. The ~46 detectors that lived INLINE
@@ -83,3 +84,35 @@ residual: >-
   tier_d_interconnect_detect.is_ucie (bare "UCIe" token over-fires on jesd204's comparison
   mention) and the DERIVED_SIBLING_CROSS_FIRES allowlist in protocol_detector_lib.py — so the
   hardening must span those plus the runner-ordering model, not just programs/*_protocol_synth.py.
+
+end_goal_resolution: >-
+  v0.2.34 CLOSED the suggested_fix END-GOAL ("the universal guard covers all with
+  ZERO foreign fire"). All 34 ordering-dependent detectors were hardened
+  STANDALONE-CLEAN via a foreign-primary-defer (the is_mipi / is_avalon
+  subject-dominance + sibling-MUTEX pattern), each keyed on the dominant subject's
+  GENERAL structural signature — protocol tokens, frame/register/channel/field
+  names, relative density counts — with ZERO benchmark-name / chip / SKU literals
+  (adversarially grep-verified across all 34 changed files: every quoted-literal
+  hit was a protocol standard name + structural token, e.g. EtherCAT+ESC+FMMU,
+  nvlink-count>=20, jesd204 density, SoundWire+Data-Port). Each was edited only in
+  its own programs/<stem>_protocol_synth.py (a local defer-gate wraps any shared
+  predicate, so the "non-assigned files" concern in the residual above — is_ucie /
+  the derived-sibling allowlist — was handled at the is_<stem> entry point without
+  editing the shared libs). Two additional gold-model residuals that the empty-set
+  strict sweep then surfaced were resolved correctly, not silenced: (ddr, ddr4) via
+  a DDR4/DDR5 generation sibling-MUTEX using DOMINANT-DENSITY (count(ddr4|ddr5) >
+  count(ddr3)) so an incidental "compared to DDR4/5" mention in the DDR3 spec still
+  detects as DDR3; (cxl, ucie) via a UCIe-primary defer (chiplet + die-to-die +
+  sideband/RDI/FDI) because a UCIe spec lists CXL.io/.cache/.mem as carried
+  protocol layers; (ace, ace_chi) is a CORRECT same-subject gold fire (the ace_chi
+  gold's subject IS the ACE coherency protocol — ACE + full AMBA AXI 5-channel
+  baseline, CHI absent) and is allowlisted in
+  protocol_detector_no_misfire_matrix.ACCEPTABLE_GOLD_SUBCLAUSE_FIRES, while the
+  superset model (input_doc = the comprehensive AMBA AXI spec) correctly defers via
+  is_ace's AXI-spec-primary guard. NEWLY_LIFTED_ORDERING_DEPENDENT is now EMPTY:
+  EVERY discovered detector is held to the STRICT no-foreign-fire assertion on all
+  three blob models (superset / generated / gold), 0 foreign fires on the real
+  benchmark_phase1/ corpus (test_protocol_detector_no_misfire +
+  test_protocol_detector_no_misfire_matrix, 9 passed). Verified by an INDEPENDENT
+  re-sweep (not the agents' self-reports) + adversarial benchmark-name grep.
+end_goal_resolved_at: "2026-06-03"

@@ -1595,13 +1595,78 @@ def apply_modbus_synth(generated_docs_dir: Path, is_modbus: bool,
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_modbus(blob: str) -> bool:
-    """Content-only `modbus` detector (importable, lifted from the runner).
+    """Content-only `modbus` detector with a FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text). The original structural
+    signature (below) is necessary but NOT sufficient: the loose
+    ``"Modbus" and ("RTU" | "ASCII" | "TCP")`` branch is tripped by any
+    spec that merely *mentions* Modbus as an incidental comparison or
+    example application. Three foreign fieldbus / transceiver benchmarks
+    do exactly that and would otherwise have the generic Modbus synth
+    inject Modbus PDU / Function-Code content into their L-docs:
+      - DALI (IEC 62386 lighting) cites Modbus/TCP as a comparison bus.
+      - PROFIBUS-DP carries a Modbus-as-fieldbus comparison plus its own
+        Function-Code-ish service text.
+      - the TI RS-485 design guide uses Modbus-RTU as its canonical
+        application example (26 "Modbus" / 21 "RTU" tokens).
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine — general,
+    content-only, NO chip / SKU / benchmark-name literal as detection
+    logic): if the blob's DOMINANT subject is one of those foreign
+    protocols (detected by THAT protocol's distinctive multi-token
+    structural signature, not by the incidental Modbus mention), defer
+    (False) so the generic Modbus synth never fires on it.
+
+    Empirically corpus-clean: the real `modbus` benchmark trips NONE of
+    these defers (it carries no IEC-62386 / DPVx / SD1-SD4 / SLLA272 /
+    TIA-EIA-485 signature), while dali trips dali_primary, profibus trips
+    profibus_primary, and rs485 trips rs485_primary — all suppressed.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT Modbus). ---
+    # DALI-primary: the IEC 62386 lighting structural signature (mirrors
+    # dali_protocol_synth.is_dali). Control gear / control device + forward
+    # / backward frame are DALI-only and absent from every Modbus spec.
+    dali_primary = (
+        ("DALI" in blob and "IEC 62386" in blob and "lighting" in low)
+        or ("DALI" in blob and "control gear" in low
+            and "control device" in low)
+        or ("DALI" in blob and "forward frame" in low
+            and "backward frame" in low))
+    # PROFIBUS-primary: the PROFIBUS-DP structural signature (mirrors
+    # profibus_protocol_synth.is_profibus). Require the name token AND at
+    # least TWO independent PROFIBUS-only structural features (SD1-SD4
+    # telegram delimiters, DPV0/1/2 service levels, GSD device database,
+    # DSAP/SSAP service access points) so a passing "PROFIBUS vs Modbus"
+    # comparison sentence never trips it.
+    _pb_name = "profibus" in low or "process field bus" in low
+    _pb_sd = sum(t in blob for t in ("SD1", "SD2", "SD3", "SD4")) >= 3
+    _pb_dpv = sum(t in blob for t in ("DPV0", "DPV1", "DPV2")) >= 2
+    _pb_gsd = "gsd" in low and ("device database" in low
+                                or "general station description" in low
+                                or "device description" in low)
+    _pb_sap = "dsap" in low and "ssap" in low
+    profibus_primary = _pb_name and (
+        sum([_pb_sd, _pb_dpv, _pb_gsd, _pb_sap]) >= 2)
+    # RS-485-primary: the TI RS-485 transceiver design-guide signature
+    # (mirrors rs485_protocol_synth.is_rs485). The electrical-PHY tokens
+    # (TIA/EIA-485, unit-load, fail-safe biasing, 120 Ω termination) are a
+    # transceiver-layer signature absent from a Modbus application spec.
+    rs485_primary = (
+        "RS-485 Design Guide" in blob
+        or "SLLA272" in blob
+        or ("RS-485 transceiver" in blob
+            and ("TIA/EIA-485" in blob or "32 unit load" in low
+                 or "fail-safe biasing" in low or "120 Ω" in blob
+                 or "120 ohm" in low)))
+    if dali_primary or profibus_primary or rs485_primary:
+        return False
+
+    # --- STRUCTURAL Modbus signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         ("Modbus" in blob and "Function Code" in blob
             and "PDU" in blob)

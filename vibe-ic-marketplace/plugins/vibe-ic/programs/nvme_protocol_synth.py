@@ -2110,13 +2110,63 @@ def _l23(gd: Path) -> None:
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_nvme(blob: str) -> bool:
-    """Content-only `nvme` detector (importable, lifted from the runner).
+    """Content-only `nvme` detector with a FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text). The structural NVMe
+    signature below (SQ+CQ+doorbell, or NVMe+Admin/I/O Command, or
+    NVM Express + controller-register/BAR0) is necessary but NOT
+    sufficient: NVMe is layered on PCIe and lists eMMC/UFS as sibling
+    storage interfaces, so two foreign specs trip the loose
+    "NVM Express + controller register/BAR0" branch when they cite NVMe
+    only incidentally as the canonical PCIe endpoint / a comparison
+    sibling:
+      - pcie_gen5 — a PCI Express Base 5.0 PHY spec whose dominant
+        subject is the Gen5 link, using NVMe as the example endpoint.
+      - ufs       — a Universal Flash Storage spec whose dominant subject
+        is UFS/UniPro/UPIU, comparing itself to NVMe.
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine — general,
+    content-only, NO chip/SKU/benchmark-name literal as detection logic):
+    if the blob's DOMINANT subject is one of those foreign protocols,
+    defer (False), so the generic NVMe synth never fires on a foreign
+    spec that only mentions NVM Express incidentally.
+
+    The discriminators are each foreign's OWN distinctive structural
+    signature (the sibling-MUTEX that the foreign's own detector relies
+    on), and every one is ABSENT from the real NVMe benchmark:
+
+      - pcie_gen5-primary: the Gen5 PHY electrical signature `is_pcie_gen5`
+        keys on — a Gen5-only PHY feature (retimer / lane margining)
+        ANDed with the Gen5 rate context (32 GT/s + PCI Express, or
+        "PCIe 5.0", or "PCI Express Base 5"). A real NVMe spec cites PCIe
+        densely (incl. 32 GT/s / PCIe 5.0) but NOT the Gen5 PHY tokens
+        retimer / lane margining, so this is a true sibling-MUTEX, not an
+        own-kill.
+      - ufs-primary: the UFS structural signature `is_ufs` keys on —
+        dense "ufs", or UPIU, or Universal Flash Storage, or UFS+UniPro.
+        Absent from the real NVMe benchmark (count("ufs")==0).
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT NVMe). ---
+    _gen5_phy = ("retimer" in low or "lane margining" in low)
+    _gen5_rate = (
+        ("32 GT/s" in blob and "PCI Express" in blob)
+        or ("PCIe 5.0" in blob)
+        or ("PCI Express Base 5" in blob))
+    pcie_gen5_primary = _gen5_phy and _gen5_rate
+    ufs_primary = (
+        low.count("ufs") >= 20
+        or ("UPIU" in blob)
+        or ("Universal Flash Storage" in blob)
+        or ("UFS" in blob and "UniPro" in blob))
+    if pcie_gen5_primary or ufs_primary:
+        return False
+
+    # --- STRUCTURAL NVMe signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         ("Submission Queue" in blob
             and "Completion Queue" in blob

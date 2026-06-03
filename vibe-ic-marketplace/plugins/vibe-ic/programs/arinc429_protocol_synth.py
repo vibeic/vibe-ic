@@ -30,6 +30,7 @@ from Interference.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -1207,16 +1208,67 @@ def apply_arinc429_synth(generated_docs_dir: Path, is_arinc429: bool,
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_arinc429(blob: str) -> bool:
-    """Content-only `arinc429` detector (importable, lifted from the runner).
+    """Content-only `arinc429` detector (importable, lifted from the runner)
+    WITH a FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the same
+    boolean the runner used inline for the structural signature below.
+
+    FOREIGN-PRIMARY DEFER (mirrors `is_mipi`'s defer doctrine and the AFDX
+    sibling-MUTEX — general, content-only, no chip/SKU/benchmark literal as
+    detection logic): the ARINC-429 structural signature is necessary but NOT
+    sufficient. AFDX (ARINC 664 Part 7) specs cite ARINC 429 / Mark 33 / DITS
+    as the LEGACY point-to-point bus that AFDX's deterministic switched
+    Ethernet replaces, so an AFDX doc trips the `Mark 33`+`DITS` branch below
+    and the generic ARINC-429 synth would inject 32-bit-word / Label / SSM
+    avionics-bus content into an AFDX spec's L-docs.
+
+    AFDX-primary is the VESA-style structural fingerprint that is ABSENT from
+    a genuine ARINC 429 point-to-point spec: the Virtual Link (VL) abstraction
+    plus AFDX's determinism mechanisms (Bandwidth Allocation Gap, dual-network
+    Network A / Network B redundancy with redundancy management) plus the
+    ARINC 664 / AFDX name anchor. A real ARINC 429 spec has none of these
+    switched-fabric tokens, so deferring on them is safe.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (blob's true subject is AFDX, not ARINC 429). -
+    _afdx_name = (
+        "afdx" in low
+        or "avionics full-duplex switched ethernet" in low
+        or "avionics full duplex switched ethernet" in low)
+    _arinc664 = (
+        "arinc 664" in low or "arinc664" in low
+        or "664 part 7" in low or "664p7" in low or "664-p7" in low)
+    _virtual_link = (
+        "virtual link" in low or "vl id" in low or "vlid" in low
+        or "virtual link identifier" in low)
+    _bag = (
+        "bandwidth allocation gap" in low
+        or (bool(re.search(r"\bbag\b", low))
+            and ("allocation gap" in low
+                 or "inter-frame" in low or "interframe" in low
+                 or "power of two" in low or "power-of-two" in low)))
+    _dual_network = (
+        ("network a" in low and "network b" in low)
+        or "dual redundant" in low or "redundant network" in low)
+    # AFDX-primary: the switched-fabric VL structure plus a determinism
+    # mechanism (BAG or dual-network redundancy), anchored by the AFDX /
+    # ARINC 664 name. None of these appear in a real ARINC 429 spec.
+    afdx_primary = (
+        (_afdx_name or _arinc664)
+        and _virtual_link
+        and (_bag or _dual_network))
+    if afdx_primary:
+        return False
+
+    # --- STRUCTURAL ARINC 429 signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         ("ARINC 429" in blob and "Label" in blob
          and ("SSM" in blob or "Sign/Status" in blob))
         or ("Mark 33" in blob and "DITS" in blob)
-        or ("avionics" in blob.lower()
+        or ("avionics" in low
             and "32-bit word" in blob and "Label" in blob))

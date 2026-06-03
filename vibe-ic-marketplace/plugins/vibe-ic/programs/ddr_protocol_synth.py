@@ -2358,9 +2358,26 @@ def is_ddr(blob: str) -> bool:
         "HBM3" in blob
         or "JESD238" in blob
         or "High Bandwidth Memory" in blob)
+    # DDR4 / DDR5 are same-family generations that ship their OWN is_ddr4 /
+    # is_ddr5 detectors; the generic DDR detector must defer to the more-specific
+    # generation (sibling-MUTEX) so it does not clobber a DDR4/DDR5 gold whose
+    # JESD79-4/-5 id contains the "JESD79" substring the third base branch keys
+    # on. Use DOMINANT-SUBJECT density (the later generation out-mentions DDR3
+    # AND is non-incidental), NOT a bare "DDR4"/"DDR5" token — a DDR3 spec that
+    # merely compares itself to DDR4/DDR5 (a few incidental mentions) must STILL
+    # be detected as DDR3. General structural signal (relative naming density),
+    # no benchmark-name literal.
+    _low = blob.lower()
+    _c_ddr3 = _low.count("ddr3")
+    _c_ddr4 = _low.count("ddr4")
+    _c_ddr5 = _low.count("ddr5")
+    has_ddr4_signature = _c_ddr4 >= 5 and _c_ddr4 > _c_ddr3
+    has_ddr5_signature = _c_ddr5 >= 5 and _c_ddr5 > _c_ddr3
     return bool((not has_nand_flash_signature)
         and (not has_lpddr5_signature)
-        and (not has_hbm3_signature) and (
+        and (not has_hbm3_signature)
+        and (not has_ddr4_signature)
+        and (not has_ddr5_signature) and (
         ("ACTIVATE" in blob and "PRECHARGE" in blob
             and "tRCD" in blob and "tRP" in blob)
         or ("DDR3" in blob and "SDRAM" in blob

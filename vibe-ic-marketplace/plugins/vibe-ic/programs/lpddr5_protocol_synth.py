@@ -1894,13 +1894,89 @@ def _l23(gd: Path) -> None:
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_lpddr5(blob: str) -> bool:
-    """Content-only `lpddr5` detector (importable, lifted from the runner).
+    """Content-only `lpddr5` detector (importable, lifted from the runner)
+    WITH a FOREIGN-PRIMARY DEFER (mirrors the `is_mipi` doctrine).
 
     Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    same boolean the runner used inline, gated below a foreign-primary
+    defer.
+
+    The structural LPDDR5 signature (LPDDR5 / JESD209-5 name+spec-id, or
+    WCK + bank group + low-power) is necessary but NOT sufficient: the
+    Phase-1 runner injects a generic memory vocabulary (and the memory-
+    family gold legitimately cross-references LPDDR5 in comparison
+    sections), so the SIBLING mainstream/graphics DRAM specs (DDR4 /
+    DDR5 / GDDR6) carry incidental "LPDDR5"/"JESD209-5"/"WCK"+"bank
+    group"+"low-power" tokens and trip the loose structural branch.
+
+    Guard (general, content-only, density-counts + protocol-distinctive
+    structural tokens — never a benchmark/chip/SKU literal): if the
+    blob's DOMINANT subject is one of the sibling DRAM protocols, defer
+    (False) BEFORE the LPDDR5 structural signature runs:
+
+      - DDR4-primary: its own JESD79-4 spec-id present AND the DDR4 name
+        token DOMINATES the LPDDR5 name token (a DDR4 spec mentions
+        "DDR4" far more than it mentions "LPDDR5" in passing), AND the
+        LPDDR5 spec-id JESD209-5 is absent. (A real LPDDR5 spec carries
+        JESD209-5 and is LPDDR5-name-dominant, so it never trips this.)
+      - DDR5-primary: its own JESD79-5 spec-id present together with the
+        DDR5-defining structural feature (two independent 32/40-bit
+        sub-channels per DIMM — absent from LPDDR5), AND the DDR5 name
+        token dominates the LPDDR5 name token.
+      - GDDR6-primary: the GDDR6-only structural signature — the JESD250
+        graphics-SGRAM spec-id together with the graphics-SGRAM identity
+        phrase (LPDDR5 is a low-power MOBILE DRAM, never a graphics
+        SGRAM, so neither token appears in a real LPDDR5 spec).
+
+    Empirically corpus-clean: the real lpddr5 benchmark trips NONE of
+    these (no JESD79-4/JESD79-5 dominance, no sub-channel, no JESD250,
+    no graphics SGRAM) and stays True; ddr4/ddr5/gddr6 each trip their
+    own primary defer and are suppressed.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is a sibling DRAM). ---
+    n_lpddr5 = low.count("lpddr5")
+    n_ddr4 = low.count("ddr4")
+    n_ddr5 = low.count("ddr5")
+    has_lpddr5_specid = ("jesd209-5" in low or "jesd209" in low)
+
+    # DDR4-primary: JESD79-4 spec-id, DDR4 name dominates LPDDR5, no LPDDR5
+    # spec-id. (LPDDR5's own JESD209-5 spec-id breaks this defer.)
+    ddr4_primary = (
+        "jesd79-4" in low
+        and n_ddr4 >= 2 * max(n_lpddr5, 1)
+        and n_ddr4 > n_lpddr5
+        and not has_lpddr5_specid)
+
+    # DDR5-primary: JESD79-5 spec-id + the DDR5-defining sub-channel feature
+    # (absent from LPDDR5), DDR5 name dominates LPDDR5.
+    ddr5_sub_channel = (
+        ("sub-channel" in low or "subchannel" in low or "sub channel" in low)
+        and ("independent" in low or "32-bit" in low or "32 bit" in low
+             or "40-bit" in low or "two" in low))
+    ddr5_primary = (
+        "jesd79-5" in low
+        and ddr5_sub_channel
+        and n_ddr5 >= 2 * max(n_lpddr5, 1)
+        and n_ddr5 > n_lpddr5)
+
+    # GDDR6-primary: the GDDR6-only graphics-SGRAM signature (JESD250 spec-id
+    # + graphics-SGRAM identity). LPDDR5 is a low-power MOBILE DRAM, never a
+    # graphics SGRAM.
+    graphics_sgram = (
+        "graphics sgram" in low
+        or "graphics ddr" in low
+        or "graphics double data rate" in low
+        or "graphics dram" in low
+        or ("graphics memory" in low and ("gddr" in low or "sgram" in low)))
+    gddr6_primary = ("jesd250" in low and graphics_sgram)
+
+    if ddr4_primary or ddr5_primary or gddr6_primary:
+        return False
+
     has_ddr3_only_signature = (
         ("DDR3" in blob or "JESD79-3" in blob)
         and not ("LPDDR5" in blob or "JESD209-5" in blob

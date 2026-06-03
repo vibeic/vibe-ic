@@ -1406,6 +1406,20 @@ def is_cxl(blob: str) -> bool:
     """
     if not blob:
         return False
+    low = blob.lower()
+    # UCIe-primary defer: UCIe is a die-to-die chiplet interconnect that CARRIES
+    # CXL.io/.cache/.mem as protocol layers, so a UCIe spec lists the CXL.* names
+    # without being a CXL spec. Defer to the UCIe subject (it ships its own
+    # is_ucie). General structural signature (chiplet die-to-die + sideband/RDI/
+    # FDI/UCIe), no benchmark-name literal. A real CXL spec's subject is
+    # cache-coherent memory expansion over Flex Bus, not a chiplet die-to-die PHY.
+    ucie_primary = (
+        "chiplet" in low
+        and ("die-to-die" in low or "die to die" in low)
+        and ("sideband" in low or "RDI" in blob or "FDI" in blob
+             or "UCIe" in blob))
+    if ucie_primary:
+        return False
     pcie5_phy = (
         "retimer" in blob.lower()
         or "lane margining" in blob.lower()

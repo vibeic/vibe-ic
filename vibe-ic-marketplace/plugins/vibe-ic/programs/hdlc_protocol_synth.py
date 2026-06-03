@@ -1179,17 +1179,56 @@ def apply_hdlc_synth(generated_docs_dir: Path, is_hdlc: bool,
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_hdlc(blob: str) -> bool:
-    """Content-only `hdlc` detector (importable, lifted from the runner).
+    """Content-only `hdlc` detector (importable, lifted from the runner) with
+    a FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text). The structural HDLC signature
+    below is byte-for-byte the same boolean the runner used inline, but it is
+    necessary, NOT sufficient: a Bluetooth Low Energy (BLE) spec that mentions
+    HDLC framing only incidentally (one "HDLC" token, a passing "bit stuffing"
+    mention, a "flag"/"0x7E" elsewhere in the link-layer framing prose) would
+    otherwise trip the loose ``HDLC + flag + 0x7E + bit stuffing`` branch and
+    have the generic HDLC synth inject ISO/IEC-13239 LAPB/SDLC content into a
+    BLE spec's L-docs.
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine — general,
+    content-only, no chip/SKU/benchmark-name literal as detection logic): if
+    the blob's DOMINANT subject is a foreign protocol, defer (return False),
+    so the generic HDLC synth never fires on a foreign spec that only mentions
+    HDLC incidentally:
+      - BLE (Bluetooth Low Energy): the Bluetooth Core LE structural signature
+        (Bluetooth Low Energy + advertising + connection, OR BLE + GAP + GATT,
+        OR Bluetooth + LE + 2.4 GHz + 40 channels). This mirrors
+        ble_protocol_synth.is_ble exactly. The BLE signature is absent from
+        every real HDLC benchmark (HDLC is a wired OSI-L2 link protocol with no
+        GATT/GAP/advertising/2.4-GHz-channel-hopping concept), so deferring on
+        it is safe.
+
+    Empirically verified corpus-clean: the real HDLC benchmark trips NONE of
+    these defers and stays True; the BLE benchmark trips ble_primary and is
+    suppressed.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT HDLC). ---
+    ble_primary = bool(
+        ("Bluetooth Low Energy" in blob
+         and "advertising" in low
+         and "connection" in low)
+        or ("BLE" in blob and "GAP" in blob and "GATT" in blob)
+        or ("Bluetooth" in blob and "LE" in blob
+            and "2.4 GHz" in blob and "40 channels" in blob))
+    if ble_primary:
+        return False
+
+    # --- STRUCTURAL HDLC / SDLC signature (unchanged from the runner's
+    #     inline detector). ---
     return bool(
         ("HDLC" in blob and "I-frame" in blob
          and "S-frame" in blob and "U-frame" in blob)
-        or ("HDLC" in blob and "flag" in blob.lower()
-            and "0x7E" in blob and "bit stuffing" in blob.lower())
+        or ("HDLC" in blob and "flag" in low
+            and "0x7E" in blob and "bit stuffing" in low)
         or ("HDLC" in blob and "SDLC" in blob
             and "SABM" in blob))

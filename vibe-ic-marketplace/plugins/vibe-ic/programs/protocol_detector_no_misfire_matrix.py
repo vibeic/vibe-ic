@@ -64,6 +64,14 @@ ACCEPTABLE_GOLD_SUBCLAUSE_FIRES = {
     # "IEEE 802.3 ... (Clauses 4 / 22 / 35 / 45)".
     ("mdio", "ethernet"),
     ("mdio", "ethernet_800g"),
+    # The ace_chi benchmark's GOLD subject is the ACE coherency protocol itself
+    # (its gold carries the full AMBA AXI 5-channel baseline + ACE coherency:
+    # ReadShared/ReadUnique/snoop AC-CR-CD, MOESI), so is_ace fires CORRECTLY —
+    # this is detection of the gold's true subject, not contamination. In the
+    # GENERATED/superset model the ace_chi input_doc is the comprehensive AMBA
+    # AXI Protocol Specification, so is_ace's AXI-spec-primary defer (added v0.2.34)
+    # correctly suppresses it there; only the ACE-subject gold legitimately fires.
+    ("ace", "ace_chi"),
 }
 
 

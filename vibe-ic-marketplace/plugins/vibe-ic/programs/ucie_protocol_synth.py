@@ -2465,7 +2465,59 @@ from tier_d_interconnect_detect import is_ucie as _det_ucie  # noqa: E402
 
 
 def is_ucie(blob: str) -> bool:
-    """Content-only `ucie` detector (re-export of the canonical predicate)."""
+    """Content-only `ucie` detector (re-export of the canonical predicate).
+
+    FOREIGN-PRIMARY DEFER (mirrors the `is_mipi` doctrine — general,
+    content-only, no chip/SKU/benchmark-name literal as detection logic):
+    if the blob's DOMINANT subject is a foreign protocol, defer (return
+    False) BEFORE delegating to the canonical UCIe predicate, so the
+    generic UCIe synth never fires on a foreign spec that only mentions
+    "UCIe" incidentally.
+
+      - JESD204 (JESD204B/C converter-to-logic serial interface). The
+        canonical UCIe predicate fires on a bare ``"UCIe" in blob``; a
+        JESD204 spec cites UCIe ONCE as a contrast example ("a forwarded/
+        source-synchronous lane clock as in DDR or UCIe is wrong for
+        JESD204"), tripping that loose branch even though the document's
+        true subject is JESD204. JESD204's DISTINCTIVE structural
+        signature (the converter data-converter domain + Initial Lane
+        Alignment Sequence + Code-Group Synchronization + multiframe/LMFC
+        + SYSREF deterministic latency + the L/M/F/S converter-frame
+        parameter set, or a dense ``jesd204`` name density) is ENTIRELY
+        absent from a real UCIe die-to-die chiplet spec, so deferring on
+        it is safe and does not touch own-fire. This mirrors the JESD204
+        structural core in `jesd204_protocol_synth.is_jesd204`.
+    """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT UCIe). ---
+    # JESD204B/C converter-link structural signature (converter domain +
+    # ILAS + multiframe + deterministic-latency SYSREF/SYNC~ + the
+    # converter-frame parameter or code-group-sync evidence), OR a dense
+    # JESD204 name density. Either marks JESD204 as the dominant subject.
+    _jesd_named_dense = (low.count("jesd204") + low.count("jesd 204")) >= 5
+    _jesd_converter = (
+        "data converter" in low
+        or ("converter device" in low and "logic device" in low)
+        or ("adc" in low and "dac" in low and "converter" in low))
+    _jesd_ilas = ("ilas" in low or "initial lane alignment" in low)
+    _jesd_multiframe = ("multiframe" in low or "lmfc" in low
+                        or "local multiframe clock" in low)
+    _jesd_det_latency = ("sysref" in low or "sync~" in low
+                         or "sync_n" in low or "subclass" in low)
+    _jesd_cgs_or_frameparams = (
+        "code group synchronization" in low or "cgs" in low
+        or "k28.5" in low or "/k/" in low
+        or "octets per frame" in low or "octets/frame" in low
+        or "frames per multiframe" in low or "frames/multiframe" in low
+        or "samples per converter" in low or "l/m/f/s" in low)
+    jesd204_primary = (
+        _jesd_named_dense
+        or (_jesd_converter and _jesd_ilas and _jesd_multiframe
+            and _jesd_det_latency and _jesd_cgs_or_frameparams))
+    if jesd204_primary:
+        return False
+
     return bool(_det_ucie(blob))

@@ -1500,13 +1500,106 @@ def apply_pcie_synth(generated_docs_dir: Path, is_pcie: bool,
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_pcie(blob: str) -> bool:
-    """Content-only `pcie` detector (importable, lifted from the runner).
+    """Content-only `pcie` detector (importable) with a FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text).
+
+    The base PCIe structural signature (TLP+DLLP+LTSSM, or PCI Express +
+    Transaction Layer + Data Link Layer, or 8b/10b + PCI Express) is necessary
+    but NOT sufficient: every protocol layered on or compared against PCIe
+    incidentally carries the PCIe Base-Spec vocabulary in its spec text and
+    would otherwise trip these loose branches. The base-PCIe synth must NOT
+    fire on a spec whose DOMINANT subject is one of those foreign protocols.
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine and the SAS
+    sibling-MUTEX doctrine — every condition is a GENERAL protocol-semantic
+    signature: distinctive structural tokens, layer/transport names, frame-field
+    names, density counts; NO benchmark-directory / chip / SKU literal as
+    detection logic). If the blob's DOMINANT subject is a foreign protocol,
+    defer (return False) so the generic PCIe synth never fires on a foreign
+    spec that only cites PCIe incidentally as its transport or as a comparison:
+
+      - CXL (Compute Express Link): a cache-coherent interconnect that RUNS its
+        CXL.io / CXL.cache / CXL.mem protocols on the PCIe PHY. Its base-PCIe
+        vocabulary (TLP/DLLP/LTSSM, Transaction/Data-Link layers) is incidental
+        transport, not subject. Defer on dense CXL.io / CXL.mem / CXL.cache /
+        "Compute Express Link" density (a real PCIe spec mentions CXL only in
+        passing — ~1 hit — while a CXL spec carries 100+).
+      - PCIe 5.0 (the derived CHILD): extends base PCIe with the Gen5 PHY
+        (retimers + lane margining at 32 GT/s). Defer via the CHILD's
+        distinctive PHY discriminator (a sibling-MUTEX): retimer + lane
+        margining + dense "32 GT/s". Base PCIe (Gen1, 2.5 GT/s) carries none.
+      - NVMe: a storage command set whose transport is PCIe. Defer on the dense
+        NVMe queueing model (Submission/Completion Queue + doorbell, or NVM
+        Express + dense Admin Command) — absent from a pure PCIe Base Spec.
+      - UFS: built on MIPI UniPro + M-PHY. Defer on UPIU density / UniPro+M-PHY
+        / "Universal Flash Storage" — none of which appear in a PCIe spec.
+      - USB4: a tunneling fabric that can carry PCIe; defer on dense USB4 +
+        router / Connection Manager / 40 Gbps and the absence of 32 GT/s
+        (mirrors `is_usb4`'s own 32-GT/s sibling-MUTEX vs PCIe5).
+      - DisplayPort: a VESA display interface that cites PCIe/USB4; defer on the
+        DP structural trio (Main Link + AUX + DPCD), absent from PCIe.
+      - SAS: Serial Attached SCSI; defer on the SSP+STP+SMP transport triple +
+        expander + SAS-address/wide-port structure, absent from PCIe.
+
+    Empirically corpus-clean: the real `pcie` benchmark trips NONE of these
+    defers (its CXL/NVLink/USB4/queue tokens are all single incidental
+    mentions), while cxl / displayport / nvlink / nvme / pcie_gen5 / sas / ufs
+    / usb4 each trip their own foreign-primary discriminator and are suppressed.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT base PCIe). ---
+    cxl_primary = (
+        low.count("compute express link") >= 10
+        or low.count("cxl.io") >= 10
+        or low.count("cxl.mem") >= 10
+        or low.count("cxl.cache") >= 10)
+    # NVLink: NVIDIA's high-speed link; dense "nvlink" / its NVHS sublayer.
+    nvlink_primary = (low.count("nvlink") >= 10 or "nvhs" in low)
+    # PCIe 5.0 derived-CHILD sibling-MUTEX: Gen5 PHY = retimer + lane margining
+    # + dense 32 GT/s (the Gen5 line rate). Base PCIe Gen1 carries none.
+    pcie5_primary = (
+        ("retimer" in low and "lane margining" in low)
+        and low.count("32 gt/s") >= 20)
+    # NVMe: dense host/controller queueing model on top of PCIe.
+    nvme_primary = (
+        (low.count("submission queue") >= 10
+         and low.count("completion queue") >= 10
+         and low.count("doorbell") >= 10)
+        or (("nvm express" in low or "nvme" in low)
+            and low.count("admin command") >= 10))
+    # UFS: MIPI UniPro + M-PHY transport with the UPIU information-unit model.
+    ufs_primary = (
+        low.count("upiu") >= 10
+        or ("unipro" in low and ("m-phy" in low or "mphy" in low))
+        or low.count("universal flash storage") >= 10)
+    # USB4: a tunneling router fabric; 32-GT/s absent distinguishes it from PCIe5.
+    usb4_primary = (
+        "32 gt/s" not in low
+        and low.count("usb4") >= 10
+        and ("router" in low or "connection manager" in low
+             or "40 gbps" in low))
+    # DisplayPort: the VESA Main-Link + AUX + DPCD display-interface trio.
+    dp_primary = (
+        "main link" in low
+        and ("aux ch" in low or "aux channel" in low or "i2c-over-aux" in low)
+        and ("dpcd" in low or "displayport configuration data" in low))
+    # SAS: the SSP+STP+SMP transport triple + expander + SAS-address/wide-port.
+    sas_primary = (
+        ("ssp" in low or "serial scsi protocol" in low)
+        and ("stp" in low or "sata tunnel" in low)
+        and ("smp" in low or "serial management protocol" in low)
+        and "expander" in low
+        and ("sas address" in low or "wide port" in low))
+    if (cxl_primary or nvlink_primary or pcie5_primary or nvme_primary
+            or ufs_primary or usb4_primary or dp_primary or sas_primary):
+        return False
+
+    # --- STRUCTURAL base-PCIe signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         ("TLP" in blob and "DLLP" in blob
             and "LTSSM" in blob)

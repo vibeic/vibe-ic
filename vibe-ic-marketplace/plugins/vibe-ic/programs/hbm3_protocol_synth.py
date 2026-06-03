@@ -60,6 +60,7 @@ Public entry: `apply_hbm3_synth(generated_docs_dir, is_hbm3, hbm3_ic_name)`.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -1654,13 +1655,108 @@ def _l23(gd: Path) -> None:
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_hbm3(blob: str) -> bool:
-    """Content-only `hbm3` detector (importable, lifted from the runner).
+    """Content-only `hbm3` detector (importable, lifted from the runner) WITH a
+    FOREIGN-PRIMARY DEFER (mirrors `is_mipi`'s foreign-primary defer doctrine).
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    The bare structural signature ("HBM3", or High Bandwidth Memory + a
+    1024-bit/TSV/JESD238/pseudo-channel token) is necessary but NOT sufficient:
+    the Phase-1 runner injects a generic DRAM/memory vocabulary into foreign
+    benchmarks' generated L-docs, and the memory-family gold legitimately cites
+    HBM3 in comparison sections, so a SIBLING memory spec (DDR4 / DDR5 / GDDR6)
+    carries incidental "HBM3"/"JESD238"/"1024-bit"/"TSV" tokens and would
+    otherwise trip this loose signature and have the generic HBM3 synth inject
+    HBM3 (16-channel / pseudo-channel / interposer) content into a DDR4/DDR5/
+    GDDR6 spec's L-docs.
+
+    Guard (general, content-only, NO benchmark-name / chip / SKU literal as
+    detection logic): defer (return False) when the blob's DOMINANT subject is
+    a foreign DRAM sibling. Each sibling is recognised by its OWN distinctive
+    spec-id + structural cluster (the same signatures `is_ddr4` / `is_ddr5` /
+    `is_gddr6` fire on) AND by NAME-DOMINANCE over HBM3 — in a genuine HBM3
+    spec the "HBM3"/JESD238 subject dominates every sibling token, whereas in a
+    sibling spec the sibling's own spec-id dominates even when HBM3 appears
+    comparatively:
+      - DDR4   (JESD79-4 + bank groups + a DDR4-only feature: gear-down / write
+                CRC / CA parity / DBI; the mainstream 1.2 V single-channel SDRAM)
+      - DDR5   (JESD79-5 + a DDR5-only feature: two 32-bit sub-channels / DFE /
+                same-bank refresh / DIMM PMIC / SPD hub)
+      - GDDR6  (JESD250 graphics SGRAM + WCK2CK / EDC CRC / CABI — the graphics
+                memory signature absent from HBM3 / DDR4 / DDR5)
+
+    Empirically corpus-clean: the real HBM3 benchmark trips NONE of these defers
+    (its HBM3/JESD238 subject dominates ~30:1) and stays True; ddr4/ddr5/gddr6
+    each trip their own foreign-primary defer and are suppressed. The dominance
+    test keys off raw token frequency in the CONTENT blob only — never a
+    filename or benchmark folder name.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT HBM3). ---
+    # HBM3 subject strength (spec id + canonical name) for the dominance test.
+    n_hbm3 = blob.count("HBM3") + low.count("jesd238")
+
+    # DDR4-primary: JESD79-4 + bank groups + a DDR4-only structural feature,
+    # with the DDR4 name dominating HBM3. (gear-down / write CRC / CA parity /
+    # DBI are DDR4 distinctives a generic HBM3 comparison paragraph lacks.)
+    n_ddr4 = len(re.findall(r"\bDDR4\b", blob)) + low.count("jesd79-4")
+    _ddr4_bank_groups = ("bank group" in low or "bank-group" in low
+                         or "bank groups" in low)
+    _ddr4_feature = (
+        ("gear-down" in low or "gear down" in low or "geardown" in low)
+        or ("write crc" in low or "write-crc" in low)
+        or ("ca parity" in low or "c/a parity" in low
+            or "command/address parity" in low
+            or "command address parity" in low)
+        or ("data bus inversion" in low))
+    ddr4_primary = (
+        ("jesd79-4" in low or n_ddr4 >= 20)
+        and _ddr4_bank_groups and _ddr4_feature
+        and n_ddr4 > n_hbm3)
+
+    # DDR5-primary: JESD79-5 + a DDR5-only structural feature, DDR5 name
+    # dominating HBM3. (Two 32-bit sub-channels / DFE / same-bank refresh /
+    # DIMM PMIC / SPD hub are DDR5 distinctives.)
+    n_ddr5 = len(re.findall(r"\bDDR5\b", blob)) + low.count("jesd79-5")
+    _ddr5_feature = (
+        (("sub-channel" in low or "subchannel" in low or "sub channel" in low)
+         and ("independent" in low or "32-bit" in low or "32 bit" in low
+              or "40-bit" in low))
+        or ("decision feedback equalization" in low)
+        or ("same-bank refresh" in low or "same bank refresh" in low
+            or "refsb" in low)
+        or ("spd hub" in low)
+        or (("pmic" in low or "power management ic" in low)
+            and ("dimm" in low or "module" in low)))
+    ddr5_primary = (
+        ("jesd79-5" in low or n_ddr5 >= 20)
+        and _ddr5_feature
+        and n_ddr5 > n_hbm3)
+
+    # GDDR6-primary: the JESD250 graphics-SGRAM signature (graphics SGRAM +
+    # WCK2CK / EDC CRC / CABI), GDDR6 name dominating HBM3.
+    n_gddr6 = low.count("gddr6") + low.count("jesd250")
+    _gddr6_graphics = (
+        "graphics sgram" in low or "graphics ddr" in low
+        or "graphics double data rate" in low or "graphics dram" in low
+        or ("graphics memory" in low and ("gddr" in low or "sgram" in low)))
+    _gddr6_feature = (
+        ("wck2ck" in low or "wck-to-ck" in low or "wck to ck" in low)
+        or ("cabi" in low or "command/address bus inversion" in low
+            or "command address bus inversion" in low)
+        or ("edc" in low and ("read crc" in low or "write crc" in low
+                              or "error detection" in low)))
+    gddr6_primary = (
+        ("jesd250" in low or n_gddr6 >= 20)
+        and _gddr6_graphics and _gddr6_feature
+        and n_gddr6 > n_hbm3)
+
+    if ddr4_primary or ddr5_primary or gddr6_primary:
+        return False
+
+    # --- STRUCTURAL HBM3 signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         "HBM3" in blob
         or ("High Bandwidth Memory" in blob and (

@@ -2339,13 +2339,87 @@ def apply_ethercat_synth(generated_docs_dir: Path, is_ethercat: bool,
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_ethercat(blob: str) -> bool:
-    """Content-only `ethercat` detector (importable, lifted from the runner).
+    """Content-only `ethercat` detector with a FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text).
+
+    The original structural signature below (EtherCAT + ESC + slave, or
+    EtherCAT + FMMU + SyncManager, or 0x88A4 + EtherCAT, or EtherCAT +
+    datagram) is necessary but NOT sufficient: every neighbour in the
+    Industrial-Ethernet family cites EtherCAT in a comparison section
+    (datagram / 0x88A4 / FMMU / SyncManager / ESC tokens leak in), and the
+    base IEEE-802.3 docs share EtherCAT's MII/MDIO/802.3 substrate, so the
+    loose branches below would otherwise fire on a doc whose DOMINANT
+    subject is a foreign protocol — and the generic EtherCAT synth would
+    then FORCE-OVERWRITE that foreign spec's L-docs with EtherCAT identity.
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine — general,
+    content-only, density/structural signatures only, NO benchmark-name /
+    chip / SKU literal as detection logic): if the blob's DOMINANT subject
+    is one of the foreign protocols, defer (return False) so the generic
+    EtherCAT synth never runs on it:
+      - 800G Ethernet (the IEEE 802.3df / 800GBASE / PAM4 PHY signature) —
+        EtherCAT runs at 100 Mb/s or 1 Gb/s and carries NONE of the 800G
+        PHY-family tokens.
+      - Base IEEE 802.3 Ethernet (overwhelming MII/MDIO/802.3 PHY-MAC
+        density with only incidental EtherCAT mentions) — an EtherCAT-
+        PRIMARY doc names "EtherCAT" hundreds of times, not a handful.
+      - PROFIBUS (the PROFIBUS-DP signature: dense PROFIBUS naming + the
+        SD1-SD4 telegram delimiters / DPVx service levels / GSD device
+        description / token-passing hybrid MAC). EtherCAT carries none of
+        these RS-485 fieldbus structures.
+      - PROFINET (the PROFINET-IO signature: dense PROFINET naming +
+        IO-Controller/IO-Device roles / GSDML / DCP / RT EtherType 0x8892).
+
+    The real `ethercat` benchmark trips NONE of these defers (it has 0
+    800GBASE/PROFIBUS-DP tokens, near-zero PROFINET tokens, and is not
+    802.3-PHY-dominated) and stays True; the four foreign benchmarks each
+    trip their own foreign-primary defer and are suppressed.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT EtherCAT). ---
+    # 800G Ethernet: the IEEE 802.3df / 800GBASE PAM4 PHY-family signature.
+    ethernet_800g_primary = (
+        blob.count("800GBASE") >= 5
+        or blob.count("802.3df") >= 5
+        or ("800 Gigabit Ethernet" in blob and "PAM4" in blob)
+        or (low.count("pam4") >= 20 and "802.3" in blob))
+    # PROFIBUS-DP: dense PROFIBUS naming + at least one PROFIBUS-only
+    # structural feature (SD1-SD4 telegram delimiters / DPVx service levels /
+    # GSD device description / token-passing hybrid MAC).
+    _sd_delims = sum(blob.count(t) for t in ("SD1", "SD2", "SD3", "SD4"))
+    _dpv = sum(blob.count(t) for t in ("DPV0", "DPV1", "DPV2"))
+    _token_passing = (low.count("token passing") + low.count("token-passing"))
+    profibus_primary = (
+        low.count("profibus") >= 20
+        and (_sd_delims >= 4 or _dpv >= 2 or low.count("gsd") >= 5
+             or _token_passing >= 3))
+    # PROFINET-IO: dense PROFINET naming + an IO-role / engineering / RT
+    # EtherType signature unique to PROFINET.
+    _pn_roles = (
+        ("io-controller" in low or "io controller" in low)
+        and ("io-device" in low or "io device" in low))
+    profinet_primary = (
+        low.count("profinet") >= 20
+        and (_pn_roles or "gsdml" in low or low.count("dcp") >= 5
+             or "0x8892" in low))
+    # Base IEEE 802.3 Ethernet: overwhelming MII/MDIO/802.3 PHY-MAC density
+    # with only incidental EtherCAT mentions (an EtherCAT-PRIMARY doc names
+    # EtherCAT hundreds of times — not a handful).
+    ethernet_base_primary = (
+        blob.count("802.3") >= 200
+        and blob.count("MII") >= 200
+        and blob.count("MDIO") >= 50
+        and blob.count("EtherCAT") < 20)
+    if (ethernet_800g_primary or profibus_primary or profinet_primary
+            or ethernet_base_primary):
+        return False
+
+    # --- STRUCTURAL EtherCAT signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         ("EtherCAT" in blob and "ESC" in blob
          and "slave" in blob.lower())

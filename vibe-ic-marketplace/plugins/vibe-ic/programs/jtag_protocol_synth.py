@@ -1670,10 +1670,87 @@ def is_jtag(blob: str) -> bool:
     """Content-only `jtag` detector (importable, lifted from the runner).
 
     Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    same boolean the runner used inline BELOW the foreign-primary defer.
+
+    FOREIGN-PRIMARY DEFER (mirrors `is_mipi`'s doctrine — general,
+    content-only, structural; NO benchmark/chip/SKU literal as detection
+    logic). JTAG's IEEE-1149.1 TAP vocabulary is the lingua franca of the
+    on-chip debug-and-test domain, so several SIBLING debug protocols cite
+    the TAP state machine / TCK-TMS-TDI-TDO / IEEE 1149.1 incidentally while
+    being ABOUT something else. The generic JTAG synth must not fire on those.
+    If the blob's DOMINANT subject is a foreign debug protocol, defer (False):
+
+      - CoreSight — the ARM on-chip TRACE ARCHITECTURE (AMBA Trace Bus used as
+        a trace transport + trace FUNNEL + trace REPLICATOR + at least one
+        trace SINK (TPIU/ETB/ETF/ETR) + at least one trace SOURCE
+        (ETM/ITM/STM/PTM)). This trace-transport structure is absent from a
+        pure JTAG-TAP / boundary-scan doc (mirrors `is_coresight.trace_arch`).
+      - MDIO — the IEEE 802.3 Clause-22/45 MAC/PHY management interface: the
+        MDC+MDIO two-wire pair PLUS the fixed management-frame field model
+        (ST/OP/PHYAD/REGAD/TA/DATA, preamble, Clause 22/45). That frame model
+        is absent from a JTAG TAP doc (mirrors `is_mdio`).
+      - SWD — the ARM Serial-Wire single-bidirectional-data Debug Port
+        (SWDIO+SWCLK, the serial-wire alternative to the 4-wire JTAG TAP),
+        or the SWD+ADIv5 serial-wire Debug-Port/Access-Port signature. The
+        single-wire serial DP is the sibling-MUTEX discriminator vs JTAG's
+        4-wire TAP (mirrors `is_swd`).
+
+    Empirically corpus-clean: the real `jtag` benchmark trips NONE of these
+    (no ATB/funnel/replicator trace transport, no MDC/PHYAD frame model, no
+    SWDIO/SWCLK serial-wire pair) and stays True; coresight/mdio/swd each trip
+    their own primary and are suppressed.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT JTAG). ---
+    # CoreSight trace architecture: ATB-as-trace-bus + funnel + replicator
+    # (the trace TRANSPORT) + >=1 trace sink + >=1 trace source.
+    _atb = ("amba trace bus" in low or " atb " in f" {low} "
+            or "atb)" in low or "(atb" in low)
+    _trace_transport = _atb and "funnel" in low and "replicator" in low
+    _trace_sink = sum(bool(x) for x in (
+        ("tpiu" in low or "trace port interface unit" in low),
+        ("etb" in low or "embedded trace buffer" in low),
+        ("etf" in low or "embedded trace fifo" in low),
+        ("etr" in low or "embedded trace router" in low),
+    ))
+    _trace_source = sum(bool(x) for x in (
+        ("etm" in low or "embedded trace macrocell" in low),
+        ("itm" in low or "instrumentation trace" in low),
+        ("stm" in low or "system trace macrocell" in low
+         or "system trace protocol" in low),
+        ("ptm" in low or "program trace macrocell" in low),
+    ))
+    coresight_primary = (
+        _trace_transport and _trace_sink >= 1 and _trace_source >= 1)
+
+    # MDIO Clause-22/45 management interface: MDC+MDIO pair + frame-field model.
+    _mdio_pair = "mdc" in low and "mdio" in low
+    _mdio_fields = sum(bool(x) for x in (
+        ("phyad" in low or "phy address" in low),
+        ("regad" in low or "register address" in low),
+        ("clause 22" in low or "clause22" in low),
+        ("clause 45" in low or "clause45" in low),
+        ("management data input" in low),
+    ))
+    mdio_primary = _mdio_pair and _mdio_fields >= 3
+
+    # SWD serial-wire Debug Port: single bidirectional data line (SWDIO+SWCLK),
+    # or the SWD+ADIv5 serial-wire DP/AP signature.
+    swd_primary = (
+        ("SWDIO" in blob and "SWCLK" in blob)
+        or ("SWD" in blob and "ADIv5" in blob
+            and (("serial wire" in low or "serial-wire" in low)
+                 or ("DP" in blob and "AP" in blob)))
+        or ("SWJ-DP" in blob and "Debug Port" in blob))
+
+    if coresight_primary or mdio_primary or swd_primary:
+        return False
+
+    # --- STRUCTURAL JTAG signature (unchanged from the runner's inline
+    #     detector). ---
     tap_fsm = (
         "ShiftDR" in blob or "ShiftIR" in blob
         or "Shift-DR" in blob or "Shift-IR" in blob

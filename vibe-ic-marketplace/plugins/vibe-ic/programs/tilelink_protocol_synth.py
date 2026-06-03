@@ -22,6 +22,7 @@ Public entry: `apply_tilelink_synth(generated_docs_dir, is_tilelink,
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -1739,11 +1740,40 @@ def _l23(gd: Path) -> None:
 def is_tilelink(blob: str) -> bool:
     """Content-only `tilelink` detector (importable, lifted from the runner).
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text).
+
+    FOREIGN-PRIMARY DEFER (mirrors the `is_mipi` / OCP-`_axi_primary`
+    doctrine — general, content-only, no chip/SKU/benchmark-name literal as
+    detection logic): the original structural signature below is loose enough
+    that an OCP spec which cites TileLink as a comparison sibling (and uses
+    the generic English words "Get"/"Put", or "Acquire"/"Release"/"Grant")
+    would trip the first/third branches and have the generic TileLink synth
+    fire on it. So if the blob's DOMINANT subject is OCP, defer (False).
+
+    OCP-primary signature: the Open Core Protocol M/S-prefixed handshake
+    model — MCmd (master command) + SCmdAccept (slave request accept) +
+    SResp (slave response). This mixed-case M/S-prefixed signal trio is
+    unique to OCP among the SoC buses (AXI/AHB/Wishbone/Avalon/TileLink use
+    entirely different signal names) and is ABSENT from every real TileLink
+    benchmark (which uses Channels A-E / Acquire / Grant / Probe naming).
+    Corroborate with MData/SData/MAddr or MRespAccept so a stray single token
+    cannot defer. Mirrors `ocp_protocol_synth.is_ocp`'s own hard structural
+    gate, so the two detectors are mutually exclusive by construction.
     """
     if not blob:
         return False
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is OCP, not TileLink).
+    def _has(tok: str) -> bool:
+        return re.search(r"\b" + re.escape(tok) + r"\b", blob) is not None
+
+    _ocp_command_core = _has("MCmd") and _has("SCmdAccept") and _has("SResp")
+    _ocp_data_signals = _has("MData") and _has("SData") and _has("MAddr")
+    ocp_primary = _ocp_command_core and (
+        _has("MRespAccept") or _ocp_data_signals)
+    if ocp_primary:
+        return False
+
     return bool(
         ("TileLink" in blob and "Get" in blob
             and "Put" in blob)

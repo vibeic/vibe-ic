@@ -934,13 +934,84 @@ def apply_can_synth(generated_docs_dir: Path, is_can: bool,
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_can(blob: str) -> bool:
-    """Content-only `can` detector (importable, lifted from the runner).
+    """Content-only `can` detector with a FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text). The original Bosch CAN 2.0
+    structural signature (DATA/REMOTE/ERROR FRAME, OR dominant/recessive +
+    arbitration/identifier, OR CAN + Bosch) is necessary but NOT sufficient:
+    several adjacent automotive / serial-bus protocols carry the same CAN
+    data-link vocabulary or cite Bosch / CAN as a comparison, and would
+    otherwise trip the (deliberately loose) structural branches below and have
+    the generic CAN synth inject Bosch CAN 2.0 frame-format facts into their
+    L-docs.
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine — general,
+    content-only, NO benchmark-name / chip / SKU literal as detection logic):
+    if the blob's DOMINANT subject is one of these foreign protocols, defer
+    (return False), so the generic CAN synth never fires on a foreign spec
+    that only shares CAN data-link vocabulary or names CAN/Bosch incidentally:
+
+      - CAN-FD (a genuine derived-CHILD of CAN — it extends the CAN data-link
+        layer, so it shares the structural base). Defer via CAN-FD's distinctive
+        discriminators (a sibling-MUTEX): the flexible-data-rate control bits
+        (BRS + FDF + ESI) or the Bosch M_CAN register model (M_CAN + CCCR).
+      - CANopen (the CiA-301 application layer ON TOP of CAN): Object Dictionary
+        / COB-ID with the PDO + SDO communication-object kernel.
+      - FlexRay (TDMA automotive bus that cites CAN): static segment + dynamic
+        segment + the macrotick/microtick or communication-cycle timing.
+      - HDLC (ISO 13239 link layer that names bit-stuffing / Bosch comparisons):
+        the HDLC I/S/U frame triple, or HDLC + 0x7E flag + bit stuffing.
+      - I3C (MIPI sensor bus that supersedes I2C and cites CAN/Bosch): I3C +
+        Dynamic Address + IBI, or the ENTDAA / CCC common-command-code model.
+      - LIN (the low-cost automotive companion bus to CAN): the LIN name token
+        with the BREAK+SYNC header or the master+schedule-table structure.
+
+    These distinctive signatures are absent from the real Bosch CAN 2.0
+    benchmark, so deferring on them keeps own-fire intact while suppressing the
+    six foreign cross-fires. See test_protocol_detector_no_misfire.py.
     """
     if not blob:
         return False
+    low = blob.lower()
+    up = blob.upper()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT raw CAN). ---
+    # CAN-FD child-MUTEX: flexible-data-rate control bits / Bosch M_CAN model.
+    canfd_primary = (
+        ("BRS" in blob and "FDF" in blob and "ESI" in blob)
+        or ("M_CAN" in blob and "CCCR" in blob))
+    # CANopen application-layer kernel (Object Dictionary / COB-ID + PDO + SDO).
+    canopen_primary = (
+        ("object dictionary" in low or "cob-id" in low or "cob id" in low)
+        and "pdo" in low and "sdo" in low)
+    # FlexRay TDMA segment + macrotick/microtick / communication-cycle timing.
+    flexray_primary = (
+        "static segment" in low and "dynamic segment" in low
+        and ("macrotick" in low or "microtick" in low
+             or "communication cycle" in low))
+    # HDLC framing signature (I/S/U frame triple, or 0x7E flag + bit stuffing).
+    hdlc_primary = (
+        ("HDLC" in blob and "I-frame" in blob
+         and "S-frame" in blob and "U-frame" in blob)
+        or ("HDLC" in blob and "0x7E" in blob
+            and "bit stuffing" in low))
+    # I3C dynamic-addressing / common-command-code signature.
+    i3c_primary = (
+        ("I3C" in blob and "Dynamic Address" in blob and "IBI" in blob)
+        or ("ENTDAA" in blob and "CCC" in blob)
+        or ("I3C" in blob and "CCC" in blob))
+    # LIN name token + BREAK/SYNC header or master/schedule-table structure.
+    lin_primary = (
+        ("LIN bus" in blob or "Local Interconnect Network" in blob
+         or "LIN Consortium" in blob or "LIN 2." in blob)
+        and (("BREAK" in up and "SYNC" in up)
+             or ("master" in low and "schedule" in low)))
+    if (canfd_primary or canopen_primary or flexray_primary
+            or hdlc_primary or i3c_primary or lin_primary):
+        return False
+
+    # --- STRUCTURAL Bosch CAN 2.0 signature (unchanged from the runner's
+    #     inline detector). ---
     return bool(
         ("DATA FRAME" in blob and "REMOTE FRAME" in blob
             and "ERROR FRAME" in blob)

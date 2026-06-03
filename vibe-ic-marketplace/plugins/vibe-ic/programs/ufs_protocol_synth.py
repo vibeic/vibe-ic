@@ -60,6 +60,7 @@ Public entry: `apply_ufs_synth(generated_docs_dir, is_ufs, ufs_ic_name)`.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -1623,14 +1624,76 @@ def _l23(gd: Path) -> None:
 # (tests/test_protocol_detector_no_misfire.py) auto-cover this protocol.
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
-def is_ufs(blob: str) -> bool:
-    """Content-only `ufs` detector (importable, lifted from the runner).
+def _wb(tok: str, blob: str) -> bool:
+    """Word-boundary token match (avoids substring false-positives)."""
+    return re.search(r"\b" + re.escape(tok) + r"\b", blob) is not None
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+
+def is_ufs(blob: str) -> bool:
+    """Content-only `ufs` detector (importable, lifted from the runner) WITH a
+    FOREIGN-PRIMARY DEFER (mirrors `is_mipi` / `is_soundwire` defer doctrine).
+
+    The structural signature below ("UFS"+"UniPro", or "UPIU", or
+    "Universal Flash Storage", or "UFS"+"M-PHY"+"JESD220") is necessary but
+    NOT sufficient as a STANDALONE superset predicate: the runner's generic
+    storage / serial-interface vocabulary injects incidental UFS comparison
+    tokens ("Universal Flash Storage" as the eMMC/SD successor, "UFS"+"UniPro"
+    as a high-speed-serial example) into the generated L-docs of FOREIGN
+    benchmarks whose true subject is a different protocol. Empirically two
+    foreign benchmarks trip the loose branches below:
+
+      * ONFI (Open NAND Flash Interface): an asynchronous/source-synchronous
+        raw-NAND command bus. Its L-docs name UFS as the managed-NAND
+        comparison, tripping the "Universal Flash Storage" branch. ONFI's own
+        structural signature (raw-NAND CLE/ALE latch-enable strobes, DQ data
+        bus with WE#/RE# write/read strobes, the Parameter Page + R/B#
+        ready/busy pin) is absent from every real UFS spec (UFS is a layered
+        SCSI/UPIU-over-UniPro-over-M-PHY protocol with no raw-NAND pinout).
+
+      * SoundWire (MIPI audio control+data bus): its L-docs cite UFS/UniPro as
+        a MIPI-family high-speed-serial sibling, tripping the "UFS"+"UniPro"
+        branch. SoundWire's own structural signature (the SoundWire Data Port
+        framing with Master/Slave roles, or SoundWire streams over Data Ports,
+        or dense "SoundWire" subject density) is absent from every real UFS
+        spec (UFS has no SoundWire / Data-Port framing).
+
+    Guard (general, content-only — structural protocol tokens + density
+    counts only, NO benchmark-directory / chip / SKU literal): if the blob's
+    DOMINANT subject is one of those foreign protocols, defer (False), so the
+    generic UFS synth never fires on a foreign spec that only mentions
+    UFS / UniPro / Universal Flash Storage incidentally.
+
+    Empty-safe. Reads ONLY ``blob`` (spec text).
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT UFS). ---
+    # ONFI-primary: the raw-NAND command-bus structural signature. CLE/ALE
+    # (command/address latch enable), the DQ data bus with WE#/RE# strobes,
+    # and the Parameter Page + R/B# ready/busy pin uniquely identify ONFI and
+    # are absent from a layered UPIU/UniPro UFS spec.
+    onfi_primary = (
+        ("onfi" in low and "nand" in low
+            and _wb("CLE", blob) and _wb("ALE", blob))
+        or ("nand" in low and _wb("DQ", blob)
+            and "we#" in low and "re#" in low)
+        or ("parameter page" in low and "r/b#" in low and "onfi" in low))
+    # SoundWire-primary: the MIPI SoundWire Data-Port framing signature, or
+    # dense "SoundWire" subject density. UFS has no SoundWire / Data-Port
+    # construct, so deferring on it is safe.
+    soundwire_primary = (
+        ("soundwire" in low and "data port" in low
+            and ("master" in low or "manager" in low)
+            and ("slave" in low or "peripheral" in low))
+        or ("soundwire" in low and "stream" in low and "data port" in low)
+        or (low.count("soundwire") >= 8))
+    if onfi_primary or soundwire_primary:
+        return False
+
+    # --- STRUCTURAL UFS signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         ("UFS" in blob and "UniPro" in blob)
         or ("UPIU" in blob)

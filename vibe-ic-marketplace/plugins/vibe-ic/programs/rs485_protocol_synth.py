@@ -1238,13 +1238,54 @@ def apply_rs485_synth(generated_docs_dir: Path, is_rs485: bool,
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_rs485(blob: str) -> bool:
-    """Content-only `rs485` detector (importable, lifted from the runner).
+    """Content-only `rs485` detector (importable, lifted from the runner)
+    WITH a FOREIGN-PRIMARY DEFER (mirrors the ``is_mipi`` doctrine).
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text).
+
+    RS-485 is a pure physical-layer (OSI L1) electrical standard, so the
+    APPLICATION-LAYER protocols that ride on it (Modbus RTU, DL/T645,
+    Profibus DP, BACnet MS/TP, …) document their own RS-485 PHY: a Modbus
+    spec legitimately contains ``RS-485 transceiver`` + ``TIA-485`` and
+    therefore trips the loose structural branches below. Conversely the
+    RS-485 spec only *names* those higher-level protocols incidentally
+    ("higher-level standards built ON TOP of RS-485: Modbus RTU, …") and
+    NEVER carries their distinctive application-layer signature.
+
+    Guard (general, content-only, no chip/SKU/benchmark literal as detection
+    logic — same shape as ``is_mipi``'s pcie/ufs/dp primary defer): if the
+    blob's DOMINANT subject is one of those layered protocols, defer (False),
+    so the generic RS-485 synth never fires on a layered spec that merely
+    documents RS-485 as its underlying wire.
+
+      - Modbus (the application-layer signature the ``is_modbus`` detector
+        keys on: a Function Code + PDU framing model, OR the canonical
+        register/coil access function names ``Read Holding Registers`` +
+        ``Read Coils``, OR a dense ``Modbus`` subject density that an
+        RS-485 PHY spec never reaches by merely citing Modbus as one of the
+        protocols layered on top).
+
+    Empirically corpus-clean: the real RS-485 benchmark trips NONE of these
+    defers (its incidental ``Modbus`` mentions stay well below the density
+    floor and it carries no Function-Code/PDU framing model nor the
+    register/coil access function names) and stays True; the modbus
+    benchmark trips ``modbus_primary`` and is suppressed.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT RS-485, it is
+    #     an application-layer protocol that merely rides on the RS-485 PHY). ---
+    modbus_primary = (
+        ("Function Code" in blob and "PDU" in blob
+            and "Modbus" in blob)
+        or ("Read Holding Registers" in blob and "Read Coils" in blob)
+        or (low.count("modbus") >= 60
+            and ("rtu" in low or "ascii" in low or "function code" in low)))
+    if modbus_primary:
+        return False
+
     return bool(
         ("TI SLLA272" in blob)
         or ("RS-485 Design Guide" in blob)

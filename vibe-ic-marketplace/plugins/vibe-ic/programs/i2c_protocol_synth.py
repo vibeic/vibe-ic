@@ -16,6 +16,7 @@ Public entry: `apply_i2c_synth(generated_docs_dir, is_i2c, i2c_ic_name)`.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -945,13 +946,121 @@ def apply_i2c_synth(generated_docs_dir: Path, is_i2c: bool,
 # Reads ONLY the spec text `blob` — never a filename or benchmark name.
 # ---------------------------------------------------------------------------
 def is_i2c(blob: str) -> bool:
-    """Content-only `i2c` detector (importable, lifted from the runner).
+    """Content-only `i2c` detector (importable, lifted from the runner) WITH a
+    FOREIGN-PRIMARY DEFER.
 
-    Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
-    same boolean the runner used inline.
+    Empty-safe. Reads ONLY ``blob`` (spec text). The original structural
+    signature below is byte-for-byte the boolean the runner used inline.
+
+    Why the defer (mirrors `is_mipi` / `is_mdio` / `is_smbus_pmbus` doctrine —
+    general, content-only, NO chip/SKU/benchmark-name literal): the NXP
+    UM10204 I2C spec is the PARENT of a whole family of two-wire / control
+    buses and therefore mentions many of them incidentally (it discusses SMBus,
+    PMBus, the HDMI DDC channel, and I3C's IBI / dynamic-addressing as
+    comparisons). Conversely, every one of those foreign specs cites SDA/SCL +
+    "I2C" because they are built on or compared against the I2C 2-wire model —
+    so the loose `(SDA+SCL or START/STOP/slave-addr) and I2C` structural test
+    below over-fires on them. The guard defers (returns False) when the blob's
+    DOMINANT subject is one of those foreign protocols, detected by ITS OWN
+    distinctive multi-token structural signature (frame-field names, density
+    counts, signal/role names) — not by a name token alone.
+
+    Two of the foreign protocols (SMBus/PMBus and I3C) are genuine derived
+    CHILDREN of I2C; they are deferred via the CHILD's distinctive sibling-MUTEX
+    discriminator (SMBus PEC / SMBALERT# / PMBus command set; I3C ENTDAA /
+    dynamic-address+IBI / CCC / Hot-Join), which the plain I2C parent spec never
+    satisfies. Empirically the real I2C benchmark (spec + runner blob) trips
+    NONE of these defers and stays True; all nine foreign benchmarks
+    (a2b / ethercat / hdmi / i3c / mdio / mipi_csi2 / mipi_spmi_rffe /
+    smbus_pmbus / tpm) trip exactly their own defer and are suppressed.
     """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT I2C). ---
+    # A2B (ADI Automotive Audio Bus): a twisted-pair daisy-chain audio bus with
+    # a sample-rate-locked superframe. Dense "a2b" subject + superframe + daisy
+    # chain is absent from the I2C spec.
+    a2b_primary = (
+        low.count("a2b") >= 20
+        and "superframe" in low
+        and ("daisy chain" in low or "daisy-chain" in low
+             or "daisy chained" in low or "daisy-chained" in low))
+    # EtherCAT: the EtherCAT Slave Controller (ESC) + FMMU / SyncManager
+    # frame-processing model, or the EtherType 0x88A4.
+    ethercat_primary = (
+        ("EtherCAT" in blob and "ESC" in blob and "FMMU" in blob)
+        or ("EtherCAT" in blob and "SyncManager" in blob)
+        or ("0x88A4" in blob and "EtherCAT" in blob))
+    # HDMI/DVI: the TMDS three-channel transmitter (TX0/TX1/TX2), the
+    # TFP410 PanelBus part, or the HDMI DDC+EDID+HPD display-link triad.
+    hdmi_primary = (
+        ("TMDS" in blob and ("HDMI" in blob or "DVI" in blob)
+         and "TX0" in blob and "TX1" in blob and "TX2" in blob)
+        or ("TFP410" in blob and "PanelBus" in blob)
+        or ("HDMI" in blob and "DDC" in blob
+            and "EDID" in blob and "HPD" in blob))
+    # I3C (MIPI I3C — a derived child of I2C): the dynamic-addressing +
+    # in-band-interrupt (IBI) + Common-Command-Code (CCC) + ENTDAA / Hot-Join
+    # signature. This is the sibling-MUTEX discriminator the plain I2C parent
+    # spec (which only mentions IBI / dynamic addressing in passing) never has.
+    i3c_primary = (
+        ("I3C" in blob and "Dynamic Address" in blob and "IBI" in blob)
+        or ("I3C Basic" in blob and "CCC" in blob)
+        or ("ENTDAA" in blob and "CCC" in blob)
+        or ("I3C" in blob and "Hot-Join" in blob
+            and ("HDR-DDR" in blob or "CCC" in blob)))
+    # MDIO (IEEE 802.3 Clause 22/45): the MDC/MDIO two-wire pair PLUS the
+    # PHYAD/REGAD frame-field model PLUS the Clause-22/45 marker.
+    mdio_primary = (
+        ("mdc" in low and "mdio" in low)
+        and (("phyad" in low or "phy address" in low)
+             and ("regad" in low or "register address" in low))
+        and ("clause 22" in low or "clause 45" in low
+             or "management data input" in low))
+    # MIPI CSI-2: dense CSI-2 subject + the Camera Control Interface (CCI)
+    # camera-pipeline sideband (present in NO I2C-family doc).
+    csi2_primary = (
+        (low.count("csi-2") + low.count("csi2")) >= 20
+        and "camera control interface" in low
+        and ("d-phy" in low or "image sensor" in low))
+    # MIPI SPMI / RFFE: the MIPI two-wire (SCLK + SDATA, NOT SDA/SCL) control
+    # bus framed by a Sequence Start Condition (SSC, NOT I2C START/STOP) with
+    # 4-bit MASTER_ID/SLAVE_ID (SPMI) or USID/GSID (RFFE).
+    spmi_rffe_primary = (
+        ("SCLK" in blob and "SDATA" in blob)
+        and ("Sequence Start Condition" in blob
+             or re.search(r"\bSSC\b", blob))
+        and (("SPMI" in blob and ("MASTER_ID" in blob or "SLAVE_ID" in blob))
+             or ("RFFE" in blob and ("USID" in blob or "GSID" in blob))))
+    # SMBus / PMBus (a system-/power-management bus derived from I2C): the
+    # SMBus-only Packet Error Code (PEC) / SMBALERT# / Alert-Response, or a
+    # dense PMBus subject with its command-code set. This is the sibling-MUTEX
+    # discriminator the plain I2C parent spec (which only names SMBus/PMBus in
+    # passing, without their structural vocabulary) never satisfies.
+    smbus_pmbus_primary = (
+        (re.search(r"\bPEC\b", blob) and ("CRC-8" in blob or "CRC8" in blob))
+        or "Packet Error Code" in blob
+        or "SMBALERT" in blob
+        or ("PMBus" in blob and low.count("pmbus") >= 20
+            and (("OPERATION" in blob and "VOUT_COMMAND" in blob)
+                 or ("STATUS_WORD" in blob and "PAGE" in blob))))
+    # TPM (TCG Trusted Platform Module — a security device, not a bus): the
+    # TPM 2.0 commandCode/PCR model, the TCG+PCR+hierarchy triad, or TPM2_.
+    tpm_primary = (
+        ("TPM 2.0" in blob and "PCR" in blob and "commandCode" in blob)
+        or ("TPM" in blob and "TCG" in blob and "PCR" in blob
+            and "hierarchy" in low)
+        or ("Trusted Platform Module" in blob and "TPM2_" in blob))
+
+    if (a2b_primary or ethercat_primary or hdmi_primary or i3c_primary
+            or mdio_primary or csi2_primary or spmi_rffe_primary
+            or smbus_pmbus_primary or tpm_primary):
+        return False
+
+    # --- STRUCTURAL I2C signature (unchanged from the runner's inline
+    #     detector). ---
     return bool(
         (("SDA" in blob and "SCL" in blob)
          or ("START condition" in blob

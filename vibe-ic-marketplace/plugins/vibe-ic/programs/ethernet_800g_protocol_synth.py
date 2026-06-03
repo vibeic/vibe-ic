@@ -1480,8 +1480,91 @@ def apply_ethernet_800g_synth(generated_docs_dir: Path,
 from tier_d_interconnect_detect import is_ethernet_800g as _det_ethernet_800g  # noqa: E402
 
 
+def _wb_e8(tok: str, blob: str) -> bool:
+    """Word-boundary token match (avoids substring false-positives)."""
+    import re
+    return re.search(r"\b" + re.escape(tok) + r"\b", blob) is not None
+
+
 def is_ethernet_800g(blob: str) -> bool:
-    """Content-only `ethernet_800g` detector (re-export of the canonical predicate)."""
+    """Content-only `ethernet_800g` detector with a FOREIGN-PRIMARY DEFER.
+
+    The structural 800G signature ("800GBASE" / "802.3df" / 800G+PAM4 /
+    "800 Gigabit Ethernet") is necessary but NOT sufficient: two foreign
+    protocols carry incidental 800G/PAM4 comparison tokens and would
+    otherwise trip the loose `800G`+`PAM4` branch and have the generic 800G
+    synth FORCE-OVERWRITE their L-docs with 800GBASE PHY content:
+
+      - Automotive Ethernet (a single-twisted-pair T1 PHY spec that contrasts
+        itself against 800G/PAM4, so its L-doc blob carries those tokens).
+      - PCIe Gen5 (a Gen5 SerDes spec whose PAM4 / 800G comparison vocabulary
+        trips the same branch).
+
+    Guard (mirrors `is_mipi`'s foreign-primary defer doctrine — general,
+    content-only, ZERO chip/SKU/benchmark-name literal as detection logic):
+    if the blob's DOMINANT subject is one of those foreign protocols, defer
+    (False). Each defer condition is the foreign's OWN distinctive structural
+    signature, reproduced from its synth detector:
+
+      - automotive_ethernet: single-twisted-pair STRUCTURE + PAM3 ternary line
+        code + a named T1 variant (100BASE-T1 / 10BASE-T1S / 802.3bp …) + an
+        automotive bidirectional/multidrop MECHANISM (echo cancellation / PLCA
+        / BroadR-Reach). 800G is full-duplex multi-pair PAM4, so its own doc
+        carries NONE of PAM3 or the automotive mechanism — the full conjunct
+        is absent from the 800G benchmark and own-fire is preserved.
+      - pcie_gen5: the Gen5 PHY electrical signature (retimer / lane margining
+        / equalization) AND a PCIe-5 SUBJECT token (32 GT/s + PCI Express, or
+        "PCIe 5.0", or "PCI Express Base 5"). The 800G own doc may cite generic
+        "equalization"/"retimer" but carries NO PCIe-5 subject token, so the
+        conjunct stays False on the 800G benchmark.
+
+    Empirically corpus-verified: ethernet_800g trips NEITHER defer (stays
+    True); automotive_ethernet trips auto_primary; pcie_gen5 trips pcie5_primary
+    (both suppressed). See test_protocol_detector_no_misfire.py.
+    """
     if not blob:
         return False
+    low = blob.lower()
+
+    # --- FOREIGN-PRIMARY DEFER (the blob's true subject is NOT 800G). ---
+    # Automotive-Ethernet single-twisted-pair T1 PHY structural signature.
+    _auto_single_pair = (
+        _wb_e8("single twisted pair", blob)
+        or _wb_e8("single unshielded twisted pair", blob)
+        or _wb_e8("one twisted pair", blob)
+        or _wb_e8("single-pair", blob)
+        or _wb_e8("single twisted-pair", blob)
+        or _wb_e8("one single twisted pair", blob)
+        or _wb_e8("one balanced pair", blob))
+    _auto_pam3 = _wb_e8("PAM3", blob)
+    _auto_variant = (
+        _wb_e8("100BASE-T1", blob) or _wb_e8("1000BASE-T1", blob)
+        or _wb_e8("10BASE-T1S", blob) or _wb_e8("10BASE-T1L", blob)
+        or _wb_e8("10BASE-T1", blob)
+        or _wb_e8("802.3bw", blob) or _wb_e8("802.3bp", blob)
+        or _wb_e8("802.3cg", blob))
+    _auto_mechanism = (
+        _wb_e8("echo cancellation", blob) or _wb_e8("echo canceller", blob)
+        or _wb_e8("echo canceler", blob)
+        or _wb_e8("PLCA", blob)
+        or _wb_e8("Physical Layer Collision Avoidance", blob)
+        or _wb_e8("BroadR-Reach", blob))
+    auto_primary = (
+        _auto_single_pair and _auto_pam3 and _auto_variant and _auto_mechanism)
+
+    # PCIe-Gen5 SerDes structural signature (PHY electrical + PCIe-5 subject).
+    _pcie5_phy = (
+        "retimer" in low
+        or "lane margining" in low
+        or "equalization" in low)
+    _pcie5_subject = (
+        ("32 GT/s" in blob and "PCI Express" in blob)
+        or ("PCIe 5.0" in blob)
+        or ("PCI Express Base 5" in blob))
+    pcie5_primary = _pcie5_phy and _pcie5_subject
+
+    if auto_primary or pcie5_primary:
+        return False
+
+    # --- STRUCTURAL 800G signature (unchanged shared predicate). ---
     return bool(_det_ethernet_800g(blob))

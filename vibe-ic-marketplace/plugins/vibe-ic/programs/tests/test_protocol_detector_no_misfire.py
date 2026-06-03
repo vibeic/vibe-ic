@@ -22,12 +22,11 @@ Coverage note (honest, v0.2.32 / ORGANIC-20260531 CLOSED for importability):
 EVERY ``<stem>_protocol_synth.py`` now exports a module-level ``is_<stem>``
 predicate (pinned by ``test_all_protocol_synth_detectors_importable.py``), so
 this guard auto-DISCOVERS all of them — the old "~47 inline, not importable"
-gap is gone. The discovered fleet is partitioned (see the banner below):
-the standalone-clean set (the original 40 + 12 newly-lifted) is held to the
-STRICT no-foreign-fire assertion; the 34 newly-lifted ordering-dependent
-detectors are runner-safe via force-overwrite but not yet standalone-clean —
-they are enumerated as the precise remaining residual (standalone subject-
-dominance hardening), still own-fire-checked, their cross-fires reported.
+gap is gone. v0.2.34 then HARDENED the last 34 ordering-dependent detectors
+standalone-clean (foreign-primary-defer, general structural signatures only),
+so the residual partition (see the banner below) is now EMPTY: EVERY discovered
+detector is held to the STRICT no-foreign-fire assertion across all three blob
+models, with 0 foreign fires on the real corpus.
 """
 import glob
 import importlib
@@ -115,7 +114,7 @@ from protocol_detector_lib import (  # noqa: E402
 )
 
 # ---------------------------------------------------------------------------
-# ORGANIC-20260531 partition (v0.2.32).
+# ORGANIC-20260531 partition — CLOSED (v0.2.34).
 #
 # The v0.1.93 .. v0.1.94 detectors that ship a module-level ``is_<stem>`` were
 # each authored standalone-clean: they pass this STRICT superset+isolation sweep
@@ -127,38 +126,39 @@ from protocol_detector_lib import (  # noqa: E402
 # branches into importable module-level ``is_<stem>`` so this guard could cover
 # them too (and so the registry guard
 # ``test_all_protocol_synth_detectors_importable.py`` can pin the 1:1 invariant).
-# Of those 46, 12 are already superset-standalone-clean and join the strict
-# sweep below. The other 34 are ORDERING-DEPENDENT: in the runner they are safe
-# because a more-specific sibling synth runs AFTER them and force-overwrites
-# (the cross-protocol force-overwrite doctrine — the runner's actual L1+L2 blob
-# is also far narrower than this superset), so the runner's emitted L-docs are
-# correct. But as a STANDALONE superset predicate they still over-fire, because
-# the runner's generic interface vocabulary injects sibling tokens into foreign
-# benchmarks' generated L-docs. Making each of the 34 standalone-clean (the
-# ``is_mipi`` / ``is_avalon`` subject-dominance + sibling-MUTEX pattern) is the
-# remaining engineering work tracked by ORGANIC-20260531.
+# 12 of those were immediately superset-standalone-clean; the other 34 were
+# ORDERING-DEPENDENT — runner-safe via force-overwrite, but as STANDALONE superset
+# predicates they over-fired because the runner's generic interface vocabulary
+# injects sibling tokens into foreign benchmarks' generated L-docs.
 #
-# HONESTY: these 34 are NOT silenced wholesale. They are enumerated here as the
-# precise open residual; they still get the callable / empty-safe / own-fire
-# assertions, and their foreign cross-fires are REPORTED (not asserted) so the
-# coverage hole stays visible. The strict no-foreign-fire assertion keeps full
-# teeth for every other detector — any NEW regression among the 52 clean ones
-# fails immediately. As each of the 34 is hardened standalone-clean it is simply
-# removed from this set, shrinking the residual toward empty.
+# v0.2.34 HARDENED ALL 34 standalone-clean (the ``is_mipi`` / ``is_avalon``
+# subject-dominance + sibling-MUTEX pattern): each grew a foreign-primary-defer
+# keyed on the dominant subject's GENERAL structural signature (protocol tokens,
+# frame/register/channel names, relative density counts — ZERO benchmark-name /
+# chip / SKU literals, adversarially grep-verified). The two gold-model residuals
+# that surfaced on top of the superset sweep were resolved correctly: ddr's
+# DDR4/DDR5 generation sibling-MUTEX (dominant-density defer) and cxl's UCIe-primary
+# defer; (ace, ace_chi) is a correct same-subject gold fire (ace_chi's gold subject
+# IS the ACE coherency protocol) and is allowlisted in
+# protocol_detector_no_misfire_matrix.ACCEPTABLE_GOLD_SUBCLAUSE_FIRES.
+#
+# The partition is now EMPTY (below): EVERY discovered detector is held to the
+# STRICT no-foreign-fire assertion on all three blob models. 0 foreign fires
+# across the real ``benchmark_phase1/`` corpus.
 # ---------------------------------------------------------------------------
-# The complete ordering-dependent set, derived authoritatively from the
-# protocol_detector_no_misfire_matrix program across ALL THREE blob models
-# (superset / generated / gold), excluding the documented allowlists. A
-# detector is here iff it foreign-fires under at least one model and is
-# runner-safe only via the cross-protocol force-overwrite ordering (e.g. cxl
-# rides on ucie's die-to-die transport; ddr's sibling DRAM generations).
-NEWLY_LIFTED_ORDERING_DEPENDENT = {
-    "ace", "arinc429", "ble", "can", "canfd", "cxl", "ddr", "ethercat",
-    "ethernet", "ethernet_800g", "hbm3", "hdlc", "hdmi", "i2c", "jtag",
-    "lpddr5", "milstd1553", "mipi_dsi", "modbus", "nvme", "pcie", "pcie_gen5",
-    "rs485", "sata", "sdmmc", "soundwire", "spdif", "spi", "swd", "tilelink",
-    "uart", "ucie", "ufs", "usb", "usb4", "wishbone",
-}
+# The ordering-dependent set is now EMPTY — kept as a named symbol (imported by
+# the matrix guard) so a FUTURE newly-lifted detector that is not yet
+# standalone-clean can be parked here again, but every current detector is held
+# strictly.
+# ORGANIC-20260531 residual CLOSED (v0.2.34): all 36 formerly ordering-dependent
+# detectors were hardened STANDALONE-CLEAN — each grew a foreign-primary-defer
+# (mirroring is_mipi) keyed on the dominant subject's GENERAL structural signature
+# (protocol tokens, frame/register/channel names, density counts; ZERO
+# benchmark-name / chip / SKU literals — adversarially grep-verified). The
+# partition is now EMPTY: EVERY discovered detector is held to the STRICT
+# no-foreign-fire assertion below, on all three blob models (superset / generated
+# / gold). Verified 0 foreign fires across the real benchmark_phase1/ corpus.
+NEWLY_LIFTED_ORDERING_DEPENDENT: set = set()
 
 
 def test_at_least_the_known_module_level_detectors_are_discovered():
