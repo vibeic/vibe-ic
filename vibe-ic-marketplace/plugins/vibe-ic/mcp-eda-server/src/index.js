@@ -458,6 +458,146 @@ function cellgdsPath(cfg) {
   return `${cfg.pdk_path}/libs.ref/${cfg.scl}/gds/${cfg.scl}.gds`;
 }
 
+// ─── Tie-cell discovery + hilomap clause (ORGANIC-20260531) ──────────────
+// Port of phase3_one_shot_runner.py `_v1_6_596_discover_tie_cells` +
+// `_v1_6_596_build_hilomap_directive`. The bare MCP `eda_synth` yosys
+// script (synth; dfflibmap; abc; clean; write_verilog) left constant bits
+// (1'h0 / 1'h1 from CRC tables, clamps, tie-offs, unused-output zeroing,
+// etc.) as bare `zero_`/`one_` nets in the gate netlist. OpenROAD's
+// `detailed_route` then rejects them with [DRT-0305] (POWER net) / [DRT-0199].
+// `phase3_one_shot_runner.py` (v1.6.596+) already discovers the PDK tie cell
+// from the liberty and inserts Yosys `hilomap` after abc so 1'b0/1'b1 are
+// mapped to the dedicated tie cell. This ports the SAME logic into eda_synth
+// so the bare doc→GDS path (i2s/ahb_apb/ufs/sent pilots) gets it too.
+//
+// Chip-AGNOSTIC / PDK-agnostic: discovers the tie cell from the liberty
+// cell-name vocabulary only (conb_/conp_/TIEHI/TIELO patterns). sky130
+// conb_1 is the dual-output (HI + LO) tie cell; other PDKs split into
+// separate tie_h / tie_l cells. No chip-class string literal as logic; when
+// nothing is discoverable, the hilomap step is OMITTED and a warning is
+// surfaced — exactly as the runner falls back.
+const _TIE_HI_PAT =
+  /(?:^|_)(?:conb|conp|tieh|tiehi|tie_h|tie_hi|tiep|hi)_?\d*$/i;
+const _TIE_LO_PAT =
+  /(?:^|_)(?:conp|conb|tiel|tielo|tie_l|tie_lo|tien|lo)_?\d*$/i;
+// Production OpenLane liberty wraps cell names in DOUBLE QUOTES:
+// `cell ("sky130_fd_sc_hd__conb_1")`. Accept both quoted and bare forms.
+const _RE_CELL_DECL = /^\s*cell\s*\(\s*"?([A-Za-z_][A-Za-z0-9_]*)"?\s*\)/gm;
+
+// Read a liberty file from inside the EDA container (the sky130A / gf180
+// PDK lives only at /foss/pdks inside the container; the host has no
+// mirror). Returns the text, or null if it can't be read. Mirrors
+// `_v1_6_604_read_text_or_container_cat`'s container-cat fallback.
+function _readLibertyInContainer(libPath) {
+  if (!libPath) return null;
+  // `cat` inside the container; bounded by dockerExec's 10MB maxBuffer.
+  const r = dockerExec(`cat ${libPath} 2>/dev/null`, 30000);
+  if (r.success && r.output && r.output.length > 0) return r.output;
+  return null;
+}
+
+// Faithful JS port of `_v1_6_596_discover_tie_cells`. Returns
+// {hi_cell, lo_cell, hi_pin, lo_pin}; cells are null when nothing is
+// discoverable so the caller can OMIT hilomap (legacy flow). Chip-AGNOSTIC.
+function discoverTieCells(libText) {
+  const out = { hi_cell: null, lo_cell: null, hi_pin: "HI", lo_pin: "LO" };
+  if (!libText || typeof libText !== "string") return out;
+  const cellnames = [];
+  let m;
+  _RE_CELL_DECL.lastIndex = 0;
+  while ((m = _RE_CELL_DECL.exec(libText)) !== null) cellnames.push(m[1]);
+  if (cellnames.length === 0) return out;
+  // sky130-style: conb_X is the canonical dual-output tie cell (HI + LO);
+  // prefer it when seen. Otherwise split into separate tie_h / tie_l.
+  for (const nm of cellnames) {
+    const nLc = nm.toLowerCase();
+    if (nLc.includes("conb")) {
+      if (out.hi_cell === null) out.hi_cell = nm;
+      if (out.lo_cell === null) out.lo_cell = nm;
+      continue;
+    }
+    if (_TIE_HI_PAT.test(nLc) && out.hi_cell === null) {
+      // Avoid matching tie-low patterns (the `lo` token also matches
+      // _TIE_HI_PAT if loosely written).
+      if (!_TIE_LO_PAT.test(nLc) || nLc.includes("hi")) out.hi_cell = nm;
+    }
+    if (_TIE_LO_PAT.test(nLc) && out.lo_cell === null) {
+      if (!_TIE_HI_PAT.test(nLc) || nLc.includes("lo")) out.lo_cell = nm;
+    }
+  }
+  // Sniff output-pin names from the chosen cell block(s). When the same
+  // cell is used for both HI and LO (sky130 conb_1 dual-output), gather all
+  // pins in the block and select HI-like / LO-like by vocabulary. When the
+  // cells differ (separate tie_h / tie_l), the first pin is the output.
+  const sameCell = out.hi_cell !== null && out.hi_cell === out.lo_cell;
+  const cellsHandled = new Set();
+  for (const [key, defaultPin] of [["hi_cell", "HI"], ["lo_cell", "LO"]]) {
+    if (out[key] === null) continue;
+    const cellName = out[key];
+    if (cellsHandled.has(cellName)) continue;
+    cellsHandled.add(cellName);
+    const blockRe = new RegExp(
+      "cell\\s*\\(\\s*" +
+        cellName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") +
+        "\\s*\\)\\s*\\{",
+      "i");
+    const bm = blockRe.exec(libText);
+    const pinKey = key.replace("cell", "pin");
+    if (!bm) { out[pinKey] = defaultPin; continue; }
+    // Cap window at 4KB so we don't scan the entire liberty.
+    const windowTxt = libText.slice(bm.index + bm[0].length,
+                                    bm.index + bm[0].length + 4096);
+    // Negative lookbehind on identifier chars so `pg_pin(VDD)` (the
+    // power rail, declared before signal pins) is not picked as the
+    // output pin. Mirrors the v1.6.598 fix.
+    const pinNames = [];
+    const pinRe = /(?<![A-Za-z_])pin\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)/g;
+    let pm;
+    while ((pm = pinRe.exec(windowTxt)) !== null) pinNames.push(pm[1]);
+    if (pinNames.length === 0) continue;
+    if (sameCell) {
+      const hiNamed = pinNames.filter(p => /\b(hi|h|p|pwr|vdd|one)\b/i.test(p));
+      const loNamed = pinNames.filter(p => /\b(lo|l|n|gnd|vss|zero)\b/i.test(p));
+      if (hiNamed.length) out.hi_pin = hiNamed[0];
+      else if (pinNames.length) out.hi_pin = pinNames[0];
+      if (loNamed.length) out.lo_pin = loNamed[0];
+      else if (pinNames.length > 1) out.lo_pin = pinNames[1];
+      else if (pinNames.length) out.lo_pin = pinNames[0];
+    } else {
+      out[pinKey] = pinNames[0];
+    }
+  }
+  return out;
+}
+
+// Port of `_v1_6_596_build_hilomap_directive` + the v0.1.98 HDLC-pilot
+// recipe refinement. Returns the Yosys clause to insert AFTER `abc` and
+// BEFORE `write_verilog`, or "" when no tie cell is discoverable (the
+// caller then OMITs hilomap and falls back to the legacy flow, exactly as
+// phase3_one_shot_runner does).
+//
+// CRITICAL recipe (from the backlog suggested_fix):
+//   setundef -zero; hilomap -hicell <HI> <HIPIN> -locell <LO> <LOPIN>; splitnets; clean
+//   * `setundef -zero` MUST come BEFORE hilomap — a function with don't-care
+//     output bits emits Yosys 1'hx that survives hilomap as a bare zero_/x
+//     net and still trips DRT-0305 unless forced to 0 first.
+//   * use PLAIN `clean` (NOT opt_clean) — opt_clean deletes the just-inserted
+//     tie cells, re-introducing the bare constants.
+// Returns { clause, tie } where `tie` is the discovery result (for warnings).
+function buildHilomapClause(libPath) {
+  const libText = _readLibertyInContainer(libPath);
+  const tie = discoverTieCells(libText);
+  if (!(tie.hi_cell && tie.lo_cell)) return { clause: "", tie };
+  // When hi_cell === lo_cell (sky130 conb_1 dual-output), Yosys accepts the
+  // same cell name for both arguments.
+  const clause =
+    `setundef -zero; ` +
+    `hilomap -hicell ${tie.hi_cell} ${tie.hi_pin} ` +
+    `-locell ${tie.lo_cell} ${tie.lo_pin}; ` +
+    `splitnets; clean; `;
+  return { clause, tie };
+}
+
 // v2.5.0 helpers ----------------------------------------------------------
 // wrapResult() — unified tool result envelope. Tools that adopt it return
 // {success, duration_ms, tool_version, error, output_head, output_tail, ...}.
@@ -629,7 +769,23 @@ server.tool(
     const readFlag = sv_mode ? "-sv" : "";
     const reads = verilog_files.map((f) => `read_verilog ${readFlag} ${f}`).join("; ");
 
-    const cmdStr = `export PATH=${TOOLS}/yosys/bin:${TOOLS}/bin:$PATH && yosys -p '${reads}; synth -top ${top_module}; dfflibmap -liberty ${lib}; abc -liberty ${lib}; clean; stat -liberty ${lib}; write_verilog -noattr ${output_netlist}' 2>&1`;
+    // ORGANIC-20260531: discover the PDK tie cell from the liberty and
+    // inject `setundef -zero; hilomap ...; splitnets; clean` AFTER abc and
+    // BEFORE write_verilog so constant 1'b0/1'b1 bits map to the dedicated
+    // tie cell instead of surviving as bare `zero_`/`one_` nets that
+    // OpenROAD detailed_route rejects with DRT-0305 / DRT-0199. Ported
+    // faithfully from phase3_one_shot_runner.py (_v1_6_596_discover_tie_cells
+    // + hilomap). When NO tie cell is discoverable, the clause is empty and
+    // the legacy flow is preserved (hilomap omitted + warning surfaced),
+    // exactly as the runner falls back. Chip-AGNOSTIC / PDK-agnostic — never
+    // hardcodes a cell name as the only path; conb_1 is found in the liberty.
+    const { clause: hilomapClause, tie: tieCells } = buildHilomapClause(lib);
+    const tie_cell_warning = hilomapClause
+      ? undefined
+      : `No tie cell discoverable in liberty ${lib} — hilomap step OMITTED; ` +
+        `any constant 1'b0/1'b1 bit will survive as a bare zero_/one_ net ` +
+        `and may trip OpenROAD DRT-0305/DRT-0199 in downstream eda_pnr.`;
+    const cmdStr = `export PATH=${TOOLS}/yosys/bin:${TOOLS}/bin:$PATH && yosys -p '${reads}; synth -top ${top_module}; dfflibmap -liberty ${lib}; abc -liberty ${lib}; ${hilomapClause}clean; stat -liberty ${lib}; write_verilog -noattr ${output_netlist}' 2>&1`;
     const t0 = Date.now();
     const result = dockerExec(cmdStr);
     const durationMs = Date.now() - t0;
@@ -669,6 +825,12 @@ server.tool(
       area_um2: areaMatch ? parseFloat(areaMatch[1]) : null,
       cells: cellMatch ? parseInt(cellMatch[1]) : null,
       netlist: output_netlist,
+      // ORGANIC-20260531: surface the discovered tie cell + whether the
+      // hilomap pass was applied (so the caller knows constant nets were
+      // mapped) or omitted (with a warning) — mirrors phase3 runner.
+      hilomap_applied: !!hilomapClause,
+      tie_cell: hilomapClause ? tieCells.hi_cell : null,
+      tie_cell_warning,
       log_tail,
     };
 

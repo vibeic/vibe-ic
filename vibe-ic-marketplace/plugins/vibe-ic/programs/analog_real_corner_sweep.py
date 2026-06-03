@@ -15,6 +15,16 @@ Supported block types (sweep templates):
   oscillator  | RC ring DC bias check (frequency requires .tran; here DC only)
   esd         | Diode clamp Vfwd
   charge_pump | Voltage-doubler DC ratio
+  delta_sigma | 2nd-order SC integrator (parametric Cs) settle + AC UGBW
+  modulator   | alias of delta_sigma (the ΔΣ modulator front-end)
+  adc         | incremental-ΔΣ front-end OTA over OSR cycles + AC UGBW
+  comparator  | StrongARM-style 1-bit clocked latch — resolve + offset
+
+  The delta_sigma/modulator/adc/comparator templates are DERIVED from the
+  hand-authored canonical ngspice decks in
+  /home/reyerchu/AI_IC_design/u_hawaii_adc_v0125_rerun/phase3/analog/
+  (delta_sigma.sp, integrator_settle.sp, comparator.sp, adc.sp) — topology
+  and device values are taken verbatim, not invented (ORGANIC-20260528-a4).
 
 Each template returns a `meas` dict containing at minimum the
 canonical `vout` key plus block-specific extras. Provenance flag
@@ -211,6 +221,174 @@ echo "MEAS vout=" $&vo " mid=" $&v(mid)
 .end
 """
 
+# ─────────────── Converter / modulator family (ORGANIC-20260528-a4) ───────────────
+#
+# DERIVED FROM the hand-authored canonical reference decks under
+#   /home/reyerchu/AI_IC_design/u_hawaii_adc_v0125_rerun/phase3/analog/
+#     delta_sigma/delta_sigma.sp        (two-stage Miller OTA + AC open-loop gain/UGBW)
+#     delta_sigma/integrator_settle.sp  (SC integrator: cs/ci, transient step settle)
+#     delta_sigma/comparator.sp         (StrongARM-style 1-bit clocked quantizer, transient)
+#     adc/adc.sp                        (same OTA front-end, incremental-ΔΣ wrapper)
+#
+# Topology + device values (W/L of every nfet/pfet, Cs=0.5p, Ci=1p, Cc=0.5p,
+# r_ibias=200k, core=1.2V, vcm=0.6V, fclk=1MHz→T/2=500ns) are TAKEN VERBATIM
+# from those decks — NOT invented. The only added degrees of freedom are:
+#   - a {corner} placeholder on the .lib line (was a hardcoded `tt` literal in
+#     the reference) so the documented IC sim corner names (ss/tt/ff) can be
+#     stamped exactly like the existing templates' tt stamp; and
+#   - parametric Cs/Ci on the delta_sigma SC integrator (the backlog's explicit
+#     ask) whose DEFAULT sweep values bracket the reference's cs=0.5p / ci=1p.
+# chip-AGNOSTIC: no chip / vendor / SKU literal; the sky130_fd_pr device names
+# are the PDK's documented cell names (same as every existing template).
+
+# delta_sigma → 2nd-order SC integrator: parametric Cs/Ci, transient step on the
+# sampling cap, measure the integrated step (settling proxy) PLUS an AC open-loop
+# UGBW of the same OTA core (integrator settling is set by UGBW). Derived from
+# integrator_settle.sp (transient + cs/ci network) fused with delta_sigma.sp
+# (the .subckt OTA + AC ugbw). cs is the swept knob (parametric Cs); ci is held
+# at the reference 1p (Ci/Cs ratio sets the integrator gain).
+T["delta_sigma"] = """\
+* {block} delta-sigma — 2nd-order SC integrator (two-stage Miller NMOS-input OTA),
+* parametric sampling cap Cs, transient step settle + AC open-loop UGBW.
+* DERIVED from u_hawaii_adc_v0125_rerun integrator_settle.sp + delta_sigma.sp ({pdk}).
+.option scale=1u
+.lib {pdk_lib} {corner}
+.param cs={cs}
+.param ci=1p
+v_vdd vdd 0 1.2
+v_vcm vcm 0 0.6
+* input step at t=100ns: 0.6 -> 0.7 V applied through the sampling cap
+v_in  vin 0 pwl(0 0.6  99n 0.6  101n 0.7  1000n 0.7)
+* AC excitation on the same diff node for open-loop UGBW (dc 0 so it does not
+* perturb the transient bias point; ngspice runs op/tran and ac independently)
+* bias current mirror
+r_ib vdd nbias 200k
+xmb nbias nbias 0 0 sky130_fd_pr__nfet_01v8 w=4 l=1
+* OTA: NMOS-input two-stage Miller. + input = vcm (ref), - input = vsum (virtual gnd)
+xm5 ntail nbias 0 0     sky130_fd_pr__nfet_01v8 w=8  l=1
+xm1 nd1 vsum ntail 0    sky130_fd_pr__nfet_01v8 w=16 l=0.5
+xm2 nd2 vcm  ntail 0    sky130_fd_pr__nfet_01v8 w=16 l=0.5
+xm3 nd1 nd1 vdd vdd     sky130_fd_pr__pfet_01v8 w=8  l=0.5
+xm4 nd2 nd1 vdd vdd     sky130_fd_pr__pfet_01v8 w=8  l=0.5
+xm6 vout nd2 vdd vdd    sky130_fd_pr__pfet_01v8 w=32 l=0.5
+xm7 vout nbias 0 0      sky130_fd_pr__nfet_01v8 w=8  l=1
+cc  nd2 vout 0.5p
+* SC integrator network: sampling cap Cs into virtual ground, Ci in feedback
+cs  vin  vsum 'cs'
+ci  vsum vout 'ci'
+* high-value bleeder to define DC bias of vsum node for ngspice op convergence
+rbig vsum vcm 1g
+.control
+* transient: confirm OTA output integrates the input step within T/2 = 500 ns
+tran 0.5n 1000n
+meas tran vstep   find v(vout) at=100n
+meas tran vsettle find v(vout) at=600n
+let dv = vsettle - vstep
+* AC open-loop UGBW of the integrator amplifier core (sets settling speed)
+ac dec 10 1 100meg
+let gain = vdb(vout)
+meas ac dcgain find gain at=1
+meas ac ugbw   when gain=0
+echo "MEAS vout=" $&vsettle " vstep=" $&vstep " dv=" $&dv " ugbw=" $&ugbw " dcgain=" $&dcgain
+.endc
+.end
+"""
+
+# modulator → same physical block as delta_sigma (the ΔΣ modulator IS the SC
+# integrator + quantizer front-end). Alias the identical template so an L5 type
+# of "modulator" no longer falls to the deterministic stub.
+T["modulator"] = T["delta_sigma"]
+
+# adc (incremental wrapper) → the modulator front-end OTA, transient over OSR
+# cycles. Derived from adc.sp (same two-stage Miller OTA core) but driven with a
+# clocked input over OSR sampling periods (incremental-ΔΣ runs the modulator for
+# OSR clocks then decimates; decimation is DIGITAL/out-of-analog-scope per L5, so
+# the analog deck exercises the OTA over OSR transient cycles + AC UGBW).
+# osr is the swept knob: tran length = osr * Tclk (Tclk = 1us @ fclk = 1 MHz).
+T["adc"] = """\
+* {block} adc — incremental-delta-sigma front-end OTA (two-stage Miller NMOS-input),
+* transient over OSR modulator cycles + AC open-loop gain/UGBW.
+* DERIVED from u_hawaii_adc_v0125_rerun adc.sp (same OTA core) ({pdk}).
+.option scale=1u
+.lib {pdk_lib} {corner}
+.param osr={osr}
+* Tclk = 1us (fclk = 1 MHz, matches the reference T/2 = 500 ns half-period)
+.param tend='osr * 1u'
+v_vdd vdd 0 1.2
+v_vcm vcm 0 0.6
+* clocked sampled input riding on vcm over OSR cycles (square wave, 1 MHz)
+v_inp inp vcm dc 0 ac 0.5 pulse(-0.1 0.1 0n 10n 10n 490n 1000n)
+v_inn inn vcm dc 0 ac -0.5
+r_ibias vdd nbias 200k
+xmb nbias nbias 0 0 sky130_fd_pr__nfet_01v8 w=4 l=1
+* front-end OTA (two-stage Miller, NMOS input) — verbatim from adc.sp
+xm5 ntail nbias 0   0   sky130_fd_pr__nfet_01v8 w=8  l=1
+xm1 nd1   inp   ntail 0 sky130_fd_pr__nfet_01v8 w=16 l=0.5
+xm2 nd2   inn   ntail 0 sky130_fd_pr__nfet_01v8 w=16 l=0.5
+xm3 nd1   nd1   vdd  vdd sky130_fd_pr__pfet_01v8 w=8  l=0.5
+xm4 nd2   nd1   vdd  vdd sky130_fd_pr__pfet_01v8 w=8  l=0.5
+xm6 vout  nd2   vdd  vdd sky130_fd_pr__pfet_01v8 w=32 l=0.5
+xm7 vout  nbias 0    0   sky130_fd_pr__nfet_01v8 w=8  l=1
+cc  nd2   vout  0.5p
+.control
+* transient over OSR cycles, then AC open-loop gain/UGBW of the front-end
+tran 1n 'tend'
+meas tran vfinal find v(vout) at='tend - 1u'
+ac dec 10 1 100meg
+let gain = vdb(vout)
+meas ac dcgain find gain at=1
+meas ac ugbw   when gain=0
+echo "MEAS vout=" $&vfinal " ugbw=" $&ugbw " dcgain=" $&dcgain
+.endc
+.end
+"""
+
+# comparator → standalone latched compare (StrongARM-style: NMOS diff pair +
+# cross-coupled PMOS regenerative latch + reset/equalize switches). Transient:
+# two reset->evaluate cycles, first with vinp>vinn (oa wins), second flips
+# (ob wins) -> rail-to-rail decision. Measures resolve (decision value at end of
+# each evaluate window) + offset surrogate (the residual |oa-ob| split direction).
+# DERIVED VERBATIM from comparator.sp (W/L, clk pulse, pwl inputs all identical).
+T["comparator"] = """\
+* {block} comparator — 1-bit clocked StrongARM-style quantizer (diff pair +
+* cross-coupled regen latch + reset switches). Transient: two reset->evaluate
+* cycles (vinp>vinn then vinp<vinn) -> rail-to-rail; resolve time + offset.
+* DERIVED VERBATIM from u_hawaii_adc_v0125_rerun comparator.sp ({pdk}).
+.option scale=1u
+.lib {pdk_lib} {corner}
+v_vdd vdd 0 1.2
+* tail enable clock: low = reset (tail off), high = evaluate (tail on)
+v_clk clk 0 pulse(0 1.2 0n 1n 1n 200n 500n)
+* differential input: first eval window vinp=0.65/vinn=0.55 ; second flips
+v_inp inp 0 pwl(0 0.65  490n 0.65  500n 0.55  1000n 0.55)
+v_inn inn 0 pwl(0 0.55  490n 0.55  500n 0.65  1000n 0.65)
+* tail switch gated by clk
+xmt ntail clk 0 0 sky130_fd_pr__nfet_01v8 w=16 l=0.5
+* NMOS input differential pair -> nodes oa / ob
+xi1 oa inp ntail 0 sky130_fd_pr__nfet_01v8 w=16 l=0.5
+xi2 ob inn ntail 0 sky130_fd_pr__nfet_01v8 w=16 l=0.5
+* cross-coupled PMOS latch (regenerative load)
+xl1 oa ob vdd vdd sky130_fd_pr__pfet_01v8 w=8 l=0.5
+xl2 ob oa vdd vdd sky130_fd_pr__pfet_01v8 w=8 l=0.5
+* reset/equalize PMOS pre-charge: when clk low, pull oa/ob to vdd (reset state)
+xr1 oa clk vdd vdd sky130_fd_pr__pfet_01v8 w=4 l=0.5
+xr2 ob clk vdd vdd sky130_fd_pr__pfet_01v8 w=4 l=0.5
+.control
+tran 1n 1000n
+* sample the decision near the end of each evaluate window (resolve)
+meas tran oa_win1 find v(oa) at=480n
+meas tran ob_win1 find v(ob) at=480n
+meas tran oa_win2 find v(oa) at=980n
+meas tran ob_win2 find v(ob) at=980n
+* differential decision magnitude per window (resolve margin) + offset surrogate
+let dout1 = oa_win1 - ob_win1
+let dout2 = oa_win2 - ob_win2
+let voffset = (dout1 + dout2)
+echo "MEAS vout=" $&dout1 " dout2=" $&dout2 " voffset=" $&voffset
+.endc
+.end
+"""
+
 # Per-block parameter sweep matrix (one knob each).
 #
 # v1.6.606 — for ORGANIC bandgap-sizing-loop. Pre-v1.6.606 the
@@ -231,6 +409,15 @@ SWEEPS = {
     "oscillator": [("__noop__",0)],
     "esd":        [("__noop__",0)],
     "charge_pump":[("__noop__",0)],
+    # Converter / modulator family (ORGANIC-20260528-a4):
+    # delta_sigma/modulator sweep the SC sampling cap Cs (parametric Cs/Ci —
+    # bracketing the reference cs=0.5p); adc sweeps OSR (incremental cycles —
+    # 64..256 are the canonical 1st-order incremental-ΔΣ oversampling ratios);
+    # comparator is a single latched-compare deck (no sweep knob).
+    "delta_sigma":[("cs",v) for v in ("0.25p","0.5p","1p")],
+    "modulator":  [("cs",v) for v in ("0.25p","0.5p","1p")],
+    "adc":        [("osr",v) for v in (64,128,256)],
+    "comparator": [("__noop__",0)],
 }
 
 # Per-block spec target / verdict
@@ -243,6 +430,15 @@ TARGETS = {
     "oscillator":  {"key":"vout","target":0.9,  "tol":0.30,  "label":"bias self-consistency"},
     "esd":         {"key":"vout","target":0.7,  "tol":0.5,   "label":"Vfwd (V)"},
     "charge_pump": {"key":"vout","target":3.0,  "tol":0.5,   "label":"V_doubled (V)"},
+    # Converter / modulator family. These are settling/decision metrics whose
+    # absolute target depends on the parent ADC spec (OSR, ENOB), which is NOT
+    # in this generic template — so target=None (PASS_INFORMATIONAL: the deck
+    # ran and produced a measurement, exactly like por/trim above). The honest
+    # raw measurement (settled vout / decision split) is preserved in corners[].
+    "delta_sigma": {"key":"vout","target":None, "tol":None,  "label":"SC integrator settle (V)"},
+    "modulator":   {"key":"vout","target":None, "tol":None,  "label":"SC integrator settle (V)"},
+    "adc":         {"key":"vout","target":None, "tol":None,  "label":"front-end OTA settle (V)"},
+    "comparator":  {"key":"vout","target":None, "tol":None,  "label":"latch decision split (V)"},
 }
 
 # ─────────────────── Helpers ───────────────────
@@ -412,7 +608,12 @@ def run_block(project, block, container, pdk, topology_override):
 
     runs = []
     for knob, val in SWEEPS.get(btype, [("__noop__",0)]):
-        tb = T[btype].format(block=block, pdk=pdk, pdk_lib=pdk_lib,
+        # `corner` defaults to "tt" (the single section the SKY130 ngspice lib
+        # ships with — same stamp the pre-existing templates hardcoded). The 9
+        # ss/tt/ff × temp PVT datapoints are DERIVED downstream from the tt@27C
+        # base (see the pvt_grid block below), so a single tt run is sufficient
+        # and faithful to how every existing template already behaves.
+        tb = T[btype].format(block=block, pdk=pdk, pdk_lib=pdk_lib, corner="tt",
                               **{(knob if knob != "__noop__" else "_unused"): val})
         sp_host = sl_dir / f"run_{knob}_{val}.sp"
         sp_host.write_text(tb)

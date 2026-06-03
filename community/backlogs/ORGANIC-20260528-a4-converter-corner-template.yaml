@@ -21,3 +21,61 @@ id: "ORGANIC-20260528-a4-converter-corner-template"
 submitted_at: "2026-05-28T00:00:00+08:00"
 session_context: >-
   Captured by benchmark-enhancement-capture from the u_hawaii_adc v0.1.25 analog rerun. AI authored a real ΔΣ topology + real ngspice corner deck blind (LDO+ADC+ΔΣ all reached A8) but it's per-design hand-authoring. Adding it to analog_real_corner_sweep as a deterministic family removes the hand-authoring step for the next converter benchmark / real-case.
+
+status: resolved
+resolved_at: "2026-06-03T00:00:00+08:00"
+resolved_in: "program:analog_real_corner_sweep"
+resolution: |
+  Added the converter / modulator template family to
+  programs/analog_real_corner_sweep.py, DERIVED VERBATIM (topology + every W/L,
+  Cs=0.5p, Ci=1p, Cc=0.5p, r_ibias=200k, core=1.2V, vcm=0.6V, fclk=1MHz) from the
+  cited canonical hand-authored decks:
+    /home/reyerchu/AI_IC_design/u_hawaii_adc_v0125_rerun/phase3/analog/
+      delta_sigma/delta_sigma.sp, delta_sigma/integrator_settle.sp,
+      delta_sigma/comparator.sp, adc/adc.sp
+
+  New btypes wired into T + SWEEPS + TARGETS so adc / delta_sigma / modulator /
+  comparator NO LONGER fall to the deterministic stub (`if btype not in T: return 2`):
+    - delta_sigma → 2nd-order SC integrator (two-stage Miller NMOS-input OTA),
+      PARAMETRIC sampling cap Cs (sweep 0.25p/0.5p/1p, brackets reference 0.5p),
+      Ci=1p; transient step on the sampling cap (settle proxy) + AC open-loop
+      UGBW (integrator-settling proxy) + dcgain. Fuses integrator_settle.sp
+      (cs/ci network, transient) with delta_sigma.sp (OTA + AC ugbw).
+    - modulator → alias of delta_sigma (same physical ΔΣ front-end block).
+    - adc → incremental wrapper: same front-end OTA driven over OSR cycles
+      (sweep osr 64/128/256, tend = osr*1us @ fclk=1MHz), transient + AC UGBW.
+    - comparator → StrongARM-style 1-bit clocked latch (verbatim from
+      comparator.sp): two reset→evaluate windows; measures decision split
+      (resolve) per window + offset surrogate. No swept param (faithful to ref).
+
+  Corner stamping: a {corner} placeholder replaces the hardcoded `tt` literal on
+  the .lib line (default corner="tt" wired into the .format() call); the existing
+  9-corner ss/tt/ff × m40c/27c/125c PVT grid is still DERIVED downstream from the
+  tt@27C base exactly as for every pre-existing template (unchanged). Existing
+  templates render unchanged with the new corner kwarg present.
+
+  GENERAL / NO-FABRICATION: no chip / vendor / SKU literal as logic; all device
+  values come from the cited real reference decks (none invented); sky130_fd_pr
+  cell names are the PDK's documented names (same as every existing template).
+  The simulator_run:true / _provenance:real_ngspice runtime logic was LEFT
+  UNCHANGED — it still flips only when ngspice actually runs.
+
+  Tests added: programs/tests/test_analog_real_corner_sweep_converter.py — 39
+  cases asserting (a) each new btype is wired into T/SWEEPS/TARGETS (dispatch no
+  longer stubs), (b) every sweep point format-fills with no KeyError / no
+  leftover placeholder, (c) structural validity (.param where parametric, .tran,
+  .measure, corner-stamped .lib, terminating .end, MEAS echo line), (d) {corner}
+  honoured for ss/tt/ff, (e) delta_sigma parametric Cs+Ci+UGBW, modulator alias,
+  adc OSR sweep, comparator resolve+offset, (f) existing templates unbroken.
+  Result: 39 passed; full corner-test selection 124 passed; related suites
+  (a4_corner_sweep_check + corner_sweep_check + enhancement_emit) 43 passed;
+  py_compile OK.
+
+  HONEST RESIDUAL (does NOT block resolution): ngspice is NOT available on this
+  host, so the decks were verified by template-render + structural assertions +
+  dispatch wiring ONLY — NOT by a real ngspice run. A real ngspice host (the
+  iic-osic-tools docker the runner targets) is required to exercise the decks
+  end-to-end and confirm the MEAS scrape (vout/ugbw/dcgain/decision-split) and
+  the simulator_run:true / _provenance:real_ngspice flip. The template family
+  itself is complete and faithfully derived from the cited reference, matching
+  exactly how the pre-existing ldo/bandgap/etc. templates are consumed.

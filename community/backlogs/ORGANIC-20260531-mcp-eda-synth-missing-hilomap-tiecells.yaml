@@ -1,4 +1,5 @@
 type: tool-gap
+status: resolved
 severity: P2
 component: mcp-eda-server/src/index.js (eda_synth tool) — vs programs/phase3_one_shot_runner.py
 plugin_version: "0.1.95"
@@ -63,3 +64,71 @@ forward_validation: >-
   class on the next pilot without re-discovery, which is exactly the closed-loop payoff and
   RAISES confidence that porting hilomap into eda_synth (the suggested_fix) is the correct,
   general remedy. Two independent pilots (SENT recovered, QSPI pre-empted) now motivate it.
+
+resolved_at: "2026-06-03T00:00:00+08:00"
+resolved_in: "mcp-eda-server/src/index.js (eda_synth) + new test/test_eda_synth_hilomap_tiecells.py"
+resolution: |
+  PORTED the phase3_one_shot_runner tie-cell discovery + hilomap step into
+  the MCP `eda_synth` tool, chip-/PDK-agnostically. Edits (all in
+  plugins/vibe-ic/mcp-eda-server/src/index.js):
+    1. Added `discoverTieCells(libText)` — a faithful JS port of
+       phase3_one_shot_runner.py `_v1_6_596_discover_tie_cells`: same
+       regex vocabulary (conb/conp/tieh/tiehi/tie_h/tie_hi/tiep/hi and the
+       tie-lo mirror), same quoted/bare `cell (...)` decl grammar
+       (_V1_6_596_RE_CELL_DECL), same dual-output handling (sky130 conb_1 =
+       both HI and LO), same pg_pin-first negative-lookbehind pin sniff
+       (the v1.6.598 fix). Cell name is DISCOVERED from the liberty — never
+       a hardcoded literal.
+    2. Added `_readLibertyInContainer(libPath)` — reads the liberty via
+       `docker exec cat` (the sky130A/gf180 PDK lives only inside the
+       container at /foss/pdks), mirroring the runner's
+       `_v1_6_604_read_text_or_container_cat` fallback.
+    3. Added `buildHilomapClause(libPath)` — returns the ordered recipe
+       `setundef -zero; hilomap -hicell <HI> <HIPIN> -locell <LO> <LOPIN>;
+       splitnets; clean; ` or "" when no tie cell is discoverable (caller
+       then OMITs hilomap + surfaces tie_cell_warning, exactly as the
+       runner falls back). RECIPE honored exactly per suggested_fix:
+       `setundef -zero` BEFORE hilomap; PLAIN `clean` (NOT opt_clean).
+    4. Wired `${hilomapClause}` into the eda_synth yosys cmdStr AFTER
+       `abc -liberty` and BEFORE `clean; stat; write_verilog`; added
+       hilomap_applied / tie_cell / tie_cell_warning to the returned metrics.
+
+  VERIFIED (honest):
+   * Real yosys 0.62 in the live iic-eda container against the REAL
+     production liberty
+     /foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
+     (conb_1 confirmed present, quoted form, pg_pin-first). A CRC-style
+     const_top design (outputs tied 1'b0 / 1'b1 + constant CRC bits + a
+     don't-care 2'bxx path):
+       - OLD script (no hilomap): emitted bare `assign crc[3:1]=3'h0;
+         assign tie_hi=1'h1; assign tie_lo=1'h0;`, 0 conb_1 instances.
+       - NEW script (discovered clause): 5 `sky130_fd_sc_hd__conb_1`
+         instances with .HI(tie_hi) / .LO(crc[1]) / .LO(crc[2]) /
+         .LO(crc[3]) / .LO(tie_lo); ZERO bare 1'h0/1'h1/3'h0/zero_/one_/1'hx
+         remained in write_verilog. yosys log confirms pass order
+         SETUNDEF(5) -> HILOMAP(6) -> SPLITNETS(7) -> clean.
+   * The SHIPPED `discoverTieCells`/`buildHilomapClause` source (extracted
+     verbatim and eval'd with a container-cat-backed dockerExec stub)
+     produced exactly
+       setundef -zero; hilomap -hicell sky130_fd_sc_hd__conb_1 HI
+       -locell sky130_fd_sc_hd__conb_1 LO; splitnets; clean;
+     on the real liberty, and "" on a no-tie-cell liberty.
+   * New test test/test_eda_synth_hilomap_tiecells.py (10 cases) — incl. a
+     cell-for-cell cross-check that the Python discovery mirror AGREES with
+     phase3_one_shot_runner._v1_6_596_discover_tie_cells on 3 fixtures (so
+     the JS port is provably faithful to the runner), plus JS source-shape
+     asserts (recipe-in-order, setundef-before-hilomap, plain-clean-not-
+     opt_clean, clause-after-abc-before-write, discovery-not-hardcoded).
+     All 10 PASS. Full mcp-eda-server suite: 136 passed. `node --check
+     src/index.js`: OK.
+
+  COULD NOT VERIFY (stated plainly): the full doc->GDS DRT-0305 corpus
+  sweep (re-run i2s + ahb_apb + ufs + sent pilots through patched
+  eda_synth -> eda_pnr, confirm 0 DRT-0305 + unchanged cell counts) was
+  NOT run — it needs the full pilot harness + long OpenROAD PnR per design.
+  The unit of the gap (constant net -> bare zero_/one_ -> DRT-0305) is
+  proven closed at the synth boundary (the netlist now contains real tie
+  cells, no bare constants), which is the root cause OpenROAD was rejecting.
+  Also: the running stdio MCP server was started before this edit; the
+  patch takes effect on the next server start (no restart/rebuild done
+  here per the no-version-bump scope).
