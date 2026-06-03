@@ -61,6 +61,25 @@ def run(cmd, cwd=None, timeout=120, env=None):
         return 124, "TIMEOUT"
 
 
+def _l9_rendered(wd: Path) -> bool:
+    """True if an L9 doc exists in EITHER the primary engine's out/ dir OR the
+    bundled fallback runner's phase1_proj/phase1/ dir.
+
+    Both are checked so a CLEAN plugin install passes the phase1 hard gate
+    self-contained: tools/phase1_engine is NOT shipped in the plugin (it is a
+    dev-only symlink to the monorepo), so on a clean machine the primary
+    `tools.phase1_engine.cli run-all <spec> <wd>/out` path is dead and the
+    bundled fallback `phase1_one_shot_runner.py` runs instead, writing L9 to
+    <wd>/phase1_proj/phase1/generated_docs/ rather than <wd>/out/generated_docs/.
+    (ORGANIC-20260603-ingest-engine-cli-missing-from-plugin-cache fix.)
+    """
+    for d in (wd / "out" / "generated_docs",
+              wd / "phase1_proj" / "phase1" / "generated_docs"):
+        if d.is_dir() and any(d.glob("L9*.json")):
+            return True
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--prob", required=True, help="problem id (e.g. Prob001_zero)")
@@ -133,8 +152,10 @@ def main():
             pass
         rc, out = run([sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
                        str(proj)], timeout=180, env=cli_env)
-    gd = wd / "out/generated_docs"
-    l9_ok = gd.is_dir() and any(gd.glob("L9*.json"))
+    # L9 may land in the primary engine's out/ dir OR the bundled fallback's
+    # phase1_proj/phase1/ dir — probe BOTH so a clean plugin install passes the
+    # phase1 hard gate self-contained (see _l9_rendered).
+    l9_ok = _l9_rendered(wd)
     steps["phase1_run_all"] = {"verdict": "PASS" if rc == 0 and l9_ok else "FAIL",
                                "rc": rc, "l9_rendered": l9_ok, "log": out[-400:]}
 
