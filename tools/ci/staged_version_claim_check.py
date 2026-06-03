@@ -83,16 +83,20 @@ _HISTORICAL_PREFIXES = (
 # Path globs we never gate. CHANGELOG / RELEASE_NOTES intentionally list
 # the version they ANNOUNCE (which by definition is the about-to-bump
 # value). Without this skip the hook would block release-prep commits.
-# `test_staged_version_claim_check` skip: this hook's own pytest harness
-# deliberately injects fake-future versions (vX.Y.Z fixtures, far above
-# the current release) to verify the FAIL path; without the skip the
-# hook would block its own test file every time the harness is touched.
+# `staged_version_claim_check` skip (both this source file AND its pytest
+# harness, since the substring matches both paths): this guard's own source
+# DOCUMENTS the version-shapes it gates — its docstrings/comments carry
+# illustrative "bad shapes" (a bare `vX.Y.Z`, a `vibe-ic X.Y.Z` self-claim
+# example) and its test harness deliberately injects fake-future versions to
+# exercise the FAIL path. Both are descriptions OF the gate, never a real
+# plugin-version claim, so the guard must not gate its own implementation +
+# test (symmetric with how every linter exempts its own rule fixtures).
 _SKIP_PATH_PATTERNS = (
     "CHANGELOG",
     "RELEASE_NOTES",
     "RELEASE-NOTES",
     "release_notes",
-    "test_staged_version_claim_check",
+    "staged_version_claim_check",
     # Tool-output artefacts — these embed third-party tool versions
     # (Yosys, Quartus, gcc, OpenSTA, ...) which are NOT plugin version
     # claims. Skip the entire tool-output families so they don't trip

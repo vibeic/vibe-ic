@@ -393,3 +393,23 @@ def test_dependency_carveout_does_not_hole_plugin_claim(tmp_path):
     assert cp.returncode == 1, cp.stdout + cp.stderr
     cp2 = _run(tmp_path, _diff("src/x.py", "# vibe-ic 1.5.316 ships next"))
     assert cp2.returncode == 1, cp2.stdout + cp2.stderr
+
+
+def test_guard_source_self_documents_shapes_is_skipped(tmp_path):
+    # The guard's OWN source documents the bad shapes it gates (a bare
+    # vX.Y.Z, a `vibe-ic X.Y.Z` self-claim example) — symmetric with the
+    # test-harness skip, it must not gate its own implementation file.
+    _make_plugin_json(tmp_path, "0.2.33")
+    cp = _run(tmp_path, _diff(
+        "tools/ci/staged_version_claim_check.py",
+        "    # self-claim hole: a bare `v1.5.316`, or `vibe-ic 1.5.316`"))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_guard_test_harness_still_skipped(tmp_path):
+    # The pytest harness injects fake-future versions; still exempt.
+    _make_plugin_json(tmp_path, "0.2.33")
+    cp = _run(tmp_path, _diff(
+        "tools/ci/test_staged_version_claim_check.py",
+        "    cp = _run(tmp_path, _diff('src/x.py', '# v9.9.9 fixture'))"))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
