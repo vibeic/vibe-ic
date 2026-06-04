@@ -98,6 +98,18 @@ def test_doc_artifact_carveout_does_not_mask_self_claim(tmp_path):
     assert "claimed v0.3.0" in cp.stdout
 
 
+def test_community_backlog_prose_versions_skipped(tmp_path):
+    # backlog filings quote external spec sections / doc versions in prose —
+    # those are NOT plugin self-claims and the whole tree is path-skipped.
+    _make_plugin_json(tmp_path, "0.2.39")
+    cp = _run(tmp_path, _diff(
+        "community/backlogs/ORGANIC-20260521-some-filing.yaml",
+        "  Verilog 1995 §3.7.5 — identifiers are case-sensitive",
+        "  1.2.3 Title; modern Markdown ## Architecture",
+        '  Doc citing "Debug Module 0.13.2 defines exactly one of ..."'))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
 # ────────────────────────────────────────────────────────────────
 # Historical-reference filtering
 # ────────────────────────────────────────────────────────────────

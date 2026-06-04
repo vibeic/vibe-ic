@@ -150,6 +150,13 @@ _SKIP_PATH_PATTERNS = (
     "/extracted_text/",
     "/work/",
     "/reports/",
+    # Community backlog filings are field-agent PROSE describing IC-design
+    # problems — they quote external spec section numbers (e.g. "Verilog 1995
+    # §3.7.5"), external-doc/tool versions ("Debug Module 0.13.2"), and section
+    # headers ("1.2.3 Title"). None of these are plugin self-claims; the whole
+    # tree is exempt for the same reason as the benchmark-snapshot dirs and
+    # CHANGELOG/RFC docs below.
+    "community/backlogs/", "community/backlogs",
     # RFC / planning docs legitimately discuss target / proposed
     # versions before plugin.json bumps (same exemption rationale
     # as CHANGELOG / RELEASE_NOTES).
