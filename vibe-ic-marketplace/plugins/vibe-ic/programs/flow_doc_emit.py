@@ -40,16 +40,29 @@ def _read(p: Path) -> str:
 
 
 def phase1_markers(src: str) -> List[Tuple[str, str]]:
-    """[(marker, description)] from `print(f"[N/15] desc ...")`, first occurrence, in order.
+    """[(marker, description)] from the runner's step markers, first occurrence, in order.
 
-    Only matches print() strings (not comments), so a `# ... [14b/15] ...` comment is ignored.
+    Two equivalent marker forms are recognised (ORGANIC-20260522 routed the
+    L1-L13 generators through the `_run_layer` watchdog wrapper, which prints
+    the same `[N/15] LAYER ...` line at runtime but in source appears as a
+    `_run_layer("[N/15]", "LAYER", ...)` call rather than a bare print):
+      * `print(f"[N/15] desc ...")`            — e.g. [1/15] ingest, [15/15] coverage
+      * `_run_layer("[N/15]", "LAYER", ...)`   — the L1-L13 + L8_TIMING emit steps
+    Only matches code (not comments), so a `# ... [14b/15] ...` comment is ignored.
     """
     out: List[Tuple[str, str]] = []
     seen = set()
-    pat = re.compile(r'print\(\s*f?"(\s*\[[0-9]+[a-z0-9]*/15\])\s*([^"]*?)"', re.IGNORECASE)
+    pat = re.compile(
+        r'print\(\s*f?"(\s*\[[0-9]+[a-z0-9]*/15\])\s*([^"]*?)"'
+        r'|_run_layer\(\s*"(\[[0-9]+[a-z0-9]*/15\])"\s*,\s*"([^"]*)"',
+        re.IGNORECASE)
     for m in pat.finditer(src):
-        marker = m.group(1).strip()
-        desc = m.group(2).strip()
+        if m.group(1) is not None:
+            marker = m.group(1).strip()
+            desc = m.group(2).strip()
+        else:
+            marker = m.group(3).strip()
+            desc = m.group(4).strip()
         # strip trailing " ..." progress dots
         desc = re.sub(r"\s*\.\.\.\s*$", "", desc).strip()
         if marker in seen:

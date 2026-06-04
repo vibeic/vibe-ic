@@ -85,7 +85,10 @@ def test_main_calls_extractor_after_l13_lab_calibration():
     """The call MUST come after L13 + L8_TIMING + all the post-emit hooks
     so ic_class is final when R13 applicability gate inspects it."""
     src = RUNNER.read_text()
-    l13_pos = src.find("[14/15] L13_LAB_CALIBRATION")
+    # ORGANIC-20260522 routed L13 through the _run_layer watchdog wrapper, so
+    # in source the L13 emit marker is the _run_layer("[14/15]", "L13_..." call
+    # (it still prints "[14/15] L13_LAB_CALIBRATION ..." at runtime).
+    l13_pos = src.find('_run_layer("[14/15]", "L13_LAB_CALIBRATION"')
     call_pos = src.find("_emit_l14_to_l18_via_extractor(project")
     assert l13_pos > 0
     assert l13_pos < call_pos, (

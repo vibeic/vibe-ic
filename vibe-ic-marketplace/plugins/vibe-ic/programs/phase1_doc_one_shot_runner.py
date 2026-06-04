@@ -16560,14 +16560,22 @@ def gen_l1_datasheet(project: Path,
         _port_name = (_row.get("name") or "").strip()
         if not _port_name:
             continue
+        # ORGANIC-20260521 — the AsciiDoc top-entity-ports route was the one
+        # remaining site still emitting the useless [name.lower(),
+        # name.replace("_","")] auto-synth aliases. Mirror the two sibling
+        # sites (15808, 16431): emit ONLY doc-declared aliases (pipe-delim in
+        # the name / parenthetical in the description) via the _v1_6_363 helper,
+        # and strip any pipe-alias suffix from the emitted base name.
+        _v1_6_363_row_aliases = _v1_6_363_extract_doc_declared_aliases(
+            _port_name, source_row=(_row.get("description") or ""))
+        _port_name = _v1_6_363_strip_pipe_from_name(_port_name)
         if _port_name in pin_index:
             continue
         pin_index[_port_name] = len(pins)
         pins.append({
             "name": _port_name,
             "mode": "unspecified",
-            "aliases": [_port_name.lower(),
-                        _port_name.replace("_", "")],
+            "aliases": _v1_6_363_row_aliases,
             "rtl_name": _port_name.lower(),
             "board_name": _port_name,
             "io_standard": None,
@@ -48254,22 +48262,51 @@ def main() -> int:
 
     # Steps 2-14: L1-L13 generators
     results: List[LDocResult] = []
-    print(f"[2/15] L1_DATASHEET ...")
-    r = gen_l1_datasheet(project, extracted); results.append(r)
-    print(f"      → {r.path.name} (todo={r.todo_count}, ev={r.evidence_count})")
+    # ORGANIC-20260522 — route every L-doc generator through the per-step
+    # watchdog (_v1_6_580_run_step_with_watchdog): a step that RAISES (or, on
+    # POSIX, hangs past the timeout) writes a recoverable <layer>.json stub +
+    # a runner.log line and the runner CONTINUES, instead of crashing the whole
+    # run or vanishing silently. The 1800s timeout only trips a true hang (no
+    # legitimate single step approaches it); the high-value path is the
+    # except-Exception stub that distinguishes "no data" from "step failed".
+    _PHASE1_STEP_TIMEOUT_S = 1800
 
-    print(f"[3/15] L2_FRS ...")
-    r = gen_l2_frs(project, extracted); results.append(r)
-    print(f"      → {r.path.name} (todo={r.todo_count}, ev={r.evidence_count})")
+    def _run_layer(label, layer_name, step_fn):
+        print(f"{label} {layer_name} ...")
+        ok, r = _v1_6_580_run_step_with_watchdog(
+            step_fn, step_name=layer_name, layer_name=layer_name,
+            project=project, timeout_s=_PHASE1_STEP_TIMEOUT_S)
+        if ok and r is not None:
+            results.append(r)
+            try:
+                print(f"      → {r.path.name} (todo={r.todo_count}, "
+                      f"ev={r.evidence_count})")
+            except AttributeError:
+                print(f"      → {layer_name} emitted")
+        else:
+            print(f"      → {layer_name} STEP FAILED — recoverable stub "
+                  "written (see runner log); continuing", file=sys.stderr)
+        return r
+
+    def _reread(fname):
+        # tolerant: the file exists either as real content or a failure stub;
+        # a stub yields a dict whose .get() calls return defaults downstream.
+        try:
+            return json.loads(
+                (_pl.generated_docs_dir(project) / fname).read_text())
+        except Exception:
+            return {}
+
+    _run_layer("[2/15]", "L1_DATASHEET",
+               lambda: gen_l1_datasheet(project, extracted))
+    _run_layer("[3/15]", "L2_FRS", lambda: gen_l2_frs(project, extracted))
 
     # Read L2 back so subsequent gens can reference protocol_overview
-    l2 = json.loads((_pl.generated_docs_dir(project) / "L2_FRS.json").read_text())
+    l2 = _reread("L2_FRS.json")
 
-    print(f"[4/15] L3_CMD_PROTOCOL ...")
-    r = gen_l3_cmd_protocol(project, extracted, l2); results.append(r)
-    print(f"      → {r.path.name} (todo={r.todo_count}, ev={r.evidence_count})")
-    l3 = json.loads(
-        (_pl.generated_docs_dir(project) / "L3_CMD_PROTOCOL.json").read_text())
+    _run_layer("[4/15]", "L3_CMD_PROTOCOL",
+               lambda: gen_l3_cmd_protocol(project, extracted, l2))
+    l3 = _reread("L3_CMD_PROTOCOL.json")
 
     # v1.6.132 (#51 Fix 7b) — wire l3_opcode_name_coverage_check into
     # phase1 runner main flow. Pre-v1.6.132 the gate program existed
@@ -48310,53 +48347,33 @@ def main() -> int:
         if cov_cp.returncode == 1:
             cov_gate_failed = True
 
-    print(f"[5/15] L4_REGMAP ...")
-    r = gen_l4_regmap(project, extracted); results.append(r)
-    print(f"      → {r.path.name} (todo={r.todo_count}, ev={r.evidence_count})")
-
-    print(f"[6/15] L5_ADI_SPEC ...")
-    r = gen_l5_adi_spec(project, extracted); results.append(r)
-    print(f"      → {r.path.name} (todo={r.todo_count}, ev={r.evidence_count})")
-
-    print(f"[7/15] L6_CONTROL_LOGIC ...")
-    r = gen_l6_control_logic(project, extracted); results.append(r)
-    print(f"      → {r.path.name} (todo={r.todo_count}, ev={r.evidence_count})")
-
-    print(f"[8/15] L7_TEST_DEBUG ...")
-    r = gen_l7_test_debug(project, extracted); results.append(r)
-    print(f"      → {r.path.name} (todo={r.todo_count}, ev={r.evidence_count})")
-
-    print(f"[9/15] L8_RTL_CONSTANTS ...")
-    r = gen_l8_timing_waveform(project, extracted); results.append(r)
-    print(f"      → {r.path.name} (todo={r.todo_count}, ev={r.evidence_count})")
-
-    print(f"[10/15] L9_INTEGRATION_SPEC ...")
-    r = gen_l9_integration_spec(project, extracted, l3); results.append(r)
-    print(f"      → {r.path.name} (todo={r.todo_count}, ev={r.evidence_count})")
-
-    print(f"[11/15] L10_TEST_CASES ...")
-    r = gen_l10_test_cases(project, extracted, l3); results.append(r)
-    print(f"      → {r.path.name} (todo={r.todo_count}, ev={r.evidence_count})")
-
-    print(f"[12/15] L11_OTP_CONTENT ...")
-    r = gen_l11_otp_content(project, extracted); results.append(r)
-    print(f"      → {r.path.name} (todo={r.todo_count}, ev={r.evidence_count})")
-
-    print(f"[13/15] L12_BEHAVIORAL_SEQUENCES ...")
-    r = gen_l12_behavioral(project, extracted, l3); results.append(r)
-    print(f"      → {r.path.name} (todo={r.todo_count}, ev={r.evidence_count})")
-
-    print(f"[14/15] L13_LAB_CALIBRATION ...")
-    r = gen_l13_lab_calibration(project, extracted); results.append(r)
-    print(f"      → {r.path.name} (todo={r.todo_count}, ev={r.evidence_count})")
+    _run_layer("[5/15]", "L4_REGMAP",
+               lambda: gen_l4_regmap(project, extracted))
+    _run_layer("[6/15]", "L5_ADI_SPEC",
+               lambda: gen_l5_adi_spec(project, extracted))
+    _run_layer("[7/15]", "L6_CONTROL_LOGIC",
+               lambda: gen_l6_control_logic(project, extracted))
+    _run_layer("[8/15]", "L7_TEST_DEBUG",
+               lambda: gen_l7_test_debug(project, extracted))
+    _run_layer("[9/15]", "L8_RTL_CONSTANTS",
+               lambda: gen_l8_timing_waveform(project, extracted))
+    _run_layer("[10/15]", "L9_INTEGRATION_SPEC",
+               lambda: gen_l9_integration_spec(project, extracted, l3))
+    _run_layer("[11/15]", "L10_TEST_CASES",
+               lambda: gen_l10_test_cases(project, extracted, l3))
+    _run_layer("[12/15]", "L11_OTP_CONTENT",
+               lambda: gen_l11_otp_content(project, extracted))
+    _run_layer("[13/15]", "L12_BEHAVIORAL_SEQUENCES",
+               lambda: gen_l12_behavioral(project, extracted, l3))
+    _run_layer("[14/15]", "L13_LAB_CALIBRATION",
+               lambda: gen_l13_lab_calibration(project, extracted))
 
     # v1.6.9 Fix 1 — emit a separate L8_TIMING_WAVEFORM.json file. This
     # is in addition to the L8_RTL_CONSTANTS.json emitted in step 9, and
     # carries typed `timing_windows[]` parsed from any input doc whose
     # filename hints at timing / waveform / measurement / 量測 content.
-    print(f"[14b/15] L8_TIMING_WAVEFORM ...")
-    r = gen_l8_timing_waveform_doc(project, extracted); results.append(r)
-    print(f"      → {r.path.name} (todo={r.todo_count}, ev={r.evidence_count})")
+    _run_layer("[14b/15]", "L8_TIMING_WAVEFORM",
+               lambda: gen_l8_timing_waveform_doc(project, extracted))
 
     # v1.6.79 — closes issue #12 L8 flag-evidence consistency. The
     # earlier L8_RTL_CONSTANTS emission ran BEFORE L8_TIMING_WAVEFORM
