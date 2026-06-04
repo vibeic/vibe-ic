@@ -77,6 +77,27 @@ def test_changelog_path_skipped(tmp_path):
     assert cp.returncode == 0, cp.stdout + cp.stderr
 
 
+def test_doc_artifact_version_reference_passes(tmp_path):
+    # ALL_STEPS_v2.2.0 is a DOC-version namespace, not a plugin claim. A file
+    # that REFERENCES the doc by name in prose — without a trailing extension,
+    # or with a brace-glob the filename-extension carve-out misses — must NOT
+    # be gated (regression for the v0.2.38 ② pre-commit false-positive).
+    _make_plugin_json(tmp_path, "0.2.38")
+    cp = _run(tmp_path, _diff(
+        "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_all_steps_covers_flow.py",
+        "# guards docs/architecture/ALL_STEPS_v2.2.0.{md,zh-TW.md} vs the flow",
+        "# the human-readable ALL_STEPS_v2.2.0 docs are hand-maintained"))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_doc_artifact_carveout_does_not_mask_self_claim(tmp_path):
+    # the doc-artifact carve-out must NOT exempt a real forward plugin self-claim
+    _make_plugin_json(tmp_path, "0.2.38")
+    cp = _run(tmp_path, _diff("src/x.py", "# ships in vibe-ic v0.3.0 release"))
+    assert cp.returncode == 1
+    assert "claimed v0.3.0" in cp.stdout
+
+
 # ────────────────────────────────────────────────────────────────
 # Historical-reference filtering
 # ────────────────────────────────────────────────────────────────

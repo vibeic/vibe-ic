@@ -307,6 +307,31 @@ def _is_filename_version(body: str, match) -> bool:
     return before_ch in "_-/" or before_ch.isalnum()
 
 
+# Doc-artifact version namespaces. A versioned architecture/flow document carries
+# its OWN vX.Y.Z (the doc-version scheme, distinct from plugin semver) in its
+# basename — `ALL_STEPS_v2.2.0`, `CANONICAL_FLOW_v2.2.0`. The doc FILES are
+# already path-skipped (see _SKIP_PATH_PATTERNS), but OTHER files (a guard test,
+# a README) legitimately REFERENCE the doc by name in prose — sometimes without a
+# trailing extension (`ALL_STEPS_v2.2.0 docs`) or with a brace-glob
+# (`ALL_STEPS_v2.2.0.{md,zh-TW.md}`) that _is_filename_version's extension check
+# misses. A version-triple immediately preceded by one of these UPPERCASE
+# doc-artifact basename prefixes is a doc-version reference, never a plugin
+# self-claim (a real self-claim like `vibe-ic 1.2.3` is not preceded by
+# `<DOCNAME>_`, so this does not reopen the 9d4e984a hole).
+_DOC_ARTIFACT_PREFIXES = (
+    "ALL_STEPS_", "CANONICAL_FLOW_", "FLOW_STEPS_GENERATED_",
+    "FLOW_STEPS_GENERATED", "RENAME_MAPPING_", "RFC_",
+)
+
+
+def _is_doc_artifact_version(body: str, match) -> bool:
+    """True iff the version-triple is the version suffix of a known doc-artifact
+    basename (`ALL_STEPS_v2.2.0`, `CANONICAL_FLOW_v2.2.0`, …), regardless of any
+    trailing extension / brace-glob — i.e. a doc-version namespace reference."""
+    before = body[:match.start()]
+    return any(before.endswith(pfx) for pfx in _DOC_ARTIFACT_PREFIXES)
+
+
 # Recognised third-party TOOL / PDK / runtime names that carry their OWN
 # X.Y.Z version. A version-triple whose immediately-preceding word is one of
 # these is a DEPENDENCY version (e.g. `netgen 1.5.316`, `yosys 0.40.0`,
@@ -388,6 +413,8 @@ def check(diff_text: str,
                 continue
             if _is_filename_version(body, m):
                 continue
+            if _is_doc_artifact_version(body, m):
+                continue   # doc-version namespace (ALL_STEPS_v2.2.0 …), not a claim
             if _is_dependency_tool_version(body, m):
                 continue   # third-party tool / PDK / runtime version, not a claim
             # A numeric triple whose first digit is immediately preceded by
