@@ -47,8 +47,26 @@ from pathlib import Path
 
 MCP_ROOT = Path(__file__).resolve().parent.parent
 INDEX_JS = MCP_ROOT / "src" / "index.js"
-PLUGIN_ROOT = MCP_ROOT.parent
-PHASE3_RUNNER = PLUGIN_ROOT / "programs" / "phase3_one_shot_runner.py"
+
+
+def _resolve_phase3_runner():
+    """Locate the plugin's phase3_one_shot_runner.py whether this mcp-eda-server
+    tree is the plugin-embedded copy (…/plugins/vibe-ic/mcp-eda-server/) or the
+    repo-root copy (mcp-eda-server/) — both ship in the repo, so the mirror test
+    must resolve the reference from EITHER layout. Returns None if the plugin
+    source is not co-located (an isolated mcp-eda-server checkout) so the test
+    skips honestly instead of erroring on a path assumption."""
+    cands = [MCP_ROOT.parent / "programs" / "phase3_one_shot_runner.py"]  # embedded
+    for up in Path(__file__).resolve().parents:                          # root / any layout
+        cands.append(up / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+                     / "programs" / "phase3_one_shot_runner.py")
+    for c in cands:
+        if c.exists():
+            return c
+    return None
+
+
+PHASE3_RUNNER = _resolve_phase3_runner()
 
 
 # --- Python mirror of the JS `discoverTieCells` port -----------------------
@@ -186,6 +204,11 @@ def test_python_mirror_matches_phase3_runner_reference():
     import sys
     import tempfile
     import os
+
+    if PHASE3_RUNNER is None:
+        import pytest
+        pytest.skip("plugin phase3_one_shot_runner.py not co-located with this "
+                    "mcp-eda-server tree (isolated checkout)")
 
     prog_dir = str(PHASE3_RUNNER.parent)
     if prog_dir not in sys.path:
