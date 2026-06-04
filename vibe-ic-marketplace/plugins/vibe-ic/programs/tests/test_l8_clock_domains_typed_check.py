@@ -17,7 +17,7 @@ def _run(project: Path) -> subprocess.CompletedProcess:
     )
 
 
-def _make(tmp_path, l8=None, doc_text=None):
+def _make(tmp_path, l8=None, doc_text=None, l9=None):
     proj = tmp_path / "p"
     (proj / "phase1" / "input_doc").mkdir(parents=True)
     (proj / "phase1" / "generated_docs").mkdir(parents=True)
@@ -26,6 +26,10 @@ def _make(tmp_path, l8=None, doc_text=None):
     if l8 is not None:
         (proj / "phase1" / "generated_docs" / "L8_TIMING_WAVEFORM.json").write_text(
             json.dumps(l8)
+        )
+    if l9 is not None:
+        (proj / "phase1" / "generated_docs" / "L9_INTEGRATION_SPEC.json").write_text(
+            json.dumps(l9)
         )
     return proj
 
@@ -91,6 +95,80 @@ def test_fail_when_clocks_too_shallow(tmp_path):
     )
     r = _run(proj)
     assert r.returncode == 1
+
+
+# ORGANIC-20260531 — per-clock-name typed-ness (cross-doc mirror).
+def test_pass_cross_doc_bare_mirror_of_typed_clock(tmp_path):
+    """L8 fully types clk_sys (name+freq+role); L9 carries a bare
+    structural mirror {name, edge} so STA/CDC have a port handle.
+    Under a multi-clock doc the same physical clock is fully typed
+    by its L8 sibling, so the bare L9 mirror must NOT be flagged."""
+    proj = _make(
+        tmp_path,
+        doc_text="master clock 5 MHz, derived clock 1.25 MHz",
+        l8={"clock_domains": [
+            {"name": "clk_sys", "freq_mhz": 5.0, "role": "master"},
+            {"name": "clk_1m25", "freq_mhz": 1.25,
+             "source": "clk_sys", "divider": 4},
+        ]},
+        l9={"clocks": [
+            {"name": "clk_sys", "edge": "posedge"},
+        ]},
+    )
+    r = _run(proj)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "PASS" in r.stdout
+
+
+def test_pass_cross_doc_mirror_case_insensitive(tmp_path):
+    """The cross-doc match keys on the canonical (case-normalized)
+    name, so an L9 mirror with different casing/whitespace still
+    resolves to its typed L8 sibling."""
+    proj = _make(
+        tmp_path,
+        doc_text="primary clock 50 MHz, derived clock 5 MHz",
+        l8={"clock_domains": [
+            {"name": "Clk_Sys", "freq_mhz": 50.0, "role": "system"},
+            {"name": "core_clk", "freq_mhz": 5.0, "source": "Clk_Sys"},
+        ]},
+        l9={"clocks": [
+            {"name": "  CLK_SYS  ", "edge": "posedge"},
+        ]},
+    )
+    r = _run(proj)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_still_fail_when_name_never_typed(tmp_path):
+    """A clock name appearing ONLY in shallow form (no typed sibling
+    anywhere) must still FAIL — proves the narrowing is real, not a
+    blanket pass."""
+    proj = _make(
+        tmp_path,
+        doc_text="primary clock 50 MHz and core clock 5 MHz",
+        l8={"clocks": [{"name": "never_typed_clk", "edge": "posedge"}]},
+        l9={"clocks": [{"name": "another_bare_clk", "edge": "negedge"}]},
+    )
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "shallow" in r.stdout
+
+
+def test_still_fail_when_entry_has_no_name(tmp_path):
+    """An entry with no resolvable name at all stays flagged even
+    when a fully-typed named sibling exists — the per-name
+    suppression cannot launder an anonymous shallow entry."""
+    proj = _make(
+        tmp_path,
+        doc_text="master clock 5 MHz, derived clock 1.25 MHz",
+        l8={"clocks": [
+            {"name": "clk_sys", "freq_mhz": 5.0, "role": "master"},
+            {"edge": "posedge"},
+        ]},
+    )
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "clock[" in r.stdout
 
 
 # Wave 43 (v0.119.75) — ic_class_profile SKIP case.

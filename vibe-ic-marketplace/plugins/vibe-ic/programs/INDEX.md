@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 634
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 634)
+- **Total programs (excluding helpers / shims):** 636
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 636)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 625 |
+| `any` | 627 |
 
 ## Alphabetical listing
 
@@ -93,6 +93,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `backlog_sanitize_check` | any | — | Organic Plugin gate: verify that a community |
 | `backlog_severity_classify` | any | — | deterministic severity table-lookup for |
 | `behavioral_evidence_per_spec_item_check` | any | v0.100 | v0.100 J1 |
+| `benchmark_clean_room_check` | any | — | clean-room run-dir guard (ORGANIC-20260604). |
 | `benchmark_dispatch` | any | — | entry point for /vibe-ic-benchmark. |
 | `benchmark_result_md_lint` | any | — | presence-check linter for the |
 | `benchmark_score_cwd_guard` | any | — | assert the host scorer is invoked |
@@ -385,6 +386,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `mpw_precheck_cleanup` | any | v0.1.51 | mpw_precheck cleanup automator (B4 from spm pilot). |
 | `nba_addr_read_race_check` | any | — | FSM consuming addressed data without pipelining. |
 | `nba_shift_register_same_cycle_read_check` | any | Wave 12 | v0.119.44 (Wave 12) plugin gate. |
+| `netlist_src_coord_canonicalize` | any | — | make a synthesised netlist reproducible |
 | `nfc_protocol_synth` | any | v0.1.84 | NFC / ISO 14443 contactless-protocol synth helper. |
 | `no_protocol_consistency_check` | any | v0.56 | v0.56 plugin gate |
 | `nvlink_protocol_synth` | any | v0.1.89 | NVIDIA NVLink (high-speed GPU / die-to-die interconnect) protocol synth helper. |
@@ -706,7 +708,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (625 programs)
+### `any` (627 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -775,6 +777,7 @@ _(no programs in this group)_
 - `backlog_sanitize_check` — Organic Plugin gate: verify that a community
 - `backlog_severity_classify` — deterministic severity table-lookup for
 - `behavioral_evidence_per_spec_item_check` — v0.100 J1  _[v0.100]_
+- `benchmark_clean_room_check` — clean-room run-dir guard (ORGANIC-20260604).
 - `benchmark_dispatch` — entry point for /vibe-ic-benchmark.
 - `benchmark_result_md_lint` — presence-check linter for the
 - `benchmark_score_cwd_guard` — assert the host scorer is invoked
@@ -1062,6 +1065,7 @@ _(no programs in this group)_
 - `mpw_precheck_cleanup` — mpw_precheck cleanup automator (B4 from spm pilot).  _[v0.1.51]_
 - `nba_addr_read_race_check` — FSM consuming addressed data without pipelining.
 - `nba_shift_register_same_cycle_read_check` — v0.119.44 (Wave 12) plugin gate.  _[Wave 12]_
+- `netlist_src_coord_canonicalize` — make a synthesised netlist reproducible
 - `nfc_protocol_synth` — NFC / ISO 14443 contactless-protocol synth helper.  _[v0.1.84]_
 - `no_protocol_consistency_check` — v0.56 plugin gate  _[v0.56]_
 - `nvlink_protocol_synth` — NVIDIA NVLink (high-speed GPU / die-to-die interconnect) protocol synth helper.  _[v0.1.89]_

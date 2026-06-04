@@ -32,6 +32,7 @@ Exit codes:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -40,6 +41,24 @@ from typing import List, Optional, Tuple
 
 WAIVER_KEY = "otp_image_intentionally_zeroed"
 WAIVER_MIN = 60
+
+
+def _rel(f: Path, project: Path) -> str:
+    """Human-readable path of `f` relative to `project`, robust to symlinked
+    inputs. ``Path.relative_to`` raises ``ValueError`` when `f` is not a
+    subpath of `project` — which happens when the project's ``input/`` tree
+    is a symlink to a shared/source location outside the project subtree
+    (a common space-saving staging pattern). ``os.path.relpath`` tolerates a
+    non-subpath relationship (yielding ``"../shared/otp/image.hex"``), and we
+    fall back to the absolute string if even that fails. This only affects
+    report formatting; the gate's verdict logic is unchanged."""
+    try:
+        return str(f.relative_to(project))
+    except ValueError:
+        try:
+            return os.path.relpath(str(f), str(project))
+        except Exception:
+            return str(f)
 
 
 _L_DOC_GLOBS = (
@@ -247,13 +266,13 @@ def main() -> int:
         img = _read_hex_image(f)
         if img is None or len(img) == 0:
             failures.append(
-                f"{f.relative_to(project)}: parse failed or empty")
+                f"{_rel(f, project)}: parse failed or empty")
             continue
-        images_checked.append(f"{f.relative_to(project)} ({len(img)} bytes)")
+        images_checked.append(f"{_rel(f, project)} ({len(img)} bytes)")
         if not _check_image_nonzero_at(img, payload_addrs):
             sample = ", ".join(f"{a:#x}" for a in payload_addrs[:5])
             failures.append(
-                f"{f.relative_to(project)}: ALL ZEROS at payload addresses "
+                f"{_rel(f, project)}: ALL ZEROS at payload addresses "
                 f"[{sample}{'...' if len(payload_addrs) > 5 else ''}]"
             )
 

@@ -60,17 +60,25 @@ def cmd_show(bench: str):
     e = _entry(bench)
     print(f"# {e.get('title', bench)}")
     print(f"  Shape: {e['shape']}     Status: {e.get('status')}")
-    # § 4.1 + § 8.1 of open-benchmark-methodology (user directive 2026-05-29):
-    # DEFAULT on "run X benchmark" with no qualifier = re-attempt the FAILing
-    # set BLIND on the current plugin version. Do NOT skip on prior FLOOR.
+    # § 4.1 + § 8.1 of open-benchmark-methodology (user directive 2026-06-04,
+    # BINDING, supersedes the 2026-05-29 re-attempt-FAILing-set default):
+    # DEFAULT on "run X benchmark" with no qualifier = CLEAN-ROOM FULL re-run.
     print()
-    print("# DEFAULT BEHAVIOUR (per skill § 4.1 + § 8.1, 2026-05-29 user policy):")
-    print("# When the user asks 'run <bench>' with no other flag, the default action")
-    print("# is to RE-ATTEMPT prior FAIL/FLOOR cases BLIND on the current plugin —")
-    print("# NOT to publish the prior canonical and skip. Use --reattempt-floor to")
-    print("# print the prior FAILing-problem list for this benchmark from the")
-    print("# newest scoring artifact under benchmark_external/<bench>/")
-    print("# (Shape-C pass_at_1.json / Shape-D cocotb_score.json / RESULT.md).")
+    print("# DEFAULT BEHAVIOUR (per skill § 4.1 + § 8.1, 2026-06-04 user policy):")
+    print("# 'run <bench>' with no flag = CLEAN-ROOM FULL re-run. A fresh agent")
+    print("# authors EVERY problem from the spec alone, blind to any prior run.")
+    print("# The authoring context starts EMPTY. A clean-room run MUST NOT read:")
+    print("#   (1) prior run samples / artifacts,")
+    print("#   (2) agent memory,")
+    print("#   (3) any cached result in storage (prior pass_at_1.json / scores).")
+    print("# --setup scaffolds a FRESH run dir with an EMPTY samples/; the")
+    print("# benchmark_clean_room_check.py guard FAILs a contaminated run so it")
+    print("# cannot be scored as canonical.")
+    print("#")
+    print("# Re-attempting ONLY the prior FAILing set is an EXPLICIT OPTION, never")
+    print("# the default: pass --floor-only (it still re-authors each selected")
+    print("# problem BLIND — no inherited RTL/samples). Use --reattempt-floor to")
+    print("# print the prior FAILing-problem list to drive a --floor-only run.")
     print()
     if "dataset" in e:
         ds = e["dataset"]
@@ -120,7 +128,7 @@ def cmd_show(bench: str):
         print(f"  Blind instructions: {bi}")
 
 
-def cmd_setup(bench: str, dataset: str, run: str):
+def cmd_setup(bench: str, dataset: str, run: str, floor_only: bool = False):
     e = _entry(bench)
     if e["shape"] == "E":
         raise SystemExit(f"Shape E (blocked/out-of-scope). Cannot setup; see blocker:\n  {e.get('blocker')}")
@@ -129,6 +137,20 @@ def cmd_setup(bench: str, dataset: str, run: str):
     if not ds_p.is_dir():
         raise SystemExit(f"Dataset path not found: {ds_p}\n"
                          f"Clone first: git clone {e.get('dataset',{}).get('repo','<URL>')} {ds_p}")
+    # ── Clean-room enforcement (ORGANIC-20260604, user directive 2026-06-04) ──
+    # A clean-room run authors EVERY problem fresh; the run dir's samples/ MUST
+    # be EMPTY at --setup. Refuse to set up on top of a prior run's samples
+    # (default AND --floor-only) — a fresh run dir is required so no prior
+    # authoring is inherited. This is the deterministic half of "一定是重跑".
+    samples_dir = run_p / "samples"
+    if samples_dir.is_dir() and any(samples_dir.rglob("*")):
+        raise SystemExit(
+            f"clean-room violation: {samples_dir} is NOT empty — it carries a "
+            "prior run's samples. A clean-room run must start EMPTY (user "
+            "directive 2026-06-04: '一定是重跑', no inherited samples). Use a "
+            "FRESH --run dir. Re-attempting only the prior FAILing set is an "
+            "explicit option (--floor-only) but it still re-authors blind into "
+            "a fresh dir.")
     (run_p / "work").mkdir(parents=True, exist_ok=True)
     (run_p / "samples").mkdir(parents=True, exist_ok=True)
     (run_p / "batches").mkdir(parents=True, exist_ok=True)
@@ -173,15 +195,32 @@ def cmd_setup(bench: str, dataset: str, run: str):
         batch_id = f"batch{i//10:02d}"
         (run_p / "batches" / f"{batch_id}.list").write_text("\n".join(problems[i:i+10]) + "\n")
 
-    # write a .config so subsequent commands know the dataset path
+    # write a .config so subsequent commands know the dataset path.
+    # clean_room=true is the default; floor_only records the explicit opt-in.
+    # inherited_from/seed_run are intentionally NULL — a clean-room run inherits
+    # nothing (the clean-room guard FAILs any run that sets them, except a
+    # floor_only run may NAME its seed run in inherited_from with fresh samples).
     (run_p / ".bench_config.json").write_text(json.dumps({
         "bench": bench, "dataset": str(ds_p), "shape": shape,
         "problems": len(problems), "batches": (len(problems) + 9) // 10,
+        "clean_room": True,
+        "floor_only": bool(floor_only),
+        "inherited_from": None,
+        "seed_run": None,
     }, indent=2) + "\n")
-    print(f"Set up Shape-{shape} run dir for {bench}:")
+    mode = "FLOOR-ONLY (blind re-author of the prior FAIL set)" if floor_only \
+        else "CLEAN-ROOM FULL re-run (every problem authored fresh)"
+    print(f"Set up Shape-{shape} run dir for {bench}  [{mode}]:")
     print(f"  problems: {len(problems)}")
     print(f"  batches:  {(len(problems) + 9) // 10}")
     print(f"  RUNDIR:   {run_p}")
+    # Verify the fresh run dir is clean-room (empty samples, no seed config).
+    guard = Path(__file__).resolve().parent / "benchmark_clean_room_check.py"
+    if guard.is_file():
+        rc = subprocess.call([sys.executable, str(guard), str(run_p)])
+        if rc != 0:
+            raise SystemExit("clean-room guard FAILed on the fresh run dir — "
+                             "see violations above; do not author into it.")
     bi = HARNESS / f"blind_instructions_shape_{shape.lower()}.md"
     if bi.is_file():
         print(f"  Read the blind instructions next: {bi}")
@@ -299,6 +338,16 @@ def cmd_score(bench: str, run: str, dataset: str | None):
     if e["shape"] not in ("B", "C"):
         raise SystemExit(f"--score only handles Shape B + C here. Shape {e['shape']} → use score_cocotb_mcp.py / benchmark-verify skill.")
     run_p = Path(run).resolve()
+    # Front-door clean-room gate (ORGANIC-20260604): refuse to score a run that
+    # inherited prior samples / scores / memory. The published pass@1 must come
+    # from a clean-room run ('一定是重跑', user directive 2026-06-04).
+    guard = Path(__file__).resolve().parent / "benchmark_clean_room_check.py"
+    if guard.is_file():
+        rc = subprocess.call([sys.executable, str(guard), str(run_p)])
+        if rc != 0:
+            raise SystemExit("clean-room guard FAILed — this run inherited prior "
+                             "samples/scores and CANNOT be scored as canonical. "
+                             "Re-run clean-room into a fresh dir.")
     if dataset:
         ds_p = Path(dataset)
     else:
@@ -319,7 +368,14 @@ def main():
     ap.add_argument("--setup", action="store_true", help="create run dir scaffold")
     ap.add_argument("--score", action="store_true", help="invoke the scorer on an existing run dir")
     ap.add_argument("--reattempt-floor", action="store_true",
-                    help="print prior FAILing-problem list (per § 4.1 default policy)")
+                    help="OPT-IN: print the prior FAILing-problem list to drive "
+                         "a --floor-only run (not the default; default is "
+                         "clean-room full re-run per § 4.1/§ 8.1, 2026-06-04)")
+    ap.add_argument("--floor-only", action="store_true",
+                    help="OPT-IN: scope --setup to the prior FAILing set only. "
+                         "Still re-authors each selected problem BLIND into a "
+                         "FRESH run dir (no inherited samples). Default is a "
+                         "clean-room FULL re-run.")
     ap.add_argument("--dataset", help="dataset path on disk")
     ap.add_argument("--run", help="run dir")
     a = ap.parse_args()
@@ -333,7 +389,7 @@ def main():
     if a.setup:
         if not (a.dataset and a.run):
             raise SystemExit("--setup requires --dataset and --run")
-        cmd_setup(a.bench, a.dataset, a.run)
+        cmd_setup(a.bench, a.dataset, a.run, floor_only=a.floor_only)
         return
     if a.score:
         if not a.run:

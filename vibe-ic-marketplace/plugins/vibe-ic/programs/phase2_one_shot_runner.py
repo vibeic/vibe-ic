@@ -1589,11 +1589,9 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
     import shutil as _shutil
     iverilog = _shutil.which("iverilog")
     if iverilog and rtl_dir.is_dir():
-        pkg_files = sorted(p for p in rtl_dir.glob("*pkg*.sv") if not _is_tb(p))
-        other_sv = sorted(p for p in rtl_dir.glob("*.sv")
-                          if "pkg" not in p.name and not _is_tb(p))
-        other_v = sorted(p for p in rtl_dir.glob("*.v") if not _is_tb(p))
-        rtl_files = pkg_files + other_sv + other_v
+        # ORGANIC-20260531: exclude FPGA / board-integration wrappers
+        # (sibling-include or vendor-primitive) from the ASIC source list.
+        rtl_files = _select_asic_rtl_sources(rtl_dir)
         run_dir = sim_dir / "generic_full_stack_run"
         run_dir.mkdir(parents=True, exist_ok=True)
         vvp = run_dir / "full_stack.vvp"
@@ -1668,6 +1666,224 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
          f"TB; gate-level synth + Phase 3 is the verification path."),
         extras={"verification_track": "generic_full_stack",
                 "aid_tb_skipped_reason": track_reason})
+
+
+# ---------------------------------------------------------------------------
+# ORGANIC-20260531-reference-tb-source-glob-includes-fpga-board-wrapper
+# Chip-AGNOSTIC structural predicate: is this rtl/ source an FPGA / board
+# integration wrapper that must NOT be dragged into the ASIC functional
+# sim / synth source list?  Two robust, IC-agnostic signals — either alone
+# is sufficient — plus a one-line allow-marker escape hatch.  Fail-OPEN:
+# only exclude when a signal clearly fires.
+# ---------------------------------------------------------------------------
+
+# Uncommented `include "sibling.v"` of a SIBLING rtl/ source. ASIC leaf/top
+# RTL never re-includes a sibling because every file is passed to the
+# simulator explicitly; only board/integration wrappers do.
+_INCLUDE_RE = re.compile(r'^\s*`?\s*include\s+"([^"]+\.s?v)"', re.IGNORECASE)
+# Allow-marker on the preceding line overrides signal 1 (sibling-include)
+# for the rare legitimate include-based ASIC composition.
+_ASIC_SIM_INCLUDE_MARKER = re.compile(r'//\s*asic-sim-include\s*:', re.IGNORECASE)
+# FPGA-vendor hard primitives an open-source simulator cannot elaborate.
+# chip-AGNOSTIC: vendor IP/primitive token set, NOT a chip-class name.
+_FPGA_VENDOR_PRIMS = (
+    "altsyncram", "altpll", "altclkctrl", "scfifo", "dcfifo",
+    "BUFG", "IBUF", "OBUF",
+)
+# lpm_*, MMCME*, PLLE*, RAMB*, DSP48*, IBUFG* families (prefix tokens).
+_FPGA_VENDOR_PRIM_PREFIXES = (
+    "lpm_", "MMCME", "PLLE", "RAMB", "DSP48", "IBUFG", "OBUFT",
+)
+
+
+def _strip_v_comments(text: str) -> str:
+    """Remove // line comments and /* */ block comments (chip-AGNOSTIC)."""
+    if not isinstance(text, str):
+        return ""
+    # Block comments first, then line comments.
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def _is_fpga_board_wrapper(p: Path, sibling_basenames: Optional[set] = None) -> bool:
+    """Return True iff `p` is an FPGA / board integration wrapper that must
+    be excluded from the ASIC functional sim / synth source list.
+
+    chip-AGNOSTIC. Signals (any one => exclude):
+      1. The file `include`s a SIBLING .v/.sv source that also lives in rtl/.
+         (Overridable with a `// asic-sim-include:` marker on a nearby line.)
+      2. The file instantiates a known FPGA-vendor hard primitive.
+
+    `sibling_basenames` = the set of OTHER rtl/ source basenames (so an
+    include of itself or a non-sibling header is NOT a wrapper signal).
+    Fail-open: any read error => not a wrapper (do not exclude).
+    """
+    try:
+        raw = p.read_text(errors="replace")
+    except Exception:
+        return False
+    lines = raw.splitlines()
+    have_allow_marker = any(_ASIC_SIM_INCLUDE_MARKER.search(ln) for ln in lines)
+    # Signal 1: sibling include (only consider uncommented include lines).
+    if sibling_basenames and not have_allow_marker:
+        for ln in lines:
+            # ignore a line that itself is fully commented out
+            stripped = ln.split("//", 1)[0]
+            m = _INCLUDE_RE.match(stripped)
+            if m:
+                inc_base = os.path.basename(m.group(1))
+                if inc_base in sibling_basenames and inc_base != p.name:
+                    return True
+    # Signal 2: FPGA-vendor primitive instantiation (uncommented body).
+    body = _strip_v_comments(raw)
+    for prim in _FPGA_VENDOR_PRIMS:
+        # instantiation form: `<prim> [#(...)] [inst] (`  — token-bounded
+        if re.search(r'(?<![\w$])' + re.escape(prim) +
+                     r'\s+(?:#\s*\(|\w+\s*\()', body):
+            return True
+    for pref in _FPGA_VENDOR_PRIM_PREFIXES:
+        if re.search(r'(?<![\w$])' + re.escape(pref) +
+                     r'\w*\s+(?:#\s*\(|\w+\s*\()', body):
+            return True
+    return False
+
+
+def _select_asic_rtl_sources(rtl_dir: Path):
+    """Chip-AGNOSTIC unified source selector for the ASIC sim / synth glob.
+
+    Applies the shared `_is_tb` + pkg-ordering + `_is_fpga_board_wrapper`
+    filtering at one place so all three call sites stay in sync. Returns
+    pkg_files + other_sv + other_v with TBs / packages-as-body / FPGA board
+    wrappers removed.  Packages still come first so `import pkg::*` resolves.
+    """
+    def _is_tb(p):
+        n = p.name
+        return n.startswith("tb_") or n.endswith("_tb.v") or n.endswith("_tb.sv")
+
+    all_src = (sorted(rtl_dir.glob("*.sv")) + sorted(rtl_dir.glob("*.v")))
+    sibling_basenames = {p.name for p in all_src}
+
+    def _keep(p):
+        return (not _is_tb(p)
+                and not _is_fpga_board_wrapper(p, sibling_basenames))
+
+    pkg_files = sorted(p for p in rtl_dir.glob("*pkg*.sv") if _keep(p))
+    other_sv = sorted(p for p in rtl_dir.glob("*.sv")
+                      if "pkg" not in p.name and _keep(p))
+    other_v = sorted(p for p in rtl_dir.glob("*.v") if _keep(p))
+    return pkg_files + other_sv + other_v
+
+
+# ---------------------------------------------------------------------------
+# ORGANIC-20260531-reference-tb-binds-asic-pad-top-not-behavioral-top
+# Chip-AGNOSTIC behavioral-top resolver: bind the functional reference-TB to
+# the candidate top whose declared ports are a SUPERSET of the ports the TB
+# actually drives — NOT the synthesis pad-split ASIC top.
+# ---------------------------------------------------------------------------
+
+# Instance port connections inside the TB's DUT instantiation: `.X(...)`.
+_TB_INST_PORT_RE = re.compile(r'\.([A-Za-z_]\w*)\s*\(')
+# Module header: `module <name> ( ... );`
+_MODULE_HEADER_RE = re.compile(r'\bmodule\s+([A-Za-z_]\w*)\s*'
+                               r'(?:#\s*\(.*?\))?\s*\((.*?)\)\s*;', re.S)
+# A bare port identifier in a header port list (ANSI or non-ANSI). We strip
+# direction/type keywords and packed dims, then take the trailing identifier.
+_PORT_IDENT_RE = re.compile(r'([A-Za-z_]\w*)\s*(?:,|$)')
+
+
+def _parse_tb_required_ports(tb_text: str) -> set:
+    """Extract the set of port names the reference TB drives on its DUT
+    instance (the `\\`DUT_TOP_NAME u_dut ( .X(...), ... )` block). Generic:
+    works for any future reference-TB without hardcoding port names."""
+    if not isinstance(tb_text, str):
+        return set()
+    body = _strip_v_comments(tb_text)
+    ports: set = set()
+    # Find every `u_dut ( ... )` instantiation block and collect .X( names.
+    for m in re.finditer(r'\bu_dut\s*\((.*?)\)\s*;', body, re.S):
+        for pm in _TB_INST_PORT_RE.finditer(m.group(1)):
+            ports.add(pm.group(1))
+    return ports
+
+
+def _module_declared_ports(header_ports: str) -> set:
+    """From a module header's parenthesized port list, return the set of
+    declared port identifiers (chip-AGNOSTIC; ANSI + non-ANSI tolerant)."""
+    ports: set = set()
+    # Drop packed/unpacked dimensions so `[7:0] foo` keeps `foo`.
+    cleaned = re.sub(r'\[[^\]]*\]', ' ', header_ports)
+    # Split on commas at top level (already paren-stripped by header regex).
+    for chunk in cleaned.split(","):
+        toks = re.findall(r'[A-Za-z_]\w*', chunk)
+        # Skip direction / type / sign keywords; the LAST identifier in a
+        # declaration chunk is the port name.
+        kw = {"input", "output", "inout", "wire", "reg", "logic", "signed",
+              "unsigned", "tri", "wand", "wor", "supply0", "supply1", "bit",
+              "byte", "integer", "int", "shortint", "longint"}
+        names = [t for t in toks if t.lower() not in kw]
+        if names:
+            ports.add(names[-1])
+    return ports
+
+
+def _module_port_sets(rtl_text: str) -> dict:
+    """Return {module_name: set(declared_port_names)} for every module in
+    `rtl_text`. chip-AGNOSTIC structural parse."""
+    out: dict = {}
+    if not isinstance(rtl_text, str):
+        return out
+    body = _strip_v_comments(rtl_text)
+    for m in _MODULE_HEADER_RE.finditer(body):
+        name = m.group(1)
+        out[name] = _module_declared_ports(m.group(2))
+    return out
+
+
+def _looks_like_pad_split_top(ports: set) -> bool:
+    """Heuristic, chip-AGNOSTIC: a pad-ring wrapper exposes split-pad
+    signals (`*_in_async` / `*_oe_low` / `*_oe` / `*_drive_data` /
+    `*_pad_in` / `*_pad_out` …) rather than the single behavioral net."""
+    pad_suffixes = ("_in_async", "_oe_low", "_oe", "_drive_data",
+                    "_pad_in", "_pad_out", "_pad_oe", "_din", "_dout", "_oen")
+    return any(any(p.endswith(s) for s in pad_suffixes) for p in ports)
+
+
+def _resolve_reference_tb_top(rtl_files, tb_text: str, top_name: str) -> str:
+    """Pick the module the functional reference-TB should bind to.
+
+    Among modules declared across `rtl_files`, choose the one whose declared
+    ports are a SUPERSET of the TB's required port set, preferring a
+    candidate that does NOT look like a pad-split wrapper. Fall back to the
+    caller-supplied `top_name` when no candidate matches (honest FAIL
+    preserved). chip-AGNOSTIC — matches on the TB's parsed port set only.
+    """
+    required = _parse_tb_required_ports(tb_text)
+    if not required:
+        return top_name
+    # name -> port-set, across all RTL files
+    name_ports: dict = {}
+    for p in rtl_files:
+        try:
+            txt = Path(p).read_text(errors="replace")
+        except Exception:
+            continue
+        for mod, ports in _module_port_sets(txt).items():
+            # first declaration wins; ignore later re-includes
+            name_ports.setdefault(mod, ports)
+    candidates = [n for n, ports in name_ports.items()
+                  if required.issubset(ports)]
+    if not candidates:
+        return top_name
+    # Prefer non-pad-split candidates.
+    non_wrapper = [n for n in candidates
+                   if not _looks_like_pad_split_top(name_ports[n])]
+    pool = non_wrapper or candidates
+    # Stable, deterministic selection: if the caller's top_name itself
+    # qualifies, keep it (least surprise); else pick the shortest-named
+    # candidate (the behavioral top is typically the un-suffixed base).
+    if top_name in pool:
+        return top_name
+    return sorted(pool, key=lambda n: (len(n), n))[0]
 
 
 def _class_uses_aid_reference_tb(ic_class: Optional[str]) -> Tuple[bool, str]:
@@ -1776,17 +1992,23 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
     # those are simulation harnesses, not synthesis inputs, and
     # feeding them to yosys/iverilog as DUT sources causes
     # double-defined-module + tb-only-construct errors.
-    def _is_tb(p):
-        n = p.name
-        return n.startswith("tb_") or n.endswith("_tb.v") or n.endswith("_tb.sv")
-    pkg_files = sorted(p for p in rtl_dir.glob("*pkg*.sv") if not _is_tb(p))
-    other_sv = sorted(p for p in rtl_dir.glob("*.sv")
-                      if "pkg" not in p.name and not _is_tb(p))
-    other_v  = sorted(p for p in rtl_dir.glob("*.v") if not _is_tb(p))
-    rtl_files = pkg_files + other_sv + other_v
+    # ORGANIC-20260531-reference-tb-source-glob-includes-fpga-board-wrapper:
+    # exclude FPGA / board-integration wrappers (sibling-include or vendor
+    # primitive) so an un-elaboratable vendor IP cannot tank an ASIC sim.
+    rtl_files = _select_asic_rtl_sources(rtl_dir)
+    # ORGANIC-20260531-reference-tb-binds-asic-pad-top-not-behavioral-top:
+    # bind the functional reference-TB to the candidate top whose declared
+    # ports are a SUPERSET of the ports the TB drives (the behavioral
+    # single-net top), NOT the synthesis pad-split ASIC top. Falls back to
+    # the caller-supplied top_name when no candidate matches (honest FAIL).
+    try:
+        tb_text = PROTOCOL_TB.read_text(errors="replace")
+    except Exception:
+        tb_text = ""
+    bound_top = _resolve_reference_tb_top(rtl_files, tb_text, top_name)
     cmd = ["iverilog", "-g2012",
            "-DSIMULATION",
-           f"-DDUT_TOP_NAME={top_name}",
+           f"-DDUT_TOP_NAME={bound_top}",
            "-o", str(vvp),
            str(PROTOCOL_TB)] + [str(p) for p in rtl_files]
     # v0.2.33 — SV-frontend fallback: on a SystemVerilog-construct compile
@@ -1794,7 +2016,7 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
     # declaring a defect. Honesty preserved: a genuine RTL bug the SV
     # frontend also rejects still FAILs.
     rc, out, err, tb_frontend = _iverilog_compile_with_sv_fallback(
-        cmd, rtl_files, PROTOCOL_TB, sim_dir, container, top_name)
+        cmd, rtl_files, PROTOCOL_TB, sim_dir, container, bound_top)
     if rc != 0:
         return StepResult("reference_tb", "FAIL",
                           time.time() - t0,
@@ -2184,14 +2406,12 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
     # those are simulation harnesses, not synthesis inputs, and
     # feeding them to yosys/iverilog as DUT sources causes
     # double-defined-module + tb-only-construct errors.
-    def _is_tb(p):
-        n = p.name
-        return n.startswith("tb_") or n.endswith("_tb.v") or n.endswith("_tb.sv")
-    pkg_files = sorted(p for p in rtl_dir.glob("*pkg*.sv") if not _is_tb(p))
-    other_sv = sorted(p for p in rtl_dir.glob("*.sv")
-                      if "pkg" not in p.name and not _is_tb(p))
-    other_v  = sorted(p for p in rtl_dir.glob("*.v") if not _is_tb(p))
-    rtl_files = pkg_files + other_sv + other_v
+    # ORGANIC-20260531-reference-tb-source-glob-includes-fpga-board-wrapper:
+    # also exclude FPGA / board-integration wrappers (sibling-include or
+    # vendor primitive) from the ASIC synth source list. The ASIC-top
+    # derivation below (asic_top_name) is intentionally left untouched —
+    # synth/PnR legitimately use the pad-split top.
+    rtl_files = _select_asic_rtl_sources(rtl_dir)
     # v1.6.191 (#78 P0) — prefer ASIC-core top when both an FPGA
     # wrapper (`chip_top`) and an ASIC core (`chip_top_asic`) are
     # present in rtl/. The FPGA wrapper has tristate I/O whose

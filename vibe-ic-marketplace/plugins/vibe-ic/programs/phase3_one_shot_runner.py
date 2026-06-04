@@ -5294,7 +5294,13 @@ catch {{set_wire_rc -clock -layer {mp}5}}
             "mode": "static_ir_drop",
             "power_nets": power_nets,
             "source": str(ir_rpt.relative_to(project)),
-            "verdict": "PASS",
+            # NOT a sign-off verdict. This emitter only proves the PSM tool RAN
+            # and produced an IR-drop measurement; whether the worst drop is
+            # within the PDK budget is decided downstream by
+            # ir_drop_report_check (eda_report_audit --mode ir_drop) and
+            # signoff_ladder_run (worst <= budget_uv). Emitting a literal
+            # "PASS" here would assert sign-off from mere tool-ran evidence.
+            "verdict": "MEASURED",
             "evidence": "analyze_power_grid stdout",
         }, indent=2) + "\n")
         ir_ok = True
@@ -5351,7 +5357,11 @@ catch {{set_wire_rc -clock -layer {mp}5}}
             "segments_analysed": seg_count,
             "max_segment_current_A": max_cur,
             "source": str(em_rpt.relative_to(project)),
-            "verdict": "PASS",
+            # NOT a sign-off verdict — see the ir_drop.json note above. The EM
+            # sign-off PASS/FAIL (segment current density vs PDK Jmax) is
+            # decided downstream by em_report_check (eda_report_audit --mode em)
+            # and signoff_ladder_run, not by this measurement emitter.
+            "verdict": "MEASURED",
             "evidence": "analyze_power_grid -enable_em stdout + em_segments.csv",
         }, indent=2) + "\n")
         em_ok = True

@@ -219,34 +219,47 @@ Honesty check: if you're tempted to label something Category A-D to avoid a hard
 re-read the description top-to-bottom** for clues (Category F/G). The 2026-05-28 RTLLM triage
 under-estimated the recoverable fails (radix2_div, adder_pipe_64bit, LFSR) by failing this check.
 
-### § 4.1 — Default action on previously-flagged FLOOR cases (user directive 2026-05-29)
+### § 4.1 — Default action on a benchmark run: CLEAN-ROOM FULL re-run (user directive 2026-06-04)
 
-> **Enforced by `programs/benchmark_dispatch.py --reattempt-floor` (default-on)** — the run-mode
-> default is to re-run the failing set blind, never to inherit a prior FLOOR label.
+> **Enforced by `programs/benchmark_dispatch.py` (clean-room default) +
+> `programs/benchmark_clean_room_check.py` (front-door guard)** — `--setup` scaffolds a FRESH
+> run dir with an EMPTY `samples/` and refuses to build on top of a prior run's samples;
+> `--score` runs the clean-room guard first and REFUSES to score a contaminated run.
 
-> **User policy (binding)**: "ALWAYS go [re-attempt FLOOR] by default. DON'T CARE ABOUT PREVIOUS RESULT."
+> **User policy (binding, 2026-06-04 — SUPERSEDES the 2026-05-29 "re-attempt the FAILing set by
+> default" policy)**: "Run vibe-ic Benchmark 一定是重跑，一定重跑。不要拿舊的資料，也不要用
+> memory，也不要用原來 storage 裡面的東西，一定是重跑。"
 
-When a previously-published run labeled cases as Category A-E (FLOOR), the **default action on
-the next run is to RE-ATTEMPT them blind, NOT to inherit the prior FLOOR label**. Rationale:
+When the user asks to "run `<bench>`", the **default and only honest measurement is a CLEAN-ROOM
+FULL re-run**: a fresh agent authors **EVERY** problem in the benchmark from the spec alone, with
+the authoring context starting **EMPTY**. A clean-room run MUST NOT read:
 
-1. **Prior categorisation may have been wrong.** The 2026-05-28 RTLLM triage missed 3 recoverable
-   fails; the same blind-spot can hide in any prior session.
-2. **Plugin compounds.** Every v0.1.X release may carry a program/regex/rule extension that
-   silently moves a previously-FLOOR case to PASS. The only way to know is to re-attempt.
-3. **Cheap.** Per-problem re-attempt under Shape C costs minutes; the saved-FLOOR-label optimum
-   over-fits one moment in plugin history.
+1. **prior run samples / artifacts** (no inheriting previously-passing RTL — that contaminates
+   the published pass@1 by mixing fresh authoring with stale prior-session authoring);
+2. **agent memory** (no "I solved this last time" recall);
+3. **any cached result in storage** (no reading a prior `pass_at_1.json` / `cocotb_score.json`
+   to decide what to author).
+
+Why clean-room is the only honest number: re-running only the prior FAILing set inherits the
+prior PASSes, so the headline mixes a fresh agent (on the fails) with an arbitrary prior session
+(on the passes). That is not "a fresh agent on this benchmark today" — it is contaminated. A full
+re-run also automatically re-attempts every prior FLOOR (no case is ever skipped on a stale
+label), which preserves the original rationale (prior categorisation may be wrong; the plugin
+compounds; a previously-FLOOR case can silently become PASS) **as a property of the full re-run**,
+not as a reason to scope down to the failing set.
 
 Operational rule (DEFAULT, do not ask the user):
-- **Re-run the FAILing set blind** on the current plugin version, fresh authoring per problem.
-- ONLY after that re-run can a case retain a FLOOR label — and the label MUST be re-justified
-  from the NEW run's evidence (TB line, iverilog log, descriptor quote), not copy-pasted from
-  the prior RESULT.md.
-- If 0 of the prior FLOOR cases recover, that's evidence the FLOOR is real (this iteration).
-- If ≥ 1 recover, the prior labeling was overcalled — log the recovery and capture the rule
-  into a program/skill per `benchmark-enhancement-capture`.
+- **Author the FULL problem list blind**, fresh, on the current plugin version, into a FRESH run
+  dir whose `samples/` started empty.
+- A FLOOR label may only be (re-)applied from THIS run's evidence (TB line, iverilog log,
+  descriptor quote), never copy-pasted from a prior RESULT.md.
+- Re-attempting **only** the prior FAILing set is an **explicit OPTION**, never the default:
+  `benchmark_dispatch.py <bench> --setup --floor-only …` (also surfaced by `--reattempt-floor`).
+  Even then it re-authors each selected problem **blind into a fresh dir** — no inherited samples.
 
-This rule overrides any "skip, it's a known FLOOR" instinct. Encoded in
-`programs/benchmark_dispatch.py --reattempt-floor` (default-on).
+This rule overrides any "skip, it's a known FLOOR" or "just re-run the fails" instinct. Encoded in
+`programs/benchmark_dispatch.py` (clean-room default; `--floor-only` opt-in) and guarded by
+`programs/benchmark_clean_room_check.py`.
 
 ## § 5 — Per-benchmark cheat sheet (current as of v0.1.26)
 
@@ -311,21 +324,28 @@ new run is a **separate datapoint**, not a "v0.X.Y improvement" claim. Label cle
 If a backlog fix (e.g. `ORGANIC-20260528-spec-to-rtl-missing-chip-top-wrapper`) lands and could
 move the number, mention it explicitly + cite the backlog id in the trajectory section.
 
-### § 8.1 — Default re-run policy (user directive 2026-05-29)
+### § 8.1 — Default re-run policy: CLEAN-ROOM FULL re-run (user directive 2026-06-04)
 
-> **User policy (binding)**: "ALWAYS GO 2 by default. DON'T CARE ABOUT PREVIOUS RESULT."
+> **User policy (binding, 2026-06-04 — SUPERSEDES the 2026-05-29 "re-run the FAILing set" default)**:
+> "Run vibe-ic Benchmark 一定是重跑，一定重跑。不要拿舊的資料，也不要用 memory，也不要用原來
+> storage 裡面的東西，一定是重跑。"
 
 When the user asks to "run X benchmark" with no qualifier:
-- **DEFAULT = full re-run of the FAILing set** (per § 4.1 re-attempt-FLOOR rule), regardless
-  of how recent the prior run was.
+- **DEFAULT = CLEAN-ROOM FULL re-run** (per § 4.1): author EVERY problem fresh, blind to any
+  prior run; the authoring context starts EMPTY (no prior samples, no agent memory, no cached
+  storage). This applies regardless of how recent the prior run was.
 - DO NOT propose "skip, prior canonical stands" as the default. That's an OPTION the user can
   pick, never the default.
-- DO NOT propose "smoke test on 1 problem" as the default either — that's also an OPTION.
-- The DEFAULT action is execute the floor-case re-attempt without asking permission. Surface
+- DO NOT propose "re-run only the FAILing set" as the default either — that inherits the prior
+  PASSes and contaminates the headline. It is an explicit OPTION (`--floor-only`), and even then
+  re-authors blind into a fresh dir.
+- DO NOT propose "smoke test on 1 problem" as the default — also an OPTION.
+- The DEFAULT action is execute the clean-room full re-run without asking permission. Surface
   the result; if the user wanted something narrower they will say so.
 
-> **Enforced by `programs/benchmark_dispatch.py`** as the implicit run mode when no `--smoke` /
-> `--floor` / `--skip-rerun` flag is given (same default as § 4.1).
+> **Enforced by `programs/benchmark_dispatch.py`** (clean-room is the implicit mode; `--setup`
+> requires an empty `samples/`, `--floor-only` is the explicit opt-in) and guarded at the score
+> front-door by `programs/benchmark_clean_room_check.py`.
 
 
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)

@@ -633,6 +633,33 @@ function buildHilomapClause(libPath) {
   return { clause, tie };
 }
 
+// ORGANIC-20260531: yosys `write_verilog` mints auto-generated net/cell names
+// that embed the SOURCE COORDINATE (`$func$/abs/path/design.v:42$`,
+// `\mux$/abs/foo.v:118`). The absolute path + `:line` make the netlist
+// NON-deterministic — synth the same RTL from a different dir / after a line
+// shift and the bytes (and provenance sha256) change. This collapses every
+// embedded `<path>:<line>` coordinate inside a `$…$` auto-name or a `\`-escaped
+// identifier to its path-free, line-free basename, mirroring the standalone
+// programs/netlist_src_coord_canonicalize.py (the Python source of truth).
+// chip-AGNOSTIC: matches the generic coordinate shape, never a chip token.
+function canonicalizeNetlistSrcCoords(netlistPath) {
+  try {
+    const fs = require("fs");
+    if (!netlistPath || !fs.existsSync(netlistPath)) return false;
+    const before = fs.readFileSync(netlistPath, "utf8");
+    const stripCoord = (tok) =>
+      tok.replace(/[^\s$]*\/([^\s$/:\\]+):\d+/g, "$1")  // <path>/<base>:<line> -> <base>
+         .replace(/([^\s$/:\\]+):\d+/g, "$1");           // <base>:<line>        -> <base>
+    let text = before
+      .replace(/\$([^$\n]*?:\d+[^$\n]*?)\$/g, (_m, inner) => "$" + stripCoord(inner) + "$")
+      .replace(/\\[^\s]*:\d+[^\s]*/g, (m) => stripCoord(m));
+    if (text !== before) { fs.writeFileSync(netlistPath, text); return true; }
+    return false;
+  } catch (_e) {
+    return false;  // best-effort: never break synth on a canonicalisation hiccup
+  }
+}
+
 // v2.5.0 helpers ----------------------------------------------------------
 // wrapResult() — unified tool result envelope. Tools that adopt it return
 // {success, duration_ms, tool_version, error, output_head, output_tail, ...}.
@@ -824,6 +851,10 @@ server.tool(
     const t0 = Date.now();
     const result = dockerExec(cmdStr);
     const durationMs = Date.now() - t0;
+    // ORGANIC-20260531: make the emitted netlist reproducible by stripping the
+    // yosys source-coordinate (<path>:<line>) auto-names. Best-effort; no-op if
+    // the netlist is absent or already coordinate-free.
+    if (result.success) canonicalizeNetlistSrcCoords(output_netlist);
 
     // Extract key metrics
     const areaMatch = result.output.match(/Chip area for top module.*?:\s*([\d.]+)/);
@@ -1484,7 +1515,7 @@ server.tool(
         `export PATH=${TOOLS}/bin:$PATH && yosys -p "read_verilog -sv ${netlist}; flatten; write_verilog -noattr ${flatNetlist}" 2>&1`,
         60000
       );
-      if (flatResult.success) effectiveNetlist = flatNetlist;
+      if (flatResult.success) { canonicalizeNetlistSrcCoords(flatNetlist); effectiveNetlist = flatNetlist; }
     }
 
     const staCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && openroad -exit << 'EOF'
@@ -2980,7 +3011,7 @@ server.tool(
         `export PATH=${TOOLS}/bin:$PATH && yosys -p "read_verilog -sv ${netlist}; flatten; write_verilog -noattr ${flatNetlist}" 2>&1`,
         60000
       );
-      if (flatResult.success) effectiveNetlist = flatNetlist;
+      if (flatResult.success) { canonicalizeNetlistSrcCoords(flatNetlist); effectiveNetlist = flatNetlist; }
     }
 
     const corners = [

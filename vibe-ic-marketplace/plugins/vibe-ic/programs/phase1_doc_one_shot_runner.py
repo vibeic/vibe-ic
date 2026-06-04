@@ -386,6 +386,85 @@ def extract_docx(p: Path) -> str:
         return f"[docx-extract-failed: {e}]"
 
 
+def _looks_like_binary_garbage(raw: bytes, text: str) -> bool:
+    """ORGANIC-20260531-legacy-binary-office-doc-ingestion-depth (B).
+
+    Chip-AGNOSTIC structural test for an un-decoded binary blob. Returns
+    True when the decoded ``text`` is dominated by control characters
+    (fraction of chars outside the printable/whitespace set above 5%) OR
+    the raw bytes contain a NUL byte (OLE/BIFF compound files always do).
+    Used so a legacy .doc/.xls that no decoder could read returns "" (the
+    skip path records it as a KNOWN gap) instead of feeding raw OLE/BIFF
+    bytes to every downstream L-doc extractor.
+    """
+    if not text:
+        return False
+    if b"\x00" in raw:
+        return True
+    ctrl = 0
+    for ch in text:
+        o = ord(ch)
+        # Printable ASCII + common whitespace are "good"; everything else
+        # in the C0/C1 control range counts as binary noise. CJK / latin-1
+        # accented prose (o >= 0xA0) is NOT penalised.
+        if o in (0x09, 0x0A, 0x0D):
+            continue
+        if 0x20 <= o <= 0x7E:
+            continue
+        if o >= 0xA0:
+            continue
+        ctrl += 1
+    return ctrl > 0.05 * len(text)
+
+
+def _libreoffice_convert_to_text(p: Path, target_filter: str) -> str:
+    """ORGANIC-20260531-legacy-binary-office-doc-ingestion-depth (A).
+
+    Headless LibreOffice conversion of a legacy binary office file to
+    text. Mirrors doc_extract.py: copy to an ASCII-stem temp (handles
+    CJK filenames), convert with `soffice`/`libreoffice`, and on failure
+    retry with an isolated `-env:UserInstallation` profile. Returns the
+    decoded text or "" when LibreOffice is unavailable / produced nothing.
+    Chip-AGNOSTIC.
+    """
+    import tempfile
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        return ""
+    try:
+        with tempfile.TemporaryDirectory(prefix="lo_extract_") as td:
+            tdp = Path(td)
+            ascii_in = tdp / ("doc_" + str(abs(hash(p.name)))[:12] + p.suffix)
+            shutil.copy2(p, ascii_in)
+            _run([soffice, "--headless", "--convert-to", target_filter,
+                  "--outdir", str(tdp), str(ascii_in)], timeout=180)
+            cands = sorted(tdp.glob("*.txt")) + sorted(tdp.glob("*.csv"))
+            for c in cands:
+                if c.stat().st_size > 0:
+                    return c.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        pass
+    # Retry with an isolated profile (LibreOffice sometimes refuses to
+    # run headless against a shared user profile).
+    try:
+        with tempfile.TemporaryDirectory(prefix="lo_profile_") as profile_td, \
+                tempfile.TemporaryDirectory(prefix="lo_out_") as out_td:
+            tdp = Path(out_td)
+            ascii_in = tdp / ("doc_" + str(abs(hash(p.name)))[:12] + p.suffix)
+            shutil.copy2(p, ascii_in)
+            _run([soffice, "--headless",
+                  f"-env:UserInstallation=file://{profile_td}",
+                  "--convert-to", target_filter,
+                  "--outdir", str(tdp), str(ascii_in)], timeout=180)
+            cands = sorted(tdp.glob("*.txt")) + sorted(tdp.glob("*.csv"))
+            for c in cands:
+                if c.stat().st_size > 0:
+                    return c.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        pass
+    return ""
+
+
 def extract_doc_legacy(p: Path) -> str:
     rc, out, _ = _run(["antiword", str(p)], timeout=60)
     if rc == 0 and out:
@@ -393,11 +472,54 @@ def extract_doc_legacy(p: Path) -> str:
     rc, out, _ = _run(["catdoc", str(p)], timeout=60)
     if rc == 0 and out:
         return out
-    # Last resort: strip tags
+    # ORGANIC-20260531 (A): LibreOffice headless tier before the raw-byte
+    # last resort. Decodes a real Word 97-2003 .doc to prose when
+    # antiword/catdoc are absent but soffice/libreoffice is on PATH.
+    lo = _libreoffice_convert_to_text(p, "txt:Text")
+    if lo and lo.strip():
+        return lo
+    # ORGANIC-20260531 (B): last resort raw-byte decode — but NEVER feed
+    # raw OLE bytes downstream. If the decoded string looks binary, return
+    # "" so the existing skip path records it as a KNOWN gap instead.
     try:
-        return p.read_bytes().decode("utf-8", errors="ignore")
+        raw = p.read_bytes()
     except Exception:
         return ""
+    decoded = raw.decode("utf-8", errors="ignore")
+    if _looks_like_binary_garbage(raw, decoded):
+        return ""
+    return decoded
+
+
+def extract_xls_legacy(p: Path) -> str:
+    """ORGANIC-20260531-legacy-binary-office-doc-ingestion-depth (C).
+
+    Decode a legacy .xls (BIFF) workbook. Tier 1: xlrd (BIFF reader),
+    emitting tab-joined rows per sheet, mirroring extract_xlsx. Tier 2:
+    LibreOffice headless --convert-to csv. Returns "" when neither is
+    available so the skip path records the .xls gap (never raw BIFF
+    bytes). Chip-AGNOSTIC.
+    """
+    try:
+        import xlrd  # BIFF reader for legacy .xls
+        wb = xlrd.open_workbook(str(p))
+        out: List[str] = []
+        for sheet in wb.sheets():
+            out.append(f"=== sheet: {sheet.name} ===")
+            for r in range(sheet.nrows):
+                vals = sheet.row_values(r)
+                if any(v not in (None, "") for v in vals):
+                    out.append("\t".join(
+                        str(v) if v not in (None, "") else "" for v in vals))
+        if out:
+            return "\n".join(out)
+    except Exception:
+        pass
+    # Tier 2: LibreOffice headless CSV conversion.
+    lo = _libreoffice_convert_to_text(p, "csv:Text")
+    if lo and lo.strip():
+        return lo
+    return ""
 
 
 def extract_xlsx(p: Path) -> str:
@@ -801,6 +923,10 @@ def extract_one(p: Path) -> str:
         return extract_doc_legacy(p)
     if suf == ".xlsx":
         return extract_xlsx(p)
+    # ORGANIC-20260531-legacy-binary-office-doc-ingestion-depth (C):
+    # legacy BIFF .xls — xlrd / LibreOffice / else skip (no raw BIFF bytes).
+    if suf == ".xls":
+        return extract_xls_legacy(p)
     if suf == ".pptx":
         return extract_pptx(p)
     if suf in (".txt", ".md"):
@@ -5897,6 +6023,16 @@ def extract_text_pipeline(project: Path,
                     f"{f.relative_to(project)} — {reason}",
                     file=sys.stderr,
                 )
+            elif suf == ".doc":
+                # ORGANIC-20260531-legacy-binary-office-doc-ingestion-depth
+                reason = ("legacy binary .doc could not be decoded "
+                          "(antiword/catdoc/libreoffice unavailable) — "
+                          "raw OLE bytes deliberately NOT ingested")
+            elif suf == ".xls":
+                # ORGANIC-20260531-legacy-binary-office-doc-ingestion-depth
+                reason = ("legacy binary .xls (BIFF) could not be decoded "
+                          "(xlrd/libreoffice unavailable) — raw BIFF "
+                          "bytes deliberately NOT ingested")
             elif suf:
                 reason = f"converter for extension {suf!r} returned empty"
             else:
@@ -18440,10 +18576,28 @@ def _v1_6_371_l3_addr_len_eligible(opcodes: list, l2: dict) -> bool:
 # / 不超過 / up to / under) must appear between anchor and hex.
 # Hex width expanded to 2-8 chars so larger address spaces are
 # captured. Chip-AGNOSTIC: pure structural keyword constraint.
+# ORGANIC-20260531-l3-addr-len-max-comparator-and-disk-source-gap (FIX 1).
+# Real datasheets state the bound as a bare *exceed* comparator
+# ("address EXCEEDS 0x7F → no reply", "位址超過 0x80 → no reply",
+# "length must not exceed 0x1F", "greater than 0x7F"). Semantically
+# "X exceeds N is rejected" means N is the max, but the bare exceed
+# verb was previously absent from the alternation so the emitter
+# produced addr_max=None even though the bound was explicit in the
+# doc — which the L3 gate then hard-FAILed on. Mirror the gate's
+# exceed-comparator vocabulary here so emitter and gate agree.
+# Chip-AGNOSTIC: pure comparator-keyword tighten; the eligibility
+# gate (_v1_6_371_l3_addr_len_eligible) still guards prose like
+# "address 0x32" on a non-protocol CPU chip.
+_V1_6_371_MAX_COMPARATORS = (
+    r"(?:max|maximum|≤|<=|>=|至多|不超過|不得超過|不可超過|不大於|"
+    r"up\s+to|under|exceeds?|greater(?:\s+than)?|"
+    r"must\s+not\s+exceed|cannot\s+exceed|超過)"
+)
 _V1_6_371_RE_ADDR_MAX = re.compile(
     r"(?:max(?:imum)?\s+)?"
     r"(?:位址|address|addr)[^\n]{0,40}?"
-    r"(?:max|maximum|≤|<=|>=|至多|不超過|up\s+to|under)\s*"
+    + _V1_6_371_MAX_COMPARATORS +
+    r"\s*"
     r"0x([0-9a-fA-F]{2,8})",
     re.IGNORECASE,
 )
@@ -18451,7 +18605,8 @@ _V1_6_371_RE_ADDR_MAX = re.compile(
 _V1_6_371_RE_LEN_MAX = re.compile(
     r"(?:max(?:imum)?\s+)?"
     r"(?:長度|length|len|size)[^\n]{0,40}?"
-    r"(?:max|maximum|≤|<=|>=|至多|不超過|up\s+to|under)\s*"
+    + _V1_6_371_MAX_COMPARATORS +
+    r"\s*"
     r"0x([0-9a-fA-F]{2,8})",
     re.IGNORECASE,
 )
@@ -19493,6 +19648,72 @@ def gen_l3_cmd_protocol(project: Path,
                     "literal": m.group(0)[:80],
                     "label": "len_max (extracted, v1.6.371 max-token)"})
                 break
+
+        # ORGANIC-20260531-l3-addr-len-max-comparator-and-disk-source-gap
+        # (FIX 2). The in-memory `extracted` dict can omit sidecar .txt
+        # files the doc-extraction step wrote to disk (e.g. spreadsheet→txt
+        # conversions). The downstream L3 gate reads its constraint from
+        # the on-disk glob set directly, so the emitter and the gate
+        # disagree on the source set — the gate sees an ADDR/LEN bound the
+        # emitter never scanned and hard-FAILs. If addr_max / len_max is
+        # still unresolved, fall back to scanning the SAME glob set the L3
+        # gate uses (input_doc/*.txt, input/docs/*.txt, input/input_doc/
+        # *.txt) so emitter and gate agree. Guarded by the 2 MB scan cap so
+        # we never re-introduce the O(items×text) hang class (v0.1.91).
+        # Chip-AGNOSTIC: structural glob + the same two regexes only.
+        if (addr_max is None or len_max is None) and isinstance(project, Path):
+            _l3_disk_globs = (
+                "**/input_doc/*.txt",
+                "**/input/docs/*.txt",
+                "**/input/input_doc/*.txt",
+            )
+            _seen_disk: Set[str] = set()
+            for _glob in _l3_disk_globs:
+                if addr_max is not None and len_max is not None:
+                    break
+                try:
+                    _cands = sorted(project.glob(_glob))
+                except Exception:
+                    _cands = []
+                for _dp in _cands:
+                    if addr_max is not None and len_max is not None:
+                        break
+                    try:
+                        _rkey = str(_dp.resolve())
+                    except Exception:
+                        _rkey = str(_dp)
+                    if _rkey in _seen_disk:
+                        continue
+                    _seen_disk.add(_rkey)
+                    try:
+                        if not _dp.is_file():
+                            continue
+                        _dtext = _dp.read_text(
+                            encoding="utf-8", errors="ignore")
+                    except Exception:
+                        continue
+                    if len(_dtext) > _LARGE_DOC_SCAN_CAP_BYTES:
+                        _dtext = _dtext[:_LARGE_DOC_SCAN_CAP_BYTES]
+                    try:
+                        _rel = str(_dp.relative_to(project))
+                    except ValueError:
+                        _rel = _dp.name
+                    if addr_max is None:
+                        _m = _V1_6_371_RE_ADDR_MAX.search(_dtext)
+                        if _m:
+                            addr_max = "0x" + _m.group(1).upper()
+                            evidence.setdefault(_rel, []).append({
+                                "literal": _m.group(0)[:80],
+                                "label": "addr_max (extracted, "
+                                         "disk-scan fallback)"})
+                    if len_max is None:
+                        _m = _V1_6_371_RE_LEN_MAX.search(_dtext)
+                        if _m:
+                            len_max = "0x" + _m.group(1).upper()
+                            evidence.setdefault(_rel, []).append({
+                                "literal": _m.group(0)[:80],
+                                "label": "len_max (extracted, "
+                                         "disk-scan fallback)"})
 
     # Wave-on-fix: per-opcode response_payload_template + argument_constraints.
     # Heuristic chip-AGNOSTIC default: response_opcode at byte_offset=0,

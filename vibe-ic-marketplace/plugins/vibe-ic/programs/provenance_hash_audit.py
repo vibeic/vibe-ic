@@ -50,6 +50,49 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _looks_path_like(v: str) -> bool:
+    """Chip-AGNOSTIC: a string is path-like if it carries a separator or a
+    file extension. Bare category labels (def / gds / netlist) have neither."""
+    if not isinstance(v, str) or not v:
+        return False
+    if "/" in v or "\\" in v:
+        return True
+    try:
+        return Path(v).suffix != ""
+    except Exception:
+        return False
+
+
+def _extract_path_mapping(report: Dict[str, Any]) -> Dict[str, str]:
+    """Best-effort: find a label->real-path mapping field on the report.
+
+    Recognises the explicit artefact_paths / artifact_paths keys, and
+    generically any dict whose every value is a path-like string. Returns a
+    flat {label: path_str} mapping (empty if none found). Chip-AGNOSTIC:
+    structural test only, no chip/vendor literals.
+    """
+    mapping: Dict[str, str] = {}
+    # Explicit named fields first.
+    for key in ("artefact_paths", "artifact_paths"):
+        m = report.get(key)
+        if isinstance(m, dict):
+            for k, v in m.items():
+                if isinstance(v, str) and v:
+                    mapping[str(k)] = v
+    if mapping:
+        return mapping
+    # Generic: any dict field whose values are ALL path-like strings.
+    for key, val in report.items():
+        if key in ("summary",):
+            continue
+        if isinstance(val, dict) and val:
+            vals = list(val.values())
+            if all(isinstance(v, str) and _looks_path_like(v) for v in vals):
+                for k, v in val.items():
+                    mapping[str(k)] = v
+    return mapping
+
+
 def _scan_gate_reports(project: Path) -> List[Path]:
     out = []
     for d in (project / "gate_reports", project / "reports"):
@@ -146,6 +189,7 @@ def main():
             d.get("output_files")
             or d.get("outputs")
             or d.get("artefacts")
+            or d.get("artifacts")
             or d.get("evidence_files")
             or []
         )
@@ -162,18 +206,54 @@ def main():
             ))
             continue
         audited += 1
+        # Resolve a real label->path mapping field (artefact_paths / generic
+        # values-are-paths dict). Bare category-label entries in `outputs`
+        # (no separator, no extension) are resolved through it, not against
+        # the project root. chip-AGNOSTIC: structural rules only.
+        path_mapping = _extract_path_mapping(d)
+        # Build the candidate (path_str, recorded_hash) list, de-duped.
+        candidates: List[tuple] = []
+        seen_paths: set = set()
+
+        def _add_candidate(path_str: Optional[str], recorded_hash: Optional[str]):
+            if not path_str or path_str in seen_paths:
+                return
+            seen_paths.add(path_str)
+            candidates.append((path_str, recorded_hash))
+
         for entry in outputs:
             if isinstance(entry, str):
-                fpath = (project / entry).resolve() if not Path(entry).is_absolute() else Path(entry)
-                recorded_hash = None
+                # Bare category label (no separator/extension) -> resolve via
+                # the mapping if present, else SKIP (do not resolve a label
+                # against the project root, which would false-positive).
+                if not _looks_path_like(entry):
+                    mapped = path_mapping.get(entry)
+                    if mapped:
+                        _add_candidate(mapped, None)
+                    # else: unmapped bare label -> skip (not a path)
+                    continue
+                _add_candidate(entry, None)
             elif isinstance(entry, dict):
                 fpath_str = entry.get("path") or entry.get("file") or entry.get("name") or ""
                 if not fpath_str:
                     continue
-                fpath = (project / fpath_str).resolve() if not Path(fpath_str).is_absolute() else Path(fpath_str)
                 recorded_hash = entry.get("sha256") or entry.get("hash")
+                # A dict "name" that is a bare label resolves via the mapping.
+                if not _looks_path_like(fpath_str) and fpath_str in path_mapping:
+                    _add_candidate(path_mapping[fpath_str], recorded_hash)
+                    continue
+                _add_candidate(fpath_str, recorded_hash)
             else:
                 continue
+        # Additionally validate every value in the path mapping as a real path
+        # so a genuinely-absent mapped artefact STILL emits an accurate
+        # STALE_OUTPUT against the REAL path (de-duped against the above).
+        for _label, mapped in path_mapping.items():
+            if _looks_path_like(mapped):
+                _add_candidate(mapped, None)
+
+        for path_str, recorded_hash in candidates:
+            fpath = (project / path_str).resolve() if not Path(path_str).is_absolute() else Path(path_str)
             try:
                 fpath.relative_to(project)
             except ValueError:
