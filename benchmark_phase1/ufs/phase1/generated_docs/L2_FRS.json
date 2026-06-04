@@ -4,13 +4,6 @@
   "ic_name": "Universal Flash Storage (JEDEC JESD220, UFS 4.0)",
   "frs_sections": [
     {
-      "section": "7420",
-      "title": "Nvidia Jetson AGX Xavier SOMs",
-      "content": "    UFS 2.1 has been implemented in Snapdragon 712 (710&720G), 730G, 732G, 835, 845\n    and 855. Kirin 960, 970 and 980. Exynos 9609,[33] 9610,[34] 9611,[35] 9810 and 980.[36]\n    UFS 3.0 has been implemented in Snapdragon 855, 855+, 860, 865, Exynos 9820–9825,[37]\n    and Kirin 990.[38]\n    UFS 3.1 has been implemented in Snapdragon 855+/860, Snapdragon 865, Snapdragon\n    870, Snapdragon 888, Exynos 2100, Exynos 2200 and Snapdragon 7s gen 2.[39][40][41][42]\n    UFS 4.0 has been implemented in Google Tensor G5, MediaTek Dimensity 9200, MediaTek\n    Dimensity 8300 and Snapdragon 8 Gen 2.[43]\n\n\nComplementary UFS standards\nOn 30 March 2016, JEDEC published version 1.0 of the UFS Card Extension Standard (JESD220-2),\nwhich offered many of the features and much of the same functionality as the …",
-      "evidence": "input/docs/ufs_spec.pdf",
-      "heading_shape": "numbered"
-    },
-    {
       "section": "300",
       "title": "MB/s",
       "content": "1\n\n300 MB/s\n\n1.0\n\n1.4\n\n1200 MB/s\n\n3.0\n\n1.6\n\n2900 MB/s\n\n4.1\n\n1.8\n\n2900 MB/s\n\n5800 MB/s\n\n5.0\n\n2.0\n\n5400 MB/s\n\n10800 MB/s\n\n6.0",
@@ -126,7 +119,7 @@
   "no_frs_sections_in_input": false,
   "protocol_overview": {
     "half_duplex": true,
-    "wire_count": "2 + 2 × N_data_lanes (N = 1..4)",
+    "wire_count": 4,
     "byte_order": null,
     "wake_required_pre_command": null,
     "evidence": "half-duplex/single-wire/1-wire keyword match",
@@ -139,10 +132,6 @@
       "DOUT_t/DOUT_c (device TX differential pair per lane)",
       "DIN_t/DIN_c (device RX differential pair per lane)"
     ],
-    "dual_mode_signaling": "HS (high-speed terminated differential 100-200 mV) + LP (low-power single-ended 1.2 V CMOS); share same wires.",
-    "DDR_clock": "Both edges of Clock Lane latch one bit per Data Lane; Data-rate = 2 × Clock-Lane-frequency.",
-    "controller_role": "Source (image sensor / display panel side) drives all HS payload; both ends can initiate LP escape.",
-    "target_role": "Sink (application processor) receives HS payload, decodes CSI-2 packets, may participate in LP escape (e.g. acknowledge ULPS exit).",
     "lane_count_max": 2,
     "physical_layer": "MIPI M-PHY 5.0 (HS-Gear 1..5 + PWM low-speed modes; RMMI interface to UniPro)",
     "transport_layer": "MIPI UniPro v2.0 (data-link L2 + network L3 + transport L4 + L1.5 PHY-adapter; CPorts as logical connection endpoints)",
@@ -163,12 +152,6 @@
   "fmax_mhz": null,
   "no_fmax_mhz_in_input": true,
   "extraction_evidence": {
-    "input/docs/ufs_spec.pdf": [
-      {
-        "literal": "7420 Nvidia Jetson AGX Xavier SOMs",
-        "label": "FRS section"
-      }
-    ],
     "input/docs/ufs_spec.txt": [
       {
         "literal": "300 MB/s",

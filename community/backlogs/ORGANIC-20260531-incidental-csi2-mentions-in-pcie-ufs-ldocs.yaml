@@ -36,9 +36,19 @@ session_context: >-
   v0.1.92/v0.1.93 detector-authoring captures: tokens scattered across a 24-doc blob
   trip a loose detector even when the protocol is not the subject (v0.1.89 KEY LESSON).
 
-status: partially-fixed
-partially_fixed_at: "2026-06-03"
-partially_fixed_in: "0.2.30"
+status: resolved
+resolved_at: "2026-06-04"
+resolved_in: "0.2.30 (action 1: is_mipi foreign-primary defer) + action 2: pcie_gen5/ufs L-docs regenerated clean"
+action2_closure: >-
+  ACTION 2 (scrub the stale CSI-2 example text from the already-committed pcie_gen5/ufs
+  generated L-docs) is now DONE. With action 1 in place, a fresh deterministic
+  phase1_doc_one_shot_runner re-run on both benchmarks (--skip-text-extract, reusing the
+  committed input_doc text so only synth/detector logic changes) regenerated clean L-docs:
+  CSI-2 hits pcie_gen5 25->0, ufs 21->0; the wrong MIPI-injected L1 document_number is gone.
+  The regen PRESERVES gated own-parity vs the claude_extracted gold (HALLUCINATED=0,
+  VALUE_MISMATCH=0 before and after — CSI-2 keys were additive SHAPE_MISMATCH, excluded
+  from gated; ufs SHAPE_MISMATCH improved 24->22). Verified with l_doc_parity_diff.py;
+  detector regression tests green.
 resolution: >-
   ACTION 1 (recurrence root-cause) DONE + tested. The actual contaminator was the
   runner's INLINE `_is_mipi` detector in phase1_doc_one_shot_runner.py (~L50210):

@@ -11,32 +11,6 @@
     "floorplan_hints": [],
     "constraints_present": false,
     "notes": "PCI Express 5.0 is a protocol spec; it does not impose PDK-specific SDC / floorplan constraints. The Base Spec specifies 32 GT/s NRZ eye masks, the four-phase enhanced equalization procedure, the up-to-two-retimer channel model, and mandatory Lane Margining. SoC integration constraints (clock-tree budget, PHY characterization, retimer placement) live in the SoC integration spec.",
-    "pcb_constraints": {
-      "differential_pair_impedance_ohm": 100,
-      "differential_pair_impedance_tolerance_pct": 10,
-      "intra_pair_skew_ps_max": 5,
-      "inter_pair_skew_ps_max": 100,
-      "max_trace_length_cm_at_low_rate": 30,
-      "max_trace_length_cm_at_high_rate": 10,
-      "AC_coupling": "NOT used — D-PHY is DC-coupled differential",
-      "common_mode_choke": "Not recommended; degrades HS eye",
-      "ESD_protection_class": "HBM 2 kV minimum (Class 2); diodes placed close to connector"
-    },
-    "pad_constraints": {
-      "HS_termination_internal_ohm": 100,
-      "HS_swing_diff_mV_target": [
-        100,
-        200
-      ],
-      "LP_swing_V_target": 1.2,
-      "ESD_clamp_present": true,
-      "shared_HS_LP_pad": "Same Dp/Dn pair carries both modes; lane-state controller arbitrates"
-    },
-    "sdc_floorplan_hints": {
-      "Clock_Lane_PLL_placement": "Close to source pads; minimize jitter.",
-      "Per_lane_delay_line_placement": "Close to receiver pads; programmable for deskew.",
-      "Sync_hunter_placement": "Receiver-side; pipelined to meet Clock-Lane DDR rate."
-    },
     "electrical_channel_constraints": {
       "line_rate_GT_s": 32.0,
       "modulation": "NRZ",

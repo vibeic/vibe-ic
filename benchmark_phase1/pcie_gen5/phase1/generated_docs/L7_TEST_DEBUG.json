@@ -47,83 +47,72 @@
       "purpose": "Link Status 2 Register exposes the current EQ phase / de-emphasis; the Secondary PCIe Extended Capability holds per-lane Transmitter Preset + Receiver Preset Hint."
     },
     {
-      "name": "Eye diagram (HS pair)",
-      "purpose": "Verify HS driver / receiver / channel quality at multi-gigabit; jitter, opening, common-mode."
+      "name": "LTSSM state probe",
+      "purpose": "Each Link's current LTSSM state (Detect / Polling / Configuration / L0 / L0s / L1 / L2 / Recovery / Disabled / Hot Reset / Loopback) is observable via Link Status Register + Link Capabilities Register + vendor-specific probe ports."
     },
     {
-      "name": "Sync pattern integrity",
-      "purpose": "Confirm receiver locks on 8'b00011101 (LSB-first 10111000); miss-lock indicates clock-recovery or skew issue."
+      "name": "TLP / DLLP capture",
+      "purpose": "Protocol analyzers tap into the Link via electrical interposers or via vendor-side mirrored ports."
     },
     {
-      "name": "ECC parity coverage",
-      "purpose": "Header ECC = extended Hamming(8,4); single-bit-correct & double-bit-detect over DI + WC."
+      "name": "Retry Buffer monitor",
+      "purpose": "Per-Link retry-attempt counter (REPLAY_NUM) exposed as a status bit; retry-buffer occupancy is implementation-defined."
     },
     {
-      "name": "CRC-16 verification",
-      "purpose": "Long-Packet payload integrity; polynomial 0x1021 init 0xFFFF; mismatch reported but not retransmitted."
+      "name": "Credit accounting",
+      "purpose": "Per-VC running credits for each of 6 credit types (PH/PD/NPH/NPD/CplH/CplD) — observable via VC Resource Status Register + UpdateFC traffic."
     },
     {
-      "name": "Lane skew / deskew",
-      "purpose": "Inter-pair skew across N Data Lanes must be ≤ 100 ps; intra-pair skew Dp/Dn ≤ 5 ps; trained at HS Entry."
+      "name": "8b/10b symbol stream",
+      "purpose": "Lane-by-Lane symbol stream is the lowest-level observable; bit/symbol/Lane-decoding errors are reported via Receiver Error in Link Status + AER Uncorrectable Error Status."
     },
     {
-      "name": "LP/HS mode transition timing",
-      "purpose": "T-LPX, T-HS-PREPARE, T-HS-ZERO, T-HS-TRAIL, T-EOT must all meet D-PHY v1.x bounds."
+      "name": "Lane skew status",
+      "purpose": "Multi-Lane elastic-buffer occupancy; SKP-set insertion + extraction rate is observable in the Physical Layer."
     },
     {
-      "name": "LP-Contention detection",
-      "purpose": "Reported by lane-state controller when both ends drive conflicting LP states."
+      "name": "Link Width + Speed",
+      "purpose": "Negotiated width and current speed observable in Link Status Register."
     },
     {
-      "name": "Frame / line counters",
-      "purpose": "FS / FE short packets carry frame number; receiver counts FS/FE matches to verify completeness."
-    },
-    {
-      "name": "Virtual Channel decode",
-      "purpose": "DI[7:6] (or DI[7:6]+extension in v1.2+) identifies VC; receiver routes to correct decoder."
+      "name": "Slot Status + Slot Capabilities",
+      "purpose": "Hot-plug event observability (Card Present, Power Indicator, Attention Indicator, MRL Sensor)."
     }
   ],
   "error_detection_mechanisms": [
-    "Header ECC (Hamming 8,4) single-bit-correct / double-bit-detect on every packet header.",
-    "Payload CRC-16 (poly 0x1021, init 0xFFFF, MSB-first) on every Long-Packet payload.",
-    "Sync-pattern miss-lock — receiver fails to find 8'b00011101 within HS-Zero window; entire burst lost.",
-    "T-HS-* timing violation — per-lane bit errors; usually surface as ECC / CRC failures.",
-    "Lane-skew exceeded — multi-lane payload de-interleave misalignment; ECC / CRC failures.",
-    "LP-Contention — both endpoints assert mutually exclusive LP states.",
-    "False EoT (End-of-Transmission) — HS-Trail violated or missing LP-11 return."
+    "8b/10b decode errors — invalid 10-bit symbol or running-disparity violation; reported as Receiver Error.",
+    "TLP LCRC error (16-bit) — Data Link Layer triggers NAK + replay.",
+    "TLP ECRC error (32-bit, optional) — Transaction Layer logs in AER Uncorrectable Error Status.",
+    "DLLP CRC error (16-bit) — DLLP discarded.",
+    "Sequence Number error — TLP arriving out of expected sequence; receiver NAKs.",
+    "REPLAY_NUM rollover — repeated NAK / timeout; declares Link as failed → LTSSM Recovery / Detect.",
+    "Completion Timeout — Non-Posted Request did not get a Completion within the timeout window.",
+    "Unsupported Request (UR), Completer Abort (CA), Configuration Retry Status (CRS) — abnormal Completion Status codes."
   ],
   "interrupt_or_event_sources": [
     {
-      "event": "FS detected",
-      "trigger": "Short Packet DT=0x00 received with valid ECC."
+      "event": "Hot-plug Card-Present change",
+      "trigger": "Card insertion / removal sensed by slot circuitry."
     },
     {
-      "event": "FE detected",
-      "trigger": "Short Packet DT=0x01 received with valid ECC."
+      "event": "Link Up / Link Down",
+      "trigger": "LTSSM enters / exits L0."
     },
     {
-      "event": "LS / LE detected",
-      "trigger": "Short Packet DT=0x02 / 0x03 (optional)."
+      "event": "Correctable Error",
+      "trigger": "Per AER capability; e.g. Receiver Error, Bad TLP, Bad DLLP, REPLAY_NUM rollover."
     },
     {
-      "event": "ECC corrected",
-      "trigger": "1-bit error in header ECC was corrected."
+      "event": "Uncorrectable Error (Fatal/Non-Fatal)",
+      "trigger": "Per AER capability; e.g. Poisoned TLP Received, Flow Control Protocol Error, Completion Timeout, Completer Abort."
     },
     {
-      "event": "ECC double-bit error",
-      "trigger": "2-bit error in header ECC was detected; packet dropped."
+      "event": "Root Error reporting",
+      "trigger": "RC aggregates First / Next Uncorrectable Error sources via Root Error Status."
     },
     {
-      "event": "CRC mismatch",
-      "trigger": "Long-Packet payload CRC-16 mismatch."
-    },
-    {
-      "event": "Sync miss-lock",
-      "trigger": "Receiver did not find Sync within HS-Zero window."
-    },
-    {
-      "event": "ULPS entry / exit",
-      "trigger": "Source / sink escape commands; bus enters / exits Ultra-Low Power State."
+      "event": "Power Management Event (PME)",
+      "trigger": "Endpoint generates PM_PME Message; routed up to RC."
     }
   ],
   "notes": "PCI Express 5.0 adds Lane Margining at the Receiver as a mandatory protocol-level observability feature plus the per-lane equalization preset registers needed for the four-phase enhanced EQ. The in-band error framework (CRC + Sequence Number + replay + AER) is carried forward from base PCIe. JTAG / scan / BIST remain integrator-side at the SoC."

@@ -16,7 +16,6 @@
     }
   ],
   "extraction_evidence": {
-    "input/docs/ufs_spec.pdf": [],
     "input/docs/ufs_spec.txt": [
       {
         "literal": "Queue",
@@ -24,151 +23,6 @@
       }
     ]
   },
-  "fsm_states_transmitter": [
-    {
-      "name": "TX_LP11_STOP",
-      "description": "Idle Stop state; LP-11 driven on both Dp and Dn; bus is free."
-    },
-    {
-      "name": "TX_LP_REQUEST",
-      "description": "HS-Request: drive LP-01 (Dp HIGH, Dn LOW) for T-LPX duration."
-    },
-    {
-      "name": "TX_LP_BRIDGE",
-      "description": "Bridge state: drive LP-00 (both LOW) for T-LPX; final LP step before HS entry."
-    },
-    {
-      "name": "TX_HS_PREPARE",
-      "description": "Switch on HS driver, hold differential 0 (HS-0) for T-HS-PREPARE; receiver enables HS termination."
-    },
-    {
-      "name": "TX_HS_ZERO",
-      "description": "Continue HS-0 state for T-HS-ZERO; gives receiver time to lock HS clock recovery."
-    },
-    {
-      "name": "TX_HS_SYNC",
-      "description": "Transmit 8-bit Sync pattern 8'b00011101 (LSB-first on wire = 10111000) to mark start of payload."
-    },
-    {
-      "name": "TX_HS_PAYLOAD",
-      "description": "Stream CSI-2 packet bytes at full HS data rate; bytes interleaved across lanes when N > 1."
-    },
-    {
-      "name": "TX_HS_TRAIL",
-      "description": "Last payload bit is held for T-HS-TRAIL (~ 60 ns or 8 × UI, whichever is larger)."
-    },
-    {
-      "name": "TX_HS_EXIT",
-      "description": "Disable HS driver; LP driver takes over and forces LP-11 (Stop)."
-    },
-    {
-      "name": "TX_LP_ESCAPE_REQ",
-      "description": "Escape Request: drive LP-10 (Dp LOW, Dn HIGH) for T-LPX, then LP-00 → LP-00 → Escape pattern."
-    },
-    {
-      "name": "TX_ESC_ULPS",
-      "description": "Ultra-Low Power State: drive LP-00 continuously; can stay indefinitely."
-    },
-    {
-      "name": "TX_ESC_TRIGGER",
-      "description": "Send LP escape Trigger command (4-bit code)."
-    },
-    {
-      "name": "TX_ESC_RESET",
-      "description": "Send LP escape Reset command (force receiver to known state)."
-    }
-  ],
-  "fsm_states_receiver": [
-    {
-      "name": "RX_LP11_DETECT",
-      "description": "Wait for LP-11 → LP-01 → LP-00 sequence (HS Request)."
-    },
-    {
-      "name": "RX_HS_PREP_DETECT",
-      "description": "Enable HS receiver termination + comparator on detecting LP-00 → HS-0 transition."
-    },
-    {
-      "name": "RX_SYNC_LOCK",
-      "description": "Hunt for Sync pattern 8'b00011101 (LSB-first 10111000); declare byte-boundary lock on match."
-    },
-    {
-      "name": "RX_HS_PAYLOAD",
-      "description": "Sample each Data Lane on both edges of Clock Lane; deinterleave across lanes; assemble byte stream."
-    },
-    {
-      "name": "RX_PACKET_DECODE",
-      "description": "Parse 4-byte header (DI + WC + ECC), validate ECC; if Long Packet, read WC payload bytes + 2-byte CRC-16 footer; if Short Packet, packet ends after header."
-    },
-    {
-      "name": "RX_HS_TRAIL_DETECT",
-      "description": "Detect end-of-payload via HS-Trail timing + LP-11 transition."
-    },
-    {
-      "name": "RX_LP_ESCAPE_DETECT",
-      "description": "Detect LP-11 → LP-10 → LP-00 → LP-00 escape pattern; decode escape command."
-    }
-  ],
-  "fsm_hints": {
-    "trigger": "Host always initiates transactions by submitting UPIUs; the device never initiates a command. Link startup must complete before any UPIU exchange.",
-    "rule": "Device init handshake: host sends NOP Out, device replies NOP In, host sets fDeviceInit flag, device clears it when internal init completes.",
-    "abort": "Task Management Request UPIU (ABORT TASK / ABORT TASK SET / CLEAR TASK SET / LOGICAL UNIT RESET) aborts outstanding work; a full UniPro link reset re-initializes the link."
-  },
-  "anti_deadlock_rule": "Write data flow is bounded by Ready-To-Transfer (RTT) UPIUs and bMaxNumOfRTT, so the host can never overrun the device buffer. UniPro provides credit-based flow control at the data-link layer; persistent transport errors escalate to UniPro error recovery rather than blocking indefinitely.",
-  "exit_from_reset_or_poweron": "On RESET_n release / power-on the M-PHY+UniPro execute the link startup sequence to negotiate lanes and power mode; the host then performs the NOP handshake and sets fDeviceInit. Only after fDeviceInit clears does normal SCSI/UPIU I/O begin.",
-  "default_ready_state_recommendation": {
-    "REF_CLK": "Driven by host at the configured frequency (selected via bRefClkFreq) before link startup.",
-    "RESET_n": "Held LOW during reset; released to HIGH to start the link.",
-    "M-PHY lanes": "Parked in HIBERN8 / SLEEP when idle; brought to HS-BURST for high-speed transfer."
-  },
-  "lane_states_table": [
-    {
-      "state": "LP-00",
-      "Dp": 0,
-      "Dn": 0,
-      "meaning": "Bridge before HS / Escape entry; also Escape Mode signaling"
-    },
-    {
-      "state": "LP-01",
-      "Dp": 0,
-      "Dn": 1,
-      "meaning": "HS Request (Dn HIGH, Dp LOW)"
-    },
-    {
-      "state": "LP-10",
-      "Dp": 1,
-      "Dn": 0,
-      "meaning": "Escape Request / LP signaling"
-    },
-    {
-      "state": "LP-11",
-      "Dp": 1,
-      "Dn": 1,
-      "meaning": "Stop state (idle); bus free"
-    },
-    {
-      "state": "HS-0",
-      "Dp": 0,
-      "Dn": 1,
-      "meaning": "HS differential zero (during HS-Prepare / HS-Zero / payload bit '0')"
-    },
-    {
-      "state": "HS-1",
-      "Dp": 1,
-      "Dn": 0,
-      "meaning": "HS differential one (payload bit '1')"
-    }
-  ],
-  "configurations": [
-    {
-      "name": "Legacy single-queue",
-      "description": "One Transfer Request List (UTRD ring) with a single doorbell; SCSI Tagged Command Queuing across task tags."
-    },
-    {
-      "name": "MCQ multi-queue (UFSHCI 4.0)",
-      "description": "Multiple submission/completion queue pairs, each with its own doorbell; higher concurrency and multi-core scaling."
-    }
-  ],
-  "timing_dependency_rule": "All high-speed data movement is bursty and clocked by the M-PHY recovered/embedded clock; the host's REF_CLK seeds the device PLL. Power-mode and gear transitions (PWM <-> HS-Gear, HIBERN8 entry/exit) are negotiated through the UniPro DME (Device Management Entity) via UIC commands before data transfer, so the host and device always agree on the active gear and lane count.",
   "fsm_states_device": [
     {
       "name": "POWER_OFF",
@@ -228,5 +82,28 @@
       "name": "HC_LOW_POWER",
       "description": "Host requests M-PHY power-mode change to HIBERN8 for idle power saving."
     }
-  ]
+  ],
+  "fsm_hints": {
+    "trigger": "Host always initiates transactions by submitting UPIUs; the device never initiates a command. Link startup must complete before any UPIU exchange.",
+    "rule": "Device init handshake: host sends NOP Out, device replies NOP In, host sets fDeviceInit flag, device clears it when internal init completes.",
+    "abort": "Task Management Request UPIU (ABORT TASK / ABORT TASK SET / CLEAR TASK SET / LOGICAL UNIT RESET) aborts outstanding work; a full UniPro link reset re-initializes the link."
+  },
+  "anti_deadlock_rule": "Write data flow is bounded by Ready-To-Transfer (RTT) UPIUs and bMaxNumOfRTT, so the host can never overrun the device buffer. UniPro provides credit-based flow control at the data-link layer; persistent transport errors escalate to UniPro error recovery rather than blocking indefinitely.",
+  "exit_from_reset_or_poweron": "On RESET_n release / power-on the M-PHY+UniPro execute the link startup sequence to negotiate lanes and power mode; the host then performs the NOP handshake and sets fDeviceInit. Only after fDeviceInit clears does normal SCSI/UPIU I/O begin.",
+  "default_ready_state_recommendation": {
+    "REF_CLK": "Driven by host at the configured frequency (selected via bRefClkFreq) before link startup.",
+    "RESET_n": "Held LOW during reset; released to HIGH to start the link.",
+    "M-PHY lanes": "Parked in HIBERN8 / SLEEP when idle; brought to HS-BURST for high-speed transfer."
+  },
+  "configurations": [
+    {
+      "name": "Legacy single-queue",
+      "description": "One Transfer Request List (UTRD ring) with a single doorbell; SCSI Tagged Command Queuing across task tags."
+    },
+    {
+      "name": "MCQ multi-queue (UFSHCI 4.0)",
+      "description": "Multiple submission/completion queue pairs, each with its own doorbell; higher concurrency and multi-core scaling."
+    }
+  ],
+  "timing_dependency_rule": "All high-speed data movement is bursty and clocked by the M-PHY recovered/embedded clock; the host's REF_CLK seeds the device PLL. Power-mode and gear transitions (PWM <-> HS-Gear, HIBERN8 entry/exit) are negotiated through the UniPro DME (Device Management Entity) via UIC commands before data transfer, so the host and device always agree on the active gear and lane count."
 }

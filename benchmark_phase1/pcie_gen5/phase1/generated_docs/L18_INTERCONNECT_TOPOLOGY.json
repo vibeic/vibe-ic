@@ -73,27 +73,19 @@
     },
     "memory_vs_peripheral_regions": "Four address spaces: Memory (primary data path / DMA), I/O (legacy), Configuration (per-device control plane, 256 B + 4 KB extended incl. Lane Margining capability), Message (replaces sideband signals).",
     "device_classification": {
-      "image_sensor": "Source; drives Clock Lane + Data Lane HS payload.",
-      "display_panel": "Source (when using DSI which shares D-PHY); drives Clock + Data HS payload toward the panel.",
-      "application_processor": "Sink; integrates CSI-2 RX + DSI TX subsystems.",
-      "ISP / image processor": "Sink; consumes CSI-2 packets; may include de-Bayer, color, etc.",
-      "MIPI bridge / serializer": "Both source and sink; converts MIPI-CSI-2 to other formats (e.g. GMSL, FPD-Link).",
       "root_complex": "Connects CPU + memory to PCIe; one per hierarchy; up to 32 GT/s.",
       "switch": "Aggregates N downstream ports into one upstream port.",
       "pci_express_endpoint": "Modern Endpoint; up to 32 GT/s.",
+      "legacy_endpoint": "PCI-compatible Endpoint; may use I/O space + Lock.",
+      "pci_express_to_pci_bridge": "PCIe ↔ PCI / PCI-X protocol translator.",
       "retimer": "Protocol-aware repeater (up to two per link) for 32 GT/s reach extension.",
       "cxl_device": "Coherent accelerator / memory expander running CXL over the PCIe 5.0 PHY via Alternate Protocol Negotiation."
     },
-    "max_link_length": {
-      "PCB_trace_cm_at_400Mbps": 30,
-      "PCB_trace_cm_at_1500Mbps": 10,
-      "FFC_cable_cm_typical": 20
-    },
     "default_signal_values_evidence_tables": [
-      "Section 5 — D-PHY Lane Configuration",
-      "Section 6 — CSI-2 Packet Layer",
-      "Section 7 — Virtual Channel Multiplexing",
-      "Section 8 — Frame / Line Sync Sequence"
+      "Figure 1-2 Example Topology",
+      "Figure 1-3 Logical Block Diagram of a Switch",
+      "Figure 1-6 Advanced Peer-to-Peer Communication",
+      "Section 1.3 PCI Express Fabric Topology"
     ],
     "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
   },

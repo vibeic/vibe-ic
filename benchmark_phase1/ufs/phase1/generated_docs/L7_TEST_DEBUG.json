@@ -45,54 +45,11 @@
       "purpose": "UniPro Device Management Entity exposes PHY-adapter and data-link error counters via UIC GET commands."
     }
   ],
-  "error_detection_mechanisms": [
-    "Header ECC (Hamming 8,4) single-bit-correct / double-bit-detect on every packet header.",
-    "Payload CRC-16 (poly 0x1021, init 0xFFFF, MSB-first) on every Long-Packet payload.",
-    "Sync-pattern miss-lock — receiver fails to find 8'b00011101 within HS-Zero window; entire burst lost.",
-    "T-HS-* timing violation — per-lane bit errors; usually surface as ECC / CRC failures.",
-    "Lane-skew exceeded — multi-lane payload de-interleave misalignment; ECC / CRC failures.",
-    "LP-Contention — both endpoints assert mutually exclusive LP states.",
-    "False EoT (End-of-Transmission) — HS-Trail violated or missing LP-11 return."
-  ],
-  "interrupt_or_event_sources": [
-    {
-      "event": "FS detected",
-      "trigger": "Short Packet DT=0x00 received with valid ECC."
-    },
-    {
-      "event": "FE detected",
-      "trigger": "Short Packet DT=0x01 received with valid ECC."
-    },
-    {
-      "event": "LS / LE detected",
-      "trigger": "Short Packet DT=0x02 / 0x03 (optional)."
-    },
-    {
-      "event": "ECC corrected",
-      "trigger": "1-bit error in header ECC was corrected."
-    },
-    {
-      "event": "ECC double-bit error",
-      "trigger": "2-bit error in header ECC was detected; packet dropped."
-    },
-    {
-      "event": "CRC mismatch",
-      "trigger": "Long-Packet payload CRC-16 mismatch."
-    },
-    {
-      "event": "Sync miss-lock",
-      "trigger": "Receiver did not find Sync within HS-Zero window."
-    },
-    {
-      "event": "ULPS entry / exit",
-      "trigger": "Source / sink escape commands; bus enters / exits Ultra-Low Power State."
-    }
-  ],
-  "notes": "UFS does not define a JTAG/scan port on the device package edge. Host-side debug relies on (a) Response UPIU status + SCSI sense, (b) Reject UPIUs, (c) Query-readable Health/Attributes, (d) UFSHCI interrupt/error registers, and (e) M-PHY/UniPro protocol-analyzer captures of the differential lanes.",
   "scope_observability": [
     "High-speed differential probing of the M-PHY lane pairs requires a high-bandwidth oscilloscope and a UFS/M-PHY protocol analyzer; eye-diagram and gear/power-mode transitions are observable at the lane.",
     "Protocol analyzers decode UniPro frames and UPIU transactions to trace command/response/data flow.",
     "RESET_n and REF_CLK are low-speed and directly probeable."
   ],
-  "ate_or_dft": "Internal NAND test, ECC scrub, scan and BIST are vendor-specific and accessed at wafer/package probe, not exposed over the UFS link. The link-level observability is via UPIU status, Query Descriptors/Attributes/Flags, UFSHCI error registers, and UniPro DME counters."
+  "ate_or_dft": "Internal NAND test, ECC scrub, scan and BIST are vendor-specific and accessed at wafer/package probe, not exposed over the UFS link. The link-level observability is via UPIU status, Query Descriptors/Attributes/Flags, UFSHCI error registers, and UniPro DME counters.",
+  "notes": "UFS does not define a JTAG/scan port on the device package edge. Host-side debug relies on (a) Response UPIU status + SCSI sense, (b) Reject UPIUs, (c) Query-readable Health/Attributes, (d) UFSHCI interrupt/error registers, and (e) M-PHY/UniPro protocol-analyzer captures of the differential lanes."
 }

@@ -89,6 +89,15 @@
   "no_interface_types_in_input": true,
   "chip_top_interfaces": [],
   "module_role": "Point-to-point high-speed storage interface between a UFS host controller (master, per UFSHCI/JESD223) and a UFS device (slave, per UFS/JESD220). Defines the layered stack (M-PHY physical + UniPro transport + UPIU/UTP + SCSI command set) and the UFSHCI register/queue model. A concrete UFS host controller IP integrates the UFSHCI register file behind a system bus (AXI/AHB) and a UniPro+M-PHY hard-macro PHY.",
+  "integration_overview": {
+    "link_type": "Point-to-point host <-> device (no shared bus, no multi-drop).",
+    "max_lanes_per_direction": 2,
+    "phy": "MIPI M-PHY 5.0 differential RX/TX lane pairs.",
+    "transport": "MIPI UniPro v2.0.",
+    "sideband": "REF_CLK (host -> device) and RESET_n (host -> device, active low).",
+    "command_model": "Host submits UPIUs via UFSHCI; legacy single Transfer Request List or native MCQ.",
+    "full_duplex": "Independent TX and RX lanes allow simultaneous bidirectional transfer."
+  },
   "interface_categories": [
     "Power (VCC NAND core, VCCQ logic, VCCQ2 interface, VSS ground)",
     "Reference clock (REF_CLK)",
@@ -110,38 +119,11 @@
     "Interrupt routing for UFSHCI completion / error events (legacy doorbell or MCQ completion queues).",
     "Secure key provisioning path for the RPMB 256-bit authentication key."
   ],
-  "pcb_integration_constraints": {
-    "differential_pair_impedance_ohm": 100,
-    "intra_pair_skew_ps_max": 5,
-    "inter_pair_skew_ps_max": 100,
-    "max_trace_length_cm": "≤ 30 (depends on data rate; shorter at 1.5+ Gbps).",
-    "AC_coupling": "NOT used — D-PHY is DC-coupled differential.",
-    "ESD_protection_class": "Class 2 minimum (HBM 2 kV)."
-  },
   "low_power_modes": {
-    "Stop_state": "LP-11 between bursts — minimal current.",
-    "ULPS": "Ultra-Low Power State; lane held LP-00 indefinitely; deep sleep.",
-    "Non_Continuous_Clock": "Clock Lane returns to LP-11 between bursts; saves clock-tree power.",
     "HIBERN8": "Deepest M-PHY line low-power state with fast wake; the primary idle state.",
     "SLEEP": "Device sleep power mode (UFS power mode), reduces device activity.",
     "Deep Sleep": "Lower-power device state (UFS 3.1+) with longer wake latency.",
     "Power_Off": "Host removes supplies; full state loss (boot LU repopulated on next power-up)."
-  },
-  "typical_use_cases": [
-    "Mobile-phone main + front camera (single CSI-2 interface to ISP).",
-    "Multi-camera mobile (front + main + ultra-wide) muxed via VC into a single CSI-2 RX.",
-    "Automotive front / rear / surround camera modules → vision SoC.",
-    "Tablet / laptop webcam.",
-    "Application-processor → display panel (DSI shares the same D-PHY physical layer)."
-  ],
-  "integration_overview": {
-    "link_type": "Point-to-point host <-> device (no shared bus, no multi-drop).",
-    "max_lanes_per_direction": 2,
-    "phy": "MIPI M-PHY 5.0 differential RX/TX lane pairs.",
-    "transport": "MIPI UniPro v2.0.",
-    "sideband": "REF_CLK (host -> device) and RESET_n (host -> device, active low).",
-    "command_model": "Host submits UPIUs via UFSHCI; legacy single Transfer Request List or native MCQ.",
-    "full_duplex": "Independent TX and RX lanes allow simultaneous bidirectional transfer."
   },
   "compatibility_notes": [
     "UFS is the successor to eMMC; both are JEDEC mobile-storage standards, but UFS uses a full-duplex M-PHY/UniPro serial link and a SCSI/UPIU command model, whereas eMMC uses a parallel half-duplex bus with a CMD/DAT command-line protocol.",

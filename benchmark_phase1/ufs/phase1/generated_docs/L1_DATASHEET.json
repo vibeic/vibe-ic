@@ -10,223 +10,18 @@
   "electrical_specs": [],
   "no_electrical_specs_in_input": true,
   "ordering_info": {
-    "part_number": "ufs",
+    "part_number": "JESD220",
     "vendor": "Texas Instruments",
     "no_vendor_in_input": false
   },
   "tapeout_metadata": null,
   "no_tapeout_metadata_in_input": true,
   "extraction_evidence": {
-    "input/docs/ufs_spec.pdf": [],
     "input/docs/ufs_spec.txt": []
   },
   "class_path": null,
   "no_class_path_in_input": true,
   "auto_discovered_identifiers": [
-    {
-      "name": "UFS",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "NAND",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "TLC",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "QLC",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "PHY",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "MIPI",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "LVDS",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "SCSI",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "JEDEC",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "UFSA",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "JESD220B",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "MWC",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "SLC",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "AGX",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "JESD220",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "UFSHCI",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "JESD223C",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "JESD223",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "JESD223D",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "NVM",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "TOSHIBA",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "EMEA",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "KIOXIA",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "FBO",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "ZUFS",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "S25",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "UNIVERSAL",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "FLASH",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "STORAGE",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "PDF",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "CARD",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "EXTENSION",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "SSD",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
-    {
-      "name": "EM133",
-      "source_doc": "ufs_spec.pdf",
-      "kind": "upper_ident",
-      "source": "phase1_auto_extraction"
-    },
     {
       "name": "UNIVERSAL",
       "source_doc": "ufs_spec.txt",
@@ -988,27 +783,42 @@
     {
       "literal": "2%",
       "kind": "percent",
-      "source": "ufs_spec.pdf"
+      "source": "ufs_spec.txt"
     },
     {
       "literal": "2.2in",
       "kind": "dimension",
-      "source": "ufs_spec.pdf"
+      "source": "ufs_spec.txt"
     },
     {
       "literal": "nand",
       "kind": "primitive_cell",
-      "source": "ufs_spec.pdf"
+      "source": "ufs_spec.txt"
     }
   ],
   "document_title": "Universal Flash Storage (UFS) Standard",
   "document_number": "JEDEC JESD220 (UFS) + JESD223 (UFSHCI)",
   "version": "UFS 4.0 (UFSHCI 4.0)",
   "revised_date": "August 17, 2022",
-  "original_release_date": "D-PHY v0.9 (2007) + CSI-2 v1.0 (2005)",
   "manufacturer": "JEDEC Solid State Technology Association",
+  "publisher": "JEDEC Solid State Technology Association, 3103 North 10th Street, Suite 240 South, Arlington, VA 22201-2107 USA",
   "copyright": "Copyright JEDEC Solid State Technology Association",
   "abstract": "Universal Flash Storage (UFS) is a high-performance mobile flash storage standard, positioned as the successor to eMMC and SD cards. UFS is layered on the MIPI M-PHY physical layer and the MIPI UniPro transport/network stack, and uses a SCSI-based command set carried in UFS Protocol Information Units (UPIUs). UFS 4.0 pairs M-PHY 5.0 (HS-Gear 5, 23.2 Gbit/s per lane) with UniPro v2.0 over up to 2 lanes per direction, and adds the UFSHCI 4.0 Multi-Circular Queue (MCQ) host-controller interface.",
+  "overview": "Universal Flash Storage (UFS) is a flash storage specification for mobile phones, digital cameras and consumer electronic devices, positioned as a replacement for eMMC and SD cards. The standard encompasses both permanently embedded packages (eUFS, via ball grid array) and removable UFS memory cards. The electrical interface uses the MIPI M-PHY high-speed serial PHY; the transport stack is MIPI UniPro. Unlike eMMC, UFS is based on the SCSI architectural model and supports SCSI Tagged Command Queuing, exchanging UPIUs (UFS Protocol Information Units) between host and device. UFS 4.0 uses M-PHY 5.0 (HS-Gear 5, 23.2 Gbit/s per lane), UniPro v2.0, and UFSHCI 4.0 with the native Multi-Circular Queue (MCQ). The standard is developed by, and available from, the JEDEC Solid State Technology Association as JESD220 (UFS) and JESD223 (UFSHCI).",
+  "topology_summary": "Point-to-point host-to-device link. The UFS host (master, via the UFS host controller / UFSHCI) drives REF_CLK and RESET_n; the UFS device (slave) communicates over M-PHY differential RX/TX lane pairs under the UniPro transport stack. The host initiates all transactions by submitting Command UPIUs; the device returns Response / Data In / RTT / Query / Task-Management Response UPIUs.",
+  "external_pins": [
+    "RESET_n",
+    "REF_CLK",
+    "DIN0_t/DIN0_c (M-PHY RX lane 0 differential pair)",
+    "DOUT0_t/DOUT0_c (M-PHY TX lane 0 differential pair)",
+    "DIN1_t/DIN1_c (M-PHY RX lane 1 differential pair)",
+    "DOUT1_t/DOUT1_c (M-PHY TX lane 1 differential pair)",
+    "VCC (NAND core supply)",
+    "VCCQ (low-voltage core supply)",
+    "VCCQ2 (interface supply)",
+    "VSS (ground)"
+  ],
+  "external_pin_count": 10,
   "keywords": [
     "UFS",
     "Universal Flash Storage",
@@ -1026,19 +836,6 @@
     "SCSI",
     "LUN"
   ],
-  "external_pins": [
-    "RESET_n",
-    "REF_CLK",
-    "DIN0_t/DIN0_c (M-PHY RX lane 0 differential pair)",
-    "DOUT0_t/DOUT0_c (M-PHY TX lane 0 differential pair)",
-    "DIN1_t/DIN1_c (M-PHY RX lane 1 differential pair)",
-    "DOUT1_t/DOUT1_c (M-PHY TX lane 1 differential pair)",
-    "VCC (NAND core supply)",
-    "VCCQ (low-voltage core supply)",
-    "VCCQ2 (interface supply)",
-    "VSS (ground)"
-  ],
-  "external_pin_count": 10,
   "key_features": [
     "Layered architecture: MIPI M-PHY (physical) + MIPI UniPro (transport/network/data-link) + UFS Transport Protocol (UTP) carrying UPIUs + SCSI-based UFS Command Set (UCS) + UFSHCI host controller interface.",
     "MIPI M-PHY 5.0 physical layer: high-speed differential serial (LVDS-style), HS-Gear 1..5 plus PWM low-speed modes, RMMI (Reference M-PHY Module Interface) to UniPro.",
@@ -1053,8 +850,6 @@
     "HPB (Host Performance Booster): optional caching of the device L2P (logical-to-physical) mapping in host DRAM to cut device-side lookup latency.",
     "Full-duplex serial differential interface, scaling better to higher bandwidths than eMMC's parallel half-duplex bus."
   ],
-  "topology_summary": "Point-to-point host-to-device link. The UFS host (master, via the UFS host controller / UFSHCI) drives REF_CLK and RESET_n; the UFS device (slave) communicates over M-PHY differential RX/TX lane pairs under the UniPro transport stack. The host initiates all transactions by submitting Command UPIUs; the device returns Response / Data In / RTT / Query / Task-Management Response UPIUs.",
-  "package_summary": "Application-processor SoC + image sensor / display panel side; physical interconnect is PCB-trace or short FFC cable (≤ 30 cm at low rates; shorter at 1.5+ Gbps).",
   "revision_history": [
     {
       "version": "1.0",
@@ -1092,16 +887,6 @@
       "description": "Doubled bandwidth to 23.2 Gbit/s per lane (2900 MB/s); MIPI M-PHY v5.0 (HS-Gear 5); UniPro v2.0; UFSHCI 4.0 Multi-Circular Queue (MCQ); File Based Optimization."
     }
   ],
-  "use_cases": [
-    "Flagship smartphones and tablets (embedded UFS / eUFS)",
-    "Automotive infotainment and ADAS storage",
-    "Removable UFS memory cards (UFS Card Extension)",
-    "AR/VR and high-frame-rate camera capture storage",
-    "Edge-AI devices requiring high random-read throughput",
-    "Set-top boxes and consumer electronics with high terabytes-written endurance"
-  ],
-  "overview": "Universal Flash Storage (UFS) is a flash storage specification for mobile phones, digital cameras and consumer electronic devices, positioned as a replacement for eMMC and SD cards. The standard encompasses both permanently embedded packages (eUFS, via ball grid array) and removable UFS memory cards. The electrical interface uses the MIPI M-PHY high-speed serial PHY; the transport stack is MIPI UniPro. Unlike eMMC, UFS is based on the SCSI architectural model and supports SCSI Tagged Command Queuing, exchanging UPIUs (UFS Protocol Information Units) between host and device. UFS 4.0 uses M-PHY 5.0 (HS-Gear 5, 23.2 Gbit/s per lane), UniPro v2.0, and UFSHCI 4.0 with the native Multi-Circular Queue (MCQ). The standard is developed by, and available from, the JEDEC Solid State Technology Association as JESD220 (UFS) and JESD223 (UFSHCI).",
-  "publisher": "JEDEC Solid State Technology Association, 3103 North 10th Street, Suite 240 South, Arlington, VA 22201-2107 USA",
   "lun_classes": [
     {
       "name": "Normal LUN",
@@ -1123,5 +908,13 @@
       "name": "RPMB W-LUN",
       "description": "Well-known LUN for Replay Protected Memory Block access (authenticated secure storage)."
     }
+  ],
+  "use_cases": [
+    "Flagship smartphones and tablets (embedded UFS / eUFS)",
+    "Automotive infotainment and ADAS storage",
+    "Removable UFS memory cards (UFS Card Extension)",
+    "AR/VR and high-frame-rate camera capture storage",
+    "Edge-AI devices requiring high random-read throughput",
+    "Set-top boxes and consumer electronics with high terabytes-written endurance"
   ]
 }

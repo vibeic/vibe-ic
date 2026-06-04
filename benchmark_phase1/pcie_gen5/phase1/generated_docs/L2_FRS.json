@@ -7,71 +7,61 @@
       "section": "32",
       "title": "Ground      Reserved",
       "content": "         PCI Express ×4 cards end at pin 32\n\n 33   HSOp(4)     Reserved   Lane 4 transmit data,\n 34   HSOn(4)     Ground     + and −\n\n 35   Ground      HSIp(4)    Lane 4 receive data,\n 36   Ground      HSIn(4)    + and −\n\n 37   HSOp(5)     Ground     Lane 5 transmit data,\n 38   HSOn(5)     Ground     + and −\n\n 39   Ground      HSIp(5)    Lane 5 receive data,\n 40   Ground      HSIn(5)    + and −\n\n 41   HSOp(6)     Ground     Lane 6 transmit data,\n 42   HSOn(6)     Ground     + and −\n\n 43   Ground      HSIp(6)    Lane 6 receive data,                         Legend\n\n 44   Ground      HSIn(6)    + and −                        Power       Supplies power to the card\n\n 45   HSOp(7)     Ground     Lane 7 transmit data,          Sense       Tied together on card\n\n 46   HSOn(7)     Ground     + and …",
-      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "evidence": "input/docs/pcie_gen5_spec.txt",
       "heading_shape": "numbered"
     },
     {
       "section": "49",
       "title": "Ground      Ground                              Card-to-host",
       "content": "                                                                        motherboard\n\n         PCI Express ×8 cards end at pin 49                Reserved     Not presently used\n\n\n\nPower\n\n\nSlot power\nAll PCI express cards may consume up to 3 A at +3.3 V (9.9 W). The amount of +12 V and total power\nthey may consume depends on the form factor and the role of the card:[31]: 35–36 [32][33]\n\n   ×1 cards are limited to 0.5 A at +12 V (6 W) and 10 W combined.\n   ×4 and wider cards are limited to 2.1 A at +12 V (25 W) and 25 W combined.\n   A full-sized ×1 card may draw up to the 25 W limits after initialization and software\n   configuration as a high-power device.\n   A full-sized ×16 graphics card may draw up to 5.5 A at +12 V (66 W) and 75 W combined\n   after initialization and software configurati…",
-      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "evidence": "input/docs/pcie_gen5_spec.txt",
       "heading_shape": "numbered"
     },
     {
       "section": "4",
       "title": "Ground",
       "content": "",
-      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "evidence": "input/docs/pcie_gen5_spec.txt",
       "heading_shape": "numbered"
     },
     {
       "section": "5",
       "title": "Sense",
       "content": "  6      Ground\n\n                       —\n\n 8-pin power connector (150 W)[36][37][38]\n Pin                  Description\n\n  1      +12 V\n  2      +12 V\n\n  3      +12 V\n\n  4      Sense 1 (8-pin connected[A])\n  5      Ground\n  6      Sense 0 (6-pin or 8-pin connected)\n\n  7      Ground\n\n  8      Ground\n\n\n\n\n              6 pin power connector pin map\n\n\n\n\n       8 pin power connector pin map\n\n\n\n\nA. When a 6-pin connector is plugged into an 8-pin receptacle the card is notified by a missing\n   Sense1 that it may only use up to 75 W.\n\n\n12VHPWR connector\nThe 16-pin 12VHPWR connector is a standard for connecting\ngraphics processing units (GPUs) to computer power supplies\nfor up to 600 W power delivery. It was introduced by Nvidia\nin 2022 to supersede the previous 6- and 8-pin power\nconnectors for GP…",
-      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "evidence": "input/docs/pcie_gen5_spec.txt",
       "heading_shape": "numbered"
     },
     {
       "section": "2025",
       "title": "PAM-4",
       "content": "                                      242B/256B\n   7.0      (specification   FEC                    128.0 GT/s      15.125      30.25       60.5       121      242\n                                      FLIT\n            released)\n\n            2028\n   8.0                                              256.0 GT/s      30.25       60.5        121        242      484\n            (planned)\n\n\nNotes\n\n  i. In each direction (each lane is a dual simplex channel).\n ii. Transfer rate refers to the encoded serial bit rate; 2.5 GT/s means 2.5 Gbit/s serial data rate.\niii. Throughput indicates the usable bandwidth (i.e. only including the payload, not the 8b/10b,\n     128b/130b, or 242B/256B encoding overhead). The PCIe 1.0 transfer rate of 2.5 GT/s per\n     lane means a 2.5 Gbit/s serial bit rate; after a…",
-      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "evidence": "input/docs/pcie_gen5_spec.txt",
       "heading_shape": "numbered"
     },
     {
       "section": "5",
       "title": "GT/s and the per-lane throughput rises from 250 MB/s to",
       "content": "500 MB/s. Consequently, a 16-lane PCIe connector (×16) can\nsupport an aggregate throughput of up to 8 GB/s.\n\nPCIe 2.0 motherboard slots are fully backward compatible\nwith PCIe v1.x cards. PCIe 2.0 cards are also generally\n                                                                    A PCI Express 2.0 ×1 expansion card\nbackward compatible with PCIe 1.x motherboards, using the\n                                                                    that provides USB 3.0 connectivity[b]\navailable bandwidth of PCI Express 1.1. Overall, graphic\ncards or motherboards designed for v2.0 work, with the other\nbeing v1.1 or v1.0a.\n\nThe PCI-SIG also said that PCIe 2.0 features improvements to the point-to-point data transfer protocol\nand its software architecture.[73]\n\nIntel's first PCIe 2.0 capable …",
-      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "evidence": "input/docs/pcie_gen5_spec.txt",
       "heading_shape": "numbered"
     },
     {
       "section": "106",
       "title": "Power E1080 Enterprise server delivers a uniquely architected platform to help securely and",
       "content": "     efficiently scale core operational and AI applications in a hybrid cloud, IBM Europe\n     Hardware Announcement ZG21-0059 (https://www.ibm.com/common/ssi/rep_ca/9/877/ENU\n     SZG21-0059/index.html)\n107. IBM Power E1080 Technical Overview and Introduction (http://www.redbooks.ibm.com/redp\n     apers/pdfs/redp5649.pdf)\n108. \"Intel Unveils 12th Gen Intel Core, Launches World's Best Gaming\" (https://www.intel.com/c\n     ontent/www/us/en/newsroom/news/12th-gen-core-processors.html). Intel.com. 31\n     December 2021. Retrieved 16 February 2022.\n109. \"NVIDIA Announces Hopper Architecture, the Next Generation of Accelerated Computing\" (h\n     ttps://nvidianews.nvidia.com/news/nvidia-announces-hopper-architecture-the-next-generatio\n     n-of-accelerated-computing).\n110. \"AMD Showcases Industr…",
-      "evidence": "input/docs/pcie_gen5_spec.pdf",
+      "evidence": "input/docs/pcie_gen5_spec.txt",
       "heading_shape": "numbered"
     }
   ],
   "no_frs_sections_in_input": false,
   "protocol_overview": {
     "half_duplex": true,
-    "wire_count": "2 + 2 × N_data_lanes (N = 1..4)",
+    "wire_count": 4,
     "byte_order": null,
     "wake_required_pre_command": null,
     "evidence": "half-duplex/single-wire/1-wire keyword match",
     "type": "Layered, point-to-point, dual-simplex, differentially-signaled, packet-based serial I/O interconnect operating at 32 GT/s per lane (Gen5).",
     "duplex": "dual-simplex (independent TX + RX differential pairs per Lane; both directions transmit simultaneously and continuously)",
-    "synchronous": true,
-    "wire_names": [
-      "CLK_P / CLK_N (Clock Lane differential pair)",
-      "DAT0_P / DAT0_N (Data Lane 0 differential pair)",
-      "DAT1.. (optional additional Data Lanes)"
-    ],
-    "dual_mode_signaling": "HS (high-speed terminated differential 100-200 mV) + LP (low-power single-ended 1.2 V CMOS); share same wires.",
-    "DDR_clock": "Both edges of Clock Lane latch one bit per Data Lane; Data-rate = 2 × Clock-Lane-frequency.",
-    "controller_role": "Source (image sensor / display panel side) drives all HS payload; both ends can initiate LP escape.",
-    "target_role": "Sink (application processor) receives HS payload, decodes CSI-2 packets, may participate in LP escape (e.g. acknowledge ULPS exit).",
     "synchronous_serial": false,
     "embedded_clock": true,
     "encoding": "128b/130b (carried forward from Gen3/Gen4): a 130-bit block carries a 2-bit sync header + 128 bits of scrambled payload (~1.54% overhead). Replaces the 8b/10b of Gen1/Gen2.",
@@ -135,7 +125,7 @@
   "fmax_mhz": null,
   "no_fmax_mhz_in_input": true,
   "extraction_evidence": {
-    "input/docs/pcie_gen5_spec.pdf": [
+    "input/docs/pcie_gen5_spec.txt": [
       {
         "literal": "32 Ground      Reserved",
         "label": "FRS section"
@@ -793,24 +783,6 @@
     {
       "id": "FR-FRAMING-12",
       "text": "Gen5 retains 128b/130b packet framing — Flit mode as mandatory framing is a PCIe 6.0 feature."
-    }
-  ],
-  "configurations": [
-    {
-      "name": "1 Data Lane",
-      "description": "Smallest config: 1 Clock Lane + 1 Data Lane. Single byte stream."
-    },
-    {
-      "name": "2 Data Lanes",
-      "description": "1 Clock Lane + 2 Data Lanes interleaved byte 0/byte 1."
-    },
-    {
-      "name": "3 Data Lanes",
-      "description": "1 Clock Lane + 3 Data Lanes (less common)."
-    },
-    {
-      "name": "4 Data Lanes",
-      "description": "Maximum: 1 Clock Lane + 4 Data Lanes; 4 × per-lane bandwidth."
     }
   ],
   "error_response_conditions": [

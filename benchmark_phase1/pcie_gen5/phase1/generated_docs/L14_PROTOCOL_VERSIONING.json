@@ -47,7 +47,6 @@
         "summary": "Doubles the per-lane signaling rate to 32 GT/s (NRZ); retains 128b/130b from Gen3/Gen4; adds four-phase enhanced transmitter equalization with preset hints (P0-P10); adds optional transmitter precoding; mandates Lane Margining at the Receiver; carries up to two retimers per link; defines Alternate Protocol Negotiation (used by CXL); keeps the TLP/DLLP/LTSSM/credit-flow-control semantics of base PCIe."
       }
     ],
-    "version_naming_history_note": "PCI-SIG maintains the PCI Express Base Specification. PCIe 5.0 (Rev 5.0, 2019) doubles Gen4 to 32 GT/s while staying on NRZ + 128b/130b. The modulation change to PAM4 + FEC + Flit arrives at PCIe 6.0. The Rev 5.0 base spec is membership-gated; Gen5 facts here are from the public PCI-SIG Rev 5.0 announcement, PCI-SIG briefs, and vendor IP-controller datasheets (Synopsys DesignWare, Cadence, Rambus, PLDA).",
     "future_versions_industry_outline": [
       {
         "version": "PCIe 6.0 (2022)",
@@ -62,6 +61,7 @@
         "summary": "Doubles to 128 GT/s; FLIT-based mandatory."
       }
     ],
+    "version_naming_history_note": "PCI-SIG maintains the PCI Express Base Specification. PCIe 5.0 (Rev 5.0, 2019) doubles Gen4 to 32 GT/s while staying on NRZ + 128b/130b. The modulation change to PAM4 + FEC + Flit arrives at PCIe 6.0. The Rev 5.0 base spec is membership-gated; Gen5 facts here are from the public PCI-SIG Rev 5.0 announcement, PCI-SIG briefs, and vendor IP-controller datasheets (Synopsys DesignWare, Cadence, Rambus, PLDA).",
     "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
   },
   "extraction_status": "EXTRACTION_FOUND_NOTHING",

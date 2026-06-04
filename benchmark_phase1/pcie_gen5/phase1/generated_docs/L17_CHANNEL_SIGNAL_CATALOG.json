@@ -194,14 +194,11 @@
       }
     ],
     "ordering_rules": {
-      "bit_order_within_byte": "LSB-first on the wire (bit 0 first, bit 7 last).",
-      "byte_order_within_header": "DI (byte 0) → WC[7:0] (byte 1) → WC[15:8] (byte 2) → ECC (byte 3); little-endian over the wire.",
-      "byte_order_within_crc": "CRC[7:0] first, then CRC[15:8] appended; CRC computed MSB-first over payload.",
-      "multilane_byte_order": "byte k → lane (k mod N); Sync byte replicated on every active lane.",
+      "bit_order_within_byte": "Byte is 8b/10b-encoded then transmitted LSB of the 10-bit symbol first on the wire (per Figure 4-3, Bit Transmission Order on Physical Lanes).",
+      "byte_order_within_field": "Little-endian for multi-byte fields within TLP headers (matches PCI convention).",
+      "lane_striping": "Multi-Lane Links stripe successive bytes round-robin starting at Lane 0; STP/SDP MUST land on Lane 0.",
       "tx_rx_simultaneity": "Dual-simplex: TX and RX transmit independently and simultaneously.",
-      "bit_order_on_wire": "Serial NRZ; 128b/130b block boundaries delimited by the 2-bit sync header.",
-      "byte_order_within_field": "Little-endian for multi-byte fields within TLP headers.",
-      "lane_striping": "Multi-Lane Links stripe successive bytes round-robin starting at Lane 0."
+      "bit_order_on_wire": "Serial NRZ; 128b/130b block boundaries delimited by the 2-bit sync header."
     },
     "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
   },

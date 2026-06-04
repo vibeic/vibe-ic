@@ -91,17 +91,17 @@
     {
       "name": "DOWN",
       "transitions": [],
-      "evidence": "input/docs/pcie_gen5_spec.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/pcie_gen5_spec.txt (prose state-to-state v1.6.484)"
     },
     {
       "name": "EXTENDED",
       "transitions": [],
-      "evidence": "input/docs/pcie_gen5_spec.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/pcie_gen5_spec.txt (prose state-to-state v1.6.484)"
     },
     {
       "name": "TRAIN",
       "transitions": [],
-      "evidence": "input/docs/pcie_gen5_spec.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/pcie_gen5_spec.txt (prose state-to-state v1.6.484)"
     }
   ],
   "no_fsm_states_in_input": false,
@@ -135,7 +135,7 @@
       "port_count": null,
       "depth": null,
       "width": null,
-      "evidence_file": "pcie_gen5_spec.pdf",
+      "evidence_file": "pcie_gen5_spec.txt",
       "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
       "low_confidence": true
     }
@@ -208,27 +208,8 @@
   ],
   "class_path": "digital_cmd_driven",
   "module_role": "Wire-level + transaction-level + software-interface specification for a fifth-generation (32 GT/s) point-to-point, layered, differential serial I/O interconnect. Functionally the same protocol as base PCIe, with the physical layer upgraded to 32 GT/s NRZ with 128b/130b encoding, four-phase enhanced equalization, optional precoding, up to two retimers per link, and mandatory Lane Margining at the Receiver.",
+  "topology_description": "Hierarchy (tree) rooted at a Root Complex (RC), with optional Switches and Bridges; leaf nodes are Endpoints. Each Link is a point-to-point dual-simplex connection. Because 32 GT/s channels are loss-limited, up to two protocol-aware retimers may be inserted per link to extend reach.",
   "integration_overview": {
-    "wire_count": "2 + 2 × N_data_lanes (N=1..4); plus a sideband I2C for sensor control.",
-    "wire_directions": "Clock Lane + Data Lanes: source → sink during HS; bidirectional during LP escape. Sideband I2C: bidirectional.",
-    "no_chip_select": "No CS line; point-to-point pair is the only addressing.",
-    "no_addressing": "No device address on CSI-2; Virtual Channel (VC) field on each packet provides 4 / 16 logical streams over one physical bus.",
-    "controller_choices": "Source (sensor / display TX) is always the HS-payload driver; sink only receives HS and may drive LP for escape acknowledgment.",
-    "handshake_at_protocol_layer": "None — CSI-2 has no ACK / NAK / retry. ECC corrects 1-bit header errors; CRC reports payload errors; upper layer decides.",
-    "gen5_line_rate_GT_s": 32.0,
-    "modulation": "NRZ",
-    "encoding": "128b/130b",
-    "x16_bandwidth_per_direction_GB_s": 63,
-    "backward_compat_rates_GT_s": [
-      2.5,
-      5.0,
-      8.0,
-      16.0,
-      32.0
-    ],
-    "retimers_max_per_link": 2,
-    "lane_margining_at_receiver": "mandatory",
-    "refclk_sharing": "Common Clock OR Separate Reference clock with Independent SSC (SRIS).",
     "host_count_per_hierarchy": 1,
     "max_lane_width": 32,
     "lane_widths_supported": [
@@ -241,20 +222,39 @@
       32
     ],
     "host_side_register_spec": "PCI Configuration Space (256 B) + PCI Express Extended Configuration Space (up to 4096 B per device), incl. Link Capabilities/Control/Status 2, Secondary PCIe Extended Capability (EQ presets), and Lane Margining at the Receiver Extended Capability.",
+    "device_side_interface": "Each device exposes its Configuration Space via Configuration Read/Write TLPs routed by Bus/Device/Function number.",
     "wire_count_per_lane_per_dir": 2,
+    "lanes_are_lock-step": "All Lanes of a Link run at the same line rate; data is striped Lane-by-Lane starting at Lane 0.",
     "ac_coupling_required": true,
-    "refclk_freq_MHz": 100
+    "refclk_freq_MHz": 100,
+    "refclk_sharing": "Common Clock OR Separate Reference clock with Independent SSC (SRIS).",
+    "gen5_line_rate_GT_s": 32.0,
+    "modulation": "NRZ",
+    "encoding": "128b/130b",
+    "x16_bandwidth_per_direction_GB_s": 63,
+    "backward_compat_rates_GT_s": [
+      2.5,
+      5.0,
+      8.0,
+      16.0,
+      32.0
+    ],
+    "retimers_max_per_link": 2,
+    "lane_margining_at_receiver": "mandatory"
   },
   "interface_categories": [
-    "Source D-PHY transmitter (HS driver + LP driver + lane controller + Clock-Lane DDR generator)",
-    "Sink D-PHY receiver (HS receiver with 100 Ω termination + LP receiver + sync-pattern hunter + clock recovery)",
-    "Source CSI-2 protocol packetizer (header builder + ECC computer + payload serializer + CRC computer)",
-    "Sink CSI-2 protocol depacketizer (header parser + ECC verify + payload de-serializer + CRC verify + VC demux)",
-    "Sideband I2C controller (for sensor register access — gain, exposure, ROI, ...)"
+    "Root Complex (RC) — top of the hierarchy; connects CPU + memory subsystem to PCIe fabric; one or more Root Ports.",
+    "Switch — logical assembly of virtual PCI-to-PCI bridges; aggregates multiple downstream Endpoints under one upstream port.",
+    "PCI Express Endpoint — modern PCIe-only Endpoint; Type 0 header; must not generate I/O Requests or support Lock semantics.",
+    "Legacy Endpoint — PCIe Endpoint with PCI-style behaviors permitted (may support I/O space + Lock semantics for legacy software).",
+    "PCI Express-to-PCI/PCI-X Bridge — translates between PCIe protocol and legacy PCI / PCI-X bus."
   ],
   "interconnect_topologies_supported": [
-    "Point-to-point only — 1 source ↔ 1 sink per physical interface.",
-    "Multi-stream via Virtual Channels (one physical bus carries up to 4 / 16 independent logical streams)."
+    "Point-to-point Link between RC and a single Endpoint.",
+    "Tree via Switch — one upstream port + N downstream ports.",
+    "Cascaded Switches — multi-level hierarchy.",
+    "PCI Express-to-PCI Bridge for legacy peripherals.",
+    "Optional: Advanced Peer-to-Peer Communication (Cross-Link) between two RCs (separate spec)."
   ],
   "default_signal_values_when_omitted": "TX defaults to Electrical Idle outside L0/L0s; in L0 with no TLP/DLLP queued, TX emits scrambled Logical Idle in 128b/130b Data Blocks. PERST# is asserted (LOW) while system power is unstable.",
   "soc_dependent_items": [
@@ -268,14 +268,6 @@
     "DMA engine wiring for Memory Read / Write TLPs at 32 GT/s.",
     "Power-management policy (D0..D3 mapped to L0..L2)."
   ],
-  "pcb_integration_constraints": {
-    "differential_pair_impedance_ohm": 100,
-    "intra_pair_skew_ps_max": 5,
-    "inter_pair_skew_ps_max": 100,
-    "max_trace_length_cm": "≤ 30 (depends on data rate; shorter at 1.5+ Gbps).",
-    "AC_coupling": "NOT used — D-PHY is DC-coupled differential.",
-    "ESD_protection_class": "Class 2 minimum (HBM 2 kV)."
-  },
   "low_power_modes": {
     "L0": "Active — full operation at the trained rate (up to 32 GT/s).",
     "L0s": "Standby per direction; sub-µs exit via FTS.",
@@ -283,14 +275,6 @@
     "L2": "Deep sleep; REFCLK off; Beacon required to wake.",
     "L3": "Main power off."
   },
-  "typical_use_cases": [
-    "Mobile-phone main + front camera (single CSI-2 interface to ISP).",
-    "Multi-camera mobile (front + main + ultra-wide) muxed via VC into a single CSI-2 RX.",
-    "Automotive front / rear / surround camera modules → vision SoC.",
-    "Tablet / laptop webcam.",
-    "Application-processor → display panel (DSI shares the same D-PHY physical layer)."
-  ],
-  "topology_description": "Hierarchy (tree) rooted at a Root Complex (RC), with optional Switches and Bridges; leaf nodes are Endpoints. Each Link is a point-to-point dual-simplex connection. Because 32 GT/s channels are loss-limited, up to two protocol-aware retimers may be inserted per link to extend reach.",
   "device_classes_examples": [
     "GPU / AI accelerator (PCIe 5.0 Endpoint, typically x16, ~63 GB/s per direction)",
     "NVMe Gen5 SSD storage controller (x4 at 32 GT/s)",

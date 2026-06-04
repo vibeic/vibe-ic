@@ -1,6 +1,7 @@
 {
   "fields": {
     "properties": [],
+    "ic_name": "Universal Flash Storage (JEDEC JESD220, UFS 4.0)",
     "must_have_properties": [
       "The interface shall be layered: MIPI M-PHY (physical) + MIPI UniPro (data-link/network/transport) + UFS Transport Protocol carrying UPIUs + SCSI-based UFS Command Set.",
       "The host shall complete the UniPro/M-PHY link startup and power-mode/HS-Gear negotiation before exchanging UPIUs.",
@@ -55,9 +56,8 @@
         "trigger": "CRC/sequence error; UniPro retransmits; persistent failure escalates to error recovery."
       }
     ],
-    "reset_behavior_compliance": "RESET_n (active low) resets the device; on release the M-PHY/UniPro link must be re-started via the UniPro link startup sequence, followed by the NOP handshake and fDeviceInit before normal I/O. Three reset scopes exist: link reset (UniPro), logical-unit reset (Task Management), and full device reset (RESET_n / power-cycle).",
-    "ic_name": "Universal Flash Storage (JEDEC JESD220, UFS 4.0)",
-    "min_link_constraint": "Link startup begins at low speed (PWM); the host must negotiate up to the target HS-Gear. The device PLL requires a valid host REF_CLK at a frequency selected via bRefClkFreq."
+    "min_link_constraint": "Link startup begins at low speed (PWM); the host must negotiate up to the target HS-Gear. The device PLL requires a valid host REF_CLK at a frequency selected via bRefClkFreq.",
+    "reset_behavior_compliance": "RESET_n (active low) resets the device; on release the M-PHY/UniPro link must be re-started via the UniPro link startup sequence, followed by the NOP handshake and fDeviceInit before normal I/O. Three reset scopes exist: link reset (UniPro), logical-unit reset (Task Management), and full device reset (RESET_n / power-cycle)."
   },
   "extraction_status": "EXTRACTION_FOUND_NOTHING",
   "schema_version": "v0.1.62",

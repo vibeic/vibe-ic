@@ -10,12 +10,6 @@
     "secure_boot": false,
     "security_requirements_present": false,
     "notes": "PCI Express 5.0 base transactions are in plaintext on the Link; CRC + ECRC provide anti-corruption only. Cryptographic security (IDE link encryption, CMA/SPDM attestation) is provided by separate ECNs layered above the base PCIe 5.0 data path. The mandatory Lane Margining feature is a signal-integrity diagnostic, not a security feature.",
-    "anti_corruption_mechanisms": [
-      "Header ECC: extended Hamming(8,4); single-bit-correct, double-bit-detect over DI + WC.",
-      "Payload CRC-16: polynomial 0x1021, init 0xFFFF, MSB-first; reports payload corruption (no retry).",
-      "Sync-pattern lock: receiver only consumes payload after matching 8'b00011101.",
-      "Scrambling (CSI-2 v2.x optional): EMI-reduction scrambler over payload bytes — NOT cryptographic."
-    ],
     "anti_corruption_features": [
       "16-bit LCRC at the Data Link Layer protects each TLP across the Link (catches all 1-bit + 2-bit errors and most burst errors).",
       "16-bit CRC at the Data Link Layer protects each DLLP.",

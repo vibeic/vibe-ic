@@ -5,12 +5,12 @@
       {
         "feature": "is",
         "quote": "solely of the UniPro specification document, SDL is no longer supported. The UniPro v1.6 Specification",
-        "line": 816
+        "line": 492
       },
       {
         "feature": "is",
         "quote": "the M-PHY physical layer. As D-PHY is no longer supported on v1.60, backwards compatibility for DPHY operation cannot be maintained.",
-        "line": 895
+        "line": 571
       }
     ],
     "backward_compat_traps": [
@@ -35,33 +35,8 @@
         "trap": "A host relying on HPB L2P caching must first verify device support via the Device Descriptor / flags before enabling fHpbEn."
       }
     ],
-    "spec_version": "UFS 4.0 (JEDEC JESD220) with UFSHCI 4.0 (JESD223), M-PHY 5.0, UniPro v2.0 (August 17, 2022)",
-    "previous_versions": [
-      "D-PHY v0.9 (2007) — initial release; HS up to ~1 Gbps per lane.",
-      "D-PHY v1.0 (2009) — first production release; HS / LP definitions locked.",
-      "D-PHY v1.1 (2011) — added ULPS clarification; 4 Virtual Channels formalized.",
-      "D-PHY v1.2 (2014) — raised HS data-rate ceiling to 2.5 Gbps per lane; 16 Virtual Channels via VC extension.",
-      "CSI-2 v1.0 (2005) — initial CSI-2 release on D-PHY v0.9.",
-      "CSI-2 v1.1 (2009) — 4 VC; aligned with D-PHY v1.0.",
-      "CSI-2 v1.2 (2012) — Added RAW20, scrambling foundation.",
-      "CSI-2 v1.3 (2014) — Added RAW24; aligned with D-PHY v1.2."
-    ],
-    "key_changes": [
-      {
-        "version": "UFS 3.0 (2018)",
-        "summary": "Doubled per-lane rate to 11.6 Gbit/s (HS-Gear 4) via M-PHY 4.1 + UniPro 1.8."
-      },
-      {
-        "version": "UFS 3.1 (2020)",
-        "summary": "Added WriteBooster turbo-write buffer + Host Performance Booster (optional L2P caching in host DRAM)."
-      },
-      {
-        "version": "UFS 4.0 (2022)",
-        "summary": "Doubled per-lane rate to 23.2 Gbit/s (HS-Gear 5) via M-PHY 5.0 + UniPro 2.0; added UFSHCI 4.0 native Multi-Circular Queue (MCQ) and File Based Optimization."
-      }
-    ],
-    "version_naming_history_note": "UFS is standardized by the JEDEC Solid State Technology Association as JESD220 (device) and JESD223 (UFSHCI host controller interface). The physical and transport layers are MIPI Alliance specifications (M-PHY and UniPro). The Universal Flash Storage Association (UFSA) was founded in 2010 to promote the standard. UFS is the JEDEC successor to eMMC; both share JEDEC stewardship, but UFS replaces eMMC's parallel half-duplex CMD/DAT bus with a full-duplex M-PHY/UniPro serial link and a SCSI/UPIU command model.",
     "ic_name": "Universal Flash Storage (JEDEC JESD220, UFS 4.0)",
+    "spec_version": "UFS 4.0 (JEDEC JESD220) with UFSHCI 4.0 (JESD223), M-PHY 5.0, UniPro v2.0 (August 17, 2022)",
     "spec_lineage_ufs": [
       {
         "version": "1.0",
@@ -131,7 +106,22 @@
         "layer": "Command Set",
         "spec": "SCSI-based UFS Command Set (UCS)"
       }
-    ]
+    ],
+    "key_changes": [
+      {
+        "version": "UFS 3.0 (2018)",
+        "summary": "Doubled per-lane rate to 11.6 Gbit/s (HS-Gear 4) via M-PHY 4.1 + UniPro 1.8."
+      },
+      {
+        "version": "UFS 3.1 (2020)",
+        "summary": "Added WriteBooster turbo-write buffer + Host Performance Booster (optional L2P caching in host DRAM)."
+      },
+      {
+        "version": "UFS 4.0 (2022)",
+        "summary": "Doubled per-lane rate to 23.2 Gbit/s (HS-Gear 5) via M-PHY 5.0 + UniPro 2.0; added UFSHCI 4.0 native Multi-Circular Queue (MCQ) and File Based Optimization."
+      }
+    ],
+    "version_naming_history_note": "UFS is standardized by the JEDEC Solid State Technology Association as JESD220 (device) and JESD223 (UFSHCI host controller interface). The physical and transport layers are MIPI Alliance specifications (M-PHY and UniPro). The Universal Flash Storage Association (UFSA) was founded in 2010 to promote the standard. UFS is the JEDEC successor to eMMC; both share JEDEC stewardship, but UFS replaces eMMC's parallel half-duplex CMD/DAT bus with a full-duplex M-PHY/UniPro serial link and a SCSI/UPIU command model."
   },
   "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",

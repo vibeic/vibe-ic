@@ -101,71 +101,6 @@
       "common_rule": "Host supplies REF_CLK and controls RESET_n. After link startup and gear negotiation, the host initiates all transactions by submitting Command/Query/Task-Management/NOP-Out UPIUs; the device responds with Response/Data-In/RTT/Query-Response/Task-Management-Response/NOP-In/Reject UPIUs. Write data is gated by RTT.",
       "data_dependency": "Read payload (Data In) and write grants (RTT) depend on a prior Command UPIU. UniPro delivers UPIUs reliably and in order; M-PHY carries UniPro frames as 8b/10b symbols in HS bursts."
     },
-    "logical_signaling_levels": [
-      {
-        "name": "LP-00",
-        "Dp": "0",
-        "Dn": "0",
-        "meaning": "Bridge state before HS or Escape entry"
-      },
-      {
-        "name": "LP-01",
-        "Dp": "0",
-        "Dn": "1",
-        "meaning": "HS Request"
-      },
-      {
-        "name": "LP-10",
-        "Dp": "1",
-        "Dn": "0",
-        "meaning": "Escape Request / ULPS Mark"
-      },
-      {
-        "name": "LP-11",
-        "Dp": "1",
-        "Dn": "1",
-        "meaning": "Stop state (idle)"
-      },
-      {
-        "name": "HS-0",
-        "Dp": "diff-LOW",
-        "Dn": "diff-HIGH",
-        "meaning": "HS differential 0"
-      },
-      {
-        "name": "HS-1",
-        "Dp": "diff-HIGH",
-        "Dn": "diff-LOW",
-        "meaning": "HS differential 1"
-      }
-    ],
-    "packet_types_summary": [
-      {
-        "class": "Long Packet",
-        "members": [
-          "RAW8/10/12/14",
-          "YUV420/422-8/10",
-          "RGB444/555/565/666/888",
-          "generic 0x30..0x37"
-        ],
-        "count_approx": 22
-      },
-      {
-        "class": "Short Packet",
-        "members": [
-          "FS (DT=0x00)",
-          "FE (DT=0x01)",
-          "LS (DT=0x02)",
-          "LE (DT=0x03)",
-          "generic 0x08..0x0F"
-        ],
-        "count_approx": 12
-      }
-    ],
-    "ordering_rules": {
-      "transport_ordering": "UniPro v2.0 provides reliable in-order delivery within a CPort connection; UPIUs for a given task are delivered in order.",
-      "command_ordering": "SCSI Tagged Command Queuing allows the device to complete commands out of order across task tags; under MCQ, completions are posted per completion queue."
-    },
     "ic_name": "Universal Flash Storage (JEDEC JESD220, UFS 4.0)",
     "power_pins": [
       {
@@ -184,7 +119,11 @@
         "name": "VSS",
         "purpose": "Ground."
       }
-    ]
+    ],
+    "ordering_rules": {
+      "transport_ordering": "UniPro v2.0 provides reliable in-order delivery within a CPort connection; UPIUs for a given task are delivered in order.",
+      "command_ordering": "SCSI Tagged Command Queuing allows the device to complete commands out of order across task tags; under MCQ, completions are posted per completion queue."
+    }
   },
   "extraction_status": "EXTRACTION_FOUND_NOTHING",
   "schema_version": "v0.1.62",

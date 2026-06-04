@@ -10,17 +10,6 @@
     "jtag_tap": null,
     "dft_present": "partial",
     "notes": "UFS does not define a formal DFT/scan architecture at the link interface. Link-level observability is via M-PHY/UniPro loopback + link-startup, UniPro DME error counters, the Device Health Descriptor, Query Attributes/Flags, and the UFSHCI error/interrupt registers. Internal flash test is vendor-specific and out of scope of JESD220.",
-    "internal_diagnostics": [
-      "In-band error reporting via ECC (1-bit correct / 2-bit detect) and CRC-16 (payload mismatch).",
-      "Sync-pattern miss-lock detector reports loss of receiver alignment.",
-      "Lane-skew calibration during HS Entry trains per-lane delay-lines.",
-      "FS / FE / LS / LE short-packet counters validate frame completeness."
-    ],
-    "scan_topology": {
-      "standard_scan_chain_present": false,
-      "JTAG_present_at_protocol_layer": false,
-      "vendor_BIST_extensions": "Some commercial CSI-2 RX IP cores (e.g. Synopsys, Cadence) add MIPI CSI-2 BIST and PHY loopback test modes, but these are NOT part of the MIPI D-PHY / CSI-2 specs."
-    },
     "ic_name": "Universal Flash Storage (JEDEC JESD220, UFS 4.0)",
     "exposed_dft_features": [
       {

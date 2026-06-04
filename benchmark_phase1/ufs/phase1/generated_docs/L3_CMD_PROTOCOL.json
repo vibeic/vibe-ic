@@ -17,206 +17,9 @@
   "no_payload_semantics_in_input": true,
   "opcode_synthesis_skipped_reason": null,
   "extraction_evidence": {
-    "input/docs/ufs_spec.pdf": [],
     "input/docs/ufs_spec.txt": []
   },
   "protocol_type": "Host-mastered, UPIU-based transaction protocol. The host submits Command UPIUs carrying SCSI/UFS CDBs over the UFS Transport Protocol (UTP); the device returns Response, Data In, RTT, Query Response, Task-Management Response, NOP In and Reject UPIUs. Transport is MIPI UniPro over MIPI M-PHY.",
-  "channels": [
-    {
-      "name": "REF_CLK",
-      "direction": "host -> device",
-      "description": "Reference clock supplied by the host to the device."
-    },
-    {
-      "name": "RESET_n",
-      "direction": "host -> device",
-      "description": "Active-low device reset."
-    },
-    {
-      "name": "M-PHY TX lanes (DOUT)",
-      "direction": "device -> host",
-      "description": "Device transmit differential pairs (up to 2 lanes), HS-Gear 1..5."
-    },
-    {
-      "name": "M-PHY RX lanes (DIN)",
-      "direction": "host -> device",
-      "description": "Device receive differential pairs (up to 2 lanes), HS-Gear 1..5."
-    }
-  ],
-  "packet_classes": [
-    {
-      "class": "Long Packet",
-      "purpose": "Carries image-data payload (RAW/YUV/RGB/generic). Has header + payload + CRC-16 footer.",
-      "header_layout": "DI (1 byte) + WC[15:0] Word Count (2 bytes) + ECC (1 byte) — total 32 bits.",
-      "payload_layout": "WC bytes of image data, byte-interleaved across N Data Lanes when N > 1.",
-      "footer_layout": "16-bit CRC-16 over payload bytes only (polynomial 0x1021, init 0xFFFF, MSB-first)."
-    },
-    {
-      "class": "Short Packet",
-      "purpose": "Frame / line synchronization markers and generic short signaling. No payload, no footer.",
-      "header_layout": "DI (1 byte) + Data[15:0] (2 bytes; e.g. frame number for FS) + ECC (1 byte) — total 32 bits.",
-      "members": [
-        "FS (Frame Start, DT=0x00)",
-        "FE (Frame End, DT=0x01)",
-        "LS (Line Start, DT=0x02)",
-        "LE (Line End, DT=0x03)",
-        "Generic Short Packet 0x08..0x0F (vendor-defined)"
-      ]
-    }
-  ],
-  "data_identifier_byte": {
-    "width_bits": 8,
-    "structure": "DI = { VC[1:0] : DT[5:0] } in v1.1 (4 VCs); DI = { VC[3:0] (split across reserved bits) : DT[5:0] } in v1.2+ (16 VCs via VC extension).",
-    "VC_field_bits": [
-      7,
-      6
-    ],
-    "DT_field_bits": [
-      5,
-      0
-    ],
-    "VC_count_v1_1": 4,
-    "VC_count_v1_2_plus": 16
-  },
-  "data_types_enum": {
-    "synchronization_short_packets": [
-      {
-        "DT_hex": "0x00",
-        "name": "Frame Start (FS)",
-        "category": "Short Sync"
-      },
-      {
-        "DT_hex": "0x01",
-        "name": "Frame End (FE)",
-        "category": "Short Sync"
-      },
-      {
-        "DT_hex": "0x02",
-        "name": "Line Start (LS)",
-        "category": "Short Sync (optional)"
-      },
-      {
-        "DT_hex": "0x03",
-        "name": "Line End (LE)",
-        "category": "Short Sync (optional)"
-      }
-    ],
-    "generic_short_packets": "DT 0x08..0x0F reserved for generic short packets (vendor-defined Data[15:0]).",
-    "yuv_formats": [
-      {
-        "DT_hex": "0x18",
-        "name": "YUV420 8-bit"
-      },
-      {
-        "DT_hex": "0x19",
-        "name": "YUV420 10-bit"
-      },
-      {
-        "DT_hex": "0x1A",
-        "name": "YUV420 8-bit Legacy"
-      },
-      {
-        "DT_hex": "0x1C",
-        "name": "YUV420 8-bit CSPS"
-      },
-      {
-        "DT_hex": "0x1D",
-        "name": "YUV420 10-bit CSPS"
-      },
-      {
-        "DT_hex": "0x1E",
-        "name": "YUV422 8-bit"
-      },
-      {
-        "DT_hex": "0x1F",
-        "name": "YUV422 10-bit"
-      }
-    ],
-    "rgb_formats": [
-      {
-        "DT_hex": "0x20",
-        "name": "RGB444"
-      },
-      {
-        "DT_hex": "0x21",
-        "name": "RGB555"
-      },
-      {
-        "DT_hex": "0x22",
-        "name": "RGB565"
-      },
-      {
-        "DT_hex": "0x23",
-        "name": "RGB666"
-      },
-      {
-        "DT_hex": "0x24",
-        "name": "RGB888"
-      }
-    ],
-    "raw_formats": [
-      {
-        "DT_hex": "0x28",
-        "name": "RAW6"
-      },
-      {
-        "DT_hex": "0x29",
-        "name": "RAW7"
-      },
-      {
-        "DT_hex": "0x2A",
-        "name": "RAW8"
-      },
-      {
-        "DT_hex": "0x2B",
-        "name": "RAW10"
-      },
-      {
-        "DT_hex": "0x2C",
-        "name": "RAW12"
-      },
-      {
-        "DT_hex": "0x2D",
-        "name": "RAW14"
-      }
-    ],
-    "generic_long_packets": "DT 0x30..0x37 reserved for user-defined 8-bit data (long packets)."
-  },
-  "header_ecc_field": {
-    "width_bits": 8,
-    "structure": "Extended Hamming(8,4): 6 parity bits over 24 data bits (DI + WC[7:0] + WC[15:8]) + 2 extra bits for double-bit detect.",
-    "correction_capability": "1-bit error — corrected automatically.",
-    "detection_capability": "2-bit error — detected; packet discarded."
-  },
-  "payload_crc_field": {
-    "width_bits": 16,
-    "polynomial_hex": "0x1021",
-    "polynomial_equation": "x^16 + x^12 + x^5 + 1",
-    "initial_value_hex": "0xFFFF",
-    "shift_direction": "MSB-first",
-    "covers": "Long Packet payload bytes only (does NOT cover header)."
-  },
-  "transaction_phases": [
-    "HS Entry — source drives LP-11 → LP-01 → LP-00 → HS-0 → Sync pattern 8'b00011101.",
-    "Packet Stream — one or more Long / Short Packets back-to-back on HS payload (header → payload → footer per Long Packet).",
-    "HS Exit — HS-Trail → LP-11 (Stop state).",
-    "Optional Escape — LP-11 → LP-10 → LP-00 → escape-pattern for ULPS / Trigger / Reset."
-  ],
-  "addressing": {
-    "device_address": "None — CSI-2 is strictly point-to-point source→sink; one transmitter + one receiver per physical interface.",
-    "virtual_channel_width_bits_v1_1": 2,
-    "virtual_channel_width_bits_v1_2_plus": 4,
-    "default_VC_at_reset": 0,
-    "VC_role": "Time-multiplex multiple logical streams (e.g. left + right sensor) onto the same physical D-PHY."
-  },
-  "valid_ready_handshake_rules": [
-    "There is no wire-level VALID/READY handshake; reliability is provided by UniPro data-link retransmission and in-order delivery.",
-    "Write data flow is gated by Ready-To-Transfer (RTT) UPIUs from the device; the host sends Data Out UPIUs only up to the granted amount.",
-    "Read data flows from device to host via Data In UPIUs after the Command UPIU.",
-    "Completion is reported by a Response UPIU; under MCQ the controller posts a completion to the Completion Queue and rings the completion doorbell."
-  ],
-  "burst_based": true,
-  "byte_oriented": false,
   "upiu_header_format": {
     "description": "Every UPIU begins with a Basic Header that identifies the transaction. The header carries Transaction Type, Flags, LUN, Task Tag, Command Set Type, Query/Task function, Total EHS (Extra Header Segment) length and Data Segment length fields.",
     "fields": [
@@ -382,6 +185,36 @@
       "description": "Multi-Circular Queue: multiple hardware submission and completion queue pairs, each with its own doorbell and head/tail pointers, analogous to NVMe SQ/CQ pairs, improving parallelism and multi-core scaling."
     }
   ],
+  "channels": [
+    {
+      "name": "REF_CLK",
+      "direction": "host -> device",
+      "description": "Reference clock supplied by the host to the device."
+    },
+    {
+      "name": "RESET_n",
+      "direction": "host -> device",
+      "description": "Active-low device reset."
+    },
+    {
+      "name": "M-PHY TX lanes (DOUT)",
+      "direction": "device -> host",
+      "description": "Device transmit differential pairs (up to 2 lanes), HS-Gear 1..5."
+    },
+    {
+      "name": "M-PHY RX lanes (DIN)",
+      "direction": "host -> device",
+      "description": "Device receive differential pairs (up to 2 lanes), HS-Gear 1..5."
+    }
+  ],
+  "valid_ready_handshake_rules": [
+    "There is no wire-level VALID/READY handshake; reliability is provided by UniPro data-link retransmission and in-order delivery.",
+    "Write data flow is gated by Ready-To-Transfer (RTT) UPIUs from the device; the host sends Data Out UPIUs only up to the granted amount.",
+    "Read data flows from device to host via Data In UPIUs after the Command UPIU.",
+    "Completion is reported by a Response UPIU; under MCQ the controller posts a completion to the Completion Queue and rings the completion doorbell."
+  ],
+  "burst_based": true,
+  "byte_oriented": false,
   "frame_format": {
     "upiu_layout": "Basic Header (Transaction Type + Flags + LUN + Task Tag + Command Set Type + lengths) + optional Extra Header Segment(s) + optional Data Segment.",
     "command_upiu": "Header + 16-byte (or extended) SCSI/UFS CDB carried in the Command UPIU.",

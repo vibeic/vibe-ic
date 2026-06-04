@@ -29,9 +29,18 @@ session_context: >
   Found by the v0.1.89 C/D adversarial code-review workflow (finding M1, verified).
   usb4 instance fixed; JTAG/MIPI-on-pcie_gen5 instance documented here.
 
-status: partially-fixed
-resolved_at: "2026-06-03"
-resolved_in: "usb4 v0.1.89; JTAG PRIMARY-SUBJECT guard v0.1.90; present in 0.2.29"
+status: resolved
+resolved_at: "2026-06-04"
+resolved_in: "usb4 v0.1.89; JTAG PRIMARY-SUBJECT guard v0.1.90; MIPI residual closed via is_mipi FOREIGN-PRIMARY defer (companion ORGANIC-20260531-incidental-csi2 action 1) + stale pcie_gen5/ufs L-docs regenerated clean"
+closure_note: >-
+  All THREE documented instances now fixed. The MIPI-on-pcie_gen5/ufs instance
+  (below residual) is closed: mipi_protocol_synth.is_mipi() adds a content-only
+  FOREIGN-PRIMARY defer for PCIe/UFS/DisplayPort, verified to fire on EXACTLY
+  {mipi, mipi_csi2, mipi_dsi} and defer on pcie_gen5/ufs/displayport/edp. The clean
+  structural separator the residual said did not exist is PRIMARY-SUBJECT (foreign-
+  primary) deferral, NOT packet structure — so the real mipi benchmark keeps firing.
+  Stale committed pcie_gen5/ufs L-docs regenerated through the fixed deterministic
+  runner: CSI-2 hits 25→0 / 21→0, gated parity preserved at 0, ufs SHAPE_MISMATCH 24→22.
 resolution: >-
   Two of the three documented instances are fixed via suggested_fix option (a)
   PRIMARY-SUBJECT weighting. (1) usb4-on-pcie5 fixed v0.1.89 (32 GT/s mutex +

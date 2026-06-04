@@ -10,12 +10,6 @@
     "secure_boot": false,
     "security_requirements_present": true,
     "notes": "The security-critical surfaces are (1) the write-once, never-readable 256-bit RPMB key underpinning HMAC-SHA256 replay protection, and (2) the irreversible fPermanentWPEn flag. All bulk-data confidentiality is delegated to host/inline encryption above the protocol.",
-    "anti_corruption_mechanisms": [
-      "Header ECC: extended Hamming(8,4); single-bit-correct, double-bit-detect over DI + WC.",
-      "Payload CRC-16: polynomial 0x1021, init 0xFFFF, MSB-first; reports payload corruption (no retry).",
-      "Sync-pattern lock: receiver only consumes payload after matching 8'b00011101.",
-      "Scrambling (CSI-2 v2.x optional): EMI-reduction scrambler over payload bytes — NOT cryptographic."
-    ],
     "ic_name": "Universal Flash Storage (JEDEC JESD220, UFS 4.0)",
     "security_summary": "UFS provides data-integrity at the transport layer (UniPro CRC + retransmission) and a dedicated authenticated, replay-protected secure-storage region: RPMB (Replay Protected Memory Block). RPMB is accessed via the RPMB Well-known LUN, authenticated with a write-once 256-bit key and a monotonic write counter, with an HMAC-SHA256 MAC computed over each RPMB frame. UFS also provides write-protection (permanent and power-on) and a Security Send/Receive transport (SECURITY PROTOCOL IN/OUT) for vendor/TCG security features. Bulk user data confidentiality is not provided at the protocol layer and is expected to be handled by host/inline encryption.",
     "security_features": [

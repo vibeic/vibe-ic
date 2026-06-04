@@ -19,7 +19,6 @@
     "l8_evidence_population_v1_6_395": 0
   },
   "extraction_evidence": {
-    "input/docs/ufs_spec.pdf": [],
     "input/docs/ufs_spec.txt": []
   },
   "width_parameters": {
@@ -34,42 +33,6 @@
     "RPMB_MAC_ALGORITHM": "HMAC-SHA256",
     "LINE_CODE_HS": "8b/10b",
     "LINE_CODE_LS": "PWM"
-  },
-  "data_rate_constants": {
-    "HS_min_Mbps_per_lane": 80,
-    "HS_max_Mbps_per_lane_v1_0": 1000,
-    "HS_max_Mbps_per_lane_v1_1": 1500,
-    "HS_max_Mbps_per_lane_v1_2": 2500,
-    "LP_max_Mbps_per_lane": 10
-  },
-  "key_constants_for_RTL_authoring": {
-    "host_initiates_all_transactions": true,
-    "is_layered_protocol": true,
-    "physical_layer": "MIPI M-PHY 5.0",
-    "transport_layer": "MIPI UniPro v2.0",
-    "command_set": "SCSI-based (UFS Command Set)",
-    "write_flow_control": "Ready-To-Transfer (RTT) UPIU, bounded by bMaxNumOfRTT",
-    "command_queueing_legacy": "single Transfer Request List (UTRD) + doorbell, one bit per task tag",
-    "command_queueing_native": "MCQ (Multi-Circular Queue) submission/completion pairs",
-    "rpmb_replay_protection": "monotonic write counter + HMAC-SHA256 over the RPMB frame",
-    "low_power_idle_state": "HIBERN8",
-    "full_duplex": true
-  },
-  "named_timing_parameters_D_PHY": {
-    "T_LPX_ns_typ": "50 (min) — LP transmit length",
-    "T_HS_PREPARE_ns": "40 + 4 × UI .. 85 + 6 × UI — HS driver prepare time",
-    "T_HS_ZERO_ns_min": "105 + 6 × UI — HS-0 state minimum before Sync",
-    "T_HS_TRAIL_ns_min": "max(8 × UI, 60 + 4 × UI) — trailing-bit hold",
-    "T_HS_EXIT_ns_min": "100 — minimum LP-11 after HS Exit",
-    "T_EOT_ns_max": "105 + 12 × UI — total end-of-transmission",
-    "T_CLK_PRE_ns_min": "8 × UI — Clock Lane HS active before Data Lane HS",
-    "T_CLK_POST_ns_min": "60 + 52 × UI — Clock Lane HS active after last Data-Lane bit",
-    "UI_definition": "Unit Interval = 1 / (2 × Clock-Lane-Hz) = 1 / data-rate-per-lane"
-  },
-  "default_signal_values_when_idle": {
-    "REF_CLK": "Host-driven at the configured reference frequency.",
-    "RESET_n": "HIGH (deasserted) during normal operation; LOW resets the device.",
-    "M-PHY lanes": "Parked in HIBERN8 / SLEEP between bursts."
   },
   "speed_generation_table": [
     {
@@ -120,5 +83,23 @@
     "UFS_DEVICE_WLUN": "device-level commands / power management",
     "BOOT_WLUN": "boot partition (bBootLunEn)",
     "RPMB_WLUN": "Replay Protected Memory Block"
+  },
+  "key_constants_for_RTL_authoring": {
+    "host_initiates_all_transactions": true,
+    "is_layered_protocol": true,
+    "physical_layer": "MIPI M-PHY 5.0",
+    "transport_layer": "MIPI UniPro v2.0",
+    "command_set": "SCSI-based (UFS Command Set)",
+    "write_flow_control": "Ready-To-Transfer (RTT) UPIU, bounded by bMaxNumOfRTT",
+    "command_queueing_legacy": "single Transfer Request List (UTRD) + doorbell, one bit per task tag",
+    "command_queueing_native": "MCQ (Multi-Circular Queue) submission/completion pairs",
+    "rpmb_replay_protection": "monotonic write counter + HMAC-SHA256 over the RPMB frame",
+    "low_power_idle_state": "HIBERN8",
+    "full_duplex": true
+  },
+  "default_signal_values_when_idle": {
+    "REF_CLK": "Host-driven at the configured reference frequency.",
+    "RESET_n": "HIGH (deasserted) during normal operation; LOW resets the device.",
+    "M-PHY lanes": "Parked in HIBERN8 / SLEEP between bursts."
   }
 }
