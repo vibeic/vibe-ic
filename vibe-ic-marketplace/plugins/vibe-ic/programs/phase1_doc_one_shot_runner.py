@@ -1735,6 +1735,22 @@ _DIR_ABBR_TO_FULL = {
     "inout":  "inout",
 }
 
+# v0.2.62 — ORGANIC-20260606-l9-ports-empty-submodule-pollution (#431).
+# The 4COL grid above hard-codes the `signal | WIDTH | DIR | desc` column
+# ORDER; the equally common `signal | DIR | WIDTH | desc` ordering
+# (`| Port | Dir | Width | Description |`) matched ZERO rows, so a fully
+# defined external-interface table fed L1.pin_table (and the L9 cascade)
+# exactly the rows the suffix-heuristic N-col fallback happened to like —
+# the filing's project surfaced with 1/5 ports. Same permissive width
+# cell, same dir alternation; only the column order differs.
+_RE_L1_L9_RST_IFACE_4COL_DIR2 = re.compile(
+    r"^[ \t]*\|\s*[`]{0,2}(?P<signal>[a-zA-Z_][\w]{0,40}(?:\[[^\]\n]{1,40}\])?)[`]{0,2}\s*\|"
+    r"\s*(?P<dir>input|output|inout|in|out|io)\s*\|"
+    r"\s*[`]{0,2}" + _V1_6_423_WIDTH_CELL_PERMISSIVE + r"[`]{0,2}\s*\|"
+    r"\s*(?P<desc>[^|\n]{0,200}?)\s*\|",
+    re.MULTILINE,
+)
+
 # v1.6.250 — for #108 field-agent round-3 feedback. Real RV
 # `integration.rst` also ships **2-column** grid rows that only
 # carry `signal | description` (no width / direction cells). The
@@ -2818,11 +2834,31 @@ _RE_L9_SUBMOD_DOC_CTX = re.compile(
     r'(?i)sub[\s_-]?module|submodule|對外契約|module\s+integration|階層')
 
 
+# v0.2.62 — ORGANIC-20260606-l9-ports-empty-submodule-pollution (#431).
+# A verification-plan / test-plan layer doc routinely SAYS "submodule-level
+# verification" in its prose, which armed _RE_L9_SUBMOD_DOC_CTX and turned
+# every numbered stage heading ("## 1.1 Smoke Test Stage", …) into a phantom
+# L9 submodule. Two deny layers: (1) doc-TYPE — a doc whose opening
+# identifies itself as a verification/test plan is never a submodule
+# inventory source; (2) entry — a heading whose name reads as a
+# verification-activity title (…Stage / …Test / …Phase / …Scenario / …Plan)
+# is a section title, not a module. chip-AGNOSTIC: doc-genre vocabulary.
+_RE_L9_SUBMOD_DOC_DENY = re.compile(
+    r'(?i)verification\s+plan|test\s+plan|verification\s+strategy'
+    r'|驗證計畫|測試計畫|驗證策略')
+_RE_L9_SUBMOD_ENTRY_DENY = re.compile(
+    r'(?i)\b(?:stage|test|tests|phase|step|case|cases|scenario|plan'
+    r'|coverage|regression|checklist)\s*$')
+
+
 def _l9_heading_submodule_extract(text: str) -> List[str]:
     """Parse numbered sub-headings (`### N.N[.N] <name>`) of a submodule-
     integration-context doc into submodule names. Skips section titles that
     are themselves about the integration spec (not a concrete submodule)."""
     if not text or not _RE_L9_SUBMOD_DOC_CTX.search(text):
+        return []
+    # (#431 deny layer 1) verification/test-plan docs are not module sources
+    if _RE_L9_SUBMOD_DOC_DENY.search(text[:1200]):
         return []
     out: List[str] = []
     # Section-title words (not concrete submodule names) to drop.
@@ -2835,6 +2871,9 @@ def _l9_heading_submodule_extract(text: str) -> List[str]:
             continue
         low = nm.lower()
         if any(w in low for w in _skip):
+            continue
+        # (#431 deny layer 2) verification-activity titles are not modules
+        if _RE_L9_SUBMOD_ENTRY_DENY.search(nm):
             continue
         if nm not in out:
             out.append(nm)
@@ -15928,6 +15967,35 @@ def gen_l1_datasheet(project: Path,
                 width=_width_arg,
                 description=(m.group("desc") or "").strip() or None,
                 extraction_strategy=_strategy_v1_6_423,
+            )
+            if len(ev) < 24:
+                ev.append({"literal": m.group(0).strip()[:120],
+                           "label": "pin (RST grid Interface table)"})
+        # v0.2.62 (#431) — the `signal | DIR | WIDTH | desc` column-order
+        # sibling of the 4COL parser above (see _RE_L1_L9_RST_IFACE_4COL_DIR2
+        # rationale). Same header-reject + dir normalisation + permissive
+        # width routing; `_add_pin` score-merge dedups across both orders.
+        for m in _RE_L1_L9_RST_IFACE_4COL_DIR2.finditer(text or ""):
+            signal = m.group("signal").strip()
+            if signal.lower() in {"signal", "name", "port",
+                                  "direction", "type", "dir",
+                                  "description", "width"}:
+                continue
+            raw_dir = m.group("dir").lower()
+            mode_full = _DIR_ABBR_TO_FULL.get(raw_dir, raw_dir)
+            width_raw_str = (m.group("width") or "").strip()
+            try:
+                _w_int, _w_sym = _v1_6_420_parse_width_cell(width_raw_str)
+            except NameError:
+                _w_int = int(width_raw_str) if width_raw_str.isdigit() else None
+                _w_sym = width_raw_str
+            _add_pin(
+                name=signal,
+                mode=mode_full,
+                fname=fname,
+                width=str(_w_int) if _w_int is not None else None,
+                description=(m.group("desc") or "").strip() or None,
+                extraction_strategy="rst_grid_interface_table_dir2col_v0262",
             )
             if len(ev) < 24:
                 ev.append({"literal": m.group(0).strip()[:120],
