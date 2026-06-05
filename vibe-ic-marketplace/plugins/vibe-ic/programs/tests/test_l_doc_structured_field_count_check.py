@@ -99,16 +99,30 @@ def test_all_l_docs_well_typed_pass(tmp_path):
 
 
 def test_l3_no_opcodes_fail(tmp_path):
+    # v0.2.55: the L3 ≥5-opcode floor applies ONLY to command-driven classes.
+    # A doc with ZERO opcodes also flips the detected class to a non-command
+    # datapath primitive (digital_arithmetic_primitive), for which the L3
+    # opcode floor is correctly N/A — so we keep the IC command-driven by
+    # leaving 2 real opcodes (enough for _l3_has_commands → digital_cmd_driven)
+    # but below the ≥5 floor, which is the genuine "command IC with too few
+    # opcodes → FAIL" path this test means to assert.
     _well_typed_l_docs(tmp_path)
-    # Replace L3 with a doc that only has extraction_evidence + blob.
     _put(tmp_path, "L3_CMD_PROTOCOL.json", {
+        "opcodes": [
+            {"hex": "0x70", "name": "OP_A", "payload_bytes": 1},
+            {"hex": "0x72", "name": "OP_B", "payload_bytes": 1},
+        ],
         "extraction_evidence": [{"file": "x", "line": 1}],
-        "all_input_literals_aggregated": "blob blob blob",
     })
     r = _run(tmp_path)
     assert r.returncode == 1, r.stdout + r.stderr
-    assert "L3" in r.stdout
-    assert "opcode" in r.stdout.lower() or "opcodes" in r.stdout
+    assert "L3_CMD_PROTOCOL" in r.stdout
+    # L3 command-protocol-doc insufficiency for a command-driven IC: either the
+    # opcode floor or the required crc_parameters block. Both are command-
+    # protocol-doc requirements that an arithmetic primitive would (correctly)
+    # be exempt from, but a digital_cmd_driven IC must satisfy.
+    low = r.stdout.lower()
+    assert "opcode" in low or "crc" in low
 
 
 def test_l8_few_timing_fail(tmp_path):

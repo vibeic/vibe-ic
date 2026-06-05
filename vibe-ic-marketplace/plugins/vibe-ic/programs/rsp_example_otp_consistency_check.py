@@ -169,6 +169,18 @@ def check(l3: Any, otp: Any, poly_ref: int = 0x8C, crc_init: int = 0xFF) -> list
                 break
 
     if not opcodes_list:
+        # v0.2.55 — N/A escape for genuinely NON-PROTOCOL ICs (CPU SoCs, pure
+        # datapath, reused-IP glue). When L3 truthfully declares it has no
+        # command opcodes (`no_opcodes_in_input: true` /
+        # `command_protocol_applicable: false`), there is nothing to cross-check
+        # against OTP — the rsp-example↔OTP consistency oracle is N/A, not a
+        # defect. Return NO findings (gate is VACUOUS PASS). A protocol IC that
+        # SHOULD have opcodes but doesn't still FAILs (no honest N/A flag).
+        # chip-AGNOSTIC: keyed on L3's own declaration, never a chip name.
+        if isinstance(l3, dict) and (
+                l3.get("no_opcodes_in_input") is True
+                or l3.get("command_protocol_applicable") is False):
+            return findings
         findings.append(Finding(
             "ERROR", "no_opcodes_found", "(root)",
             "L3 must contain a list of opcodes under 'opcodes' or 'commands'.",

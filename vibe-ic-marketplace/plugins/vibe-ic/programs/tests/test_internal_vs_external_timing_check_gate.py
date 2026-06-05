@@ -15,7 +15,14 @@ def test_help():
     assert r.returncode == 0
 
 def test_with_waveform(tmp_path):
+    # v0.2.55: an L8 with NO protocol/symbol timing content (empty waveforms,
+    # no rx_*/tx_* group keys) is N/A for the RX/TX-split rule — a non-protocol
+    # IC (e.g. a pure-digital arithmetic primitive) has nothing to split. The
+    # gate VACUOUS_PASSes (rc=0) instead of FAILing. A genuinely half-duplex L8
+    # that carries only the host-side half is still caught (see the rx_*/tx_*
+    # fixtures in test_internal_vs_external_timing_check.py).
     wf = tmp_path / "L8_TIMING_WAVEFORM.json"
     wf.write_text(json.dumps({"waveforms": []}))
     r = _run([str(wf)])
-    assert r.returncode == 1
+    assert r.returncode == 0
+    assert "VACUOUS_PASS" in r.stdout

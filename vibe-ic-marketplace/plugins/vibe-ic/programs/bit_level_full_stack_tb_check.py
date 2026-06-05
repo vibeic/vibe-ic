@@ -391,6 +391,39 @@ def main():
     if not proj.exists():
         print(f"ERROR: project_dir {proj} not found", file=sys.stderr)
         return 2
+
+    # VACUOUS_PASS (rc=2) when the IC has NO command protocol / opcodes. This
+    # gate enforces an OPCODE-DRIVEN bit-level full-stack TB (>= min_opcodes
+    # distinct CMD opcodes, byte[6]=0xF2-class response checks) — meaningful
+    # ONLY for command/protocol-driven ICs. A pure-digital arithmetic /
+    # data-transform primitive (e.g. an spm multiplier) has no opcodes, so
+    # the runner's full_stack_tb_gen + reference_tb both SKIP it; this gate
+    # must mirror that N/A decision instead of FAILing on a missing
+    # opcode-TB dir. Signal: L3_CMD_PROTOCOL.no_opcodes_in_input == True (or
+    # an empty opcode list). chip-AGNOSTIC: keyed on the absence of a command
+    # protocol, not on any chip.
+    try:
+        _l3 = _pl.generated_docs_dir(proj) / "L3_CMD_PROTOCOL.json"
+        if _l3.is_file():
+            _d = json.loads(_l3.read_text())
+            _no_op = bool(_d.get("no_opcodes_in_input")) or \
+                not (_d.get("opcodes") or [])
+            if _no_op:
+                _msg = ("VACUOUS_PASS: IC has no command protocol / opcodes "
+                        "(L3_CMD_PROTOCOL.no_opcodes_in_input) — opcode-driven "
+                        "bit-level full-stack TB is N/A for this non-protocol "
+                        "IC (mirrors runner full_stack_tb_gen/reference_tb "
+                        "SKIP).")
+                _res = {"pass": True, "vacuous_pass": True, "rule": "N/A",
+                        "rationale": _msg}
+                if args.json:
+                    Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+                    Path(args.json).write_text(json.dumps(_res, indent=2))
+                print(json.dumps(_res, indent=2))
+                return 2
+    except Exception:
+        pass  # fall through to the strict check on any parse trouble
+
     rtl = Path(args.rtl_dir) if args.rtl_dir else _pl.rtl_dir(proj)
     sim = Path(args.sim_dir) if args.sim_dir else _pl.sim_full_stack_dir(proj)
 

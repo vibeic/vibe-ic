@@ -312,22 +312,44 @@ def _resolve_waveform_path(arg: str) -> Path | None:
 
 
 def _read_l2_half_duplex(arg: str) -> bool | None:
-    """When `arg` is a project_dir, return its L2 half_duplex flag.
-    Returns None when arg is a file path (caller fall-back) or L2 missing.
+    """Return the project's L2 ``protocol_overview.half_duplex`` flag.
+
+    Accepts EITHER a project_dir OR the L8 file path the flow manifest
+    passes. When given a file under ``phase1/generated_docs/`` (the
+    canonical flow-manifest invocation
+    ``... L8_TIMING_WAVEFORM.json --layer ...``) we walk up to the
+    project root and read the sibling ``L2_FRS.json``. Without this, the
+    half-duplex VACUOUS_PASS escape never fires in the flow-manifest
+    path, so every NON-half-duplex IC (memory-mapped register bus,
+    pure-digital datapath, parallel bus) false-FAILs the RX/TX-split
+    rule that only applies to single-wire half-duplex protocols.
+    Returns None only when L2 genuinely cannot be located/parsed.
+    Chip-AGNOSTIC.
     """
     p = Path(arg)
-    if not p.is_dir():
-        return None
-    l2 = p / "phase1" / "generated_docs" / "L2_FRS.json"
-    if not l2.is_file():
-        return None
-    try:
-        d = json.loads(l2.read_text())
-        po = d.get("protocol_overview") or {}
-        if "half_duplex" in po:
-            return bool(po["half_duplex"])
-    except Exception:
-        pass
+    candidates: list[Path] = []
+    if p.is_dir():
+        candidates.append(p / "phase1" / "generated_docs" / "L2_FRS.json")
+    else:
+        # arg is a file path — derive the generated_docs dir it lives in
+        # and look for the sibling L2 doc. Also handle the project-root
+        # form in case a caller passes <project>/phase1/...{L8}.
+        gd = p.parent
+        candidates.append(gd / "L2_FRS.json")
+        # Walk up to a plausible project root (…/phase1/generated_docs/L8…)
+        # → <project>/phase1/generated_docs/L2_FRS.json.
+        for up in (p.parent, p.parent.parent, p.parent.parent.parent):
+            candidates.append(up / "phase1" / "generated_docs" / "L2_FRS.json")
+    for l2 in candidates:
+        if not l2.is_file():
+            continue
+        try:
+            d = json.loads(l2.read_text())
+            po = d.get("protocol_overview") or {}
+            if "half_duplex" in po:
+                return bool(po["half_duplex"])
+        except Exception:
+            continue
     return None
 
 
@@ -375,6 +397,60 @@ def main() -> int:
     if half_duplex_l2 is False:
         msg = ("VACUOUS_PASS: L2 protocol_overview.half_duplex=false — "
                "RX/TX timing split rule does not apply.")
+        if args.json:
+            txt = json.dumps({
+                "source_file": waveform_path,
+                "total_findings": 0,
+                "errors": 0,
+                "findings": [],
+                "verdict": "VACUOUS_PASS",
+                "rationale": msg,
+            }, indent=2)
+            if args.json == "-":
+                print(txt)
+            else:
+                Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+                Path(args.json).write_text(txt + "\n")
+        else:
+            print(msg)
+        return 0
+
+    # VACUOUS_PASS when the L8 waveform carries NO protocol / symbol timing
+    # content at all. The RX/TX-split rule only applies to half-duplex
+    # single-wire shared-direction protocols whose L8 records per-symbol
+    # pulse widths (timing_windows / timing_constants / waveforms). A
+    # pure-digital arithmetic / parallel-bus IC (e.g. an spm multiplier) has
+    # only clock_domains and zero symbol timing — there is nothing to split,
+    # so demanding rx_*/tx_* groups would FAIL every non-protocol IC. This
+    # complements the explicit L2.half_duplex=false escape above for the
+    # common case where L2 simply never mentions a protocol. chip-AGNOSTIC:
+    # keyed on the absence of symbol-timing content, not on any chip.
+    def _empty(key):
+        v = waveform.get(key)
+        return not v  # None / [] / {} / 0 all count as empty
+    # Only VACUOUS_PASS when there is genuinely NO protocol/symbol timing
+    # content by ANY name. Besides the canonical containers (timing_windows /
+    # timing_constants / waveforms), the gate's own check() also recognises
+    # group keys named rx_* / tx_* / host_* / dut_* / external_* / internal_*
+    # (and *_counters / *_cycles symbol-timing tables). If ANY such key carries
+    # content, the waveform DOES describe protocol timing and the strict
+    # RX/TX-split rule must run — do NOT short-circuit. Without this guard the
+    # escape mis-fired on legitimate half-duplex L8 docs that store timing
+    # under those group keys rather than the canonical containers.
+    _PROTO_GROUP_TOKENS = ("rx_", "tx_", "host_", "dut_", "external_",
+                           "internal_", "_counters", "_cycles", "symbol",
+                           "_low", "_high", "break", "ibt")
+    _has_proto_group = any(
+        bool(v) and any(tok in str(k).lower() for tok in _PROTO_GROUP_TOKENS)
+        for k, v in waveform.items()
+    )
+    if (not _has_proto_group) and all(
+            _empty(k) for k in ("timing_windows", "timing_constants",
+                                "waveforms")):
+        msg = ("VACUOUS_PASS: L8_TIMING_WAVEFORM carries no symbol/protocol "
+               "timing content (timing_windows / timing_constants / waveforms "
+               "all empty) — RX/TX timing-split rule is N/A for this "
+               "non-protocol IC.")
         if args.json:
             txt = json.dumps({
                 "source_file": waveform_path,

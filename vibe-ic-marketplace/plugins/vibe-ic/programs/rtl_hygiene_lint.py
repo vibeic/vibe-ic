@@ -190,6 +190,17 @@ def collect_lhs_set(src: str) -> Set[str]:
     # assign X = ...
     for m in re.finditer(r'\bassign\s+(\w+)(?:\[[^\]]+\])?\s*=', src):
         lhs.add(m.group(1))
+    # LHS concatenation / bit-grouping targets, e.g.
+    #   assign {carry, sum} = a + b;
+    #   {hi, lo} <= a * b;
+    # Every identifier inside the `{...}` group on the LHS of `=`/`<=` is driven.
+    # Without this, multi-driver concat targets (very common in CPU/arithmetic
+    # IP — SERV's serv_alu `assign {add_cy,result_add} = ...`) were reported as
+    # false-positive `undriven-wire` ERRORs. Chip-AGNOSTIC: pure structural.
+    for m in re.finditer(r'(?:\bassign\s+)?\{([^{}]*)\}\s*(?:<=|=)(?!=)', src):
+        for tok in re.findall(r'[a-zA-Z_]\w*', m.group(1)):
+            if tok not in VERILOG_KEYWORDS and not tok.startswith("'"):
+                lhs.add(tok)
     # X <= ... or X = ... inside procedural blocks
     for m in re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*(<=|=)(?!=)', src):
         # Skip the tokens around 'begin', 'end', keywords
@@ -978,10 +989,19 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
     # Scope the search to the top module's body to eliminate both classes.
     top_body, top_start = _extract_top_module_body(src)
     src_scope = top_body if top_body is not None else src
+    # v0.2.55 — mask generate-block bodies for ALL cases (a)/(b)/(c), not just
+    # (c). A reg declared inside `generate ... endgenerate` (or a `for`-genvar
+    # loop) has generate-block scope and CANNOT be referenced by a module-scope
+    # `initial begin name = 0; end` block (iverilog: "Could not find variable").
+    # Cases (a)/(b) used to scan the UNMASKED scope and so picked up SERV's
+    # generate-scoped registered outputs (serv_state cnt_lsb/cnt_en,
+    # serv_immdec imm19_12_20/...) — the autofix then emitted broken initial
+    # refs that failed elaboration. chip-AGNOSTIC: structural masking only.
+    src_scope_nogen = _mask_generate_blocks(src_scope)
     names: List[str] = []
     seen: Set[str] = set()
     # (a) registered OUTPUT ports with no power-up (the WARN-rule set).
-    for f in rule_uninit_registered_output(src_scope, str(path)):
+    for f in rule_uninit_registered_output(src_scope_nogen, str(path)):
         if f.rule == 'uninit-registered-output' and f.symbol not in seen:
             names.append(f.symbol); seen.add(f.symbol)
     # (b) INTERNAL registered regs that drive a module output via a continuous
@@ -999,8 +1019,11 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
         out_ports = set(re.findall(
             r'\boutput\b\s+(?:(?:reg|logic|wire)\s+)?(?:signed\s+)?(?:\[[^\]]+\]\s*)?'
             r'([A-Za-z_]\w*)\s*(?=[,;)=])', src_scope))
+        # v0.2.55 — `registered` from the GENERATE-MASKED scope so generate-
+        # scoped regs (whose `<=` lives inside a generate body) are NOT eligible
+        # for a module-scope `initial` (they would fail elaboration).
         registered = {mm.group(1) for mm in
-                      re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src_scope)}
+                      re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src_scope_nogen)}
         has_initial = bool(re.search(r'\binitial\b', src_scope))
         for om in re.finditer(r'\bassign\s+([A-Za-z_]\w*)\s*=\s*([^;]+);', src_scope):
             if om.group(1) not in out_ports:
