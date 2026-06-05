@@ -131,17 +131,47 @@ def _iter_transcripts(paths: list[str]) -> list[Path]:
     return out
 
 
+def _extract_rel(line: str, end: int, ds: str) -> str:
+    """Path tail after a dataset-root match, SPACE-safe
+    (ORGANIC-20260606-blindness-audit-space-path-truncation): the legacy
+    charclass tail had no space, so a dataset whose directory names contain
+    spaces ("…/Misc category/Frequency divider/…") truncated at the first
+    space — the ALLOWED spec read then mis-matched the glob and hard-blocked
+    scoring. Resolution ladder:
+      1. disk-truth longest prefix: extend to EOL and shrink right-to-left at
+         whitespace until the path EXISTS (also strips trailers like
+         "(123 bytes)" and CMD flags after the path);
+      2. READ-line convention: a transcript `READ <path>` line carries ONE
+         path — take everything to EOL;
+      3. legacy conservative charclass tail (space-free) as the fallback for
+         prose mentions / paths not present on this host."""
+    tail = line[end:]
+    full = (ds + tail).rstrip()
+    probe = full
+    while len(probe) > len(ds):
+        if Path(probe).exists():
+            return probe[len(ds):].lstrip("/")
+        cut = probe.rfind(" ")
+        if cut <= len(ds):
+            break
+        probe = probe[:cut].rstrip()
+    if re.match(r"\s*READ\b", line):
+        return full[len(ds):].lstrip("/")
+    m2 = re.match(r"[A-Za-z0-9_\-./]*", tail)
+    return m2.group(0).lstrip("/")
+
+
 def audit_text(text: str, dataset: Path, allowed: list[str],
                source: str) -> list[dict]:
     """Pure scanner: return violation dicts for one transcript text."""
     from fnmatch import fnmatch
     findings: list[dict] = []
     ds = str(dataset).rstrip("/")
-    path_re = re.compile(re.escape(ds) + r"([A-Za-z0-9_\-./]*)")
+    path_re = re.compile(re.escape(ds))
     for ln_no, line in enumerate(text.splitlines(), 1):
         # V1 — dataset paths beyond allowed prompt files
         for m in path_re.finditer(line):
-            rel = m.group(1).lstrip("/")
+            rel = _extract_rel(line, m.end(), ds)
             if not rel:
                 continue                       # bare dataset root: benign
             base = Path(rel.rstrip("/")).name
@@ -153,6 +183,7 @@ def audit_text(text: str, dataset: Path, allowed: list[str],
                 "kind": "dataset-file-access",
                 "class": _classify_rel(rel),
                 "path": f"{ds}/{rel}",
+                "allowed_globs": list(allowed),
                 "transcript": source, "line": ln_no,
                 "evidence": line.strip()[:300],
             })
