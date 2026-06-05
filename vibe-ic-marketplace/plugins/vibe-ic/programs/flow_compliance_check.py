@@ -1948,6 +1948,80 @@ _CLASS_SKIPPABLE_PROTOCOL_GATES: frozenset[str] = frozenset({
     "l12_behavioral_sequences_steps_typed_check",  # protocol behavioral step
     "protocol_ip_simulation_required_check",     # protocol sim required
 })
+# ORGANIC-20260605-fullstack-byte-oracle-inapplicable-to-datapath-primitive
+# (#419): full-stack byte-protocol ARTEFACT gates. For a registry-matched
+# class with command_protocol_applicable=false (datapath / combinational
+# primitives — "No SW-visible protocol / register map", per the registry
+# entry) these are structurally unsatisfiable: there are no opcodes to
+# build golden response bytes from, no register fields to type or lay
+# out, no submodule decomposition to conform to, and no protocol
+# metadata to be substantive about. A functionally perfect primitive
+# (lint clean, synth clean, zero latches, functional TB PASS) would
+# carry a guaranteed false-FAIL.
+#
+# DOUBLE-KEYED, fail-closed: the skip fires ONLY when (a) the class
+# flag says command_protocol_applicable=false AND (b) the L docs
+# POSITIVELY record a no-opcode/no-regmap input
+# (_ldocs_record_no_opcodes) — a primitive-classed project whose input
+# docs DO define opcodes or registers keeps every gate. The
+# primitive-appropriate set (generic_full_stack reference TB against
+# the L9 contract, lint, synth, latch checks) still runs and still
+# gates.
+_CLASS_SKIPPABLE_FULLSTACK_ARTEFACT_GATES: frozenset[str] = frozenset({
+    "rtl_response_byte_oracle_check",         # byte-protocol golden vectors
+    "l4_regmap_enumerated_values_typed_check",  # register-map field depth
+    "regmap_bit_layout_check",                # register-map bit layout
+    "l9_submodule_conformance_check",         # submodule structure
+    "metadata_content_substance_check",       # protocol metadata substance
+})
+
+
+def _ldocs_record_no_opcodes(project: Path) -> bool:
+    """Deterministic L-doc evidence that the INPUT itself carries no
+    command protocol: every opcode/command list across generated_docs
+    L3*.json is empty AND the L4 regmap records no registers (or an
+    explicit register_map_present=false). Missing generated_docs ->
+    False (fail-closed: no positive evidence, keep every gate)."""
+    gd = project / "generated_docs"
+    if not gd.is_dir():
+        return False
+
+    def _count_named_lists(obj: Any, key_tokens: tuple) -> int:
+        n = 0
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                kl = str(k).lower()
+                if isinstance(v, list) and any(t in kl for t in key_tokens):
+                    n += len(v)
+                n += _count_named_lists(v, key_tokens)
+        elif isinstance(obj, list):
+            for it in obj:
+                n += _count_named_lists(it, key_tokens)
+        return n
+
+    saw_any_doc = False
+    opcode_total = 0
+    reg_total = 0
+    regmap_explicitly_absent = False
+    for f in sorted(gd.glob("L3*.json")) + sorted(gd.glob("L4*.json")):
+        try:
+            data = json.loads(f.read_text())
+        except Exception:
+            return False        # unreadable evidence -> fail closed
+        saw_any_doc = True
+        name = f.name.upper()
+        if name.startswith("L3"):
+            opcode_total += _count_named_lists(data, ("opcode", "command"))
+        else:
+            reg_total += _count_named_lists(data, ("register",))
+            if isinstance(data, dict) and \
+                    data.get("register_map_present") is False:
+                regmap_explicitly_absent = True
+    if not saw_any_doc:
+        return False
+    return opcode_total == 0 and (reg_total == 0 or regmap_explicitly_absent)
+
+
 _CLASS_SKIPPABLE_ANALOG_GATES: frozenset[str] = frozenset({
     "analog_block_coverage_check",
     "analog_hardmacro_check",
@@ -2021,6 +2095,22 @@ def _class_skipped_gates(project: Path) -> Dict[str, str]:
                 f"block-coverage / hardmacro / mixed-signal gate does "
                 f"not apply. Core functional gates (lint/synth/CDC/sim) "
                 f"still run.")
+    # #419 (ORGANIC-20260605-fullstack-byte-oracle-inapplicable-to-
+    # datapath-primitive): the full-stack byte-protocol ARTEFACT gates
+    # skip ONLY on the DOUBLE key — class says no command protocol AND
+    # the L docs positively record a no-opcode/no-regmap input.
+    if (flags.get("command_protocol_applicable") is False
+            and _ldocs_record_no_opcodes(project)):
+        for g in _CLASS_SKIPPABLE_FULLSTACK_ARTEFACT_GATES:
+            skipped.setdefault(g, (
+                f"N/A for class {ic_class!r}: command_protocol_applicable"
+                f"=false AND the L docs record a no-opcode / no-regmap "
+                f"input — there are no opcodes to build golden bytes "
+                f"from, no register fields, no submodule decomposition, "
+                f"no protocol metadata. The primitive-appropriate set "
+                f"(generic_full_stack reference TB vs the L9 contract, "
+                f"lint, synth, latch checks) still runs and still gates "
+                f"(ORGANIC-20260605 #419)."))
     return skipped
 
 
