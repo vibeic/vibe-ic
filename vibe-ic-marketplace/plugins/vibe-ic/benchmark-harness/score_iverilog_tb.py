@@ -490,10 +490,27 @@ def main():
 
     if shape == "B":
         designs = _problems_list_shape_b(run, dataset, layout["prompt_filename"])
+        # ORGANIC-20260605 disk-truth: surface the on-disk sample inventory vs
+        # the problem count UP FRONT so a partially-authored run is visible at
+        # scoring time (the filesystem — not any agent tally — is authoritative).
+        on_disk = sum(1 for _ in samples.glob("*.v")) + sum(1 for _ in samples.glob("*.sv"))
+        print(f"# disk-truth: {on_disk} sample file(s) in {samples} vs {len(designs)} problem(s)")
+        if on_disk < len(designs):
+            print(f"# WARNING: PARTIALLY-AUTHORED RUN — {len(designs) - on_disk} problem(s) "
+                  "have no on-disk sample; resume by diffing problems.list vs samples/ "
+                  "(blind_instructions_shape_c.md § ORCHESTRATION RULES)")
         results = [_score_shape_b(d, samples, dataset, layout, args) for d in designs]
         ident = "design"
     else:  # Shape C
         probs = _problems_list_shape_c(run, dataset, layout["prompt_suffix"])
+        # ORGANIC-20260605 disk-truth (same as Shape B above, keyed per-problem).
+        missing = [p for p in probs if not (samples / f"{p}_sample01.sv").is_file()]
+        print(f"# disk-truth: {len(probs) - len(missing)}/{len(probs)} problems have an "
+              f"on-disk sample in {samples}")
+        if missing:
+            print(f"# WARNING: PARTIALLY-AUTHORED RUN — {len(missing)} problem(s) missing a "
+                  "sample (first few: " + ", ".join(missing[:5]) + "); resume by diffing "
+                  "problems.list vs samples/ (blind_instructions_shape_c.md § ORCHESTRATION RULES)")
         results = [_score_shape_c(p, samples, dataset, layout, args) for p in probs]
         ident = "problem"
 

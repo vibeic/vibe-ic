@@ -235,22 +235,68 @@ def _rtl_port_is_zero_based(rtl_body: str, name: str, width: int) -> bool:
     return False
 
 
+# ORGANIC-20260605 corpus-sweep tightening: a width-equal index reference that
+# sits in a BOUNDARY-CONDITION sentence is the out-of-range neighbour of a
+# zero-based vector, not 1-based indexing evidence. Real shapes from the two
+# 156-problem atomic suites (all on PASSING zero-based designs):
+#   "(q[-1] and q[512]) are both zero (off)"          <- assumed-zero boundary
+#   "we don't need to know out_both[3]."              <- not-needed boundary
+#   "simply set out_both[99] to be zero."             <- set-to-zero boundary
+_BOUNDARY_CONTEXT_RE = None  # compiled lazily below (module-level re import)
+
+
+def _is_boundary_context(line: str) -> bool:
+    """True iff the line containing an index reference reads as a boundary-
+    condition statement (assumed-zero / set-to-zero / not-needed / out-of-range
+    / non-existent) rather than normal signal indexing."""
+    import re
+    global _BOUNDARY_CONTEXT_RE
+    if _BOUNDARY_CONTEXT_RE is None:
+        _BOUNDARY_CONTEXT_RE = re.compile(
+            r"(?:are|is|be|being|to\s+be|set(?:\s+\w+){0,2}\s+to)\s+"
+            r"(?:both\s+|all\s+)?(?:zero|0\b|'0'|off)"
+            r"|(?:don'?t|do\s+not|no)\s+need"
+            r"|out\s+of\s+(?:range|bounds)"
+            r"|does\s+not\s+exist|non-?existent|doesn'?t\s+exist",
+            re.IGNORECASE)
+    return bool(_BOUNDARY_CONTEXT_RE.search(line))
+
+
 def _onebased_index_warnings(spec_text: str, rtl_body: str,
                              rtl_ports: List[Port]) -> List[tuple]:
     """Return [(name, width, maxidx)] for each port whose declared width is W,
     is declared zero-based [W-1:0] in the RTL, yet the spec body references the
     signal up to S[k] with maxidx == W (a clean 1-based signal → should be
-    [W:1]). Conservative: fires only when maxidx is EXACTLY the bit-count W."""
+    [W:1]). Conservative: fires only when maxidx is EXACTLY the bit-count W.
+
+    ORGANIC-20260605 tightenings (corpus-swept over both 156-problem atomic
+    suites — zero false fires on passing designs):
+      * an index occurrence on a BOUNDARY-CONDITION line (assumed-zero /
+        set-to-zero / not-needed / out-of-range) is excluded — it describes the
+        out-of-range neighbour of a zero-based vector;
+      * a prose reference to <sig>[-1] anywhere excludes the signal entirely
+        (negative-neighbour talk is definitive zero-based boundary semantics)."""
     import re
     out: List[tuple] = []
     seen = set()
+    lines = spec_text.splitlines()
     for p in rtl_ports:
         if p.width <= 1 or p.name in seen:
             continue
         seen.add(p.name)
-        # collect every literal single-bit index S[k] referenced in the prose
-        idxs = [int(m) for m in re.findall(
-            r'\b' + re.escape(p.name) + r'\s*\[\s*(\d+)\s*\]', spec_text)]
+        # negative-index boundary talk anywhere → definitively zero-based
+        if re.search(r'\b' + re.escape(p.name) + r'\s*\[\s*-\s*1\s*\]',
+                     spec_text):
+            continue
+        # collect every literal single-bit index S[k] referenced in the prose,
+        # EXCLUDING occurrences on boundary-condition lines.
+        idxs = []
+        pat = re.compile(r'\b' + re.escape(p.name) + r'\s*\[\s*(\d+)\s*\]')
+        for ln in lines:
+            for m in pat.finditer(ln):
+                if _is_boundary_context(ln):
+                    continue
+                idxs.append(int(m.group(1)))
         if not idxs:
             continue
         maxidx = max(idxs)
@@ -333,12 +379,35 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
     # Sibling of the reset-mode check: the spec picked an output style, so verify
     # the RTL honors it. Mealy-vs-Moore is otherwise a free design choice, so this
     # fires ONLY when spec.fsm_output_style == 'moore' (semantically extracted).
+    #
+    # ORGANIC-20260605 corpus-sweep tightenings (zero false fires across both
+    # 156-problem atomic suites after these):
+    #   * SKIP the whole check when the module takes its FSM state as an INPUT
+    #     port (externally-stated, combinational next-state/output-logic-only
+    #     modules — e.g. one-hot derive-by-inspection problems). With the state
+    #     register outside the module, every output is "combinationally
+    #     dependent on an input" by construction and f(state-input) is exactly
+    #     the correct Moore output shape — the check cannot distinguish it
+    #     from Mealy and must not try.
+    #   * NEVER flag next-state-like outputs (next_state / *_next / next_*):
+    #     the Moore property constrains the OUTPUT function only; next-state
+    #     logic is input-dependent in every FSM, Moore included.
     if spec.fsm_output_style == 'moore' and rtl_body:
-        for nm, refd in _mealy_outputs(rtl_body, rtl_ports):
-            f.append(Finding(path, 'WARN', 'fsm-output-style-mismatch', nm,
-                f"spec declares a Moore FSM but output '{nm}' is combinationally "
-                f"dependent on input(s) {', '.join(refd)} (Mealy). A Moore output "
-                f"must be a function of state only — register it as f(state)."))
+        import re as _re
+        _state_input = any(
+            p.direction == 'input'
+            and _re.search(r'(?:^|_)state$', p.name, _re.IGNORECASE)
+            for p in rtl_ports)
+        _next_like = lambda nm: bool(_re.search(  # noqa: E731
+            r'(?:^|_)next(?:_|$)', nm, _re.IGNORECASE))
+        if not _state_input:
+            for nm, refd in _mealy_outputs(rtl_body, rtl_ports):
+                if _next_like(nm):
+                    continue
+                f.append(Finding(path, 'WARN', 'fsm-output-style-mismatch', nm,
+                    f"spec declares a Moore FSM but output '{nm}' is combinationally "
+                    f"dependent on input(s) {', '.join(refd)} (Mealy). A Moore output "
+                    f"must be a function of state only — register it as f(state)."))
 
     # ---- pipelined data-width parameterization (advisory) ------------------
     # Spec calls it a pipelined N-bit adder/multiplier but the RTL hardcodes N

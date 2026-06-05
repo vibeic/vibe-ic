@@ -146,6 +146,22 @@ the gates held across 17 fresh agents; the same fix as free-text guidance regres
 
 This shape is documented in `benchmark_external/verilogeval_v2/run_fresh_v0125/gates.py` (canonical).
 
+**Shape-C ORCHESTRATION RULES (ORGANIC-20260605, REQUIRED):**
+1. **Batch granularity** for ≥100-problem datasets: spawn ONE authoring agent per
+   pre-split `batches/batchNN.list` — NEVER one agent per problem. A 312-problem
+   per-problem fan-out lost ~93% of its agents' structured returns; the same
+   problems re-run one-agent-per-batch (32 agents) completed 312/312.
+2. **Disk truth**: the deterministic gate writes `samples/<Prob>_sample01.sv`
+   regardless of whether the agent's structured return survives — reconcile
+   progress by COUNTING on-disk samples, never by tallying agent returns. Resume
+   = diff `problems.list` vs on-disk `samples/` and re-dispatch only the missing
+   set. The scorer prints this disk-truth inventory up front and warns on a
+   partially-authored run.
+3. **Emit-blocking structural rules**: `gates_atomic.py` blocks emit on the
+   corpus-swept allow-list (`onebased-port-range`, `fsm-output-style-mismatch`) —
+   the author must fix and re-run the gate; a blocked problem has no sample on
+   disk, so disk-truth accounting automatically surfaces it.
+
 #### Shape D — Agentic with runner (SoC / multi-task)
 **When**: agentic benchmarks where the unit-of-work is a full SoC + cocotb harness (CVDP). The
 runner is the right tool because (a) the IC needs `ic_class` dispatch, (b) `catalog-glue-author`

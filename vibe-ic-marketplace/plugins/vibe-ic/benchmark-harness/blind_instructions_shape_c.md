@@ -7,6 +7,24 @@ overhead-dominated for ≥100 atomic problems, but **every verification GATE is
 still a plugin program** (`phase1_engine`, `spec_conformance_check`,
 `rtl_hygiene_lint --fix`, `iverilog`).
 
+## ORCHESTRATION RULES (for the caller spawning the agents — ORGANIC-20260605)
+
+These are REQUIRED, learned from a 312-problem clean-room run where per-problem
+fan-out lost ~93% of its agents' results while batch fan-out completed 312/312:
+
+1. **Batch granularity is REQUIRED for ≥100-problem datasets.** Spawn ONE
+   authoring agent per pre-split `<RUNDIR>/batches/batchNN.list` file — NEVER
+   one agent per problem. Hundreds of short-lived per-problem subagents lose
+   their final structured return far too often; batch agents do sustained
+   multi-problem work and return reliably.
+2. **The filesystem is the authoritative truth for emitted samples.** The
+   deterministic gate writes `<RUNDIR>/samples/<Prob>_sample01.sv` regardless of
+   whether the agent's structured return survives. Orchestrators MUST reconcile
+   progress by COUNTING on-disk samples — never by tallying agent returns.
+3. **Resume = diff `problems.list` vs on-disk `samples/`.** The un-authored set
+   is exactly the problems with no `<Prob>_sample01.sv` on disk; re-dispatch
+   only those (in batches), never re-author what is already on disk.
+
 PARAMS your caller provides:
 - `BENCH`     benchmark name (e.g. `verilogeval-v2`, `verilogeval-human`) — used by gates_atomic.py
 - `DATASET`   absolute path to dataset (flat dir with `<Prob>_prompt.txt`, hidden `<Prob>_test.sv` / `<Prob>_ref.sv`)
@@ -55,14 +73,23 @@ golden reference, touched ONLY by the host scorer at scoring time).
        --dataset <DATASET> \\
        --bench <BENCH>
    ```
-   Hard gates = `phase1_run_all` + `iverilog_compile`. On hard-PASS the gate
-   writes `<RUNDIR>/samples/<Prob>_sample01.sv`. The gate ENFORCES
+   Hard gates = `phase1_run_all` + `iverilog_compile` + NO emit-blocking
+   structural finding. On hard-PASS the gate writes
+   `<RUNDIR>/samples/<Prob>_sample01.sv`. The gate ENFORCES
    `rtl_hygiene_lint --fix` (step 5a) before emit, so reset-less registered
    outputs are auto-given `initial=0` power-up determinism — do NOT add or
    remove `initial` yourself; do NOT over-fit to silence WARNs.
 
-6. Fix conformance ERRORs (wrong port name/width/dir vs prompt) or compile
-   errors and re-run the gate.
+   EMIT-BLOCKING structural rules (ORGANIC-20260605, corpus-swept zero
+   false-positives): `onebased-port-range` (prompt indexes the signal 1-based
+   but the RTL declares `[W-1:0]` — declare `[W:1]`) and
+   `fsm-output-style-mismatch` (spec declares Moore but an output combinationally
+   depends on an input — register it as f(state)). When `gates.json` carries
+   `structural_emit_block`, the sample was NOT emitted: apply the finding's fix
+   to `sample.sv` and re-run the gate.
+
+6. Fix conformance ERRORs (wrong port name/width/dir vs prompt), emit-blocking
+   structural findings, or compile errors and re-run the gate.
 
 7. Confirm `<RUNDIR>/samples/<Prob>_sample01.sv` exists.
 

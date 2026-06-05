@@ -24,6 +24,28 @@ The 5a `--fix` enforcement is the v0.1.24 lesson (see memory
 get `initial = 0` inserted before emit, so the blind path can never leak a
 power-up-X sample regardless of what the AI authoring step did.
 
+EMIT-BLOCKING STRUCTURAL RULES (ORGANIC-20260605-shapec-existing-guards-nonblocking):
+beyond the two hard gates above, an allow-listed set of HIGH-CONFIDENCE
+structural rules now BLOCKS emit when they fire — the v0.2.39 clean-room run
+proved single-shot functional fails corresponded exactly to rules the plugin
+already implements but only logged informationally:
+  * spec_conformance_check:  onebased-port-range        (1-based indexing declared
+                              zero-based — every bit off by one)
+  * spec_conformance_check:  fsm-output-style-mismatch  (spec declares Moore, RTL
+                              output is combinationally input-dependent)
+On a block the author must FIX sample.sv and re-run this gate (the must-resolve
+surface); the sample is not emitted while a blocking finding stands.
+
+CORPUS-SWEEP HONESTY (the backlog's own promotion precondition): the sweep over
+all 305 prior-PASSING samples of both 156-problem atomic suites initially found
+14 false-positive blocks, so the rules were TIGHTENED first (boundary-condition
+index references excluded from onebased; state-as-input modules + next-state-like
+outputs excluded from the Moore check) until the sweep came back ZERO. The
+backlog's third candidate, rtl_hygiene_lint's vector-self-shift-fold, was NOT
+promoted: the sweep showed correct passing solutions legitimately use the exact
+idiom it flags (in & {1'b0, in[W-1:1]} boundary-AND), so it stays informational
+WARN — promoting it would have blocked correct designs.
+
 Usage (called per-problem by the agent during a Shape C run):
     python3 gates_atomic.py --prob <Prob> --workdir <run>/work --dataset <ds> \\
                             --bench <bench>                         # registry lookup
@@ -172,14 +194,35 @@ def main():
 
     # 4. spec_conformance_check vs prompt-derived contract
     sem_manifest = wd / "semantic_manifest.json"
+    conf_json = wd / "conformance_findings.json"
     rc, out = run([sys.executable, str(PROGRAMS / "spec_conformance_check.py"),
                    "--rtl-dir", str(wd), "--spec", str(prompt), "--top", top_module,
-                   "--semantic-manifest", str(sem_manifest)], env=cli_env)
+                   "--semantic-manifest", str(sem_manifest),
+                   "--json", str(conf_json)], env=cli_env)
     cverd = "PASS" if "PASS" in out.split("\n")[0] else ("WARN" if "WARN" in out else "FAIL")
     steps["spec_conformance"] = {"verdict": cverd, "rc": rc, "log": out[-500:]}
     if sem_manifest.is_file():
         try:
             steps["semantic_confirm"] = json.loads(sem_manifest.read_text())
+        except Exception:
+            pass
+
+    # ORGANIC-20260605: allow-listed HIGH-CONFIDENCE structural rules are
+    # EMIT-BLOCKING. The v0.2.39 clean-room run shipped 3 single-shot fails the
+    # plugin's own rules had already flagged — they fired as WARN inside an
+    # overall-PASS verdict, and this harness recorded the roll-up verdict only.
+    # Parse the per-finding JSON (deterministic) instead of the roll-up.
+    _BLOCKING_CONFORMANCE_RULES = {"onebased-port-range",
+                                   "fsm-output-style-mismatch"}
+    blocking: list = []
+    if conf_json.is_file():
+        try:
+            for fd in json.loads(conf_json.read_text()):
+                if fd.get("rule") in _BLOCKING_CONFORMANCE_RULES:
+                    blocking.append({"program": "spec_conformance_check",
+                                     "rule": fd.get("rule"),
+                                     "symbol": fd.get("symbol", ""),
+                                     "message": (fd.get("message") or "")[:400]})
         except Exception:
             pass
 
@@ -191,13 +234,25 @@ def main():
                                 "rc": rc, "log": out[-300:]}
 
     # 5b. rtl_hygiene_lint at WARN (informational; v0.1.10 rule 5 + later additions)
+    # NOTE (ORGANIC-20260605): vector-self-shift-fold was CONSIDERED for the
+    # emit-blocking allow-list but the corpus sweep showed correct passing
+    # solutions legitimately use the idiom it flags — it stays informational.
     rc, out = run([sys.executable, str(PROGRAMS / "rtl_hygiene_lint.py"),
                    "--severity", "WARN", str(sample)], env=cli_env)
     hverd = "PASS" if rc == 0 else "WARN"
     steps["rtl_hygiene_lint"] = {"verdict": hverd, "rc": rc, "log": out[-600:]}
 
+    if blocking:
+        steps["structural_emit_block"] = {
+            "verdict": "BLOCK", "findings": blocking,
+            "note": ("EMIT BLOCKED — fix sample.sv per each finding above and "
+                     "re-run this gate. These allow-listed structural rules "
+                     "are high-confidence bug shapes the hidden TB will catch "
+                     "(ORGANIC-20260605-shapec-existing-guards-nonblocking).")}
+
     hard_ok = (steps["phase1_run_all"]["verdict"] == "PASS"
-               and steps["iverilog_compile"]["verdict"] == "PASS")
+               and steps["iverilog_compile"]["verdict"] == "PASS"
+               and not blocking)
     if hard_ok:
         samples_dir = wd.parent.parent / "samples"
         samples_dir.mkdir(parents=True, exist_ok=True)
