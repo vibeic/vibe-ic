@@ -170,6 +170,14 @@ _SKIP_PATH_PATTERNS = (
     "docs/architecture/FLOW_STEPS_GENERATED",
     "docs/architecture/v2_validation/",
     "_PROPOSED.md",
+    # Dependency LOCKFILES enumerate the versions of every npm/node package
+    # in the dependency graph ("version": "0.99.0" of some dep) — none are
+    # plugin self-claims. Without this skip, mirroring an mcp-eda-server
+    # package-lock.json into opensource_repo/ produced 484 false positives
+    # (2026-06-05). Same rationale as tool-banner content skips.
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
 )
 
 

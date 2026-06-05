@@ -446,3 +446,24 @@ def test_guard_test_harness_still_skipped(tmp_path):
         "tools/ci/test_staged_version_claim_check.py",
         "    cp = _run(tmp_path, _diff('src/x.py', '# v9.9.9 fixture'))"))
     assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_package_lock_dependency_versions_skipped(tmp_path):
+    # ORGANIC follow-up 2026-06-05: lockfiles enumerate DEPENDENCY versions
+    # ("version": "0.99.0" of some npm package), not plugin self-claims —
+    # mirroring mcp-eda-server's package-lock.json produced 484 false
+    # positives without this path skip.
+    _make_plugin_json(tmp_path, "0.2.45")
+    cp = _run(tmp_path, _diff(
+        "opensource_repo/mcp-eda-server/package-lock.json",
+        '"version": "0.99.0",'))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_lockfile_carveout_does_not_mask_plugin_json_claim(tmp_path):
+    # the exemption is path-scoped: a plugin.json self-claim still FAILs.
+    _make_plugin_json(tmp_path, "0.2.45")
+    cp = _run(tmp_path, _diff(
+        "vibe-ic-marketplace/plugins/vibe-ic/README.md",
+        "Now at v0.99.0 with the new gate."))
+    assert cp.returncode == 1, cp.stdout + cp.stderr
