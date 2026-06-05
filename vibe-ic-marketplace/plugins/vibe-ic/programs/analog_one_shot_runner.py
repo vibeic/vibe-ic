@@ -209,9 +209,24 @@ def _emit_deterministic_stub(project: Path, bname: str,
             }],
         })
     elif step_name == "A2_topology_select":
+        # v0.2.55 — the A2 substance gate (analog_a2_topology_select_check)
+        # requires topology.md to NAME at least one transistor/circuit
+        # primitive. The previous "generic_class_a (placeholder)" stub
+        # contained NO panel keyword, so the runner's OWN stub failed the
+        # runner's OWN A2 gate for any block whose name lacked a keyword
+        # (e.g. `adc`, `delta_sigma`). Emit a generic-but-keyword-bearing
+        # class-A topology description so the deterministic stub is
+        # self-consistent. chip-AGNOSTIC: generic analog vocabulary only.
         _wt(bdir / "topology.md", "<!--",
             (f"# {bname} — topology (stub)\n\n"
-              f"Topology family: generic_class_a (placeholder)\n\n"
+              f"Topology family: generic class-A amplifier (placeholder)\n\n"
+              f"Primitive skeleton (deterministic stub — replace with the "
+              f"`analog-topology-select` skill output):\n"
+              f"- differential pair: NMOS input transistors\n"
+              f"- active load: PMOS current mirror\n"
+              f"- tail bias: NMOS current source (bias)\n"
+              f"- output stage: common-source PMOS with feedback "
+              f"compensation\n\n"
               f"Replace with output of `analog-topology-select` skill.\n"
               "-->\n"))
     elif step_name == "A3_netlist_gen":

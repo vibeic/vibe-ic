@@ -39,6 +39,17 @@ from pathlib import Path
 
 _MEAS_LINE_RE = re.compile(r"^.*MEAS\b(.*)$", re.MULTILINE)
 _KV_RE = re.compile(r"(\w+)=\s*([\-+]?[0-9]*\.?[0-9]+(?:[eE][\-+]?\d+)?)")
+# v0.2.55 — ngspice prints every `.meas`/`meas` result on its own line as
+# `name = value` (e.g. `vfinal = 1.190796e+00`). The `echo "MEAS ..."`
+# convenience line uses `$&<measvar>`, which silently yields an empty
+# field when a control-mode `meas ... at=` result is a scalar rather than
+# a vector ("no such variable") — dropping that key from the MEAS echo
+# and causing "no successful sim" even though the measure DID succeed.
+# Capture the native meas-result lines as a fallback so a single failed
+# `$&` echo field never masks a converged simulation. chip-AGNOSTIC.
+_NATIVE_MEAS_RE = re.compile(
+    r"^\s*([A-Za-z_]\w*)\s*=\s*([\-+]?[0-9]*\.?[0-9]+(?:[eE][\-+]?\d+)?)\s*$",
+    re.MULTILINE)
 
 PDK_LIB = {
     "sky130":"/foss/pdks/sky130A/libs.tech/ngspice/sky130.lib.spice",
@@ -313,7 +324,17 @@ T["adc"] = """\
 .lib {pdk_lib} {corner}
 .param osr={osr}
 * Tclk = 1us (fclk = 1 MHz, matches the reference T/2 = 500 ns half-period)
-.param tend='osr * 1u'
+* v0.2.55 — `tend` must be resolved to a CONCRETE numeric stop time for
+* the `.control` `tran` command: ngspice does NOT expand a `.param`
+* symbol inside a control-mode `tran`/`meas at=` argument (it fed the
+* literal token `tend`, hitting "TSTOP is invalid, must be greater than
+* zero" and aborting the transient — the `vfinal` measure then failed
+* and the whole sweep returned "no successful sim"). The transient only
+* needs enough settled OSR cycles to read a steady output; cap it at a
+* fixed, representative window (32 cycles × 1us = 32us) so the deck is
+* OSR-knob-independent for the settle read while AC UGBW still gates the
+* swept design. Mirrors how the delta_sigma template uses concrete
+* literal times. chip-AGNOSTIC: fixed time constants, no chip literal.
 v_vdd vdd 0 1.2
 v_vcm vcm 0 0.6
 * clocked sampled input riding on vcm over OSR cycles (square wave, 1 MHz)
@@ -331,9 +352,10 @@ xm6 vout  nd2   vdd  vdd sky130_fd_pr__pfet_01v8 w=32 l=0.5
 xm7 vout  nbias 0    0   sky130_fd_pr__nfet_01v8 w=8  l=1
 cc  nd2   vout  0.5p
 .control
-* transient over OSR cycles, then AC open-loop gain/UGBW of the front-end
-tran 1n 'tend'
-meas tran vfinal find v(vout) at='tend - 1u'
+* transient over a fixed settled window (32 cycles), then AC open-loop
+* gain/UGBW of the front-end. Concrete literal stop time (see header).
+tran 1n 32u
+meas tran vfinal find v(vout) at=31u
 ac dec 10 1 100meg
 let gain = vdb(vout)
 meas ac dcgain find gain at=1
@@ -549,6 +571,17 @@ def _run_ngspice(container, sp_in_container):
                  f"{shlex.quote(sp_in_container)} 2>&1")
     txt = cp.stdout
     meas = {}
+    # Native `name = value` meas-result lines first (authoritative —
+    # ngspice prints these directly from each `.meas`/`meas` command).
+    for nm in _NATIVE_MEAS_RE.finditer(txt):
+        try:
+            meas[nm.group(1)] = float(nm.group(2))
+        except ValueError:
+            pass
+    # The `echo "MEAS ..."` summary line OVERRIDES where present (it may
+    # carry derived/aliased keys like `vout`), but only with real values —
+    # an empty `key=` field never reaches _KV_RE, so it cannot clobber a
+    # value already captured from the native meas line.
     for line_m in _MEAS_LINE_RE.finditer(txt):
         for kv in _KV_RE.finditer(line_m.group(1)):
             meas[kv.group(1)] = float(kv.group(2))
@@ -618,6 +651,22 @@ def run_block(project, block, container, pdk, topology_override):
         sp_host = sl_dir / f"run_{knob}_{val}.sp"
         sp_host.write_text(tb)
         ok, meas, _ = _run_ngspice(container, _container_path(container, host_root, sp_host))
+        # v0.2.55 — normalise the settle measure to the target key. The
+        # transient-settle templates name their point-measure `vfinal`
+        # (adc) / `vsettle` (delta_sigma / modulator) and ALIAS it to
+        # `vout` only via an `echo "MEAS vout=" $&<m>` line. That `$&`
+        # echo silently drops the field when the meas result is a scalar
+        # ("no such variable"), so `vout` (= TARGETS[btype]['key']) was
+        # never captured and the converged sim was discarded as "no
+        # successful sim". Map the canonical settle aliases onto the
+        # target key here so the native meas-result line is sufficient.
+        # chip-AGNOSTIC: fixed alias set of generic settle-measure names.
+        tkey = TARGETS.get(btype, {}).get("key")
+        if tkey and tkey not in meas:
+            for _alias in ("vfinal", "vsettle", "vout_final", "vlast"):
+                if _alias in meas:
+                    meas[tkey] = meas[_alias]
+                    break
         runs.append({"knob":knob, "val":val, "ok":ok, **meas})
 
     # v1.6.228 — emit the full 9-corner PVT matrix (3 process × 3 temp)

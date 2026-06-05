@@ -1306,6 +1306,27 @@ def _glob_first(project: Path, pattern: str) -> List[str]:
             matches = sorted(project.glob(f"reports/{sd}/{rest}"))
             if matches:
                 break
+    # v0.2.55 — canonical-analog-dir tolerance. The flow-def pins analog
+    # A-step artefacts at phase-distributed prefixes (phase1/analog/,
+    # phase2/analog/, phase3/analog/), but the analog runner writes ALL
+    # of them under the single canonical analog dir (`_pl.analog_dir`,
+    # currently phase3/analog/). When a `phase{1,2,3}/analog/<rest>`
+    # pattern misses, re-probe the canonical analog dir with the same
+    # tail. chip-AGNOSTIC: pure path remap, no chip names.
+    if not matches:
+        # Longest prefix first so "phase3/analog/" wins over "analog/".
+        for _pref in ("phase1/analog/", "phase2/analog/", "phase3/analog/",
+                      "analog/"):
+            if pattern.startswith(_pref):
+                tail = pattern[len(_pref):]
+                try:
+                    canon = _pl.analog_dir(project)
+                    canon_matches = sorted(canon.glob(tail))
+                    if canon_matches:
+                        matches = canon_matches
+                        break
+                except Exception:
+                    pass
     return [str(m.relative_to(project)) for m in matches]
 
 
@@ -2122,6 +2143,104 @@ def _class_skipped_gates(project: Path) -> Dict[str, str]:
     return skipped
 
 
+# v0.2.55 — pure-analog flow profile. A pure-analog IC (e.g. a stand-
+# alone ADC / LDO / bandgap) has NO digital RTL track at all: its
+# physical implementation is produced by the analog A1..A9 track, not by
+# the digital RTL→synth→PnR→GDS canonical steps. Without a class profile
+# the SOLE-ACCEPTANCE gate marks every digital step (stages 1-4) MISSING
+# and the whole flow FAILs, even though a pure-analog chip is COMPLETE
+# once its analog track signs off. These stages are the digital RTL→GDS
+# backend that a pure-analog IC replaces with the analog track. Mixed-
+# signal (M1-M4) is also N/A for a single-domain analog IC (no A+D GDS
+# merge). chip-AGNOSTIC: keyed off the registry contract, never a name.
+_PURE_ANALOG_NA_STAGES: frozenset = frozenset({
+    "stage1", "stage2", "stage3", "stage4", "stage_mixed_signal",
+})
+
+# Memoization cache keyed by resolved project path (string).
+_PURE_ANALOG_CACHE: Dict[str, Tuple[bool, str]] = {}
+
+
+def _project_is_pure_analog(project: Path) -> Tuple[bool, str]:
+    """True when the project's detected IC class is pure-analog with NO
+    digital RTL track — so the digital backend stages (1-4) + mixed-
+    signal (M1-M4) are N/A and replaced by the analog A1..A9 track.
+
+    Decision is fail-CLOSED and chip-AGNOSTIC:
+      - the registry class entry must say analog_applicable=True AND
+        rtl_gen=null AND fallback_skill=null (the analog-only signature),
+      - AND the project must carry no synthesisable RTL
+        (phase2/stage1/rtl/ empty),
+      - AND an analog block list must be present (canonical analog dir
+        or L5_ADI_SPEC.analog_blocks) so we never misclassify a digital
+        project that simply hasn't generated RTL yet.
+
+    Returns (is_pure_analog, reason). Any missing precondition → False.
+    """
+    key = str(project.resolve())
+    if key in _PURE_ANALOG_CACHE:
+        return _PURE_ANALOG_CACHE[key]
+    result: Tuple[bool, str] = (False, "")
+    try:
+        # (1) No synthesisable RTL anywhere canonical.
+        rtl_present = False
+        for cand in ("phase2/stage1/rtl", "rtl", "src", "hdl"):
+            d = project / cand
+            if d.is_dir() and (any(d.glob("*.sv")) or any(d.glob("*.v"))):
+                rtl_present = True
+                break
+        if rtl_present:
+            result = (False, "synthesisable RTL present")
+            _PURE_ANALOG_CACHE[key] = result
+            return result
+        # (2) Registry contract: analog-only class.
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        from ic_class_profile import detect_ic_class as _detect
+        profile = _detect(project) or {}
+        ic_class = str(profile.get("ic_class") or "unknown")
+        config = None
+        try:
+            reg = json.loads(
+                (PROGRAMS_DIR / "ic_class_registry.json").read_text())
+            for c in (reg.get("classes") or []):
+                if (c.get("name") == ic_class
+                        or ic_class in (c.get("synonyms") or [])):
+                    config = c
+                    break
+        except Exception:
+            config = None
+        analog_only_class = False
+        if config is not None:
+            analog_only_class = (
+                bool(config.get("analog_applicable"))
+                and config.get("rtl_gen") is None
+                and config.get("fallback_skill") is None)
+        elif profile.get("is_pure_analog") and not profile.get("is_pure_digital"):
+            analog_only_class = True
+        if not analog_only_class:
+            result = (False, f"class {ic_class!r} is not analog-only")
+            _PURE_ANALOG_CACHE[key] = result
+            return result
+        # (3) Analog block list must exist (guards against a digital
+        # project that merely lacks RTL).
+        if not _has_canonical_analog_blocks(project):
+            result = (False, "no analog block list — not confirmably analog")
+            _PURE_ANALOG_CACHE[key] = result
+            return result
+        result = (
+            True,
+            f"pure-analog class {ic_class!r} (analog_applicable=True, "
+            f"rtl_gen=null, fallback_skill=null), no digital RTL — digital "
+            f"backend (stages 1-4) + mixed-signal replaced by the analog "
+            f"A1..A9 track")
+    except Exception as e:
+        result = (False, f"pure-analog detection unavailable: {e}")
+    _PURE_ANALOG_CACHE[key] = result
+    return result
+
+
 def _run_structural_rtl_gates(project: Path,
                               strict_timing: bool = False,
                               allow_thin_input: bool = False
@@ -2270,11 +2389,26 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
             reasons.append(f"missing files (any_of={any_of}): {missing}")
         return passed, reasons
 
-    # `program_exit_zero` - single command
+    # `program_exit_zero` - single command.
+    # Accept BOTH the bare-string form ("prog . --args") AND the mapping
+    # form ({"command": "prog . --args"}). Some canonical flow steps (e.g.
+    # Step 16 Clock planning) author the gate as a YAML mapping with a
+    # `command:` key for readability; without this normalization shlex.split
+    # would receive a dict and crash the ENTIRE compliance run for every
+    # project that reaches such a step (chip-agnostic). This mirrors how
+    # `optional_program_exit_zero` already extracts spec["command"].
     if "program_exit_zero" in gate:
-        passed, out = _check_program_exit_zero(project, gate["program_exit_zero"])
+        _pez = gate["program_exit_zero"]
+        if isinstance(_pez, dict):
+            _cmd = _pez.get("command")
+            if not _cmd:
+                reasons.append("program_exit_zero: mapping form missing `command` key")
+                return False, reasons
+        else:
+            _cmd = _pez
+        passed, out = _check_program_exit_zero(project, _cmd)
         if not passed:
-            reasons.append(f"program failed: {gate['program_exit_zero']}")
+            reasons.append(f"program failed: {_cmd}")
             reasons.append(f"output: {out[:200]}")
         elif out.startswith(_VACUOUS_HINT_PREFIX):
             # Wave 93 — bubble the rc=2 vacuous signal up so check_step
@@ -2369,9 +2503,13 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
 _ENV_UNAVAILABLE_STEP_NAME_TO_ID: Dict[str, Any] = {
     "fpga_compile":         6,
     "fpga_early_prototype": 6,
-    "fpga_onboard_test":    36,
-    "fpga_final_signoff":   36,
-    "fpga_signoff":         36,
+    # Step 37 (not 36) is "FPGA final sign-off (recompile + on-board test)";
+    # step 36 is "Foundry Handoff" and is NOT FPGA. The prior 36 mapping
+    # meant an FPGA-no-board ENV_UNAVAILABLE waiver could never waive the
+    # actual FPGA final-signoff step. chip-AGNOSTIC step-id correction.
+    "fpga_onboard_test":    37,
+    "fpga_final_signoff":   37,
+    "fpga_signoff":         37,
     "drc":                  29,
     "lvs":                  29,
     "erc":                  29,
@@ -2518,8 +2656,51 @@ def _check_condition(project: Path, condition: Dict[str, Any]) -> bool:
             if "analog_block_list" in pat:
                 if _l9_has_analog_modules(project):
                     continue
+                # v0.2.55 — canonical-path tolerance. The analog runner
+                # writes the block list to the canonical analog dir
+                # (`_pl.analog_dir` = phase3/analog/), but the flow-def
+                # condition historically pins `phase1/analog/`. Accept the
+                # canonical location too, and fall back to L5_ADI_SPEC's
+                # `analog_blocks` array (Phase-1 doc-extraction emits it).
+                # chip-AGNOSTIC: existence of an analog block list anywhere
+                # canonical, never a chip name.
+                if _has_canonical_analog_blocks(project):
+                    continue
             return False
     return True
+
+
+def _has_canonical_analog_blocks(project: Path) -> bool:
+    """v0.2.55 — True if the project has an analog block list at the
+    canonical analog dir (`_pl.analog_dir`, i.e. phase3/analog/) OR the
+    Phase-1 L5_ADI_SPEC.json declares a non-empty `analog_blocks` array.
+
+    Closes the path drift between the analog runner (writes
+    phase3/analog/analog_block_list.json) and the flow-def condition
+    (pins phase1/analog/analog_block_list.json). chip-AGNOSTIC."""
+    try:
+        bl = _pl.analog_dir(project) / "analog_block_list.json"
+        if bl.is_file():
+            d = json.loads(bl.read_text())
+            blocks = d.get("blocks") or d.get("analog_blocks")
+            if isinstance(blocks, list) and len(blocks) > 0:
+                return True
+    except Exception:
+        pass
+    for cand in (_pl.generated_docs_dir(project) / "L5_ADI_SPEC.json",
+                 project / "phase1/generated_docs/L5_ADI_SPEC.json"):
+        try:
+            if not cand.is_file():
+                continue
+            d = json.loads(cand.read_text())
+            if d.get("no_analog") is True:
+                continue
+            blocks = d.get("analog_blocks") or d.get("blocks")
+            if isinstance(blocks, list) and len(blocks) > 0:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _l9_has_analog_modules(project: Path) -> bool:
@@ -2541,7 +2722,8 @@ def _l9_has_analog_modules(project: Path) -> bool:
     return False
 
 
-def check_step(project: Path, step: Dict[str, Any], waivers: Dict, skip_analog: bool = False) -> StepResult:
+def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
+               skip_analog: bool = False, skip_hardware: bool = False) -> StepResult:
     raw_id = step["id"]
     try:
         sid = int(raw_id)
@@ -2559,6 +2741,39 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict, skip_analog: 
         result.status = "SKIPPED-CONDITION"
         result.reasons.append("analog track skipped via --skip-analog")
         return result
+
+    # v0.2.55 — --skip-hardware: the two FPGA-board steps (6 = early-prototype
+    # SOF, 37 = final on-board sign-off) require a physical FPGA (DE10-Lite-
+    # class) attached. A pure doc→GDS run launched with --skip-hardware (the
+    # documented headless flow) cannot produce a .sof or run an on-board test,
+    # so these steps FAILed unconditionally with no way to honor the run mode.
+    # Mirror --skip-analog: downgrade them to WAIVED (review_required at
+    # foundry/board-bringup time). All OTHER steps still gate normally — the
+    # GDS, STA, DRC, LVS sign-off is unaffected. chip-AGNOSTIC.
+    if skip_hardware and isinstance(sid, int) and sid in (6, 37):
+        result.status = "WAIVED"
+        result.reasons.append(
+            "FPGA-board step waived via --skip-hardware: no physical FPGA "
+            "attached for a headless doc→GDS run (review_required at "
+            "board-bringup; GDS/STA/DRC/LVS sign-off unaffected)")
+        return result
+
+    # v0.2.55 — pure-analog flow profile. For a pure-analog IC (no digital
+    # RTL track), the digital backend stages (stage1-4) and mixed-signal
+    # (M1-M4) are N/A; the analog A1..A9 track produces the silicon. Mark
+    # those steps SKIPPED-CONDITION with a class-N/A reason instead of
+    # MISSING (which would fail the SOLE-ACCEPTANCE gate). The analog
+    # A-steps + D1 doc-completeness + manufacturing steps still gate.
+    # chip-AGNOSTIC + fail-closed (see _project_is_pure_analog).
+    step_stage = step.get("stage", "")
+    if step_stage in _PURE_ANALOG_NA_STAGES:
+        is_pa, pa_reason = _project_is_pure_analog(project)
+        if is_pa:
+            result.status = "SKIPPED-CONDITION"
+            result.reasons.append(
+                f"N/A for pure-analog IC: stage {step_stage!r} is the "
+                f"digital RTL→GDS backend — {pa_reason}.")
+            return result
 
     condition = step.get("condition")
     if condition and not _check_condition(project, condition):
@@ -2714,6 +2929,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--skip-analog", action="store_true",
         help=("v0.108: skip analog track steps (A1-A8). Intended for "
               "pure-digital ICs that have no analog blocks."),
+    )
+    p.add_argument(
+        "--skip-hardware", action="store_true",
+        help=("v0.2.55: waive the two FPGA-board steps (6 early-prototype "
+              "SOF, 37 final on-board sign-off) for a headless doc→GDS run "
+              "with no physical FPGA attached. Mirrors the runner's "
+              "--skip-hardware. GDS/STA/DRC/LVS sign-off is unaffected."),
     )
     p.add_argument(
         "--phase", choices=["2", "3", "all"],
@@ -2996,6 +3218,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if pre_pnr_result is not None:
         results.append(pre_pnr_result)
     skip_analog = getattr(args, 'skip_analog', False)
+    skip_hardware = getattr(args, 'skip_hardware', False)
     # Wave 91 / v1.6.15 — when the in-process pre-PnR Yosys gate emitted
     # a synthetic StepResult for id=14, suppress the YAML-driven Step 14
     # entry so the report doesn't list the same gate twice. The YAML
@@ -3013,7 +3236,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
         if suppress_yaml_step14 and sid == 14:
             continue
-        r = check_step(project, step, waivers, skip_analog=skip_analog)
+        r = check_step(project, step, waivers, skip_analog=skip_analog,
+                       skip_hardware=skip_hardware)
         results.append(r)
 
     # v0.100 H2: advisory — warn if post-route STA passed single-corner only
