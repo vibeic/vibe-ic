@@ -444,6 +444,33 @@ def check(project: Path, results_path: Path) -> dict:
             **info,
         }
 
+    # v0.2.55 — non-protocol IC N/A escape. A genuinely non-protocol IC
+    # (CPU SoC, pure datapath, reused-IP glue) has NO software-visible command
+    # opcodes, so there is NO command-byte oracle to verify. The full-stack TB
+    # generator marks this with `command_oracle_applicable: false` (derived from
+    # L3's own honest `no_opcodes_in_input: true`). When set, this gate is N/A
+    # and PASSes (functional verification for such ICs is via gate-level synth +
+    # Phase 3 + firmware execution, not a command-byte oracle). chip-AGNOSTIC:
+    # keyed on the doc's truthful N/A declaration, never on a chip name. This is
+    # NOT a waiver — the oracle legitimately does not apply to this IC class.
+    if data.get("command_oracle_applicable") is False:
+        return {
+            "program": "bit_level_full_stack_tb_oracle_check",
+            "pass": True,
+            "skipped": True,
+            "findings": [{
+                "rule": "COMMAND_ORACLE_NOT_APPLICABLE",
+                "severity": "INFO",
+                "message": (
+                    "results.json declares command_oracle_applicable=false "
+                    "(non-protocol IC: no software-visible command opcodes). "
+                    "Bit-level command-byte oracle is N/A; functional "
+                    "verification path is gate-level synth + Phase 3 + "
+                    "firmware execution."),
+            }],
+            **info,
+        }
+
     per_vector = data.get("per_vector")
     info["per_vector_count"] = (
         len(per_vector) if isinstance(per_vector, list) else None
@@ -473,19 +500,48 @@ def check(project: Path, results_path: Path) -> dict:
             ),
         })
 
-    # Rule 2: vectors_passed == vectors_total (when both present)
+    # Rule 2: vectors_passed == vectors_total (when both present).
+    # ORGANIC-20260606-structured-field-count-no-protocol-class (#428,
+    # second half): vectors the harness ITSELF marks UNVERIFIED (the
+    # connectivity-only skeleton TB's placeholder vectors) are a disclosed
+    # bucket, not functional fails — but ONLY while the documented
+    # connectivity-only waiver is active (never a silent green).
     vt = data.get("vectors_total")
     vp = data.get("vectors_passed")
+    unverified = 0
+    if isinstance(per_vector, list):
+        unverified = sum(
+            1 for v in per_vector
+            if isinstance(v, dict)
+            and str(v.get("verdict", "")).upper() == "UNVERIFIED")
+    info["vectors_unverified"] = unverified
+    conn_waived, conn_why = _waiver_connectivity(project)
+    deferred_rule2_warning = None
     if isinstance(vt, int) and isinstance(vp, int):
         if vp != vt:
-            findings.append({
-                "rule": "VECTORS_NOT_ALL_PASS",
-                "severity": "FAIL",
-                "message": (
-                    f"vectors_passed={vp} != vectors_total={vt}; "
-                    f"{vt - vp} vector(s) failed in this oracle run."
-                ),
-            })
+            if conn_waived and unverified > 0 and vp + unverified == vt:
+                deferred_rule2_warning = {
+                    "rule": "VECTORS_UNVERIFIED_CONNECTIVITY_ONLY",
+                    "severity": "WARN",
+                    "message": (
+                        f"vectors_passed={vp} != vectors_total={vt}, but "
+                        f"the {unverified} shortfall vector(s) are "
+                        f"harness-marked UNVERIFIED and the documented "
+                        f"connectivity-only waiver is active "
+                        f"(`{WAIVER_KEY_CONNECTIVITY}`) — counted in the "
+                        f"disclosed unverified bucket, not as functional "
+                        f"fails. Functional behaviour remains UNVERIFIED."),
+                    "waived": True,
+                }
+            else:
+                findings.append({
+                    "rule": "VECTORS_NOT_ALL_PASS",
+                    "severity": "FAIL",
+                    "message": (
+                        f"vectors_passed={vp} != vectors_total={vt}; "
+                        f"{vt - vp} vector(s) failed in this oracle run."
+                    ),
+                })
 
     # Rule 3: input_doc_evidence required + non-empty
     evidence = data.get("input_doc_evidence")
@@ -530,6 +586,8 @@ def check(project: Path, results_path: Path) -> dict:
             })
 
     warnings: list[dict] = []
+    if deferred_rule2_warning is not None:
+        warnings.append(deferred_rule2_warning)
 
     # ------------------------------------------------------------------
     # Rule 9 (ORGANIC-20260528): refuse a functional PASS built on
@@ -564,7 +622,7 @@ def check(project: Path, results_path: Path) -> dict:
         "placeholder": placeholder,
     }
 
-    conn_waived, conn_why = _waiver_connectivity(project)
+    # (conn_waived / conn_why resolved above at Rule 2.)
     if placeholder > 0:
         msg = (
             f"{placeholder}/{scored_with_golden + placeholder} scored "

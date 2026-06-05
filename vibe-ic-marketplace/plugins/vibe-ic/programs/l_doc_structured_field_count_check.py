@@ -314,6 +314,35 @@ _DATAPATH_COMPUTE_CLASSES = frozenset({
     "digital_arithmetic_primitive", "processor_cpu",
 })
 
+# Wave 36 fail-closed classes: detection ambiguity must NOT relax minimums.
+_NO_PROTOCOL_FAIL_CLOSED = frozenset({"bare_fpga", "unknown_protocol_class"})
+
+
+def _class_no_cmd_protocol(ic_class: str) -> bool:
+    """ORGANIC-20260606-structured-field-count-no-protocol-class (#428):
+    classes the runner's OWN registry marks `command_protocol_applicable=
+    False` AND that have no deterministic rtl_gen (pure datapath / compute
+    transforms) have no source for opcodes / registers / OTP — phase1
+    cannot synthesize protocol fields the spec does not contain, so the
+    protocol-chip minimums switch to an N/A-SKIPPED-CONDITION for them
+    (not a FAIL, not a waiver). Reuses the registry instead of a hardcoded
+    class list; falls back to the legacy datapath list when the registry
+    is unreadable. bare_fpga / unknown stay fail-closed per Wave 36."""
+    if ic_class in _NO_PROTOCOL_FAIL_CLOSED:
+        return False
+    try:
+        reg = json.loads(
+            (Path(__file__).resolve().parent / "ic_class_registry.json")
+            .read_text())
+        for e in reg.get("classes", []):
+            if (e.get("name") == ic_class
+                    or ic_class in (e.get("synonyms") or [])):
+                return (e.get("command_protocol_applicable") is False
+                        and e.get("rtl_gen") is None)
+    except (OSError, ValueError):
+        pass
+    return ic_class in _DATAPATH_COMPUTE_CLASSES
+
 
 def _check_l_doc(layer: int, data: dict,
                  escapes: dict[str, bool] | None = None,
@@ -332,6 +361,29 @@ def _check_l_doc(layer: int, data: dict,
     # auto-skips, and explicit facts.yaml escape booleans skip.
     if ic_class == "pure_analog" and layer in (3, 6, 7, 10):
         return True, ""
+    # v0.2.55 — datapath/compute classes (digital_arithmetic_primitive,
+    # processor_cpu) have NO command protocol (L3 opcodes) and NO control
+    # FSM (L6 states): their behavior is a deterministic data transform whose
+    # micro-architecture is delegated to the implementation. The runner's own
+    # class config marks command_protocol_applicable=false for these, and
+    # the compliance harness SKIPs every other protocol gate for them — so
+    # the L3-opcode (≥5) and L6-FSM (≥2) typed-field floors are likewise N/A.
+    # Without this, every pure-arithmetic IP (e.g. an spm multiplier) FAILs P0
+    # on L3=0-opcodes / L6=0-FSM-states that it legitimately has no source
+    # for. chip-AGNOSTIC: keyed on the datapath class, not on any chip.
+    # #428 — registry-flag N/A for the OPCODE minimum, DOUBLE-KEYED per the
+    # #419 doctrine (class flag AND L-doc evidence, fail-closed): a class
+    # with command_protocol_applicable=False + rtl_gen=null has no source
+    # for L3 opcodes, but the N/A additionally requires the doc's OWN
+    # honest empty record (an explicit `opcodes: []`). A blob-only L3 with
+    # NO opcodes key stays a FAIL — extraction failure can degrade class
+    # detection toward datapath, and a missing key must never ride that
+    # degradation into a silent N/A (the gameable chicken-egg). L6 stays a
+    # class-appropriate FLOOR (l6_min=2 below) per the filing — not a skip.
+    if _class_no_cmd_protocol(ic_class) and layer == 3:
+        ops = data.get("opcodes")
+        if isinstance(ops, list) and len(ops) == 0:
+            return True, ""
     if escapes.get("no_command_protocol") and layer in (3, 10):
         return True, ""
     if escapes.get("no_fsm") and layer == 6:
@@ -458,6 +510,22 @@ def _check_l_doc(layer: int, data: dict,
                 if v in (None, "", [], {}):
                     continue
                 n_otp_subfields += 1
+        # #428 double-keyed N/A (mirrors the #419 class-skip doctrine):
+        # a no-protocol datapath class whose L4 doc HONESTLY records zero
+        # registers AND zero otp content has no source for either — switch
+        # the minimum to an N/A-SKIPPED-CONDITION. The honest-empty key
+        # requirement (an EXPLICIT empty registers-alias list) keeps a
+        # blob-only doc with no key at all failing; partial content (1-4
+        # entries) keeps the floor — a source exists, so a shortfall is an
+        # extraction defect.
+        _honest_empty_regs = any(
+            isinstance(data.get(k), list) and len(data.get(k)) == 0
+            for k in ("registers", "regmap", "register_table",
+                      "register_entries", "logical_regions", "regions",
+                      "memory_map", "sections"))
+        if (max(n_regs, n_otp_subfields) == 0 and _honest_empty_regs
+                and _class_no_cmd_protocol(ic_class)):
+            return True, ""
         if max(n_regs, n_otp_subfields) < 5:
             return False, (
                 f"L4 regmap+otp_layout must carry ≥5 typed register "
@@ -621,9 +689,13 @@ def _check_l_doc(layer: int, data: dict,
         cases = (data.get("test_cases") or data.get("cases")
                  or data.get("vectors"))
         n_cases = _list_len_of_dicts(cases)
-        if n_cases < 5:
+        # #428 — class-appropriate floor: a no-protocol datapath primitive
+        # has no command sequences to enumerate, so its structured test-case
+        # floor falls back to ≥2 (a real floor, not a skip).
+        l10_min = 2 if _class_no_cmd_protocol(ic_class) else 5
+        if n_cases < l10_min:
             return False, (
-                f"L10 test_cases must carry ≥5 typed test cases; "
+                f"L10 test_cases must carry ≥{l10_min} typed test cases; "
                 f"have {n_cases}.")
     elif layer == 11:
         # Wave 32 — L11 jointly owns behavioral_sequences and
@@ -730,9 +802,11 @@ def _check_l_doc(layer: int, data: dict,
         # by the runner (lab_calibration_present==false / applicable==false).
         # Guarded: only an explicit False / explicit True no_lab flag counts —
         # a bare missing/empty field never does.
-        if n_cases < 5 and not _has_honest_no_lab(data):
+        # #428 — same class-appropriate floor as L10 for no-protocol classes.
+        l13_min = 2 if _class_no_cmd_protocol(ic_class) else 5
+        if n_cases < l13_min and not _has_honest_no_lab(data):
             return False, (
-                f"L13 lab_calibration / test_cases must carry ≥5 typed "
+                f"L13 lab_calibration / test_cases must carry ≥{l13_min} typed "
                 f"cases (or calibration_steps[] / lab_equipment[] / "
                 f"rig_pin_assignments{{}} entries), OR declare it has no lab "
                 f"calibration via an explicit honest signal "
