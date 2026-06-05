@@ -24,7 +24,14 @@ OTHER designs' testbenches / verified references, and any other run
 directory's `work/` or `samples/`. Sibling reference solutions encode the
 dataset's authoring conventions, so reading them is dataset-internal solution
 knowledge even though they are not the current design's own hidden files.
-Applies EQUALLY to close-loop / repair agents.
+Applies EQUALLY to close-loop / repair agents. Explicitly included:
+**dataset BUILD files** (Makefile / *.mk / run scripts — they encode
+module-name and flow authority) and **self-running the host scorer or any
+verdict-level oracle query mid-loop** (`score_*.py`, `benchmark_dispatch
+--score` — scoring is the HOST's post-generation step; self-verify with
+your OWN testbench only). Deterministic enforcement: transcripts exported
+to `<RUNDIR>/transcripts/` are audited by `programs/blindness_audit.py`
+at the score front door.
 
 ## Per-design procedure (every `<design>` in BATCHFILE)
 

@@ -46,7 +46,19 @@ sampling phases, encoding styles), so reading them is dataset-internal
 solution knowledge: it violates prompt-only blindness even though the file is
 not the current problem's own hidden file. This prohibition applies EQUALLY
 to every close-loop / repair / convention-sweep agent, not only single-shot
-authors.
+authors. It explicitly includes **dataset BUILD files** (Makefile / *.mk /
+CMakeLists.txt / run scripts) — they encode the dataset's module-name and
+flow authority and are dataset-internal solution knowledge.
+
+**NO SELF-SCORING (ORGANIC-20260605-blindness-deterministic-audit-guard).**
+You may NEVER invoke the host scorer (`score_*.py`, `benchmark_dispatch
+--score`) or make ANY verdict-level oracle query mid-loop — not in
+single-shot, not in close-loop. Scoring is the HOST's post-generation step.
+Self-verification means YOUR OWN testbench only. Enforcement is
+deterministic, not just this text: the orchestrator exports agent
+transcripts to `<RUNDIR>/transcripts/`, and `programs/blindness_audit.py`
+runs at the score front door — any non-prompt dataset access or
+command-shaped scorer invocation in a transcript FAILs the whole run.
 
 **CAPTURED-LESSON DIGEST (ORGANIC-20260605-shapec-lesson-digest-injection).**
 If `<RUNDIR>/lessons.md` exists (rendered by `benchmark_dispatch.py --setup`

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 636
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 636)
+- **Total programs (excluding helpers / shims):** 637
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 637)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 627 |
+| `any` | 628 |
 
 ## Alphabetical listing
 
@@ -107,6 +107,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `bit_level_full_stack_tb_oracle_check` | any | Wave 12 | v0.119.44 (Wave 12) plugin gate. |
 | `bitwidth_consistency_check` | any | — | flag Verilog bit-selects that exceed the |
 | `ble_protocol_synth` | any | v0.1.84 | Bluetooth Low Energy 5.2-class protocol synth helper. |
+| `blindness_audit` | any | — | deterministic prompt-only blindness audit. |
 | `bram_init_file_actually_loaded_check` | any | Wave 16 | Wave 16 CRITICAL gate. |
 | `bram_init_portable_compat_check` | any | v0.116 | BACKLOG-v11 P1.2. |
 | `bram_pdob_combinational_check` | any | v0.116 | BACKLOG-v11 P1.3 (WARNING-class). |
@@ -708,7 +709,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (627 programs)
+### `any` (628 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -791,6 +792,7 @@ _(no programs in this group)_
 - `bit_level_full_stack_tb_oracle_check` — v0.119.44 (Wave 12) plugin gate.  _[Wave 12]_
 - `bitwidth_consistency_check` — flag Verilog bit-selects that exceed the
 - `ble_protocol_synth` — Bluetooth Low Energy 5.2-class protocol synth helper.  _[v0.1.84]_
+- `blindness_audit` — deterministic prompt-only blindness audit.
 - `bram_init_file_actually_loaded_check` — Wave 16 CRITICAL gate.  _[Wave 16]_
 - `bram_init_portable_compat_check` — BACKLOG-v11 P1.2.  _[v0.116]_
 - `bram_pdob_combinational_check` — BACKLOG-v11 P1.3 (WARNING-class).  _[v0.116]_

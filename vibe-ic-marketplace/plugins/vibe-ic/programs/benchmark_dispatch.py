@@ -415,6 +415,28 @@ def cmd_score(bench: str, run: str, dataset: str | None):
         if not cfg.is_file():
             raise SystemExit("Pass --dataset, or run --setup first to pin the dataset path.")
         ds_p = Path(json.loads(cfg.read_text())["dataset"])
+    # Front-door blindness audit (ORGANIC-20260605-blindness-deterministic-
+    # audit-guard): when the orchestrator exported batch-agent transcripts to
+    # <RUNDIR>/transcripts/, audit them deterministically — any non-prompt
+    # dataset access (sibling refs/tests, build files) or agent-side scorer
+    # self-run REFUSES scoring. No transcripts exported -> explicit NOTICE
+    # (the audit cannot vouch for a run it never saw).
+    audit = Path(__file__).resolve().parent / "blindness_audit.py"
+    tdir = run_p / "transcripts"
+    if audit.is_file() and tdir.is_dir():
+        rc = subprocess.call([sys.executable, str(audit), "--dataset",
+                              str(ds_p), "--bench", bench, str(tdir)])
+        if rc == 1:
+            raise SystemExit(
+                "blindness audit FAILed — an agent accessed non-prompt "
+                "dataset files or self-ran the host scorer (offending "
+                "transcript + path named above). The run is not blind and "
+                "CANNOT be scored as canonical; fix the orchestration and "
+                "re-run clean-room.")
+    elif audit.is_file():
+        print("NOTICE: <RUNDIR>/transcripts/ not present — blindness audit "
+              "skipped. Export batch-agent transcripts there to enable the "
+              "deterministic guard (ORGANIC-20260605).")
     scorer = HARNESS / e.get("scorer", "score_iverilog_tb.py")
     cmd = [sys.executable, str(scorer), "--bench", bench, "--dataset", str(ds_p), "--run", str(run_p)]
     print("$ " + " ".join(cmd))

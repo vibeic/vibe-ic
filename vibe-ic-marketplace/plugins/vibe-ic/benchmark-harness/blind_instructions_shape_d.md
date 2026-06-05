@@ -29,7 +29,13 @@ outside the current `<PROJECT>`'s blind inputs — explicitly including OTHER
 projects' `score/` harnesses, reference solutions, and any other run
 directory's outputs. Sibling references encode the dataset's authoring
 conventions, so reading them is dataset-internal solution knowledge.
-Applies EQUALLY to close-loop / repair agents.
+Applies EQUALLY to close-loop / repair agents. Explicitly included:
+**dataset BUILD files** (Makefile / *.mk / docker-compose — flow and
+naming authority) and **self-running the scoring harness or any
+verdict-level oracle query mid-loop** (scoring is the HOST's
+post-generation step; self-verify with your OWN testbench only).
+Deterministic enforcement: transcripts exported to
+`<RUNDIR>/transcripts/` are audited by `programs/blindness_audit.py`.
 
 ## Procedure
 

@@ -259,12 +259,20 @@ the authoring context starting **EMPTY**. A clean-room run MUST NOT read:
 3. **any cached result in storage** (no reading a prior `pass_at_1.json` / `cocotb_score.json`
    to decide what to author);
 4. **any dataset file other than the current problem's prompt** — explicitly including OTHER
-   problems' reference solutions / testbenches (ORGANIC-20260605-blindness-rule-cross-problem-refs).
-   Sibling references encode the dataset's authoring conventions (axis orders, sampling phases,
-   encoding styles); calibrating against them is dataset-internal solution knowledge that
-   satisfies the letter of "don't read THIS problem's hidden files" while violating prompt-only
-   blindness. This binds single-shot authors AND every close-loop / repair / convention-sweep
-   agent — write the prohibition into every close-loop prompt you spawn.
+   problems' reference solutions / testbenches (ORGANIC-20260605-blindness-rule-cross-problem-refs)
+   AND dataset BUILD files (Makefile / *.mk / run scripts — they encode the dataset's module-name
+   and flow authority). Sibling references encode the dataset's authoring conventions (axis
+   orders, sampling phases, encoding styles); calibrating against them is dataset-internal
+   solution knowledge that satisfies the letter of "don't read THIS problem's hidden files"
+   while violating prompt-only blindness. This binds single-shot authors AND every close-loop /
+   repair / convention-sweep agent — write the prohibition into every close-loop prompt you spawn;
+5. **the host scorer** — no agent-side `score_*.py` / `benchmark_dispatch --score` invocation and
+   no verdict-level oracle query mid-loop (ORGANIC-20260605-blindness-deterministic-audit-guard);
+   scoring is the HOST's post-generation step, and an agent's self-verification means its OWN
+   testbench only. Enforcement is deterministic, not prose: export batch-agent transcripts to
+   `<RUNDIR>/transcripts/` and `programs/blindness_audit.py` audits them at the score front door
+   (wired into `benchmark_dispatch.py --score`) — any non-prompt dataset access or command-shaped
+   scorer invocation FAILs the run before scoring.
 
 Why clean-room is the only honest number: re-running only the prior FAILing set inherits the
 prior PASSes, so the headline mixes a fresh agent (on the fails) with an arbitrary prior session
