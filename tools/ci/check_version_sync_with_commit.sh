@@ -16,8 +16,10 @@
 #     .git/COMMIT_EDITMSG (pre-commit hook). Falls back to first arg.
 #   * Extracts the FIRST `vX.Y.Z` mention in the SUBJECT line (line 1).
 #     Body lines are scanned only if subject has no version. A mention
-#     immediately preceded by "supersedes" / "(was " / "fixes " / "from"
-#     is treated as a HISTORICAL reference and skipped.
+#     preceded (within a short look-back window) by "supersedes" / "(was" /
+#     "fixes" / "from" / "since" / "replaces" / "history" / "deprecates" /
+#     "predecessor" is a HISTORICAL reference and skipped — both the
+#     "from v1.2.3" and the bare "from 1.2.3" spellings.
 #   * If no version is advertised anywhere, exit 0 (skip — not applicable).
 #   * If advertised version exists, BOTH plugin.json and marketplace.json
 #     must already match it. Mismatch → exit 1 with diagnostic.
@@ -74,14 +76,23 @@ if not lines:
 
 # Pattern: optional 'v', then X.Y.Z (Z required). Reject e.g. "1.0" alone.
 VER_RE = re.compile(r"\bv?(\d+\.\d+\.\d+)\b")
-HIST_MARKERS = ("supersedes", "(was", "(was ", "fixes v", "from v", "since v",
-                "history", "deprecates", "replaces v", "predecessor")
+# Markers are 'v'-free: the look-back window is sliced at the DIGITS (see
+# below), so for "from v1.2.3" the window ends "...from v" and for the bare
+# "from 1.2.3" it ends "...from " — a bare "from " marker matches both.
+# (ORGANIC-20260606-version-claim-marker-window-off-by-v: the old window was
+# sliced at m.start() — the 'v' itself — so every marker that carried a
+# trailing " v" could NEVER appear inside the window; "iter-5 from v0.2.50"
+# hard-failed despite the documented exemption.)
+HIST_MARKERS = ("supersedes", "(was", "fixes ", "from ", "since ",
+                "history", "deprecates", "replaces ", "predecessor")
 
 def first_version(line: str):
     """Return the first non-historical vX.Y.Z mention in `line`, or None."""
     for m in VER_RE.finditer(line):
-        # Look at the substring left of the match for a historical marker.
-        prefix_window = line[max(0, m.start() - 30):m.start()].lower()
+        # Look-back window left of the DIGITS (m.start(1)), keeping the
+        # optional 'v' prefix inside the window so a marker can abut the
+        # version mention in both its "v1.2.3" and "1.2.3" spellings.
+        prefix_window = line[max(0, m.start(1) - 30):m.start(1)].lower()
         if any(mk in prefix_window for mk in HIST_MARKERS):
             continue
         return m.group(1)
