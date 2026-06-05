@@ -194,7 +194,27 @@ _MACRO_HINT_RE = re.compile(r"\b\w*(?:macro|pll|dll|phy|io_pad|bandgap)\w*\b", r
 
 
 def features_from_project(project_dir: Path) -> ComplexityFeatures:
-    rtl_files = gate_utils.find_rtl_files(project_dir)
+    # ORGANIC-20260606 #436 — scope to the DESIGN RTL. The project-wide
+    # rglob counted analog behavioral stubs / FPGA harness templates as
+    # design source, so a zero-RTL (pure-analog) project reported nonzero
+    # loc/module/SRAM counts in its complexity advisory. Prefer the
+    # canonical rtl dir; fall back to the legacy sweep only when no
+    # canonical layout exists.
+    rtl_files: list = []
+    try:
+        import _path_layout as _pl
+        canon = _pl.rtl_dir(Path(project_dir))
+        if canon.is_dir():
+            rtl_files = sorted(canon.glob("*.v")) + sorted(canon.glob("*.sv"))
+    except Exception:
+        pass
+    if not rtl_files:
+        canon_probe = Path(project_dir) / "phase2" / "stage1" / "rtl"
+        if canon_probe.is_dir():
+            rtl_files = (sorted(canon_probe.glob("*.v"))
+                         + sorted(canon_probe.glob("*.sv")))
+        else:
+            rtl_files = gate_utils.find_rtl_files(project_dir)
     loc = 0
     clocks: set = set()
     max_width = 1
