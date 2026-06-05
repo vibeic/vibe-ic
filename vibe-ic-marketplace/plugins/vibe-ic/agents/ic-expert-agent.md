@@ -227,48 +227,13 @@ sample against your registered-latency. *Miss class:* hysteresis FSMs with outpu
 and one-hot FSMs with table-driven transitions — both turn on a single carefully-read transition or
 boundary.
 
-**Hysteresis / history-dependent FSMs.** When an output depends on *how* a state was reached, model
-the history explicitly before declaring a spec defect — and use the dedicated full worked structure
-in the next Skill section; naming the converging reading alone is NOT enough to reproduce a pass.
-
-### Skill: hysteresis level-controller — the held flag's FULL structure (reset-equivalence + boundary-row anchored)
-
-For thermometer-sensor level controllers (tank / reservoir class) whose supplemental/direction
-output depends on "the level previous to the last sensor change", FOUR elements are pinned
-simultaneously — three lesson-guided blind sweeps that each got a different ONE wrong all failed
-the oracle while passing their own TBs, so name all four explicitly before writing RTL:
-
-1. **Registered level, Moore decode.** Register the decoded level (count of asserted thermometer
-   sensors; non-thermometer codes HOLD the previous level). EVERY output — the nominal per-band
-   outputs AND the supplemental flag — decodes from the REGISTERED level, never combinationally
-   from the raw sensor inputs. (Observed fail: correct flag polarity but nominal outputs decoded
-   `~s[k]` straight off the sensors — every value right, one cycle early, oracle-FAIL.)
-2. **The flag is a HELD register whose update set is exactly {level CHANGE}.** fall (new<cur) → 1
-   (open supplemental), rise (new>cur) → 0, dwell (new==cur) → HOLD through arbitrarily long
-   dwells. Compare new_level against the REGISTERED level and update on the same clock edge the
-   level register absorbs the change.
-3. **Polarity comes from the behaviourally-pinned anchors, NOT from the relative direction
-   sentence.** Such prompts often carry "if the previous level was lower than the current, open
-   the supplemental valve" — the literal antecedent reads RISE→open. Do NOT implement that
-   literal reading when the spec also pins: (a) the reset-equivalence sentence ("reset == level
-   low for a long time, ALL outputs asserted") — flag=1 while at/falling-to the bottom; and
-   (b) the boundary table rows — bottom row "maximum flow, both valves open" (flag=1), top row
-   "flow zero" (flag=0). Bottom is only reached by FALLING, top only by RISING, so the anchors
-   fix FALL→1 / RISE→0 — the OPPOSITE of the literal sentence. Behaviourally-pinned anchors
-   (reset equivalence + boundary rows) outrank a relative prose sentence with an ambiguous
-   antecedent. (Observed fail: paired direction-states, everything right except literal
-   RISE→open polarity — oracle-FAIL on more than half the vectors.)
-4. **Output-vector mapping per band** (registered level L, bands 0=bottom..N=top): nominal
-   outputs are monotone threshold decodes (`out_k = (L <= threshold_k)`) read row-by-row from the
-   spec's table; supplemental = the held flag, optionally with boundary overrides bottom→1 /
-   top→0 — the overrides are behaviourally redundant given elements 2+3 (any reachable arrival
-   at bottom set the flag; at top cleared it) and overrides ALONE rescue nothing if another
-   element is wrong; what is NOT optional is the HOLD through dwells.
-
-Paired direction-states (split each interior band into arrived-from-below / arrived-from-above)
-are an EQUIVALENT encoding — but only with element-3 polarity (the fell-into states carry
-flag=1). The held-flag form is smaller and harder to get wrong. Both verified-passing readings
-of this class use: registered level + held flag + fall→1 + Moore decode.
+**Hysteresis / history-dependent FSMs.** When an output depends on *how* a state was reached (the
+direction of travel), the machine needs PAIRED states, not one state per level — e.g. a tank
+controller with levels splits each interior level into "arrived-from-below" / "arrived-from-above"
+states (B1/B2, C1/C2) so a supplemental-flow output can differ on the way up vs down. If a spec
+reads as "contradictory" (e.g. "open dfr when the previous level was lower" vs a reset that asserts
+it at the bottom), the resolution is usually a hysteresis FSM with a defined reset-arrival state,
+not an actual contradiction — model the history explicitly before declaring a defect.
 
 ### Skill: dual-edge flip-flop (both clock edges)
 A flop that must capture `d` on BOTH clock edges cannot use `always @(posedge clk or negedge clk)`
@@ -1122,3 +1087,271 @@ _Captured by benchmark-enhancement-capture 2026-06-02._
 **Why this is GENERAL**: the recoverable/fatal classification comes from the protocol's published error-response semantics, not from any testbench; documenting it is faithful transcription.
 
 _Captured by benchmark-enhancement-capture 2026-06-02._
+
+### Skill: Don't-care grouping should default to the canonical minimal-SOP form
+
+**Pattern**: A combinational truth table or K-map with don't-care cells admits many spec-valid implementations; an independent reference oracle usually encodes the canonical minimal sum-of-products in which don't-cares are absorbed into the LARGEST prime implicant (e.g. preferring a 2-literal product term over a 3-literal one).
+
+**When to apply**: Authoring combinational logic from a truth table or K-map that contains don't-cares, where the own-testbench leaves the don't-care rows unconstrained.
+
+**What to do**: Among the spec-valid coverings, choose the canonical minimal-SOP grouping (absorb don't-cares into the largest implicant) rather than an arbitrary care-only covering; it is the most likely to agree with an independent reference on the don't-care rows.
+
+**Worked pattern** (anonymized): A care set whose only required minterms sit under a wide 2-literal term should be expressed with that 2-literal term plus the remaining care term, not split into narrower 3-literal terms that happen to also cover the care set.
+
+**Why this is GENERAL**: Applies to any combinational generation from an incompletely-specified truth table or K-map across digital benchmarks.
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: An apparent one-cycle output lag in a waveform is a SINGLE registered stage, not a pipeline
+
+**Pattern**: When a waveform shows an output that looks delayed by one clock relative to an input, the most faithful reading is a single flop whose non-blocking assignment samples the input's pre-edge value — adding a second register to explain the lag double-delays the output and fails the reference.
+
+**When to apply**: Deriving sequential RTL from a timing diagram or waveform where output appears to trail an input by one cycle.
+
+**What to do**: Implement one registered stage (output gets function(input) under the stated clock and reset); do NOT insert an extra pipeline register. Use a discriminating transition (e.g. the cycle where the input changes exactly at the sampling edge) to distinguish single-flop from two-flop before committing.
+
+**Worked pattern** (anonymized): Output equals the inverse of the input sampled at the previous rising edge maps to a single registered inverter, not a two-stage shift.
+
+**Why this is GENERAL**: Applies to any waveform-to-RTL sequential inference across benchmarks.
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: MSB-first serial load — the new bit enters the LSB and the register shifts LEFT; the MSB-entry form is the bit-reversing ANTI-PATTERN
+
+**Pattern**: "Shifted in MSB-first" means the FIRST received bit must sit at the MSB after the load completes. The ONLY structure that achieves this is the one-line idiom: **each new bit enters at the LSB end and the register shifts LEFT** — `q <= {q[W-2:0], serial_in};`. Prose statements of direction invert under paraphrase — decide by the worked trace below, never by your verbal reading of "MSB-first".
+
+**ANTI-PATTERN (the textually-tempting REVERSED form — do NOT write this)**: wiring the serial input at the MSB end with a right shift, `q <= {serial_in, q[W-1:1]};`, *looks* like "MSB-first" because each new bit visibly lands at the most-significant position. It is bit-REVERSED: every later bit pushes the earlier bits toward the LSB, so the FIRST (most-significant) bit ends up at the LSB. Two independent digest-primed authors produced exactly this form in one campaign while citing this lesson's title. Mechanical check: **if your new bit is concatenated at the MSB end, you have the wrong form.**
+
+**4-bit worked trace** (feed b3, b2, b1, b0 in that order; the register must read {b3,b2,b1,b0} when done):
+
+- CORRECT `q <= {q[2:0], in}`:  `0000` → `0 0 0 b3` → `0 0 b3 b2` → `0 b3 b2 b1` → **`{b3,b2,b1,b0}`** ✓
+- WRONG `q <= {in, q[3:1]}`:  `0000` → `b3 0 0 0` → `b2 b3 0 0` → `b1 b2 b3 0` → **`{b0,b1,b2,b3}`** ✗ bit-reversed
+
+**When to apply**: Authoring any serial-to-parallel shift register, LFSR-style loader, or shift-and-count block where the prose states MSB-first (or first-bit-is-most-significant) loading. For LSB-first loading the two forms swap roles (new bit enters MSB, shift RIGHT).
+
+**What to do**: Write the one-line correct idiom `q <= {q[W-2:0], serial_in};`, then run the 4-bit trace above (or any asymmetric directed sequence — e.g. feeding 1,0,1,1 must read 1011, not 1101) in your OWN testbench before emitting.
+
+**Why this is GENERAL**: Applies to every serial-load register across benchmarks and real protocol ICs (shift-register frontends, command deserializers); direction/polarity lessons need a shown-wrong-form plus a numeric trace, the same structure that fixed the hysteresis lesson.
+
+_Captured by benchmark-enhancement-capture 2026-06-05; anti-pattern rewrite per ORGANIC-20260605-msbfirst-lesson-antipattern-rewrite._
+
+### Skill: K-map axis convention: the FIRST-listed variable pair labels the COLUMNS
+
+**Pattern**: A textual K-map whose header lists all four variables in one run (e.g. a header naming the first pair then the second pair) conventionally assigns the FIRST-listed pair to the COLUMN labels and the SECOND pair to the ROW labels (column-first convention, as used by the common university sources these benchmarks derive from). Reading it row-first transposes the map and yields a plausible but wrong ON-set.
+
+**When to apply**: Transcribing any prose/ASCII K-map where the axis assignment is implied by variable listing order rather than stated explicitly.
+
+**What to do**: Assign the first-listed variable pair to columns, the second to rows, both in Gray order 00,01,11,10. Reconstruct the full ON-set cell by cell, then sanity-check by re-deriving two or three cells from the original grid. If a first attempt fails a hidden check, transposing the axes is the FIRST alternative reading to try.
+
+**Worked pattern** (anonymized): A sixteen-cell map read column-first gave an ON-set differing in six cells from the row-first reading; only the column-first reading matched the reference.
+
+**Why this is GENERAL**: Applies to every prose-rendered K-map across benchmarks; the same transposition trap exists for truth tables printed with multi-variable headers.
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: Cycle-window FSMs: windows are NON-overlapping — never reuse the last sample as the next window's first
+
+**Pattern**: Specs that examine an input over fixed windows of N cycles (count how many times the input is high during each group of N cycles) mean DISJOINT windows: cycles 1..N, then N+1..2N. A tempting FSM optimization that lets the Nth sample double as the next window's first sample makes windows overlap by one cycle and drifts the phase of every subsequent decision.
+
+**When to apply**: Authoring FSMs that evaluate an input over repeated fixed-length cycle groups (debounce windows, sampling frames, periodic decision points).
+
+**What to do**: Structure the FSM so each window consumes exactly N fresh cycles and the next window starts on the cycle AFTER the previous window's last sample. Self-verify with a stimulus whose decisive bits sit exactly on window boundaries — overlap bugs only show up there.
+
+**Worked pattern** (anonymized): With three-cycle windows, a decision made on cycles 1-2-3 must be followed by a window over cycles 4-5-6; an implementation deciding on 3-4-5 passed random stimulus but failed boundary-aligned stimulus.
+
+**Why this is GENERAL**: Applies to all framed/windowed counting logic across benchmarks and protocol ICs (bit-period sampling, frame counters).
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: One-hot next-state equations: enumerate EVERY in-edge per state, including SELF-LOOPS
+
+**Pattern**: Deriving one-hot next-state logic by in-edge inspection (next-state of S = OR of every edge arriving at S) fails silently when a hold condition is forgotten: a state that waits on a condition has a SELF-LOOP in-edge (state stays while condition false) that is easy to omit because the prose phrases it as wait until rather than as a transition.
+
+**When to apply**: Writing next-state equations for any one-hot (or explicit-equation) FSM from a prose/tabular state description, especially states described with wait/until/keep-counting phrasing.
+
+**What to do**: For each state, list arrival edges from OTHER states AND the self-loop term (state AND NOT leave-condition). Cross-check: every state with a conditional exit must appear in its own next-state equation. Self-verify with a stimulus that parks the FSM in each waiting state for several cycles.
+
+**Worked pattern** (anonymized): A counting state that waits for a done flag needs next-count = (entry-edge) OR (count AND NOT done); dropping the second term makes the FSM fall out of the state after one cycle and fail only on multi-cycle dwells.
+
+**Why this is GENERAL**: Applies to every FSM authored from prose transitions across benchmarks and real ICs; self-loop omission is among the most common FSM authoring bugs.
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: Anchor ambiguous output semantics with the spec's reset-equivalence sentence
+
+**Pattern**: When a spec defines reset as equivalent to some physical condition having held for a long time (e.g. reset behaves as if the level has been low for a long time), that sentence pins the OUTPUT VALUES of the corresponding steady state — and transitively disambiguates otherwise-ambiguous conventions (direction sense of a history flag, hold-vs-recompute semantics). A reading that cannot reproduce the anchored steady state from normal operation is wrong even if it satisfies every other sentence.
+
+**When to apply**: Any FSM spec where a history-dependent output admits two direction/hold readings AND the reset clause is phrased as equivalence to a long-held physical condition.
+
+**What to do**: First derive the anchored steady state's full output vector from the reset clause. Then test each candidate reading: drive the machine into that physical condition for many cycles and require the outputs to converge to the anchored vector. Keep only the reading that converges; make history flags HELD registers (update on change, hold on steady) when the anchor requires a value to persist through a long dwell.
+
+**Worked pattern** (anonymized): A history flag two readings called rise-implies-one vs fall-implies-one was settled because only fall-implies-one with hold-on-steady reproduces the all-outputs-asserted state the reset clause anchors for a long low dwell.
+
+**Why this is GENERAL**: Applies to any spec with a reset-as-equivalence clause across benchmarks and real ICs (power-on defaults, brown-out semantics).
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: Single next-state-bit problems: the answer is the SELECTED BIT of the destination state's encoding, row by row
+
+**Pattern**: Problems that ask for one next-state signal (one bit of the next-state vector) over an encoded-state transition table are pure table transcription: for every (state, input) row, look up the DESTINATION state's binary encoding and take exactly the asked-for bit position. The recurring bug is mislabeling which bit of the encoding corresponds to the asked signal (e.g. taking the middle bit when the signal indexes a different position), which silently corrupts about half the rows.
+
+**When to apply**: Any one-bit-of-next-state derivation over a table of encoded states (state assignment given as binary codes).
+
+**What to do**: Build the full (state, input) → destination table first; write each destination's encoding beside it; then column-extract the single asked-for bit index. Cross-check two rows whose destinations differ only in that bit. Leave unused encodings as don't-cares.
+
+**Worked pattern** (anonymized): With three-bit encodings, the signal asking for bit one must read the MIDDLE bit of each destination code — a row going to a state encoded one-zero-zero contributes zero, not one.
+
+**Why this is GENERAL**: Applies to every encoded-FSM next-state-equation extraction across benchmarks and real designs.
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: A waveform whose output changes WHILE the clock is high is a transparent latch, not an edge FF
+
+**Pattern**: Reverse-engineering a sequential circuit from a simulation waveform table: if an output changes value at multiple timestamps INSIDE a single clock-high window (not only at the rising edge), the storage element is a level-sensitive transparent latch (output follows input while clock is high, holds while low). A second output that only updates when the clock FALLS is a negedge-captured register of the first.
+
+**When to apply**: Any 'read the waveforms and implement the circuit' problem where outputs are sampled at sub-period granularity. Scan each clock-high window: >1 output transition inside the window rules out a posedge FF.
+
+**What to do**: Author the transparent element as `always @(*) if (clock) p = a;` (latch inference intended), and check the second output against the falling edge (`always @(negedge clock)`). Self-verify by replaying the published waveform rows in the own-TB at the same timestamps.
+
+**Worked pattern** (anonymized): An output p that follows input a through 5 changes during one clock-high window, while q only takes p's value when clock drops, is `if (clock) p = a;` plus a negedge register — a posedge-FF reading reproduces the edge rows but fails every mid-window row.
+
+**Why this is GENERAL**: Waveform-to-RTL reverse engineering appears across benchmarks and silicon bring-up (scope traces); the mid-window-transition discriminator is universal for latch-vs-FF.
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: In-edge input-labels are transcribed row-by-row from the table — never inferred from symmetry
+
+**Pattern**: Companion to 'One-hot next-state equations: enumerate EVERY in-edge per state'. After enumerating the arrival edges, the second silent killer is assigning the WRONG input label to an enumerated edge: edges converging on one destination often (but not always) share the same input value, and an author who pattern-guesses (e.g. assumes the edges alternate 0/1, or copies the label of the textually-nearest row) corrupts the OR term while keeping its structure plausible.
+
+**When to apply**: Deriving next-state OR-equations from a prose/tabular edge list (one-hot or encoded), especially when several sources converge on one destination state.
+
+**What to do**: For each in-edge, copy the input label from ITS OWN table row, one row at a time; then re-read every row a second pass purely to confirm the label. Cross-check: if all in-edges to a destination carry the same input value, the equation factors as (OR of sources) & input — verify that factoring against each row before using it.
+
+**Worked pattern** (anonymized): Four edges converging on one state all carried input one in the table; the failing attempt had split them across input values by symmetry-guessing, producing a structurally-plausible but row-inconsistent OR term. Transcribing the four rows literally gave (OR of the four source state bits) ANDed with the input, and passed.
+
+**Why this is GENERAL**: Edge-label transcription applies to every FSM derived from a transition table across benchmarks and real ICs; it is independent of encoding style.
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: Cycle-window FSMs are back-to-back: the report cycle IS the next window's first sample — never insert a throwaway cycle
+
+**Pattern**: Companion to 'Cycle-window FSMs: windows are NON-overlapping'. Non-overlapping does NOT mean separated: consecutive examination windows are contiguous, and the cycle in which the result output is asserted is simultaneously the FIRST sampling cycle of the next window. Inserting a dedicated throwaway/reset cycle after the report makes every window after the first drift by one cycle — and the bug is invisible to a naive own-testbench because the FIRST window is identical in both readings.
+
+**When to apply**: Any FSM spec that examines an input over fixed-length windows of clock cycles and asserts a result in the cycle after each window, especially when the spec asks for as few states as possible.
+
+**What to do**: Structure the state graph so the result-asserting states transition directly into the position-one states of the next window AND sample the input in that same cycle. Self-verify with an own-TB golden that runs MULTIPLE consecutive windows (thousands of randomized cycles), never just the first window.
+
+**Worked pattern** (anonymized): A three-cycle window machine needs the eight-state form where the position-three states feed position-one states that both carry the result and sample the next window's first input; the failing version added two result-only states, making each window four cycles, and matched the correct machine on window one only.
+
+**Why this is GENERAL**: Applies to every fixed-window examination FSM (serial protocol framers, pattern monitors, duty counters) across benchmarks and real ICs; the as-few-states-as-possible clause is the standard tell.
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: Startup undefined rows in a waveform are the sampling phase, not an extra pipeline stage — prefer the single-stage reading
+
+**Pattern**: Extends 'An apparent one-cycle output lag in a waveform is a SINGLE registered stage'. When a reverse-engineering waveform shows the output undefined for the first one or two rows and then tracking (or inverting) the input with apparent lag, TWO readings reproduce the defined rows: a single registered stage observed PRE-edge (the row shows the value going INTO the edge), or a two-stage chain observed post-edge. They are indistinguishable on the defined rows alone — but the single-stage reading is the canonical one, and the undefined startup rows are exactly the single register's power-up value seen through the pre-edge sample, not evidence of a second stage.
+
+**When to apply**: Any 'read the simulation waveform and implement' problem where the output column starts with undefined rows and then follows the input with a fixed lag; especially when a first attempt with a multi-stage chain fails.
+
+**What to do**: Tabulate the rows under the pre-edge sampling convention first (row value = register value entering that edge). Test the single-stage candidates (registered input, registered inverse) against every DEFINED row before considering any multi-stage chain. Check polarity from the first defined row. Do not hand-manage initial values to recreate undefined rows — the defined rows decide the circuit.
+
+**Worked pattern** (anonymized): An output column reading undefined, undefined, then the inverse of the input two rows back is the single inverting register sampled pre-edge; the two-register chain satisfies the same defined rows under post-edge sampling but is the wrong (non-canonical) reading.
+
+**Why this is GENERAL**: Waveform-to-RTL reverse engineering with undefined startup rows appears across benchmarks and lab bring-up; the pre-edge tabulation discipline resolves the stage-count ambiguity generally.
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: An INFERRED optional handshake port must degrade gracefully when unconnected
+
+**Pattern**: Extends the inferred downstream-ready lesson. When prose like 'whether the result has been consumed' implies a ready/consume input the stated port list omits, the testbench may bind it OR leave it unconnected (it floats to high-impedance). A consume condition written as valid AND ready then never fires under the float, the valid flag latches high after the first transaction, and a start gate of request AND NOT valid deadlocks every later operation — the failure surfaces only from the second transaction onward.
+
+**When to apply**: Any time a port is added on prose inference rather than the stated port list, especially valid/ready handshakes on iterative blocks (dividers, multi-cycle ALUs, FIFO-like interfaces).
+
+**What to do**: Make the inferred port's semantics robust to ALL bindings: consume = ready OR request-withdrawn (or an equivalent self-clearing path) so the flag clears whether the port is pulsed, tied high, tied low, or unconnected. Self-verify the SECOND and THIRD transactions under each of the four bindings — first-transaction-only tests miss the deadlock entirely.
+
+**Worked pattern** (anonymized): An iterative divider whose valid cleared only on valid-and-ready passed one division and wedged forever when ready floated; changing consume to ready-or-request-withdrawn passed exhaustive sweeps under pulsed, tied-high, tied-low, and floating bindings alike.
+
+**Why this is GENERAL**: Applies to every prose-inferred optional port across benchmarks and real ICs; the float-z deadlock is generic Verilog semantics, independent of design class.
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: hysteresis level-controller — the held flag's FULL structure (reset-equivalence + boundary-row anchored)
+
+For thermometer-sensor level controllers (tank / reservoir class) whose supplemental/direction
+output depends on "the level previous to the last sensor change", FOUR elements are pinned
+simultaneously — three lesson-guided blind sweeps that each got a different ONE wrong all failed
+the oracle while passing their own TBs, so name all four explicitly before writing RTL:
+
+1. **Registered level, Moore decode.** Register the decoded level (count of asserted thermometer
+   sensors; non-thermometer codes HOLD the previous level). EVERY output — the nominal per-band
+   outputs AND the supplemental flag — decodes from the REGISTERED level, never combinationally
+   from the raw sensor inputs. (Observed fail: correct flag polarity but nominal outputs decoded
+   `~s[k]` straight off the sensors — every value right, one cycle early, oracle-FAIL.)
+2. **The flag is a HELD register whose update set is exactly {level CHANGE}.** fall (new<cur) → 1
+   (open supplemental), rise (new>cur) → 0, dwell (new==cur) → HOLD through arbitrarily long
+   dwells. Compare new_level against the REGISTERED level and update on the same clock edge the
+   level register absorbs the change.
+3. **Polarity comes from the behaviourally-pinned anchors, NOT from the relative direction
+   sentence.** Such prompts often carry "if the previous level was lower than the current, open
+   the supplemental valve" — the literal antecedent reads RISE→open. Do NOT implement that
+   literal reading when the spec also pins: (a) the reset-equivalence sentence ("reset == level
+   low for a long time, ALL outputs asserted") — flag=1 while at/falling-to the bottom; and
+   (b) the boundary table rows — bottom row "maximum flow, both valves open" (flag=1), top row
+   "flow zero" (flag=0). Bottom is only reached by FALLING, top only by RISING, so the anchors
+   fix FALL→1 / RISE→0 — the OPPOSITE of the literal sentence. Behaviourally-pinned anchors
+   (reset equivalence + boundary rows) outrank a relative prose sentence with an ambiguous
+   antecedent. (Observed fail: paired direction-states, everything right except literal
+   RISE→open polarity — oracle-FAIL on more than half the vectors.)
+4. **Output-vector mapping per band** (registered level L, bands 0=bottom..N=top): nominal
+   outputs are monotone threshold decodes (`out_k = (L <= threshold_k)`) read row-by-row from the
+   spec's table; supplemental = the held flag, optionally with boundary overrides bottom→1 /
+   top→0 — the overrides are behaviourally redundant given elements 2+3 (any reachable arrival
+   at bottom set the flag; at top cleared it) and overrides ALONE rescue nothing if another
+   element is wrong; what is NOT optional is the HOLD through dwells.
+
+Paired direction-states (split each interior band into arrived-from-below / arrived-from-above)
+are an EQUIVALENT encoding — but only with element-3 polarity (the fell-into states carry
+flag=1). The held-flag form is smaller and harder to get wrong. Both verified-passing readings
+of this class use: registered level + held flag + fall→1 + Moore decode.
+
+### Skill: A waveform that enumerates ALL input combinations is a COMPLETE truth table — fit every row, never adopt a don't-care reading
+
+**Pattern**: When a combinational reverse-engineering waveform covers every input combination (16 rows for 4 inputs), there are NO don't-cares: a candidate that treats any input as irrelevant (e.g. a majority-of-three over four inputs) can match most rows while missing exactly the rows that distinguish it. The correct discipline is to tabulate ALL rows and require a candidate to match every one; with full coverage the function is UNIQUE, so any mismatch (even one row) eliminates the candidate.
+
+**When to apply**: Combinational waveform-to-RTL problems where the row count equals 2^(input count) — check this FIRST, before proposing structurally-pretty candidates.
+
+**What to do**: Count rows vs 2^n. If complete: build the function directly from the rows (sum of the 1-rows), then optionally factor it (e.g. into AND-of-ORs); verify the factored form against all rows. Never start from a structural guess and check a subset.
+
+**Worked pattern** (anonymized): A four-input waveform with all sixteen rows present was mis-read as a majority of three inputs (each such reading missed exactly three rows); direct tabulation gave the unique two-group form — the AND of two ORs — matching all sixteen.
+
+**Why this is GENERAL**: Applies to every complete-truth-table reverse-engineering task across benchmarks and lab work; the row-count-vs-2^n check is universal.
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: Anchor a duration threshold to what the counter MEANS at the decision edge, not to the literal comparison operator
+
+**Pattern**: A spec phrase like 'more than N cycles' must be translated against the counter's semantics at the moment of decision. If the counter loads ZERO on the entry cycle and increments on subsequent cycles, then at the decision edge it holds duration−1 — so 'more than N' compiles to count >= N, and the literal-looking count > N silently implements 'more than N+1'. The off-by-one is invisible to coarse tests; only the exact-boundary durations (N and N+1) discriminate.
+
+**When to apply**: Any FSM with a dwell/duration threshold (timeout, debounce, splat/failure windows, watchdog): whenever a prose threshold meets a hand-rolled cycle counter.
+
+**What to do**: Write down the counter's value as a function of true duration FIRST (trace 2-3 cycles by hand), then derive the comparison from the prose. Own-TB MUST include both exact-boundary durations: N (must not trigger) and N+1 (must trigger).
+
+**Worked pattern** (anonymized): A fall-duration splat threshold of 'more than 20 cycles' with an entry-zero counter needs count >= 20 at landing (duration 21 triggers, 20 survives); the original count > 20 let duration-21 falls survive and only boundary-duration own-TB rows exposed it.
+
+**Why this is GENERAL**: Counter-vs-duration off-by-ones are among the most common sequential bugs in benchmarks and production RTL alike; the anchor-then-derive discipline is universal.
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: In a ripple-enable chain, the TOP element needs its own explicit rollover — it has no higher carry to imply one
+
+**Pattern**: In cascaded digit/element counters (BCD digits, time fields), each lower element's 9-to-0 rollover is often implied by the same condition that generates the next element's enable. The TOP element has no higher neighbor, so writing its update as plain increment-when-enabled silently overflows past the radix (digit hits ten) — and the bug only fires at the full-range wrap (e.g. 9999 to 0000), far beyond shallow own-TB horizons.
+
+**When to apply**: Any multi-digit/multi-field ripple counter (BCD counters, clocks, odometers) — especially the most significant element's update equation.
+
+**What to do**: Give EVERY element an explicit at-max ? zero : increment form when enabled (uniform structure, no implied rollovers). Own-TB MUST run past the full-range wrap at least once (e.g. >10^digits cycles or seeded near-max state).
+
+**Worked pattern** (anonymized): A four-digit decimal counter wrapped correctly at every interior boundary but produced a hex digit at the full wrap because the thousands digit lacked its own nine-to-zero term; a reference-model own-TB run only to twelve hundred counts missed it, the full-wrap run caught it.
+
+**Why this is GENERAL**: Applies to every radix-limited ripple structure in benchmarks and production RTL; the run-past-full-wrap test rule is universal.
+
+_Captured by benchmark-enhancement-capture 2026-06-05._
