@@ -398,7 +398,21 @@ def _cmd_run_all(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
-    docs_out = out_dir / "generated_docs"
+    # ORGANIC-20260606-phase1-prompt-mode-nested-generated-docs (#424):
+    # two caller contracts coexist — Shape-C gates pass a WORK ROOT and
+    # expect docs at <out>/generated_docs, while the one-shot runner passes
+    # the canonical generated-docs dir ITSELF (<project>/phase1/
+    # generated_docs). Re-joining the basename onto the latter nested the
+    # layer docs one level too deep (generated_docs/generated_docs/), so
+    # phase2's precheck saw 0/13 and the spec-to-rtl handoff never fired.
+    # Resolve ONCE: when the out dir already IS a generated_docs dir, write
+    # flat into it (human docs then land at the canonical sibling).
+    if out_dir.name == "generated_docs":
+        docs_out = out_dir
+        human_root = out_dir.parent
+    else:
+        docs_out = out_dir / "generated_docs"
+        human_root = out_dir
     written = render_layers(graph, docs_out)
     print(f"[run-all] rendered {len(written)} layer JSONs → {docs_out}")
 
@@ -421,7 +435,7 @@ def _cmd_run_all(args: argparse.Namespace) -> int:
     # v0.60: emit human-readable Markdown views alongside the JSONs
     # so a Phase-1 prompt entry produces both deliverables (the JSON
     # is what Phase 2b consumes; the .md is what humans review).
-    human_out = out_dir / "human_docs"
+    human_out = human_root / "human_docs"
     md_written = render_human_docs(graph, human_out)
     print(f"[run-all] rendered {len(md_written)} human-readable .md → {human_out}")
 

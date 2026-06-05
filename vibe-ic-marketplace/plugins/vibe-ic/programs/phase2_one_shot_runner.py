@@ -4198,8 +4198,18 @@ def main() -> int:
     gd = _pl.generated_docs_dir(project)
     L_count = len(list(gd.glob("L*.json"))) if gd.is_dir() else 0
     if L_count < 13:
+        # ORGANIC-20260606-phase1-prompt-mode-nested-generated-docs (#424):
+        # name the one-level-too-deep layout explicitly when present, so a
+        # caller on a pre-fix phase1 artefact sees the structural cause
+        # instead of a bare 0/13.
+        nested = gd / "generated_docs"
+        nested_n = len(list(nested.glob("L*.json"))) if nested.is_dir() else 0
+        hint = (f" NOTE: {nested_n} L docs found NESTED at {nested} "
+                f"(pre-fix prompt-mode emit wrote one level too deep) — "
+                f"flatten them into {gd} or re-run phase1 on the current "
+                f"plugin;" if nested_n else "")
         plan.append(StepResult("phase1_precheck", "FAIL", 0.0,
-                               f"only {L_count}/13 L docs in {gd}; "
+                               f"only {L_count}/13 L docs in {gd};{hint} "
                                "run phase1_one_shot_runner.py first or "
                                "use /vibe-ic-phase2 to chain"))
         # Fall through to write report and exit FAIL.
