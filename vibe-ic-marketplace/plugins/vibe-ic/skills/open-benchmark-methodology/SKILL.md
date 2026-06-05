@@ -164,6 +164,19 @@ This shape is documented in `benchmark_external/verilogeval_v2/run_fresh_v0125/g
    advisories; the AND form is the legitimate masking idiom, WARN only) — the
    author must fix and re-run the gate; a blocked problem has no sample on
    disk, so disk-truth accounting automatically surfaces it.
+4. **Transcript export is the DEFAULT** (ORGANIC-20260605-transcripts-export-default):
+   `--setup` pre-creates `<RUNDIR>/transcripts/`; the orchestrator MUST export every
+   authoring/close-loop agent's transcript there (named per agent) before scoring —
+   `--score` audits them via `programs/blindness_audit.py` and refuses on violations.
+   A run scored on the NOTICE branch (no transcripts) MUST disclose
+   "blindness audit unavailable" in its RESULT.md.
+5. **Rate-limit resilience ladder** (ORGANIC-20260605-ratelimit-resilient-dispatch-ladder):
+   burst rate-limiting kills full-width fan-out within seconds (kill signature:
+   sub-minute workflow death, zero/near-zero token usage, most agents nulled at once)
+   and same-width retries die identically. On a burst kill: 1-agent CANARY completes a
+   FULL batch first → resume at narrow width (2–4 concurrent, completion-driven
+   dispatch, never barrier fan-out) → disk-truth reconcile remains the resume
+   mechanism.
 
 #### Shape D — Agentic with runner (SoC / multi-task)
 **When**: agentic benchmarks where the unit-of-work is a full SoC + cocotb harness (CVDP). The

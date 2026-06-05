@@ -24,6 +24,26 @@ fan-out lost ~93% of its agents' results while batch fan-out completed 312/312:
 3. **Resume = diff `problems.list` vs on-disk `samples/`.** The un-authored set
    is exactly the problems with no `<Prob>_sample01.sv` on disk; re-dispatch
    only those (in batches), never re-author what is already on disk.
+4. **Transcript export is the DEFAULT, not an optional extra
+   (ORGANIC-20260605-transcripts-export-default).** `--setup` pre-creates
+   `<RUNDIR>/transcripts/`; the caller MUST copy/export EVERY authoring and
+   close-loop agent's transcript (or tool-call path log) there, named per
+   agent (e.g. `batch03.log`, `closeloop_r2_probX.log`), BEFORE scoring.
+   `--score` audits them deterministically and refuses on violations; a run
+   scored without them takes the honest NOTICE branch and its RESULT.md MUST
+   disclose "blindness audit unavailable".
+5. **Rate-limit resilience ladder
+   (ORGANIC-20260605-ratelimit-resilient-dispatch-ladder).** Provider-side
+   burst rate-limiting kills a full-width fan-out within seconds — the kill
+   signature is sub-minute workflow death with ZERO/near-zero token usage and
+   most agents nulled at once. Naive retries at the same width die
+   identically, while a single sustained agent survives. On a burst kill:
+   (a) drop to a **1-agent CANARY** that must complete a FULL batch before
+   any scaling; (b) resume at **narrow width (2–4 concurrent)** with
+   completion-driven dispatch (launch the next agent when one finishes),
+   never barrier fan-out; (c) disk-truth reconcile (rule 3) remains the
+   resume mechanism. Recognize the signature instead of burning full-width
+   retries.
 
 PARAMS your caller provides:
 - `BENCH`     benchmark name (e.g. `verilogeval-v2`, `verilogeval-human`) — used by gates_atomic.py
@@ -48,7 +68,9 @@ not the current problem's own hidden file. This prohibition applies EQUALLY
 to every close-loop / repair / convention-sweep agent, not only single-shot
 authors. It explicitly includes **dataset BUILD files** (Makefile / *.mk /
 CMakeLists.txt / run scripts) — they encode the dataset's module-name and
-flow authority and are dataset-internal solution knowledge.
+flow authority and are dataset-internal solution knowledge — and the
+harness's **`canonical_samples/` tree** (vetted defect-audit samples =
+solution knowledge; host scorer only, access is audit-flagged).
 
 **NO SELF-SCORING (ORGANIC-20260605-blindness-deterministic-audit-guard).**
 You may NEVER invoke the host scorer (`score_*.py`, `benchmark_dispatch

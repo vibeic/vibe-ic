@@ -411,6 +411,59 @@ def _golden_ref_self_compiles(prob: str, dataset: Path, layout: dict):
         return False
 
 
+_CANONICAL_DIR = Path(__file__).resolve().parent / "canonical_samples"
+
+
+def _canonical_disagrees_with_golden(prob: str, dataset: Path, layout: dict,
+                                     args: dict, bench: str):
+    """ORGANIC-20260605-scorer-disagreeing-golden-flag: the SECOND
+    dataset-defect audit class — a golden that consistently REJECTS the
+    spec-correct canonical reading. When a core-vetted canonical sample
+    exists at canonical_samples/<bench>/<prob>.sv (vetting policy in that
+    tree's README), run it against the hidden golden; if it fails at a
+    high mismatch rate (>=50%) return the evidence string, else None.
+    DISCLOSURE-ONLY by contract: the caller flags, never excludes —
+    auto-exclusion stays reserved for the scorer-PROVEN class
+    (golden_ref_fails_own_tb). chip-AGNOSTIC mechanism: pure
+    bench/prob path lookup + the scorer's own compile/sim path."""
+    can = _CANONICAL_DIR / bench / f"{prob}.sv"
+    test = dataset / f"{prob}{layout['tb_suffix']}"
+    if not (can.is_file() and test.is_file()):
+        return None
+    ref = dataset / f"{prob}{layout['ref_suffix']}" if layout.get("ref_suffix") else None
+    with tempfile.TemporaryDirectory() as td:
+        binp = os.path.join(td, "bin")
+        sources = [str(can), str(test)]
+        if args.get("tb_compile_with_ref") and ref is not None and ref.is_file():
+            sources.append(str(ref))
+        for cmd in (["iverilog", "-g2012", "-s", "tb", "-o", binp] + sources,
+                    ["iverilog", "-g2012", "-o", binp] + sources):
+            try:
+                c = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            except subprocess.TimeoutExpired:
+                return None
+            if c.returncode == 0:
+                break
+        else:
+            return None
+        try:
+            r = subprocess.run(["vvp", binp], capture_output=True, text=True,
+                               timeout=120)
+        except subprocess.TimeoutExpired:
+            return None
+        out = r.stdout + r.stderr
+        if re.search(args["pass_regex"], out):
+            return None            # golden agrees with the canonical — no flag
+        m = re.search(r"Mismatches:\s*(\d+)\s+in\s+(\d+)", out)
+        if not m:
+            return None            # no mismatch summary — no determination
+        mism, tot = int(m.group(1)), int(m.group(2))
+        if tot == 0 or mism / tot < 0.5:
+            return None            # low-rate disagreement — ambiguity, not defect
+        return (f"vetted canonical sample mismatches the hidden golden: "
+                f"{mism}/{tot} samples")
+
+
 def _score_shape_c(prob: str, samples: Path, dataset: Path,
                    layout: dict, args: dict) -> dict:
     """Shape-C scorer wrapper: run the core scorer, then on a FAIL annotate
@@ -424,6 +477,14 @@ def _score_shape_c(prob: str, samples: Path, dataset: Path,
         if gref is False:
             res["dataset_defect"] = True
             res["dataset_defect_reason"] = "golden_ref_fails_own_tb"
+        elif args.get("_bench"):
+            # second audit class (disclosure-only; see helper docstring)
+            ev = _canonical_disagrees_with_golden(prob, dataset, layout,
+                                                  args, args["_bench"])
+            if ev:
+                res["dataset_defect_suspected"] = True
+                res["dataset_defect_reason"] = "suspected_defective_golden"
+                res["canonical_evidence"] = ev
     return res
 
 
@@ -482,7 +543,8 @@ def main():
     entry = _load_bench(a.bench)
     shape = entry["shape"]
     layout = entry["layout"]
-    args = entry["scorer_args"]
+    args = dict(entry["scorer_args"])
+    args["_bench"] = a.bench   # canonical_samples/<bench> lookup (#418 audit)
     dataset, run = Path(a.dataset), Path(a.run)
     samples = run / "samples"
     if not samples.is_dir():
@@ -568,6 +630,13 @@ def main():
     ddef = [r for r in results if r.get("dataset_defect")]
     n_ddef = len(ddef)
     n_eff_satisfiable = n_eff - n_ddef
+    # Suspected-defective goldens (ORGANIC-20260605-scorer-disagreeing-golden-
+    # flag): the vetted canonical sample fails the hidden golden at a high
+    # mismatch rate. DISCLOSURE-ONLY dual report — raw pass@1 unchanged; the
+    # excluding rate is advisory and never replaces the headline.
+    dsus = [r for r in results if r.get("dataset_defect_suspected")]
+    n_dsus = len(dsus)
+    n_eff_unsuspected = n_eff_satisfiable - n_dsus
     summary = {
         "benchmark": entry["title"],
         "shape": shape,
@@ -584,6 +653,12 @@ def main():
         "dataset_defect_count": n_ddef,
         "dataset_defect_problems": [r[ident].split('/')[-1] for r in ddef],
         "pass_at_1_excluding_dataset_defects_pct": round(100.0 * npass / n_eff_satisfiable, 2) if n_eff_satisfiable else 0.0,
+        "suspected_defective_golden_count": n_dsus,
+        "suspected_defective_golden_problems": [
+            {"problem": r[ident].split('/')[-1],
+             "evidence": r.get("canonical_evidence", "")} for r in dsus],
+        "pass_at_1_excluding_suspected_defects_pct": round(
+            100.0 * npass / n_eff_unsuspected, 2) if n_eff_unsuspected else 0.0,
         "results": results,
     }
     (run / "pass_at_1.json").write_text(json.dumps(summary, indent=2) + "\n")
@@ -604,6 +679,15 @@ def main():
               f"(unsatisfiable by anyone): {summary['dataset_defect_problems']}")
         print(f"  pass@1 excluding dataset defects = {npass}/{n_eff_satisfiable} = "
               f"{summary['pass_at_1_excluding_dataset_defects_pct']}%")
+    if n_dsus:
+        print(f"  ⓘ {n_dsus} SUSPECTED defective golden(s) — the vetted canonical "
+              f"sample fails the hidden golden at a high mismatch rate "
+              f"(disclosure-only; counted in pass@1): " +
+              ", ".join(f"{d['problem']} ({d['evidence']})"
+                        for d in summary['suspected_defective_golden_problems']))
+        print(f"  advisory pass@1 excluding suspected defects = "
+              f"{npass}/{n_eff_unsuspected} = "
+              f"{summary['pass_at_1_excluding_suspected_defects_pct']}%")
     fails = [r for r in results if r["verdict"] not in ("PASS", "SKIP")]
     if fails:
         print(f"  fails ({len(fails)}): " +

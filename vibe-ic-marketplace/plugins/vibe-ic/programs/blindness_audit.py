@@ -33,6 +33,11 @@ V2  agent-side invocation of a host scorer (a verdict-level oracle query
     step — an authoring/close-loop transcript must never contain it.
     (Mere mentions of a scorer name in instruction prose are not flagged —
     only command-shaped lines.)
+V3  access to a `canonical_samples/` path (any root): the harness's
+    vetted defect-audit samples are dataset-adjacent SOLUTION KNOWLEDGE
+    (ORGANIC-20260605-scorer-disagreeing-golden-flag); only the host
+    scorer may touch them. Path-shaped references only (a trailing
+    file/dir component must follow the segment).
 
 KNOWN HONEST LIMIT: a batch agent legitimately reads EVERY prompt in its
 batch, so cross-problem reads of *prompt* files are not distinguishable
@@ -76,6 +81,12 @@ _SCORER_INVOKE_RE = re.compile(
     r"|(?:^|\s)score_[a-z0-9_]+\.py\s+--"              # score_x.py --args
     r"|(?:benchmark_dispatch(?:\.py)?\s+\S+.*--score)",  # dispatch … --score
     re.IGNORECASE)
+
+# V3: path-shaped reference into a canonical_samples tree (any root). A bare
+# mention of the word in prose lacks the trailing path component and does
+# not fire; instruction text referring to "canonical_samples/" alone is safe.
+_CANONICAL_PATH_RE = re.compile(
+    r"canonical_samples/[A-Za-z0-9_\-./]+")
 
 
 def _allowed_globs(bench: str | None, extra: list[str]) -> list[str]:
@@ -150,6 +161,16 @@ def audit_text(text: str, dataset: Path, allowed: list[str],
             findings.append({
                 "kind": "scorer-self-run",
                 "class": "agent-side host-scorer invocation (oracle query)",
+                "transcript": source, "line": ln_no,
+                "evidence": line.strip()[:300],
+            })
+        # V3 — vetted canonical-sample access (defect-audit data is
+        # solution knowledge; host-scorer-only)
+        if _CANONICAL_PATH_RE.search(line):
+            findings.append({
+                "kind": "canonical-sample-access",
+                "class": "vetted canonical defect-audit sample "
+                         "(solution knowledge — host scorer only)",
                 "transcript": source, "line": ln_no,
                 "evidence": line.strip()[:300],
             })

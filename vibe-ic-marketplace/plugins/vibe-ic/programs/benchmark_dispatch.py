@@ -208,6 +208,10 @@ def cmd_setup(bench: str, dataset: str, run: str, floor_only: bool = False):
     (run_p / "work").mkdir(parents=True, exist_ok=True)
     (run_p / "samples").mkdir(parents=True, exist_ok=True)
     (run_p / "batches").mkdir(parents=True, exist_ok=True)
+    # ORGANIC-20260605-transcripts-export-default: transcript export is the
+    # orchestration DEFAULT, not an optional extra — pre-create the audit
+    # input dir so the blindness guard has something to audit at --score.
+    (run_p / "transcripts").mkdir(parents=True, exist_ok=True)
 
     # discover problems.list
     shape = e["shape"]
@@ -274,6 +278,10 @@ def cmd_setup(bench: str, dataset: str, run: str, floor_only: bool = False):
     if n_lessons:
         print(f"  lessons:  {n_lessons} captured general-pattern lessons → "
               f"{run_p / 'lessons.md'}  (authors MUST read before authoring)")
+    print(f"  transcripts: EXPORT REQUIRED — copy every authoring/close-loop "
+          f"agent's transcript (or tool-call log) to {run_p / 'transcripts'}/ "
+          f"named per agent; the blindness audit at --score reads them "
+          f"(ORGANIC-20260605-transcripts-export-default).")
     # Verify the fresh run dir is clean-room (empty samples, no seed config).
     guard = Path(__file__).resolve().parent / "benchmark_clean_room_check.py"
     if guard.is_file():
@@ -423,7 +431,8 @@ def cmd_score(bench: str, run: str, dataset: str | None):
     # (the audit cannot vouch for a run it never saw).
     audit = Path(__file__).resolve().parent / "blindness_audit.py"
     tdir = run_p / "transcripts"
-    if audit.is_file() and tdir.is_dir():
+    has_transcripts = tdir.is_dir() and any(tdir.iterdir())
+    if audit.is_file() and has_transcripts:
         rc = subprocess.call([sys.executable, str(audit), "--dataset",
                               str(ds_p), "--bench", bench, str(tdir)])
         if rc == 1:
@@ -434,9 +443,12 @@ def cmd_score(bench: str, run: str, dataset: str | None):
                 "CANNOT be scored as canonical; fix the orchestration and "
                 "re-run clean-room.")
     elif audit.is_file():
-        print("NOTICE: <RUNDIR>/transcripts/ not present — blindness audit "
-              "skipped. Export batch-agent transcripts there to enable the "
-              "deterministic guard (ORGANIC-20260605).")
+        print("NOTICE: <RUNDIR>/transcripts/ not present or empty — blindness "
+              "audit skipped. Export is the orchestration DEFAULT (--setup "
+              "pre-creates the dir; copy every agent transcript there). A run "
+              "scored on this branch MUST disclose 'blindness audit "
+              "unavailable' in its RESULT.md (ORGANIC-20260605-transcripts-"
+              "export-default).")
     scorer = HARNESS / e.get("scorer", "score_iverilog_tb.py")
     cmd = [sys.executable, str(scorer), "--bench", bench, "--dataset", str(ds_p), "--run", str(run_p)]
     print("$ " + " ".join(cmd))
