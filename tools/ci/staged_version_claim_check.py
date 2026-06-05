@@ -97,6 +97,12 @@ _SKIP_PATH_PATTERNS = (
     "RELEASE-NOTES",
     "release_notes",
     "staged_version_claim_check",
+    # The commit-msg version-sync hook + its pytest harness are the SAME
+    # self-exemption case as this guard's own source above: their comments
+    # and fixtures carry illustrative version shapes ("from v1.2.3",
+    # "feat(v1.2.3)") that DESCRIBE what the hook gates, never a real
+    # plugin-version claim (ORGANIC-20260606 #422).
+    "check_version_sync_with_commit",
     # Tool-output artefacts — these embed third-party tool versions
     # (Yosys, Quartus, gcc, OpenSTA, ...) which are NOT plugin version
     # claims. Skip the entire tool-output families so they don't trip

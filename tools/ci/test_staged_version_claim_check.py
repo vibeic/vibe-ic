@@ -448,6 +448,19 @@ def test_guard_test_harness_still_skipped(tmp_path):
     assert cp.returncode == 0, cp.stdout + cp.stderr
 
 
+def test_commit_msg_hook_and_its_harness_skipped(tmp_path):
+    # ORGANIC-20260606 #422: the commit-msg version-sync hook + its pytest
+    # harness carry illustrative shapes ("from v1.2.3", "feat(v1.2.3)")
+    # that DESCRIBE what the hook gates — same self-exemption case as this
+    # guard's own source/harness above, incl. the opensource_repo mirror.
+    _make_plugin_json(tmp_path, "0.2.52")
+    for path in ("tools/ci/check_version_sync_with_commit.sh",
+                 "tools/ci/test_check_version_sync_with_commit.py",
+                 "opensource_repo/tools/ci/check_version_sync_with_commit.sh"):
+        cp = _run(tmp_path, _diff(path, '# fixture: "feat(v9.9.9): new gate"'))
+        assert cp.returncode == 0, path + cp.stdout + cp.stderr
+
+
 def test_package_lock_dependency_versions_skipped(tmp_path):
     # ORGANIC follow-up 2026-06-05: lockfiles enumerate DEPENDENCY versions
     # ("version": "0.99.0" of some npm package), not plugin self-claims —
