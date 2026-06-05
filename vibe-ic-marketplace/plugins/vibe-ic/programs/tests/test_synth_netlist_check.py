@@ -123,7 +123,7 @@ class TestEmptyFile:
 
 
 # ===========================================================================
-# Test 3: 5 cells with min=10 — advisory WARNING (v1.1.0 #427)
+# Test 3: 5 cells with min=10 — advisory WARNING (since v1.1.0, #427)
 # ===========================================================================
 class TestTooFewCells:
     def test_5_cells_warns(self, tmp_path):

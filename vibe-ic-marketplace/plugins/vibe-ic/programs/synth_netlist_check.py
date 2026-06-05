@@ -419,7 +419,7 @@ def build_report(findings: List[Finding], stats: dict,
             "unique_cell_types": stats["unique_cell_types"],
             "findings_count": len(findings),
             "error_count": n_err,
-            # v1.1.0 (#427): WARNING/INFO findings no longer fail the gate —
+            # since v1.1.0 (#427): WARNING/INFO findings no longer fail the gate —
             # pass = no ERROR (TOO_FEW_CELLS alone is advisory now).
             "pass": n_err == 0,
         },
