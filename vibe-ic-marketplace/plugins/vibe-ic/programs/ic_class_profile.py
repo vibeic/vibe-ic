@@ -505,13 +505,48 @@ def _normalise_protocol_class(raw: Optional[str], l3_phys: str,
 # ---------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------
-def detect_ic_class(project_dir: Path) -> Dict[str, Any]:
+def detect_ic_class(project_dir: Path,
+                    refresh: bool = False) -> Dict[str, Any]:
     """Return an IC class profile dict for the given project.
 
     See module docstring for the full contract.  Falls back to
     `class="unknown"` on missing input — gates must treat this as
     fail-closed (run their existing FAIL logic).
+
+    ORGANIC-20260606-ic-class-detector-disagreement (#435): the detected
+    class is PERSISTED once at `<project>/reports/ic_class.json` and every
+    later call returns that persisted result — never a second inference.
+    Two inferences at different times see different L-doc states (later
+    steps augment the docs), which forked class-gated behavior (rtl_gen
+    WAIVE target, structured-field minimums, no-protocol N/A escapes)
+    between enforced and N/A on the SAME project. `refresh=True` forces a
+    re-inference AND re-persists (the runner's detect step uses it so the
+    persisted truth is the run's own detection). An `unknown` inference is
+    never persisted (fail-closed must stay re-inferable once docs land).
     """
+    project = Path(project_dir)
+    persisted = project / "reports" / "ic_class.json"
+    if not refresh and persisted.is_file():
+        try:
+            d = json.loads(persisted.read_text())
+            if isinstance(d, dict) and d.get("ic_class"):
+                return d
+        except (OSError, ValueError):
+            pass  # unreadable persistence → fall through to inference
+    profile = _detect_ic_class_infer(project)
+    if project.is_dir() and profile.get("ic_class") not in (None, "",
+                                                            "unknown"):
+        try:
+            persisted.parent.mkdir(parents=True, exist_ok=True)
+            persisted.write_text(
+                json.dumps(profile, indent=2, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+    return profile
+
+
+def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
+    """The actual single-pass inference (see detect_ic_class)."""
     project = Path(project_dir)
     profile: Dict[str, Any] = {
         "protocol_class": "none",

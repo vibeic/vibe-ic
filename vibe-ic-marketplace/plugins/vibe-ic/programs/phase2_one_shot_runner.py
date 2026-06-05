@@ -697,7 +697,14 @@ def detect_ic_class(project: Path) -> Tuple[str, str]:
         return ("unknown",
                 f"ic_class_profile import failed: {e}")
     try:
-        profile = _profile_detect(project) or {}
+        # #435 — the runner's detect step is the run's AUTHORITATIVE
+        # inference: refresh=True re-infers and re-persists
+        # reports/ic_class.json, which every later direct
+        # detect_ic_class() call then returns verbatim (single source
+        # of truth — no second inference can fork class-gated gates).
+        profile = _profile_detect(project, refresh=True) or {}
+    except TypeError:
+        profile = _profile_detect(project) or {}  # older signature
     except Exception as e:
         return ("unknown",
                 f"ic_class_profile.detect_ic_class raised: {e}")
@@ -3875,23 +3882,63 @@ def step_emit_phase2_manifests(project: Path,
             "init_file_search_path_in_qsf": True,
         })
 
-    # Step 3: CDC / RDC
-    w("reports/phase2/cdc/crossing.json", {
-        "verdict": "PASS",
-        "evidence": "rtl/chip_top.sv 3-FF synchroniser id_rx_syn{1,2,3}",
-        "crossings": [{"signal": "id_bus", "src_domain": "external_async",
-                        "dst_domain": "clk_main", "synchroniser_depth": 3}],
-    })
-    w("reports/phase2/cdc/async_input.json", {
-        "verdict": "PASS",
-        "async_inputs": [{"signal": "id_bus",
-                          "synchroniser": "3-FF id_rx_syn1/2/3"}],
-    })
-    w("reports/phase2/cdc/reset_dep.json", {
-        "verdict": "PASS",
-        "reset_strategy": "async-assert sync-deassert",
-        "reset_signal": "reset_n",
-    })
+    # Step 3: CDC / RDC.
+    # ORGANIC-20260606-cross-ic-recycled-canned-pass-reports (#436): the
+    # pre-fix trio was a CANNED verdict citing one specific chip's signals
+    # (a 3-FF `id_rx_syn` synchroniser on `id_bus`) — byte-identical across
+    # four different ICs, including a pure-analog project with NO RTL at
+    # all. A CDC verdict must come from the PROJECT'S OWN RTL: scan the
+    # clock edges actually used; a single-clock design honestly has no
+    # crossings (PASS with the scan as evidence); a multi-clock design
+    # needs a real CDC tool (SKIPPED-CONDITION, named reason); no RTL →
+    # SKIPPED-CONDITION.
+    _rtl_files = sorted(rtl_dir.glob("*.sv")) + sorted(rtl_dir.glob("*.v")) \
+        if rtl_dir.is_dir() else []
+    _clocks: set = set()
+    for _rf in _rtl_files:
+        try:
+            _txt = _rf.read_text(errors="replace")
+        except OSError:
+            continue
+        for _m in re.finditer(r"\b(?:pos|neg)edge\s+([A-Za-z_]\w*)", _txt):
+            nm = _m.group(1)
+            if not re.search(r"(?:^|_)(?:rst|reset|areset)(?:_|$)|^a?rst",
+                             nm, re.IGNORECASE):
+                _clocks.add(nm)
+    if not _rtl_files:
+        _cdc_payload = {
+            "verdict": "SKIPPED-CONDITION",
+            "reason": ("no RTL in this project — a CDC verdict cannot be "
+                       "produced (#436: never emit another design's "
+                       "canned crossings)"),
+        }
+        w("reports/phase2/cdc/crossing.json", _cdc_payload)
+        w("reports/phase2/cdc/async_input.json", _cdc_payload)
+        w("reports/phase2/cdc/reset_dep.json", _cdc_payload)
+    elif len(_clocks) <= 1:
+        _ev = (f"clock-edge scan of {len(_rtl_files)} RTL file(s): "
+               f"single clock domain {sorted(_clocks) or ['(none)']} — "
+               f"no clock-domain crossings exist")
+        w("reports/phase2/cdc/crossing.json", {
+            "verdict": "PASS", "evidence": _ev, "crossings": [],
+            "clocks_found": sorted(_clocks),
+            "rtl_files_scanned": [f.name for f in _rtl_files]})
+        w("reports/phase2/cdc/async_input.json", {
+            "verdict": "PASS", "evidence": _ev, "async_inputs": []})
+        w("reports/phase2/cdc/reset_dep.json", {
+            "verdict": "PASS", "evidence": _ev,
+            "clocks_found": sorted(_clocks)})
+    else:
+        _cdc_payload = {
+            "verdict": "SKIPPED-CONDITION",
+            "reason": (f"multi-clock design (clocks={sorted(_clocks)}): a "
+                       f"real CDC tool run is required — this runner does "
+                       f"not synthesize crossing verdicts (#436)"),
+            "clocks_found": sorted(_clocks),
+        }
+        w("reports/phase2/cdc/crossing.json", _cdc_payload)
+        w("reports/phase2/cdc/async_input.json", _cdc_payload)
+        w("reports/phase2/cdc/reset_dep.json", _cdc_payload)
 
     # Step 4: simulation.
     # ORGANIC-20260606-verdict-only-pass-artifacts-no-evidence (#433a):
@@ -3929,15 +3976,32 @@ def step_emit_phase2_manifests(project: Path,
             "reason": ("no substantiating reference-TB evidence — "
                        "refusing a verdict-only PASS (#433): " + _why),
         })
-    w("reports/phase2/coverage/coverage_actual.json", {
-        "verdict": "PASS",
-        "evidence": "iverilog reference TB scenarios + sim_full_stack",
-        "tb_path": str(PROTOCOL_TB),
-        "scenarios_covered": [
-            "GET_ID", "GET_STATE", "GET_INFO",
-            "GET_OTP_BYTE", "SET_STATE", "MULTI_BYTE_CMD",
-        ],
-    })
+    # Coverage manifest (#436): the pre-fix shape hardcoded ANOTHER chip
+    # class's TB path + scenario names (half-duplex GET_ID/GET_STATE/…)
+    # into every project — flagged by four independent audits as the worst
+    # integrity violation. Coverage may only cite the TB that ACTUALLY ran
+    # on THIS project (the transcript is the evidence); otherwise the
+    # manifest honestly reports SKIPPED-CONDITION.
+    if ref_tb_step is not None and ref_tb_step.status == "PASS" and ref_logs:
+        _log_rel = str(ref_logs[0].relative_to(project))
+        _log_txt = ref_logs[0].read_text(errors="replace")
+        _scen = sorted(set(re.findall(
+            r"\b(?:SCENARIO|TEST)[\s:_-]+([A-Za-z0-9_]+)", _log_txt)))[:24]
+        w("reports/phase2/coverage/coverage_actual.json", {
+            "verdict": "PASS",
+            "evidence": _log_rel,
+            "scenarios_covered": _scen,
+            "note": ("scenarios extracted from this project's own "
+                     "reference-TB transcript (#436: never another "
+                     "design's canned list)"),
+        })
+    else:
+        w("reports/phase2/coverage/coverage_actual.json", {
+            "verdict": "SKIPPED-CONDITION",
+            "reason": ("no reference-TB transcript for THIS project — a "
+                       "coverage verdict cannot cite scenarios that never "
+                       "ran (#436)"),
+        })
 
     # Step 5: formal.
     # ORGANIC-20260606 #433(c): the formal step must NEVER copy testbench
