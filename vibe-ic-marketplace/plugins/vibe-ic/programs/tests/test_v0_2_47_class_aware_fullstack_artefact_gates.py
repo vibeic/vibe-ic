@@ -25,9 +25,14 @@ GATES = fcc._CLASS_SKIPPABLE_FULLSTACK_ARTEFACT_GATES
 
 # ── _ldocs_record_no_opcodes evidence helper ──────────────────────────────
 
-def _stage(tmp_path, l3=None, l4=None):
-    gd = tmp_path / "generated_docs"
-    gd.mkdir(exist_ok=True)
+def _stage(tmp_path, l3=None, l4=None, legacy=False):
+    # #419 REOPEN: the CANONICAL runner layout is phase1/generated_docs/
+    # (_path_layout.generated_docs_dir). The original fixtures self-built
+    # the root generated_docs/ path and thereby MIRRORED the helper's
+    # wrong-path bug — fixtures must match the runner's real layout.
+    gd = (tmp_path / "generated_docs") if legacy \
+        else (tmp_path / "phase1" / "generated_docs")
+    gd.mkdir(parents=True, exist_ok=True)
     if l3 is not None:
         (gd / "L3_CMD_PROTOCOL.json").write_text(json.dumps(l3))
     if l4 is not None:
@@ -62,8 +67,30 @@ def test_registers_present_keeps_gates_unless_explicit_flag(tmp_path):
 
 def test_unreadable_ldoc_is_fail_closed(tmp_path):
     p = _stage(tmp_path, l3={"opcodes": []}, l4={"registers": []})
-    (tmp_path / "generated_docs" / "L3_extra.json").write_text("{not json")
+    (tmp_path / "phase1" / "generated_docs" / "L3_extra.json").write_text(
+        "{not json")
     assert fcc._ldocs_record_no_opcodes(p) is False
+
+
+def test_legacy_root_layout_still_supported(tmp_path):
+    p = _stage(tmp_path, l3={"opcodes": []}, l4={"registers": []},
+               legacy=True)
+    assert fcc._ldocs_record_no_opcodes(p) is True
+
+
+def test_real_runner_arbiter_project_skips_artefact_gates():
+    """#419 REOPEN acceptance — assert against a REAL runner output
+    layout, not a hand-built fixture (the original fixtures mirrored the
+    wrong-path bug). Skips honestly when the local artifact is absent."""
+    import pytest
+    real = Path("/home/reyerchu/AI_IC_design/cvdp_example_cleanroom_v0244"
+                "/work/cvdp_agentic_fixed_arbiter_0001")
+    if not (real / "phase1" / "generated_docs").is_dir():
+        pytest.skip("real runner artifact not present on this machine")
+    skips = fcc._class_skipped_gates(real)
+    for g in GATES:
+        assert g in skips, g
+        assert "#419" in skips[g]
 
 
 def test_nested_command_lists_are_counted(tmp_path):

@@ -1981,8 +1981,16 @@ def _ldocs_record_no_opcodes(project: Path) -> bool:
     command protocol: every opcode/command list across generated_docs
     L3*.json is empty AND the L4 regmap records no registers (or an
     explicit register_map_present=false). Missing generated_docs ->
-    False (fail-closed: no positive evidence, keep every gate)."""
-    gd = project / "generated_docs"
+    False (fail-closed: no positive evidence, keep every gate).
+
+    #419 REOPEN fix: the canonical runner layout is
+    phase1/generated_docs/ (_pl.generated_docs_dir) — the original
+    helper read project/generated_docs and therefore NEVER found a real
+    runner's docs (fail-closed dormancy on every production project);
+    root generated_docs/ stays only as a legacy-layout fallback."""
+    gd = _pl.generated_docs_dir(project)
+    if not gd.is_dir():
+        gd = project / "generated_docs"   # legacy fallback layout
     if not gd.is_dir():
         return False
 
