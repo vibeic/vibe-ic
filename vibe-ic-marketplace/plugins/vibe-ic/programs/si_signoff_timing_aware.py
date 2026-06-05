@@ -657,12 +657,19 @@ def build_opensta_si_tcl(
     """
     libs = "\n".join(f"read_liberty {q}" for q in
                      ([liberty] + list(extra_liberties or [])))
-    lefs = "\n".join(f"read_lef {q}" for q in (extra_lefs or []))
-    lef_block = (lefs + "\n") if lefs else ""
+    # NOTE: standalone OpenSTA (`sta`) has NO `read_lef` command — that is an
+    # OpenROAD command. OpenSTA derives all timing from Liberty + Verilog +
+    # SDC + SPEF; LEF carries only physical abstracts it neither reads nor
+    # needs. Emitting `read_lef` here aborted the whole TCL at line 1 with
+    # `Error: invalid command name "read_lef"`, leaving a sub-1KB stub log
+    # that the STA substance gate (Steps 10/23) then flagged as a hand-typed
+    # stub → FAIL, for EVERY project. `extra_lefs` is accepted for signature
+    # compatibility but intentionally unused. (chip-AGNOSTIC fix)
+    _ = extra_lefs
     return f"""# === Vibe-IC timing-window-aware SI screen — OpenSTA timing JSON emitter ===
 # Produces the per-pin arrival-window + slew JSON consumed by
 # si_signoff_timing_aware.score_si_timing_aware(). Chip-AGNOSTIC.
-{lef_block}{libs}
+{libs}
 read_verilog {netlist}
 link_design {top}
 read_sdc {sdc}

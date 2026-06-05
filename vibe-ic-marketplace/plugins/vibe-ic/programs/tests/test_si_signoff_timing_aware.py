@@ -388,13 +388,19 @@ def test_build_tcl_has_required_commands():
 
 
 def test_build_tcl_extra_lefs_liberties():
+    # v0.2.55: standalone OpenSTA (`sta`) has NO `read_lef` command (that is an
+    # OpenROAD command) — emitting it aborted the whole TCL at line 1 with
+    # "invalid command name read_lef", leaving a sub-1KB stub log the STA gate
+    # then rejected. OpenSTA derives all timing from Liberty + Verilog + SDC +
+    # SPEF; LEF is physical-only and neither read nor needed. The TCL must NOT
+    # contain read_lef, and the macro liberties must still be read.
     tcl = m.build_opensta_si_tcl(
         liberty="/p/a.lib", netlist="/p/n.v", top="t", sdc="/p/c.sdc",
         spef="/p/x.spef", out_json="/p/o.json",
         extra_lefs=["/p/tech.lef", "/p/cell.lef"],
         extra_liberties=["/p/macro.lib"])
-    assert "read_lef /p/tech.lef" in tcl
-    assert "read_lef /p/cell.lef" in tcl
+    assert "read_lef" not in tcl
+    assert "read_liberty /p/a.lib" in tcl
     assert "read_liberty /p/macro.lib" in tcl
 
 

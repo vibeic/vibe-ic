@@ -209,6 +209,32 @@ def _has_tool_signature(text: str, mode: str) -> tuple[bool, str]:
     return False, ""
 
 
+# A "strong" signature set per mode: distinctive multi-marker combinations
+# that a hand-typed stub could not carry without effectively reproducing a
+# real tool's content. When ALL markers of any group are present, the
+# byte-size floor is waived (but the basic tool-signature requirement still
+# applies). This prevents a genuinely real but COMPACT report from a SMALL
+# design (e.g. an spm with a single timing path → a ~0.9 KB report_checks
+# path table that legitimately carries Startpoint/Endpoint/arrival/slack)
+# from being false-rejected as a "hand-typed stub". chip-AGNOSTIC: keyed on
+# universal tool-output structure, not on any chip's signals.
+STRONG_SIGNATURE_GROUPS = {
+    "sta": [
+        # A real OpenSTA report_checks path table.
+        ["data arrival time", "data required time", "slack"],
+        ["startpoint", "endpoint", "slack"],
+    ],
+}
+
+
+def _has_strong_signature(text: str, mode: str) -> bool:
+    lower = text.lower()
+    for group in STRONG_SIGNATURE_GROUPS.get(mode, []):
+        if all(marker.lower() in lower for marker in group):
+            return True
+    return False
+
+
 def _check_tool_authenticity(files: List[Path], mode: str,
                               result: AuditResult) -> bool:
     """Append findings for missing tool signature + undersized reports.
@@ -220,7 +246,11 @@ def _check_tool_authenticity(files: List[Path], mode: str,
             text = fp.read_text(errors="replace")
         except OSError:
             continue
-        ok_size = size >= MIN_REPORT_BYTES.get(mode, 1024)
+        # Waive the byte-size floor when the report carries a strong,
+        # multi-marker tool signature (a real-but-compact small-design
+        # report). The tool-signature requirement below still gates.
+        strong = _has_strong_signature(text, mode)
+        ok_size = size >= MIN_REPORT_BYTES.get(mode, 1024) or strong
         ok_sig, matched = _has_tool_signature(text, mode)
         if ok_size and ok_sig:
             any_authentic = True
@@ -508,6 +538,18 @@ def _check_sta(project_dir: Path) -> AuditResult:
     result = AuditResult(program="eda_report_audit:sta", passed=False)
     files = _discover(project_dir, ["*sta*.rpt", "*timing*.rpt",
                                      "*STA*.rpt", "*timing*.log"])
+    # The `*sta*` glob substring-matches unrelated report classes whose names
+    # merely CONTAIN "sta" — most notably "cro**sta**lk" (si_crosstalk.rpt).
+    # A Signal-Integrity / crosstalk / noise report is NOT an STA timing
+    # report and legitimately carries no OpenSTA/Startpoint signature, so it
+    # must not be swept into the STA-mode authenticity check (it would force a
+    # spurious STA_NO_TOOL_SIGNATURE FAIL for every project that emits an SI
+    # report). Drop files whose names denote a different report class.
+    # chip-AGNOSTIC: keyed on report-class name tokens, not any chip's signals.
+    _STA_EXCLUDE = ("crosstalk", "si_", "_si.", "noise", "antenna", "drc",
+                    "lvs", "_em.", "ir_drop", "power")
+    files = [f for f in files
+             if not any(tok in f.name.lower() for tok in _STA_EXCLUDE)]
     if not files:
         result.findings.append(Finding(
             rule="STA_REPORT_EXISTS", severity="ERROR",
@@ -519,6 +561,16 @@ def _check_sta(project_dir: Path) -> AuditResult:
     wns_tns_re = re.compile(r"WNS|TNS|worst\s*negative\s*slack|total\s*negative\s*slack",
                             re.I)
     setup_hold_re = re.compile(r"setup|hold", re.I)
+    # An OpenSTA `report_checks` PATH-TABLE report is the per-path equivalent of
+    # a WNS/TNS summary: it ends each path with "slack (MET)" / "slack
+    # (VIOLATED)" and labels the analysis with "Path Type: max" (= setup) or
+    # "min" (= hold). Tiny designs (e.g. spm with a single timing path) emit
+    # exactly this table and NEVER the literal "WNS"/"TNS" or "setup"/"hold"
+    # summary words — so the strict token search false-FAILed a genuinely real
+    # report. Accept the path-table form as satisfying both requirements.
+    # chip-AGNOSTIC: matches universal OpenSTA report_checks structure.
+    pathtable_slack_re = re.compile(r"slack\s*\((?:MET|VIOLATED)\)", re.I)
+    pathtype_re = re.compile(r"Path\s*Type\s*:\s*(?:max|min)", re.I)
     has_wns_tns = False
     has_setup_hold = False
     best_file = ""
@@ -528,9 +580,10 @@ def _check_sta(project_dir: Path) -> AuditResult:
             text = fp.read_text(errors="replace")
         except OSError:
             continue
-        if wns_tns_re.search(text):
+        has_pathtable = bool(pathtable_slack_re.search(text))
+        if wns_tns_re.search(text) or has_pathtable:
             has_wns_tns = True
-        if setup_hold_re.search(text):
+        if setup_hold_re.search(text) or pathtype_re.search(text) or has_pathtable:
             has_setup_hold = True
         if not best_file:
             best_file = str(fp)

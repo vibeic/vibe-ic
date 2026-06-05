@@ -148,47 +148,75 @@ def main(argv: List[str] | None = None) -> int:
 
     overall_ok = True
 
-    for out_rel, tools_csv in zip(args.output, args.tool):
-        check: Dict = {"output": out_rel, "allowed_tools": tools_csv,
-                       "status": "FAIL", "reasons": []}
+    for out_rel_pattern, tools_csv in zip(args.output, args.tool):
         allowed = {t.strip() for t in tools_csv.split(",") if t.strip()}
 
-        # The file must exist on disk
-        abs_out = project / out_rel
-        if not abs_out.exists():
-            check["reasons"].append(f"file on disk missing: {out_rel}")
-            report["checks"].append(check)
-            overall_ok = False
-            continue
-
-        disk_hash = _sha256_file(abs_out)
-
-        # Find a matching entry
-        entry, reasons = _find_entry(entries, out_rel, allowed)
-        if entry is None:
-            check["reasons"].extend(reasons)
-            report["checks"].append(check)
-            overall_ok = False
-            continue
-
-        # Hash match
-        logged_hash = entry["outputs"][out_rel]
-        if logged_hash != disk_hash:
-            check["reasons"].append(
-                f"hash mismatch: log={logged_hash[:18]}... disk={disk_hash[:18]}..."
-                " — file modified after tool run, or log is stale"
+        # Glob expansion (chip-AGNOSTIC): flow steps reference outputs by
+        # pattern (e.g. `phase3/stage3/extracted/*.spef`) because the top
+        # cell name is not known at manifest-authoring time. Without
+        # expansion the literal `*.spef` path "exists on disk" check fails
+        # and Step 22 false-FAILs on every chip whose SPEF is registered
+        # under its concrete name. Expand the pattern to the actual file(s);
+        # a non-glob path resolves to itself.
+        if any(ch in out_rel_pattern for ch in "*?[") :
+            matches = sorted(
+                str(p.relative_to(project))
+                for p in project.glob(out_rel_pattern)
+                if p.is_file()
             )
-            check["logged_hash"] = logged_hash
-            check["disk_hash"] = disk_hash
-            report["checks"].append(check)
-            overall_ok = False
-            continue
+            if not matches:
+                check = {"output": out_rel_pattern, "allowed_tools": tools_csv,
+                         "status": "FAIL",
+                         "reasons": [f"no file on disk matches pattern: "
+                                     f"{out_rel_pattern}"]}
+                report["checks"].append(check)
+                overall_ok = False
+                continue
+            out_rels = matches
+        else:
+            out_rels = [out_rel_pattern]
 
-        check["status"] = "PASS"
-        check["tool"] = entry.get("tool")
-        check["timestamp"] = entry.get("timestamp")
-        check["version"] = entry.get("version")
-        report["checks"].append(check)
+        # Check each concrete output resolved from the pattern.
+        for out_rel in out_rels:
+            check: Dict = {"output": out_rel, "allowed_tools": tools_csv,
+                           "status": "FAIL", "reasons": []}
+
+            # The file must exist on disk
+            abs_out = project / out_rel
+            if not abs_out.exists():
+                check["reasons"].append(f"file on disk missing: {out_rel}")
+                report["checks"].append(check)
+                overall_ok = False
+                continue
+
+            disk_hash = _sha256_file(abs_out)
+
+            # Find a matching entry
+            entry, reasons = _find_entry(entries, out_rel, allowed)
+            if entry is None:
+                check["reasons"].extend(reasons)
+                report["checks"].append(check)
+                overall_ok = False
+                continue
+
+            # Hash match
+            logged_hash = entry["outputs"][out_rel]
+            if logged_hash != disk_hash:
+                check["reasons"].append(
+                    f"hash mismatch: log={logged_hash[:18]}... disk={disk_hash[:18]}..."
+                    " — file modified after tool run, or log is stale"
+                )
+                check["logged_hash"] = logged_hash
+                check["disk_hash"] = disk_hash
+                report["checks"].append(check)
+                overall_ok = False
+                continue
+
+            check["status"] = "PASS"
+            check["tool"] = entry.get("tool")
+            check["timestamp"] = entry.get("timestamp")
+            check["version"] = entry.get("version")
+            report["checks"].append(check)
 
     report["ok"] = overall_ok
 

@@ -246,6 +246,20 @@ def _parse_worst_hold_slack(path: Path) -> Tuple[Optional[float], List[float]]:
                 slacks.append(float(m.group(1)))
             except (TypeError, ValueError):
                 continue
+    # OpenSTA / OpenROAD `report_checks -path_delay min` TABLE form: the report
+    # declares "Path Type: min" (= hold / min-path) and ends each path with
+    # "<value>   slack (MET|VIOLATED)". This is the canonical hold report the
+    # runner now emits (post_hold_timing.rpt) and it carries NO "min slack" /
+    # "hold slack" summary token, so the patterns above miss it. When the report
+    # is a min-path (hold) report, mine the "slack (MET|VIOLATED)" path-end
+    # values directly. chip-AGNOSTIC: matches universal report_checks structure.
+    if not slacks and re.search(r"Path\s*Type\s*:\s*min", text, re.I):
+        for m in re.finditer(r"(-?\d+\.?\d*)\s+slack\s*\((?:MET|VIOLATED)\)",
+                             text, re.I):
+            try:
+                slacks.append(float(m.group(1)))
+            except (TypeError, ValueError):
+                continue
     if not slacks:
         return None, []
     return min(slacks), slacks
