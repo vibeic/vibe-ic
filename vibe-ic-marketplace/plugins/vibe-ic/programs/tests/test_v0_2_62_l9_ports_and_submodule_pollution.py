@@ -95,7 +95,7 @@ def test_soc_numbered_heading_inventory_still_extracts():
     # the original v0.1.82 use case (SoC integration spec with numbered
     # submodule headings) must keep working — deny layers are narrow
     doc = ("# SoC submodule integration\n\n"
-           "### 8.2.1 SERV core(必含)\n\n### 8.2.4 GPIO peripheral\n")
+           "### 8.1 SERV core(必含)\n\n### 8.4 GPIO peripheral\n")
     out = D._l9_heading_submodule_extract(doc)
     assert "SERV core" in out and "GPIO peripheral" in out
 
