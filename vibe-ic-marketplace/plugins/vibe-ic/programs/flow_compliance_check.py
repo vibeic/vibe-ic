@@ -2739,6 +2739,85 @@ _PLATFORM_CAPABILITY_GAPS: Dict[int, str] = {
 }
 
 
+# v0.2.64 — ORGANIC-20260606 #433/#434 evidence-integrity scan.
+# A PASS that nothing substantiates is not a PASS:
+#   * #434: evidence content tagged `deterministic_stub` / `low_confidence`
+#     is DEFERRED work — the step downgrades to WAIVED (review_required),
+#     which excludes it from strict PASS (headline becomes
+#     PASS_WITH_WAIVERS at best). The strict verdict is otherwise gameable
+#     by emitting tagged stubs.
+#   * #433(b): a verdict-shaped artifact whose `evidence` POINTER names a
+#     file that does not exist or is empty (the broken
+#     `sim/reference_tb/ref_tb.log` chain seen in all four campaign
+#     projects) downgrades to FAIL EVIDENCE_MISSING. Prose evidence notes
+#     (no path separator) are not dereferenced.
+#   * a verdict artifact may honestly SELF-REPORT "SKIPPED-CONDITION"
+#     (e.g. the formal step when no proof tool ran) — the step then
+#     reports SKIPPED-CONDITION instead of a fabricated PASS.
+# chip-AGNOSTIC: tag / structure scan only, no chip-class literals.
+_STUB_TAG_RE = re.compile(
+    r'deterministic_stub|"low_confidence"\s*:\s*true|low_confidence=true',
+    re.IGNORECASE)
+
+
+def _evidence_integrity_scan(project: Path,
+                             result: "StepResult") -> "StepResult":
+    if result.status != "PASS" or not result.evidence:
+        return result
+    stub_hits: List[str] = []
+    broken: List[str] = []
+    self_skipped: List[str] = []
+    for rel in list(result.evidence):
+        rel_s = str(rel)
+        p = Path(rel_s) if rel_s.startswith("/") else project / rel_s
+        try:
+            if p.stat().st_size == 0:
+                broken.append(f"{rel} (0 bytes)")
+                continue
+            txt = p.read_text(errors="replace")[:8000]
+        except OSError:
+            continue  # non-text / vanished: out of scope for this scan
+        if _STUB_TAG_RE.search(txt):
+            stub_hits.append(str(rel))
+            continue
+        if '"verdict"' in txt:
+            try:
+                d = json.loads(txt)
+            except ValueError:
+                d = None
+            if isinstance(d, dict):
+                if str(d.get("verdict", "")).upper().replace("_", "-") \
+                        == "SKIPPED-CONDITION":
+                    self_skipped.append(
+                        f"{rel}: {str(d.get('reason', ''))[:160]}")
+                    continue
+                ev_ptr = d.get("evidence")
+                if isinstance(ev_ptr, str) and "/" in ev_ptr:
+                    tgt = project / ev_ptr
+                    if not tgt.is_file() or tgt.stat().st_size == 0:
+                        broken.append(
+                            f"{rel} → evidence '{ev_ptr}' missing/empty")
+    if broken:
+        result.status = "FAIL"
+        result.reasons.append(
+            "EVIDENCE_MISSING (#433): verdict artifact(s) reference "
+            "evidence that does not exist or is empty — a PASS nothing "
+            "substantiates is not a PASS: " + "; ".join(broken[:4]))
+    elif stub_hits:
+        result.status = "WAIVED"
+        result.reasons.append(
+            "stub-backed (#434, review_required): evidence tagged "
+            "deterministic_stub/low_confidence is DEFERRED work, not "
+            "executed verification — excluded from strict PASS: "
+            + "; ".join(stub_hits[:4]))
+    elif self_skipped:
+        result.status = "SKIPPED-CONDITION"
+        result.reasons.append(
+            "verdict artifact self-reports SKIPPED-CONDITION (#433c): "
+            + "; ".join(self_skipped[:3]))
+    return result
+
+
 def _apply_capability_gap(result: "StepResult", sid) -> "StepResult":
     """#430 — convert a would-be-MISSING verdict on a capability-gap step
     to SKIPPED-CONDITION with the NAMED flag. Applied at EVERY MISSING
@@ -2884,7 +2963,8 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 f"(approver: {waivers[sid].get('approver', '?')})",
                 f"  ↳ natural: {natural_reason}",
             ]
-        return _apply_capability_gap(result, sid)
+        return _apply_capability_gap(
+            _evidence_integrity_scan(project, result), sid)
 
     # Now evaluate the gate predicate
     gate = step.get("gate")
@@ -2939,9 +3019,10 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         for r in original_reasons[:3]:
             result.reasons.append(f"  ↳ natural: {r}")
 
-    # v0.2.63 (#430) — capability-gap conversion at the final exit (the
-    # early required_outputs exit applies the same helper). See
-    # _apply_capability_gap for the full rationale.
+    # v0.2.64 (#433/#434) — evidence-integrity scan on the natural PASS,
+    # then v0.2.63 (#430) capability-gap conversion (the early
+    # required_outputs exit applies the same helpers).
+    result = _evidence_integrity_scan(project, result)
     return _apply_capability_gap(result, sid)
 
 

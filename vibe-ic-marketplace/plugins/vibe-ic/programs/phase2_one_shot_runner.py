@@ -3893,22 +3893,42 @@ def step_emit_phase2_manifests(project: Path,
         "reset_signal": "reset_n",
     })
 
-    # Step 4: simulation
+    # Step 4: simulation.
+    # ORGANIC-20260606-verdict-only-pass-artifacts-no-evidence (#433a):
+    # the emitter may only write a PASS that is SUBSTANTIATED — the
+    # reference-TB step must have PASSed AND its real transcript must
+    # exist non-empty on disk (the pre-fix shape hardcoded a broken
+    # `sim/reference_tb/ref_tb.log` pointer that existed in NONE of the
+    # four audited campaign projects, and even a pure-analog project with
+    # no RTL at all received the PASS pair). Without evidence the emitter
+    # writes SKIP naming the missing artifact — never PASS.
     sim_dir = _pl.sim_dir(project)
     sim_dir.mkdir(parents=True, exist_ok=True)
-    (sim_dir / "pass.flag").write_text("PASS\n")
-    written.append("sim/pass.flag")
-    w("sim/results.xml", {
-        "verdict": "PASS",
-        "evidence": "sim/reference_tb/ref_tb.log",
-    })
-    # Wave-on-fix: emit results.xml as actual XML too (some consumers
-    # want xml-shaped). Tiny shim — JSON-in-xml is acceptable for the
-    # audit's file-presence check.
-    (sim_dir / "results.xml").write_text(
-        "<results><verdict>PASS</verdict>"
-        "<source>phase23_one_shot_runner.step_reference_tb</source>"
-        "</results>\n")
+    ref_tb_step = by_name.get("reference_tb")
+    ref_logs = sorted(p for p in sim_dir.rglob("ref_tb.log")
+                      if p.is_file() and p.stat().st_size > 0)
+    if ref_tb_step is not None and ref_tb_step.status == "PASS" and ref_logs:
+        log_rel = str(ref_logs[0].relative_to(project))
+        (sim_dir / "pass.flag").write_text("PASS\n")
+        written.append("sim/pass.flag")
+        w("sim/results.xml", {
+            "verdict": "PASS",
+            "evidence": log_rel,
+        })
+        (sim_dir / "results.xml").write_text(
+            "<results><verdict>PASS</verdict>"
+            f"<evidence>{log_rel}</evidence>"
+            "<source>step_reference_tb transcript</source>"
+            "</results>\n")
+    else:
+        _why = ("reference_tb step verdict="
+                f"{ref_tb_step.status if ref_tb_step else 'not-run'}; "
+                f"transcripts found={len(ref_logs)}")
+        w("sim/results.xml", {
+            "verdict": "SKIP",
+            "reason": ("no substantiating reference-TB evidence — "
+                       "refusing a verdict-only PASS (#433): " + _why),
+        })
     w("reports/phase2/coverage/coverage_actual.json", {
         "verdict": "PASS",
         "evidence": "iverilog reference TB scenarios + sim_full_stack",
@@ -3919,44 +3939,26 @@ def step_emit_phase2_manifests(project: Path,
         ],
     })
 
-    # Step 5: formal — reuse sim_full_stack/results.json as formal results.
-    # v1.6.53 — augment with `all_proved` boolean derived from
-    # vectors_passed == vectors_total (or verdict == "PASS"). The flow
-    # gate at flow/phase1_phase2_phase3.yaml:309 contracts on `all_proved` as
-    # the proof signal; without this field the gate emits "field not
-    # found: all_proved" as a step-level FAIL on every run. The schema
-    # drift was harmless (informational only, not gating in
-    # --strict-structural) but persistent — closes the silent paper-cut.
-    full_stack = _pl.sim_full_stack_dir(project)
+    # Step 5: formal.
+    # ORGANIC-20260606 #433(c): the formal step must NEVER copy testbench
+    # results as a proof — a TB run is not a formal run, and `all_proved`
+    # may only be written by an actual proof tool. The pre-fix shape
+    # byte-copied sim_full_stack/results.json (or fabricated
+    # `verdict: PASS, all_proved: true` from "iverilog reference TB
+    # scenarios"). No formal engine is wired into this runner, so the
+    # honest manifest is SKIPPED-CONDITION with the reason — the
+    # compliance scan's self-report channel surfaces it as a skipped
+    # step, never as a fabricated proof.
     formal_dir = _pl.formal_dir(project)
     formal_dir.mkdir(parents=True, exist_ok=True)
-    formal_payload: dict
-    if (full_stack / "results.json").is_file():
-        try:
-            formal_payload = json.loads(
-                (full_stack / "results.json").read_text())
-        except Exception:
-            formal_payload = {"verdict": "UNKNOWN",
-                              "evidence": "sim_full_stack results.json "
-                              "unparseable"}
-    else:
-        formal_payload = {
-            "verdict": "PASS",
-            "evidence": "iverilog reference TB scenarios",
-        }
-    # Derive all_proved (the gate field). True iff every vector
-    # passed; conservative — when counts are absent, fall back to
-    # verdict == "PASS".
-    if "all_proved" not in formal_payload:
-        vt = formal_payload.get("vectors_total")
-        vp = formal_payload.get("vectors_passed")
-        if isinstance(vt, int) and isinstance(vp, int):
-            formal_payload["all_proved"] = (vt > 0 and vp == vt)
-        else:
-            formal_payload["all_proved"] = (
-                str(formal_payload.get("verdict", "")).upper() == "PASS")
-    (formal_dir / "results.json").write_text(
-        json.dumps(formal_payload, indent=2, ensure_ascii=False) + "\n")
+    (formal_dir / "results.json").write_text(json.dumps({
+        "verdict": "SKIPPED-CONDITION",
+        "reason": ("no formal proof tool ran in this chain — reference-TB "
+                   "simulation results are NOT a proof and are never "
+                   "copied here (#433c). `all_proved` is only written by "
+                   "an actual proof run (e.g. SymbiYosys on "
+                   "formal/constraints.sby)."),
+    }, indent=2, ensure_ascii=False) + "\n")
     # placeholder .sby for tool consumers that look for it
     (formal_dir / "constraints.sby").write_text(
         "# Auto-generated formal task placeholder; rtl/assertions.sv\n"

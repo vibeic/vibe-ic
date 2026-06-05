@@ -245,6 +245,34 @@ def main(argv=None):
                 ),
             }
 
+    # ORGANIC-20260606 #433(d) — 0-byte member hard-fail: an empty file
+    # inside the handoff pack is a broken deliverable (one audited campaign
+    # shipped a 0-byte chip_top.magic_merged.gds). Scan every member; any
+    # 0-byte file FAILs packaging by NAME — never waivable into a PASS.
+    zero_members = []
+    for hd in sorted(project.glob("phase3/stage4/foundry_handoff/**/*")):
+        if hd.is_file() and hd.stat().st_size == 0:
+            zero_members.append(str(hd.relative_to(project)))
+    if zero_members:
+        verdict, rc = "FAIL", 1
+        findings = [{
+            "severity": "ERROR",
+            "rule": "FOUNDRY_HANDOFF_ZERO_BYTE_MEMBER",
+            "message": (
+                f"0-byte member file(s) in the handoff pack — an empty "
+                f"deliverable must hard-fail packaging (#433d): "
+                f"{zero_members[:6]}"),
+        }]
+        report = {"program": _GATE_NAME, "verdict": verdict,
+                  "findings": findings,
+                  "zero_byte_members": zero_members}
+        out = json.dumps(report, indent=2, ensure_ascii=False)
+        if args.json:
+            Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.json).write_text(out)
+        print(out)
+        return rc
+
     waiver = _step_waived(project, args.step_label)
     if missing and not waiver:
         verdict, rc = "SKIP", 2

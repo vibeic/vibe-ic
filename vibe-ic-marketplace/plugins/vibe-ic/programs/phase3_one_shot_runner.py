@@ -4142,9 +4142,16 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             if extra not in candidate_chip_gds:
                 candidate_chip_gds.append(extra)
     if handoff_out.is_dir():
+        _zero_byte_members: List[str] = []
         for src_gds in candidate_chip_gds:
             stem_lo = src_gds.stem.lower()
             if any(h in stem_lo for h in _SCRIBE_HINTS):
+                continue
+            # ORGANIC-20260606 #433(d): a 0-byte member must never enter
+            # the foundry handoff pack — record it by name instead of
+            # silently packaging an empty mask source.
+            if src_gds.stat().st_size == 0:
+                _zero_byte_members.append(src_gds.name)
                 continue
             dst_gds = handoff_out / src_gds.name
             if dst_gds.is_file():
@@ -4157,6 +4164,12 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 written.append(str(dst_gds))
             except OSError:
                 pass
+        if _zero_byte_members:
+            (handoff_out / "PACKAGING_ERRORS.txt").write_text(
+                "0-byte GDS source(s) REFUSED from the handoff pack "
+                "(#433d — an empty mask source must hard-fail packaging, "
+                "not ship silently):\n"
+                + "\n".join(f"  - {n}" for n in _zero_byte_members) + "\n")
 
     # --- Step 14: phase2/stage2/synth/netlist.v canonical alias --------
     # v1.6.161 (#60 P1-5) — accept multiple synthesiser-emitted
