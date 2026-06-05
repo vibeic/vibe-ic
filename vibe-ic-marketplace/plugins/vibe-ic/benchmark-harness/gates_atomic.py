@@ -167,7 +167,15 @@ def main():
     rc, out = run([sys.executable, "-m", "tools.phase1_engine.cli",
                    "run-all", str(spec), str(wd / "out")],
                   cwd=str(cli_cwd), timeout=180, env=cli_env)
-    if rc != 0:
+    # v0.2.58 (#429): the engine is now BUNDLED in the plugin payload, so
+    # the primary `-m tools.phase1_engine.cli` import SUCCEEDS everywhere —
+    # including on the minimal Shape-C spec.yaml, where the structured
+    # ingester legitimately yields 0 facts and renders 0 layer docs with
+    # rc=0. Pre-bundle, the import failure (rc!=0) was what routed those
+    # cases to the runner fallback (whose Path-A prose bridge + stub chain
+    # DOES emit the L docs). Trigger the fallback on "no L9 rendered" too,
+    # not only on a nonzero rc.
+    if rc != 0 or not _l9_rendered(wd):
         # v0.1.38 fix (Bucket A — Human b7): phase1_one_shot_runner.py takes a
         # PROJECT DIR (positional), NOT --spec <yaml>. The Path-A bridge inside
         # the runner converts input/phase1_prompt.md → input/docs/design_description.md.

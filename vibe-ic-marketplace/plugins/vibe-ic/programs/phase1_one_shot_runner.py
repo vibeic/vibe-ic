@@ -41,7 +41,7 @@ import sys
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import _path_layout as _pl
 
 # v2 — Phase 1 absorbs Phase 2a's doc-extraction track. The ~47k-line
@@ -114,30 +114,61 @@ def _detect_input_mode(project: Path) -> str:
 
 # ── Prompt mode (PM Agent / dialogue → phase1_engine) ──────────────
 
-def _find_phase1_engine() -> Path:
-    """Walk up from PROGRAMS_DIR looking for tools/phase1_engine/cli.py."""
+def _find_phase1_engine() -> "Tuple[Optional[Path], List[str]]":
+    """Resolve tools/phase1_engine/cli.py via an explicit fallback chain
+    (ORGANIC-20260606-plugin-cache-missing-phase1-engine #429):
+      1. the engine BUNDLED in the plugin payload (<plugin>/tools/…) — the
+         only location that exists in an installed cache;
+      2. $CLAUDE_PLUGIN_ROOT/tools/… (plugin-host hint);
+      3. repo-checkout walk-up from PROGRAMS_DIR (legacy);
+      4. known sibling-checkout guesses (legacy).
+    Returns (cli_path_or_None, tried_locations) so the caller can emit a
+    HARD, NAMED error listing every location searched — never a silent
+    null engine."""
+    tried: List[str] = []
+    # 1. bundled inside the plugin payload (works from the installed cache)
+    cand = PROGRAMS_DIR.parent / "tools" / "phase1_engine" / "cli.py"
+    tried.append(str(cand))
+    if cand.is_file():
+        return cand, tried
+    # 2. plugin-host hint
+    env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if env_root:
+        cand = Path(env_root) / "tools" / "phase1_engine" / "cli.py"
+        tried.append(str(cand))
+        if cand.is_file():
+            return cand, tried
+    # 3. repo-checkout walk-up
     here = PROGRAMS_DIR
     for ancestor in (here, *here.parents):
         cand = ancestor / "tools" / "phase1_engine" / "cli.py"
+        tried.append(str(cand))
         if cand.is_file():
-            return cand
-    # opensource_repo / sibling layouts
+            return cand, tried
+    # 4. opensource_repo / sibling layouts
     for guess in ("/home/user/AI_IC_design/tools/phase1_engine/cli.py",
                   "/home/user/AI_IC_design/opensource_repo/tools/"
                   "phase1_engine/cli.py"):
         p = Path(guess)
+        tried.append(str(p))
         if p.is_file():
-            return p
-    return Path("/dev/null")  # missing — caller's run will FAIL with msg
+            return p, tried
+    return None, tried
 
 
 def step_ingest_render(project: Path, ic_name: str) -> StepResult:
     t0 = time.time()
-    cli = _find_phase1_engine()
-    if not cli.is_file():
+    cli, tried = _find_phase1_engine()
+    if cli is None or not cli.is_file():
+        # #429 — hard NAMED error: list every location the fallback chain
+        # searched so a bare cache install diagnoses itself.
         return StepResult("phase1_ingest_render", "FAIL",
                           time.time() - t0,
-                          f"phase1_engine cli not found: {cli}")
+                          "phase1_engine cli NOT FOUND. Searched (in "
+                          "order): " + "; ".join(tried) + ". The engine "
+                          "ships bundled at <plugin>/tools/phase1_engine "
+                          "(v0.2.58+); set CLAUDE_PLUGIN_ROOT or run from "
+                          "a repo checkout otherwise.")
     structured = project / "input" / "phase1_structured.yaml"
     docs_dir = project / "input" / "docs"
     facts = project / "facts.yaml"
