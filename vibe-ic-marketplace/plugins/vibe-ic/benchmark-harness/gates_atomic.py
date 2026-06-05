@@ -230,10 +230,20 @@ def main():
     #    testbench can observe — deterministic signature of a mis-read
     #    interface (prompt direction typo). NEW rule in
     #    spec_conformance_check; structural, spec-typo-proof.
+    #
+    # v0.2.50 addition (same corpus-sweep precondition — ZERO false fires
+    # over every emitted passing sample of the audited two-track campaigns):
+    #  * msbfirst-direction-mismatch (ORGANIC-20260605-msbfirst-direction-
+    #    conformance-rule): prompt says MSB-first serial load but the RTL
+    #    inserts the new bit at the MSB end of a parallel-consumed register
+    #    (`vec <= {bit, vec[W-1:1]}`) — the word assembles bit-REVERSED.
+    #    Lesson→program promotion: the prose lesson got 31/32 agents right;
+    #    the residual wrong form is this exact structural signature.
     _BLOCKING_CONFORMANCE_RULES = {"onebased-port-range",
                                    "fsm-output-style-mismatch",
                                    "port-missing",
-                                   "zero-output-ports"}
+                                   "zero-output-ports",
+                                   "msbfirst-direction-mismatch"}
     blocking: list = []
     if conf_json.is_file():
         try:

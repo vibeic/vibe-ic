@@ -27,6 +27,12 @@ Findings:
                                    spec repeating the typo cannot mask it.
     reset-mode-spec-mismatch     : spec says sync, RTL is async (or vice-versa)
     reset-polarity-spec-mismatch : spec says active-high, RTL active-low (or v.v.)
+    msbfirst-direction-mismatch  : spec says the serial data loads MSB-first but
+                                   the RTL inserts the new bit at the MSB end of
+                                   a parallel-consumed register
+                                   (`vec <= {bit, vec[W-1:1]}`) — the word comes
+                                   out bit-REVERSED; the first-received bit must
+                                   END at the MSB (left-shift idiom).
   WARN:
     reset-not-found              : spec declares a reset but no reset block found
     pipelined-width-not-parameterized : spec says "pipelined N-bit adder/mul" but
@@ -315,6 +321,106 @@ def _onebased_index_warnings(spec_text: str, rtl_body: str,
     return out
 
 
+# ---------------------------------------------------------------------------
+# ERROR: MSB-first serial-load direction inversion
+# (ORGANIC-20260605-msbfirst-direction-conformance-rule) — the lesson→program
+# promotion of the shift-direction expert lesson. Prose guidance cut the
+# inversion rate from 2/2 relevant agents to 1/32 across a fully-audited
+# campaign, but cannot reach zero; the residual wrong form is a STRUCTURAL
+# signature detectable mechanically on both halves:
+#   prompt half : an MSB-first / most-significant-bit-first serial-load phrase
+#   RTL half    : `vec <= {bit, vec[W-1:1]}` — the new bit enters at the MSB
+#                 end, so after W cycles the FIRST-received bit sits at the
+#                 LSB: the assembled word is bit-REVERSED. Under MSB-first
+#                 reception the first bit must END at the MSB → the correct
+#                 idiom is the left shift `vec <= {vec[W-2:0], bit}`.
+# Conservative guards (each kills a real legitimate idiom from the corpus):
+#   * prompt must ALSO carry serial/shift vocabulary, and must NOT carry an
+#     LSB-first phrase (configurable/dual-direction prompts are ambiguous);
+#   * the inserted bit's base identifier must differ from the vector (a
+#     rotate `q <= {q[0], q[W-1:1]}` / arithmetic shift `{q[W-1], q[W-1:1]}`
+#     is not a serial load);
+#   * a same-vector LEFT-entry form elsewhere means a runtime-muxed
+#     dual-direction design — cannot statically conclude a mismatch;
+#   * the vector must be CONSUMED AS A PARALLEL WORD (multi-bit output port
+#     or whole-vector use): a delay line that only taps vec[0] re-emits bits
+#     in arrival order, so its entry end is immaterial.
+# chip-AGNOSTIC: pure phrase + expression structure; no IC/vendor literals.
+# ---------------------------------------------------------------------------
+_MSB_TOKEN = r'(?:msb|most[\s-]+significant[\s-]+bit)'
+_LSB_TOKEN = r'(?:lsb|least[\s-]+significant[\s-]+bit)'
+
+
+def _spec_declares_msbfirst_serial(spec_text: str) -> bool:
+    """True iff the prompt declares an MSB-first serial load: an MSB-first
+    phrase (either word order), NO LSB-first phrase, plus serial/shift
+    vocabulary somewhere in the prose."""
+    import re
+
+    def _first_phrase(token: str) -> bool:
+        return bool(re.search(
+            r'\b' + token + r'\b(?:\W+\w+){0,5}?\W+first\b'
+            r'|\bfirst\b(?:\W+\w+){0,6}?\W+' + token + r'\b',
+            spec_text, re.IGNORECASE))
+
+    if not _first_phrase(_MSB_TOKEN) or _first_phrase(_LSB_TOKEN):
+        return False
+    return bool(re.search(
+        r'\b(?:shift(?:s|ed|ing)?|serial(?:ly)?|bit[\s-]?stream'
+        r'|one\s+bit\s+(?:per|at\s+a\s+time)|bit\s+at\s+a\s+time)\b',
+        spec_text, re.IGNORECASE))
+
+
+def _vector_consumed_as_word(rtl_body: str, vec: str,
+                             rtl_ports: List[Port]) -> bool:
+    """True iff `vec` is read as a parallel word: it IS a multi-bit output
+    port, or a bare whole-vector READ (no bit-select, not an assignment LHS)
+    appears outside its own declaration (e.g. `assign data_out = vec;`,
+    `vec == PATTERN`). `vec = …` / `vec <= …` are writes, not reads; `==`
+    survives the lookahead because the first `=` is followed by `=`."""
+    import re
+    for p in rtl_ports:
+        if p.name == vec and p.direction == 'output' and p.width > 1:
+            return True
+    for m in re.finditer(
+            r'\b' + re.escape(vec) + r'\b(?!\s*(?:\[|<|=(?!=)))', rtl_body):
+        ls = rtl_body.rfind('\n', 0, m.start()) + 1
+        le = rtl_body.find('\n', m.start())
+        line = rtl_body[ls:le if le != -1 else len(rtl_body)]
+        if re.match(r'\s*(?:reg|wire|logic|input|output|inout|integer)\b', line):
+            continue  # declaration occurrence
+        return True
+    return False
+
+
+def _msb_entry_serial_loads(rtl_body: str,
+                            rtl_ports: List[Port]) -> List[tuple]:
+    """Return [(vec, bit_src)] for each nonblocking `vec <= {bit, vec[hi:1]}`
+    whose inserted bit comes from OUTSIDE the vector and whose vector is
+    consumed as a parallel word, with no same-vector left-entry form (see
+    the rule comment for why each guard exists)."""
+    import re
+    out, seen = [], set()
+    pat = re.compile(
+        r'\b([A-Za-z_]\w*)\s*<=\s*\{\s*'
+        r'([A-Za-z_]\w*)((?:\s*\[[^\[\]]+\])?)\s*,\s*'
+        r'\1\s*\[\s*[^\]:]+?\s*:\s*1\s*\]\s*\}')
+    for m in pat.finditer(rtl_body):
+        vec, src_base = m.group(1), m.group(2)
+        if src_base == vec:
+            continue  # rotate / arithmetic-shift self-feedback
+        if re.search(r'\b' + re.escape(vec) + r'\s*<=\s*\{\s*'
+                     + re.escape(vec) + r'\s*\[', rtl_body):
+            continue  # runtime-muxed dual-direction design
+        if not _vector_consumed_as_word(rtl_body, vec, rtl_ports):
+            continue  # delay line / single-bit tap — entry end immaterial
+        t = (vec, (src_base + m.group(3)).replace(' ', ''))
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
 def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
           rtl_resets: dict, rtl_registered: Optional[bool],
           path: str, rtl_body: str = '', spec_text: str = '') -> List[Finding]:
@@ -461,6 +567,20 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
                 f"(1-based indexing) but the RTL declares it zero-based [{width-1}:0] "
                 f"— declare the port as [{width}:1], not [{width-1}:0], or every bit "
                 f"index is off by one (K-map / bit-mapping comes out wrong)."))
+
+    # ---- MSB-first serial-load direction (ERROR; lesson→program promotion) --
+    # Spec says the serial data arrives MSB-first but the RTL inserts the new
+    # bit at the MSB end of a parallel-consumed register — the assembled word
+    # is bit-reversed. See the rule comment above _spec_declares_msbfirst_serial.
+    if spec_text and rtl_body and _spec_declares_msbfirst_serial(spec_text):
+        for vec, bit_src in _msb_entry_serial_loads(rtl_body, rtl_ports):
+            f.append(Finding(path, 'ERROR', 'msbfirst-direction-mismatch', vec,
+                f"spec says the serial data loads MSB-first, but the RTL "
+                f"inserts the new bit '{bit_src}' at the MSB end of '{vec}' "
+                f"({vec} <= {{{bit_src}, {vec}[W-1:1]}}) — after W cycles the "
+                f"FIRST-received bit sits at the LSB: the word is bit-REVERSED. "
+                f"Under MSB-first reception the first bit must END at the MSB; "
+                f"use the left-shift idiom {vec} <= {{{vec}[W-2:0], {bit_src}}}."))
     return f
 
 
