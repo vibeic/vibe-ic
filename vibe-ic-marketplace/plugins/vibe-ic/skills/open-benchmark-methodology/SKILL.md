@@ -146,7 +146,10 @@ the gates held across 17 fresh agents; the same fix as free-text guidance regres
 
 This shape is documented in `benchmark_external/verilogeval_v2/run_fresh_v0125/gates.py` (canonical).
 
-**Shape-C ORCHESTRATION RULES (ORGANIC-20260605, REQUIRED):**
+**Batch-dispatch ORCHESTRATION RULES — Shapes B/C (ORGANIC-20260605, REQUIRED):**
+These bind EVERY batch fan-out shape — Shape C here AND Shape B (same
+BATCHFILE/batches architecture; Shape D is a single project with no fan-out
+and is exempt):
 1. **Batch granularity** for ≥100-problem datasets: spawn ONE authoring agent per
    pre-split `batches/batchNN.list` — NEVER one agent per problem. A 312-problem
    per-problem fan-out lost ~93% of its agents' structured returns; the same

@@ -11,6 +11,33 @@ PARAMS your caller provides:
 - `RUNDIR`    absolute path to the run dir (with `samples/`, `problems.list`, `batches/`)
 - `BATCHFILE` list of design dirs (relative to DATASET) — your batch
 
+## ORCHESTRATION RULES (for the caller spawning the agents — ORGANIC-20260605)
+
+Shape B uses the SAME batch fan-out architecture as Shape C, so the same
+caller-side rules are REQUIRED (full doctrine + rationale in
+`blind_instructions_shape_c.md` § ORCHESTRATION RULES):
+
+1. **Batch granularity** — one agent per pre-split `batches/batchNN.list`,
+   never one agent per design.
+2. **Disk truth** — reconcile progress by counting on-disk
+   `<RUNDIR>/samples/` files, never by tallying agent returns; resume =
+   diff `problems.list` vs `samples/`.
+3. **Transcript export is the DEFAULT** — copy every authoring and
+   close-loop agent's transcript to `<RUNDIR>/transcripts/` (named per
+   agent) before scoring; the blindness audit reads them
+   (ORGANIC-20260605-transcripts-export-default).
+4. **Rate-limit resilience ladder
+   (ORGANIC-20260605-ratelimit-resilient-dispatch-ladder).** Provider-side
+   burst rate-limiting kills a full-width fan-out within seconds — kill
+   signature: sub-minute workflow death, ZERO/near-zero token usage, most
+   agents nulled at once; same-width retries die identically while a
+   single sustained agent survives. On a burst kill: (a) drop to a
+   **1-agent CANARY** that must complete a FULL batch before any scaling;
+   (b) resume at **narrow width (2–4 concurrent)** with completion-driven
+   dispatch (launch the next agent when one finishes), never barrier
+   fan-out; (c) disk-truth reconcile (rule 2) remains the resume
+   mechanism.
+
 ## ABSOLUTE BLINDNESS RULE
 For each `<design>` you may read ONLY `<DATASET>/<design>/design_description.txt`.
 NEVER open / cat / grep / list `testbench.v` / `verified_*.v` / any
