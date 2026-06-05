@@ -29,6 +29,21 @@ suggested_fix: |
 
 id: "ORGANIC-20260526-memmap-range-constants"
 submitted_at: "2026-05-26T03:00:00+08:00"
+status: resolved
+resolved_at: "2026-06-05"
+resolution: >-
+  Re-verified against the current 0.2.42 plugin: the suggested fix is
+  fully implemented as _RE_MEMMAP_RANGE + _extract_memmap_range_constants
+  in programs/phase1_doc_one_shot_runner.py (:24905-24969) — range-aware
+  regex 0x[0-9A-Fa-f]{1,8}\s*[-–—]\s*0x[0-9A-Fa-f]{1,8} covering ASCII
+  hyphen / en-dash / em-dash, emitting BOTH endpoints as
+  kind=indexed_register_address entries with provenance (evidence file +
+  verbatim source line), lo<hi range guard, and address_int dedup.
+  Reproduced the original session scenario: the verbatim prose
+  "(0x00000000-0x3FFFFFFF)" / "(0x40000000-0xFFFFFFFF)" now yields all
+  four boundary literals deterministically (no AI deep-review needed).
+  Regression coverage: programs/tests/test_orch_phase1_catalog_fixes.py
+  (memmap_range cases) — 57/57 PASS on 2026-06-05.
 session_context: >-
   Fresh field-agent Vibe-IC run on a bit-serial RISC-V SoC benchmark;
   one vendor doc dropped to 82.3% capture because a prose memory-map
