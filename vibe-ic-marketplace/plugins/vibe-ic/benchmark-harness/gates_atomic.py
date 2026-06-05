@@ -239,11 +239,19 @@ def main():
     #    (`vec <= {bit, vec[W-1:1]}`) — the word assembles bit-REVERSED.
     #    Lesson→program promotion: the prose lesson got 31/32 agents right;
     #    the residual wrong form is this exact structural signature.
+    #
+    # v0.2.53 addition (same corpus-sweep precondition):
+    #  * moore-output-reset-gated (ORGANIC-20260606-moore-output-reset-
+    #    gated-rule): spec ties an N-cycle assertion window to RESET itself
+    #    ("whenever ... reset, assert <sig> for N cycles") but the RTL ANDs
+    #    that output with the negated reset — held/re-asserted reset eats
+    #    assertion cycles. Lesson→program promotion (third in the series).
     _BLOCKING_CONFORMANCE_RULES = {"onebased-port-range",
                                    "fsm-output-style-mismatch",
                                    "port-missing",
                                    "zero-output-ports",
-                                   "msbfirst-direction-mismatch"}
+                                   "msbfirst-direction-mismatch",
+                                   "moore-output-reset-gated"}
     blocking: list = []
     if conf_json.is_file():
         try:

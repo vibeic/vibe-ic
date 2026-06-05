@@ -33,6 +33,12 @@ Findings:
                                    (`vec <= {bit, vec[W-1:1]}`) — the word comes
                                    out bit-REVERSED; the first-received bit must
                                    END at the MSB (left-shift idiom).
+    moore-output-reset-gated     : spec ties an N-cycle assertion window to
+                                   RESET itself ("whenever ... reset, assert
+                                   <sig> for N cycles") but the RTL ANDs that
+                                   output with the negated reset — a held or
+                                   re-asserted reset then eats assertion
+                                   cycles (held-reset window N-1 instead of N).
   WARN:
     reset-not-found              : spec declares a reset but no reset block found
     pipelined-width-not-parameterized : spec says "pipelined N-bit adder/mul" but
@@ -421,6 +427,82 @@ def _msb_entry_serial_loads(rtl_body: str,
     return out
 
 
+# ---------------------------------------------------------------------------
+# ERROR: reset-tied assertion window AND-ed with the negated reset
+# (ORGANIC-20260606-moore-output-reset-gated-rule) — lesson→program promotion,
+# same capture-ladder shape as the MSB-first direction rule. Spec half: a
+# clause of the form "when(ever) ... reset ..., assert <sig> for N cycles"
+# ties the assertion window to the reset STATE — the canonical Moore reading
+# asserts <sig> the cycle after any edge sampling reset high, INCLUDING while
+# reset is held. RTL half: the named output's driver carries a conjunction
+# with the negated reset (`assign <sig> = <expr> && !<reset>` / `& ~<reset>`,
+# or the same RHS shape inside an always block). Together they are a
+# deterministic mismatch signature: any acceptance run holding reset more
+# than one cycle (or re-resetting mid-run) observes a missing assertion
+# cycle (held-reset contiguous window N-1 instead of N).
+# Conservative guards (per the filing):
+#   (a) the spec clause must tie the window to reset ITSELF — clauses anchored
+#       to reset RELEASE ("after reset is deasserted/released") never fire;
+#   (b) only the spec-NAMED asserted output is examined;
+#   (c) skipped entirely when the spec declares an ASYNCHRONOUS reset (an
+#       async-clear contract is a different class).
+# The deferred-window mis-reading (counter starts after release) has no
+# negated-reset conjunction, so it stays lesson-covered — out of scope here.
+# chip-AGNOSTIC: pure phrase + expression structure; no IC/vendor literals.
+# ---------------------------------------------------------------------------
+_RESET_TIED_ASSERT_RES = (
+    # "when(ever) ... reset ..., assert <sig> for N cycles"
+    __import__('re').compile(
+        r'\bwhen(?:ever)?\b[^.!?]{0,60}?\breset\b[^.!?]{0,60}?'
+        r'\bassert\s+`?([A-Za-z_]\w*)`?\s+for\s+(?:exactly\s+)?\d+\s+'
+        r'(?:clock\s+)?cycles?', __import__('re').IGNORECASE),
+    # "assert <sig> for N cycles when(ever) ... reset"
+    __import__('re').compile(
+        r'\bassert\s+`?([A-Za-z_]\w*)`?\s+for\s+(?:exactly\s+)?\d+\s+'
+        r'(?:clock\s+)?cycles?[^.!?]{0,60}?\bwhen(?:ever)?\b'
+        r'[^.!?]{0,40}?\breset\b', __import__('re').IGNORECASE),
+)
+_RESET_RELEASE_RE = __import__('re').compile(
+    r'de-?assert|releas|removed|lifted|negated|cleared', __import__('re').IGNORECASE)
+
+
+def _spec_reset_tied_assert_signals(spec_text: str) -> List[str]:
+    """Signals whose N-cycle assertion window the spec ties to reset ITSELF.
+    Sentence-scoped (soft-unwrapped); release-anchored sentences are excluded
+    per guard (a)."""
+    from _specrtl_common import _soft_unwrap_sentences
+    out: List[str] = []
+    for sent in _soft_unwrap_sentences(spec_text):
+        if _RESET_RELEASE_RE.search(sent):
+            continue
+        for rx in _RESET_TIED_ASSERT_RES:
+            for m in rx.finditer(sent):
+                if m.group(1) not in out:
+                    out.append(m.group(1))
+    return out
+
+
+def _output_reset_gated(rtl_body: str, sig: str,
+                        rtl_ports: List[Port]) -> Optional[str]:
+    """Return the reset name when `sig`'s driver RHS conjoins the negated
+    reset (`... && !rst` / `... & ~rst`), else None. Only RHS conjunction
+    shapes count — an `if (reset)` branch is ordinary reset structure."""
+    import re
+    reset_names = [p.name for p in rtl_ports
+                   if re.search(r'rst|reset', p.name, re.IGNORECASE)]
+    if not reset_names:
+        return None
+    for m in re.finditer(r'\b' + re.escape(sig) + r'\s*(?:<=|=)(?!=)\s*([^;]+);',
+                         rtl_body):
+        rhs = m.group(1)
+        if '&' not in rhs:
+            continue
+        for rn in reset_names:
+            if re.search(r'[!~]\s*\(?\s*' + re.escape(rn) + r'\b', rhs):
+                return rn
+    return None
+
+
 def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
           rtl_resets: dict, rtl_registered: Optional[bool],
           path: str, rtl_body: str = '', spec_text: str = '') -> List[Finding]:
@@ -581,6 +663,26 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
                 f"FIRST-received bit sits at the LSB: the word is bit-REVERSED. "
                 f"Under MSB-first reception the first bit must END at the MSB; "
                 f"use the left-shift idiom {vec} <= {{{vec}[W-2:0], {bit_src}}}."))
+
+    # ---- reset-tied window AND-ed with !reset (ERROR; lesson→program) ------
+    # Spec ties the N-cycle assertion window to reset ITSELF; the RTL gates
+    # the named output off while reset is high — a held/re-asserted reset
+    # eats assertion cycles. See _spec_reset_tied_assert_signals rule comment.
+    if spec_text and rtl_body and spec.reset_mode != 'asynchronous':
+        outs = {p.name for p in rtl_ports if p.direction == 'output'}
+        for sig in _spec_reset_tied_assert_signals(spec_text):
+            if sig not in outs:
+                continue  # guard (b): only the spec-named asserted output
+            rn = _output_reset_gated(rtl_body, sig, rtl_ports)
+            if rn:
+                f.append(Finding(path, 'ERROR', 'moore-output-reset-gated', sig,
+                    f"spec ties '{sig}'s N-cycle assertion window to RESET "
+                    f"itself (assert WHENEVER reset, including while it is "
+                    f"held), but the RTL conjoins '{sig}' with !{rn} — a "
+                    f"held or re-asserted reset then eats assertion cycles "
+                    f"(held-reset contiguous window comes out N-1, not N). "
+                    f"Drive '{sig}' from the FSM state alone; do not gate it "
+                    f"with the reset."))
     return f
 
 
