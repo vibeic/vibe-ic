@@ -746,6 +746,47 @@ def _lookup_class(ic_class: str) -> Optional[dict]:
     return None
 
 
+def _is_pure_analog_no_rtl_track(ic_class: Optional[str]) -> Tuple[bool, str]:
+    """True when the IC class is a *pure-analog* design that has NO digital
+    RTL track at all — so the RTL-dependent digital steps (reference_tb,
+    yosys_synth, the ECO loop) must SKIP, not FAIL.
+
+    chip-AGNOSTIC: decided purely from the registry contract, not a chip
+    name. The signature of an analog-only class is:
+        analog_applicable == True   (analog A1..A8 owns verification)
+        rtl_gen           is null   (no deterministic RTL generator)
+        fallback_skill    is null   (no spec-to-rtl handoff either —
+                                     distinguishes this from digital
+                                     classes that legitimately WAIVE
+                                     rtl_gen awaiting spec-to-rtl).
+
+    The pure_analog registry entry's own `description` states the intent:
+    "Phase 2 SKIPs RTL gen; analog flow (A1..A8) handles via
+    /vibe-ic-analog." This helper makes the runner honor that contract
+    instead of hard-FAILing reference_tb/yosys_synth on the absent rtl/.
+
+    Returns (is_pure_analog, reason).
+    """
+    if not ic_class:
+        return (False, "")
+    config = _lookup_class(ic_class)
+    if config is None:
+        return (False, f"class {ic_class!r} not in registry")
+    analog_ok = bool(config.get("analog_applicable"))
+    has_rtl_gen = config.get("rtl_gen") is not None
+    has_fallback = config.get("fallback_skill") is not None
+    if analog_ok and not has_rtl_gen and not has_fallback:
+        return (True,
+                f"class {ic_class!r} is pure-analog "
+                f"(analog_applicable=True, rtl_gen=null, "
+                f"fallback_skill=null) — RTL-dependent digital steps "
+                f"defer to the analog A1..A8 track")
+    return (False,
+            f"class {ic_class!r} has a digital RTL track "
+            f"(rtl_gen={config.get('rtl_gen')!r}, "
+            f"fallback_skill={config.get('fallback_skill')!r})")
+
+
 def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepResult]:
     """since v0.1.10 — program-first RTL. If the project ships a structured RTL
     spec, route it through deterministic_rtl_dispatcher (FSM-table / truth-table /
@@ -899,6 +940,22 @@ def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
             # Catalog query is best-effort — never blocks rtl_gen
             catalog_hint = f"\n(ip_catalog query skipped: {_e})"
 
+        # v0.2.55 — pure-analog classes have NO RTL track at all. The
+        # registry sets fallback_skill=null DELIBERATELY (analog
+        # A1..A8 owns the design); recommending spec-to-rtl there is
+        # wrong — there is no digital RTL to author. Direct to the
+        # analog track instead. chip-AGNOSTIC: registry contract.
+        is_analog, _analog_reason = _is_pure_analog_no_rtl_track(ic_class)
+        if is_analog:
+            return StepResult(
+                "rtl_gen", "WAIVED",
+                time.time() - t0,
+                f"IC class {ic_class!r} is pure-analog (rtl_gen=null, "
+                f"fallback_skill=null) — no digital RTL. Verification "
+                f"deferred to the analog A1..A8 track (/vibe-ic-analog).",
+                extras={"fallback_skill": None,
+                        "deferred_to": "analog_track",
+                        "class_config": config})
         skill = config.get("fallback_skill") or "spec-to-rtl"
         if catalog_matches_summary:
             skill = "catalog-glue-author"
@@ -1208,9 +1265,20 @@ def step_full_stack_tb_gen(project: Path,
     # L3_CMD_PROTOCOL.json, not from any chip-specific literal.
     l3_path = gd / "L3_CMD_PROTOCOL.json"
     opcodes_hex: List[str] = []
+    # v0.2.55 — detect a genuinely NON-PROTOCOL IC (no software-visible command
+    # opcodes). For those (processor/CPU SoCs, pure datapath, reused-IP glue),
+    # L3 truthfully declares `no_opcodes_in_input: true` and carries an empty
+    # `opcodes`. We must NOT fabricate a phantom default opcode oracle for them —
+    # phantom vectors with no golden bytes make the bit-level oracle gate FAIL on
+    # an IC that has no command protocol to verify. chip-AGNOSTIC: keyed on the
+    # doc's own honest N/A flag, not on any chip name.
+    no_command_protocol = False
     if l3_path.is_file():
         try:
             l3 = json.loads(l3_path.read_text())
+            if l3.get("no_opcodes_in_input") is True \
+                    or l3.get("command_protocol_applicable") is False:
+                no_command_protocol = True
             for op in (l3.get("opcodes") or []):
                 if not isinstance(op, dict):
                     continue
@@ -1224,8 +1292,12 @@ def step_full_stack_tb_gen(project: Path,
     # If L3 lookup yielded < 3 opcodes (e.g. L3 has __TODO__ stubs),
     # fall back to a chip-AGNOSTIC default set (any three distinct
     # 8-bit values; values are pure structural stimuli, not chip-
-    # specific commands).
-    if len(opcodes_hex) < 3:
+    # specific commands). v0.2.55 — but ONLY when the IC actually HAS a
+    # command protocol. A non-protocol IC (no_command_protocol) keeps an
+    # EMPTY opcode list so the full-stack TB is purely connectivity-only and
+    # the bit-level oracle treats it as N/A instead of FAILing on phantom
+    # golden-less command vectors.
+    if len(opcodes_hex) < 3 and not no_command_protocol:
         opcodes_hex = (opcodes_hex
                        + ["0x70", "0x72", "0x74", "0x76", "0x78"])[:5]
 
@@ -1391,13 +1463,26 @@ def step_full_stack_tb_gen(project: Path,
             source="step_full_stack_tb_gen (ORGANIC-20260528)",
             evidence=l3_evidence,
             opcodes_tested=opcodes_hex[:5],
-            extra={"evidence": (
-                "Connectivity skeleton: TB skeleton drives bit-level "
-                "stimulus via drive_byte() task; opcodes from "
-                "L3_CMD_PROTOCOL.json. Functional verdict is honest — "
-                "PASS only when every vector has a concrete golden + "
-                "matching actual; CONNECTIVITY_ONLY otherwise. "
-                "chip-AGNOSTIC.")},
+            extra={
+                # v0.2.55 — non-protocol ICs (CPU SoCs / pure datapath /
+                # reused-IP glue) have NO command oracle. Mark it N/A so the
+                # bit-level oracle gate treats this connectivity-only
+                # results.json as not-applicable rather than FAILing on
+                # golden-less phantom command vectors. chip-AGNOSTIC: keyed on
+                # L3's own honest no_opcodes_in_input declaration.
+                "command_oracle_applicable": (not no_command_protocol),
+                "evidence": (
+                    "Connectivity skeleton: TB skeleton drives bit-level "
+                    "stimulus via drive_byte() task; opcodes from "
+                    "L3_CMD_PROTOCOL.json. Functional verdict is honest — "
+                    "PASS only when every vector has a concrete golden + "
+                    "matching actual; CONNECTIVITY_ONLY otherwise. "
+                    + ("This IC has NO command protocol "
+                       "(no_opcodes_in_input=true) — command oracle N/A; "
+                       "functional verification is via gate-level synth + "
+                       "Phase 3 + firmware execution, not a command-byte "
+                       "oracle. " if no_command_protocol else "")
+                    + "chip-AGNOSTIC.")},
         )
         results_path.write_text(json.dumps(results, indent=2) + "\n")
     else:
@@ -1928,6 +2013,21 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
     if not rtl_dir.is_dir():
+        # v0.2.55 — pure-analog classes have NO digital RTL track (the
+        # registry sets rtl_gen=null AND fallback_skill=null; analog
+        # A1..A8 owns verification). The absent rtl/ is the EXPECTED
+        # state, not a failure — SKIP and defer to the analog track
+        # rather than hard-FAILing on "rtl/ missing". chip-AGNOSTIC:
+        # decided from the registry contract, not a chip name.
+        is_analog, reason = _is_pure_analog_no_rtl_track(ic_class)
+        if is_analog:
+            return StepResult(
+                "reference_tb", "SKIP",
+                time.time() - t0,
+                f"no rtl/ — {reason}; functional verification deferred "
+                f"to the analog A1..A8 track (/vibe-ic-analog)",
+                extras={"deferred_to": "analog_track",
+                        "ic_class": ic_class})
         return StepResult("reference_tb", "FAIL",
                           time.time() - t0,
                           "rtl/ missing")
@@ -2390,10 +2490,25 @@ def _phase2_retrieve_netlist(container: str, netlist_c: str,
 # 4. yosys offline synth
 # -------------------------------------------------------------------------
 def step_yosys_synth(project: Path, top_name: str = "chip_top",
-                     container: str = "iic-eda") -> StepResult:
+                     container: str = "iic-eda",
+                     ic_class: Optional[str] = None) -> StepResult:
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
     if not rtl_dir.is_dir():
+        # v0.2.55 — pure-analog classes have NO digital RTL to
+        # synthesize (registry rtl_gen=null + fallback_skill=null;
+        # analog A1..A8 owns the design). Absent rtl/ is EXPECTED —
+        # SKIP and defer to the analog track rather than FAIL.
+        # chip-AGNOSTIC: registry contract, not a chip name.
+        is_analog, reason = _is_pure_analog_no_rtl_track(ic_class)
+        if is_analog:
+            return StepResult(
+                "yosys_synth", "SKIP",
+                time.time() - t0,
+                f"no rtl/ — {reason}; gate-level netlist deferred to "
+                f"the analog A1..A8 track (/vibe-ic-analog)",
+                extras={"deferred_to": "analog_track",
+                        "ic_class": ic_class})
         return StepResult("yosys_synth", "FAIL",
                           time.time() - t0,
                           "rtl/ missing")
@@ -2727,11 +2842,15 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         # synth time so phase2 audit gates see the alias too).
         # chip-AGNOSTIC: alias is the universal canonical name.
         canon_v = synth_dir / "netlist.v"
-        if not canon_v.is_file():
-            try:
-                canon_v.write_text(out_v.read_text())
-            except OSError:
-                pass
+        # ORGANIC-20260606-synth-netlist-stale-on-regate (#426): the alias
+        # must be refreshed UNCONDITIONALLY. The old `if not is_file()`
+        # guard wrote it only on the first run, so a close-loop re-gate had
+        # synth refreshing netlist_yosys.v while every check that reads the
+        # canonical netlist.v kept judging the PRE-EDIT design's ghost.
+        try:
+            canon_v.write_text(out_v.read_text())
+        except OSError:
+            pass
 
         # v1.6.196 (#83 P0-A) — append a provenance.jsonl entry
         # declaring yosys produced netlist_yosys.v + netlist.v.
@@ -2820,7 +2939,11 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                 [sys.executable,
                  str(PROGRAMS_DIR / "synth_netlist_check.py"),
                  "--netlist", str(canon_v if canon_v.is_file()
-                                   else out_v)],
+                                   else out_v),
+                 # #426/#427: hand the RTL over so the checker can refuse a
+                 # stale netlist and let the structure-aware floor vouch for
+                 # legitimately tiny designs (register-bit cover).
+                 "--rtl", *_rtl_file_strs],
                 capture_output=True, text=True, timeout=60,
             )
         except (subprocess.TimeoutExpired, OSError) as exc:
@@ -4455,7 +4578,8 @@ def main() -> int:
         last_rtl_hash = new_rtl_hash
 
     # Step 4 — yosys offline synth (Docker fallback if host yosys absent)
-    plan.append(step_yosys_synth(project, args.top_name, args.container))
+    plan.append(step_yosys_synth(project, args.top_name, args.container,
+                                 ic_class))
 
     # Step 4b — QSF / SDC auto-gen (Wave 72). Runs even when --skip-hardware
     # so the QSF/SDC artefacts are present for downstream lints/audits.

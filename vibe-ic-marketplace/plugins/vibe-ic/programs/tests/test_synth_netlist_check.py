@@ -123,20 +123,22 @@ class TestEmptyFile:
 
 
 # ===========================================================================
-# Test 3: 5 cells with min=10 — FAIL
+# Test 3: 5 cells with min=10 — advisory WARNING (v1.1.0 #427)
 # ===========================================================================
 class TestTooFewCells:
-    def test_5_cells_fail(self, tmp_path):
-        """5 cells with min=10 → TOO_FEW_CELLS."""
+    def test_5_cells_warns(self, tmp_path):
+        """5 cells with min=10 → TOO_FEW_CELLS as a WARNING (#427: a retry
+        cannot grow a legitimately tiny correct design, so the flat count
+        is advisory; only the real stub signatures hard-fail)."""
         f = tmp_path / "netlist.v"
         f.write_text(SMALL_5_CELLS)
         findings, stats = snc.audit_netlist(f, min_cells=10)
-        assert len(findings) >= 1
-        assert any(fi.category == "TOO_FEW_CELLS" for fi in findings)
+        tfc = [fi for fi in findings if fi.category == "TOO_FEW_CELLS"]
+        assert len(tfc) == 1 and tfc[0].severity == "WARNING"
         assert stats["total_cells"] == 5
 
-    def test_cli_fail(self, tmp_path):
-        """CLI returns exit 1 for too few cells."""
+    def test_cli_rc0_warning_only(self, tmp_path):
+        """CLI exits 0 when the only finding is the advisory floor (#427)."""
         f = tmp_path / "netlist.v"
         f.write_text(SMALL_5_CELLS)
 
@@ -145,7 +147,7 @@ class TestTooFewCells:
              '--netlist', str(f),
              '--min-cells', '10'],
             capture_output=True, text=True)
-        assert res.returncode == 1
+        assert res.returncode == 0
 
 
 # ===========================================================================

@@ -11,14 +11,31 @@ What it catches:
   1. MISSING_NETLIST — the netlist file does not exist
   2. EMPTY_NETLIST — the netlist file is empty or contains no Verilog
   3. TOO_FEW_CELLS — cell instance count is below the minimum threshold
+     (WARNING only when the structure-aware floor cannot vouch — see below)
   4. NO_MODULE — no module definition found in the netlist
+  5. STALE_NETLIST — the netlist is OLDER than the RTL it is judged against
+     (ORGANIC-20260606-synth-netlist-stale-on-regate #426: a close-loop
+     re-gate must never be judged against the previous run's ghost netlist)
+  6. OUTPUTS_TIED_CONSTANT — every module output is driven only by constants
+     (the real pruned-stub signature)
+
+Structure-aware floor (ORGANIC-20260606-min-cells-floor-tiny-designs #427):
+a legitimately tiny correct design (an 8-DFF shifter, a 3-cell pulse FSM, a
+5-cell edge detector) cannot grow on retry, so a flat min-cells ERROR is
+unactionable noise. Resolution order:
+  (a) PASS when the netlist's sequential-cell count >= the RTL's declared
+      register bit count (needs --rtl; a shift register legitimately
+      synthesizes to exactly its DFFs);
+  (b) zero cells / outputs tied constant stay hard ERRORs (real stubs);
+  (c) otherwise a below-threshold count is a WARNING (disclosed, non-fatal).
 
 Usage:
-    python3 synth_netlist_check.py --netlist synth/netlist.v [--min-cells 10]
+    python3 synth_netlist_check.py --netlist synth/netlist.v
+        [--min-cells 10] [--rtl <rtl.v> ...]
 
 Exit codes:
-    0 = valid netlist with sufficient cells
-    1 = missing, empty, or too few cells
+    0 = valid netlist (warnings allowed)
+    1 = missing, empty, stale, stub, or structurally invalid
     2 = parse error / invalid arguments
 
 Generality: works for ANY Verilog gate-level netlist.
@@ -147,14 +164,69 @@ def count_cell_instances(netlist_text: str) -> Tuple[int, Dict[str, int]]:
     return total, cell_counts
 
 
+# Sequential-cell fingerprint: yosys `$_DFF_*_` / `$_SDFF*_` / `$_DLATCH*_`
+# primitives and PDK flop/latch cell names (…dfxtp…, …sdf…, …latch…).
+# chip-AGNOSTIC: structural cell-family vocabulary, not a chip class.
+_SEQ_CELL_RE = re.compile(r"(?i)(?:\$_S?DFF|\$_DLATCH|\$_SR|dff|sdf|latch)")
+
+# RTL register declaration: `reg [h:l] name` / `reg name` (also `logic`).
+_RTL_REG_DECL_RE = re.compile(
+    r"^\s*(?:output\s+)?(?:reg|logic)\s*(?:\[\s*(\d+)\s*:\s*(\d+)\s*\])?"
+    r"\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)", re.MULTILINE)
+_RTL_NB_ASSIGN_RE = re.compile(r"\b([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*<=")
+
+
+def rtl_declared_register_bits(rtl_texts: List[str]) -> int:
+    """Best-effort total bit count of RTL registers that are actually
+    nonblocking-assigned somewhere (a `reg` used purely combinationally
+    does not demand a flop). Used by the structure-aware floor (#427)."""
+    total = 0
+    for text in rtl_texts:
+        assigned = set(_RTL_NB_ASSIGN_RE.findall(text))
+        for m in _RTL_REG_DECL_RE.finditer(text):
+            hi, lo, names = m.group(1), m.group(2), m.group(3)
+            width = abs(int(hi) - int(lo)) + 1 if hi is not None else 1
+            for nm in (n.strip() for n in names.split(",")):
+                if nm in assigned:
+                    total += width
+    return total
+
+
+def _outputs_tied_constant(text: str) -> List[str]:
+    """Output ports of the FIRST module whose only drivers are constant
+    assigns (`assign y = 1'b0;` / `1'hx`) — the real pruned-stub signature.
+    Returns the constant-tied output names ONLY when every driven output is
+    constant-tied (a partially-constant design is legitimate)."""
+    # output declarations appear both as standalone lines AND inside the
+    # module header port list (ANSI style) — no line anchor.
+    outs = re.findall(r"\boutput\s+(?:reg\s+|wire\s+)?(?:\[[^\]]*\]\s*)?"
+                      r"([A-Za-z_]\w*)", text)
+    if not outs:
+        return []
+    const_tied, otherwise_driven = [], []
+    for o in outs:
+        drivers = re.findall(
+            r"^\s*assign\s+" + re.escape(o) + r"\s*(?:\[[^\]]*\])?\s*=\s*([^;]+);",
+            text, re.MULTILINE)
+        if not drivers:
+            otherwise_driven.append(o)   # cell-driven or undriven: not const
+            continue
+        if all(re.fullmatch(r"\s*\d+'[bhd][0-9a-fxz_]+\s*", d) for d in drivers):
+            const_tied.append(o)
+        else:
+            otherwise_driven.append(o)
+    return const_tied if const_tied and not otherwise_driven else []
+
+
 # ---------------------------------------------------------------------------
 # Core audit logic
 # ---------------------------------------------------------------------------
 def audit_netlist(
     netlist_path: Path,
     min_cells: int = 10,
+    rtl_paths: List[Path] = (),
 ) -> Tuple[List[Finding], dict]:
-    """Check netlist existence and cell count.
+    """Check netlist existence, freshness vs RTL, and structural substance.
 
     Returns (findings, stats).
     """
@@ -166,6 +238,10 @@ def audit_netlist(
         "total_cells": 0,
         "unique_cell_types": 0,
         "cell_type_counts": {},
+        "sequential_cells": 0,
+        "rtl_register_bits": None,
+        "outputs_tied_constant": [],
+        "stale_vs_rtl": False,
     }
 
     # Check file exists
@@ -179,6 +255,27 @@ def audit_netlist(
 
     stats["file_exists"] = True
     stats["file_size_bytes"] = netlist_path.stat().st_size
+
+    # Staleness guard (#426): a netlist OLDER than any RTL file it is judged
+    # against is the previous run's ghost — a close-loop re-gate must refuse
+    # it instead of grading the pre-edit design.
+    rtl_files = [p for p in rtl_paths if p.is_file()]
+    if rtl_files:
+        nl_mtime = netlist_path.stat().st_mtime
+        stale_against = [str(p) for p in rtl_files
+                         if p.stat().st_mtime > nl_mtime]
+        if stale_against:
+            stats["stale_vs_rtl"] = True
+            findings.append(Finding(
+                severity="ERROR",
+                category="STALE_NETLIST",
+                message=(
+                    f"Netlist is OLDER than the RTL it is judged against — "
+                    f"re-run synthesis before gating (judging a re-gated "
+                    f"design on the prior run's netlist grades ghost data)."),
+                details=f"newer RTL: {stale_against}",
+            ))
+            return findings, stats
 
     # Read file
     text = netlist_path.read_text(errors='replace')
@@ -252,15 +349,55 @@ def audit_netlist(
                 message="Netlist contains a module definition but no cell instances",
             ))
     elif total_cells < min_cells:
-        findings.append(Finding(
-            severity="ERROR",
-            category="TOO_FEW_CELLS",
-            message=(
-                f"Netlist has {total_cells} cell instance(s), "
-                f"minimum required is {min_cells}"
-            ),
-            details=f"Cell types: {dict(sorted(cell_counts.items()))}",
-        ))
+        # Structure-aware floor (#427). A retry cannot grow a correct tiny
+        # design, so a flat-count ERROR is unactionable; vouch structurally
+        # first, hard-fail only on the real stub signatures, and otherwise
+        # disclose as a WARNING.
+        seq_cells = sum(c for t, c in cell_counts.items()
+                        if _SEQ_CELL_RE.search(t))
+        stats["sequential_cells"] = seq_cells
+        const_outs = _outputs_tied_constant(text)
+        stats["outputs_tied_constant"] = const_outs
+        rtl_bits = None
+        if rtl_files:
+            rtl_bits = rtl_declared_register_bits(
+                [p.read_text(errors="replace") for p in rtl_files])
+            stats["rtl_register_bits"] = rtl_bits
+        if const_outs:
+            # (b) the real pruned-stub signature: every output constant-tied
+            findings.append(Finding(
+                severity="ERROR",
+                category="OUTPUTS_TIED_CONSTANT",
+                message=(
+                    f"All module outputs are tied to constants "
+                    f"({const_outs}) — synth pruned the design to a stub."),
+                details=f"Cell types: {dict(sorted(cell_counts.items()))}",
+            ))
+        elif rtl_bits is not None and rtl_bits > 0 and seq_cells >= rtl_bits:
+            # (a) sequential cells cover the RTL's register bits — a shift
+            # register legitimately synthesizes to exactly its DFFs. PASS.
+            findings.append(Finding(
+                severity="INFO",
+                category="TINY_DESIGN_VOUCHED",
+                message=(
+                    f"{total_cells} cells < min_cells={min_cells}, but "
+                    f"sequential cells ({seq_cells}) cover the RTL's "
+                    f"declared register bits ({rtl_bits}) — legitimately "
+                    f"tiny design, structure-aware floor PASS."),
+            ))
+        else:
+            # (c) cannot vouch structurally: disclose, do not block — the
+            # flat count alone is not evidence of a stub (#427).
+            findings.append(Finding(
+                severity="WARNING",
+                category="TOO_FEW_CELLS",
+                message=(
+                    f"Netlist has {total_cells} cell instance(s), below the "
+                    f"advisory floor of {min_cells} — review whether the "
+                    f"design is legitimately tiny (pass --rtl to let the "
+                    f"structure-aware floor vouch via register-bit cover)."),
+                details=f"Cell types: {dict(sorted(cell_counts.items()))}",
+            ))
 
     return findings, stats
 
@@ -270,9 +407,10 @@ def audit_netlist(
 # ---------------------------------------------------------------------------
 def build_report(findings: List[Finding], stats: dict,
                  netlist_path: str, min_cells: int) -> dict:
+    n_err = sum(1 for f in findings if f.severity == "ERROR")
     return {
         "program": "synth_netlist_check",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "netlist": netlist_path,
         "min_cells": min_cells,
         "summary": {
@@ -280,7 +418,10 @@ def build_report(findings: List[Finding], stats: dict,
             "total_cells": stats["total_cells"],
             "unique_cell_types": stats["unique_cell_types"],
             "findings_count": len(findings),
-            "pass": len(findings) == 0,
+            "error_count": n_err,
+            # v1.1.0 (#427): WARNING/INFO findings no longer fail the gate —
+            # pass = no ERROR (TOO_FEW_CELLS alone is advisory now).
+            "pass": n_err == 0,
         },
         "stats": stats,
         "findings": [asdict(f) for f in findings],
@@ -294,13 +435,18 @@ def main(argv: list = None) -> int:
     parser.add_argument('--netlist', required=True,
                         help="Path to synthesized Verilog netlist")
     parser.add_argument('--min-cells', type=int, default=10,
-                        help="Minimum cell instance count (default: 10)")
+                        help="Advisory cell-count floor (default: 10)")
+    parser.add_argument('--rtl', nargs='*', default=[],
+                        help="RTL source files the netlist is judged against "
+                             "(enables the staleness guard #426 and the "
+                             "register-bit structure-aware floor #427)")
     parser.add_argument('--json', default=None,
                         help="Output JSON report path")
     args = parser.parse_args(argv)
 
     netlist_path = Path(args.netlist)
-    findings, stats = audit_netlist(netlist_path, args.min_cells)
+    findings, stats = audit_netlist(netlist_path, args.min_cells,
+                                    [Path(p) for p in args.rtl])
 
     report = build_report(findings, stats, str(netlist_path), args.min_cells)
     report_json = json.dumps(report, indent=2, ensure_ascii=False)
