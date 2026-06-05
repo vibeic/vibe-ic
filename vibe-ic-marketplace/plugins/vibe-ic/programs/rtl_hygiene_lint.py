@@ -521,15 +521,34 @@ def rule_vector_self_shift_fold(src: str, path: str) -> List[Finding]:
     the recurring "boundary bit by placement, not by an op" miss.
     """
     findings: List[Finding] = []
-    # top-level `<ident> <|&^> { ...concat... }` (concat has no nested braces)
-    for m in re.finditer(r'\b([A-Za-z_]\w*)\s*([|&^])\s*\{([^{}]*)\}', src):
-        lhs, op, concat = m.group(1), m.group(2), m.group(3)
+    # The composing operators are COMMUTATIVE, so the same bug can be written
+    # with EITHER operand order (ORGANIC-20260605-boundary-fold-commutative-
+    # match: the third consecutive clean-room recurrence wrote the zero-padded
+    # shifted self-copy as the LEFT operand and escaped the vector-first-only
+    # match with zero findings). Match BOTH:
+    #   form A: `<ident> <|&^> { ...concat... }`   (vector first)
+    #   form B: `{ ...concat... } <|&^> <ident>`   (mirrored)
+    # In both forms the ident must be the UNSHIFTED whole vector (not sliced —
+    # form A enforces this by `\s*` adjacency; form B adds a `(?!\s*\[)`
+    # lookahead), and the concat must slice the SAME ident + carry a zero pad.
+    matches = [(m.group(1), m.group(2), m.group(3), m.start())
+               for m in re.finditer(
+                   r'\b([A-Za-z_]\w*)\s*([|&^])\s*\{([^{}]*)\}', src)]
+    matches += [(m.group(3), m.group(2), m.group(1), m.start())
+                for m in re.finditer(
+                    r'\{([^{}]*)\}\s*([|&^])\s*([A-Za-z_]\w*)(?!\s*\[)', src)]
+    seen_keys = set()
+    for lhs, op, concat, mstart in matches:
         if lhs in VERILOG_KEYWORDS:
             continue
         has_self_slice = re.search(r'\b' + re.escape(lhs) + r'\s*\[[^\]]*\]', concat)
         has_zero_pad = _BASED_ZERO_RE.search(concat)
         if has_self_slice and has_zero_pad:
-            lineno = src[:m.start()].count('\n') + 1
+            lineno = src[:mstart].count('\n') + 1
+            key = (lineno, lhs, op)
+            if key in seen_keys:      # same expression matched by both forms
+                continue
+            seen_keys.add(key)
             if op == '&':
                 findings.append(Finding(
                     path, lineno, 'WARN', 'vector-self-shift-fold', lhs,

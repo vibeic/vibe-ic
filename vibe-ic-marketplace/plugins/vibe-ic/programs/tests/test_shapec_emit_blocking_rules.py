@@ -254,3 +254,48 @@ def test_gate_emits_correct_fold_fix(tmp_path):
     r = _run_fold_gate(ds, run)
     assert r.returncode == 0, r.stdout + r.stderr
     assert (run / "samples" / "ProbF_sample01.sv").exists()
+
+
+# ── ORGANIC-20260605-boundary-fold-commutative-match ─────────────────────
+
+_FOLD_BUG_RTL_MIRRORED = ("module TopModule(input [3:0] vec, output [3:0] y);\n"
+                          "  assign y = {1'b0, vec[3:1]} | vec;\n"  # 鏡像 OR 形
+                          "endmodule\n")
+
+
+def test_fold_mirrored_operand_order_same_severities():
+    # OR/XOR 可交換：鏡像寫法（concat 在左、整向量在右）同樣分級
+    mk = lambda op: (f"module t(input [3:0] vec, output [3:0] y);\n"  # noqa: E731
+                     f"  assign y = {{1'b0, vec[3:1]}} {op} vec;\nendmodule\n")
+    for op, sev in (("|", "ERROR"), ("^", "ERROR"), ("&", "WARN")):
+        fs = rhl.rule_vector_self_shift_fold(mk(op), "t.sv")
+        assert [f.severity for f in fs] == [sev], (op, fs)
+
+
+def test_fold_mirrored_sliced_ident_not_matched():
+    # 右運算元被切片（非整向量）→ 不是 self-fold，不 fire
+    src = ("module t(input [3:0] v, output [3:0] y);\n"
+           "  assign y = {1'b0, v[3:1]} | v[2:0];\nendmodule\n")
+    assert rhl.rule_vector_self_shift_fold(src, "t.sv") == []
+
+
+def test_gate_blocks_mirrored_or_fold_when_required_zero(tmp_path):
+    ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_BUG_RTL_MIRRORED)
+    r = _run_fold_gate(ds, run)
+    assert r.returncode == 1, r.stdout + r.stderr
+    gates = json.loads((run / "work" / "ProbF" / "gates.json").read_text())
+    blk = gates["steps"]["structural_emit_block"]
+    assert any(f["rule"] == "vector-self-shift-fold" for f in blk["findings"])
+    assert not (run / "samples" / "ProbF_sample01.sv").exists()
+
+
+def test_gate_emits_mirrored_and_fold(tmp_path):
+    # 鏡像 AND 形 = 合法遮蔽 idiom → WARN-only、照常 emit
+    rtl = ("module TopModule(input [3:0] vec, output [3:0] y);\n"
+           "  assign y = {1'b0, vec[3:1]} & vec;\nendmodule\n")
+    ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, rtl)
+    r = _run_fold_gate(ds, run)
+    assert r.returncode == 0, r.stdout + r.stderr
+    gates = json.loads((run / "work" / "ProbF" / "gates.json").read_text())
+    assert "structural_emit_block" not in gates["steps"]
+    assert (run / "samples" / "ProbF_sample01.sv").exists()
