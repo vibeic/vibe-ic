@@ -19,6 +19,12 @@ Two real failures motivate every rule here:
 Findings:
   ERROR (fails the gate):
     port-missing / port-extra / port-direction-mismatch / port-width-mismatch
+    zero-output-ports            : module parsed with >=1 port but ZERO
+                                   output/inout ports — a sink no testbench can
+                                   observe; deterministic signature of a
+                                   mis-read interface (e.g. prompt direction
+                                   typo). Fires on RTL structure alone, so a
+                                   spec repeating the typo cannot mask it.
     reset-mode-spec-mismatch     : spec says sync, RTL is async (or vice-versa)
     reset-polarity-spec-mismatch : spec says active-high, RTL active-low (or v.v.)
   WARN:
@@ -313,6 +319,25 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
           rtl_resets: dict, rtl_registered: Optional[bool],
           path: str, rtl_body: str = '', spec_text: str = '') -> List[Finding]:
     f: List[Finding] = []
+
+    # ---- structural sanity: zero output-capable ports -----------------------
+    # (ORGANIC-20260605-zero-output-module-not-emit-blocking) A module whose
+    # every port parsed as input is a deterministic signature of a mis-read
+    # interface (e.g. a prompt port-direction typo turned a storage element's
+    # state pin into an input): no spec-to-RTL design is a pure sink — a module
+    # with no output/inout ports cannot be observed by ANY testbench. This
+    # fires on RTL structure alone, so a spec that repeats the typo cannot
+    # mask it (the port-fidelity rules stay silent in exactly that case).
+    # chip-AGNOSTIC: pure port-direction structure; no name/class literals.
+    if rtl_ports and not any(p.direction in ('output', 'inout')
+                             for p in rtl_ports):
+        f.append(Finding(path, 'ERROR', 'zero-output-ports',
+            rtl_name or '<module>',
+            f"module '{rtl_name}' declares {len(rtl_ports)} port(s) but ZERO "
+            "output/inout ports — a sink module no testbench can observe. "
+            "Re-read the interface: a bullet-listed pin direction may be a "
+            "prompt typo (the hidden testbench is the port-direction "
+            "authority); flip the mis-read pin to an output."))
 
     # ---- port conformance --------------------------------------------------
     # Only when the spec actually declares an interface — a reset/latency-only

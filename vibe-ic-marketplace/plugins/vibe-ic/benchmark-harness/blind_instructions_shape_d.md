@@ -23,6 +23,14 @@ NEVER open / cat / grep / list anything under `<PROJECT>/score/` (the hidden
 cocotb harness). The host scorer (`benchmark-harness/score_cocotb_mcp.py`) is the
 only thing that touches `score/`.
 
+**CROSS-PROBLEM PROHIBITION (ORGANIC-20260605-blindness-rule-cross-problem-refs).**
+The rule binds for the WHOLE dataset: you may NOT read ANY dataset file
+outside the current `<PROJECT>`'s blind inputs — explicitly including OTHER
+projects' `score/` harnesses, reference solutions, and any other run
+directory's outputs. Sibling references encode the dataset's authoring
+conventions, so reading them is dataset-internal solution knowledge.
+Applies EQUALLY to close-loop / repair agents.
+
 ## Procedure
 
 1. Read ONLY `<PROJECT>/work/PROMPT.txt` + `<PROJECT>/work/docs/specification.md`.

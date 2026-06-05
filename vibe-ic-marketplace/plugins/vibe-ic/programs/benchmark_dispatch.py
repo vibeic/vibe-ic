@@ -20,6 +20,60 @@ from pathlib import Path
 
 HARNESS = Path(__file__).resolve().parent.parent / "benchmark-harness"
 REGISTRY = HARNESS / "BENCHMARK_REGISTRY.json"
+EXPERT_AGENT_MD = Path(__file__).resolve().parent.parent / "agents" / "ic-expert-agent.md"
+
+
+def _render_lesson_digest(run_p: Path,
+                          expert_md: Path = EXPERT_AGENT_MD) -> int:
+    """ORGANIC-20260605-shapec-lesson-digest-injection — surface captured
+    lessons to blind single-shot authors.
+
+    The benchmark-enhancement-capture loop appends general-pattern
+    `### Skill:` sections to agents/ic-expert-agent.md, but batch authoring
+    agents historically received only the blind instructions + the prompt, so
+    already-captured recoveries recurred in the very next clean-room campaign
+    (4 of 6 close-loop recoveries in the v0.2.42 two-track run were
+    recurrences). This renders every ACTIVE `### Skill:` section (retired
+    `### ~~Skill:` strikethrough sections excluded) into
+    `<RUNDIR>/lessons.md`, which blind_instructions_shape_c.md makes a
+    MUST-READ before authoring.
+
+    Blindness is preserved by the capture policy itself: captured sections are
+    chip-AGNOSTIC general patterns with no design identifiers and no oracle
+    data. Deterministic extraction — no LLM. Returns the lesson count.
+    """
+    if not expert_md.is_file():
+        return 0
+    lessons: list[str] = []
+    cur: list[str] | None = None
+    for line in expert_md.read_text(errors="replace").splitlines():
+        if line.startswith("### "):
+            if cur:
+                lessons.append("\n".join(cur).rstrip())
+            cur = [line] if line.startswith("### Skill:") else None
+            continue
+        if line.startswith("## ") or line.startswith("# "):
+            if cur:
+                lessons.append("\n".join(cur).rstrip())
+            cur = None
+            continue
+        if cur is not None:
+            cur.append(line)
+    if cur:
+        lessons.append("\n".join(cur).rstrip())
+    if not lessons:
+        return 0
+    head = (
+        "# Captured-lesson digest (READ BEFORE AUTHORING)\n\n"
+        "Rendered by `benchmark_dispatch.py --setup` from the general-pattern\n"
+        "`### Skill:` sections of `agents/ic-expert-agent.md`\n"
+        "(ORGANIC-20260605-shapec-lesson-digest-injection). These are\n"
+        "chip-AGNOSTIC patterns captured from prior close-loop recoveries —\n"
+        "no design identifiers, no oracle data — so reading them preserves\n"
+        "blindness while preventing already-captured recoveries from\n"
+        "recurring. Apply any section whose shape matches your problem.\n\n")
+    (run_p / "lessons.md").write_text(head + "\n\n".join(lessons) + "\n")
+    return len(lessons)
 
 
 def _load_registry() -> dict:
@@ -214,6 +268,12 @@ def cmd_setup(bench: str, dataset: str, run: str, floor_only: bool = False):
     print(f"  problems: {len(problems)}")
     print(f"  batches:  {(len(problems) + 9) // 10}")
     print(f"  RUNDIR:   {run_p}")
+    # ORGANIC-20260605-shapec-lesson-digest-injection: render the captured
+    # general-pattern lessons so blind authors actually receive them.
+    n_lessons = _render_lesson_digest(run_p)
+    if n_lessons:
+        print(f"  lessons:  {n_lessons} captured general-pattern lessons → "
+              f"{run_p / 'lessons.md'}  (authors MUST read before authoring)")
     # Verify the fresh run dir is clean-room (empty samples, no seed config).
     guard = Path(__file__).resolve().parent / "benchmark_clean_room_check.py"
     if guard.is_file():

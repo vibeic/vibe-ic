@@ -257,7 +257,14 @@ the authoring context starting **EMPTY**. A clean-room run MUST NOT read:
    the published pass@1 by mixing fresh authoring with stale prior-session authoring);
 2. **agent memory** (no "I solved this last time" recall);
 3. **any cached result in storage** (no reading a prior `pass_at_1.json` / `cocotb_score.json`
-   to decide what to author).
+   to decide what to author);
+4. **any dataset file other than the current problem's prompt** — explicitly including OTHER
+   problems' reference solutions / testbenches (ORGANIC-20260605-blindness-rule-cross-problem-refs).
+   Sibling references encode the dataset's authoring conventions (axis orders, sampling phases,
+   encoding styles); calibrating against them is dataset-internal solution knowledge that
+   satisfies the letter of "don't read THIS problem's hidden files" while violating prompt-only
+   blindness. This binds single-shot authors AND every close-loop / repair / convention-sweep
+   agent — write the prohibition into every close-loop prompt you spawn.
 
 Why clean-room is the only honest number: re-running only the prior FAILing set inherits the
 prior PASSes, so the headline mixes a fresh agent (on the fails) with an arbitrary prior session

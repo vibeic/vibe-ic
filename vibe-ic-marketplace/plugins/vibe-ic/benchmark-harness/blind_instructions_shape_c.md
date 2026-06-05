@@ -36,6 +36,27 @@ For each `<Prob>` you may read ONLY `<DATASET>/<Prob>_prompt.txt`.
 NEVER open / cat / grep / list `<Prob>_test.sv` or `<Prob>_ref.sv` (the hidden testbench +
 golden reference, touched ONLY by the host scorer at scoring time).
 
+**CROSS-PROBLEM PROHIBITION (ORGANIC-20260605-blindness-rule-cross-problem-refs).**
+The rule binds for the WHOLE dataset, not just the current problem: you may
+NOT read ANY dataset file other than the current problem's `_prompt.txt` —
+explicitly including OTHER problems' `_test.sv` / `_ref.sv` / reference
+solutions, and any other run directory's `work/` or `samples/`. Sibling
+reference solutions encode the dataset's authoring conventions (axis orders,
+sampling phases, encoding styles), so reading them is dataset-internal
+solution knowledge: it violates prompt-only blindness even though the file is
+not the current problem's own hidden file. This prohibition applies EQUALLY
+to every close-loop / repair / convention-sweep agent, not only single-shot
+authors.
+
+**CAPTURED-LESSON DIGEST (ORGANIC-20260605-shapec-lesson-digest-injection).**
+If `<RUNDIR>/lessons.md` exists (rendered by `benchmark_dispatch.py --setup`
+from the capture loop's general-pattern sections), you MUST read it BEFORE
+authoring your batch. It contains only chip-AGNOSTIC general patterns (the
+capture policy bars design identifiers and oracle data), so reading it
+preserves blindness while preventing already-captured recoveries from
+recurring. It is run-dir material, NOT a dataset file — the cross-problem
+prohibition above does not apply to it.
+
 ## Per-problem procedure (every `<Prob>` in BATCHFILE)
 
 1. Read ONLY `<DATASET>/<Prob>_prompt.txt`. Extract: module name (typically

@@ -33,6 +33,12 @@ already implements but only logged informationally:
                               zero-based — every bit off by one)
   * spec_conformance_check:  fsm-output-style-mismatch  (spec declares Moore, RTL
                               output is combinationally input-dependent)
+  * spec_conformance_check:  port-missing               (authored module omits a
+                              spec-declared port — legal standalone, fails the
+                              hidden TB port bind; v0.2.43)
+  * spec_conformance_check:  zero-output-ports          (module has NO output/inout
+                              ports — vacuous sink from a mis-read interface;
+                              v0.2.43)
 On a block the author must FIX sample.sv and re-run this gate (the must-resolve
 surface); the sample is not emitted while a blocking finding stands.
 
@@ -212,8 +218,22 @@ def main():
     # plugin's own rules had already flagged — they fired as WARN inside an
     # overall-PASS verdict, and this harness recorded the roll-up verdict only.
     # Parse the per-finding JSON (deterministic) instead of the roll-up.
+    #
+    # v0.2.43 additions (same corpus-sweep precondition — ZERO false fires
+    # over all 312 emitted passing samples of the v0.2.42 two-track campaign):
+    #  * port-missing (ORGANIC-20260605-port-missing-not-emit-blocking):
+    #    the checker already emitted this ERROR for a dropped
+    #    declared-but-unused port; the standalone compile passes, so the
+    #    defect surfaced ONLY at hidden-TB scoring. Block it here instead.
+    #  * zero-output-ports (ORGANIC-20260605-zero-output-module-not-emit-
+    #    blocking): a module with no output/inout ports is a vacuous sink no
+    #    testbench can observe — deterministic signature of a mis-read
+    #    interface (prompt direction typo). NEW rule in
+    #    spec_conformance_check; structural, spec-typo-proof.
     _BLOCKING_CONFORMANCE_RULES = {"onebased-port-range",
-                                   "fsm-output-style-mismatch"}
+                                   "fsm-output-style-mismatch",
+                                   "port-missing",
+                                   "zero-output-ports"}
     blocking: list = []
     if conf_json.is_file():
         try:

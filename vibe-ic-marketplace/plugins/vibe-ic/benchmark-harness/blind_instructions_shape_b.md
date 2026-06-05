@@ -17,6 +17,15 @@ NEVER open / cat / grep / list `testbench.v` / `verified_*.v` / any
 `LLM_generated_verilog.v`. The hidden TB / golden ref are touched ONLY by the host
 scorer (`benchmark-harness/score_iverilog_tb.py`), at scoring time, not generation.
 
+**CROSS-PROBLEM PROHIBITION (ORGANIC-20260605-blindness-rule-cross-problem-refs).**
+The rule binds for the WHOLE dataset: you may NOT read ANY dataset file other
+than the current design's `design_description.txt` — explicitly including
+OTHER designs' testbenches / verified references, and any other run
+directory's `work/` or `samples/`. Sibling reference solutions encode the
+dataset's authoring conventions, so reading them is dataset-internal solution
+knowledge even though they are not the current design's own hidden files.
+Applies EQUALLY to close-loop / repair agents.
+
 ## Per-design procedure (every `<design>` in BATCHFILE)
 
 1. Read ONLY `<DATASET>/<design>/design_description.txt`. Extract:
