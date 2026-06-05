@@ -476,6 +476,60 @@ _ACTIVE_LOW_RST_NAME = re.compile(
     r')$', re.I)
 
 
+# Clause-bound reset qualifier extraction
+# (ORGANIC-20260606-reset-mode-dual-keyword-false-positive). A spec sentence
+# can qualify SEVERAL signals at once — "asynchronous positive edge triggered
+# areset, synchronous active high signals load, and enable" declares an ASYNC
+# reset plus SYNC non-reset controls in ONE sentence. Sentence-scoped keyword
+# presence then lets the OTHER signals' qualifier win; worse, the legacy
+# splitter treated every newline as a sentence boundary, so a hard line-wrap
+# falling between "asynchronous" and its reset token divorced the qualifier
+# from the very line that carried "reset". Fix: soft-unwrap line-wraps (a
+# single newline inside a paragraph is a wrap, not a boundary), split REAL
+# sentences, and bind the mode/polarity keyword to the clause (comma/semicolon
+# segment) that contains the reset token itself. Clause-bound evidence wins;
+# the legacy sentence-scope logic stays as the fallback so single-qualifier
+# specs ("Asynchronous, active-high reset") keep resolving exactly as before.
+_RESET_TOKEN_RE = re.compile(r'\b\w*(?:rst|reset)\w*\b|\bpor\b')
+_MODE_KW_RE = re.compile(r'\b(a)?synchronous(?:ly)?\b')
+_POLARITY_KW_RE = re.compile(r'\bactive[\s-]*(high|low)\b')
+
+
+def _soft_unwrap_sentences(text: str) -> List[str]:
+    """Lower-cased REAL sentences: single newlines (hard wraps) become spaces,
+    blank lines stay paragraph boundaries, then split on ./!/?"""
+    low = text.lower()
+    unwrapped = re.sub(r'[ \t]*\n(?![ \t]*\n)[ \t]*', ' ', low)
+    return [s for s in re.split(r'(?<=[.!?\n])', unwrapped) if s.strip()]
+
+
+def _clause_bound_reset_kw(text: str, kw_re: re.Pattern) -> Optional[str]:
+    """Scan clause-by-clause: in every clause that contains a reset token, look
+    for the qualifier keyword. Returns the qualifier when all reset-bearing
+    clauses agree (nearest-to-token wins inside a clause carrying both), else
+    None (no clause-bound evidence, or conflicting clauses)."""
+    found: List[str] = []
+    for sent in _soft_unwrap_sentences(text):
+        toks = [m.start() for m in _RESET_TOKEN_RE.finditer(sent)]
+        if not toks:
+            continue
+        start = 0
+        for cb in list(re.finditer(r'[,;:]', sent)) + [None]:
+            end = cb.start() if cb else len(sent)
+            clause_toks = [p for p in toks if start <= p < end]
+            if clause_toks:
+                kws = [(m.start() + start, m.group(1)) for m in
+                       kw_re.finditer(sent[start:end])]
+                if kws:
+                    if len({g for _, g in kws}) == 1:
+                        found.append(kws[0][1])
+                    else:  # both qualifiers inside one clause: nearest wins
+                        t = clause_toks[0]
+                        found.append(min(kws, key=lambda kv: abs(kv[0] - t))[1])
+            start = cb.end() if cb else end
+    return found[0] if len(set(found)) == 1 else None
+
+
 def _detect_reset(text: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Return (mode, polarity, signal) the spec declares for reset, if any."""
     low = text.lower()
@@ -486,32 +540,47 @@ def _detect_reset(text: str) -> Tuple[Optional[str], Optional[str], Optional[str
     reset_ctx = ' '.join(
         s for s in re.split(r'(?<=[.\n])', low)
         if 'reset' in s or re.search(r'\bpor\b|power[\s-]*on[\s-]*reset', s)) or low
-    if re.search(r'asynchronous(?:ly)?', reset_ctx):
-        mode = 'asynchronous'
-    elif re.search(r'synchronous(?:ly)?', reset_ctx):
-        mode = 'synchronous'
-    # Conservative phrase inference, only when no explicit sync/async word fixed
-    # the mode above. A power-on reset / edge-triggered reset is asynchronous; a
-    # reset "registered to the clock" / "sampled on the clock" is synchronous.
+    # Clause-bound evidence first (see the rule comment above): the qualifier
+    # sharing a clause with the reset token beats any sentence-scope keyword.
+    cb_mode = _clause_bound_reset_kw(text, _MODE_KW_RE)
+    if cb_mode is not None:
+        mode = 'asynchronous' if cb_mode == 'a' else 'synchronous'
+    # Token-bound async phrases next — each names the reset token DIRECTLY
+    # ("rising edge OF <rst>", "edge triggered <rst>", power-on reset), so they
+    # out-rank a floating sentence-scope keyword that may qualify other signals.
     if mode is None:
         if (re.search(r'power[\s-]*on[\s-]*reset', reset_ctx)
                 or re.search(r'\bpor\b\s+holds?\b', reset_ctx)
                 or re.search(r'(?:rising|falling)\s+edge\s+of\s+'
-                             r'`?\b\w*(?:rst|reset|nrst|por)\w*\b`?', reset_ctx)):
+                             r'`?\b\w*(?:rst|reset|nrst|por)\w*\b`?', reset_ctx)
+                or re.search(r'(?:positive|negative|rising|falling)[\s-]+edge[\s-]*'
+                             r'triggered\s+`?\b\w*(?:rst|reset)\w*\b`?', reset_ctx)):
             mode = 'asynchronous'
-        elif (re.search(r'reset\s+is\s+registered', reset_ctx)
+    # Legacy sentence-scope keyword fallback (unchanged semantics).
+    if mode is None:
+        if re.search(r'asynchronous(?:ly)?', reset_ctx):
+            mode = 'asynchronous'
+        elif re.search(r'synchronous(?:ly)?', reset_ctx):
+            mode = 'synchronous'
+    # Conservative loose-phrase inference, only when nothing above fixed the
+    # mode. A reset "registered to the clock" / "sampled on the clock" is sync.
+    if mode is None:
+        if (re.search(r'reset\s+is\s+registered', reset_ctx)
                 or re.search(r'registered\s+(?:to|on|by|against)\s+the\s+clock', reset_ctx)
                 or re.search(r'reset\s+is\s+sampled\s+(?:on|by|at)\s+the\s+clock', reset_ctx)
                 or re.search(r'synchronized\s+to\s+the\s+clock', reset_ctx)):
             mode = 'synchronous'
     polarity = None
-    if re.search(r'active[\s-]*high', reset_ctx) or re.search(r'\bactive\s+high\b', reset_ctx):
+    cb_pol = _clause_bound_reset_kw(text, _POLARITY_KW_RE)
+    if cb_pol is not None:
+        polarity = 'active-' + cb_pol
+    elif re.search(r'active[\s-]*high', reset_ctx) or re.search(r'\bactive\s+high\b', reset_ctx):
         polarity = 'active-high'
     elif re.search(r'active[\s-]*low', reset_ctx) or re.search(r'\bactive\s+low\b', reset_ctx):
         polarity = 'active-low'
     # named reset signal (best-effort): a reset-shaped token near "reset"
     signal = None
-    m = re.search(r'`?\b(\w*rst_n|resetn|reset_n|nrst|nreset|arst|srst|rst_n|rst|reset|por)\b`?',
+    m = re.search(r'`?\b(\w*rst_n|resetn|reset_n|nrst|nreset|arst|areset|srst|rst_n|rst|reset|por)\b`?',
                   reset_ctx)
     if m:
         signal = m.group(1)
