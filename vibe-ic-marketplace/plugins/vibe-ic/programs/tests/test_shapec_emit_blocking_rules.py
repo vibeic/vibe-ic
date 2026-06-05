@@ -175,3 +175,82 @@ def test_gate_emits_after_fix(tmp_path):
     assert gates["hard_gates_pass"] is True
     assert "structural_emit_block" not in gates["steps"]
     assert (run / "samples" / "ProbT_sample01.sv").exists()
+
+
+# ── ORGANIC-20260605-boundary-fold-or-form-escalation ────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import rtl_hygiene_lint as rhl  # noqa: E402
+
+
+def test_fold_or_form_is_error_and_form_is_warn():
+    mk = lambda op: (f"module t(input [3:0] vec, output [3:0] y);\n"  # noqa: E731
+                     f"  assign y = vec {op} {{1'b0, vec[3:1]}};\nendmodule\n")
+    for op, sev in (("|", "ERROR"), ("^", "ERROR"), ("&", "WARN")):
+        fs = rhl.rule_vector_self_shift_fold(mk(op), "t.sv")
+        assert [f.severity for f in fs] == [sev], (op, fs)
+        assert fs[0].rule == "vector-self-shift-fold"
+
+
+_FOLD_PROMPT_REQZERO = (
+    "Build a neighbour gate.\n\n - input  vec (4 bits)\n - output y (4 bits)\n\n"
+    "y[i] should indicate whether either vec[i] or its left neighbour is 1.\n"
+    "There is no vec[4], so simply set y[3] to be zero.\n")
+_FOLD_PROMPT_DONTCARE = (
+    "Build a neighbour gate.\n\n - input  vec (4 bits)\n - output y (4 bits)\n\n"
+    "y[i] should indicate whether either vec[i] or its left neighbour is 1.\n"
+    "The answer for y[3] is obvious so we don't need to know y[3].\n")
+_FOLD_BUG_RTL = ("module TopModule(input [3:0] vec, output [3:0] y);\n"
+                 "  assign y = vec | {1'b0, vec[3:1]};\n"   # OR 形：邊界位洩漏
+                 "endmodule\n")
+_FOLD_GOOD_RTL = ("module TopModule(input [3:0] vec, output [3:0] y);\n"
+                  "  assign y = {1'b0, (vec[2:0] | vec[3:1])};\n"
+                  "endmodule\n")
+
+
+def _stage_fold(tmp_path, prompt_text, sample_body):
+    ds = tmp_path / "ds"; ds.mkdir(exist_ok=True)
+    (ds / "ProbF_prompt.txt").write_text(prompt_text)
+    wd = tmp_path / "run" / "work" / "ProbF"
+    wd.mkdir(parents=True, exist_ok=True)
+    (wd / "spec.yaml").write_text("design:\n  name: TopModule\n")
+    (wd / "sample.sv").write_text(sample_body)
+    return ds, tmp_path / "run"
+
+
+def _run_fold_gate(ds, run):
+    return subprocess.run(
+        [sys.executable, str(GATES), "--prob", "ProbF",
+         "--workdir", str(run / "work"), "--dataset", str(ds),
+         "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
+        capture_output=True, text=True, timeout=300)
+
+
+def test_gate_blocks_or_fold_when_prompt_requires_zero_boundary(tmp_path):
+    ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_BUG_RTL)
+    r = _run_fold_gate(ds, run)
+    assert r.returncode == 1, r.stdout + r.stderr
+    gates = json.loads((run / "work" / "ProbF" / "gates.json").read_text())
+    blk = gates["steps"]["structural_emit_block"]
+    assert any(f["rule"] == "vector-self-shift-fold" for f in blk["findings"])
+    assert not (run / "samples" / "ProbF_sample01.sv").exists()
+
+
+def test_gate_advisory_not_block_when_boundary_dontcare(tmp_path):
+    # OR 形 fire，但 prompt 宣告邊界 don't-care → advisory、照常 emit
+    ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_DONTCARE, _FOLD_BUG_RTL)
+    r = _run_fold_gate(ds, run)
+    assert r.returncode == 0, r.stdout + r.stderr
+    gates = json.loads((run / "work" / "ProbF" / "gates.json").read_text())
+    assert "structural_emit_block" not in gates["steps"]
+    advs = gates["steps"].get("structural_advisories", [])
+    assert any(a["rule"] == "vector-self-shift-fold" for a in advs)
+    assert (run / "samples" / "ProbF_sample01.sv").exists()
+
+
+def test_gate_emits_correct_fold_fix(tmp_path):
+    # 正確寫法（兩運算元皆移位、邊界顯式擺 0）→ 不 fire、emit
+    ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_GOOD_RTL)
+    r = _run_fold_gate(ds, run)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (run / "samples" / "ProbF_sample01.sv").exists()

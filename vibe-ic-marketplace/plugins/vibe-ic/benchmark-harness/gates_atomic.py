@@ -234,13 +234,77 @@ def main():
                                 "rc": rc, "log": out[-300:]}
 
     # 5b. rtl_hygiene_lint at WARN (informational; v0.1.10 rule 5 + later additions)
-    # NOTE (ORGANIC-20260605): vector-self-shift-fold was CONSIDERED for the
-    # emit-blocking allow-list but the corpus sweep showed correct passing
-    # solutions legitimately use the idiom it flags — it stays informational.
+    # ORGANIC-20260605-boundary-fold-or-form-escalation: the self-shift-fold
+    # rule is now severity-SPLIT by composing operator — the OR/XOR form
+    # (boundary bit LEAKS, x|0=x) escalates to ERROR and JOINS the emit-blocking
+    # allow-list; the AND form (zero pad MASKS, x&0=0 — the legitimate
+    # neighbour idiom the v0.2.40 sweep found) stays informational WARN and
+    # never blocks. Block on (rule, severity=ERROR), not on rule name alone.
+    hyg_json = wd / "hygiene_findings.json"
     rc, out = run([sys.executable, str(PROGRAMS / "rtl_hygiene_lint.py"),
-                   "--severity", "WARN", str(sample)], env=cli_env)
+                   "--severity", "WARN", "--json", str(hyg_json),
+                   str(sample)], env=cli_env)
     hverd = "PASS" if rc == 0 else "WARN"
     steps["rtl_hygiene_lint"] = {"verdict": hverd, "rc": rc, "log": out[-600:]}
+
+    # CORPUS REFINEMENT: even the ERROR-severity OR/XOR fold is benign when the
+    # spec declares the boundary bit DON'T-CARE ("we don't need to know
+    # out_any[0]" — a real passing sample in the sweep). The mechanical
+    # discriminator lives in the PROMPT: block only on POSITIVE evidence that
+    # the spec REQUIRES a zero boundary for the assigned output ("set
+    # out_both[99] to be zero", "are both zero (off)"). Spec-silent or
+    # don't-care boundaries stay non-blocking (the ERROR is still in
+    # gates.json + lint output for the author to read).
+    _BLOCKING_HYGIENE_ERROR_RULES = {"vector-self-shift-fold"}
+    _REQUIRED_ZERO_RE = __import__("re").compile(
+        r"(?:set|being|be|is|are|must\s+be|should\s+be|forced?(?:\s+to)?)"
+        r"(?:\s+\w+){0,3}?\s*(?:to\s+be\s+)?(?:both\s+|all\s+)?(?:zero|'0'|0\b)",
+        __import__("re").IGNORECASE)
+
+    def _assigned_output_of(line_no: int) -> str:
+        """LHS of the assignment containing the flagged line (scan back <=3)."""
+        import re as _re
+        src_lines = sample.read_text(errors="replace").splitlines()
+        for ln in range(min(line_no, len(src_lines)) - 1,
+                        max(-1, line_no - 5), -1):
+            m = _re.search(r"\bassign\s+([A-Za-z_]\w*)|^\s*([A-Za-z_]\w*)\s*(?:<=|=)[^=]",
+                           src_lines[ln])
+            if m:
+                return m.group(1) or m.group(2) or ""
+        return ""
+
+    def _prompt_requires_zero_boundary(out_name: str) -> bool:
+        if not out_name:
+            return False
+        import re as _re
+        for ln in prompt.read_text(errors="replace").splitlines():
+            if _re.search(r"\b" + _re.escape(out_name) + r"\s*\[\s*\d+\s*\]", ln) \
+                    and _REQUIRED_ZERO_RE.search(ln):
+                return True
+        return False
+
+    if hyg_json.is_file():
+        try:
+            for fd in json.loads(hyg_json.read_text()):
+                if (fd.get("rule") in _BLOCKING_HYGIENE_ERROR_RULES
+                        and fd.get("severity") == "ERROR"):
+                    out_name = _assigned_output_of(int(fd.get("line", 1)))
+                    if _prompt_requires_zero_boundary(out_name):
+                        blocking.append({"program": "rtl_hygiene_lint",
+                                         "rule": fd.get("rule"),
+                                         "symbol": fd.get("symbol", ""),
+                                         "assigned_output": out_name,
+                                         "message": (fd.get("message") or "")[:400]})
+                    else:
+                        steps.setdefault("structural_advisories", []).append({
+                            "rule": fd.get("rule"), "symbol": fd.get("symbol", ""),
+                            "assigned_output": out_name,
+                            "note": ("OR/XOR self-shift-fold detected but the prompt "
+                                     "does not REQUIRE a zero boundary for this output "
+                                     "(don't-care or silent) — not emit-blocking; "
+                                     "review the lint ERROR message.")})
+        except Exception:
+            pass
 
     if blocking:
         steps["structural_emit_block"] = {

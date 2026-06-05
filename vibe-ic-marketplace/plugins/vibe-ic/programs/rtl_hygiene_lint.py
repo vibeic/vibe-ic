@@ -502,13 +502,23 @@ def rule_vector_self_shift_fold(src: str, path: str) -> List[Finding]:
     """Flag `v OP {… v[..] …, 1'b0}` (OP in | & ^): a vector OR/AND/XOR-ed with a
     SHIFTED CONCAT of ITSELF that pads a boundary `1'b0`.
 
-    The *unshifted* whole-vector operand re-folds the original boundary bit, so the
-    padded edge bit is NOT the intended 0 (e.g. `in | {in[98:0],1'b0}` gives
-    out[0]=in[0] instead of 0). The correct form shifts BOTH operands inside the
-    concat: `{(in[98:0] OP in[99:1]), 1'b0}`. WARN only — the right slices depend on
-    the intended neighbour relation, so it is not auto-repaired. chip-AGNOSTIC.
-    Learned from VerilogEval-v2 Prob092 (gatesv100) — the recurring "boundary bit by
-    placement, not by an op" miss.
+    SEVERITY IS SPLIT BY THE COMPOSING OPERATOR
+    (ORGANIC-20260605-boundary-fold-or-form-escalation — two consecutive
+    clean-room campaigns produced the OR-form bug while the corpus sweep's
+    false positives were exclusively AND-form):
+      * `|` / `^` composition → ERROR. The unshifted operand DOMINATES the
+        padded zero (x|0 = x, x^0 = x), so the boundary bit LEAKS through and
+        the padded edge bit is NOT the intended 0 (e.g. `in | {in[98:0],1'b0}`
+        gives out[0]=in[0] instead of 0). Virtually always the bug. The correct
+        form shifts BOTH operands inside the concat:
+        `{(in[98:0] OP in[99:1]), 1'b0}`.
+      * `&` composition → WARN (informational). The padded zero DOMINATES
+        (x&0 = 0), so the boundary bit is correctly MASKED — `in & {1'b0,
+        in[W-1:1]}` is the legitimate, correct-by-construction neighbour-AND
+        idiom (proven by the v0.2.40 corpus sweep over 305 passing samples).
+    Not auto-repaired — the right slices depend on the intended neighbour
+    relation. chip-AGNOSTIC. Learned from VerilogEval-v2 Prob092 (gatesv100) —
+    the recurring "boundary bit by placement, not by an op" miss.
     """
     findings: List[Finding] = []
     # top-level `<ident> <|&^> { ...concat... }` (concat has no nested braces)
@@ -520,14 +530,25 @@ def rule_vector_self_shift_fold(src: str, path: str) -> List[Finding]:
         has_zero_pad = _BASED_ZERO_RE.search(concat)
         if has_self_slice and has_zero_pad:
             lineno = src[:m.start()].count('\n') + 1
-            findings.append(Finding(
-                path, lineno, 'WARN', 'vector-self-shift-fold', lhs,
-                f"`{lhs} {op} {{… {lhs}[..], 1'b0}}` combines the whole vector '{lhs}' "
-                f"with a shifted concat of itself padded with a boundary 0 — the "
-                f"UNSHIFTED operand re-folds '{lhs}'s edge bit, so the padded edge bit "
-                f"is not 0. Shift BOTH operands inside the concat "
-                f"(e.g. `{{({lhs}[hi:lo] {op} {lhs}[hi2:lo2]), 1'b0}}`) and verify the "
-                f"edge bit against the spec's stated boundary value."))
+            if op == '&':
+                findings.append(Finding(
+                    path, lineno, 'WARN', 'vector-self-shift-fold', lhs,
+                    f"`{lhs} & {{… {lhs}[..], 1'b0}}` — AND-composition with a "
+                    f"zero-padded shifted self-copy: the padded zero MASKS the "
+                    f"edge bit (x&0=0), so this is the legitimate neighbour-AND "
+                    f"idiom; verify the edge bit against the spec's stated "
+                    f"boundary value (informational)."))
+            else:
+                findings.append(Finding(
+                    path, lineno, 'ERROR', 'vector-self-shift-fold', lhs,
+                    f"`{lhs} {op} {{… {lhs}[..], 1'b0}}` — {op}-composition with "
+                    f"a zero-padded shifted self-copy: the UNSHIFTED operand "
+                    f"DOMINATES the padded zero (x{op}0=x), so '{lhs}'s edge bit "
+                    f"LEAKS through and the padded edge bit is NOT 0. Shift BOTH "
+                    f"operands inside the concat "
+                    f"(e.g. `{{({lhs}[hi:lo] {op} {lhs}[hi2:lo2]), 1'b0}}`) and "
+                    f"verify the edge bit against the spec's stated boundary "
+                    f"value."))
     return findings
 
 

@@ -158,8 +158,11 @@ This shape is documented in `benchmark_external/verilogeval_v2/run_fresh_v0125/g
    set. The scorer prints this disk-truth inventory up front and warns on a
    partially-authored run.
 3. **Emit-blocking structural rules**: `gates_atomic.py` blocks emit on the
-   corpus-swept allow-list (`onebased-port-range`, `fsm-output-style-mismatch`) —
-   the author must fix and re-run the gate; a blocked problem has no sample on
+   corpus-swept allow-list (`onebased-port-range`, `fsm-output-style-mismatch`,
+   and the OR/XOR form of `vector-self-shift-fold` WHEN the prompt requires a
+   zero boundary for the assigned output — don't-care boundaries downgrade to
+   advisories; the AND form is the legitimate masking idiom, WARN only) — the
+   author must fix and re-run the gate; a blocked problem has no sample on
    disk, so disk-truth accounting automatically surfaces it.
 
 #### Shape D — Agentic with runner (SoC / multi-task)

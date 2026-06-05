@@ -82,11 +82,15 @@ golden reference, touched ONLY by the host scorer at scoring time).
 
    EMIT-BLOCKING structural rules (ORGANIC-20260605, corpus-swept zero
    false-positives): `onebased-port-range` (prompt indexes the signal 1-based
-   but the RTL declares `[W-1:0]` — declare `[W:1]`) and
+   but the RTL declares `[W-1:0]` — declare `[W:1]`),
    `fsm-output-style-mismatch` (spec declares Moore but an output combinationally
-   depends on an input — register it as f(state)). When `gates.json` carries
-   `structural_emit_block`, the sample was NOT emitted: apply the finding's fix
-   to `sample.sv` and re-run the gate.
+   depends on an input — register it as f(state)), and the OR/XOR form of
+   `vector-self-shift-fold` (`v | {…, 1'b0}` — the unshifted operand LEAKS the
+   boundary bit; blocks ONLY when the prompt REQUIRES that output's boundary to
+   be zero — a don't-care boundary downgrades to a `structural_advisories`
+   entry; the AND form `v & {1'b0, …}` is the legitimate masking idiom and stays
+   WARN). When `gates.json` carries `structural_emit_block`, the sample was NOT
+   emitted: apply the finding's fix to `sample.sv` and re-run the gate.
 
 6. Fix conformance ERRORs (wrong port name/width/dir vs prompt), emit-blocking
    structural findings, or compile errors and re-run the gate.
