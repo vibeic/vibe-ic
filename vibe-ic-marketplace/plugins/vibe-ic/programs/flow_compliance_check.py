@@ -2722,6 +2722,42 @@ def _l9_has_analog_modules(project: Path) -> bool:
     return False
 
 
+# v0.2.63 — ORGANIC-20260606-runner-missing-canonical-steps (#430).
+# Canonical flow steps the open-tool runner chain DOES NOT implement yet,
+# each with its NAMED capability flag. Scope: digital backend steps whose
+# tooling (scan insertion + ATPG, post-DFT re-opt, LEC, post-layout SPICE
+# correlation) is not wired into phase2/phase3 runners — a clean full-chain
+# digital run can therefore never produce their evidence regardless of
+# design quality. Step 18 (spare-cell/ECO-prep) is NOT listed: the runner
+# emits its evidence chain (v0.2.60), so it gates normally. chip-AGNOSTIC:
+# keyed on canonical step id, never on a chip/class literal.
+_PLATFORM_CAPABILITY_GAPS: Dict[int, str] = {
+    11: "cap:dft_scan_insertion_atpg",
+    12: "cap:post_dft_optimization",
+    13: "cap:logic_equivalence_check",
+    29: "cap:post_layout_spice_correlation",
+}
+
+
+def _apply_capability_gap(result: "StepResult", sid) -> "StepResult":
+    """#430 — convert a would-be-MISSING verdict on a capability-gap step
+    to SKIPPED-CONDITION with the NAMED flag. Applied at EVERY MISSING
+    exit of check_step (the early required_outputs return included) so the
+    conversion is never silently skipped; evidence-backed verdicts are
+    untouched."""
+    if (result.status == "MISSING" and isinstance(sid, int)
+            and sid in _PLATFORM_CAPABILITY_GAPS):
+        flag = _PLATFORM_CAPABILITY_GAPS[sid]
+        result.status = "SKIPPED-CONDITION"
+        result.reasons.append(
+            f"platform capability gap [{flag}]: the open-tool runner "
+            f"chain does not implement this canonical step yet (#430); "
+            f"converted from MISSING so every strict deduction names its "
+            f"capability flag. Track/implement under this flag to "
+            f"re-enable gating.")
+    return result
+
+
 def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                skip_analog: bool = False, skip_hardware: bool = False) -> StepResult:
     raw_id = step["id"]
@@ -2848,7 +2884,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 f"(approver: {waivers[sid].get('approver', '?')})",
                 f"  ↳ natural: {natural_reason}",
             ]
-        return result
+        return _apply_capability_gap(result, sid)
 
     # Now evaluate the gate predicate
     gate = step.get("gate")
@@ -2903,7 +2939,10 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         for r in original_reasons[:3]:
             result.reasons.append(f"  ↳ natural: {r}")
 
-    return result
+    # v0.2.63 (#430) — capability-gap conversion at the final exit (the
+    # early required_outputs exit applies the same helper). See
+    # _apply_capability_gap for the full rationale.
+    return _apply_capability_gap(result, sid)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
