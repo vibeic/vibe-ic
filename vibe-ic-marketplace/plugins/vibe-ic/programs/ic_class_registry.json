@@ -13,12 +13,30 @@
         "apple_id_class"
       ],
       "rtl_gen": "aid_class_rtl_gen.py",
-      "rtl_gen_args": ["--spec-compliance"],
+      "rtl_gen_args": [
+        "--spec-compliance"
+      ],
       "reference_tb": "tools/protocol_tb/aid_class_reference_tb.v",
       "detect_markers": {
-        "L2": ["half_duplex", "half-duplex", "single-wire", "single_wire"],
-        "L3": ["BR", "break", "opcode", "CRC", "crc8"],
-        "L8": ["br_min", "br_max", "rx_classifier", "ibt"]
+        "L2": [
+          "half_duplex",
+          "half-duplex",
+          "single-wire",
+          "single_wire"
+        ],
+        "L3": [
+          "BR",
+          "break",
+          "opcode",
+          "CRC",
+          "crc8"
+        ],
+        "L8": [
+          "br_min",
+          "br_max",
+          "rx_classifier",
+          "ibt"
+        ]
       },
       "min_marker_score": 2,
       "default_top": "chip_top",
@@ -27,56 +45,80 @@
       "command_protocol_applicable": true,
       "analog_applicable": false,
       "half_duplex_bus": true,
-      "owner_plugin": "vibe-ic"
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen"
     },
     {
       "name": "digital_cmd_driven",
       "description": "Generic command-driven digital IC (UART / SPI / I2C / parallel cmd). RTL gen not yet covered by deterministic generator — defer to spec-to-rtl skill.",
-      "synonyms": ["digital_cmd", "uart_cmd", "spi_cmd", "i2c_cmd"],
+      "synonyms": [
+        "digital_cmd",
+        "uart_cmd",
+        "spi_cmd",
+        "i2c_cmd"
+      ],
       "rtl_gen": null,
       "fallback_skill": "spec-to-rtl",
       "verification_track": "aid_protocol",
       "command_protocol_applicable": true,
       "analog_applicable": false,
       "half_duplex_bus": false,
-      "owner_plugin": "vibe-ic"
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen"
     },
     {
       "name": "mixed_signal_otp",
       "description": "Mixed-signal IC with OTP-driven configuration. Digital control logic + OTP read sequence — partial overlap with aid_class. v1.6.142 (#52) routes through MAIN_FSM_SPEC_COMPLIANT so the dispatcher consumes L3.opcodes (per-opcode case-arms + L3-enumerated silent-reject arms); BASELINE spam-responder produces silent DUT for chips with opcodes outside the AID-convention default reply path.",
-      "synonyms": ["mixed_otp", "otp_chip"],
+      "synonyms": [
+        "mixed_otp",
+        "otp_chip"
+      ],
       "rtl_gen": "aid_class_rtl_gen.py",
-      "rtl_gen_args": ["--spec-compliance"],
+      "rtl_gen_args": [
+        "--spec-compliance"
+      ],
       "fallback_skill": "spec-to-rtl",
       "verification_track": "aid_protocol",
       "command_protocol_applicable": true,
       "analog_applicable": true,
       "half_duplex_bus": true,
-      "owner_plugin": "vibe-ic"
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen"
     },
     {
       "name": "pure_analog",
       "description": "Pure analog IC — no digital RTL. Phase 2 SKIPs RTL gen; analog flow (A1..A8) handles via /vibe-ic-analog.",
-      "synonyms": ["analog_only"],
+      "synonyms": [
+        "analog_only"
+      ],
       "rtl_gen": null,
       "fallback_skill": null,
       "verification_track": "generic_full_stack",
       "command_protocol_applicable": false,
       "analog_applicable": true,
       "half_duplex_bus": false,
-      "owner_plugin": "vibe-ic"
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen"
     },
     {
       "name": "bare_fpga",
       "description": "FPGA-only design with no silicon target. Phase 2 runs FPGA-side (RTL → SOF), Phase 3 SKIPs.",
-      "synonyms": ["fpga_only"],
+      "synonyms": [
+        "fpga_only"
+      ],
       "rtl_gen": null,
       "fallback_skill": "spec-to-rtl",
       "verification_track": "generic_full_stack",
       "command_protocol_applicable": false,
       "analog_applicable": false,
       "half_duplex_bus": false,
-      "owner_plugin": "vibe-ic"
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen"
     },
     {
       "name": "bus_interconnect_protocol",
@@ -92,19 +134,31 @@
       "command_protocol_applicable": false,
       "analog_applicable": false,
       "half_duplex_bus": false,
-      "owner_plugin": "vibe-ic"
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen"
     },
     {
       "name": "serial_peripheral_protocol",
       "description": "v0.1.77 — for SPI / I2C / UART / I2S / 1-Wire / CAN / SMBus / Microwire and similar synchronous-or-asynchronous serial peripheral SPEC documents. Distinguished by a small fixed external pin count (typically 2-4) carrying named functions (data/clock/select), master/slave (or controller/target) roles, a shift register as the core data-movement primitive, and clock-divisor / baud-rate control. No multi-channel handshake (that's bus_interconnect_protocol) and no SW-visible opcode protocol (that's digital_cmd_driven). L4 register map IS present (configuration register file at the host-bus interface); L5 (analog), L11 (OTP), L13 (lab cal) typically N/A. L14-L18 (versioning, encoding tables, compliance rules, channel catalog, interconnect rules) all apply to the serial protocol layer. Phase 2 runner dispatches via fallback_skill=spec-to-rtl since the spec is a wire-level protocol, not a complete IC.",
-      "synonyms": ["serial_protocol", "synchronous_serial_protocol", "asynchronous_serial_protocol", "two_wire_interface", "spi_protocol", "i2c_protocol", "uart_protocol"],
+      "synonyms": [
+        "serial_protocol",
+        "synchronous_serial_protocol",
+        "asynchronous_serial_protocol",
+        "two_wire_interface",
+        "spi_protocol",
+        "i2c_protocol",
+        "uart_protocol"
+      ],
       "rtl_gen": null,
       "fallback_skill": "spec-to-rtl",
       "verification_track": "generic_full_stack",
       "command_protocol_applicable": false,
       "analog_applicable": false,
       "half_duplex_bus": false,
-      "owner_plugin": "vibe-ic"
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen"
     },
     {
       "name": "digital_arithmetic_primitive",
@@ -120,7 +174,9 @@
       "command_protocol_applicable": false,
       "analog_applicable": false,
       "half_duplex_bus": false,
-      "owner_plugin": "vibe-ic"
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen"
     },
     {
       "name": "processor_cpu",
@@ -139,19 +195,25 @@
       "command_protocol_applicable": false,
       "analog_applicable": false,
       "half_duplex_bus": false,
-      "owner_plugin": "vibe-ic"
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen"
     },
     {
       "name": "unknown_protocol_class",
       "description": "Detection failed or class not yet registered. Runner fall-throughs to fallback_skill — AI takes over via /spec-to-rtl skill.",
-      "synonyms": ["unknown"],
+      "synonyms": [
+        "unknown"
+      ],
       "rtl_gen": null,
       "fallback_skill": "spec-to-rtl",
       "verification_track": "aid_protocol",
       "command_protocol_applicable": true,
       "analog_applicable": true,
       "half_duplex_bus": true,
-      "owner_plugin": "vibe-ic"
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen"
     }
   ]
 }

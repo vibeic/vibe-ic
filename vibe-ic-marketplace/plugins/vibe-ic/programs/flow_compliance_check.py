@@ -2751,7 +2751,16 @@ def _l9_has_analog_modules(project: Path) -> bool:
 # run leaves step 28's required outputs absent → SKIPPED-CONDITION here.
 # A REAL SDF-annotated sim (results.log referencing $sdf_annotate) still
 # gates normally via post_layout_sim_check.
+# v0.2.73 (#440) — step 5 added: no formal proof engine is wired into
+# the phase2 runner; the old shape emitted a placeholder .sby (targeting
+# nonexistent files) + a results.json whose all_proved derived from the
+# SIM verdict. The runner now emits only formal_not_run.json (with the
+# assertion-gen fallback direction), so a run without a real SymbiYosys
+# proof leaves step 5's required outputs absent → SKIPPED-CONDITION
+# here. A real proof (authored .sby + sby log + results.json) still
+# gates normally.
 _PLATFORM_CAPABILITY_GAPS: Dict[int, str] = {
+    5:  "cap:formal_property_proof",
     11: "cap:dft_scan_insertion_atpg",
     12: "cap:post_dft_optimization",
     13: "cap:logic_equivalence_check",

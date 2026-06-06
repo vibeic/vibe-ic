@@ -4015,22 +4015,32 @@ def step_emit_phase2_manifests(project: Path,
     # step, never as a fabricated proof.
     formal_dir = _pl.formal_dir(project)
     formal_dir.mkdir(parents=True, exist_ok=True)
-    (formal_dir / "results.json").write_text(json.dumps({
-        "verdict": "SKIPPED-CONDITION",
-        "reason": ("no formal proof tool ran in this chain — reference-TB "
-                   "simulation results are NOT a proof and are never "
-                   "copied here (#433c). `all_proved` is only written by "
-                   "an actual proof run (e.g. SymbiYosys on "
-                   "formal/constraints.sby)."),
-    }, indent=2, ensure_ascii=False) + "\n")
-    # placeholder .sby for tool consumers that look for it
-    (formal_dir / "constraints.sby").write_text(
-        "# Auto-generated formal task placeholder; rtl/assertions.sv\n"
-        "# carries one SVA per L3 constraint (use SVA_ENABLED define).\n"
-        "[options]\nmode prove\n[engines]\nsmtbmc\n"
-        "[script]\nread -formal rtl/*.sv\n"
-        "prep -top assertions_l3\n")
-    written.append("formal/constraints.sby")
+    # ORGANIC-20260606 #440 (atop #433c):
+    #   * NEVER clobber a real proof — if formal/results.json already
+    #     exists (an AI/skill ran SymbiYosys), it is preserved as-is.
+    #   * NO placeholder .sby — the old hardcoded task referenced
+    #     nonexistent rtl/*.sv + an `assertions_l3` top no class ever
+    #     generates; a .sby that cannot elaborate is not an artifact.
+    #   * When no proof ran, emit ONLY the plainly-named
+    #     formal_not_run.json carrying the WAIVE direction — the
+    #     `assertion-gen` fallback skill authors per-IC SVA from L3
+    #     constraints and runs sby (mirror of rtl_gen → spec-to-rtl).
+    #     Step 5's required outputs stay absent, so flow_compliance
+    #     reports SKIPPED-CONDITION via cap:formal_property_proof.
+    #     `all_proved` is only ever written by an actual proof run.
+    if not (formal_dir / "results.json").is_file():
+        (formal_dir / "formal_not_run.json").write_text(json.dumps({
+            "verdict": "SKIPPED-CONDITION",
+            "fallback_skill": "assertion-gen",
+            "reason": ("no formal proof tool ran in this chain — "
+                       "reference-TB simulation results are NOT a proof "
+                       "and are never copied here (#433c/#440). AI "
+                       "invokes skill assertion-gen: author per-IC SVA "
+                       "from L3 constraints, write a real .sby, run "
+                       "SymbiYosys; only that run may write "
+                       "formal/results.json with all_proved."),
+        }, indent=2, ensure_ascii=False) + "\n")
+        written.append("formal/formal_not_run.json")
 
     # Step 6: FPGA early prototype + audit
     fpga_compile_step = by_name.get("fpga_compile")
