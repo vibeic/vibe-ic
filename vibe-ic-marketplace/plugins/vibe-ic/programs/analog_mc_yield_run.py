@@ -128,15 +128,32 @@ def run_block(project: Path, block: str, container: str, pdk: str,
             f".lib {pdk_lib} {mc_section}\n"
             + deck_body + ("\n.end\n" if ".end" not in deck_body.lower()
                            else "\n"))
-        ok, meas, raw = _ars._run_ngspice(
+        # #464 — _run_ngspice now also returns a per-run sim_status (failed
+        # sub-analyses + nulled metrics + warnings). Capture it so a Monte
+        # Carlo iteration whose AC measure ERRORed is recorded as partial
+        # rather than scored with bogus zeros (the nulled metric is None and
+        # the spec-yield loop below already skips runs missing the metric).
+        # Tolerate the legacy 3-tuple return so any pre-existing caller/mock
+        # that has not yet adopted the 4-tuple keeps working.
+        _ret = _ars._run_ngspice(
             container, _ars._container_path(container, host_root, wrap))
+        if len(_ret) == 4:
+            ok, meas, raw, sim_status = _ret
+        else:
+            ok, meas, raw = _ret
+            sim_status = {"partial": False, "warnings": []}
         (mc_dir / f"mc_{i:04d}.log").write_text(raw)
-        per_run.append({"seed": i, "ok": ok, **meas})
+        per_run.append({"seed": i, "ok": ok,
+                        "partial_measurement": sim_status["partial"],
+                        "sim_warnings": sim_status["warnings"], **meas})
 
     # per-spec yield
     spec_yield = {}
     for name, lim in specs.items():
-        scored = [r for r in per_run if r.get("ok") and name in r]
+        # #464 — a nulled metric is present-as-None; it is NOT a scored value
+        # (skip it rather than crash the min/max comparison or count it).
+        scored = [r for r in per_run
+                  if r.get("ok") and r.get(name) is not None]
         if not scored:
             spec_yield[name] = {"runs_scored": 0, "yield_pct": None}
             continue

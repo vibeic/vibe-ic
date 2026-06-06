@@ -51,6 +51,104 @@ _NATIVE_MEAS_RE = re.compile(
     r"^\s*([A-Za-z_]\w*)\s*=\s*([\-+]?[0-9]*\.?[0-9]+(?:[eE][\-+]?\d+)?)\s*$",
     re.MULTILINE)
 
+# ─────────── Per-analysis error detection (ORGANIC-20260606 #464) ───────────
+#
+# ngspice returns rc=0 from a `-b` batch even when an individual sub-analysis
+# (e.g. the `ac` block) ERRORs while another (e.g. `tran`) succeeds. The
+# per-analysis failure shows up ONLY as a log line, never in the exit code:
+#   - "Error: vdb(vout): argument out of range ..."   (vdb on a dead vector)
+#   - "Error: no such vector as gain"                 (a `let` that errored)
+#   - "no such vector ..." / "can't find ..."         (missing-vector messages)
+#   - "meas ac dcgain ... failed!"                    (a `.meas` that failed)
+# A failed measure often still echoes a BOGUS scalar (e.g. ugbw=0.0) through
+# the `$&` summary line, which silently poisons corner_results.json with a
+# zero that looks like real data. Per #464 we (1) scan each log for these
+# markers, (2) attribute each failed `.meas` to its analysis type so the
+# affected metrics become null instead of bogus zeros, and (3) surface a
+# per-block sim_warnings / partial_measurement record + downgrade provenance
+# to "real_ngspice_partial". A fully clean log keeps full provenance with no
+# warnings. chip-AGNOSTIC: the markers are ngspice diagnostic strings, not any
+# chip / vendor / SKU literal.
+
+# Generic ngspice error / failed-measure / missing-vector markers.
+_ERR_MARKER_RE = re.compile(
+    r"(?im)^.*("
+    r"\berror\b"            # "Error: ..." diagnostics
+    r"|\bfailed!"           # "meas ... failed!"
+    r"|no such vector"      # missing vector referenced by a let/meas/echo
+    r"|argument out of range"  # vdb()/log() on an empty/zero vector
+    r"|can'?t find"         # "can't find the node/vector ..."
+    r").*$")
+
+# A failed `.meas` line ngspice prints as e.g. `meas ac dcgain ... failed!`
+# (control mode) or `dcgain failed!`. Capture both the analysis type (when
+# present) and the measure name so the right metric can be nulled.
+_FAILED_MEAS_RE = re.compile(
+    r"(?im)^\s*meas(?:ure)?\s+(?:(ac|tran|dc|sp|noise|pz|tf)\s+)?"
+    r"(\w+)\b.*?failed!")
+# Short form some ngspice builds use: `<name> failed!` with no `meas` prefix.
+_FAILED_MEAS_SHORT_RE = re.compile(r"(?im)^\s*(\w+)\s+failed!")
+
+# Which `.meas`/`let`-derived metric names belong to which analysis, so a
+# failed analysis nulls exactly its own metrics (general per analysis kind,
+# NOT a chip-specific keyword list). Names are the canonical measure/let
+# identifiers used across the decks above.
+_AC_METRIC_KEYS = frozenset({"gain", "dcgain", "ugbw"})
+_TRAN_METRIC_KEYS = frozenset({
+    "vstep", "vsettle", "dv", "vfinal", "vout_final", "vlast",
+    "oa_win1", "ob_win1", "oa_win2", "ob_win2",
+    "dout1", "dout2", "voffset",
+})
+_ANALYSIS_METRIC_KEYS = {"ac": _AC_METRIC_KEYS, "tran": _TRAN_METRIC_KEYS}
+
+
+def _scan_analysis_failures(txt):
+    """Scan one ngspice log for per-analysis error markers.
+
+    Returns (failed_analyses, failed_meas_keys, warnings):
+      failed_analyses : set of analysis kinds ("ac"/"tran"/...) with errors
+      failed_meas_keys: set of measure/metric names that explicitly failed
+      warnings        : list of the raw diagnostic lines (deduped, trimmed)
+    """
+    failed_analyses: set[str] = set()
+    failed_meas_keys: set[str] = set()
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for m in _ERR_MARKER_RE.finditer(txt or ""):
+        line = m.group(0).strip()
+        if not line or line in seen:
+            continue
+        seen.add(line)
+        warnings.append(line)
+    for m in _FAILED_MEAS_RE.finditer(txt or ""):
+        atype, name = m.group(1), m.group(2)
+        if atype:
+            failed_analyses.add(atype.lower())
+        if name:
+            failed_meas_keys.add(name)
+            # Infer the analysis from the measure name when the line omitted it.
+            for atype2, keys in _ANALYSIS_METRIC_KEYS.items():
+                if name in keys:
+                    failed_analyses.add(atype2)
+    for m in _FAILED_MEAS_SHORT_RE.finditer(txt or ""):
+        name = m.group(1)
+        # Skip the long-form already captured (it also matches "meas ... failed!"
+        # but group(1) would be "meas"); ignore the bare control keyword.
+        if name.lower() in ("meas", "measure"):
+            continue
+        failed_meas_keys.add(name)
+        for atype2, keys in _ANALYSIS_METRIC_KEYS.items():
+            if name in keys:
+                failed_analyses.add(atype2)
+    # An "argument out of range" / "no such vector" on an AC-derived vector
+    # (vdb / gain) means the AC sweep itself produced nothing usable.
+    blob = (txt or "")
+    if (("vdb(" in blob and "argument out of range" in blob.lower())
+            or re.search(r"(?i)no such vector\s+as\s+gain", blob)):
+        failed_analyses.add("ac")
+    return failed_analyses, failed_meas_keys, warnings
+
+
 PDK_LIB = {
     "sky130":"/foss/pdks/sky130A/libs.tech/ngspice/sky130.lib.spice",
     "gf180" :"/foss/pdks/gf180mcuD/libs.tech/ngspice/design.ngspice",
@@ -585,9 +683,38 @@ def _run_ngspice(container, sp_in_container):
     for line_m in _MEAS_LINE_RE.finditer(txt):
         for kv in _KV_RE.finditer(line_m.group(1)):
             meas[kv.group(1)] = float(kv.group(2))
+
+    # ORGANIC-20260606 #464 — per-analysis failure detection. ngspice can
+    # return rc=0 while one sub-analysis (commonly `ac`) ERRORed: the failed
+    # `.meas` then echoes a BOGUS scalar (e.g. ugbw=0.0) through the `$&`
+    # summary, poisoning the result with a zero that masquerades as data.
+    # Scan the log, NULL every metric whose analysis failed (it is not a real
+    # measurement), and report the failed analyses + raw warnings so the caller
+    # can downgrade provenance instead of silently swallowing the failure.
+    failed_analyses, failed_meas_keys, warnings = _scan_analysis_failures(txt)
+    nulled_keys: set[str] = set()
+    # Drop metrics whose owning analysis failed (e.g. all AC metrics when the
+    # `ac` sweep errored), so a bogus 0.0 never reaches corner_results.json.
+    for atype in failed_analyses:
+        for k in _ANALYSIS_METRIC_KEYS.get(atype, frozenset()):
+            if k in meas:
+                meas[k] = None
+                nulled_keys.add(k)
+    # Also drop any individually-failed measure name even if its analysis kind
+    # could not be inferred (defensive — a failed meas is never a real value).
+    for k in failed_meas_keys:
+        if k in meas:
+            meas[k] = None
+            nulled_keys.add(k)
+    sim_status = {
+        "failed_analyses": sorted(failed_analyses),
+        "nulled_metrics": sorted(nulled_keys),
+        "warnings": warnings,
+        "partial": bool(failed_analyses or nulled_keys),
+    }
     # #438(a): return the FULL transcript — run_block persists it as the
     # per-run ngspice invocation log that substantiates simulator_run.
-    return cp.returncode == 0, meas, txt
+    return cp.returncode == 0, meas, txt, sim_status
 
 def _pick_block_type(block, project):
     """L5-driven type selection — does NOT use topology.md keyword match."""
@@ -642,6 +769,10 @@ def run_block(project, block, container, pdk, topology_override):
     sl_dir.mkdir(parents=True, exist_ok=True)
 
     runs = []
+    # #464 — accumulate per-block partial-measurement evidence across runs.
+    block_sim_warnings: list[str] = []
+    block_failed_analyses: set[str] = set()
+    block_nulled_metrics: set[str] = set()
     for knob, val in SWEEPS.get(btype, [("__noop__",0)]):
         # `corner` defaults to "tt" (the single section the SKY130 ngspice lib
         # ships with — same stamp the pre-existing templates hardcoded). The 9
@@ -652,7 +783,8 @@ def run_block(project, block, container, pdk, topology_override):
                               **{(knob if knob != "__noop__" else "_unused"): val})
         sp_host = sl_dir / f"run_{knob}_{val}.sp"
         sp_host.write_text(tb)
-        ok, meas, raw = _run_ngspice(container, _container_path(container, host_root, sp_host))
+        ok, meas, raw, sim_status = _run_ngspice(
+            container, _container_path(container, host_root, sp_host))
         # ORGANIC-20260606 #438(a): persist the ngspice invocation log —
         # `simulator_run: true` is only claimable for corners whose
         # invocation log exists on disk.
@@ -668,14 +800,24 @@ def run_block(project, block, container, pdk, topology_override):
         # successful sim". Map the canonical settle aliases onto the
         # target key here so the native meas-result line is sufficient.
         # chip-AGNOSTIC: fixed alias set of generic settle-measure names.
+        # #464 — only alias from a REAL (non-null) measurement; a nulled
+        # (failed-analysis) source must never resurrect a bogus target value.
         tkey = TARGETS.get(btype, {}).get("key")
-        if tkey and tkey not in meas:
+        if tkey and meas.get(tkey) is None:
             for _alias in ("vfinal", "vsettle", "vout_final", "vlast"):
-                if _alias in meas:
+                if meas.get(_alias) is not None:
                     meas[tkey] = meas[_alias]
                     break
+        # #464 — accumulate this run's partial-measurement evidence.
+        block_sim_warnings.extend(sim_status["warnings"])
+        block_failed_analyses.update(sim_status["failed_analyses"])
+        block_nulled_metrics.update(sim_status["nulled_metrics"])
         runs.append({"knob":knob, "val":val, "ok":ok,
                      "ngspice_log": str(log_host.relative_to(project)),
+                     "sim_warnings": sim_status["warnings"],
+                     "partial_measurement": sim_status["partial"],
+                     "failed_analyses": sim_status["failed_analyses"],
+                     "nulled_metrics": sim_status["nulled_metrics"],
                      **meas})
 
     # v1.6.228 — emit the full 9-corner PVT matrix (3 process × 3 temp)
@@ -690,7 +832,9 @@ def run_block(project, block, container, pdk, topology_override):
     base = None
     base_log = None
     for r in runs:
-        if r.get("ok") and target["key"] in r:
+        # #464 — a nulled (failed-analysis) metric is present-as-None; it must
+        # NOT seed the derived PVT grid with a bogus base value.
+        if r.get("ok") and r.get(target["key"]) is not None:
             base = r[target["key"]]
             base_log = r.get("ngspice_log")
             break
@@ -734,7 +878,9 @@ def run_block(project, block, container, pdk, topology_override):
     target = TARGETS[btype]
     best = None
     for r in runs:
-        if not r.get("ok") or target["key"] not in r: continue
+        # #464 — require a REAL (non-null) target value; a nulled metric from a
+        # failed sub-analysis is not a successful measurement.
+        if not r.get("ok") or r.get(target["key"]) is None: continue
         if target["target"] is None:
             best = r; break
         err = abs(r[target["key"]] - target["target"])
@@ -752,10 +898,49 @@ def run_block(project, block, container, pdk, topology_override):
     # itself is preserved in `corners[]` for honest review.
     spec_status = verdict if verdict in ("PASS", "PASS_INFORMATIONAL") \
                             else "PASS_INFORMATIONAL"
+
+    # ORGANIC-20260606 #464 — partial-measurement honesty. When any sub-analysis
+    # ERRORed during the sweep (e.g. the `ac` open-loop gain/UGBW measure failed
+    # at every sizing point while only the transient `meas` converged), the
+    # affected metrics were nulled above. The block result must NOT keep full
+    # `real_ngspice` provenance — it downgrades to `real_ngspice_partial`, an
+    # analysis_status map records which analysis succeeded vs failed, and the
+    # raw diagnostic lines are surfaced as sim_warnings. A fully-clean sweep
+    # keeps `real_ngspice` provenance with partial_measurement=False and no
+    # warnings (corpus-sweep regression guard). chip-AGNOSTIC.
+    block_partial = bool(block_failed_analyses or block_nulled_metrics)
+    block_provenance = "real_ngspice_partial" if block_partial else "real_ngspice"
+    # analysis_status: which analyses the deck exercised vs which failed. An
+    # analysis is "exercised" when its template emits a `tran`/`ac`/... command
+    # (tran is present in every template; ac only in the converter family, which
+    # surfaces ac metric keys ugbw/dcgain/gain — present even when nulled). The
+    # ones that ERRORed are marked FAILED, the rest OK.
+    deck_blob = T.get(btype, "")
+    deck_analyses = set()
+    for _kind in ("tran", "ac", "dc", "noise"):
+        if re.search(rf"(?m)^\s*{_kind}\b", deck_blob):
+            deck_analyses.add(_kind)
+    analysis_status = {a: ("FAILED" if a in block_failed_analyses else "OK")
+                       for a in sorted(deck_analyses)}
+    # dedupe warnings while preserving order
+    seen_w: set = set()
+    block_sim_warnings_dedup = []
+    for w in block_sim_warnings:
+        if w not in seen_w:
+            seen_w.add(w)
+            block_sim_warnings_dedup.append(w)
+
     real_corner = {
         "block": block,
         "block_type": btype,
-        "_provenance": "real_ngspice",
+        "_provenance": block_provenance,
+        # #464 — first-class partial-measurement evidence so downstream gates
+        # and human review never have to dig the failure out of the raw log.
+        "partial_measurement": block_partial,
+        "analysis_status": analysis_status,
+        "failed_analyses": sorted(block_failed_analyses),
+        "nulled_metrics": sorted(block_nulled_metrics),
+        "sim_warnings": block_sim_warnings_dedup,
         "simulator": "ngspice (iic-osic-tools docker)",
         "pdk_used_for_sim": pdk,
         "spec_label": target["label"],
@@ -785,14 +970,22 @@ def run_block(project, block, container, pdk, topology_override):
                   "PVT sweep (#438a) — full PVT closure requires the "
                   "native PDK deck simulated at every corner. spec status "
                   "downgrades non-PASS to PASS_INFORMATIONAL (env gap, "
-                  "not design gap)."),
+                  "not design gap)."
+                  + ((" PARTIAL MEASUREMENT (#464): sub-analyses "
+                      f"{sorted(block_failed_analyses)} ERRORed at every "
+                      "sizing point; affected metrics "
+                      f"{sorted(block_nulled_metrics)} are null (not bogus "
+                      "zeros) and provenance is downgraded to "
+                      "real_ngspice_partial.") if block_partial else "")),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     (bdir / "corner_results.json").write_text(json.dumps(real_corner, indent=2))
     (sl_dir / "results.json").write_text(json.dumps(
         {"block":block,"block_type":btype,"sized_point":best,
          "runs":runs,"verdict":verdict,
-         "_provenance":"real_ngspice"}, indent=2))
+         "partial_measurement":block_partial,
+         "sim_warnings":block_sim_warnings_dedup,
+         "_provenance":block_provenance}, indent=2))
     print(f"[real_sim] block={block} type={btype} {verdict} "
           f"{target['key']}={best.get(target['key'])} target={target['target']}")
     return 0
