@@ -529,9 +529,40 @@ def _check_ir_drop(project_dir: Path) -> AuditResult:
             file=best_file))
 
     authentic = _check_tool_authenticity(files, "ir_drop", result)
-    result.passed = has_drop and authentic
+
+    # ORGANIC-20260606 #444 — budget comparison: when the runner's
+    # ir_drop.json carries worst_ir_uv + budget_uv, the step gate applies
+    # the SAME comparison signoff_ladder_run uses, so the step verdict
+    # can never PASS beside a memo that reads the same numbers as over
+    # budget. Values-present-only reports (legacy) gate as before.
+    budget_ok = True
+    worst_uv = budget_uv = None
+    for rel in ("reports/phase3/ir_drop.json", "reports/ir_drop.json"):
+        jp = project_dir / rel
+        if not jp.is_file():
+            continue
+        try:
+            jd = json.loads(jp.read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(jd, dict) and isinstance(
+                jd.get("worst_ir_uv"), (int, float)) and isinstance(
+                jd.get("budget_uv"), (int, float)):
+            worst_uv, budget_uv = float(jd["worst_ir_uv"]), float(jd["budget_uv"])
+            if worst_uv > budget_uv:
+                budget_ok = False
+                result.findings.append(Finding(
+                    rule="IR_OVER_BUDGET", severity="ERROR",
+                    message=(f"worst IR drop {worst_uv:.3g} µV exceeds the "
+                             f"{budget_uv:.3g} µV budget (#444)"),
+                    file=rel))
+        break
+
+    result.passed = has_drop and authentic and budget_ok
     result.summary = {"files_found": len(files), "has_drop_value": has_drop,
-                      "tool_authentic": authentic}
+                      "tool_authentic": authentic,
+                      "worst_ir_uv": worst_uv, "budget_uv": budget_uv,
+                      "ir_within_budget": budget_ok}
     return result
 
 

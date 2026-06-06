@@ -5504,12 +5504,15 @@ catch {{set_wire_rc -clock -layer {mp}5}}
         )
         # Add mV-normalised lines so the eda_report_audit:ir_drop keyword
         # check (mV / %Vdd / voltage drop / IR drop) matches deterministically.
+        worst_ir_v = 0.0
         for ln in ir_lines:
             body += ln.strip() + "\n"
             mv = re.search(r"IR drop\s*:\s*([0-9.eE+\-]+)\s*V", ln)
             if mv:
                 try:
-                    body += (f"  -> {float(mv.group(1)) * 1000.0:.6g} mV "
+                    _v = float(mv.group(1))
+                    worst_ir_v = max(worst_ir_v, abs(_v))
+                    body += (f"  -> {_v * 1000.0:.6g} mV "
                              f"(IR drop, normalised)\n")
                 except ValueError:
                     pass
@@ -5517,18 +5520,21 @@ catch {{set_wire_rc -clock -layer {mp}5}}
             "\n# === Full PSM stdout (provenance) ===\n" + log[-3000:] + "\n"
             "# end of ir_drop.rpt\n")
         ir_rpt.write_text(body)
+        # ORGANIC-20260606 #444: the measurement is wired to the SAME
+        # budget logic signoff_ladder_run uses (worst <= budget_uv,
+        # default 35 µV) so the step gate and the PERC memo read ONE
+        # verdict instead of two readers interpreting "MEASURED"
+        # oppositely. The numbers travel with the verdict.
+        _ir_budget_uv = 35.0  # = signoff_ladder_run.check_tier_2_ir default
+        _worst_ir_uv = worst_ir_v * 1e6
         (ir_rpt.parent / "ir_drop.json").write_text(json.dumps({
             "tool": "openroad-psm",
             "mode": "static_ir_drop",
             "power_nets": power_nets,
             "source": str(ir_rpt.relative_to(project)),
-            # NOT a sign-off verdict. This emitter only proves the PSM tool RAN
-            # and produced an IR-drop measurement; whether the worst drop is
-            # within the PDK budget is decided downstream by
-            # ir_drop_report_check (eda_report_audit --mode ir_drop) and
-            # signoff_ladder_run (worst <= budget_uv). Emitting a literal
-            # "PASS" here would assert sign-off from mere tool-ran evidence.
-            "verdict": "MEASURED",
+            "worst_ir_uv": _worst_ir_uv,
+            "budget_uv": _ir_budget_uv,
+            "verdict": "PASS" if _worst_ir_uv <= _ir_budget_uv else "FAIL",
             "evidence": "analyze_power_grid stdout",
         }, indent=2) + "\n")
         ir_ok = True
@@ -6769,16 +6775,25 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
     def _auto(name, verdict, tool, evidence):
         """An AUTOMATED category. PASS/FAIL from the tool verdict; if the
         report was not emitted, the category is INCOMPLETE (honest — not a
-        silent PASS)."""
+        silent PASS). ORGANIC-20260606 #444: a "MEASURED" verdict means
+        the tool ran and produced numbers but no budget comparison was
+        applied — that is INCOMPLETE (measurement awaiting sign-off
+        comparison), NOT a FAIL; the old FAIL mapping made the PERC memo
+        contradict a step gate reading the same artifact."""
         if verdict is None:
             return {"category": name, "status": "AUTOMATED",
                     "result": "INCOMPLETE", "tool": tool,
                     "evidence": evidence,
                     "note": "report not emitted (re-run phase3 sign-off)"}
         result = "PASS" if verdict == "PASS" else (
-            "REVIEW" if verdict == "REVIEW" else "FAIL")
-        return {"category": name, "status": "AUTOMATED", "result": result,
-                "tool": tool, "evidence": evidence, "source_verdict": verdict}
+            "REVIEW" if verdict == "REVIEW" else
+            "INCOMPLETE" if verdict == "MEASURED" else "FAIL")
+        out = {"category": name, "status": "AUTOMATED", "result": result,
+               "tool": tool, "evidence": evidence, "source_verdict": verdict}
+        if verdict == "MEASURED":
+            out["note"] = ("measurement-only artifact (no budget "
+                           "comparison applied) — review required (#444)")
+        return out
 
     categories: List[Dict[str, Any]] = []
     categories.append(_auto(
