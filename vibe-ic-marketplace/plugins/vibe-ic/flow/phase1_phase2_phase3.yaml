@@ -789,6 +789,13 @@ steps:
       - "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done"
     gate:
       all_of:
+        # v2.3.1 (review R3) — IP integration checklist: hard-macro
+        # LEF/GDS/Liberty file-set alignment + lib corner coverage +
+        # L21 power-domain consistency, before the macros enter
+        # floorplan. Only fires when macros are present.
+        - optional_program_exit_zero:
+            command: "ip_integration_check . --json reports/phase2/gates/ip_integration.json"
+            condition_files_exist: ["input/pdk_local", "phase3/analog/hardmacro"]
         - files_exist: ["phase3/stage3/pnr/floorplan.def"]
         - program_exit_zero: "floorplan_pdn_check . --json reports/phase3/pnr/floorplan_pdn.json"
     blocks_on: [13, 14, A8]
