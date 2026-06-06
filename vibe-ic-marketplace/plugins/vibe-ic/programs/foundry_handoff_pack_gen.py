@@ -191,13 +191,13 @@ def main(argv=None) -> int:
         "die_area_um2": area["die_area_um2"],
         "core_area_um2": area["core_area_um2"],
         "utilization_pct": area["utilization_pct"],
-        "TODO_mask_layers": (
+        "PENDING_FOUNDRY_mask_layers": (
             "Author: per-foundry mask layer index → GDS layer mapping "
             "(typically 30+ rows: Diff, Poly, Active, Contact, M1-Mn, "
             "VIA1-VIAn-1, etc.). Foundry shuttle ships a template — "
             "fill against your final routing stack."
         ),
-        "TODO_reticle_steppers": (
+        "PENDING_FOUNDRY_reticle_steppers": (
             "Author: stepper field size, alignment marks, kerf width."
         ),
     }
@@ -216,16 +216,16 @@ def main(argv=None) -> int:
         "process_node_nm": process_nm,
         "gds_path": (str(primary_gds.relative_to(project))
                      if primary_gds else None),
-        "TODO_wat_structures": (
+        "PENDING_FOUNDRY_wat_structures": (
             "Author: list of PCM (Process Control Monitor) structures "
             "to be probed in the scribe line. Common entries: NMOS Vt, "
             "PMOS Vt, n+ contact resistance, p+ contact resistance, "
             "M1 sheet R, via chains (M1-M2..Mn-1-Mn), comb structures."
         ),
-        "TODO_yield_target_pct": (
+        "PENDING_FOUNDRY_yield_target_pct": (
             "Author: minimum acceptable yield (e.g. 80%) for the lot."
         ),
-        "TODO_acceptance_criteria": (
+        "PENDING_FOUNDRY_acceptance_criteria": (
             "Author: pass/fail thresholds for each WAT parameter."
         ),
     }
@@ -244,15 +244,15 @@ def main(argv=None) -> int:
         "pdk": pdk_name,
         "test_pattern_seeds_from_l10": l10_ids,
         "test_pattern_seed_count": len(l10_ids),
-        "TODO_voltage_corners": ["VDD_min", "VDD_nom", "VDD_max"],
-        "TODO_temperature_corners_celsius": [-40, 25, 85, 125],
-        "TODO_test_patterns": (
+        "PENDING_FOUNDRY_voltage_corners": ["VDD_min", "VDD_nom", "VDD_max"],
+        "PENDING_FOUNDRY_temperature_corners_celsius": [-40, 25, 85, 125],
+        "PENDING_FOUNDRY_test_patterns": (
             "Author: convert each L10 seed above into an ATE pattern "
             "(input vector + expected output + corner constraints) from "
             "cocotb/Verilator simulation traces — see "
             "vibe-ic:tapeout-checklist skill for guidance."
         ),
-        "TODO_loadboard_id": (
+        "PENDING_FOUNDRY_loadboard_id": (
             "Author: ATE loadboard part number + revision."
         ),
     }
@@ -274,7 +274,7 @@ def main(argv=None) -> int:
         if head.startswith(b"# PLACEHOLDER"):
             scribe_path.unlink()  # remove the old fabricated placeholder
     if not scribe_path.is_file():
-        (handoff_dir / "scribe_line_layout.TODO.txt").write_text(
+        (handoff_dir / "scribe_line_layout.PENDING_FOUNDRY.txt").write_text(
             "scribe_line_layout.gds is FOUNDRY-SUPPLIED (PCM structures "
             "+ alignment marks) and is NOT generated here (#446). Obtain "
             "it from the shuttle/foundry kit and place it beside this "
@@ -293,11 +293,11 @@ def main(argv=None) -> int:
         "  mask_spec.json              — mask layer table + reticle config\n"
         "  wat_plan.json               — WAT probe plan + PCM structures\n"
         "  scribe_line_layout.gds      — foundry-supplied PCM/scribe layout\n"
-        "                                (see scribe_line_layout.TODO.txt)\n"
+        "                                (see scribe_line_layout.PENDING_FOUNDRY.txt)\n"
         "  corner_test_vectors.json    — ATE corner test kit\n"
         "\n"
-        "TODO entries inside each JSON mark fields that the production team\n"
-        "+ foundry-interface engineer must fill in before tape-out. Substance\n"
+        "PENDING_FOUNDRY_* entries inside each JSON mark fields the foundry /\n"
+        "production team supplies before tape-out (open items). Substance\n"
         "gate `foundry_handoff_package_check` (Step 35) audits completeness.\n"
         "\n"
         "Authored design facts auto-included:\n"
@@ -320,7 +320,7 @@ def main(argv=None) -> int:
             "wat_plan": "phase3/stage4/foundry_handoff/wat_plan.json",
             "scribe_layout": ("phase3/stage4/foundry_handoff/scribe_line_layout.gds"
                               if (handoff_dir / "scribe_line_layout.gds").is_file()
-                              else "phase3/stage4/foundry_handoff/scribe_line_layout.TODO.txt"),
+                              else "phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt"),
             "corner_test_vectors":
                 "phase3/stage4/foundry_handoff/corner_test_vectors.json",
         },
@@ -334,9 +334,9 @@ def main(argv=None) -> int:
             "gds_size_bytes": (primary_gds.stat().st_size
                                if primary_gds else 0),
         },
-        "todo_count": 7,  # see README + each TODO field
+        "pending_foundry_count": 9,  # PENDING_FOUNDRY_* fields (#449)
         "notes": (
-            "Skeleton emits design facts and TODO markers. "
+            "Skeleton emits design facts + PENDING_FOUNDRY_* open items. "
             "Production tape-out requires foundry-supplied scribe layout + "
             "human-authored WAT plan + ATE test patterns. "
             "Substance audit performed by foundry_handoff_package_check."

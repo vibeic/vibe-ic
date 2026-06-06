@@ -73,7 +73,7 @@ def test_no_fake_scribe_gds(tmp_path):
     FH.main([str(p)])
     hd = p / "phase3/stage4/foundry_handoff"
     assert not (hd / "scribe_line_layout.gds").exists()
-    assert (hd / "scribe_line_layout.TODO.txt").is_file()
+    assert (hd / "scribe_line_layout.PENDING_FOUNDRY.txt").is_file()
 
 
 def test_old_placeholder_scribe_is_removed(tmp_path):

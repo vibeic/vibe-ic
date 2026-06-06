@@ -279,7 +279,16 @@ def main(argv=None):
     # by name on: TODO/TBD markers in pack text members, cell_count < 0,
     # pdk == "unknown" in pack JSON members. (0-byte members already
     # hard-fail above.)
+    #
+    # ORGANIC-20260606 #449 — TODO semantics split: design-derivable
+    # TODO/TBD residue stays ERROR (an unfilled field the generator
+    # should have derived), while the structured PENDING_FOUNDRY_*
+    # namespace marks fields the FOUNDRY supplies before tapeout —
+    # honest open items, surfaced as a NAMED INFO finding (and listed
+    # in the report for the tapeout checklist), never an ERROR. The
+    # generator's own legit output must pass its own gate.
     substance_findings = []
+    pending_foundry_fields = []
     for hf in sorted(project.glob("phase3/stage4/foundry_handoff/**/*")):
         if not hf.is_file() or hf.stat().st_size == 0:
             continue
@@ -297,7 +306,9 @@ def main(argv=None):
                 "rule": "FOUNDRY_HANDOFF_TODO_MARKERS",
                 "message": (f"{rel}: {n_todo} TODO/TBD marker(s) — a "
                             f"handoff member with open placeholders is "
-                            f"not a deliverable (#437b)."),
+                            f"not a deliverable (#437b). Foundry-supplied "
+                            f"fields belong in the PENDING_FOUNDRY_* "
+                            f"namespace (#449)."),
             })
         if hf.suffix.lower() == ".json":
             try:
@@ -305,6 +316,9 @@ def main(argv=None):
             except ValueError:
                 jd = None
             if isinstance(jd, dict):
+                for k in jd:
+                    if str(k).startswith("PENDING_FOUNDRY_"):
+                        pending_foundry_fields.append(f"{rel}:{k}")
                 cc = jd.get("cell_count")
                 if isinstance(cc, (int, float)) and cc < 0:
                     substance_findings.append({
@@ -357,6 +371,18 @@ def main(argv=None):
         findings = [{"severity": "INFO", "rule": "FILES_PRESENT",
                       "message": ok_msg}]
 
+    # #449 — PENDING_FOUNDRY_* open items: a NAMED INFO finding so the
+    # tapeout checklist lists them; never an ERROR (foundry-supplied by
+    # definition).
+    if pending_foundry_fields:
+        findings.append({
+            "severity": "INFO",
+            "rule": "FOUNDRY_HANDOFF_PENDING_FOUNDRY",
+            "message": (f"{len(pending_foundry_fields)} foundry-supplied "
+                        f"open item(s) pending before tapeout (#449): "
+                        + "; ".join(pending_foundry_fields[:12])),
+        })
+
     out = {
         "gate": _GATE_NAME,
         "verdict": verdict,
@@ -369,6 +395,7 @@ def main(argv=None):
         "scribe_only": scribe_only,
         "waiver": waiver,
         "rationale_when_skipped": _WAIVER_RATIONALE,
+        "pending_foundry_fields": pending_foundry_fields,  # #449 open items
         "findings": findings,
     }
     if args.json:

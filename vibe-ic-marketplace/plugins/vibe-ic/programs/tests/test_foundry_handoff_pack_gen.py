@@ -28,7 +28,7 @@ def test_emits_all_skeleton_artefacts(tmp_path):
     assert (handoff / "wat_plan.json").is_file()
     assert (handoff / "corner_test_vectors.json").is_file()
     assert not (handoff / "scribe_line_layout.gds").exists()
-    assert (handoff / "scribe_line_layout.TODO.txt").is_file()
+    assert (handoff / "scribe_line_layout.PENDING_FOUNDRY.txt").is_file()
     assert (handoff / "README.txt").is_file()
 
 
@@ -65,13 +65,17 @@ def test_detects_process_node_from_pdk_lib(tmp_path):
     assert audit["design_facts"]["process_nm"] == 180
 
 
-def test_mask_spec_includes_todo_markers(tmp_path):
-    """mask_spec.json must carry TODO_mask_layers field for reviewer."""
+def test_mask_spec_includes_pending_foundry_markers(tmp_path):
+    """#449: foundry-supplied fields use the structured
+    PENDING_FOUNDRY_* namespace (the checker lists them as open items)
+    — never TODO_*, which the checker rightly ERRORs as design-derivable
+    residue."""
     r = _run(tmp_path)
     mask = json.loads(
         (tmp_path / "phase3/stage4/foundry_handoff/mask_spec.json").read_text())
-    assert "TODO_mask_layers" in mask
-    assert "TODO_reticle_steppers" in mask
+    assert "PENDING_FOUNDRY_mask_layers" in mask
+    assert "PENDING_FOUNDRY_reticle_steppers" in mask
+    assert not any(k.startswith("TODO_") for k in mask)
 
 
 def test_vacuous_pass_when_project_missing():
