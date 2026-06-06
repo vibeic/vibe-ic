@@ -143,11 +143,17 @@ def test_generic_class_reference_tb_runs_full_stack_tb(tmp_path):
           / f"tb_{top}_full.v")
     assert tb.is_file()
     sr = p2.step_reference_tb(proj, top, "processor_cpu")
-    # PASS (iverilog present + compiles) or PASS (results.json fallback)
-    # — never an AID-TB false FAIL.
-    assert sr.status in ("PASS", "SKIP")
+    # ORGANIC-20260606 #439: a skeleton TB running to completion is
+    # CONNECTIVITY evidence only — WAIVED with the testbench-author
+    # fallback direction, never a functional PASS (and never an AID-TB
+    # false FAIL). PASS is reserved for a real per-IC oracle TB with
+    # golden compares.
+    assert sr.status in ("WAIVED", "SKIP")
     assert sr.extras.get("verification_track") == "generic_full_stack"
     assert "aid" in sr.detail.lower()
+    if sr.status == "WAIVED":
+        assert sr.extras.get("functional_verified") is False
+        assert sr.extras.get("fallback_skill") == "testbench-author"
 
 
 def test_generic_class_real_compile_failure_still_fails(tmp_path):

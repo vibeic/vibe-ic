@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 638
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 638)
+- **Total programs (excluding helpers / shims):** 639
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 639)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 629 |
+| `any` | 630 |
 
 ## Alphabetical listing
 
@@ -401,6 +401,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `openroad_hold_repair_tcl_gen` | any | — | emit the OpenROAD `repair_timing -hold` |
 | `openroad_tcl_deprecation_check` | any | v0.69 | Recursively scan a plugin tree for |
 | `oracle_dump_required_check` | any | — | Category-B workflow gate. |
+| `oracle_tb_gen` | any | — | deterministic per-IC oracle testbench generator |
 | `oracle_vector_gen` | any | v0.114 | v0.114 (BACKLOG-v6 C1 closure). |
 | `otp_field_map_check` | any | — | gate that catches L11_OTP_CONTENT.json missing a |
 | `otp_image_check` | any | Wave 73 | Validate an OTP/NVM .ver image against an L4 register map. |
@@ -710,7 +711,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (629 programs)
+### `any` (630 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -1082,6 +1083,7 @@ _(no programs in this group)_
 - `openroad_hold_repair_tcl_gen` — emit the OpenROAD `repair_timing -hold`
 - `openroad_tcl_deprecation_check` — Recursively scan a plugin tree for  _[v0.69]_
 - `oracle_dump_required_check` — Category-B workflow gate.
+- `oracle_tb_gen` — deterministic per-IC oracle testbench generator
 - `oracle_vector_gen` — v0.114 (BACKLOG-v6 C1 closure).  _[v0.114]_
 - `otp_field_map_check` — gate that catches L11_OTP_CONTENT.json missing a
 - `otp_image_check` — Validate an OTP/NVM .ver image against an L4 register map.  _[Wave 73]_

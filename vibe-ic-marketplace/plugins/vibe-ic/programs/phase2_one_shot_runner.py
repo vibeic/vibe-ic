@@ -1628,6 +1628,69 @@ def _iverilog_compile_with_sv_fallback(
 # -------------------------------------------------------------------------
 # 3. iverilog reference TB
 # -------------------------------------------------------------------------
+def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
+                   track_reason: str, t0: float,
+                   container: str) -> Optional[StepResult]:
+    """#439 — compile + run the per-IC oracle TB and gate on its REAL
+    golden compares (`ORACLE_TB_DONE pass=<n>/<m>`). Returns None when
+    no simulator is available (caller falls through to the skeleton
+    path, which can at best WAIVE). chip-AGNOSTIC."""
+    import shutil as _shutil
+    if not _shutil.which("iverilog"):
+        return None
+    rtl_dir = _pl.rtl_dir(project)
+    if not rtl_dir.is_dir():
+        return None
+    rtl_files = _select_asic_rtl_sources(rtl_dir)
+    run_dir = _pl.sim_full_stack_dir(project) / "oracle_run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    vvp = run_dir / "oracle.vvp"
+    cmd = ["iverilog", "-g2012", "-DSIMULATION", "-o", str(vvp),
+           str(tb_path)] + [str(p) for p in rtl_files]
+    rc, out, err, tb_frontend = _iverilog_compile_with_sv_fallback(
+        cmd, rtl_files, tb_path, run_dir, container, top_name)
+    if rc != 0:
+        return StepResult(
+            "reference_tb", "FAIL", time.time() - t0,
+            (f"per-IC oracle TB ({tb_path.name}) failed to compile "
+             f"against rtl/ — real structural defect (#439). "
+             f"iverilog rc={rc} stderr={(err or out)[-1200:]}"),
+            extras={"verification_track": "oracle_tb",
+                    "tb_frontend": tb_frontend})
+    rc, out, err = _run(["vvp", str(vvp)], cwd=run_dir, timeout=300)
+    transcript = run_dir / "oracle.log"
+    transcript.write_text(out + "\n" + err)
+    m = re.search(r"ORACLE_TB_DONE pass=(\d+)/(\d+)", out)
+    if not m:
+        return StepResult(
+            "reference_tb", "FAIL", time.time() - t0,
+            (f"per-IC oracle TB ({tb_path.name}) did not reach "
+             f"ORACLE_TB_DONE (rc={rc}) — possible RTL defect (#439). "
+             f"transcript_tail={out[-800:]}"),
+            [str(transcript)],
+            extras={"verification_track": "oracle_tb"})
+    n_pass, n_total = int(m.group(1)), int(m.group(2))
+    if n_total > 0 and n_pass == n_total:
+        return StepResult(
+            "reference_tb", "PASS", time.time() - t0,
+            (f"per-IC oracle TB {tb_path.name}: {n_pass}/{n_total} "
+             f"golden vectors matched (functional verification, #439); "
+             f"AID reference TB not applicable ({track_reason})"),
+            [str(tb_path), str(transcript)],
+            extras={"verification_track": "oracle_tb",
+                    "functional_verified": True,
+                    "vectors_passed": n_pass, "vectors_total": n_total})
+    return StepResult(
+        "reference_tb", "FAIL", time.time() - t0,
+        (f"per-IC oracle TB {tb_path.name}: only {n_pass}/{n_total} "
+         f"golden vectors matched — functional mismatch (#439). See "
+         f"{transcript.name}"),
+        [str(transcript)],
+        extras={"verification_track": "oracle_tb",
+                "functional_verified": False,
+                "vectors_passed": n_pass, "vectors_total": n_total})
+
+
 def _reference_tb_generic_full_stack(project: Path, top_name: str,
                                      track_reason: str,
                                      t0: float,
@@ -1651,6 +1714,28 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
         is the verification path for that case.
     """
     sim_dir = _pl.sim_full_stack_dir(project)
+
+    # ORGANIC-20260606 #439 — per-IC ORACLE TB is the functional gate.
+    # Try the deterministic generator first (concrete L10 golden
+    # vectors → tb_<top>_oracle.v); an AI-authored oracle TB at the
+    # same path also satisfies the contract. Only when an oracle runs
+    # with >=1 golden compare may this step report functional PASS.
+    oracle_tbs = sorted(sim_dir.glob("tb_*_oracle.v")) \
+        if sim_dir.is_dir() else []
+    if not oracle_tbs:
+        try:
+            import oracle_tb_gen as _otg
+            _rep, _rc = _otg.generate(project)
+            if _rc == 0:
+                oracle_tbs = sorted(sim_dir.glob("tb_*_oracle.v"))
+        except Exception:
+            pass
+    if oracle_tbs:
+        oracle_result = _run_oracle_tb(project, top_name, oracle_tbs[0],
+                                       track_reason, t0, container)
+        if oracle_result is not None:
+            return oracle_result
+
     # Find the generic full-stack TB emitted by step_full_stack_tb_gen.
     tb_candidates = sorted(sim_dir.glob("tb_*_full.v")) if sim_dir.is_dir() else []
     results_path = sim_dir / "results.json"
@@ -1712,16 +1797,28 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
         transcript = run_dir / "full_stack.log"
         transcript.write_text(out + "\n" + err)
         if rc == 0 and "FULL_STACK_TB_DONE" in out:
+            # ORGANIC-20260606 #439: a skeleton TB running to completion
+            # is CONNECTIVITY evidence, NOT functional verification (no
+            # golden compares; functional_verified=false). The old PASS
+            # here is how 3 of 4 campaign ICs shipped with zero
+            # functional verification. WAIVED with the fallback-skill
+            # direction — the per-IC oracle TB (deterministic
+            # oracle_tb_gen or AI testbench-author) is the only
+            # functional PASS path.
             return StepResult(
-                "reference_tb", "PASS",
+                "reference_tb", "WAIVED",
                 time.time() - t0,
                 (f"AID reference TB SKIPPED ({track_reason}); generic "
                  f"full-stack TB {tb_path.name} compiled + ran to "
-                 f"completion (FULL_STACK_TB_DONE) — functional gate "
-                 f"via L9.top_ports."),
+                 f"completion — CONNECTIVITY only, 0 golden compares "
+                 f"(#439). AI invokes skill testbench-author: author a "
+                 f"per-IC oracle TB from L3/L5/L10 at "
+                 f"sim_full_stack/tb_{top_name}_oracle.v, then re-run."),
                 [str(tb_path), str(transcript)],
                 extras={"verification_track": "generic_full_stack",
                         "aid_tb_skipped_reason": track_reason,
+                        "functional_verified": False,
+                        "fallback_skill": "testbench-author",
                         "tb_frontend": tb_frontend})
         # Ran but did not reach the completion marker → real defect.
         return StepResult(
@@ -1735,19 +1832,22 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                     "aid_tb_skipped_reason": track_reason})
 
     # iverilog unavailable — fall back to the deterministic results.json
-    # the TB generator emitted. This is functional-sanity only; the
-    # authoritative functional gate is gate-level synth + Phase 3.
+    # the TB generator emitted. #439: this can never be a PASS — nothing
+    # SIMULATED; WAIVED with the open item named.
     if results_path.is_file():
         return StepResult(
-            "reference_tb", "PASS",
+            "reference_tb", "WAIVED",
             time.time() - t0,
             (f"AID reference TB SKIPPED ({track_reason}); iverilog "
              f"unavailable — generic full-stack TB skeleton "
-             f"({tb_path.name}) + results.json present; functional "
-             f"verification deferred to gate-level synth + Phase 3."),
+             f"({tb_path.name}) + results.json present but NO sim ran "
+             f"(#439). Install a simulator + author the per-IC oracle "
+             f"TB (testbench-author) for functional verification."),
             [str(tb_path), str(results_path)],
             extras={"verification_track": "generic_full_stack",
                     "aid_tb_skipped_reason": track_reason,
+                    "functional_verified": False,
+                    "fallback_skill": "testbench-author",
                     "iverilog_available": False})
     return StepResult(
         "reference_tb", "SKIP",

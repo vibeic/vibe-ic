@@ -47,7 +47,9 @@
       "half_duplex_bus": true,
       "owner_plugin": "vibe-ic",
       "assertion_gen": null,
-      "assertion_fallback_skill": "assertion-gen"
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": null,
+      "tb_fallback_skill": "testbench-author"
     },
     {
       "name": "digital_cmd_driven",
@@ -66,7 +68,9 @@
       "half_duplex_bus": false,
       "owner_plugin": "vibe-ic",
       "assertion_gen": null,
-      "assertion_fallback_skill": "assertion-gen"
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
     },
     {
       "name": "mixed_signal_otp",
@@ -86,7 +90,9 @@
       "half_duplex_bus": true,
       "owner_plugin": "vibe-ic",
       "assertion_gen": null,
-      "assertion_fallback_skill": "assertion-gen"
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
     },
     {
       "name": "pure_analog",
@@ -102,7 +108,9 @@
       "half_duplex_bus": false,
       "owner_plugin": "vibe-ic",
       "assertion_gen": null,
-      "assertion_fallback_skill": "assertion-gen"
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": null,
+      "tb_fallback_skill": null
     },
     {
       "name": "bare_fpga",
@@ -118,7 +126,9 @@
       "half_duplex_bus": false,
       "owner_plugin": "vibe-ic",
       "assertion_gen": null,
-      "assertion_fallback_skill": "assertion-gen"
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
     },
     {
       "name": "bus_interconnect_protocol",
@@ -136,7 +146,9 @@
       "half_duplex_bus": false,
       "owner_plugin": "vibe-ic",
       "assertion_gen": null,
-      "assertion_fallback_skill": "assertion-gen"
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
     },
     {
       "name": "serial_peripheral_protocol",
@@ -158,7 +170,9 @@
       "half_duplex_bus": false,
       "owner_plugin": "vibe-ic",
       "assertion_gen": null,
-      "assertion_fallback_skill": "assertion-gen"
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
     },
     {
       "name": "digital_arithmetic_primitive",
@@ -176,7 +190,9 @@
       "half_duplex_bus": false,
       "owner_plugin": "vibe-ic",
       "assertion_gen": null,
-      "assertion_fallback_skill": "assertion-gen"
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
     },
     {
       "name": "processor_cpu",
@@ -197,7 +213,9 @@
       "half_duplex_bus": false,
       "owner_plugin": "vibe-ic",
       "assertion_gen": null,
-      "assertion_fallback_skill": "assertion-gen"
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
     },
     {
       "name": "unknown_protocol_class",
@@ -213,7 +231,9 @@
       "half_duplex_bus": true,
       "owner_plugin": "vibe-ic",
       "assertion_gen": null,
-      "assertion_fallback_skill": "assertion-gen"
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
     }
   ]
 }
