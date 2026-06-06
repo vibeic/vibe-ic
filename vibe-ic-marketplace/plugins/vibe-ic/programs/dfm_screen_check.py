@@ -2,12 +2,20 @@
 """dfm_screen_check.py — Step 35 DFM screen (v2.3).
 
 Design-for-Manufacturability, scoped HONESTLY for an open-source
-130-180nm flow. Three designer-side measurables + one foundry-side
-disclosure block:
+130-180nm flow. v2.3.1 (external review P0-1): the THREE density
+touchpoints have DISTINCT natures and this screen no longer re-gates
+what Step 34 owns —
+  Step 31 = RULE compliance (the sign-off DRC deck's min-density
+            rules — legal/illegal),
+  Step 34 = EXECUTION verification (metal_fill_density_check gates
+            that the fill actually achieved the window),
+  Step 35 = OPTIMIZATION advisory (THIS screen: "could be filled
+            better / via redundancy could improve yield" — findings,
+            never a duplicate FAIL of Step 34).
 
-  1. CMP density window — delegates to metal_fill_density_check's
-     audit (per-layer 20-80% window + fill substance); its ERRORs are
-     this screen's ERRORs (density is the CMP-aware half of DFM).
+  1. CMP density — CROSS-REFERENCE only: reads Step 34's gate result
+     (reports/phase2/gates/metal_fill_density.json) and surfaces its
+     verdict as an INFO/REVIEW finding; the gate itself lives at 34.
   2. Redundant-via ratio — counted deterministically from the routed
      DEF's VIAS section (ROWCOL r c → multi-cut when r*c > 1) and the
      per-via usage in NETS/SPECIALNETS. A high single-cut fraction on
@@ -24,8 +32,14 @@ disclosure block:
 Always writes the canonical step artifact
 `reports/phase3/dfm_screen.json` (in addition to --json).
 
-Exit codes: 0 PASS / PASS_WITH_ADVISORIES, 1 FAIL (density ERROR),
-2 vacuous (no routed.def / no density artifacts yet).
+v2.3.1: ADVANCED-NODE trigger — process node derived from the PDK's
+own liberty filenames (the foundry_handoff_pack_gen heuristic); at
+<= 28 nm the FOUNDRY_SIDE items escalate to DESIGNER_COLLAB_REVIEW
+findings (dormant at this flow's 130-180 nm PDKs, mechanism present).
+
+Exit codes: 0 PASS / PASS_WITH_ADVISORIES (advisory screen — never a
+duplicate density FAIL; Step 34 owns that gate), 2 vacuous (no
+routed.def / no density artifacts yet).
 chip-AGNOSTIC: DEF structure + window numbers only.
 """
 from __future__ import annotations
@@ -38,7 +52,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
-import metal_fill_density_check as _mfd  # noqa: E402
 
 # advisory threshold: fraction of signal-net via USES that are
 # single-cut. Industry DFM aims for dual-via where room allows; at
@@ -101,13 +114,38 @@ def audit(project: Path) -> dict:
                 "reason": ("no routed.def and no density artifacts yet — "
                            "run routing + metal fill first")}
 
-    # 1) CMP density (delegate) --------------------------------------------
-    d_findings, d_stats = _mfd.audit(project)
-    density_errors = [f for f in d_findings if f.severity == "ERROR"]
-    for f in d_findings:
-        findings.append({"severity": f.severity,
-                         "category": f"DENSITY/{f.category}",
-                         "message": f.message})
+    # 1) CMP density — CROSS-REFERENCE Step 34's gate (v2.3.1: no
+    # duplicate gating; three-natures split 31/34/35).
+    gate_json = project / "reports" / "phase2" / "gates" / \
+        "metal_fill_density.json"
+    density_ref = None
+    if gate_json.is_file():
+        try:
+            g = json.loads(gate_json.read_text(errors="replace"))
+            density_ref = {
+                "step34_pass": bool(g.get("summary", {}).get("pass")),
+                "errors": g.get("summary", {}).get("errors_count"),
+                "source": str(gate_json.relative_to(project)),
+            }
+        except (OSError, ValueError):
+            density_ref = {"unparseable": True,
+                           "source": str(gate_json.relative_to(project))}
+    if density_ref is None:
+        findings.append({
+            "severity": "INFO", "category": "DENSITY_REF",
+            "message": ("Step-34 metal-fill density gate result not "
+                        "present yet — density is GATED at Step 34, "
+                        "referenced here (run metal_fill_density_check)")})
+    elif density_ref.get("step34_pass"):
+        findings.append({
+            "severity": "INFO", "category": "DENSITY_REF",
+            "message": "Step-34 density gate: PASS (cross-reference)"})
+    else:
+        findings.append({
+            "severity": "WARNING", "category": "DENSITY_REF",
+            "message": ("Step-34 density gate did not PASS — resolve at "
+                        "Step 34 (this screen is optimization advisory, "
+                        "not a duplicate gate)")})
 
     # 2) redundant-via ratio ------------------------------------------------
     via_summary = None
@@ -155,20 +193,46 @@ def audit(project: Path) -> dict:
                     "by the Step-31 sign-off DRC deck (KLayout) — not "
                     "re-executed here")})
 
-    errors = density_errors
+    # v2.3.1 — advanced-node trigger: derive the process node from the
+    # PDK's own liberty filenames (input/pdk/liberty/*.lib); at <=28nm
+    # the foundry-side items escalate to designer-collaboration REVIEW.
+    process_nm = _derive_process_nm(project)
+    advanced_node = process_nm is not None and process_nm <= 28
+    foundry_side = [dict(i) for i in _FOUNDRY_SIDE_ITEMS]
+    if advanced_node:
+        for item in foundry_side:
+            item["status"] = "DESIGNER_COLLAB_REVIEW"
+        findings.append({
+            "severity": "WARNING", "category": "ADVANCED_NODE_DFM",
+            "message": (f"process node {process_nm} nm <= 28 nm — "
+                        f"OPC/RET/litho-friendly items escalate to "
+                        f"designer-collaboration review (v2.3.1)")})
+
     advisories = [f for f in findings if f["severity"] == "WARNING"]
-    verdict = ("FAIL" if errors else
-               "PASS_WITH_ADVISORIES" if advisories else "PASS")
+    verdict = "PASS_WITH_ADVISORIES" if advisories else "PASS"
     return {
         "verdict": verdict,
-        "rc": 1 if errors else 0,
-        "density": {"errors": len(density_errors),
-                    "stats": d_stats},
+        "rc": 0,   # advisory screen — Step 34 owns the density gate
+        "density_ref": density_ref,
         "via_redundancy": via_summary,
-        "foundry_side": _FOUNDRY_SIDE_ITEMS,
+        "process_nm": process_nm,
+        "advanced_node": advanced_node,
+        "foundry_side": foundry_side,
         "advanced_node_note": _ADVANCED_NODE_NOTE,
         "findings": findings,
     }
+
+
+def _derive_process_nm(project: Path):
+    """Process node from the PDK's own liberty filenames — the same
+    PDK-namespaced heuristic foundry_handoff_pack_gen uses."""
+    lib_dir = project / "input" / "pdk" / "liberty"
+    if not lib_dir.is_dir():
+        return None
+    for tag in ("180", "130", "65", "45", "28", "22", "16", "12", "7", "5"):
+        if any(tag in f.name for f in lib_dir.glob("*.lib")):
+            return int(tag)
+    return None
 
 
 def main(argv=None) -> int:

@@ -68,13 +68,49 @@ def test_balanced_via_mix_passes(tmp_path):
     assert any(f["category"] == "VIA_REDUNDANCY_OK" for f in rep["findings"])
 
 
-def test_density_error_fails_the_screen(tmp_path):
-    # 0 fillers + rows not full + def not larger → metal-fill substance
-    # ERROR (v0.2.75) → DFM screen FAIL
+def test_density_is_cross_reference_not_duplicate_gate(tmp_path):
+    # v2.3.1 three-natures split: Step 34 OWNS the density gate; the
+    # DFM screen only cross-references its result (advisory).
+    import json as _json
     p = _proj(tmp_path, fillers=0, util=10.0)
+    g = p / "reports" / "phase2" / "gates"
+    g.mkdir(parents=True)
+    (g / "metal_fill_density.json").write_text(_json.dumps(
+        {"summary": {"pass": False, "errors_count": 1}}))
     rep = DFM.audit(p)
-    assert rep["rc"] == 1 and rep["verdict"] == "FAIL"
-    assert rep["density"]["errors"] >= 1
+    assert rep["rc"] == 0                      # never a duplicate FAIL
+    assert rep["density_ref"]["step34_pass"] is False
+    assert any(f["category"] == "DENSITY_REF"
+               and f["severity"] == "WARNING" for f in rep["findings"])
+
+
+def test_density_ref_absent_is_info(tmp_path):
+    p = _proj(tmp_path)
+    rep = DFM.audit(p)
+    assert any(f["category"] == "DENSITY_REF"
+               and f["severity"] == "INFO" for f in rep["findings"])
+
+
+def test_advanced_node_escalates_foundry_side(tmp_path):
+    p = _proj(tmp_path)
+    lib = p / "input" / "pdk" / "liberty"
+    lib.mkdir(parents=True)
+    (lib / "example_sc_7nm_tt.lib").write_text("library(x){}")
+    rep = DFM.audit(p)
+    assert rep["process_nm"] == 7 and rep["advanced_node"] is True
+    assert all(i["status"] == "DESIGNER_COLLAB_REVIEW"
+               for i in rep["foundry_side"])
+    assert any(f["category"] == "ADVANCED_NODE_DFM" for f in rep["findings"])
+
+
+def test_mature_node_keeps_foundry_side(tmp_path):
+    p = _proj(tmp_path)
+    lib = p / "input" / "pdk" / "liberty"
+    lib.mkdir(parents=True)
+    (lib / "example_sc_180nm_tt.lib").write_text("library(x){}")
+    rep = DFM.audit(p)
+    assert rep["process_nm"] == 180 and rep["advanced_node"] is False
+    assert all(i["status"] == "FOUNDRY_SIDE" for i in rep["foundry_side"])
 
 
 def test_foundry_side_items_disclosed_not_executed(tmp_path):
