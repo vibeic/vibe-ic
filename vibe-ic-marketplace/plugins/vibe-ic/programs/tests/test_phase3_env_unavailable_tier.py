@@ -159,8 +159,10 @@ def test_step_lvs_env_unavailable_when_calibre_lvs_no_binary(
     assert res.extras.get("missing_tool") == "calibre"
 
 
-def test_step_lvs_env_unavailable_when_no_deck_and_no_netgen(
+def test_step_lvs_env_unavailable_when_no_deck_and_no_tools(
         tmp_path: Path) -> None:
+    # #443: the open-source LVS path needs magic + netgen; both absent
+    # → ENV_UNAVAILABLE naming the gap.
     pdk = _FakePdkConfig()  # no calibre_lvs
     with patch(
         "programs.phase3_one_shot_runner._tool_in_path",
@@ -168,19 +170,25 @@ def test_step_lvs_env_unavailable_when_no_deck_and_no_netgen(
     ):
         res = step_lvs(tmp_path, "top", pdk, "test-container")
     assert res.status == "ENV_UNAVAILABLE"
-    assert res.extras.get("missing_tool") == "netgen"
+    assert res.extras.get("missing_tool") == "magic,netgen"
 
 
-def test_step_lvs_waived_when_no_deck_but_netgen_available(
+def test_step_lvs_waived_only_for_missing_inputs_not_unconditionally(
         tmp_path: Path) -> None:
+    # #443: tools + PDK tech present but NO GDS/netlist yet → WAIVED
+    # naming the missing INPUT (the old unconditional "deferred to
+    # dedicated extraction flow" auto-waive is retired).
     pdk = _FakePdkConfig()
     with patch(
         "programs.phase3_one_shot_runner._tool_in_path",
         return_value=True,
+    ), patch(
+        "programs.phase3_one_shot_runner._docker_exec",
+        return_value=(0, "", ""),
     ):
         res = step_lvs(tmp_path, "top", pdk, "test-container")
     assert res.status == "WAIVED"
-    assert "extraction" in res.detail.lower()
+    assert "LVS inputs missing" in res.detail
 
 
 # ---------------------------------------------------------------------------

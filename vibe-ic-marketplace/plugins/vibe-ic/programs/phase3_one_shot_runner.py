@@ -39,6 +39,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -3966,22 +3967,144 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
                     "calibre_lvs_device": pdk.calibre_lvs_device,
                     "macro_gds": pdk.macro_gds,
                     "macro_v":   pdk.macro_v})
-    # No Calibre deck. Open-source LVS via netgen requires extracted
-    # SPICE netlist (currently the runner does not invoke the
-    # extraction step). Distinguish env-vs-design via netgen
-    # availability check for diagnostics.
-    if _tool_in_path(container, "netgen"):
-        return StepResult("lvs", "WAIVED", time.time() - t0,
-                          "LVS requires SPICE-extracted netlist + "
-                          "reference; deferred to dedicated extraction "
-                          "flow (netgen IS available — re-run after "
-                          "extraction step lands)")
-    return StepResult("lvs", "ENV_UNAVAILABLE", time.time() - t0,
-                      "LVS requires SPICE-extracted netlist + reference, "
-                      "and `netgen` binary is not in container PATH for "
-                      "open-source fallback; install netgen + run "
-                      "extraction to enable",
-                      extras={"missing_tool": "netgen"})
+    # ORGANIC-20260606 #443 — open-source LVS is REACHABLE: Magic
+    # ext2spice extraction (hierarchy-preserved, cell-level — the
+    # canonical OpenLane recipe) + netgen compare against the gate
+    # netlist. The old shape auto-WAIVED unconditionally ("no
+    # extraction step exists") even with netgen on PATH. Now: when
+    # magic + netgen + the PDK's magicrc/netgen-setup + GDS + gate
+    # netlist are all present, LVS RUNS and the verdict comes from the
+    # real netgen compare; only a genuinely missing tool/tech/input
+    # WAIVEs (with the missing piece named).
+    missing_tools = [t for t in ("magic", "netgen")
+                     if not _tool_in_path(container, t)]
+    if missing_tools:
+        return StepResult(
+            "lvs", "ENV_UNAVAILABLE", time.time() - t0,
+            f"open-source LVS needs {'+'.join(missing_tools)} in "
+            f"container {container!r} PATH; install to enable (#443)",
+            extras={"missing_tool": ",".join(missing_tools)})
+    magicrc = f"{PDKS_IN_CONTAINER}/{pdk.name}/libs.tech/magic/{pdk.name}.magicrc"
+    netgen_setup = (f"{PDKS_IN_CONTAINER}/{pdk.name}/libs.tech/netgen/"
+                    f"{pdk.name}_setup.tcl")
+    missing_tech = [p for p in (magicrc, netgen_setup)
+                    if _docker_exec(container,
+                                    f"test -f {shlex.quote(p)}",
+                                    timeout=10)[0] != 0]
+    if missing_tech:
+        return StepResult(
+            "lvs", "ENV_UNAVAILABLE", time.time() - t0,
+            "open-source LVS needs the PDK Magic tech + netgen setup; "
+            "missing: " + ", ".join(missing_tech) + " (#443)",
+            extras={"missing_tech": missing_tech})
+    gds_file = _pl.gds_dir(project) / f"{top}.gds"
+    if not gds_file.is_file():
+        cands = sorted(_pl.gds_dir(project).glob("*.gds")) + \
+            sorted(_pl.pnr_dir(project).glob("*.gds"))
+        gds_file = cands[0] if cands else gds_file
+    netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    if not netlist.is_file():
+        nl_cands = sorted(_pl.synth_dir(project).glob("*.v"))
+        netlist = nl_cands[0] if nl_cands else netlist
+    if not gds_file.is_file() or not netlist.is_file():
+        return StepResult(
+            "lvs", "WAIVED", time.time() - t0,
+            "LVS inputs missing: "
+            + ("GDS " if not gds_file.is_file() else "")
+            + ("gate-netlist" if not netlist.is_file() else "")
+            + " — run PnR/GDS first (#443)")
+    return _run_extraction_lvs(project, top, pdk, container, gds_file,
+                               netlist, magicrc, netgen_setup, t0)
+
+
+_MAGIC_EXT2SPICE_TCL = """\
+crashbackups stop
+gds readonly true
+gds rescale false
+gds read $env(GDS)
+load $env(TOP)
+select top cell
+extract all
+ext2spice lvs
+ext2spice -o $env(SPICE_OUT)
+puts "MAGIC_EXT2SPICE_DONE $env(SPICE_OUT)"
+quit -noprompt
+"""
+
+
+def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
+                        container: str, gds_file: Path, netlist: Path,
+                        magicrc: str, netgen_setup: str,
+                        t0: float) -> StepResult:
+    """#443 — the layout-extraction step that was structurally missing:
+    Magic `extract all` + `ext2spice lvs` (hierarchy-preserved) on the
+    routed GDS, then netgen LVS vs the gate-level Verilog netlist with
+    the PDK's own netgen setup. The verdict comes from netgen's real
+    compare result; reports/phase3/lvs.rpt carries the netgen
+    transcript (tool signature included). chip-AGNOSTIC: PDK paths are
+    derived from pdk.name, nothing chip-specific."""
+    ext_dir = _pl.extracted_dir(project)
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    spice_out = ext_dir / f"{top}_extracted.sp"
+    tcl = ext_dir / f"ext2spice_{top}.tcl"
+    tcl.write_text(_MAGIC_EXT2SPICE_TCL)
+    env_prefix = (
+        f"export GDS={_to_container_path(str(gds_file), container)} "
+        f"TOP={top} "
+        f"SPICE_OUT={_to_container_path(str(spice_out), container)} && "
+        f"cd {_to_container_path(str(ext_dir), container)} && ")
+    cmd = (env_prefix +
+           f"magic -dnull -noconsole -rcfile {shlex.quote(magicrc)} "
+           f"{_to_container_path(str(tcl), container)} 2>&1 | "
+           f"tee {_to_container_path(str(ext_dir), container)}/ext2spice.log")
+    rc, out, err = _docker_exec(container, cmd, timeout=1800)
+    if not spice_out.is_file() or spice_out.stat().st_size == 0:
+        return StepResult(
+            "lvs", "FAIL", time.time() - t0,
+            f"Magic ext2spice produced no extracted netlist (rc={rc}); "
+            f"see phase3/stage3/extracted/ext2spice.log (#443)",
+            extras={"transcript_tail": (out + err)[-600:]})
+    # Magic may emit the top subckt as `<top>` or `<top>_flat` — feed
+    # netgen the name that actually exists in the extracted netlist.
+    sub_txt = spice_out.read_text(errors="replace")
+    lay_top = top
+    if re.search(rf"^\.subckt\s+{re.escape(top)}_flat\b", sub_txt,
+                 re.IGNORECASE | re.MULTILINE):
+        lay_top = f"{top}_flat"
+    lvs_rpt = project / "reports" / "phase3" / "lvs.rpt"
+    lvs_rpt.parent.mkdir(parents=True, exist_ok=True)
+    sp_c = _to_container_path(str(spice_out), container)
+    nl_c = _to_container_path(str(netlist), container)
+    rpt_c = _to_container_path(str(lvs_rpt), container)
+    cmd = (
+        f"export PATH={TOOLS_IN_CONTAINER}/netgen/bin:"
+        f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+        f"netgen -batch lvs \"{sp_c} {lay_top}\" \"{nl_c} {top}\" "
+        f"{shlex.quote(netgen_setup)} {rpt_c}")
+    rc, out, err = _docker_exec(container, cmd, timeout=1800)
+    transcript = (out or "") + "\n" + (err or "")
+    rpt_txt = lvs_rpt.read_text(errors="replace") if lvs_rpt.is_file() else ""
+    blob = transcript + "\n" + rpt_txt
+    matched = bool(re.search(
+        r"Circuits match uniquely|Netlists match uniquely", blob, re.I))
+    mismatched = bool(re.search(
+        r"do not match|NET MISMATCH|netlists do not match|失配", blob, re.I))
+    if matched and not mismatched:
+        return StepResult(
+            "lvs", "PASS", time.time() - t0,
+            f"netgen LVS: circuits match uniquely "
+            f"(layout {lay_top} extracted via Magic ext2spice vs gate "
+            f"netlist {netlist.name}); report at reports/phase3/lvs.rpt",
+            extras={"lvs_report": "reports/phase3/lvs.rpt",
+                    "extracted_netlist": str(
+                        spice_out.relative_to(project))})
+    return StepResult(
+        "lvs", "FAIL", time.time() - t0,
+        f"netgen LVS did not match (rc={rc}); see "
+        f"reports/phase3/lvs.rpt (#443 — a real compare ran; this is a "
+        f"design/extraction defect, not an env gap)",
+        extras={"lvs_report": "reports/phase3/lvs.rpt",
+                "transcript_tail": transcript[-600:]})
 
 
 # ---------------------------------------------------------------------------
