@@ -299,7 +299,11 @@ def main(argv=None):
         except OSError:
             continue
         rel = str(hf.relative_to(project))
-        n_todo = len(re.findall(r"\bTODO\b|\bTBD\b", txt))
+        # #449 field-audit hardening: `\bTODO\b` misses the `TODO_foo`
+        # key shape (underscore is a word char — no boundary), so a
+        # hand-crafted TODO_* key could bypass the scan. Match the
+        # underscore-suffixed forms too; PENDING_FOUNDRY_* stays clean.
+        n_todo = len(re.findall(r"\bTODO(?:_\w+)?\b|\bTBD(?:_\w+)?\b", txt))
         if n_todo:
             substance_findings.append({
                 "severity": "ERROR",

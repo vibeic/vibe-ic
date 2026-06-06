@@ -83,6 +83,21 @@ def test_design_derivable_todo_still_errors(tmp_path):
                for f in rep["findings"])
 
 
+def test_underscore_suffixed_todo_key_still_errors(tmp_path):
+    # v0.2.82 field-audit hardening: `TODO_foo` keys (underscore = word
+    # char, no \b boundary) must not bypass the design-derivable scan
+    p = _proj(tmp_path)
+    FH.main([str(p)])
+    ms = p / "phase3/stage4/foundry_handoff/mask_spec.json"
+    d = json.loads(ms.read_text())
+    d["TODO_sneaky_field"] = "hand-crafted bypass attempt"
+    ms.write_text(json.dumps(d))
+    rc, rep = _run_checker(p)
+    assert rc == 1
+    assert any(f["rule"] == "FOUNDRY_HANDOFF_TODO_MARKERS"
+               for f in rep["findings"])
+
+
 def test_generator_emits_no_todo_tokens(tmp_path):
     p = _proj(tmp_path)
     FH.main([str(p)])
