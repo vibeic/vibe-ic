@@ -49,6 +49,7 @@ import collections
 import datetime as _dt
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -62,6 +63,33 @@ PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 FLOW_YAML = PLUGIN_ROOT / "flow" / "phase1_phase2_phase3.yaml"
 COMPLIANCE_TOOL = PLUGIN_ROOT / "programs" / "flow_compliance_check.py"
 
+# ─── audit-timeout policy (#469, field-residual of #461) ─────────────────
+# #461 made the single-snapshot consistency logic correct, but on large
+# run dirs the snapshot itself is unobtainable: `flow_compliance_check.py`
+# spends >200 s on the O(items × text) per-item scans, so the old fixed
+# 180 s subprocess timeout fired and the verdict degraded to "UNKNOWN"
+# with counts 0/0 — indistinguishable from "never audited". The fix:
+#   (1) the timeout is configurable (env VIBE_IC_AUDIT_TIMEOUT_S and/or
+#       CLI --audit-timeout) with a raised, size-adaptive default; and
+#   (2) when the timeout DOES fire the verdict reads a NAMED
+#       'AUDIT_TIMEOUT' (never 'UNKNOWN'), preserving the previous
+#       snapshot marker so a reader can tell 審不完 (timed out) from
+#       沒審 (never audited).
+AUDIT_TIMEOUT_ENV = "VIBE_IC_AUDIT_TIMEOUT_S"
+# Raised default vs the old hard-coded 180 s (#469).
+AUDIT_TIMEOUT_DEFAULT_S = 900
+# Above this run-dir size we add headroom proportional to size, because
+# the flow_compliance hot spots scale with the number/size of artefacts
+# under the run dir (general; not chip- or path-specific).
+AUDIT_SIZE_ADAPT_THRESHOLD_BYTES = 128 * 1024 * 1024   # 128 MiB
+AUDIT_SIZE_ADAPT_S_PER_MIB = 4                          # +4 s per MiB over
+AUDIT_TIMEOUT_CAP_S = 3600                              # never exceed 1 h
+# The named verdict a reader sees when the audit could not finish in time.
+AUDIT_TIMEOUT_VERDICT = "AUDIT_TIMEOUT"
+# The verdict used only when the audit was never run at all (--no-audit
+# or the compliance tool is missing). Kept distinct from AUDIT_TIMEOUT.
+AUDIT_NOT_RUN_VERDICT = "UNKNOWN"
+
 VERDICT_SYM = {
     "PASS": "✅",
     "WAIVED-DEFERRED": "⚠️",
@@ -69,6 +97,8 @@ VERDICT_SYM = {
     "VACUOUS-PASS": "🟦",
     "FAIL": "❌",
     "MISSING": "❓",
+    "AUDIT_TIMEOUT": "⏳",
+    "UNKNOWN": "❔",
 }
 STAGE_TITLE = [
     ("stage1", "Stage 1 — RTL generation & verification"),
@@ -291,18 +321,126 @@ def _safe_yaml(p: Path) -> Optional[Any]:
 
 # ─── audit / verdicts ────────────────────────────────────────────────────
 
-def _run_audit(project: Path) -> Tuple[str, str]:
+def _dir_size_bytes(project: Path, cap: int = 1 << 40) -> int:
+    """Best-effort total size (bytes) of the run dir, used to make the
+    audit timeout size-adaptive. Walks lazily and stops once `cap` is
+    exceeded so this never becomes its own hot spot on huge trees.
+    chip-AGNOSTIC: pure filesystem arithmetic, no name inspection."""
+    total = 0
+    try:
+        for root, _dirs, files in os.walk(project):
+            for fn in files:
+                fp = Path(root) / fn
+                try:
+                    total += fp.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+                if total >= cap:
+                    return total
+    except OSError:
+        pass
+    return total
+
+
+def _resolve_audit_timeout(project: Path,
+                           explicit: Optional[int] = None) -> int:
+    """Resolve the flow_compliance subprocess timeout (seconds), #469.
+
+    Precedence:
+      1. an explicit value (CLI --audit-timeout);
+      2. the VIBE_IC_AUDIT_TIMEOUT_S env var (if a positive int);
+      3. a size-adaptive default: AUDIT_TIMEOUT_DEFAULT_S, plus
+         AUDIT_SIZE_ADAPT_S_PER_MIB for every MiB the run dir exceeds
+         AUDIT_SIZE_ADAPT_THRESHOLD_BYTES, capped at AUDIT_TIMEOUT_CAP_S.
+
+    An explicit/env value is honored verbatim (no size adaptation) so a
+    test can deliberately shrink it; only the computed default scales.
+    Values ≤ 0 are rejected and fall through to the next source."""
+    if explicit is not None and explicit > 0:
+        return min(explicit, AUDIT_TIMEOUT_CAP_S)
+    env_raw = os.environ.get(AUDIT_TIMEOUT_ENV)
+    if env_raw is not None:
+        try:
+            env_val = int(env_raw)
+        except (TypeError, ValueError):
+            env_val = 0
+        if env_val > 0:
+            return min(env_val, AUDIT_TIMEOUT_CAP_S)
+    base = AUDIT_TIMEOUT_DEFAULT_S
+    size = _dir_size_bytes(project)
+    if size > AUDIT_SIZE_ADAPT_THRESHOLD_BYTES:
+        over_mib = (size - AUDIT_SIZE_ADAPT_THRESHOLD_BYTES) // (1024 * 1024)
+        base += int(over_mib) * AUDIT_SIZE_ADAPT_S_PER_MIB
+    return min(base, AUDIT_TIMEOUT_CAP_S)
+
+
+def _previous_snapshot_marker(project: Path) -> Optional[str]:
+    """#469: when the audit times out we cannot compute a fresh snapshot,
+    so recover the marker line from the PREVIOUS final_summary.md if one
+    exists. That preserves the prior snapshot's timestamp + audit-digest
+    so a reader can see the last point at which the design DID audit (and
+    distinguish 審不完 / timed-out from 沒審 / never-audited). Returns the
+    raw marker payload (the 'snapshot <ts> · audit-digest …' string) or
+    None when no prior summary or no marker is present."""
+    prev = _pl.report_path(project, "final_summary.md")
+    if not prev.is_file():
+        return None
+    try:
+        text = prev.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    # The marker is stamped as "_Counts snapshot <ts> · audit-digest
+    # sha256:<hex> · overall <V>. …_" (see `_snapshot_marker`).
+    m = re.search(r"(snapshot \S+ · audit-digest sha256:[0-9a-f]+ · overall \S+)",
+                  text)
+    return m.group(1) if m else None
+
+
+def _run_audit(project: Path,
+               timeout_s: Optional[int] = None,
+               prior_marker: Optional[str] = None) -> Tuple[str, str]:
+    """Run flow_compliance_check.py and return (audit_text, overall).
+
+    #469: the timeout is now resolved via `_resolve_audit_timeout`
+    (CLI > env > size-adaptive default) rather than a hard-coded 180 s,
+    and a TimeoutExpired yields the NAMED verdict AUDIT_TIMEOUT_VERDICT
+    (never UNKNOWN) so a reader can distinguish 審不完 (the audit could
+    not finish on a large run dir) from 沒審 (the audit was never run).
+    Any other failure still degrades to AUDIT_NOT_RUN_VERDICT.
+
+    `prior_marker` is the previous summary's snapshot marker, captured by
+    the caller BEFORE any attestation pre-pass overwrote the file (the
+    pre-pass would otherwise erase the marker we want to preserve). When
+    None, `_run_audit` falls back to reading whatever is on disk."""
     if not COMPLIANCE_TOOL.is_file():
-        return "(flow_compliance_check.py unavailable)", "UNKNOWN"
+        return ("(flow_compliance_check.py unavailable)", AUDIT_NOT_RUN_VERDICT)
+    eff_timeout = _resolve_audit_timeout(project, timeout_s)
     try:
         cp = subprocess.run(
             [sys.executable, str(COMPLIANCE_TOOL), str(project), "--strict"],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True, text=True, timeout=eff_timeout,
         )
         text = cp.stdout
+    except subprocess.TimeoutExpired:
+        # 審不完: the snapshot is unobtainable. Surface the named verdict
+        # and the prior snapshot marker (if any) so the report can tell
+        # the reader WHEN the design last audited cleanly.
+        prev_marker = prior_marker or _previous_snapshot_marker(project)
+        prev_note = (f" Last clean snapshot: {prev_marker}."
+                     if prev_marker else
+                     " No prior clean snapshot is available.")
+        text = (
+            f"Overall: {AUDIT_TIMEOUT_VERDICT}\n"
+            f"(flow_compliance_check.py did not finish within "
+            f"{eff_timeout}s on this run dir — the per-step verdict "
+            f"snapshot is unobtainable.{prev_note}\n"
+            f" Raise the budget via --audit-timeout / "
+            f"{AUDIT_TIMEOUT_ENV} and re-run, or shrink the run dir.)"
+        )
+        return text, AUDIT_TIMEOUT_VERDICT
     except Exception as exc:
-        return f"(audit failed: {exc})", "UNKNOWN"
-    overall = "UNKNOWN"
+        return (f"(audit failed: {exc})", AUDIT_NOT_RUN_VERDICT)
+    overall = AUDIT_NOT_RUN_VERDICT
     for ln in text.splitlines():
         if ln.startswith("Overall:"):
             overall = ln.split(":", 1)[1].strip().split()[0]
@@ -838,9 +976,20 @@ def _gather_ic_name(project: Path) -> Optional[str]:
 
 # ─── rendering ───────────────────────────────────────────────────────────
 
-def _render(project: Path, run_audit: bool = True) -> str:
+def _render(project: Path, run_audit: bool = True,
+            audit_timeout_s: Optional[int] = None,
+            prior_marker: Optional[str] = None) -> str:
     flow = _safe_yaml(FLOW_YAML) or {}
-    audit_text, overall = _run_audit(project) if run_audit else ("(audit skipped)", "UNKNOWN")
+    # #469: capture the prior snapshot marker BEFORE the audit (which, on
+    # the main() path, runs after an attestation pre-pass that overwrote
+    # the file). The caller may also supply it explicitly.
+    if prior_marker is None:
+        prior_marker = _previous_snapshot_marker(project)
+    if run_audit:
+        audit_text, overall = _run_audit(project, timeout_s=audit_timeout_s,
+                                         prior_marker=prior_marker)
+    else:
+        audit_text, overall = ("(audit skipped)", AUDIT_NOT_RUN_VERDICT)
     verdicts = _parse_verdicts(audit_text)
 
     cells = _gather_cell_count(project)
@@ -885,6 +1034,28 @@ def _render(project: Path, run_audit: bool = True) -> str:
     md.append(f"")
     md.append(f"**`Overall: {overall}`**")
     md.append(f"")
+    if overall == AUDIT_TIMEOUT_VERDICT:
+        # #469: 審不完 (timed out), NOT 沒審 (never audited). The per-step
+        # snapshot is unobtainable on this run dir, so the counts below
+        # are degraded — say so explicitly and surface the prior clean
+        # snapshot marker if one was captured before the pre-pass.
+        prev_marker = prior_marker
+        md.append(f"> ⏳ **AUDIT_TIMEOUT** — `flow_compliance_check.py` did "
+                  f"not finish in the configured budget on this run dir, so "
+                  f"a fresh per-step verdict snapshot could not be computed. "
+                  f"This is *審不完 (timed out)*, distinct from *沒審 (never "
+                  f"audited)*. The counts below are degraded and must not be "
+                  f"read as PASS/FAIL.")
+        md.append(f">")
+        if prev_marker:
+            md.append(f"> Last clean snapshot: `{prev_marker}`.")
+        else:
+            md.append(f"> No prior clean snapshot is available.")
+        md.append(f">")
+        md.append(f"> Raise the budget via `--audit-timeout <seconds>` or "
+                  f"`{AUDIT_TIMEOUT_ENV}=<seconds>` and re-run, or shrink the "
+                  f"run dir, to obtain a real Overall verdict.")
+        md.append(f"")
     md.append(f"_Counts {snapshot_marker}. A fresh "
               f"`flow_compliance_check.py --strict` re-run may move these "
               f"once late artefacts land._")
@@ -1263,6 +1434,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="Output path (default: <project>/reports/final_summary.md)")
     ap.add_argument("--no-audit", action="store_true",
                     help="Skip running flow_compliance_check.py (verdicts will be UNKNOWN).")
+    ap.add_argument("--audit-timeout", type=int, default=None, metavar="SECONDS",
+                    help=(f"Timeout (s) for the internal flow_compliance_check "
+                          f"audit subprocess. Overrides ${AUDIT_TIMEOUT_ENV}. "
+                          f"Default: size-adaptive from "
+                          f"{AUDIT_TIMEOUT_DEFAULT_S}s. On timeout the verdict "
+                          f"reads {AUDIT_TIMEOUT_VERDICT}, never UNKNOWN."))
     args = ap.parse_args(argv)
 
     project = Path(args.project_dir).resolve()
@@ -1271,6 +1448,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     out_path = Path(args.out) if args.out else _pl.report_path(project, "final_summary.md")
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # #469: capture the previous summary's snapshot marker BEFORE the
+    # attestation pre-pass overwrites the canonical file, so an
+    # AUDIT_TIMEOUT can still report the last clean snapshot (審不完 vs
+    # 沒審). Captured here because the pre-pass below erases the marker.
+    prior_marker = _previous_snapshot_marker(project)
 
     # #461 symptom (1): pre-write the SHA-256 attestation table to the
     # CANONICAL report path (`reports/final_summary.md`, the file the
@@ -1282,7 +1465,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         canonical = _pl.report_path(project, "final_summary.md")
         _prewrite_attestation(project, canonical)
 
-    md = _render(project, run_audit=not args.no_audit)
+    md = _render(project, run_audit=not args.no_audit,
+                 audit_timeout_s=args.audit_timeout,
+                 prior_marker=prior_marker)
     out_path.write_text(md, encoding="utf-8")
     # NOTE: legacy plugin gate writers still write to reports/<flat>
     # paths. Auto-sweep was disabled because it conflicts with legacy
