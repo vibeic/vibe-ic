@@ -233,6 +233,57 @@ def _strip_comments(src: str) -> str:
     return src
 
 
+def _strip_param_block(src: str) -> str:
+    """Remove the optional `#( ... )` parameter port list that follows a
+    `module <name>` header, using a balanced-paren depth counter so a
+    parameter default containing a function call (e.g.
+    `parameter aw = $clog2(memsize)`) — or arbitrarily nested calls —
+    does NOT terminate the strip at an INNER `)`.
+
+    Without this, the old `#\\s*\\([^)]*\\)` regex closed the parameter
+    block at the first inner `)` of `$clog2(memsize)`, leaving the real
+    port list unmatched and parse_rtl_top_ports returning zero ports
+    (GitHub #474). The scanner walks every `module <name>` occurrence and
+    splices out only the matched `#(...)` span, preserving the rest of
+    the text (including the port-list parens) verbatim.
+    """
+    out: list[str] = []
+    pos = 0
+    # Iterate header-by-header: `module <name>` then optional whitespace.
+    for hm in re.finditer(r"\bmodule\s+\w+\s*", src):
+        # Emit everything up to and including the header we just matched.
+        out.append(src[pos:hm.end()])
+        pos = hm.end()
+        # A parameter block must begin with `#` then `(` (whitespace ok).
+        pm = re.match(r"#\s*\(", src[pos:])
+        if not pm:
+            continue
+        # Walk from the opening paren with a depth counter.
+        i = pos + pm.end() - 1   # index of the `(` itself
+        depth = 0
+        end = None
+        while i < len(src):
+            ch = src[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+            i += 1
+        if end is None:
+            # Unbalanced — bail out without stripping; leave text as-is so
+            # the downstream regex can still try (and fail loudly).
+            continue
+        # Skip the entire `#(...)` span (replace with a single space so
+        # tokens on either side don't accidentally merge).
+        out.append(" ")
+        pos = end
+    out.append(src[pos:])
+    return "".join(out)
+
+
 def parse_rtl_top_ports(rtl_path: Path) -> list[dict]:
     """Parse `module <name>(...);` and emit [{name, direction}].
 
@@ -240,9 +291,13 @@ def parse_rtl_top_ports(rtl_path: Path) -> list[dict]:
     (input wire clk, output id_tx_en, inout id_bus, ...)` shape.
     """
     text = _strip_comments(rtl_path.read_text(errors="ignore"))
+    # Strip the optional `#( ... )` parameter block with a balanced-paren
+    # scanner BEFORE the port-list regex runs, so function-call defaults
+    # like `$clog2(memsize)` (and nested calls) can't truncate the match
+    # at an inner `)` and yield zero ports (#474).
+    text = _strip_param_block(text)
     m = re.search(
         r"module\s+\w+\s*"
-        r"(?:#\s*\([^)]*\)\s*)?"          # optional parameter port list
         r"(?:import\s+[\w:\*\s,]+;\s*)*"  # SV imports
         r"\(([^;]+?)\)\s*;",
         text,
