@@ -61,13 +61,110 @@ def _spare_names_and_types(plan: dict) -> List[Tuple[str, str]]:
     return out
 
 
+# ──────────────────────────────────────────────────────────────────
+# Token classes shared by the linear (single-pass) collectors below.
+# A name "is present" iff it appears as a maximal [A-Za-z0-9_]+ run,
+# which is EXACTLY the word-boundary-anchored test the old per-name
+# regex did — so set membership over the token set is verdict-identical.
+# ──────────────────────────────────────────────────────────────────
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+_DONT_TOUCH_RE = re.compile(r"\bdont_touch\b")
+_SET_DONT_TOUCH_RE = re.compile(r"set_dont_touch\b")
+_KEEP_RE = re.compile(r"\bkeep\b")
+_KEEP_ATTR_RE = re.compile(r"\(\*[^\n]*\bkeep\b[^\n]*\*\)")
+_FIXED_RE = re.compile(r"\+\s*FIXED\b")
+_COVER_RE = re.compile(r"\+\s*COVER\b")
+
+
 def name_present_in_text(name: str, text: str) -> bool:
     """Word-boundary-anchored presence test for an instance name in a
-    netlist / DEF / GDS-ascii blob. Pure, chip-AGNOSTIC."""
+    netlist / DEF / GDS-ascii blob. Pure, chip-AGNOSTIC.
+
+    Retained for backward compatibility / standalone callers. NOTE: the
+    hot path (evaluate_preservation) NO LONGER calls this per-spare —
+    it builds ONE token set per artefact and tests membership, which is
+    O(text + N_spares) instead of O(N_spares * text). Set membership is
+    verdict-identical to this regex (a name matches the word-boundary
+    pattern iff it is a maximal [A-Za-z0-9_]+ token)."""
     if not name or not text:
         return False
     return re.search(r"(?<![A-Za-z0-9_])" + re.escape(name)
                      + r"(?![A-Za-z0-9_])", text) is not None
+
+
+def _keep_tagged_tokens_in_line(line: str) -> Set[str]:
+    """Single-pass classifier: return the set of [A-Za-z0-9_]+ tokens on
+    `line` that the original 7 keep/dont_touch patterns would associate
+    with a keep marker. Direction-aware, equivalent to the per-name
+    regexes (all of which were line-scoped via `[^\n]*`). Pure."""
+    if ("dont_touch" not in line and "keep" not in line
+            and "FIXED" not in line and "COVER" not in line):
+        return set()
+    toks = [(m.group(0), m.start(), m.end())
+            for m in _TOKEN_RE.finditer(line)]
+    if not toks:
+        return set()
+    tagged: Set[str] = set()
+
+    def add_after(pos: int) -> None:
+        for tk, ts, _te in toks:
+            if ts >= pos:
+                tagged.add(tk)
+
+    def add_before(pos: int) -> None:
+        for tk, _ts, te in toks:
+            if te <= pos:
+                tagged.add(tk)
+
+    # pat 1: set_dont_touch ... NAME  (tokens after the directive)
+    for m in _SET_DONT_TOUCH_RE.finditer(line):
+        add_after(m.end())
+    # pat 2: dont_touch ... NAME  (tokens after the word-bounded marker)
+    # pat 3: NAME ... dont_touch  (tokens before it)
+    for m in _DONT_TOUCH_RE.finditer(line):
+        add_after(m.end())
+        add_before(m.start())
+    # pat 4: (* ... keep ... *) ... NAME  (tokens after the closing *) )
+    for m in _KEEP_ATTR_RE.finditer(line):
+        add_after(m.end())
+    # pat 5: NAME ... keep  (tokens before the word-bounded keep)
+    for m in _KEEP_RE.finditer(line):
+        add_before(m.start())
+    # pat 6: NAME ... + FIXED  (tokens before the placement status)
+    for m in _FIXED_RE.finditer(line):
+        add_before(m.start())
+    # pat 7: NAME ... + COVER
+    for m in _COVER_RE.finditer(line):
+        add_before(m.start())
+    return tagged
+
+
+def _collect_present_and_tagged(
+        final_texts: Dict[str, str]) -> Tuple[Set[str], Set[str], bool]:
+    """ONE linear pass over each artefact. Returns
+    (present_tokens, keep_tagged_tokens, any_keep_capable):
+      * present_tokens  — every [A-Za-z0-9_]+ run seen anywhere (survival)
+      * keep_tagged_tokens — tokens the 7 keep/dont_touch forms protect
+      * any_keep_capable — does ANY artefact carry a keep marker at all
+    Cost is O(total_text), NOT O(N_spares * total_text). Pure,
+    chip-AGNOSTIC."""
+    present: Set[str] = set()
+    tagged: Set[str] = set()
+    any_keep_capable = False
+    for text in final_texts.values():
+        if not text:
+            continue
+        # whole-artefact "keep-capable" probe (substring, matches old
+        # any() that used plain `in`).
+        if (not any_keep_capable
+                and ("dont_touch" in text or "keep" in text
+                     or "FIXED" in text or "COVER" in text)):
+            any_keep_capable = True
+        for line in text.splitlines():
+            for m in _TOKEN_RE.finditer(line):
+                present.add(m.group(0))
+            tagged |= _keep_tagged_tokens_in_line(line)
+    return present, tagged, any_keep_capable
 
 
 def keep_attr_present_for(name: str, texts: Dict[str, str]) -> bool:
@@ -78,24 +175,13 @@ def keep_attr_present_for(name: str, texts: Dict[str, str]) -> bool:
       * a DEF `+ FIXED` placement status on the instance (a fixed spare
         is functionally protected from legalization), or
       * a `keep` / `dont_touch` token on the same line as the name.
-    Pure, chip-AGNOSTIC."""
-    nre = re.escape(name)
-    patterns = [
-        re.compile(r"set_dont_touch\b[^\n]*\b" + nre + r"\b"),
-        re.compile(r"\bdont_touch\b[^\n]*\b" + nre + r"\b"),
-        re.compile(nre + r"\b[^\n]*\bdont_touch\b"),
-        re.compile(r"\(\*[^\n]*\bkeep\b[^\n]*\*\)[^\n]*\b" + nre + r"\b"),
-        re.compile(nre + r"\b[^\n]*\bkeep\b"),
-        re.compile(r"\b" + nre + r"\b[^\n]*\+\s*FIXED\b"),
-        re.compile(r"\b" + nre + r"\b[^\n]*\+\s*COVER\b"),
-    ]
-    for text in texts.values():
-        if not text:
-            continue
-        for pat in patterns:
-            if pat.search(text):
-                return True
-    return False
+    Pure, chip-AGNOSTIC.
+
+    Retained for backward compatibility. The hot path uses the
+    single-pass `_collect_present_and_tagged` collector instead (this
+    function is verdict-identical but per-name)."""
+    _present, tagged, _cap = _collect_present_and_tagged(texts)
+    return name in tagged
 
 
 def evaluate_preservation(plan: dict,
@@ -117,22 +203,22 @@ def evaluate_preservation(plan: dict,
     untagged: List[Dict[str, str]] = []
     survived_names: Set[str] = set()
 
-    # Does ANY artefact carry keep/dont_touch markers? If none do (e.g.
-    # only a GDS was provided), we cannot assert on tags — so the tag
-    # check is skipped and only survival is required.
-    any_keep_capable = any(
-        ("dont_touch" in t or "keep" in t or "FIXED" in t or "COVER" in t)
-        for t in final_texts.values() if t
-    )
+    # ── LINEAR PASS ────────────────────────────────────────────────
+    # ONE scan per artefact builds (a) the set of every instance-name
+    # token present and (b) the set of keep/dont_touch-protected tokens.
+    # Per-spare verdicts then become O(1) set membership. This replaces
+    # the old O(N_spares * artefact_size) regex-per-spare loops that blew
+    # the program-budget on CPU/SoC-class designs (#471). Set membership
+    # is verdict-identical to the previous word-boundary regex.
+    present_tokens, tagged_tokens, any_keep_capable = \
+        _collect_present_and_tagged(final_texts)
 
     for name, typ in spares:
-        present = any(name_present_in_text(name, t)
-                      for t in final_texts.values())
-        if not present:
+        if name not in present_tokens:
             removed.append({"name": name, "type": typ})
             continue
         survived_names.add(name)
-        if any_keep_capable and not keep_attr_present_for(name, final_texts):
+        if any_keep_capable and name not in tagged_tokens:
             untagged.append({"name": name, "type": typ})
 
     survived = len(survived_names)
@@ -214,7 +300,7 @@ def audit(project: Path) -> dict:
         spare_json = project / "phase3/stage3/pnr/spare_cells.json"
     base = {
         "program": "spare_cell_preservation_check",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "project_dir": str(project),
     }
     if not spare_json.is_file():
