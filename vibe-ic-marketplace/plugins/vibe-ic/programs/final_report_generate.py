@@ -147,6 +147,72 @@ def _gather_attestation_rows(project: Path
     return rows
 
 
+def _render_attestation_section(project: Path) -> List[str]:
+    """Render the `## SHA-256 Attestation` section as markdown lines from
+    the CURRENT on-disk artefacts. Extracted so the same table can be
+    pre-written to disk BEFORE the internal audit runs (see
+    `_prewrite_attestation` / #461 symptom (1)) and re-used verbatim in
+    the full report."""
+    md: List[str] = []
+    md.append("## SHA-256 Attestation")
+    md.append("")
+    md.append("Independent reviewers can verify any artefact by re-")
+    md.append("computing `sha256sum <path>` and comparing against the")
+    md.append("table below. Every canonical artefact present on disk")
+    md.append("is listed; mismatches or omissions are caught by")
+    md.append("`agent_report_sha256_attestation_check.py`.")
+    md.append("")
+    rows = _gather_attestation_rows(project)
+    if rows:
+        md.append("| Artefact | Path | Size (B) | SHA-256 |")
+        md.append("|---|---|---:|---|")
+        for kind, rel, size, digest in rows:
+            md.append(f"| {kind} | `{rel}` | {size:,} | `sha256:{digest}` |")
+    else:
+        md.append("_No canonical artefacts present on disk yet._")
+    md.append("")
+    return md
+
+
+def _prewrite_attestation(project: Path, out_path: Path) -> None:
+    """#461 symptom (1): regenerate-at-audit-time semantics.
+
+    The SHA-256 attestation gate (`agent_report_sha256_attestation_check`)
+    runs INSIDE `flow_compliance_check`, which `_render` invokes via
+    `_run_audit`. That gate reads the on-disk `reports/final_summary.md`.
+    If the previous summary was generated mid-flow — before late
+    runner-emitted netlists (synth/PnR netlists, the $_DLATCH techmap
+    netlist) appeared on disk — the gate compares the fresh on-disk
+    artefact hashes against a stale table and FAILs with
+    MISSING_ATTESTATION, even though THIS run is about to write the
+    correct table.
+
+    The fix is to make the generator safely re-runnable: write the
+    freshly-computed attestation table to the output path BEFORE the
+    internal audit runs, so the gate sees up-to-date hashes for every
+    artefact currently on disk. `_render` then overwrites the file with
+    the complete report (whose attestation section is recomputed
+    identically). Best-effort: a write failure is swallowed so the
+    report still generates."""
+    try:
+        section = _render_attestation_section(project)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        # A minimal but gate-satisfying document: the attestation table
+        # alone carries every `sha256:<64hex>` token the gate scans for.
+        prelude = [
+            f"# Phase 2+3 Final Summary — {project.name} (attestation pre-pass)",
+            "",
+            "_Attestation table pre-written before the compliance audit so "
+            "the SHA-256 attestation gate reads current artefact hashes "
+            "(#461). This file is overwritten with the full report below._",
+            "",
+        ]
+        out_path.write_text("\n".join(prelude + section) + "\n",
+                            encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _safe_json(p: Path) -> Optional[Any]:
     if not p.is_file():
         return None
@@ -374,6 +440,47 @@ def _verdict_rollup(flow: Dict[str, Any], verdicts: Dict[str, str]) -> Tuple[Dic
     return dict(counts), total
 
 
+def _counts_snapshot(rollup: Dict[str, int], total_steps: int) -> Dict[str, int]:
+    """#461 symptom (2): derive ALL displayed counts from ONE rollup.
+
+    `executed_pass` / `executed_total` match the audit summary line's
+    "X/Y executed PASS" definition (PASS + VACUOUS-PASS over
+    total − waived − skipped, per flow_compliance_check Wave 93), so
+    the headline audit block, the prose bullets, and the resource log
+    never disagree. `pass_only` is the strict PASS bucket retained for
+    the per-verdict roll-up table. chip-AGNOSTIC: pure arithmetic on
+    verdict buckets."""
+    pass_only = rollup.get("PASS", 0)
+    vacuous = rollup.get("VACUOUS-PASS", 0)
+    waived = rollup.get("WAIVED-DEFERRED", 0)
+    skipped = rollup.get("SKIPPED-CONDITION", 0)
+    fail = rollup.get("FAIL", 0)
+    missing = rollup.get("MISSING", 0)
+    executed_pass = pass_only + vacuous
+    executed_total = total_steps - waived - skipped
+    return {
+        "pass_only": pass_only,
+        "vacuous": vacuous,
+        "waived": waived,
+        "skipped": skipped,
+        "fail": fail,
+        "missing": missing,
+        "executed_pass": executed_pass,
+        "executed_total": executed_total,
+        "total_steps": total_steps,
+    }
+
+
+def _snapshot_marker(audit_text: str, overall: str) -> str:
+    """A short, stable digest of the audit text + verdict, plus a UTC
+    timestamp, stamped beside the verdict so a reader knows the counts
+    are a point-in-time snapshot and a fresh `--strict` re-run may move
+    them once late artefacts land (#461 symptom (2))."""
+    h = hashlib.sha256(audit_text.encode("utf-8", errors="replace")).hexdigest()[:12]
+    ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return f"snapshot {ts} · audit-digest sha256:{h} · overall {overall}"
+
+
 # ─── artefact gathering ──────────────────────────────────────────────────
 
 def _gather_cell_count(project: Path) -> Dict[str, Any]:
@@ -546,60 +653,23 @@ def _gather_analog_evidence(project: Path) -> Dict[str, Any]:
                 block_names.append(n)
         elif isinstance(b, str):
             block_names.append(b)
-    # Per-A-step artefact presence is checked against the canonical
-    # v2 layout (A1 lives under phase1/analog/<b>/, A2-A4 under
-    # phase2/analog/<b>/, A5-A9 under phase3/analog/<b>/) PLUS legacy
-    # v1 root-level fallbacks (`analog/<b>/`) so older project trees
-    # are still recognised. v1.6.607 — the prior version only listed
-    # the v1 fallbacks, which produced an all-MISSING block grid on
-    # every v2-canonical project.
+    # #461 symptom (4): SINGLE SOURCE — the per-A-step presence grid
+    # MUST probe the SAME paths the per-block compliance checkers
+    # (analog_a{1..9}_*_check.py) inspect, or the report's grid shows
+    # all "—" while the compliance gate judges PASS. Those checkers
+    # ALL root at `phase3/analog/<block>/` (and
+    # `phase3/analog/hardmacro/<block>/` for A8) with a legacy
+    # `analog/<block>/` fallback. The prior version diverged: it
+    # looked up A1 under phase1/analog/, A2-A4 under phase2/analog/
+    # (per the `_pl.phaseN_analog_block_dir` helpers, which describe a
+    # layout the analog runner does NOT actually emit to), so on every
+    # real project the corner/topology/spec cells read "—" even
+    # though A4 corner_results.json existed and the A4 gate PASSed.
     #
-    # The locator strategy is: ask the canonical resolver first, then
-    # fall back to legacy v1 globs. Resolved paths can be either
-    # concrete or contain a `*` (in which case we glob).
-    def _safe_glob(d: Path, pattern: str) -> List[Path]:
-        """Return d.glob(pattern) as list when d is a dir, else []."""
-        return list(d.glob(pattern)) if d.is_dir() else []
-
-    def _a_step_candidates(b: str) -> Dict[str, List[Path]]:
-        p1 = _pl.phase1_analog_block_dir(project, b)
-        p2 = _pl.phase2_analog_block_dir(project, b)
-        p3 = _pl.phase3_analog_block_dir(project, b)
-        p3_hm = _pl.phase3_hardmacro_dir(project) / b
-        legacy = project / "analog" / b
-        legacy_hm = project / "hardmacro" / b
-        return {
-            "A1": [p1 / "spec.json",
-                   legacy / "spec.json"],
-            "A2": [p2 / "topology.md",
-                   legacy / "topology.md"],
-            "A3": ([p2 / f"{b}.sp"]
-                   + _safe_glob(p2, "*.sp")
-                   + [legacy / f"{b}.sp"]
-                   + _safe_glob(legacy, "*.sp")),
-            "A4": [p2 / "corner_results.json",
-                   legacy / "corner_results.json"],
-            "A5": [p3 / "layout.mag",
-                   p3 / f"{b}.gds",
-                   legacy / "layout.mag",
-                   legacy / f"{b}.gds"],
-            "A6": [p3 / "drc_clean.flag",
-                   legacy / "drc_clean.flag"],
-            "A7": [p3 / "pre_vs_post.json",
-                   legacy / "pre_vs_post.json"],
-            "A8": (_safe_glob(p3_hm, "*.lef")
-                   + _safe_glob(legacy_hm, "*.lef")
-                   + _safe_glob(legacy / "hardmacro", "*.lef")),
-            "A9": ([project / "cosim" / f"{b}_cosim_results.json"]
-                   + _safe_glob(legacy, "*cosim*.json")),
-        }
-    block_grid: Dict[str, Dict[str, bool]] = {}
-    for name in block_names:
-        candidates = _a_step_candidates(name)
-        block_grid[name] = {
-            step: any(p.exists() for p in paths if p is not None)
-            for step, paths in candidates.items()
-        }
+    # The canonical-vs-checker truth is: the checkers win (they are the
+    # gate of record). `_analog_a_step_paths` mirrors their globs
+    # exactly; see programs/analog_a{1..9}_*_check.py.
+    block_grid = _gather_analog_block_grid(project, block_names)
     # HW measurements present?
     hw_present = any((_pl.analog_dir(project) / n / "hw_measurements.json").is_file()
                      for n in block_names)
@@ -619,6 +689,65 @@ def _gather_analog_evidence(project: Path) -> Dict[str, Any]:
             "block_grid": block_grid,
             "hw_tuning_invoked": hw_present,
             "mixed_paths": mixed_paths}
+
+
+def _analog_a_step_paths(project: Path, block: str) -> Dict[str, List[Path]]:
+    """Return the candidate paths for each A1-A9 artefact, MIRRORING the
+    per-block compliance checkers (single source of truth). Each
+    checker's canonical path is documented inline; the legacy
+    `analog/<block>/` fallback matches the A6 checker's `_block_dir`
+    helper which accepts either `phase3/analog/<block>/` or the v1
+    root-level `analog/<block>/`. Keeping this in lockstep with the
+    checkers is what closes #461 symptom (4)."""
+    def _safe_glob(d: Path, pattern: str) -> List[Path]:
+        return list(d.glob(pattern)) if d.is_dir() else []
+
+    p3 = project / "phase3" / "analog" / block       # analog_a{1-7,9}_*_check
+    p3_hm = project / "phase3" / "analog" / "hardmacro" / block  # analog_a8_*
+    legacy = project / "analog" / block              # A6 _block_dir fallback
+    legacy_hm = project / "analog" / "hardmacro" / block
+    return {
+        # analog_a1_spec_extract_check: phase3/analog/<b>/spec.json
+        "A1": [p3 / "spec.json", legacy / "spec.json"],
+        # analog_a2_topology_select_check: phase3/analog/<b>/topology.md
+        "A2": [p3 / "topology.md", legacy / "topology.md"],
+        # analog_a3_netlist_gen_check: phase3/analog/<b>/<b>.sp
+        "A3": ([p3 / f"{block}.sp"] + _safe_glob(p3, "*.sp")
+               + [legacy / f"{block}.sp"] + _safe_glob(legacy, "*.sp")),
+        # analog_a4_corner_sweep_check: phase3/analog/<b>/corner_results.json
+        "A4": [p3 / "corner_results.json",
+               legacy / "corner_results.json"],
+        # analog_a5_layout_check: phase3/analog/<b>/{layout.mag,<b>.gds}
+        "A5": [p3 / "layout.mag", p3 / f"{block}.gds",
+               legacy / "layout.mag", legacy / f"{block}.gds"],
+        # analog_a6_block_pv_check: drc_clean.flag / drc.report / lvs_match.flag
+        "A6": [p3 / "drc_clean.flag", p3 / "drc.report",
+               p3 / "lvs_match.flag",
+               legacy / "drc_clean.flag", legacy / "drc.report",
+               legacy / "lvs_match.flag"],
+        # analog_a7_post_layout_resim_check: phase3/analog/<b>/pre_vs_post.json
+        "A7": [p3 / "pre_vs_post.json", legacy / "pre_vs_post.json"],
+        # analog_a8_hardmacro_gen_check: phase3/analog/hardmacro/<b>/*.lef
+        "A8": (_safe_glob(p3_hm, "*.lef") + _safe_glob(legacy_hm, "*.lef")),
+        # analog_a9_hw_verify_check: phase3/analog/<b>/hw_measurements.json
+        "A9": [p3 / "hw_measurements.json",
+               legacy / "hw_measurements.json"],
+    }
+
+
+def _gather_analog_block_grid(project: Path, block_names: List[str]
+                              ) -> Dict[str, Dict[str, bool]]:
+    """A1-A9 presence grid per block, using `_analog_a_step_paths`
+    (the compliance-checker mirror). Factored out so the test can pin
+    that the grid sees an artefact at the SAME path the gate accepts."""
+    block_grid: Dict[str, Dict[str, bool]] = {}
+    for name in block_names:
+        candidates = _analog_a_step_paths(project, name)
+        block_grid[name] = {
+            step: any(p.exists() for p in paths if p is not None)
+            for step, paths in candidates.items()
+        }
+    return block_grid
 
 
 def _gather_test_patterns(project: Path) -> Dict[str, Any]:
@@ -687,9 +816,19 @@ def _gather_waivers(project: Path) -> Dict[str, Any]:
 
 
 def _gather_ic_name(project: Path) -> Optional[str]:
-    for cand in ("generated_docs/L1_DATASHEET.json",
-                 "generated_docs/L2_FRS.json"):
-        d = _safe_json(project / cand)
+    # #461 symptom (3): the canonical L-doc location is
+    # `phase1/generated_docs/` (per `_pl.generated_docs_dir`), NOT a
+    # flat `generated_docs/` at the project root. The prior version
+    # probed only the flat path, so on every real project tree it fell
+    # through to the "(unknown — fill in via L1_DATASHEET.json[ic_name])"
+    # placeholder even though `ic_name` was populated. Probe the
+    # canonical phase1 dir first, then the flat legacy path.
+    gd = _pl.generated_docs_dir(project)
+    for cand in (gd / "L1_DATASHEET.json",
+                 gd / "L2_FRS.json",
+                 project / "generated_docs" / "L1_DATASHEET.json",
+                 project / "generated_docs" / "L2_FRS.json"):
+        d = _safe_json(cand)
         if isinstance(d, dict):
             n = d.get("ic_name") or d.get("part_number")
             if n:
@@ -719,6 +858,19 @@ def _render(project: Path, run_audit: bool = True) -> str:
     rollup, total_steps = _verdict_rollup(flow, verdicts)
     chip_addendum = (_pl.report_path(project, "chip_specific_summary.md")).is_file()
 
+    # #461 symptom (2): SINGLE COUNTS SNAPSHOT. Every PASS / executed
+    # count displayed anywhere in the report derives from THIS one
+    # `_verdict_rollup` parse of THIS one audit run — never from a
+    # second flow_compliance parse and never from a different PASS
+    # definition. `executed_pass` matches the audit summary line's
+    # "X/Y executed PASS" semantics (PASS + VACUOUS-PASS rolled in,
+    # per flow_compliance_check Wave 93) so the headline audit block,
+    # the prose, and the resource log all agree. A snapshot marker is
+    # stamped so a reader knows a fresh `--strict` re-run can move the
+    # numbers (e.g. once late artefacts land).
+    snap = _counts_snapshot(rollup, total_steps)
+    snapshot_marker = _snapshot_marker(audit_text, overall)
+
     now = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     md: List[str] = []
     md.append(f"# Phase 2+3 Final Summary — {project.name}")
@@ -733,6 +885,10 @@ def _render(project: Path, run_audit: bool = True) -> str:
     md.append(f"")
     md.append(f"**`Overall: {overall}`**")
     md.append(f"")
+    md.append(f"_Counts {snapshot_marker}. A fresh "
+              f"`flow_compliance_check.py --strict` re-run may move these "
+              f"once late artefacts land._")
+    md.append(f"")
     md.append("```")
     audit_lines = audit_text.strip().splitlines()
     # First 5 lines of the audit are the header + Steps + tally
@@ -740,12 +896,18 @@ def _render(project: Path, run_audit: bool = True) -> str:
         md.append(ln)
     md.append("```")
     md.append("")
-    pass_n = rollup.get("PASS", 0)
-    waived_n = rollup.get("WAIVED-DEFERRED", 0)
-    skipped_n = rollup.get("SKIPPED-CONDITION", 0)
-    vacuous_n = rollup.get("VACUOUS-PASS", 0)
-    fail_n = rollup.get("FAIL", 0)
-    md.append(f"- PASS={pass_n} — every executed canonical step passed deterministically.")
+    # #461 symptom (2): every count below comes from the SINGLE `snap`
+    # snapshot — never a second parse, never a divergent PASS definition.
+    pass_n = snap["pass_only"]
+    waived_n = snap["waived"]
+    skipped_n = snap["skipped"]
+    vacuous_n = snap["vacuous"]
+    fail_n = snap["fail"]
+    executed_pass = snap["executed_pass"]
+    executed_total = snap["executed_total"]
+    md.append(f"- PASS={pass_n} (+VACUOUS-PASS={vacuous_n} → executed PASS="
+              f"{executed_pass}) — every executed canonical step passed "
+              f"deterministically.")
     if waived_n:
         md.append(f"- WAIVED-DEFERRED={waived_n} — deferred via documented waiver "
                   "(human review required before tapeout).")
@@ -759,8 +921,8 @@ def _render(project: Path, run_audit: bool = True) -> str:
         md.append(f"- **FAIL={fail_n}** — blocking; do not claim PASS.")
     md.append("")
     md.append(f"Per the SOLE ACCEPTANCE CRITERION: `executed PASS = "
-              f"{pass_n}/{pass_n+waived_n}, deferred = {waived_n} pending foundry sign-off`. "
-              f"Engineering Phase 2+3 "
+              f"{executed_pass}/{executed_total}, deferred = {waived_n} pending "
+              f"foundry sign-off`. Engineering Phase 2+3 "
               + ("complete." if overall in ("PASS", "PASS_WITH_WAIVERS") else "INCOMPLETE — fix FAILs before claiming."))
     md.append("")
 
@@ -1046,35 +1208,24 @@ def _render(project: Path, run_audit: bool = True) -> str:
                 md.append(f"- Closed-loop tuning ({t['block']}): "
                           f"{t.get('iterations','?')} iterations, "
                           f"converged={'yes' if t.get('converged') else 'no'}")
-    md.append(f"- Canonical step PASS: "
-              f"**{rollup.get('PASS', 0)}/{total_steps - rollup.get('SKIPPED-CONDITION', 0)}** "
-              f"(deferred via waiver: {rollup.get('WAIVED-DEFERRED', 0)}, "
-              f"vacuous-pass: {rollup.get('VACUOUS-PASS', 0)}, "
-              f"manufacturing-skipped: {rollup.get('SKIPPED-CONDITION', 0)})")
+    # #461 symptom (2): same snapshot as the headline — executed PASS
+    # (PASS + VACUOUS-PASS) over executed total (steps − waived −
+    # skipped). Identical denominator/numerator to the Verdict block.
+    md.append(f"- Canonical step executed PASS: "
+              f"**{snap['executed_pass']}/{snap['executed_total']}** "
+              f"(strict PASS: {snap['pass_only']}, "
+              f"deferred via waiver: {snap['waived']}, "
+              f"vacuous-pass: {snap['vacuous']}, "
+              f"manufacturing-skipped: {snap['skipped']})")
     md.append("")
 
     # SHA-256 Attestation table — v1.6.34 closes doctrine rule #5
     # producer-consumer mismatch (gate ships in v1.6.33 but producer
     # only emitted SOF + GDS hashes inline; gate expects the full
     # 9-class set and looks for them in either AGENT_REPORT.md or
-    # reports/final_summary.md).
-    md.append("## SHA-256 Attestation")
-    md.append("")
-    md.append("Independent reviewers can verify any artefact by re-")
-    md.append("computing `sha256sum <path>` and comparing against the")
-    md.append("table below. Every canonical artefact present on disk")
-    md.append("is listed; mismatches or omissions are caught by")
-    md.append("`agent_report_sha256_attestation_check.py`.")
-    md.append("")
-    rows = _gather_attestation_rows(project)
-    if rows:
-        md.append("| Artefact | Path | Size (B) | SHA-256 |")
-        md.append("|---|---|---:|---|")
-        for kind, rel, size, digest in rows:
-            md.append(f"| {kind} | `{rel}` | {size:,} | `sha256:{digest}` |")
-    else:
-        md.append("_No canonical artefacts present on disk yet._")
-    md.append("")
+    # reports/final_summary.md). #461: the same table is pre-written to
+    # disk before the internal audit so the gate sees current hashes.
+    md.extend(_render_attestation_section(project))
 
     # Self-attestation
     md.append("## Self-attestation")
@@ -1120,6 +1271,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     out_path = Path(args.out) if args.out else _pl.report_path(project, "final_summary.md")
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # #461 symptom (1): pre-write the SHA-256 attestation table to the
+    # CANONICAL report path (`reports/final_summary.md`, the file the
+    # attestation gate reads) BEFORE the internal audit runs. Without
+    # this, the gate inside `_run_audit` reads the stale table from a
+    # mid-flow run and FAILs MISSING_ATTESTATION on late-emitted
+    # netlists. Only meaningful when the audit will actually run.
+    if not args.no_audit:
+        canonical = _pl.report_path(project, "final_summary.md")
+        _prewrite_attestation(project, canonical)
 
     md = _render(project, run_audit=not args.no_audit)
     out_path.write_text(md, encoding="utf-8")
