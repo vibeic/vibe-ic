@@ -54,6 +54,43 @@ TOOLS_IN_CONTAINER = "/foss/tools"
 PDKS_IN_CONTAINER = "/foss/pdks"
 
 
+def _design_identity_fields(project: Path, top_name: str = "") -> dict:
+    """ORGANIC-20260606 #484 (MEDIUM) — per-design identity stamp for every
+    per-design report JSON so honest N/A-verdict manifests
+    (SKIPPED-CONDITION sign-off self-reports, …) DIFFER per design naturally
+    and cross_design_identity_check (#454) no longer flags byte-identical-but-
+    honest artifacts as canned cross-design reports.
+
+    ``ic_name`` from ``L1_DATASHEET.json`` (fallback ``part_number``), the
+    design ``top`` from ``L9_INTEGRATION_SPEC.json`` (or the caller's
+    ``--top``), and the project directory name. The project name is always
+    present. chip-AGNOSTIC."""
+    gd = _pl.generated_docs_dir(project)
+    ic_name = None
+    for cand in ("L1_DATASHEET.json", "L2_FRS.json"):
+        try:
+            d = json.loads((gd / cand).read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(d, dict):
+            ic_name = d.get("ic_name") or d.get("part_number")
+            if ic_name:
+                break
+    top = top_name or None
+    try:
+        l9 = json.loads((gd / "L9_INTEGRATION_SPEC.json").read_text(errors="replace"))
+        if isinstance(l9, dict):
+            top = l9.get("top_module") or top
+    except (OSError, ValueError):
+        pass
+    ident: dict = {"design": project.name}
+    if ic_name:
+        ident["ic_name"] = str(ic_name)
+    if top:
+        ident["top"] = str(top)
+    return ident
+
+
 def _is_pure_analog_no_rtl_track(project: Path) -> Tuple[bool, str]:
     """True when the project is a *pure-analog* IC that has NO digital RTL
     track — so the digital backend steps (synth → PnR → GDS → DRC → LVS)
@@ -4887,6 +4924,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                        "drive a back-annotated sim (#437d). RTL-TB+STA is "
                        "an approximation, not gate-level timing sim."),
             "capability_flag": "cap:sdf_annotated_gatelevel_sim",
+            # #484: per-design identity so this honest SKIP shape differs
+            # per design (not flagged as a canned cross-design report).
+            "design_identity": _design_identity_fields(project),
             "advisory_approximation": {
                 "rtl_reference_tb_pass": bool(refsim_pass),
                 "post_route_tns_zero": bool(tns_zero),

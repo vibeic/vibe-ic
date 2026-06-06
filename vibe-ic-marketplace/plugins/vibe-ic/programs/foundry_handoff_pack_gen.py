@@ -315,12 +315,22 @@ def main(argv=None) -> int:
     design_top = _resolve_design_top(project, args.top)
     pdk_name, process_nm = _resolve_pdk_and_node(
         project, pdk_from_files, node_from_files)
+    # #484: per-design identity stamp — the project NAME is always present
+    # (design_top / pdk can both resolve null), so two designs never emit a
+    # byte-identical handoff member that cross_design_identity_check (#454)
+    # would flag as a canned cross-design report.
+    _ident: dict = {"design": project.name}
+    if design_top:
+        _ident["top"] = str(design_top)
+    if pdk_name:
+        _ident["pdk"] = str(pdk_name)
 
     # Step 1: mask_spec.json — deterministic starting point. The mask
     # layer table is foundry-specific so we mark it TODO.
     mask_spec = {
         "schema_version": "1.0",
         "generated_by": "foundry_handoff_pack_gen v1.1",
+        "design_identity": _ident,
         "design_top": design_top,
         "process_node_nm": process_nm,
         "pdk": pdk_name,
@@ -352,6 +362,7 @@ def main(argv=None) -> int:
     wat_plan = {
         "schema_version": "1.0",
         "generated_by": "foundry_handoff_pack_gen v1.1",
+        "design_identity": _ident,
         "design_top": design_top,
         "pdk": pdk_name,
         "process_node_nm": process_nm,
@@ -381,6 +392,7 @@ def main(argv=None) -> int:
     corner_kit = {
         "schema_version": "1.0",
         "generated_by": "foundry_handoff_pack_gen v1.1",
+        "design_identity": _ident,
         "design_top": design_top,
         "pdk": pdk_name,
         "test_pattern_seeds_from_l10": l10_ids,
@@ -420,11 +432,19 @@ def main(argv=None) -> int:
             "+ alignment marks) and is NOT generated here (#446). Obtain "
             "it from the shuttle/foundry kit and place it beside this "
             "note before tapeout.\n"
+            # #484: the design NAME line is ALWAYS present (design_top / pdk
+            # can both be null for two pre-resolution designs, which made
+            # this honest PENDING note byte-identical and falsely flagged as
+            # a canned cross-design report by cross_design_identity_check).
+            f"# design: {project.name}\n"
             f"# design_top: {design_top}\n"
             f"# pdk: {pdk_name}\n")
     readme = handoff_dir / "README.txt"
     readme.write_text(
         "Foundry handoff package — auto-generated skeleton (v1.1).\n"
+        # #484: design NAME line is always present so two designs that share
+        # the default top do not emit a byte-identical README.
+        f"Design name: {project.name}\n"
         f"Design: {design_top}\n"
         f"PDK: {pdk_name}\n"
         f"GDS: {str(primary_gds.relative_to(project)) if primary_gds else '(none)'}"

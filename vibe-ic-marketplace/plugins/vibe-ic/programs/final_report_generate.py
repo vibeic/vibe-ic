@@ -396,6 +396,29 @@ def _previous_snapshot_marker(project: Path) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _extract_overall_token(overall_line: str) -> str:
+    """ORGANIC #483 (LOW, symptom 2) — extract the FULL verdict token from
+    a `flow_compliance_check.py` "Overall:" summary line.
+
+    `flow_compliance_check.py` prints e.g.::
+
+        Overall: FAIL  (strict=True)
+        Overall: PASS_WITH_OPEN_SOURCE_CONSTRAINTS  (strict=True)
+
+    The prior code took ``line.split(":", 1)[1].strip().split()[0]`` which
+    keeps only the FIRST whitespace-delimited token — so any verdict that
+    contains internal whitespace was truncated to its first chunk (e.g.
+    a "FAIL"-shaped verdict rendered mid-line collapsed to the headline
+    ``Overall: FA``). The correct token is everything after ``Overall:``
+    up to the trailing ``(strict=…)`` annotation (or end of line),
+    stripped — never sliced on the first internal space. chip-AGNOSTIC."""
+    body = overall_line.split(":", 1)[1] if ":" in overall_line else overall_line
+    # Drop the trailing "(strict=…)" / "(…)" annotation the checker appends.
+    body = re.split(r"\s*\(", body, maxsplit=1)[0]
+    token = body.strip()
+    return token or AUDIT_NOT_RUN_VERDICT
+
+
 def _run_audit(project: Path,
                timeout_s: Optional[int] = None,
                prior_marker: Optional[str] = None) -> Tuple[str, str]:
@@ -443,7 +466,7 @@ def _run_audit(project: Path,
     overall = AUDIT_NOT_RUN_VERDICT
     for ln in text.splitlines():
         if ln.startswith("Overall:"):
-            overall = ln.split(":", 1)[1].strip().split()[0]
+            overall = _extract_overall_token(ln)
             break
     return text, overall
 

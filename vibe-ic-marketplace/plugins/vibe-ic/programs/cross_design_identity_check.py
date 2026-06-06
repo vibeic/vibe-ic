@@ -44,6 +44,66 @@ _SCAN_GLOBS = (
 )
 _INPUT_TOKENS = ("/input/", "/inputs/", "/pdk/", "/vendor_ref/")
 
+# ORGANIC-20260606 #484 (MEDIUM) — STRICT named honest-N/A exemption.
+#
+# A *verdict-only* manifest whose verdict is an explicit skip / not-applicable
+# token carries NO per-design substance — two designs that both honestly
+# skipped the same gate emit byte-identical N/A shapes. Those are NOT canned
+# cross-design reports. This exemption (opt-in via --allow-honest-na) lets
+# such honest shapes pass WITHOUT ever exempting a real PASS/FAIL report:
+#   * the verdict field MUST be one of the explicit skip/N-A tokens below;
+#   * a PASS / FAIL / PASS_WITH_* / *_PASS verdict is NEVER exempt;
+#   * the file must be verdict-only — it must NOT carry any substantive
+#     evidence key (scenarios_covered with entries, per_vector PASS rows,
+#     vectors_passed>0, a non-empty findings/violations list, …). A report
+#     with real per-design substance that happens to be byte-identical is a
+#     genuine cross-design-identity violation and stays flagged.
+_HONEST_NA_VERDICTS = frozenset({
+    "SKIP", "SKIPPED", "SKIPPED-CONDITION", "SKIPPED_CONDITION",
+    "N/A", "NA", "NOT_APPLICABLE", "NOT-APPLICABLE",
+    "PENDING", "PENDING_FOUNDRY", "SKELETON_EMITTED",
+})
+# Keys whose non-empty presence proves the report carries real substance,
+# so it can NEVER ride the honest-N/A exemption even with a skip-ish verdict.
+_SUBSTANCE_KEYS = (
+    "scenarios_covered", "per_vector", "findings", "violations",
+    "vectors_passed", "passes", "checks",
+)
+
+
+def _is_honest_na_verdict_only(fp: Path) -> bool:
+    """True iff `fp` is a verdict-only JSON manifest whose verdict is an
+    explicit skip / N-A token AND which carries no substantive per-design
+    evidence (so a byte-identical copy across designs is honest, not canned).
+
+    A PASS / FAIL / PASS_WITH_* verdict is NEVER honest-N/A. Any non-empty
+    substance key disqualifies the exemption. Non-JSON / list / parse-error
+    files are NOT exempt. chip-AGNOSTIC."""
+    try:
+        d = json.loads(fp.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(d, dict):
+        return False
+    verdict = d.get("verdict") or d.get("status")
+    if not isinstance(verdict, str):
+        return False
+    v = verdict.strip().upper()
+    # Hard guard: a PASS/FAIL-bearing verdict is never honest-N/A — this is
+    # what keeps a real canned PASS/FAIL report flagged.
+    if v in ("PASS", "FAIL") or v.startswith("PASS") or v.endswith("PASS") \
+            or "FAIL" in v:
+        return False
+    if v not in _HONEST_NA_VERDICTS:
+        return False
+    for key in _SUBSTANCE_KEYS:
+        val = d.get(key)
+        if isinstance(val, (list, dict, str)) and len(val) > 0:
+            return False
+        if isinstance(val, (int, float)) and val:
+            return False
+    return True
+
 
 def _wrapper_target(project: Path, fp: Path):
     """For an allowlisted wrapper: the path-shaped evidence/source target
@@ -61,7 +121,7 @@ def _wrapper_target(project: Path, fp: Path):
     return None
 
 
-def audit(projects, allow) -> dict:
+def audit(projects, allow, allow_honest_na: bool = False) -> dict:
     projects = [Path(p).resolve() for p in projects]
     if len(projects) < 2:
         return {"verdict": "SKIP", "rc": 2,
@@ -86,6 +146,7 @@ def audit(projects, allow) -> dict:
                     (proj.name, proj))
     findings = []
     allow_ok = []
+    honest_na_ok = []
     for rel, by_digest in sorted(table.items()):
         for digest, hits in by_digest.items():
             if len(hits) < 2:
@@ -108,6 +169,17 @@ def audit(projects, allow) -> dict:
                                 f"design — canned, not a wrapper (#454)"),
                 })
                 continue
+            # #484: STRICT named honest-N/A exemption — a verdict-only
+            # manifest with an explicit skip/N-A verdict and NO per-design
+            # substance is honest, not canned. EVERY hit must independently
+            # satisfy the verdict-only predicate (a single substantive /
+            # PASS-FAIL member among the byte-identical copies disqualifies
+            # the whole group, so a real canned PASS/FAIL pair is never
+            # exempted). Opt-in via --allow-honest-na.
+            if allow_honest_na and all(
+                    _is_honest_na_verdict_only(p / rel) for _, p in hits):
+                honest_na_ok.append({"path": rel, "projects": names})
+                continue
             findings.append({
                 "severity": "ERROR",
                 "rule": "CROSS_DESIGN_IDENTICAL_ARTIFACT",
@@ -121,6 +193,7 @@ def audit(projects, allow) -> dict:
         "projects": [str(p) for p in projects],
         "identical_artifacts": len(findings),
         "allowlisted_wrappers_ok": allow_ok,
+        "honest_na_exempt": honest_na_ok,
         "findings": findings,
     }
 
@@ -132,6 +205,12 @@ def main(argv=None) -> int:
     ap.add_argument("--allow", default="ir_drop.json,power.json",
                     help="comma-separated wrapper basenames (conditional "
                          "exemption: evidence targets must differ)")
+    ap.add_argument("--allow-honest-na", action="store_true",
+                    help="#484: exempt verdict-only manifests whose verdict "
+                         "is an explicit skip/N-A token AND which carry no "
+                         "per-design substance (a PASS/FAIL report is NEVER "
+                         "exempted). Use only where an emitter genuinely "
+                         "cannot stamp design identity.")
     ap.add_argument("--json", default=None)
     args = ap.parse_args(argv)
     for p in args.projects:
@@ -139,7 +218,7 @@ def main(argv=None) -> int:
             print(f"ERROR: not a directory: {p}", file=sys.stderr)
             return 2
     allow = {t.strip() for t in args.allow.split(",") if t.strip()}
-    rep = audit(args.projects, allow)
+    rep = audit(args.projects, allow, allow_honest_na=args.allow_honest_na)
     rc = rep.pop("rc")
     rep = {"program": "cross_design_identity_check",
            "version": "1.0.0", **rep}

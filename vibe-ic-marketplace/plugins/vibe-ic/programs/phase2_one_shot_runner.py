@@ -1893,22 +1893,77 @@ def _oracle_sim_bridge_evidence(project: Path,
 
 
 def _oracle_coverage_evidence(log_text: str):
-    """ORGANIC-20260606 #460 (reopened) — extract the coverage scenario /
-    vector evidence FROM the oracle.log transcript itself.
+    """ORGANIC-20260606 #460 (reopened) / #483 (LOW, symptom 1) — extract the
+    coverage scenario / vector evidence FROM the oracle.log transcript itself.
 
-    oracle_tb_gen emits one ``ORACLE_VECTOR <name> PASS`` line per matched
-    golden vector and the final ``ORACLE_TB_DONE pass=<n>/<m>`` summary. The
-    transcript is the SOLE evidence source — this parses ONLY what the log
+    The program-generated oracle TB (``oracle_tb_gen``) emits one
+    ``ORACLE_VECTOR <name> PASS`` line per matched golden vector. Real,
+    hand-authored / full-stack oracle TBs instead print the more compact
+    per-vector shape ``VEC <n> <name> PASS`` (an ordinal index followed by the
+    scenario name). #483: the prior regex only matched the ``ORACLE_VECTOR``
+    token, so against a real ``VEC <n> <name> PASS`` transcript
+    ``scenarios_covered`` came back EMPTY even though the vectors passed (the
+    summary counts / Step-4 PASS were unaffected, only the named-scenario
+    evidence was lost). Both per-vector shapes are now recognised — the
+    ``ORACLE_VECTOR`` token is retained verbatim — and the final
+    ``ORACLE_TB_DONE pass=<n>/<m>`` summary supplies the authoritative counts.
+    The transcript is the SOLE evidence source — this parses ONLY what the log
     actually carries (no canned/template scenario names). Returns
     (scenarios, n_pass, n_total): the per-vector names that the log reports
     PASS, plus the real summary counts (None when the summary line is
     absent). chip-AGNOSTIC."""
     scen = sorted(set(re.findall(
-        r"\bORACLE_VECTOR\s+([A-Za-z0-9_]+)\s+PASS\b", log_text)))[:24]
+        # Shape A (program oracle TB):  ORACLE_VECTOR <name> PASS
+        # Shape B (real / full-stack):  VEC <n> <name> PASS
+        r"\bORACLE_VECTOR\s+([A-Za-z0-9_]+)\s+PASS\b"
+        r"|\bVEC\s+\d+\s+([A-Za-z0-9_]+)\s+PASS\b", log_text)))[:24]
+    # re.findall with two capture groups yields ("name","") or ("","name");
+    # collapse to the non-empty side and drop the empties.
+    scen = sorted({a or b for (a, b) in scen if (a or b)})[:24]
     m = re.search(r"\bORACLE_TB_DONE\s+pass=(\d+)/(\d+)", log_text)
     n_pass = int(m.group(1)) if m else None
     n_total = int(m.group(2)) if m else None
     return scen, n_pass, n_total
+
+
+def _design_identity_fields(project: Path, top_name: str = "") -> dict:
+    """ORGANIC-20260606 #484 (MEDIUM) — the per-design identity stamp that
+    every per-design report JSON carries so honest N/A-verdict manifests
+    (extraction_skipped, on_board_pass SKIP, empty-list lint, …) DIFFER per
+    design naturally and cross_design_identity_check (#454) no longer flags
+    byte-identical-but-honest artifacts as canned cross-design reports.
+
+    The stamp is the design's real identity: ``ic_name`` from
+    ``L1_DATASHEET.json`` (falling back to ``part_number``), the design
+    ``top`` module from ``L9_INTEGRATION_SPEC.json`` (or the caller's
+    ``--top`` / ``top_name``), and the project-relative directory name. At
+    least the project name is always present, so even a pre-Phase-1 project
+    with no L docs gets a per-design stamp. chip-AGNOSTIC: reads only the
+    project's own L docs + its own directory name (no chip literals)."""
+    gd = _pl.generated_docs_dir(project)
+    ic_name = None
+    for cand in ("L1_DATASHEET.json", "L2_FRS.json"):
+        try:
+            d = json.loads((gd / cand).read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(d, dict):
+            ic_name = d.get("ic_name") or d.get("part_number")
+            if ic_name:
+                break
+    top = top_name or None
+    try:
+        l9 = json.loads((gd / "L9_INTEGRATION_SPEC.json").read_text(errors="replace"))
+        if isinstance(l9, dict):
+            top = l9.get("top_module") or top
+    except (OSError, ValueError):
+        pass
+    ident: dict = {"design": project.name}
+    if ic_name:
+        ident["ic_name"] = str(ic_name)
+    if top:
+        ident["top"] = str(top)
+    return ident
 
 
 # ORGANIC-20260606 #476 (LOW) — $readmemh / $readmemb relative-path
@@ -4429,8 +4484,14 @@ def step_emit_phase2_manifests(project: Path,
     t0 = time.time()
     by_name = {s.name: s for s in plan}
     written: List[str] = []
+    # #484: stamp the per-design identity into EVERY manifest so honest
+    # N/A-verdict shapes (SKIP/SKIPPED-CONDITION/empty-list) differ per
+    # design and are not flagged as canned cross-design reports.
+    _ident = _design_identity_fields(project)
 
     def w(rel: str, payload: dict) -> None:
+        if isinstance(payload, dict):
+            payload.setdefault("design_identity", _ident)
         f = project / rel
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
@@ -4604,8 +4665,9 @@ def step_emit_phase2_manifests(project: Path,
             "vectors_total": (_olt if _olt is not None else orc_vt),
             "note": ("scenarios/vector counts extracted from this "
                      "project's own oracle-TB transcript "
-                     "(oracle.log: ORACLE_VECTOR/ORACLE_TB_DONE lines; "
-                     "#460: never another design's canned list)"),
+                     "(oracle.log: ORACLE_VECTOR / VEC <n> <name> PASS / "
+                     "ORACLE_TB_DONE lines; #460/#483: never another "
+                     "design's canned list)"),
         })
     else:
         w("reports/phase2/coverage/coverage_actual.json", {
