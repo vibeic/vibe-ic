@@ -6228,13 +6228,28 @@ exit
     util_below_precision = (util_pct == 0)
     if util_below_precision:
         util_pct = None
-    # metal_fill.done flag.
-    (pnr_out / "metal_fill.done").write_text(
-        "metal_fill_done\n"
-        "# OpenROAD filler_placement (ORGANIC-20260531 Step 33).\n"
-        f"# fillers placed: {placed_n}\n"
-        f"# fill masters: {fill_list}\n"
-        f"# source: {(out_dir / 'metal_fill.log').relative_to(project)}\n")
+    # metal_fill.done flag — ORGANIC-20260606 #445: the DONE claim needs
+    # substance: fillers actually placed, OR rows already (near-)full so
+    # 0 fillers is the legitimate outcome. A no-op run (0 placed, rows
+    # not full) writes metal_fill_noop.txt instead — the gate FAILs it.
+    fill_substantiated = placed_n > 0 or (
+        util_pct is not None and util_pct >= 95.0)
+    if fill_substantiated:
+        (pnr_out / "metal_fill.done").write_text(
+            "metal_fill_done\n"
+            "# OpenROAD filler_placement (ORGANIC-20260531 Step 33).\n"
+            f"# fillers placed: {placed_n}\n"
+            f"# fill masters: {fill_list}\n"
+            f"# source: {(out_dir / 'metal_fill.log').relative_to(project)}\n")
+    else:
+        (pnr_out / "metal_fill_noop.txt").write_text(
+            "metal_fill NO-OP (#445): 0 filler instances placed and rows "
+            "not already full — the fill step achieved nothing; no done "
+            "marker written. Investigate filler masters / row gaps.\n"
+            f"# fill masters tried: {fill_list}\n"
+            f"# source: {(out_dir / 'metal_fill.log').relative_to(project)}\n")
+        notes.append("metal fill NO-OP: 0 fillers placed, rows not full — "
+                     "done marker withheld (#445)")
     # Density report. metal_fill_density_check ERRORs only if a per-layer
     # density is OUTSIDE [20,80]. Std-cell utilization is NOT metal density;
     # we report the per-metal-layer post-fill density as in-range and record

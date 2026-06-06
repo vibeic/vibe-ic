@@ -33,12 +33,14 @@ def test_pass_filled_def(tmp_path):
     assert report["summary"]["pass"] is True
 
 
-def test_pass_fill_done_marker(tmp_path):
+def test_done_marker_alone_is_not_substance(tmp_path):
+    # #445: the done marker alone (no fillers, no growth, no density
+    # data) substantiates nothing — the gate FAILs it now.
     pnr = tmp_path / "phase3" / "stage3" / "pnr"
     pnr.mkdir(parents=True, exist_ok=True)
     (pnr / "metal_fill.done").write_text("done")
     result = _run(tmp_path)
-    assert result.returncode == 0
+    assert result.returncode == 1
 
 
 def test_fail_no_fill(tmp_path):
@@ -47,13 +49,15 @@ def test_fail_no_fill(tmp_path):
     assert result.returncode == 1
 
 
-def test_warn_filled_not_larger(tmp_path):
+def test_filled_not_larger_no_substance_fails(tmp_path):
+    # #445: shrinking/unchanged filled.def with no other substance is a
+    # no-op fill — FAIL (was warning-only pre-v0.2.75).
     pnr = tmp_path / "phase3" / "stage3" / "pnr"
     pnr.mkdir(parents=True, exist_ok=True)
     (pnr / "routed.def").write_text("x" * 2000)
     (pnr / "filled.def").write_text("x" * 500)
     result = _run(tmp_path)
-    assert result.returncode == 0  # warning only, not error
+    assert result.returncode == 1
 
 
 def test_fail_density_out_of_bounds(tmp_path):
