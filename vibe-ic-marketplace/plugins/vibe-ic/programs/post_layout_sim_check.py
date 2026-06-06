@@ -50,11 +50,30 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
                  + list((_pl.extracted_dir(project_dir)).glob("*.sdf"))
                  if (_pl.extracted_dir(project_dir)).is_dir() else
                  list(sim_dir.glob("*.sdf")))
-    stats["sdf_found"] = len(sdf_files) > 0
+    # ORGANIC-20260606 #441: a stub/fallback SDF (self-marked "NOT a
+    # real SDF" / fallback DELAYFILE with no cell entries) is not an
+    # SDF — exclude it so presence of the fabricated file never
+    # satisfies the gate.
+    real_sdf = []
+    for sf in sdf_files:
+        try:
+            head = sf.read_text(errors="replace")[:1500]
+        except OSError:
+            continue
+        if re.search(r"NOT a real SDF|\(fallback\)|write_sdf \(fallback",
+                     head, re.IGNORECASE):
+            findings.append(Finding(
+                "ERROR", "STUB_SDF",
+                f"{sf.name} is a fallback/stub SDF (self-marked), not a "
+                f"real write_sdf output (#441)"))
+            continue
+        real_sdf.append(sf)
+    stats["sdf_found"] = len(real_sdf) > 0
 
-    if not sdf_files:
-        findings.append(Finding("ERROR", "NO_SDF",
-                                "No .sdf files found in sim_postlayout/ or extracted/"))
+    if not real_sdf:
+        if not any(f.category == "STUB_SDF" for f in findings):
+            findings.append(Finding("ERROR", "NO_SDF",
+                                    "No .sdf files found in sim_postlayout/ or extracted/"))
 
     log_path = sim_dir / "results.log"
     flag_path = sim_dir / "pass.flag"
