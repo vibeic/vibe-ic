@@ -2566,6 +2566,12 @@ def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]
         out: Dict[Any, Dict[str, Any]] = {}
         for w in data.get("waived_steps", []):
             root_id = _parse_id(w["id"])
+            # ORGANIC-20260606 #437(e): waiver authors use `rationale` and
+            # `reason` interchangeably, but every consumer read ONLY
+            # `reason` — a valid rationale-keyed waiver then displayed as
+            # "(no reason)" and was counted invalid. Normalize once here.
+            if not w.get("reason") and w.get("rationale"):
+                w = {**w, "reason": w["rationale"]}
             out[root_id] = w
             for child in w.get("cascades_to", []) or []:
                 child_id = _parse_id(child)
@@ -2731,10 +2737,20 @@ def _l9_has_analog_modules(project: Path) -> bool:
 # design quality. Step 18 (spare-cell/ECO-prep) is NOT listed: the runner
 # emits its evidence chain (v0.2.60), so it gates normally. chip-AGNOSTIC:
 # keyed on canonical step id, never on a chip/class literal.
+#
+# v0.2.67 (#437d) — step 28 added: the runner emits the SDF (write_sdf)
+# but never RUNS an SDF-annotated gate-level re-sim; it used to fabricate
+# `sim_postlayout/pass.flag` from "RTL TB PASS + post-route TNS=0", which
+# is an RTL-sim approximation, not gate-level timing sim. The runner now
+# emits an honest `sdf_sim_skipped.json` self-report instead, so a clean
+# run leaves step 28's required outputs absent → SKIPPED-CONDITION here.
+# A REAL SDF-annotated sim (results.log referencing $sdf_annotate) still
+# gates normally via post_layout_sim_check.
 _PLATFORM_CAPABILITY_GAPS: Dict[int, str] = {
     11: "cap:dft_scan_insertion_atpg",
     12: "cap:post_dft_optimization",
     13: "cap:logic_equivalence_check",
+    28: "cap:sdf_annotated_gatelevel_sim",
     29: "cap:post_layout_spice_correlation",
 }
 

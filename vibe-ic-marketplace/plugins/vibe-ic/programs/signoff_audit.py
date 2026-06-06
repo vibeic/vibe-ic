@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import sys
 from dataclasses import dataclass, field, asdict
@@ -240,16 +241,77 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
             rule="TAPEOUT_TIMING_EXISTS", severity="ERROR",
             message="No timing report found (*timing*.rpt, *sta*.rpt)"))
 
-    # (d) DRC report exists
+    # (d) DRC — SUBSTANCE, not existence.
+    # ORGANIC-20260606-existence-only-signoff-gates (#437a): the pre-fix
+    # gate PASSed on the FIRST `*drc*` glob hit — in one audited project
+    # that was the clean detailed-router DRC (0 items) while the KLayout
+    # SIGNOFF DRC in the same project carried 204,079 violations the
+    # checklist never read. The signoff deck's report is the authority:
+    # prefer it explicitly, parse its violation count, and FAIL on a
+    # nonzero count (waivable only via the documented step-waiver path,
+    # never by pointing at a different report).
     drc_files = _has_files(project_dir, ["*drc*.rpt", "*drc*.log",
                                           "*DRC*.rpt", "*DRC*.log"])
+    # signoff-first ordering: a report whose NAME or CONTENT marks it as
+    # the signoff deck outranks router/projection reports.
+    def _drc_rank(p: Path) -> int:
+        n = p.name.lower()
+        if "signoff" in n:
+            return 0
+        try:
+            head = p.read_text(errors="replace")[:2000]
+        except OSError:
+            return 3
+        if "<report-database>" in head:   # KLayout signoff database
+            return 1
+        if "detailed_route" in head or "openroad" in head.lower():
+            return 2                       # router projection — last
+        return 2
+    drc_files = sorted(drc_files, key=_drc_rank)
+
+    def _drc_violation_count(p: Path):
+        """Best-effort violation count; None when unparseable."""
+        try:
+            txt = p.read_text(errors="replace")
+        except OSError:
+            return None
+        if "<report-database>" in txt[:2000]:
+            return txt.count("<item>")
+        m = (re.search(r"(?i)\btotal\s+(?:errors|violations)\s*[:=]?\s*(\d+)", txt)
+             or re.search(r"(?i)\bviolations?\s*[:=]\s*(\d+)", txt))
+        return int(m.group(1)) if m else None
+
     if drc_files:
-        evidence["drc"] = True
-        evidence_count += 1
-        result.findings.append(Finding(
-            rule="TAPEOUT_DRC_EXISTS", severity="INFO",
-            message=f"DRC report found: {drc_files[0].name}",
-            file=str(drc_files[0])))
+        chosen = drc_files[0]
+        vcount = _drc_violation_count(chosen)
+        if vcount is not None and vcount > 0:
+            evidence["drc"] = False
+            result.findings.append(Finding(
+                rule="TAPEOUT_DRC_VIOLATIONS", severity="ERROR",
+                message=(f"signoff DRC report '{chosen.name}' carries "
+                         f"{vcount} violation(s) — the tapeout checklist "
+                         f"gates on the COUNT, not on file existence "
+                         f"(#437a). Waivable only via the documented "
+                         f"step-waiver path."),
+                file=str(chosen)))
+        elif vcount is None:
+            evidence["drc"] = False
+            result.findings.append(Finding(
+                rule="TAPEOUT_DRC_UNPARSED", severity="ERROR",
+                message=(f"DRC report '{chosen.name}' found but its "
+                         f"violation count could not be parsed — refusing "
+                         f"an existence-only PASS (#437a); verify the "
+                         f"signoff deck output manually."),
+                file=str(chosen)))
+        else:
+            evidence["drc"] = True
+            evidence_count += 1
+            result.findings.append(Finding(
+                rule="TAPEOUT_DRC_CLEAN", severity="INFO",
+                message=(f"signoff DRC report '{chosen.name}': "
+                         f"0 violations (count parsed, not just "
+                         f"existence)"),
+                file=str(chosen)))
     else:
         evidence["drc"] = False
         result.findings.append(Finding(

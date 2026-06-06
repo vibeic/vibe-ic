@@ -982,7 +982,10 @@ def _render(project: Path, run_audit: bool = True) -> str:
                 md.append(f"- **Evidence**: `{w['evidence']}`")
             if w.get("cascades_to"):
                 md.append(f"- **Cascades to**: {w['cascades_to']}")
-            reason = w.get("reason") or "(no reason given — waiver is INVALID)"
+            # #437(e): `rationale` is an accepted synonym for `reason` —
+            # a rationale-keyed waiver is VALID, not "(no reason given)".
+            reason = (w.get("reason") or w.get("rationale")
+                      or "(no reason given — waiver is INVALID)")
             md.append("")
             md.append("```")
             for ln in str(reason).splitlines():

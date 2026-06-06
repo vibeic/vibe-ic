@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -273,7 +274,67 @@ def main(argv=None):
         print(out)
         return rc
 
+    # ORGANIC-20260606 #437(b) — pack-substance scan: a handoff whose
+    # members self-report placeholder content is not a deliverable. FAIL
+    # by name on: TODO/TBD markers in pack text members, cell_count < 0,
+    # pdk == "unknown" in pack JSON members. (0-byte members already
+    # hard-fail above.)
+    substance_findings = []
+    for hf in sorted(project.glob("phase3/stage4/foundry_handoff/**/*")):
+        if not hf.is_file() or hf.stat().st_size == 0:
+            continue
+        if hf.suffix.lower() in (".gds", ".gds2", ".gdsii", ".oas"):
+            continue
+        try:
+            txt = hf.read_text(errors="replace")[:20000]
+        except OSError:
+            continue
+        rel = str(hf.relative_to(project))
+        n_todo = len(re.findall(r"\bTODO\b|\bTBD\b", txt))
+        if n_todo:
+            substance_findings.append({
+                "severity": "ERROR",
+                "rule": "FOUNDRY_HANDOFF_TODO_MARKERS",
+                "message": (f"{rel}: {n_todo} TODO/TBD marker(s) — a "
+                            f"handoff member with open placeholders is "
+                            f"not a deliverable (#437b)."),
+            })
+        if hf.suffix.lower() == ".json":
+            try:
+                jd = json.loads(txt)
+            except ValueError:
+                jd = None
+            if isinstance(jd, dict):
+                cc = jd.get("cell_count")
+                if isinstance(cc, (int, float)) and cc < 0:
+                    substance_findings.append({
+                        "severity": "ERROR",
+                        "rule": "FOUNDRY_HANDOFF_CELL_COUNT_INVALID",
+                        "message": (f"{rel}: cell_count={cc} — a negative "
+                                    f"count is an unfilled placeholder "
+                                    f"(#437b)."),
+                    })
+                if str(jd.get("pdk", "")).strip().lower() == "unknown":
+                    substance_findings.append({
+                        "severity": "ERROR",
+                        "rule": "FOUNDRY_HANDOFF_PDK_UNKNOWN",
+                        "message": (f"{rel}: pdk=unknown — a mask spec "
+                                    f"that cannot name its process is not "
+                                    f"submittable (#437b)."),
+                    })
+
     waiver = _step_waived(project, args.step_label)
+    if substance_findings and not waiver:
+        verdict, rc = "FAIL", 1
+        findings = substance_findings
+        report = {"program": _GATE_NAME, "verdict": verdict,
+                  "findings": findings}
+        out = json.dumps(report, indent=2, ensure_ascii=False)
+        if args.json:
+            Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.json).write_text(out)
+        print(out)
+        return rc
     if missing and not waiver:
         verdict, rc = "SKIP", 2
         findings = [{"severity": "INFO", "rule": "REQUIRED_FILES_MISSING",

@@ -21,7 +21,7 @@ def test_tapeout_all_evidence_pass(tmp_path):
     (tmp_path / "chip.gds").write_text("binary gds data")
     (tmp_path / "netlist_mapped.v").write_text("module top(); endmodule")
     (tmp_path / "timing_final.rpt").write_text("timing report")
-    (tmp_path / "drc_clean.rpt").write_text("drc report")
+    (tmp_path / "drc_clean.rpt").write_text("Total violations: 0\n")  # parseable count (#437a)
 
     result = sa._check_tapeout(tmp_path)
     assert result.passed is True
@@ -133,7 +133,7 @@ def test_tapeout_design_gds_outside_input_passes(tmp_path):
     (design_gds_dir / "chip_top.gds").write_text("design gds binary")
     (tmp_path / "synth_netlist.v").write_text("module chip_top(); endmodule")
     (tmp_path / "timing_final.rpt").write_text("timing report")
-    (tmp_path / "drc_clean.rpt").write_text("drc report")
+    (tmp_path / "drc_clean.rpt").write_text("Total violations: 0\n")  # parseable count (#437a)
 
     sa._LENIENT = False
     result = sa._check_tapeout(tmp_path)

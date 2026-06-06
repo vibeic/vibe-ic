@@ -25,13 +25,20 @@ _SDF_MARKERS = re.compile(
     re.IGNORECASE,
 )
 _FATAL_RE = re.compile(r"^\s*(\*\*\s*)?(FATAL|ERROR)\b", re.IGNORECASE | re.MULTILINE)
+# #437(d): markers a flag/self-report uses to admit it is an
+# approximation / skipped condition rather than an executed SDF sim.
+_APPROX_RE = re.compile(
+    r"approximation|SKIPPED.CONDITION|requires\s+SDF|no\s+SDF",
+    re.IGNORECASE,
+)
 
 
 def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
     findings: List[Finding] = []
     sim_dir = _pl.sim_postlayout_dir(project_dir)
     stats = {"sim_dir_exists": False, "sdf_found": False,
-             "log_found": False, "sdf_referenced": False}
+             "log_found": False, "sdf_referenced": False,
+             "flag_only": False, "approximation_flag": False}
 
     if not sim_dir.is_dir():
         findings.append(Finding("ERROR", "NO_SIM_DIR",
@@ -68,25 +75,58 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
         if _SDF_MARKERS.search(text):
             stats["sdf_referenced"] = True
         else:
-            findings.append(Finding("WARNING", "NO_SDF_REF",
-                                    "Simulation log does not reference SDF annotation"))
+            # #437(d): escalated WARNING→ERROR — a "post-layout sim"
+            # whose log never annotates SDF is an RTL sim, not a
+            # gate-level timing sim; existence of a log is not substance.
+            findings.append(Finding("ERROR", "NO_SDF_REF",
+                                    "Simulation log does not reference SDF "
+                                    "annotation — not a gate-level timing sim "
+                                    "(#437d)"))
+    else:
+        # #437(d): pass.flag WITHOUT a simulation log is existence, not
+        # evidence. A flag that self-declares an approximation maps to
+        # SKIPPED-CONDITION (honest, but still not a PASS); any other
+        # bare flag is unsubstantiated.
+        stats["flag_only"] = True
+        flag_text = flag_path.read_text(errors="replace")
+        if _APPROX_RE.search(flag_text):
+            stats["approximation_flag"] = True
+            findings.append(Finding(
+                "ERROR", "APPROX_FLAG_NOT_SDF_SIM",
+                "pass.flag self-declares an approximation — no "
+                "SDF-annotated simulation ran (#437d)"))
+        else:
+            findings.append(Finding(
+                "ERROR", "FLAG_WITHOUT_LOG",
+                "pass.flag without results.log is not simulation "
+                "evidence (#437d)"))
 
     return findings, stats
 
 
 def build_report(findings: List[Finding], stats: dict,
                  project_dir: str) -> dict:
+    ok = all(f.severity != "ERROR" for f in findings)
+    # #437(d): top-level verdict — SKIPPED-CONDITION when the only
+    # artifact is an honest approximation self-report (still exit 1 /
+    # pass=false: an approximation never PASSes the gate).
+    verdict = ("PASS" if ok else
+               "SKIPPED-CONDITION" if stats.get("approximation_flag")
+               else "FAIL")
     return {
         "program": "post_layout_sim_check",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "project_dir": project_dir,
+        "verdict": verdict,
         "summary": {
             "sim_dir_exists": stats["sim_dir_exists"],
             "sdf_found": stats["sdf_found"],
             "sdf_referenced": stats["sdf_referenced"],
+            "flag_only": stats.get("flag_only", False),
+            "approximation_flag": stats.get("approximation_flag", False),
             "findings_count": len(findings),
             "errors_count": sum(1 for f in findings if f.severity == "ERROR"),
-            "pass": all(f.severity != "ERROR" for f in findings),
+            "pass": ok,
         },
         "findings": [asdict(f) for f in findings],
     }

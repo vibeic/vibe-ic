@@ -44,10 +44,44 @@ def test_pass_with_log(tmp_path):
     assert report["summary"]["sdf_referenced"] is True
 
 
-def test_pass_with_flag(tmp_path):
+def test_bare_flag_without_log_fails(tmp_path):
+    # #437(d): pass.flag WITHOUT results.log is existence, not evidence
     _setup(tmp_path, flag=True, sdf=True)
     result = _run(tmp_path)
-    assert result.returncode == 0
+    assert result.returncode == 1
+    report = json.loads((tmp_path / "out.json").read_text())
+    assert report["verdict"] == "FAIL"
+    assert any(f["category"] == "FLAG_WITHOUT_LOG" for f in report["findings"])
+
+
+def test_approximation_flag_maps_to_skipped_condition(tmp_path):
+    # #437(d): a flag that self-declares an approximation is honest but
+    # still not a PASS — verdict SKIPPED-CONDITION, exit 1
+    sim = tmp_path / "phase3" / "stage3" / "sim_postlayout"
+    sim.mkdir(parents=True)
+    (sim / "timing.sdf").write_text("(DELAYFILE)")
+    (sim / "pass.flag").write_text(
+        "PASS\n# Production tapeout requires SDF-annotated re-sim; this\n"
+        "# flag is the open-source-flow approximation.\n")
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    report = json.loads((tmp_path / "out.json").read_text())
+    assert report["verdict"] == "SKIPPED-CONDITION"
+    assert report["summary"]["pass"] is False
+    assert any(f["category"] == "APPROX_FLAG_NOT_SDF_SIM"
+               for f in report["findings"])
+
+
+def test_log_without_sdf_reference_fails(tmp_path):
+    # #437(d): NO_SDF_REF escalated WARNING→ERROR — an un-annotated log
+    # is an RTL sim wearing a post-layout name
+    _setup(tmp_path, log_content="All tests passed: 42/42\n", sdf=True)
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    report = json.loads((tmp_path / "out.json").read_text())
+    assert report["summary"]["sdf_referenced"] is False
+    assert any(f["category"] == "NO_SDF_REF" and f["severity"] == "ERROR"
+               for f in report["findings"])
 
 
 def test_fail_no_sim_dir(tmp_path):

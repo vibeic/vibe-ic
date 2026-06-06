@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
 import re
 import sys
@@ -600,10 +601,52 @@ def _check_sta(project_dir: Path) -> AuditResult:
             file=best_file))
 
     authentic = _check_tool_authenticity(files, "sta", result)
-    result.passed = has_wns_tns and has_setup_hold and authentic
+
+    # #437(c) — multi-corner SUBSTANCE: a per_corner/ directory IS a
+    # multi-corner-STA claim, and the claim needs >= 2 NON-IDENTICAL
+    # corner reports. The audited rot: per_corner dirs EMPTY, and corner
+    # reports that are byte-identical single-corner copies. No per_corner
+    # dir at all = honest single-corner run, no claim, no check.
+    # chip-AGNOSTIC: canonical-layout paths + content hashing only.
+    corners_ok = True
+    corner_reports = 0
+    corner_distinct = 0
+    corner_dirs = sorted({Path(p) for pat in
+                          ("phase*/stage*/sta/per_corner",
+                           "reports/phase*/sta/per_corner")
+                          for p in glob.glob(str(project_dir / pat))
+                          if Path(p).is_dir()})
+    for cd in corner_dirs:
+        rpts = sorted(p for p in cd.glob("*.rpt")
+                      if p.is_file() and p.stat().st_size > 0)
+        if not rpts:
+            corners_ok = False
+            result.findings.append(Finding(
+                rule="STA_PER_CORNER_EMPTY", severity="ERROR",
+                message="per_corner/ claims multi-corner STA but contains "
+                        "no corner report (#437c)",
+                file=str(cd)))
+            continue
+        digests = {hashlib.sha256(p.read_bytes()).hexdigest() for p in rpts}
+        corner_reports += len(rpts)
+        corner_distinct += len(digests)
+        if len(rpts) < 2 or len(digests) < 2:
+            corners_ok = False
+            result.findings.append(Finding(
+                rule="STA_CORNERS_NOT_DISTINCT", severity="ERROR",
+                message=f"multi-corner STA requires >=2 non-identical "
+                        f"corner reports; found {len(rpts)} report(s), "
+                        f"{len(digests)} distinct (#437c)",
+                file=str(cd)))
+
+    result.passed = has_wns_tns and has_setup_hold and authentic and corners_ok
     result.summary = {"files_found": len(files), "has_wns_tns": has_wns_tns,
                       "has_setup_hold": has_setup_hold,
-                      "tool_authentic": authentic}
+                      "tool_authentic": authentic,
+                      "corner_dirs_found": len(corner_dirs),
+                      "corner_reports": corner_reports,
+                      "corner_reports_distinct": corner_distinct,
+                      "multi_corner_substantiated": corners_ok}
     return result
 
 

@@ -263,8 +263,15 @@ def validate(project: Path, max_step: int = 40,
                             message=f"cascades_to cannot include the root id {sid}",
                         ))
 
-        # reason
+        # reason — ORGANIC-20260606 #437(e): `rationale` is an accepted
+        # synonym. Waiver authors (incl. the runner's own templates) use
+        # the two interchangeably; rejecting a rationale-keyed entry as
+        # "reason-missing" voided VALID waivers (displayed "INVALID (no
+        # reason given)", counted WAIVED:0). Same substance bars apply.
         reason = entry.get("reason", "")
+        if (not isinstance(reason, str) or not reason.strip()) \
+                and isinstance(entry.get("rationale"), str):
+            reason = entry["rationale"]
         if not isinstance(reason, str) or not reason.strip():
             findings.append(WaiverFinding(
                 severity="error", entry_index=i, step_id=sid,

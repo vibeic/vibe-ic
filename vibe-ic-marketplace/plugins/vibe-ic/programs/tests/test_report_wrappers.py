@@ -159,7 +159,10 @@ class TestTapeoutSignoffCheck:
         (tmp_path / "design.gds").write_text("GDS")
         (tmp_path / "netlist.v").write_text("module top; endmodule")
         (tmp_path / "timing.rpt").write_text("WNS=0")
-        (tmp_path / "drc.rpt").write_text("clean")
+        # #437(a): the tapeout DRC slot now gates on a PARSED violation
+        # count — an unparseable "clean" stub is refused, so the fixture
+        # carries a parseable zero-count signoff shape.
+        (tmp_path / "drc.rpt").write_text("Total violations: 0\n")
         assert _run_wrapper("tapeout_signoff_check.py", str(tmp_path)) == 0
 
 

@@ -4036,7 +4036,8 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
       * phase3/stage3/pnr/{floorplan.def, placed.def, post_cts.def, post_hold.def, routed.def}
       * phase3/stage3/pnr/pdn.done flag
       * phase3/stage3/cts/clock_plan.json + clock_tree.rpt
-      * phase3/stage3/sim_postlayout/pass.flag (with provenance pointer)
+      * phase3/stage3/sim_postlayout/sdf_sim_skipped.json (honest
+        SKIPPED-CONDITION self-report — NOT pass.flag; #437d)
       * phase3/stage3/eco/no_eco_needed.flag (when post-route TNS=0)
       * phase3/stage4/gds/<top>.gds (canonical alias copy, NOT symlink — rule #1)
       * reports/phase3/{power,em,ir_drop,si_crosstalk,antenna}.{rpt,json}
@@ -4219,13 +4220,17 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         written.append(str(post_route_rpt))
 
     # --- Step 23: per-corner STA (if multi-corner libs available) ------
+    # #437(c): the per_corner directory IS the multi-corner claim — it is
+    # only created when a real multi-corner attempt runs (no more
+    # unconditional empty dirs), and _emit_multi_corner_sta removes it
+    # again if no corner report was actually produced.
     per_corner = sta_out / "per_corner"
-    per_corner.mkdir(parents=True, exist_ok=True)
     lib_dir = project / "input" / "pdk" / "liberty"
     multi_corner_run = False
     if lib_dir.is_dir():
         libs = sorted(lib_dir.glob("*.lib"))
         if len(libs) >= 2 and primary_def.is_file():
+            per_corner.mkdir(parents=True, exist_ok=True)
             multi_corner_run = _emit_multi_corner_sta(
                 project, top, pdk, container, libs, per_corner, notes,
             )
@@ -4501,35 +4506,40 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         )
         written.append(str(clock_rpt))
 
-    # --- Step 28: SDF emit + post-layout sim pass.flag (best-effort) ---
+    # --- Step 28: SDF emit + honest SDF-sim self-report (#437d) --------
     # OpenROAD's `write_sdf` produces the SDF the gate's check looks for.
     sdf_out = sim_pl_out / f"{top}.sdf"
     if primary_def.is_file() and not sdf_out.is_file():
         _emit_sdf(project, top, pdk, container, sdf_out, notes)
         if sdf_out.is_file() and sdf_out.stat().st_size > 0:
             written.append(str(sdf_out))
-    # Without a dedicated post-sim TB we cannot fabricate results — emit
-    # a SKIP flag instead so the gate evaluates the optional check.
-    # If reference TB passed at RTL (results.xml or pass.flag), the
-    # downstream check accepts that as evidence of post-layout
-    # functional correctness ABSENT SDF annotation. Honest path:
-    # emit pass.flag when refTB passed AND post-route TNS=0.
+    # #437(d): the runner does NOT run an SDF-annotated gate-level re-sim
+    # — "RTL TB PASS + post-route TNS=0" is an RTL-sim approximation, and
+    # an approximation must not wear the gate's pass.flag. Emit an honest
+    # SKIPPED-CONDITION self-report (named so it does NOT satisfy step
+    # 28's required outputs); flow_compliance maps the absent evidence to
+    # SKIPPED-CONDITION via cap:sdf_annotated_gatelevel_sim. A real SDF
+    # sim (results.log with $sdf_annotate) still gates normally.
     refsim_pass = (project / "phase2/stage1/sim/pass.flag").is_file() or \
         (project / "phase2/stage1/sim/results.xml").is_file()
     tns_zero = _post_route_tns_zero(primary_sta)
-    if refsim_pass and tns_zero:
-        flag = sim_pl_out / "pass.flag"
-        if not flag.is_file():
-            flag.write_text(
-                "PASS\n"
-                "# Auto-staged by phase3_one_shot_runner v1.6.36.\n"
-                "# Evidence: phase2/stage1/sim/results.xml (RTL TB PASS) +\n"
-                "# phase3/stage3/pnr/sta.rpt (post-route TNS=0).\n"
-                "# Production tapeout requires SDF-annotated re-sim; this\n"
-                "# flag is the open-source-flow approximation. Substance gate\n"
-                "# (post_layout_sim_check) verifies the underlying RTL TB pass.\n"
-            )
-            written.append(str(flag))
+    skip_note = sim_pl_out / "sdf_sim_skipped.json"
+    if not (sim_pl_out / "results.log").is_file() and not skip_note.is_file():
+        sim_pl_out.mkdir(parents=True, exist_ok=True)
+        skip_note.write_text(json.dumps({
+            "verdict": "SKIPPED-CONDITION",
+            "reason": ("no SDF-annotated gate-level re-simulation ran; "
+                       "the open-tool runner emits the SDF but does not "
+                       "drive a back-annotated sim (#437d). RTL-TB+STA is "
+                       "an approximation, not gate-level timing sim."),
+            "capability_flag": "cap:sdf_annotated_gatelevel_sim",
+            "advisory_approximation": {
+                "rtl_reference_tb_pass": bool(refsim_pass),
+                "post_route_tns_zero": bool(tns_zero),
+                "sdf_emitted": sdf_out.is_file() and sdf_out.stat().st_size > 0,
+            },
+        }, indent=2) + "\n")
+        written.append(str(skip_note))
 
     # --- Step 31: ECO no-op flag ----------------------------------------
     if tns_zero:
@@ -4819,21 +4829,33 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
         )
         rc, out, err = _docker_exec(container, cmd, timeout=600)
         if rc != 0 or not rpt.is_file():
-            # Fallback: stage the single-corner TT report as a stand-in
-            # only if we can't actually run OpenSTA. This is
-            # CONSERVATIVE — we mark the file with the failure reason so
-            # the gate auditor knows it's not a real per-corner STA.
-            single_rpt = _pl.pnr_dir(project) / "sta.rpt"
-            if single_rpt.is_file() and corner == "TT":
-                rpt.write_text(single_rpt.read_text())
-                any_emitted = True
-            else:
-                notes.append(
-                    f"multi-corner STA failed for {corner}: "
-                    f"rc={rc} (sta tool may be unavailable). "
-                    f"To upgrade, install OpenSTA in the container.")
+            # #437(c): NO single-corner stand-in. The old fallback copied
+            # the single-corner TT report into per_corner/ verbatim —
+            # exactly the "byte-identical single-corner copies
+            # masquerading as multi-corner" rot the audit found. If the
+            # per-corner run failed, we say so and emit nothing.
+            notes.append(
+                f"multi-corner STA failed for {corner}: "
+                f"rc={rc} (sta tool may be unavailable). "
+                f"To upgrade, install OpenSTA in the container.")
         else:
             any_emitted = True
+    if not any_emitted:
+        # #437(c): remove the work files + dir so an EMPTY per_corner
+        # never stands as an unsubstantiated multi-corner claim. The
+        # failure reasons live in `notes`.
+        for debris in list(out_dir.glob("sta_*.tcl")) + list(out_dir.glob("sta_*.log")):
+            try:
+                debris.unlink()
+            except OSError:
+                pass
+        try:
+            out_dir.rmdir()
+        except OSError:
+            pass
+        notes.append(
+            "multi-corner STA produced no corner report; per_corner/ "
+            "removed to avoid an unsubstantiated multi-corner claim (#437c)")
     return any_emitted
 
 
@@ -7287,34 +7309,83 @@ def main() -> int:
                 print(f"[WARN] {kind} generator failed: {exc}",
                       file=sys.stderr)
 
-    summary = {
-        "project": str(project),
-        "pdk": pdk.name,
-        "top": args.top_name,
-        "steps": [asdict(s) for s in plan],
-        "verdict": _aggregate_verdict(plan),
-    }
-    out_path = _pl.report_path(project, "phase3_one_shot.json")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
-
     # v1.6.52 — auto-emit `waivers.json` from any WAIVED steps so the
     # SOLE-ACCEPTANCE-CRITERION schema (evidence + ticket id +
     # review_required: true) is satisfied without the agent having
     # to hand-author the file. We never overwrite an existing
     # `waivers.json` — if the project already has one (auto or
-    # human-authored), it is honoured as-is.
+    # human-authored), it is honoured as-is. (Runs BEFORE the final
+    # summary so flow_compliance_check sees the waivers.)
     _autogen_waivers_json(project, plan)
 
-    # v1.6.32: emit canonical final_summary.md (best-effort).
+    # v1.6.32: emit canonical final_summary.md (best-effort). This runs
+    # flow_compliance_check, which refreshes
+    # reports/audit/phase23_completion_audit.json — the audit the
+    # headline verdict derives from (#437f).
     fs_ok = _pl.emit_final_summary(project, PROGRAMS_DIR)
 
+    steps_verdict = _aggregate_verdict(plan)
+    verdict, audit_verdict, verdict_note = _derive_headline_verdict(
+        project, steps_verdict)
+    summary = {
+        "project": str(project),
+        "pdk": pdk.name,
+        "top": args.top_name,
+        "steps": [asdict(s) for s in plan],
+        # #437(f): the headline DERIVES FROM the full-flow completion
+        # audit — the orchestrator never reports PASS* beside an audit
+        # that says FAIL. `steps_verdict` keeps the own-steps view.
+        "steps_verdict": steps_verdict,
+        "completion_audit_verdict": audit_verdict,
+        "verdict": verdict,
+    }
+    if verdict_note:
+        summary["verdict_note"] = verdict_note
+    out_path = _pl.report_path(project, "phase3_one_shot.json")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
+
     print(f"\n=== phase3_one_shot_runner DONE ===")
-    print(f"verdict: {summary['verdict']}")
+    print(f"verdict: {summary['verdict']}"
+          + (f" (steps: {steps_verdict}, completion audit: {audit_verdict})"
+             if audit_verdict else ""))
     for s in plan:
         print(f"  {s.status:6} {s.name:8} {s.detail[:120]}")
     print(f"final summary: {'reports/final_summary.md' if fs_ok else 'NOT generated'}")
-    return 0 if summary["verdict"] in ("PASS", "PASS_WITH_WAIVERS") else 1
+    return 0 if summary["verdict"] in ("PASS", "PASS_WITH_WAIVERS",
+                                       "PASS_WITH_OPEN_SOURCE_CONSTRAINTS") else 1
+
+
+# #437(f) — verdict-tier ordering for headline derivation: the headline
+# is the WEAKER of (own-steps verdict, completion-audit verdict), so the
+# orchestrator can never surface PASS_WITH_WAIVERS beside a completion
+# audit / final summary that says FAIL. chip-AGNOSTIC: tier lattice only.
+_VERDICT_RANK = {"PASS": 0, "PASS_WITH_WAIVERS": 1,
+                 "PASS_WITH_OPEN_SOURCE_CONSTRAINTS": 1, "FAIL": 2}
+
+
+def _derive_headline_verdict(project: Path, steps_verdict: str
+                             ) -> tuple:
+    """Return (headline, audit_verdict, note). Reads the freshly-refreshed
+    reports/audit/phase23_completion_audit.json; if absent/unreadable the
+    own-steps verdict stands (with a note saying the audit was absent)."""
+    audit_path = _pl.report_path(project, "phase23_completion_audit.json")
+    audit_verdict = None
+    try:
+        audit_verdict = json.loads(audit_path.read_text()).get("verdict")
+    except (OSError, ValueError):
+        pass
+    if not isinstance(audit_verdict, str) or \
+            audit_verdict not in _VERDICT_RANK:
+        return steps_verdict, audit_verdict, (
+            "completion audit absent/unreadable — headline is the "
+            "own-steps verdict only (#437f)")
+    if _VERDICT_RANK[audit_verdict] > _VERDICT_RANK.get(steps_verdict, 2):
+        return audit_verdict, audit_verdict, (
+            f"headline downgraded from own-steps {steps_verdict!r}: the "
+            f"full-flow completion audit says {audit_verdict!r} and the "
+            f"orchestrator must derive from, not contradict, it (#437f)")
+    return steps_verdict, audit_verdict, ""
 
 
 def _aggregate_verdict(plan: List[StepResult]) -> str:
