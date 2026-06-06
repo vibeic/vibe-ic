@@ -186,6 +186,50 @@ def _detect_pdk(text: str) -> Optional[str]:
     return None
 
 
+# ── ORGANIC-20260606 #438(b): declared-PDK-target consistency ──────────────
+# The audited rot: the project's input docs / L1 target one PDK family
+# while every real device deck instantiates a different foundry's
+# devices/models — the corner numbers, even where real, are for the
+# wrong process. The DECLARED target lives in
+# phase1/generated_docs/L19_CONSTRAINTS_PDK.json → fields.pdk_target.
+# chip-AGNOSTIC: family-token containment, no chip-class literals.
+
+def _declared_pdk_target(project: Path) -> Optional[str]:
+    """The project's declared PDK target string, or None when absent /
+    explicitly N-A (nothing concrete to compare against)."""
+    l19 = project / "phase1" / "generated_docs" / "L19_CONSTRAINTS_PDK.json"
+    try:
+        declared = json.loads(l19.read_text(errors="replace")) \
+            .get("fields", {}).get("pdk_target")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(declared, str) or not declared.strip():
+        return None
+    if declared.strip().lower().startswith(("n/a", "na ", "none", "tbd")):
+        return None
+    return declared.strip()
+
+
+def _pdk_mismatch_waived(project: Path) -> bool:
+    """True when waivers.json documents a PDK_MISMATCH waiver with a
+    rationale (the issue's documented waiver path)."""
+    wpath = project / "waivers.json"
+    try:
+        data = json.loads(wpath.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return False
+    entries = (data.get("waived_steps") or []) + (data.get("waivers") or [])
+    for w in entries:
+        if not isinstance(w, dict):
+            continue
+        blob = " ".join(str(w.get(k, "")) for k in
+                        ("rule", "ticket", "id", "reason", "rationale"))
+        if "pdk_mismatch" in blob.lower().replace("-", "_") \
+                and (w.get("reason") or w.get("rationale")):
+            return True
+    return False
+
+
 def _check_model_includes(text: str, rel_path: str, findings: List[Finding]) -> bool:
     includes = INCLUDE_RE.findall(text)
     if not includes:
@@ -274,6 +318,9 @@ def run_audit(project: Path) -> AuditResult:
     files_stub = 0   # v1.6.177 (#72 P1-6)
     total_body_errors = 0
     total_model_errors = 0
+    total_pdk_mismatches = 0  # v0.2.68 (#438b)
+    declared_target = _declared_pdk_target(project)
+    mismatch_waived = _pdk_mismatch_waived(project)
 
     for sp in sp_files:
         try:
@@ -320,6 +367,37 @@ def run_audit(project: Path) -> AuditResult:
             file_ok = False
             total_model_errors += model_errs
 
+        # #438(b) — deck PDK family vs the project's DECLARED target.
+        # Mismatch = declared target is concrete AND the deck's detected
+        # family token does not appear in it. Waivable with rationale.
+        if pdk and declared_target and \
+                pdk.lower() not in declared_target.lower():
+            if mismatch_waived:
+                result.findings.append(Finding(
+                    rule="PDK_MISMATCH_WAIVED",
+                    severity="WARNING",
+                    message=(f"{rel}: deck instantiates {pdk} device "
+                             f"models but the project declares PDK "
+                             f"target '{declared_target}' — waived via "
+                             f"documented PDK_MISMATCH waiver (#438b)"),
+                    file=rel,
+                ))
+            else:
+                file_ok = False
+                total_pdk_mismatches += 1
+                result.findings.append(Finding(
+                    rule="PDK_MISMATCH",
+                    severity="ERROR",
+                    message=(f"{rel}: deck instantiates {pdk} device "
+                             f"models but the project declares PDK "
+                             f"target '{declared_target}' — corner "
+                             f"numbers, even where real, are for the "
+                             f"wrong process (#438b). Waivable via "
+                             f"waivers.json with a PDK_MISMATCH "
+                             f"rationale."),
+                    file=rel,
+                ))
+
         if file_ok:
             files_pass += 1
             result.findings.append(Finding(
@@ -349,6 +427,9 @@ def run_audit(project: Path) -> AuditResult:
         "files_fail": files_checked - files_pass,
         "body_connection_errors": total_body_errors,
         "unknown_pdk_model_errors": total_model_errors,
+        "declared_pdk_target": declared_target,       # #438(b)
+        "pdk_mismatch_errors": total_pdk_mismatches,  # #438(b)
+        "pdk_mismatch_waived": mismatch_waived,       # #438(b)
         "pass": result.passed,
         "verdict_tier": verdict_tier,
     }

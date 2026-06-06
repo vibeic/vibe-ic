@@ -89,6 +89,7 @@ def run_audit(project: Path) -> AuditResult:
     blocks_checked = 0
     blocks_pass = 0
     blocks_stub = 0   # v1.6.177 (#72 P1-6)
+    blocks_derived = 0  # v0.2.68 (#438a)
     block_details = []
 
     for cf in corner_files:
@@ -165,6 +166,39 @@ def run_audit(project: Path) -> AuditResult:
                                   "found": found, "total": total})
             continue
 
+        # ORGANIC-20260606 #438(a) — executed-vs-derived accounting. A
+        # corner is DERIVED when it says so (simulator_run=false,
+        # _provenance=DERIVED, or a non-empty derived_from field — the
+        # last catches the legacy mislabel where every corner carried
+        # simulator_run=true while derived_from admitted the scaling).
+        # A sweep with fewer executed corners than MIN_CORNERS cannot
+        # claim a full PVT sweep: tier downgrades, counts are surfaced.
+        # All-derived (zero executed) is fabricated coverage → FAIL.
+        corners_list = data.get("corners") if isinstance(
+            data.get("corners"), list) else []
+        derived_n = sum(
+            1 for c in corners_list if isinstance(c, dict)
+            and (c.get("simulator_run") is False
+                 or str(c.get("_provenance", "")).upper() == "DERIVED"
+                 or bool(c.get("derived_from"))))
+        executed_n = (len(corners_list) - derived_n) if corners_list else None
+        if corners_list and executed_n == 0:
+            result.findings.append(Finding(
+                rule="ALL_CORNERS_DERIVED",
+                severity="ERROR",
+                message=(f"Block '{block_name}': all {len(corners_list)} "
+                         f"corners are arithmetic derivations — no corner "
+                         f"was simulated; derived data is not PVT "
+                         f"coverage (#438a)"),
+                file=str(cf.relative_to(project)),
+            ))
+            result.passed = False
+            block_details.append({"block": block_name, "pass": False,
+                                  "reason": "all_corners_derived",
+                                  "corners_executed": 0,
+                                  "corners_derived": derived_n})
+            continue
+
         spec_results = data.get("spec_results", [])
         failed_specs = [s for s in spec_results
                         if isinstance(s, dict) and s.get("status") == "FAIL"]
@@ -207,29 +241,54 @@ def run_audit(project: Path) -> AuditResult:
             continue
 
         blocks_pass += 1
+        if derived_n:
+            # #438(a): tier-relevant disclosure — executed base sims are
+            # genuine and PASS, but the block must never read as a fully
+            # EXECUTED PVT sweep.
+            blocks_derived += 1
+            result.findings.append(Finding(
+                rule="CORNER_SWEEP_DERIVED_DISCLOSED",
+                severity="WARNING",
+                message=(f"Block '{block_name}': {executed_n} executed / "
+                         f"{derived_n} derived corner(s) — fewer than "
+                         f"{MIN_CORNERS} executed corners cannot claim a "
+                         f"full PVT sweep (#438a)"),
+                file=str(cf.relative_to(project)),
+            ))
         result.findings.append(Finding(
             rule="CORNER_SWEEP_OK",
             severity="INFO",
             message=(
                 f"Block '{block_name}': {total} corners, all specs pass"
+                + (f" ({executed_n} executed / {derived_n} derived)"
+                   if corners_list else "")
                 + (f", MC yield {mc_yield:.1f}%" if mc_yield is not None else "")
             ),
         ))
         block_details.append({"block": block_name, "pass": True,
-                              "total_corners": total})
+                              "total_corners": total,
+                              "corners_executed": executed_n,
+                              "corners_derived": derived_n
+                              if corners_list else None})
 
     # v1.6.177 (#72 P1-6) — verdict tier.
+    # v0.2.68 (#438a) — PASS_WITH_DERIVED_CORNERS tier: passing blocks
+    # whose PVT grid is partly arithmetic derivation never present as a
+    # plain executed-sweep PASS.
     verdict_tier = "PASS"
     if result.passed and blocks_stub and blocks_stub == blocks_checked:
         verdict_tier = "PASS_WITH_STUB"
     elif result.passed and blocks_stub:
         verdict_tier = "PASS_WITH_STUB_PARTIAL"
+    elif result.passed and blocks_derived:
+        verdict_tier = "PASS_WITH_DERIVED_CORNERS"
 
     result.summary = {
         "skipped": False,
         "blocks_checked": blocks_checked,
         "blocks_pass": blocks_pass,
         "blocks_stub": blocks_stub,
+        "blocks_with_derived_corners": blocks_derived,  # #438(a)
         "blocks_fail": blocks_checked - blocks_pass,
         "min_corners_required": MIN_CORNERS,
         "details": block_details,

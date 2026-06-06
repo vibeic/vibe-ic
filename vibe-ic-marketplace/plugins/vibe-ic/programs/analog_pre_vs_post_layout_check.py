@@ -152,6 +152,20 @@ def run_audit(project: Path) -> AuditResult:
     if errors:
         result.passed = False
 
+    # ORGANIC-20260606 #438(c): pre_vs_post.json existed (past the
+    # self-skip) but zero numeric pre/post pairs were comparable — a
+    # comparison gate must FAIL, never PASS, with items_compared==0.
+    if total_specs == 0:
+        result.passed = False
+        result.findings.append(Finding(
+            rule="PRE_VS_POST_ZERO_COMPARED",
+            severity="ERROR",
+            message=("pre_vs_post.json present but 0 specs were "
+                     "compared (no numeric pre/post pairs) — a "
+                     "comparison gate must FAIL (or self-skip), never "
+                     "PASS, with items_compared==0 (#438c)"),
+        ))
+
     result.summary = {
         "skipped": False,
         "blocks_checked": len(pvp_files),

@@ -205,6 +205,21 @@ def run_audit(project: Path) -> AuditResult:
     if errors:
         result.passed = False
 
+    # ORGANIC-20260606 #438(c): a COMPARISON gate cannot PASS having
+    # compared NOTHING. hw_measurements.json existed (we are past the
+    # self-skip) but zero HW/SPICE key overlaps were found — that is a
+    # broken comparison, not a clean one.
+    if total_compared == 0:
+        result.passed = False
+        result.findings.append(Finding(
+            rule="HW_SPICE_ZERO_COMPARED",
+            severity="ERROR",
+            message=("hw_measurements.json present but 0 measurements "
+                     "were compared against SPICE — a comparison gate "
+                     "must FAIL (or self-skip), never PASS, with "
+                     "items_compared==0 (#438c)"),
+        ))
+
     ideal_pct = (ideal / total_compared * 100) if total_compared else 0.0
 
     result.summary = {

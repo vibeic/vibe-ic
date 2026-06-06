@@ -585,7 +585,9 @@ def _run_ngspice(container, sp_in_container):
     for line_m in _MEAS_LINE_RE.finditer(txt):
         for kv in _KV_RE.finditer(line_m.group(1)):
             meas[kv.group(1)] = float(kv.group(2))
-    return cp.returncode == 0, meas, txt[-1200:]
+    # #438(a): return the FULL transcript — run_block persists it as the
+    # per-run ngspice invocation log that substantiates simulator_run.
+    return cp.returncode == 0, meas, txt
 
 def _pick_block_type(block, project):
     """L5-driven type selection — does NOT use topology.md keyword match."""
@@ -650,7 +652,12 @@ def run_block(project, block, container, pdk, topology_override):
                               **{(knob if knob != "__noop__" else "_unused"): val})
         sp_host = sl_dir / f"run_{knob}_{val}.sp"
         sp_host.write_text(tb)
-        ok, meas, _ = _run_ngspice(container, _container_path(container, host_root, sp_host))
+        ok, meas, raw = _run_ngspice(container, _container_path(container, host_root, sp_host))
+        # ORGANIC-20260606 #438(a): persist the ngspice invocation log —
+        # `simulator_run: true` is only claimable for corners whose
+        # invocation log exists on disk.
+        log_host = sl_dir / f"run_{knob}_{val}.ngspice.log"
+        log_host.write_text(raw)
         # v0.2.55 — normalise the settle measure to the target key. The
         # transient-settle templates name their point-measure `vfinal`
         # (adc) / `vsettle` (delta_sigma / modulator) and ALIAS it to
@@ -667,7 +674,9 @@ def run_block(project, block, container, pdk, topology_override):
                 if _alias in meas:
                     meas[tkey] = meas[_alias]
                     break
-        runs.append({"knob":knob, "val":val, "ok":ok, **meas})
+        runs.append({"knob":knob, "val":val, "ok":ok,
+                     "ngspice_log": str(log_host.relative_to(project)),
+                     **meas})
 
     # v1.6.228 — emit the full 9-corner PVT matrix (3 process × 3 temp)
     # required by analog_corner_sweep_check (MIN_CORNERS=9). We don't
@@ -679,28 +688,47 @@ def run_block(project, block, container, pdk, topology_override):
     # block-type-independent.
     target = TARGETS[btype]
     base = None
+    base_log = None
     for r in runs:
         if r.get("ok") and target["key"] in r:
             base = r[target["key"]]
+            base_log = r.get("ngspice_log")
             break
     # Spread tables: process × temp.
     # process: ss=-3%, tt=0%, ff=+3%; temp: -40C=+1%, 27C=0%, 125C=-1%
+    #
+    # ORGANIC-20260606 #438(a): HONEST per-corner provenance. Only the
+    # tt@27C corner was actually simulated; the other eight are
+    # arithmetic derivations. `simulator_run: true` is claimable ONLY
+    # for the corner whose ngspice invocation log exists; derived
+    # corners carry simulator_run=false + _provenance="DERIVED".
     pvt_grid = []
+    corners_executed = 0
     for proc, p_off in (("ss", -0.03), ("tt", 0.0), ("ff", +0.03)):
         for tlbl, t_off in (("m40c", +0.01), ("27c", 0.0), ("125c", -0.01)):
             if base is None:
                 v = None
             else:
                 v = base * (1.0 + p_off) * (1.0 + t_off)
-            pvt_grid.append({
+            is_executed = (proc == "tt" and tlbl == "27c"
+                           and base is not None and bool(base_log))
+            entry = {
                 "name": f"{proc}_{tlbl}",
                 "process": proc,
                 "temp_c": {"m40c": -40, "27c": 27, "125c": 125}[tlbl],
-                "simulator_run": True,
+                "simulator_run": is_executed,
                 "vout_v": v,
-                "derived_from": "tt_27c base × process±3% × temp±1%",
                 "margin": target.get("tol"),
-            })
+            }
+            if is_executed:
+                corners_executed += 1
+                entry["_provenance"] = "real_ngspice"
+                entry["ngspice_log"] = base_log
+                entry["derived_from"] = None
+            else:
+                entry["_provenance"] = "DERIVED"
+                entry["derived_from"] = "tt_27c base × process±3% × temp±1%"
+            pvt_grid.append(entry)
 
     # Pick best per target
     target = TARGETS[btype]
@@ -733,6 +761,11 @@ def run_block(project, block, container, pdk, topology_override):
         "spec_label": target["label"],
         "total_corners": len(pvt_grid),
         "results_found": len(pvt_grid),
+        # #438(a) — executed-vs-derived counts are FIRST-CLASS: a sweep
+        # with < total executed corners never claims a full PVT sweep.
+        "corners_executed": corners_executed,
+        "corners_derived": len(pvt_grid) - corners_executed,
+        "full_pvt_sweep_executed": corners_executed == len(pvt_grid),
         "corners": pvt_grid,
         "best_corner": {
             "name": "tt_27c", "value": best.get(target["key"]),
@@ -745,11 +778,14 @@ def run_block(project, block, container, pdk, topology_override):
              "value": best.get(target["key"]),
              "target": target["target"], "tolerance_pct": target.get("tol")}
         ],
-        "note": ("Real ngspice tt@27C base + derived ss/tt/ff × -40/27/125 "
-                  "process+temp spread (canonical 180nm BCD ±3% process, "
-                  "±1% temp). Full PVT closure requires HSPICE/Spectre on "
-                  "HP18E80 native deck. spec status downgrades non-PASS "
-                  "to PASS_INFORMATIONAL (env gap, not design gap)."),
+        "note": (f"Real ngspice tt@27C base ({corners_executed} executed "
+                  f"corner(s)) + {len(pvt_grid) - corners_executed} DERIVED "
+                  "ss/tt/ff × -40/27/125 process+temp spread (canonical "
+                  "180nm BCD ±3% process, ±1% temp). NOT a full executed "
+                  "PVT sweep (#438a) — full PVT closure requires the "
+                  "native PDK deck simulated at every corner. spec status "
+                  "downgrades non-PASS to PASS_INFORMATIONAL (env gap, "
+                  "not design gap)."),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     (bdir / "corner_results.json").write_text(json.dumps(real_corner, indent=2))
