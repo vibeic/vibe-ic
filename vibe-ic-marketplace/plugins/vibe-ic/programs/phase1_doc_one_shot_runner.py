@@ -9161,6 +9161,262 @@ def _v466_block_multiplicity_own_entry(text: str, kw_pos: int,
     return _v1_6_402_extract_block_multiplicity(paragraph)
 
 
+# ─── ORGANIC-20260606 #466 R2 (field-agent counter-evidence) ────────
+# The v1.6.402 ×N parser landed, but the regression root cause was NOT
+# the multiplicity parser — it was keyword ANCHORING. `gen_l5_adi_spec`
+# located each analog class with a single `re.search(pat, text)` which
+# returns the FIRST match anywhere in the whole document. For a class
+# like `ldo` (pattern includes ``\bregulator\b``), the first hit is
+# often a PROSE line buried in a SIBLING block's spec table
+# (``(one copy from the LDO)``) rather than the block's own enumeration
+# header line (``… Block B … (×1)``). The own-entry multiplicity walker
+# then read the WRONG line (the prose row carries no ``×N`` → count
+# falls back to the shared paragraph, inheriting a sibling's ``×6``);
+# meanwhile `seen_classes` prevented re-matching the correct header.
+#
+# Fix: keyword anchoring PREFERS Block HEADER lines — a markdown
+# heading whose text mentions "Block" (``^#+ … Block …``) or a markdown
+# table HEADER row — over a prose hit. The prose match is only the
+# fallback when no header-line match exists for that class. So the
+# block's OWN-entry multiplicity reads the right line.
+# Chip-AGNOSTIC: pure structural heading / table-header vocabulary; no
+# chip-class literal participates in anchoring.
+_V466_RE_BLOCK_HEADER_LINE = re.compile(
+    r"^\s{0,3}#{1,6}\s+.*\bblock\b", re.IGNORECASE)
+
+
+def _v466_line_bounds(text: str, pos: int):
+    """Return (line_start, line_end) for the source line containing
+    `pos`. Defence: clamps `pos` into range."""
+    if not isinstance(text, str) or not text:
+        return (0, 0)
+    if pos < 0:
+        pos = 0
+    if pos > len(text):
+        pos = len(text)
+    ls = text.rfind("\n", 0, pos) + 1
+    le = text.find("\n", pos)
+    if le < 0:
+        le = len(text)
+    return (ls, le)
+
+
+def _v466_line_is_block_header(line: str) -> bool:
+    """True iff `line` is a Block enumeration HEADER line: a markdown
+    heading mentioning "Block" (``## Block A``, ``### … Block B …``) OR
+    a markdown table HEADER row (a ``| … |`` row whose cells name
+    "Block"/"Type"/"Name"/"Count"/"Qty"/"×"/"multiplicity"). Prose
+    pipe-rows (spec tables) are NOT headers. Chip-AGNOSTIC."""
+    if not isinstance(line, str):
+        return False
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if _V466_RE_BLOCK_HEADER_LINE.match(line):
+        return True
+    if stripped.startswith("|"):
+        cells = stripped.strip("|").lower()
+        if re.search(
+                r"\b(block|type|name|count|qty|quantity|"
+                r"multiplicity|copies|instances)\b", cells):
+            return True
+        if "×" in cells or re.search(r"(?<![a-z0-9])x\b", cells):
+            return True
+    return False
+
+
+def _v466_best_class_match(text: str, pat: str):
+    """ORGANIC #466 R2 — return the regex match for class `pat` that
+    PREFERS a Block HEADER line. Iterates ALL matches; the first one
+    whose source line is a Block header wins. When no match sits on a
+    header line, falls back to the FIRST match (legacy single-search
+    behaviour). Returns a re.Match or None.
+
+    Chip-AGNOSTIC: header preference is pure structural; the class
+    pattern is caller-supplied analog vocabulary, no chip-class literal.
+    """
+    if not isinstance(text, str) or not text or not pat:
+        return None
+    try:
+        matches = list(re.finditer(pat, text, re.IGNORECASE))
+    except re.error:
+        return None
+    if not matches:
+        return None
+    for m in matches:
+        ls, le = _v466_line_bounds(text, m.start())
+        if _v466_line_is_block_header(text[ls:le]):
+            return m
+    return matches[0]
+
+
+# ─── ORGANIC-20260606 #466 R2 — explicit-enumeration spurious guard ──
+# When L5 explicitly ENUMERATES the analog block TYPES — a count
+# statement (``two analog block types``, ``3 analog blocks``) OR
+# distinct ``Block A`` / ``Block B`` headers — the design has DECLARED
+# its full block inventory. A candidate whose spec is null AND whose
+# only evidence is an L1 product-name keyword match (e.g. a converter
+# acronym embedded in the part number) is then a HALLUCINATION: it was
+# never enumerated, it has no spec, and its sole grounding is the SKU
+# string. Such a candidate is marked ``spurious: true`` and excluded
+# from the sizing-consuming block list.
+#
+# This deterministic guard runs ONLY when L5 has an explicit
+# enumeration. With NO enumeration the ambiguous case is left to the
+# skill prose (current behaviour preserved). Field-agent directive:
+# 「L5 有明確枚舉時」的判斷是確定性的——program，不能只放 skill.
+# Chip-AGNOSTIC: pure structural enumeration cues + name-embedding test;
+# no chip-class / vendor / SKU literal in detection.
+_V466_RE_TYPE_COUNT = re.compile(
+    r"\b(?P<word>one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"\d{1,3})\b[^.\n]{0,40}?\banalog\b[^.\n]{0,20}?"
+    r"\bblock(?:[\s\-]?type)?s?\b",
+    re.IGNORECASE)
+_V466_RE_BLOCK_AB = re.compile(
+    r"(?im)^\s{0,3}#{1,6}\s+.*\bblock\s+(?P<tag>[A-Z0-9]+)\b")
+
+
+def _v466_l5_enumerates_block_types(extracted) -> bool:
+    """True iff any source doc EXPLICITLY enumerates analog block
+    types: a count statement (``two analog block types``) OR ≥2 distinct
+    ``Block <tag>`` headings (Block A / Block B). Chip-AGNOSTIC."""
+    if not isinstance(extracted, dict):
+        return False
+    for _fname, text in extracted.items():
+        if not isinstance(text, str) or not text:
+            continue
+        if _V466_RE_TYPE_COUNT.search(text):
+            return True
+        tags = {m.group("tag").upper()
+                for m in _V466_RE_BLOCK_AB.finditer(text)}
+        if len(tags) >= 2:
+            return True
+    return False
+
+
+def _v466_name_acronyms(ic_name):
+    """Return the set of uppercase ≥2-char alpha runs embedded in the
+    product / IC name (``XADC9000`` → {``XADC``, ``ADC``-substrings via
+    caller}). We return the full alpha runs; substring membership is
+    tested by the caller. Chip-AGNOSTIC: operates on whatever string
+    `_ic_name_from_docs` produced — no hard-coded SKU."""
+    if not isinstance(ic_name, str) or not ic_name:
+        return set()
+    return {tok.upper() for tok in re.findall(r"[A-Za-z]{2,}", ic_name)}
+
+
+def _v466_evidence_is_product_name_only(text, kw_text, ic_name) -> bool:
+    """ORGANIC #466 R2 — True iff a class keyword match is grounded
+    ONLY in the L1 product / IC name, i.e.:
+
+      * the matched literal `kw_text` is a substring of some alpha run
+        inside `ic_name` (the acronym lives in the SKU), AND
+      * every standalone occurrence of that literal in the doc body is
+        itself part of the product-name token (no independent analog
+        mention exists).
+
+    When the keyword also appears as a free-standing token elsewhere
+    (a real block mention), this returns False — the block is grounded
+    in more than the SKU and must be kept.
+
+    Chip-AGNOSTIC: compares the detected literal against whatever name
+    the name-picker produced; no chip-class / vendor literal here.
+    """
+    if not isinstance(kw_text, str) or not kw_text:
+        return False
+    if not isinstance(ic_name, str) or not ic_name:
+        return False
+    kw_u = kw_text.strip().upper()
+    if not kw_u:
+        return False
+    name_u = ic_name.upper()
+    # The literal must be embedded in the product name to qualify.
+    if not any(kw_u in run for run in _v466_name_acronyms(ic_name)):
+        return False
+    if not isinstance(text, str) or not text:
+        return True
+    # Is there a free-standing occurrence of the literal that is NOT
+    # part of the product-name token? If so, the block is grounded by
+    # more than the SKU → keep it.
+    name_spans = [(m.start(), m.end())
+                  for m in re.finditer(re.escape(ic_name), text,
+                                       re.IGNORECASE)]
+    try:
+        lit_re = re.compile(r"\b" + re.escape(kw_text) + r"\b",
+                            re.IGNORECASE)
+    except re.error:
+        return False
+    for m in lit_re.finditer(text):
+        inside_name = any(s <= m.start() and m.end() <= e
+                          for s, e in name_spans)
+        if not inside_name:
+            return False
+    return True
+
+
+def _v466_apply_spurious_block_guard(blocks, extracted, ic_name):
+    """ORGANIC #466 R2 (field-agent counter-evidence) — DETERMINISTIC
+    emitter-side guard. When L5 explicitly enumerates the analog block
+    types, any block whose spec is null AND whose only evidence is an
+    L1 product-name keyword match is marked ``spurious: true`` and
+    removed from `blocks` (so it never reaches the sizing-consuming
+    block list). No-op when L5 has no explicit enumeration (the
+    ambiguous case is owned by the skill prose).
+
+    Mutates `blocks` in place; returns the list of dropped (spurious-
+    marked) block dicts for audit surfacing. Chip-AGNOSTIC.
+    """
+    if not isinstance(blocks, list) or not blocks:
+        return []
+    if not _v466_l5_enumerates_block_types(extracted):
+        return []
+    survivors = []
+    dropped = []
+    for blk in blocks:
+        if not isinstance(blk, dict):
+            survivors.append(blk)
+            continue
+        spec = blk.get("spec")
+        if spec is not None:
+            survivors.append(blk)
+            continue
+        kw_text = blk.get("_v466_kw_literal")
+        src_text = None
+        src_name = blk.get("_v466_src_fname")
+        if isinstance(src_name, str):
+            src_text = (extracted or {}).get(src_name)
+        if src_text is None:
+            # Fall back to scanning every doc for the literal.
+            src_text = "\n\n".join(
+                t for t in (extracted or {}).values()
+                if isinstance(t, str))
+        if _v466_evidence_is_product_name_only(src_text, kw_text,
+                                               ic_name):
+            blk["spurious"] = True
+            blk["spurious_reason"] = (
+                "ORGANIC #466 R2: L5 explicitly enumerates analog block "
+                "types and this candidate has spec=null with evidence "
+                "grounded only in the L1 product-name keyword — excluded "
+                "from the sizing-consuming block list.")
+            # leave the entry out of the survivor (sizing) list
+            dropped.append(blk)
+            continue
+        survivors.append(blk)
+    blocks[:] = survivors
+    return dropped
+
+
+def _v466_strip_internal_fields(blocks) -> None:
+    """Drop the private bookkeeping keys the #466 guards stashed on each
+    block before the block list is serialised. Idempotent."""
+    if not isinstance(blocks, list):
+        return
+    for blk in blocks:
+        if isinstance(blk, dict):
+            blk.pop("_v466_kw_literal", None)
+            blk.pop("_v466_src_fname", None)
+
+
 # v1.6.66 — closes issue #7 Bug Z. Protocol-class acronyms harvested
 # from README prose (Taxi project: `DDR / SDR / PTP`) were emitted as
 # top-level pins by L1.pin_table → propagated to L9.ports. None of
@@ -27842,7 +28098,15 @@ def gen_l5_adi_spec(project: Path,
         for cls, pat in _ANALOG_KEYWORDS.items():
             if cls in seen_classes:
                 continue
-            m = re.search(pat, text, re.IGNORECASE)
+            # ORGANIC #466 R2 — keyword ANCHORING. Prefer a match on the
+            # block's own enumeration HEADER line (markdown heading
+            # mentioning "Block" / table header row) over the first
+            # prose hit. Without this, a class like `ldo` anchored on a
+            # sibling block's spec-table prose (``(one copy from the
+            # LDO)``) and `seen_classes` then blocked re-matching the
+            # correct ``(×1)`` header, so own-entry multiplicity read
+            # the wrong line. Chip-AGNOSTIC structural preference.
+            m = _v466_best_class_match(text, pat)
             if not m:
                 continue
             # v1.6.246 — for #107. Analog-context co-occurrence
@@ -27904,6 +28168,11 @@ def gen_l5_adi_spec(project: Path,
                 "low_confidence": (spec_str is None),
                 "evidence": f"input/docs/{fname} ({m.group(0)})",
                 "evidence_paragraph": paragraph.strip()[:240],
+                # ORGANIC #466 R2 — private bookkeeping for the
+                # emitter-side spurious-block guard. Stripped before
+                # serialisation by `_v466_strip_internal_fields`.
+                "_v466_kw_literal": m.group(0),
+                "_v466_src_fname": fname,
             }
             # v1.6.402 — for #292 P3. Parse quantifier preceding
             # block type into `count` / `multiplicity` fields.
@@ -28328,6 +28597,24 @@ def gen_l5_adi_spec(project: Path,
     # A-track has real targets instead of spec=null stub degradation.
     _v455_attach_block_specs(blocks, extracted)
 
+    # ORGANIC-20260606 #466 R2 (field-agent counter-evidence) —
+    # DETERMINISTIC emitter-side spurious-block guard. Runs ONLY when L5
+    # explicitly enumerates the analog block types; a spec-null block
+    # whose only evidence is an L1 product-name keyword match is marked
+    # spurious and dropped from the sizing-consuming block list. Must
+    # run AFTER `_v455_attach_block_specs` so a block that DID get a
+    # real spec table is never mistaken for a product-name hallucination.
+    _v466_spurious = _v466_apply_spurious_block_guard(
+        blocks, extracted, ic_name)
+    # Strip the #466 private bookkeeping keys before serialisation.
+    _v466_strip_internal_fields(blocks)
+    _v466_strip_internal_fields(_v466_spurious)
+    # Re-link the no_analog flag if the spurious guard emptied blocks,
+    # so analog_blocks_detected / no_analog / analog_blocks stay
+    # mutually consistent (same hard-link invariant as v1.6.246).
+    if not blocks:
+        _no_analog_flag = True
+
     content = {
         "schema_version": 2,
         "doc_class": "adi_spec",
@@ -28339,6 +28626,11 @@ def gen_l5_adi_spec(project: Path,
         "electrical_specs": elec_specs,
         "design_parameters": design_parameters,
     }
+    # ORGANIC #466 R2 — surface dropped product-name hallucinations for
+    # audit (NOT consumed by the sizing A-track). Only present when the
+    # deterministic enumeration guard actually dropped something.
+    if _v466_spurious:
+        content["spurious_analog_blocks"] = _v466_spurious
     # v1.6.129 (#50 Fix 3) — emit `analog/analog_block_list.json`
     # alongside L5_ADI_SPEC so the downstream analog runner + per-step
     # gates (analog_a*_check.py, which only consult the canonical
