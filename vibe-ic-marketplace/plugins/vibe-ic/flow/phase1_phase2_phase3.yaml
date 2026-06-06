@@ -35,11 +35,11 @@
 
 version: 2
 flow_name: phase1_phase2_phase3
-# total_steps counts the canonical integer main-track steps (1..43, v2.3.0).
+# total_steps counts the canonical integer main-track steps (1..44, v2.3.0).
 # Design-for-ECO added Step 18 (Spare-cell + ECO-prep insertion) as a
 # proper integer step between Placement (17) and CTS (19); every numeric
 # step id >= 18 was renumbered +1, growing the track from 40 to 41.
-total_steps: 43
+total_steps: 44
 analog_steps: 9
 
 # When a step maps to a plugin skill, use the `skill:` field with the
@@ -477,6 +477,12 @@ steps:
     gate:
       all_of:
         - program_exit_zero: "sdc_syntax_check . --json reports/phase2/sdc_check.json"
+        # v2.3.0 — exception-justification screen (advisory): every
+        # false_path/multicycle must correlate with the design's own
+        # CDC/L8 async evidence; wildcards + large multipliers flagged.
+        - optional_program_exit_zero:
+            command: "sdc_exception_correlation_check . --json reports/phase2/gates/sdc_exceptions.json"
+            condition_files_exist: ["phase2/stage2/constraints"]
         # sdc_validator_check fires only when L8 timing exists.
         - optional_program_exit_zero:
             command: "sdc_validator_check phase2/stage2/constraints --l8 phase1/generated_docs/L8_TIMING_WAVEFORM.json --json reports/sdc_validator.json"
@@ -1229,7 +1235,30 @@ steps:
             condition_files_exist: ["phase3/stage3/pnr/spare_cells.json"]
     blocks_on: [32]
 
+  # ── Step 35: DFM screen ──────────────────────────────────────────
+  # v2.3.0 — Design-for-Manufacturability, scoped HONESTLY for an
+  # open-source 130-180nm flow: the designer-side measurables run
+  # (per-layer CMP density window, redundant-via ratio counted from
+  # the routed DEF, litho/min-width margins cross-referenced to the
+  # Step-31 DRC deck); the foundry-side mask-synthesis items
+  # (OPC / RET / SRAF / PSM) are NAMED FOUNDRY_SIDE disclosure items —
+  # they appear at their correct flow position without pretending the
+  # designer executes them. At <=28nm they become designer-collaboration
+  # items (conditional note in the report).
   - id: 35
+    name: "DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure)"
+    stage: stage4
+    programs:
+      - dfm_screen_check
+    required_outputs:
+      - "reports/phase3/dfm_screen.json"
+    gate:
+      all_of:
+        - files_exist: ["reports/phase3/dfm_screen.json"]
+        - program_exit_zero: "dfm_screen_check . --json reports/phase2/gates/dfm_screen.json"
+    blocks_on: [34]
+
+  - id: 36
     name: "Tapeout checklist (final sign-off confirmation)"
     stage: stage4
     skills: [tapeout-checklist]
@@ -1241,7 +1270,7 @@ steps:
       program_exit_zero: "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
     blocks_on: [31, 32, 33, 34]
 
-  - id: 36
+  - id: 37
     name: "GDSII output (only if Step 31 PV fully clean)"
     stage: stage4
     mcp_tools: [eda_gds]
@@ -1255,9 +1284,9 @@ steps:
         # (KLayout def2gds, Magic gds write, etc.). This closes the
         # "rename old .def to .gds" loophole.
         - program_exit_zero: "provenance_check . --require-entries 1"
-    blocks_on: [34, 35]
+    blocks_on: [34, 36]
 
-  - id: 37
+  - id: 38
     name: "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)"
     stage: stage4
     skills: [tapeout-checklist]
@@ -1271,15 +1300,15 @@ steps:
       - "reports/phase3/foundry_handoff_audit.json"
     gate:
       program_exit_zero: "foundry_handoff_package_check . --json reports/phase3/foundry_handoff_audit.json"
-    blocks_on: [36]
+    blocks_on: [37]
     notes: |
       Final foundry-deliverable kit: mask reticle spec, WAT
       (Wafer Acceptance Test) probe plan, scribe-line PCM
       structures, corner-test ATE vector kit. Without this kit
       the foundry cannot accept the GDS for fab. Distinct from
-      Step 35 tapeout_checklist which is internal sign-off.
+      Step 36 tapeout_checklist which is internal sign-off.
 
-  - id: 38
+  - id: 39
     name: "FPGA final sign-off (recompile + on-board test)"
     stage: stage4
     skills: [fpga-test-harness]
@@ -1410,7 +1439,7 @@ steps:
     blocks_on: [M3]
 
 
-  - id: 39
+  - id: 40
     name: "Fabrication (foundry mask-set + wafer fab — external)"
     stage: stage5_manufacturing
     condition:
@@ -1422,13 +1451,13 @@ steps:
       - "phase3/stage5_manufacturing/wafer_lot_received.json"
     gate:
       program_exit_zero: "manufacturing_fab_intake_check . --json reports/manufacturing/fab_intake.json"
-    blocks_on: [37]
+    blocks_on: [38]
     notes: |
       External step. Plugin records lot id, mask set version, and
       foundry status; verifies wafer-lot file lands when foundry
       ships. Not waivable for production tape-out.
 
-  - id: 40
+  - id: 41
     name: "Wafer Sort / Probe Test (ATE + probe card)"
     stage: stage5_manufacturing
     condition:
@@ -1440,9 +1469,9 @@ steps:
       - "phase3/stage5_manufacturing/wafer_map.csv"
     gate:
       program_exit_zero: "wafer_sort_yield_check . --json reports/manufacturing/wafer_sort.json"
-    blocks_on: [39]
+    blocks_on: [40]
 
-  - id: 41
+  - id: 42
     name: "Packaging (assembly: wirebond / FC-CSP / WLCSP)"
     stage: stage5_manufacturing
     condition:
@@ -1453,9 +1482,9 @@ steps:
       - "phase3/stage5_manufacturing/packaging_log.json"
     gate:
       program_exit_zero: "packaging_intake_check . --json reports/manufacturing/packaging.json"
-    blocks_on: [40]
+    blocks_on: [41]
 
-  - id: 42
+  - id: 43
     name: "Final Test (ATE: functional + parametric + burn-in)"
     stage: stage5_manufacturing
     condition:
@@ -1467,15 +1496,15 @@ steps:
       - "phase3/stage5_manufacturing/burn_in_results.json"
     gate:
       program_exit_zero: "final_test_attestation_check . --json reports/manufacturing/final_test.json"
-    blocks_on: [41]
+    blocks_on: [42]
     notes: |
       Final-test sign-off before product ship. Functional test
       across PVT corners, parametric trim, optional burn-in for
       automotive / medical grades. Burn-in here is the production
       infant-mortality SCREEN; long-duration reliability qual is the
-      separate Step 43 (HTOL).
+      separate Step 44 (HTOL).
 
-  # ── Step 43: Reliability Qualification (HTOL) ────────────────────
+  # ── Step 44: Reliability Qualification (HTOL) ────────────────────
   # v2.3.0 — HTOL (High-Temperature Operating Life) / reliability
   # qualification is a distinct long-duration stress qual (cumulative
   # device-hours at elevated T/V → FIT rate), NOT the same thing as
@@ -1483,7 +1512,7 @@ steps:
   # / HTOL chambers; the gate verifies the attestation artifact is
   # substantive (device-hours, failures, derived FIT), never
   # fabricates reliability numbers.
-  - id: 43
+  - id: 44
     name: "Reliability qualification (HTOL / FIT attestation)"
     stage: stage5_manufacturing
     condition:
@@ -1494,7 +1523,7 @@ steps:
       - "phase3/stage5_manufacturing/htol_results.json"
     gate:
       program_exit_zero: "htol_attestation_check . --json reports/manufacturing/htol.json"
-    blocks_on: [42]
+    blocks_on: [43]
     notes: |
       Optional / grade-driven: required for automotive (AEC-Q100) /
       medical / industrial qualification; consumer MPW runs may skip

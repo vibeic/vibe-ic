@@ -1,14 +1,15 @@
 # Vibe-IC — 全部步驟：Phase → Stage → Step（v2.3.0・繁體中文）
 
-整條流程的每一步，以 **Phase → Stage → Step** 階層組織，主軸為**單一連續編號 1 → 43**
+整條流程的每一步，以 **Phase → Stage → Step** 階層組織，主軸為**單一連續編號 1 → 44**
 （自 Stage 1 的 Spec-to-RTL 起算）。Phase 1 的文件生成步驟以 **D1–D5** 標示（前置，
-不計入 1→43）；兩條並行支線 **Analog A1–A9** 與 **Mixed-signal M1–M4** 同時進行。
+不計入 1→44）；兩條並行支線 **Analog A1–A9** 與 **Mixed-signal M1–M4** 同時進行。
 
 v2.3.0 重點（對齊業界標準流程，發佈前一次到位）：
 
 - **Step 14 歸入 Stage 2**：它是合成→PnR 的交接 QA（合成階段收尾），非實體設計步驟；標註「開源 Yosys 專用」。
-- **新 Step 28：PERC / Reliability sign-off**：ESD 焊環＋放電拓樸、latch-up well-tap、跨電壓域保護——比照業界 Calibre-PERC 獨立簽核 deck，升為強制編號步驟（原 28–41 順移為 29–42）。
-- **新 Step 43：可靠度驗證（HTOL）**：長時操作壽命 qual，與 Step 42 的 burn-in（嬰兒期篩選）區分。
+- **新 Step 28：PERC / Reliability sign-off**：ESD 焊環＋放電拓樸、latch-up well-tap、跨電壓域保護——比照業界 Calibre-PERC 獨立簽核 deck，升為強制編號步驟（原 28–41 順移）。
+- **新 Step 35：DFM screen**：CMP 密度窗＋redundant-via 比率（DEF 確定性計數）＋ OPC/RET/SRAF/PSM 以 `FOUNDRY_SIDE` 具名揭露（mask 合成屬 foundry 端；≤28nm 升級為設計者協作項）。
+- **新 Step 44：可靠度驗證（HTOL）**：長時操作壽命 qual，與 Step 43 的 burn-in（嬰兒期篩選）區分。
 - 每步新增**輸入 / 輸出**兩欄（輸出取自 flow yaml 的 required_outputs）。
 
 **Phase → Stage 對照**
@@ -115,20 +116,21 @@ v2.3.0 重點（對齊業界標準流程，發佈前一次到位）：
 |---|---|---|---|---|
 | 33 | Power analysis | 全晶片功耗簽核（post-layout vectorless OpenSTA report_power；VCD 向量模式可選）。 | 網表・SDC・liberty（＋選用 VCD） | power 報告（leakage+dynamic, analysis_mode） |
 | 34 | Metal fill | 標準元件列 filler placement（white-space 填充）；逐層金屬 CMP 密度由 Step 31 的 KLayout deck 篩查。 | routed.def | `filled.def`・密度報告 |
-| 35 | Tapeout checklist | 最終簽核清單逐項確認（實質判定：DRC 計數、證據鏈）。 | 全部簽核報告 | `tapeout_checklist.json` |
-| 36 | GDSII output | 產出交付晶圓廠的 GDSII（僅當 Step 31 PV 全淨）。 | routed.def・merged GDS | 簽核級 `*.gds` |
-| 37 | Foundry handoff | foundry 實體 mask kit：mask spec＋WAT 計畫＋scribe PCM＋corner ATE 向量（chip-specific；foundry 待供欄位以 `PENDING_FOUNDRY_*` 具名）。 | GDS・netlist 統計・L10 測項 | `mask_spec.json`・`wat_plan.json`・scribe・`corner_test_vectors.json` |
-| 38 | FPGA final sign-off | 最終 FPGA 重編譯與板上驗證（板上 attestation，含硬體證據）。 | RTL・板卡 | final `.sof`・`on_board_pass.json` |
+| 35 | DFM screen | **（新）** 可製造性篩查：CMP 密度窗＋redundant-via 比率（single-cut 比例 advisory）；OPC/RET/SRAF/PSM 以 FOUNDRY_SIDE 具名揭露（≤28nm 為設計者協作項）。 | routed.def・密度報告 | `dfm_screen.json`（via 統計＋foundry-side 清單） |
+| 36 | Tapeout checklist | 最終簽核清單逐項確認（實質判定：DRC 計數、證據鏈）。 | 全部簽核報告 | `tapeout_checklist.json` |
+| 37 | GDSII output | 產出交付晶圓廠的 GDSII（僅當 Step 31 PV 全淨）。 | routed.def・merged GDS | 簽核級 `*.gds` |
+| 38 | Foundry handoff | foundry 實體 mask kit：mask spec＋WAT 計畫＋scribe PCM＋corner ATE 向量（chip-specific；foundry 待供欄位以 `PENDING_FOUNDRY_*` 具名）。 | GDS・netlist 統計・L10 測項 | `mask_spec.json`・`wat_plan.json`・scribe・`corner_test_vectors.json` |
+| 39 | FPGA final sign-off | 最終 FPGA 重編譯與板上驗證（板上 attestation，含硬體證據）。 | RTL・板卡 | final `.sof`・`on_board_pass.json` |
 
 ### Stage 5 — 製造與測試（post-fab；僅在收到矽晶時觸發）
 
 | # | 步驟 | 做什麼 | 輸入 | 輸出 |
 |---|---|---|---|---|
-| 39 | Fabrication | 晶圓廠光罩與晶圓製造（外部；OPC/RET 屬 foundry 端 mask 合成）。 | foundry handoff kit | mask/wafer 收貨 attestation |
-| 40 | Wafer sort / probe test | 晶圓針測、挑出良品裸晶；獨立重算良率並比對目標。 | wafer lot・probe 卡 | `wafer_sort_yield.json`・`wafer_map.csv` |
-| 41 | Packaging | 封裝（wirebond / FC-CSP / WLCSP）。 | 良品裸晶 | `packaging_log.json` |
-| 42 | Final test | 封裝後最終測試（functional + parametric + burn-in 嬰兒期篩選）。 | 封裝品・ATE 圖樣 | `final_test_yield.json`・`burn_in_results.json` |
-| 43 | Reliability qualification | **（新）** HTOL 長時壽命 qual（device-hours／failures／FIT attestation；車規/醫療等級必跑，消費級 MPW 可休眠）。 | HTOL 爐結果 | `htol_results.json` 判定 |
+| 40 | Fabrication | 晶圓廠光罩與晶圓製造（外部；OPC/RET 屬 foundry 端 mask 合成）。 | foundry handoff kit | mask/wafer 收貨 attestation |
+| 41 | Wafer sort / probe test | 晶圓針測、挑出良品裸晶；獨立重算良率並比對目標。 | wafer lot・probe 卡 | `wafer_sort_yield.json`・`wafer_map.csv` |
+| 42 | Packaging | 封裝（wirebond / FC-CSP / WLCSP）。 | 良品裸晶 | `packaging_log.json` |
+| 43 | Final test | 封裝後最終測試（functional + parametric + burn-in 嬰兒期篩選）。 | 封裝品・ATE 圖樣 | `final_test_yield.json`・`burn_in_results.json` |
+| 44 | Reliability qualification | **（新）** HTOL 長時壽命 qual（device-hours／failures／FIT attestation；車規/醫療等級必跑，消費級 MPW 可休眠）。 | HTOL 爐結果 | `htol_results.json` 判定 |
 
 > 流程外實驗室步驟（不列編號）：PFA/EFA（FIB/SEM/EMMI 破壞性失效分析）、silicon characterization（shmoo）——資料來自外部設備，plugin 提供 `wafer_map_pattern_classify` 等根因分析層。
 
@@ -167,15 +169,15 @@ v2.3.0 重點（對齊業界標準流程，發佈前一次到位）：
 |---|---|---|
 | Phase 1 — 規格與文件 | 兩條入口（Agent・doc-gen）＋架構探索前端 | D1–D5 + PM Agent・IC Expert Agent |
 | Phase 2 — RTL → 合成 | Stage 1・Stage 2 | 1–14 |
-| Phase 3 — 實體 → Tapeout | Stage 3・Stage 4・Stage 5 | 15–43 |
+| Phase 3 — 實體 → Tapeout | Stage 3・Stage 4・Stage 5 | 15–44 |
 | 並行 | Analog・Mixed-signal | A1–A9・M1–M4 |
 
-**43 個循序步驟**（Stage 1：1–6・Stage 2：7–14・Stage 3：15–32・Stage 4：33–38・
-Stage 5：39–43），外加 Phase 1（Agent 路徑與 doc-gen 路徑 D1–D5）與兩條並行支線
+**44 個循序步驟**（Stage 1：1–6・Stage 2：7–14・Stage 3：15–32・Stage 4：33–39・
+Stage 5：40–44），外加 Phase 1（Agent 路徑與 doc-gen 路徑 D1–D5）與兩條並行支線
 （Analog A1–A9・Mixed-signal M1–M4）。預檢：P0（環境健檢）。
 編排器 `vibe_ic_one_shot_runner.py` 依序執行 Phase 1 → Phase 2 → Analog → Phase 3。
 
-範圍外（婉拒並記錄理由）：OPC/RET（foundry 端）、商用硬體仿真器（FPGA 路徑涵蓋）、
+範圍外（婉拒並記錄理由）：OPC/RET 之「設計者執行」（mask 合成屬 foundry 端——已在 Step 35 以 FOUNDRY_SIDE 具名揭露＋Step 40 註記）、商用硬體仿真器（FPGA 路徑涵蓋）、
 MBIST/LBIST/EDT 壓縮（開源無引擎）、PFA/EFA、BSR/BSDL、自動 clock-gating
 （sky130 無特徵化 ICG cell；手動 RTL clock gating 可行）、via-doubling/CAA（商用 DFM）。
 

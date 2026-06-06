@@ -3548,7 +3548,7 @@ def step_usb_hid_tester_verify(project: Path, runs: int = 5,
     # v1.6.97 (issue #29 Bug 4) — the explicit ``"n/a"`` sentinel is
     # promoted from SKIP to WAIVED (PASS_WITH_WAIVERS-class). It is the
     # project owner's *explicit declaration* that no rig is in scope,
-    # so Step 38 (FPGA final sign-off ``all_scenarios_passed``) should
+    # so Step 39 (FPGA final sign-off ``all_scenarios_passed``) should
     # be unblocked with a recorded waiver entry rather than left in a
     # permanent SKIP that gates ECO loops. ``__TODO__`` is **NOT** a
     # waiver — it is an unfilled placeholder and continues to SKIP.
@@ -4161,7 +4161,7 @@ def step_emit_phase2_manifests(project: Path,
 
     # v1.6.207 (#89 P0) — pull bitstream provenance from fpga_burn extras
     # so the on_board_pass.json manifest carries the schema fields that
-    # fpga_on_board_attestation_check (Step 38) demands:
+    # fpga_on_board_attestation_check (Step 39) demands:
     #   bitstream_path / bitstream_sha / board / programmed_at / scenarios
     # plus the existing all_scenarios_passed.  Each piece is sourced from
     # a real step output (anti-fabrication: no synthesised constants —
@@ -4241,10 +4241,10 @@ def step_emit_phase2_manifests(project: Path,
     # v1.6.98 (issue #30 Bug 1) — propagate WAIVED tier from
     # usb_hid_tester_verify into on_board_pass.json. v1.6.97 added the WAIVED
     # status at the step level but the manifest writer only honored
-    # PASS, so Step 38 (FPGA final sign-off) kept FAILing on
+    # PASS, so Step 39 (FPGA final sign-off) kept FAILing on
     # PASS_WITH_WAIVERS-class projects (e.g. tester.name="n/a"). Triple
     # tier: PASS / WAIVED / SKIP. WAIVED carries all_scenarios_passed
-    # so Step 38's json_field_true(on_board_pass.json,
+    # so Step 39's json_field_true(on_board_pass.json,
     # "all_scenarios_passed") clears, plus review_required+ticket+
     # evidence so the PASS_WITH_WAIVERS audit trail is honest.
     prov = _burn_provenance()
@@ -4292,7 +4292,7 @@ def step_emit_phase2_manifests(project: Path,
     else:
         # FAIL / SKIP / ECO_LOOP / unknown — do NOT promote
         # all_scenarios_passed, but DO still emit the 6-field schema
-        # when fpga_burn ran so Step 38 (fpga_on_board_attestation_check)
+        # when fpga_burn ran so Step 39 (fpga_on_board_attestation_check)
         # has the audit-evidence fields populated (#90 P0). If
         # fpga_burn did NOT run (fpga_burn_step is None or status !=
         # PASS), keep the minimal 3-field stub — that path is the
@@ -4321,7 +4321,7 @@ def step_emit_phase2_manifests(project: Path,
 
     # v1.6.207 (#89 P0) — stage quartus_pgm output to
     # reports/phase2/fpga/quartus_pgm.log when fpga_burn returned
-    # stdout/stderr tails from the driver. Step 36 checks for any
+    # stdout/stderr tails from the driver. Step 37 checks for any
     # *pgm*.log carrying TOOL_MARKERS (USB-Blaster / quartus_pgm /
     # Configuration succeeded / etc.). chip-AGNOSTIC: same path for
     # every project whose burn ran.
@@ -4349,7 +4349,7 @@ def step_emit_phase2_manifests(project: Path,
             written.append("reports/phase2/fpga/quartus_pgm.log")
 
     # v1.6.206 (#88 P1) — emit a non-JSON evidence artefact alongside the
-    # JSON manifest so fpga_on_board_attestation_check Step 36 finds the
+    # JSON manifest so fpga_on_board_attestation_check Step 37 finds the
     # required `reports/fpga/on_board_evidence/*.{log,bin,csv,...}` file.
     # The gate refuses JSON-only evidence (anti-fabrication: byte captures
     # must be in a human-readable / raw form, not paraphrased into a

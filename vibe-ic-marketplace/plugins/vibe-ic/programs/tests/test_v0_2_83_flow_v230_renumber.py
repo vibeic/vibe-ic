@@ -36,8 +36,8 @@ _INT_IDS = sorted(i for i in _STEPS if isinstance(i, int))
 
 # ── structure ───────────────────────────────────────────────────────────────
 
-def test_flow_is_contiguous_1_to_43():
-    assert _INT_IDS == list(range(1, 44)), _INT_IDS
+def test_flow_is_contiguous_1_to_44():
+    assert _INT_IDS == list(range(1, 45)), _INT_IDS
 
 
 def test_step14_is_stage2_synthesis_handoff():
@@ -56,23 +56,32 @@ def test_step28_is_perc_reliability_signoff():
 
 
 def test_renumbered_steps_kept_identity():
-    # spot-pins across the shifted span
+    # spot-pins across the shifted span (incl. the Step-35 DFM insertion)
     assert "Gate-Level Simulation" in _STEPS[29]["name"]
     assert "SPICE" in _STEPS[30]["name"]
     assert "Physical" in _STEPS[31]["name"] or "DRC" in _STEPS[31]["name"]
     assert "ECO" in _STEPS[32]["name"]
     assert "Power" in _STEPS[33]["name"]
     assert "fill" in _STEPS[34]["name"].lower()
-    assert "GDS" in _STEPS[36]["name"]
-    assert "Handoff" in _STEPS[37]["name"] or "handoff" in _STEPS[37]["name"]
-    assert "FPGA" in _STEPS[38]["name"]
-    assert "Final Test" in _STEPS[42]["name"]
+    assert "DFM" in _STEPS[35]["name"]
+    assert "checklist" in _STEPS[36]["name"].lower()
+    assert "GDS" in _STEPS[37]["name"]
+    assert "Handoff" in _STEPS[38]["name"] or "handoff" in _STEPS[38]["name"]
+    assert "FPGA" in _STEPS[39]["name"]
+    assert "Final Test" in _STEPS[43]["name"]
 
 
-def test_step43_htol_conditional():
-    s = _STEPS[43]
+def test_step35_dfm_screen():
+    s = _STEPS[35]
+    assert s["stage"] == "stage4"
+    assert "dfm_screen_check" in json.dumps(s.get("gate", {}))
+    assert s["blocks_on"] == [34]
+
+
+def test_step44_htol_conditional():
+    s = _STEPS[44]
     assert "HTOL" in s["name"]
-    assert s["blocks_on"] == [42]
+    assert s["blocks_on"] == [43]
     assert "htol_results.json" in json.dumps(s.get("condition", {}))
 
 
@@ -93,9 +102,9 @@ def test_env_map_matches_yaml():
     assert m["physical_verification"] == 31
     assert m["ir_drop"] == 24 and m["em"] == 25
     assert m["antenna"] == 26 and m["si"] == 27
-    assert m["perc"] == 28 and m["htol"] == 43
-    assert m["metal_fill"] == 34
-    assert m["fpga_final_signoff"] == 38
+    assert m["perc"] == 28 and m["htol"] == 44
+    assert m["metal_fill"] == 34 and m["dfm"] == 35
+    assert m["fpga_final_signoff"] == 39
     # every mapped id must exist in the yaml
     for name, sid in m.items():
         assert sid in _STEPS, (name, sid)

@@ -1,9 +1,9 @@
 # Vibe-IC — All Steps: Phase → Stage → Step (v2.3.0)
 
 Every step of the full flow, organised as **Phase → Stage → Step** with a
-**single continuous numbering 1 → 43** (starting from Stage 1's Spec-to-RTL).
+**single continuous numbering 1 → 44** (starting from Stage 1's Spec-to-RTL).
 Phase 1's document-generation steps are labelled **D1–D5** (pre-flow, not
-counted in 1→43); two parallel tracks — **Analog A1–A9** and **Mixed-signal
+counted in 1→44); two parallel tracks — **Analog A1–A9** and **Mixed-signal
 M1–M4** — run alongside.
 
 v2.3.0 highlights (aligned with the industry-standard flow, fixed once
@@ -16,8 +16,12 @@ before official release):
   topology, latch-up well-tap, cross-voltage-domain protection; mirrors the
   industry's standalone Calibre-PERC sign-off deck as an enforced numbered
   step (old 28–41 renumbered to 29–42).
-- **New Step 43: Reliability qualification (HTOL)** — long-duration
-  operating-life qual, distinct from Step 42's burn-in (infant-mortality
+- **New Step 35: DFM screen** — CMP density window + redundant-via
+  ratio (deterministic DEF count) + OPC/RET/SRAF/PSM as NAMED
+  `FOUNDRY_SIDE` disclosure items (mask synthesis is foundry-side; at
+  <=28nm they become designer-collaboration items).
+- **New Step 44: Reliability qualification (HTOL)** — long-duration
+  operating-life qual, distinct from Step 43's burn-in (infant-mortality
   screen).
 - Every step now carries **Input / Output** columns (outputs derive from the
   flow yaml's required_outputs).
@@ -129,20 +133,21 @@ Flow: user free text → PM Agent → IC Expert Agent → finalised L-series doc
 |---|---|---|---|---|
 | 33 | Power analysis (post-layout) | Full-chip power sign-off (post-layout vectorless OpenSTA report_power; optional VCD vector mode). | netlist · SDC · liberty (+ optional VCD) | power report (leakage+dynamic, analysis_mode) |
 | 34 | Metal fill (density fill insertion) | Std-cell-row filler placement (white-space); per-layer metal CMP density screened by Step 31's KLayout deck. | routed.def | `filled.def` · density report |
-| 35 | Tapeout checklist (final sign-off) | Item-by-item final confirmation (substance checks: DRC counts, evidence chains). | all sign-off reports | `tapeout_checklist.json` |
-| 36 | GDSII output | Stream the foundry-deliverable GDSII (only when Step 31 PV is fully clean). | routed.def · merged GDS | sign-off `*.gds` |
-| 37 | Foundry handoff (mask spec + WAT + scribe + corner vectors) | Foundry physical mask kit: mask spec + WAT plan + scribe PCM + corner ATE vectors (chip-specific; foundry-supplied fields named `PENDING_FOUNDRY_*`). | GDS · netlist stats · L10 cases | `mask_spec.json` · `wat_plan.json` · scribe · `corner_test_vectors.json` |
-| 38 | FPGA final sign-off (on-board test) | Final FPGA recompile + on-board attestation with hardware evidence. | RTL · board | final `.sof` · `on_board_pass.json` |
+| 35 | DFM screen (manufacturability) | **(new)** CMP density window + redundant-via ratio (single-cut fraction advisory); OPC/RET/SRAF/PSM as FOUNDRY_SIDE disclosure items (designer-collaboration at <=28nm). | routed.def · density report | `dfm_screen.json` (via stats + foundry-side list) |
+| 36 | Tapeout checklist (final sign-off) | Item-by-item final confirmation (substance checks: DRC counts, evidence chains). | all sign-off reports | `tapeout_checklist.json` |
+| 37 | GDSII output | Stream the foundry-deliverable GDSII (only when Step 31 PV is fully clean). | routed.def · merged GDS | sign-off `*.gds` |
+| 38 | Foundry handoff (mask spec + WAT + scribe + corner vectors) | Foundry physical mask kit: mask spec + WAT plan + scribe PCM + corner ATE vectors (chip-specific; foundry-supplied fields named `PENDING_FOUNDRY_*`). | GDS · netlist stats · L10 cases | `mask_spec.json` · `wat_plan.json` · scribe · `corner_test_vectors.json` |
+| 39 | FPGA final sign-off (on-board test) | Final FPGA recompile + on-board attestation with hardware evidence. | RTL · board | final `.sof` · `on_board_pass.json` |
 
 ### Stage 5 — Manufacturing & test (post-fab; triggers on silicon receipt)
 
 | # | Step | What it does | Input | Output |
 |---|---|---|---|---|
-| 39 | Fabrication (foundry, external) | Foundry mask-set + wafer fab (OPC/RET are foundry-side mask synthesis). | foundry handoff kit | mask/wafer intake attestations |
-| 40 | Wafer sort / probe test | Wafer probing, good-die selection; yield independently re-derived vs target. | wafer lot · probe card | `wafer_sort_yield.json` · `wafer_map.csv` |
-| 41 | Packaging (assembly) | wirebond / FC-CSP / WLCSP assembly. | good dies | `packaging_log.json` |
-| 42 | Final test (ATE + burn-in) | Post-package final test (functional + parametric + burn-in infant-mortality screen). | packaged units · ATE patterns | `final_test_yield.json` · `burn_in_results.json` |
-| 43 | Reliability qualification (HTOL / FIT) | **(new)** Long-duration HTOL qual (device-hours / failures / FIT attestation; required for automotive/medical grades, dormant for consumer MPW). | HTOL chamber results | `htol_results.json` verdict |
+| 40 | Fabrication (foundry, external) | Foundry mask-set + wafer fab (OPC/RET are foundry-side mask synthesis). | foundry handoff kit | mask/wafer intake attestations |
+| 41 | Wafer sort / probe test | Wafer probing, good-die selection; yield independently re-derived vs target. | wafer lot · probe card | `wafer_sort_yield.json` · `wafer_map.csv` |
+| 42 | Packaging (assembly) | wirebond / FC-CSP / WLCSP assembly. | good dies | `packaging_log.json` |
+| 43 | Final test (ATE + burn-in) | Post-package final test (functional + parametric + burn-in infant-mortality screen). | packaged units · ATE patterns | `final_test_yield.json` · `burn_in_results.json` |
+| 44 | Reliability qualification (HTOL / FIT) | **(new)** Long-duration HTOL qual (device-hours / failures / FIT attestation; required for automotive/medical grades, dormant for consumer MPW). | HTOL chamber results | `htol_results.json` verdict |
 
 > Out-of-flow lab steps (unnumbered): PFA/EFA (destructive FIB/SEM/EMMI
 > failure analysis) and silicon characterization (shmoo) — data originates
@@ -184,16 +189,16 @@ Flow: user free text → PM Agent → IC Expert Agent → finalised L-series doc
 |---|---|---|
 | Phase 1 — Specification & documents | two entries (Agent · doc-gen) + architecture front-ends | D1–D5 + PM Agent · IC Expert Agent |
 | Phase 2 — RTL → synthesis | Stage 1 · Stage 2 | 1–14 |
-| Phase 3 — Physical → Tapeout | Stage 3 · Stage 4 · Stage 5 | 15–43 |
+| Phase 3 — Physical → Tapeout | Stage 3 · Stage 4 · Stage 5 | 15–44 |
 | Parallel | Analog · Mixed-signal | A1–A9 · M1–M4 |
 
-**43 sequential steps** (Stage 1: 1–6 · Stage 2: 7–14 · Stage 3: 15–32 ·
-Stage 4: 33–38 · Stage 5: 39–43), plus Phase 1 (Agent path & doc-gen path
+**44 sequential steps** (Stage 1: 1–6 · Stage 2: 7–14 · Stage 3: 15–32 ·
+Stage 4: 33–39 · Stage 5: 40–44), plus Phase 1 (Agent path & doc-gen path
 D1–D5) and the two parallel tracks (Analog A1–A9 · Mixed-signal M1–M4).
 Preflight: P0 (environment health check).
 Orchestrator `vibe_ic_one_shot_runner.py` runs Phase 1 → Phase 2 → Analog → Phase 3.
 
-Out of scope (declined with reasons): OPC/RET (foundry-side), commercial
+Out of scope (declined with reasons): designer-EXECUTED OPC/RET (mask synthesis is foundry-side — surfaced as FOUNDRY_SIDE items in Step 35 + noted at Step 40), commercial
 hardware emulators (FPGA path covers the intent), MBIST/LBIST/EDT compression
 (no open-source engines), PFA/EFA, BSR/BSDL, automatic clock gating (no
 characterized ICG cell in sky130; manual RTL clock gating remains available),

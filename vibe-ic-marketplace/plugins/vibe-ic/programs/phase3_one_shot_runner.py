@@ -4431,6 +4431,22 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(erc_rpt))
             written.append(str(rpt_phase3 / "erc.json"))
 
+    # --- v2.3.0: Step 35 DFM screen (CMP density + via redundancy) ------
+    # Runs the deterministic dfm_screen_check (it writes the canonical
+    # reports/phase3/dfm_screen.json itself); best-effort like the other
+    # canonicalize emitters — the gate re-runs it for the verdict.
+    dfm_json = rpt_phase3 / "dfm_screen.json"
+    if primary_def.is_file() and not dfm_json.is_file():
+        try:
+            subprocess.run(
+                [sys.executable, str(PROGRAMS_DIR / "dfm_screen_check.py"),
+                 str(project)],
+                timeout=300, check=False, capture_output=True, text=True)
+            if dfm_json.is_file():
+                written.append(str(dfm_json))
+        except Exception as exc:
+            notes.append(f"DFM screen emit failed: {exc}")
+
     # --- ORGANIC-20260601: Step 28 PERC-equivalent coverage aggregate (v2.3.0 numbered step) ----
     # Aggregates antenna/IR/EM/floating (AUTOMATED) + EM guardband + ESD/
     # latch-up/x-domain (MANUAL_REVIEW or N/A) into ONE honest report + memo.
@@ -4697,10 +4713,16 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         ok = _emit_power_report(project, top, pdk, container, power_rpt, notes)
         if ok:
             written.append(str(power_rpt))
-            # Companion .json for the gate's structured-form aspirations
+            # Companion .json for the gate's structured-form aspirations.
+            # v2.3.0: `analysis_mode` discloses vector-vs-vectorless —
+            # parsed back from the report's POWER_ANALYSIS_MODE line.
+            _pwr_txt = power_rpt.read_text(errors="replace")
+            _mode = ("vector_vcd" if "POWER_ANALYSIS_MODE: vector_vcd"
+                     in _pwr_txt else "vectorless_sdc")
             (rpt_phase3 / "power.json").write_text(json.dumps({
                 "tool": "opensta",
                 "source": str(power_rpt.relative_to(project)),
+                "analysis_mode": _mode,
                 "verdict": "PASS",
                 "evidence": "report_power output below",
             }, indent=2) + "\n")
@@ -4802,7 +4824,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             drc_signoff.write_text(header + src_drc.read_text(errors="ignore"))
             written.append(str(drc_signoff))
 
-    # --- Step 36: GDS canonical alias (REAL FILE, NOT SYMLINK — rule #1)
+    # --- Step 37: GDS canonical alias (REAL FILE, NOT SYMLINK — rule #1)
     if primary_gds.is_file():
         canon_gds = gds_out / f"{top}.gds"
         if not canon_gds.is_file():
@@ -4815,7 +4837,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     dst.write(chunk)
             written.append(str(canon_gds))
 
-    # --- Step 38: FPGA on_board_pass.json schema alignment --------------
+    # --- Step 39: FPGA on_board_pass.json schema alignment --------------
     # The fpga_on_board_attestation_check requires:
     #   all_scenarios_passed, bitstream_path, bitstream_sha, board,
     #   programmed_at, scenarios
@@ -5189,6 +5211,21 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
         f"read_liberty {_to_container_path(str(f), container)}"
         for f in pdk.macro_libs
     )
+    # v2.3.0 — VECTOR-BASED dynamic power (opt-in by artifact): when a
+    # simulation VCD exists, feed it to OpenSTA `read_power_activities`
+    # so switching power comes from REAL activity instead of the
+    # vectorless SDC default. The chosen mode is disclosed in power.rpt
+    # and power.json (`analysis_mode`); no VCD → vectorless (honest).
+    vcd_cands = (sorted(_pl.sim_dir(project).rglob("*.vcd"))
+                 + sorted(_pl.sim_full_stack_dir(project).rglob("*.vcd")))
+    vcd = next((v for v in vcd_cands if v.stat().st_size > 0), None)
+    analysis_mode = "vector_vcd" if vcd else "vectorless_sdc"
+    vcd_tcl = ""
+    if vcd:
+        vcd_c = _to_container_path(str(vcd), container)
+        vcd_tcl = (f"if {{[catch {{read_power_activities -vcd {vcd_c}}} "
+                   f"_vcd_err]}} {{\n"
+                   f"  puts \"READ_VCD_FAIL: $_vcd_err\"\n}}\n")
     tcl_path = power_rpt.parent / f"power_{top}.tcl"
     tcl_path.write_text(f"""
 read_liberty {lib_c}
@@ -5196,8 +5233,9 @@ read_liberty {lib_c}
 read_verilog {netlist_c}
 link_design {top}
 read_sdc {sdc_c}
-# report_power emits leakage + dynamic + internal categories explicitly,
+{vcd_tcl}# report_power emits leakage + dynamic + internal categories explicitly,
 # which is what eda_report_audit:power's substance check looks for.
+puts "POWER_ANALYSIS_MODE: {analysis_mode}"
 if {{[catch {{report_power}} pwr_err]}} {{
   puts "REPORT_POWER_FAIL: $pwr_err"
 }}

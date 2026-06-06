@@ -50,7 +50,7 @@ Usage:
 Waivers (<project>/waivers.json):
     {
       "waived_steps": [
-        {"id": 38, "reason": "No FPGA board this session", "approver": "user"}
+        {"id": 39, "reason": "No FPGA board this session", "approver": "user"}
       ]
     }
 """
@@ -2506,15 +2506,15 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
 # step-id used by the flow YAML. Chip-AGNOSTIC: keys are step roles,
 # never chip names.
 # v2.3.0 renumber: the map is aligned to the v2.3.0 flow YAML (PERC
-# inserted at 28, downstream +1; HTOL added at 43). The pre-v2.3.0 map
+# inserted at 28, DFM at 35, downstream shifted; HTOL at 44). The pre-v2.3.0 map
 # carried off-by-one legacy ids (drc→29 while PV was 30, ir_drop→23
 # while IR was 24, …) — fixed wholesale here, single source = the YAML.
 _ENV_UNAVAILABLE_STEP_NAME_TO_ID: Dict[str, Any] = {
     "fpga_compile":         6,
     "fpga_early_prototype": 6,
-    "fpga_onboard_test":    38,
-    "fpga_final_signoff":   38,
-    "fpga_signoff":         38,
+    "fpga_onboard_test":    39,
+    "fpga_final_signoff":   39,
+    "fpga_signoff":         39,
     "drc":                  31,
     "lvs":                  31,
     "erc":                  31,
@@ -2533,7 +2533,8 @@ _ENV_UNAVAILABLE_STEP_NAME_TO_ID: Dict[str, Any] = {
     "post_layout_sim":      29,
     "post_layout_spice":    30,
     "metal_fill":           34,
-    "htol":                 43,
+    "dfm":                  35,
+    "htol":                 44,
 }
 
 

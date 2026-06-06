@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 644
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 644)
+- **Total programs (excluding helpers / shims):** 646
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 646)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 635 |
+| `any` | 637 |
 
 ## Alphabetical listing
 
@@ -182,6 +182,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `design_complexity_estimator` | any | — | design_complexity_estimator.py -- Heuristic design-complexity score and |
 | `deterministic_rtl_dispatcher` | any | v0.1.9 | Phase-2 program-first RTL router. |
 | `device_response_no_br_check` | any | — | deterministic compliance check derived from |
+| `dfm_screen_check` | any | — | Step 35 DFM screen (v2.3.0). |
 | `dft_atpg_coverage_check` | any | — | REAL stuck-at coverage gate (Step 11 DFT/ATPG). |
 | `dispatch_fetch_loop_population_check` | any | — | Stub multi-frame fetch loop detector. |
 | `dispatch_handler_completeness` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 58 | Wave 58 / BACKLOG-v12 P0.2 plugin gate. |
@@ -553,6 +554,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `scope_response_byte_decode_check` | any | — | P0.3 deterministic gate |
 | `scope_waveform_metrics` | any | — | deterministic scope-CSV metric extractor. |
 | `sd_cmd_extractor` | any | — | for #36 Bug 8: SD-spec CMD table picker. |
+| `sdc_exception_correlation_check` | any | — | Step 8 SDC EXCEPTION |
 | `sdc_gen` | any | Wave 72 | auto-generate Synopsys Design Constraints (SDC). |
 | `sdc_syntax_check` | any | — | Deterministic compliance check for constraint-gen. |
 | `sdc_validator_check` | any | — | validate SDC against L8 timing constraints. |
@@ -607,7 +609,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `synth_netlist_check` | any | — | Deterministic synthesis netlist validation checker. |
 | `synth_wrapper_check` | any | — | Deterministic compliance check for synth-wrapper-gen. |
 | `synth_wrapper_gen` | any | — | auto-generate synthesis wrapper for inout-port designs. |
-| `tapeout_checklist_gen` | any | — | emit Step 35 (v2.3.0) reports/audit/tapeout_checklist.json. |
+| `tapeout_checklist_gen` | any | — | emit Step 36 (v2.3.0) reports/audit/tapeout_checklist.json. |
 | `tapeout_signoff_check` | any | — | wrapper for signoff_audit --mode tapeout. |
 | `tb_timing_extremes_check` | any | — | LL-6. |
 | `tb_vcs_only_construct_detect` | any | — | detect VCS/Xcelium-only |
@@ -716,7 +718,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (635 programs)
+### `any` (637 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -871,6 +873,7 @@ _(no programs in this group)_
 - `design_complexity_estimator` — design_complexity_estimator.py -- Heuristic design-complexity score and
 - `deterministic_rtl_dispatcher` — Phase-2 program-first RTL router.  _[v0.1.9]_
 - `device_response_no_br_check` — deterministic compliance check derived from
+- `dfm_screen_check` — Step 35 DFM screen (v2.3.0).
 - `dft_atpg_coverage_check` — REAL stuck-at coverage gate (Step 11 DFT/ATPG).
 - `dispatch_fetch_loop_population_check` — Stub multi-frame fetch loop detector.
 - `dispatch_register_default_reset_check` — Response register reset at frame boundaries.
@@ -1238,6 +1241,7 @@ _(no programs in this group)_
 - `scope_response_byte_decode_check` — P0.3 deterministic gate
 - `scope_waveform_metrics` — deterministic scope-CSV metric extractor.
 - `sd_cmd_extractor` — for #36 Bug 8: SD-spec CMD table picker.
+- `sdc_exception_correlation_check` — Step 8 SDC EXCEPTION
 - `sdc_gen` — auto-generate Synopsys Design Constraints (SDC).  _[Wave 72]_
 - `sdc_syntax_check` — Deterministic compliance check for constraint-gen.
 - `sdc_validator_check` — validate SDC against L8 timing constraints.
@@ -1292,7 +1296,7 @@ _(no programs in this group)_
 - `synth_netlist_check` — Deterministic synthesis netlist validation checker.
 - `synth_wrapper_check` — Deterministic compliance check for synth-wrapper-gen.
 - `synth_wrapper_gen` — auto-generate synthesis wrapper for inout-port designs.
-- `tapeout_checklist_gen` — emit Step 35 (v2.3.0) reports/audit/tapeout_checklist.json.
+- `tapeout_checklist_gen` — emit Step 36 (v2.3.0) reports/audit/tapeout_checklist.json.
 - `tapeout_signoff_check` — wrapper for signoff_audit --mode tapeout.
 - `tb_timing_extremes_check` — LL-6.
 - `tb_vcs_only_construct_detect` — detect VCS/Xcelium-only
