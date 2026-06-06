@@ -442,6 +442,21 @@ def cmd_score(bench: str, run: str, dataset: str | None):
                 "transcript + path named above). The run is not blind and "
                 "CANNOT be scored as canonical; fix the orchestration and "
                 "re-run clean-room.")
+        # rc == 3 is AUDIT_ERROR (blindness_audit.EXIT_AUDIT_ERROR): the
+        # auditor itself crashed (e.g. a malformed transcript line). This is a
+        # TOOL failure, NOT a blindness violation — it must NEVER be folded
+        # into the FAIL message above (ORGANIC-20260607, #480). Refuse to
+        # score (the audit could not vouch for the run) but say so honestly so
+        # the host fixes the transcript/auditor rather than the orchestration.
+        if rc == 3:
+            raise SystemExit(
+                "blindness audit could NOT complete (AUDIT_ERROR) — the "
+                "auditor hit an internal error while scanning the transcripts "
+                "(see message above); this is a tool failure, NOT a blindness "
+                "violation. The run is NOT blindness-verified, so it cannot be "
+                "scored as canonical yet; fix the transcript/auditor and re-run "
+                "the audit. (Do not treat this as 'agent accessed dataset "
+                "files'.)")
     elif audit.is_file():
         print("NOTICE: <RUNDIR>/transcripts/ not present or empty — blindness "
               "audit skipped. Export is the orchestration DEFAULT (--setup "

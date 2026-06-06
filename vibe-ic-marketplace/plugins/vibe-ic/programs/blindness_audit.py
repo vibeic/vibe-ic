@@ -48,8 +48,25 @@ structure; no IC/vendor/bench-name literals in detection logic.
 EXIT CODES
 ----------
 0 = scanned >=1 transcript, no violations
-1 = violations found (printed + optional --json)
+1 = blindness violation(s) found (printed + optional --json)
 2 = nothing to audit (no transcript files found) / usage error
+3 = AUDIT_ERROR — an auditor-internal exception (e.g. an OSError while
+    classifying a path) aborted the scan. This is a TOOL failure, NOT a
+    blindness violation; the consumer must NEVER fold it into a FAIL
+    verdict (ORGANIC-20260607-blindness-audit-jsonl-crash, #480).
+
+JSONL TRANSCRIPTS (Claude-Code export)
+--------------------------------------
+A Claude-Code transcript is one JSON object per line. The auditor parses
+each line with json.loads and inspects the structured tool-use input FIELDS
+(file_path / command / paths / pattern / …) — it never regexes over the raw
+JSON line, because a single line concatenates a legal prompt-file read with
+the rest of the JSON ({"file_path":".../X_prompt.txt"},"caller":{"type":
+"direct"}}…) and a raw-tail extraction would glue them into one enormous
+non-existent path → OSError: File name too long → a genuinely-blind run
+mis-scored as a blindness FAIL (#480). Non-JSON lines fall back to the
+legacy plain-text line scan, so READ-line / fs-access-log transcripts still
+work unchanged.
 """
 from __future__ import annotations
 
@@ -61,6 +78,17 @@ from pathlib import Path
 
 HARNESS = Path(__file__).resolve().parent.parent / "benchmark-harness"
 REGISTRY = HARNESS / "BENCHMARK_REGISTRY.json"
+
+# Exit codes (see module docstring). EXIT_AUDIT_ERROR is distinct from the
+# blindness-violation code so a tool crash can never masquerade as a FAIL.
+EXIT_CLEAN = 0
+EXIT_VIOLATION = 1
+EXIT_NOTHING = 2
+EXIT_AUDIT_ERROR = 3
+
+
+class AuditError(Exception):
+    """An auditor-internal failure (not a blindness violation)."""
 
 # Default allowed prompt-file globs (basename match). --bench narrows this to
 # the registry layout's declared prompt file(s); --allowed-glob overrides.
@@ -149,8 +177,14 @@ def _extract_rel(line: str, end: int, ds: str) -> str:
     full = (ds + tail).rstrip()
     probe = full
     while len(probe) > len(ds):
-        if Path(probe).exists():
-            return probe[len(ds):].lstrip("/")
+        try:
+            if Path(probe).exists():
+                return probe[len(ds):].lstrip("/")
+        except OSError:
+            # an over-long / malformed candidate (e.g. a JSON line whose tail
+            # was glued onto the path) can't name a real file — treat as
+            # absent and keep shrinking; never let it abort the scan (#480).
+            pass
         cut = probe.rfind(" ")
         if cut <= len(ds):
             break
@@ -161,50 +195,129 @@ def _extract_rel(line: str, end: int, ds: str) -> str:
     return m2.group(0).lstrip("/")
 
 
-def audit_text(text: str, dataset: Path, allowed: list[str],
-               source: str) -> list[dict]:
-    """Pure scanner: return violation dicts for one transcript text."""
+# Tool-use input fields that can carry a filesystem path or a shell command.
+# Claude-Code Read/Write/Edit use file_path; Bash uses command; Grep/Glob use
+# path + pattern; generic tools may use paths[]/files[]/cwd. We pull these
+# VALUES out of the parsed JSON and scan them directly — never the raw line.
+_PATH_FIELDS = ("file_path", "path", "notebook_path", "cwd", "directory",
+                "filename", "target_file", "absolute_path")
+_LIST_FIELDS = ("paths", "files", "file_paths")
+_CMD_FIELDS = ("command", "cmd", "pattern", "query", "script")
+
+
+def _harvest_tool_strings(obj) -> list[str]:
+    """Recursively pull tool-use input string VALUES (paths + commands) out of
+    a parsed JSON transcript object. We walk the whole structure so it works
+    regardless of the exact Claude-Code envelope nesting (message.content[]
+    blocks, tool_result content, sub-agent caller frames, …)."""
+    out: list[str] = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            # tool_use blocks carry the actionable fields under "input"; but be
+            # liberal and also scan path/command fields wherever they appear.
+            inp = node.get("input")
+            scopes = [node]
+            if isinstance(inp, dict):
+                scopes.append(inp)
+            for sc in scopes:
+                for k in _PATH_FIELDS + _CMD_FIELDS:
+                    v = sc.get(k)
+                    if isinstance(v, str):
+                        out.append(v)
+                for k in _LIST_FIELDS:
+                    v = sc.get(k)
+                    if isinstance(v, list):
+                        out.extend(x for x in v if isinstance(x, str))
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(obj)
+    # de-dup while preserving first-seen order: the same field can be reached
+    # both as a sub-scope of its parent and again when recursion descends into
+    # it as its own node, so a single read would otherwise be flagged twice.
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for s in out:
+        if s not in seen:
+            seen.add(s)
+            uniq.append(s)
+    return uniq
+
+
+def _scan_fragment(frag: str, ds: str, allowed: list[str], source: str,
+                   ln_no: int) -> list[dict]:
+    """Run V1/V2/V3 over one already-isolated fragment (a JSON field value, or
+    a whole legacy text line). `frag` is self-terminated, so V1 path
+    extraction never bleeds into adjacent JSON (#480)."""
     from fnmatch import fnmatch
     findings: list[dict] = []
-    ds = str(dataset).rstrip("/")
     path_re = re.compile(re.escape(ds))
+    # V1 — dataset paths beyond allowed prompt files
+    for m in path_re.finditer(frag):
+        rel = _extract_rel(frag, m.end(), ds)
+        if not rel:
+            continue                           # bare dataset root: benign
+        base = Path(rel.rstrip("/")).name
+        if not base:
+            continue
+        if any(fnmatch(base, g) for g in allowed):
+            continue
+        findings.append({
+            "kind": "dataset-file-access",
+            "class": _classify_rel(rel),
+            "path": f"{ds}/{rel}",
+            "allowed_globs": list(allowed),
+            "transcript": source, "line": ln_no,
+            "evidence": frag.strip()[:300],
+        })
+    # V2 — agent-side scorer invocation (verdict-level oracle query)
+    if _SCORER_INVOKE_RE.search(frag):
+        findings.append({
+            "kind": "scorer-self-run",
+            "class": "agent-side host-scorer invocation (oracle query)",
+            "transcript": source, "line": ln_no,
+            "evidence": frag.strip()[:300],
+        })
+    # V3 — vetted canonical-sample access (solution knowledge; host-only)
+    if _CANONICAL_PATH_RE.search(frag):
+        findings.append({
+            "kind": "canonical-sample-access",
+            "class": "vetted canonical defect-audit sample "
+                     "(solution knowledge — host scorer only)",
+            "transcript": source, "line": ln_no,
+            "evidence": frag.strip()[:300],
+        })
+    return findings
+
+
+def audit_text(text: str, dataset: Path, allowed: list[str],
+               source: str) -> list[dict]:
+    """Pure scanner: return violation dicts for one transcript text.
+
+    Each line is parsed with json.loads first; a Claude-Code JSONL line is
+    scanned through its STRUCTURED tool-use input field values (so a legal
+    prompt read does not concatenate with the rest of the JSON, #480). A line
+    that is not a JSON object falls back to the legacy raw-line text scan
+    (READ-lines / fs-access logs / prose mentions)."""
+    findings: list[dict] = []
+    ds = str(dataset).rstrip("/")
     for ln_no, line in enumerate(text.splitlines(), 1):
-        # V1 — dataset paths beyond allowed prompt files
-        for m in path_re.finditer(line):
-            rel = _extract_rel(line, m.end(), ds)
-            if not rel:
-                continue                       # bare dataset root: benign
-            base = Path(rel.rstrip("/")).name
-            if not base:
-                continue
-            if any(fnmatch(base, g) for g in allowed):
-                continue
-            findings.append({
-                "kind": "dataset-file-access",
-                "class": _classify_rel(rel),
-                "path": f"{ds}/{rel}",
-                "allowed_globs": list(allowed),
-                "transcript": source, "line": ln_no,
-                "evidence": line.strip()[:300],
-            })
-        # V2 — agent-side scorer invocation (verdict-level oracle query)
-        if _SCORER_INVOKE_RE.search(line):
-            findings.append({
-                "kind": "scorer-self-run",
-                "class": "agent-side host-scorer invocation (oracle query)",
-                "transcript": source, "line": ln_no,
-                "evidence": line.strip()[:300],
-            })
-        # V3 — vetted canonical-sample access (defect-audit data is
-        # solution knowledge; host-scorer-only)
-        if _CANONICAL_PATH_RE.search(line):
-            findings.append({
-                "kind": "canonical-sample-access",
-                "class": "vetted canonical defect-audit sample "
-                         "(solution knowledge — host scorer only)",
-                "transcript": source, "line": ln_no,
-                "evidence": line.strip()[:300],
-            })
+        stripped = line.strip()
+        obj = None
+        if stripped[:1] in ("{", "["):
+            try:
+                obj = json.loads(stripped)
+            except (ValueError, TypeError):
+                obj = None                     # non-JSON / truncated → fallback
+        if obj is not None:
+            for frag in _harvest_tool_strings(obj):
+                findings += _scan_fragment(frag, ds, allowed, source, ln_no)
+        else:
+            findings += _scan_fragment(line, ds, allowed, source, ln_no)
     return findings
 
 
@@ -231,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
         print("blindness_audit: NOTHING TO AUDIT — no transcript files found "
               "(export batch-agent transcripts to <RUNDIR>/transcripts/).",
               file=sys.stderr)
-        return 2
+        return EXIT_NOTHING
 
     dataset = Path(a.dataset).resolve()
     allowed = _allowed_globs(a.bench, a.allowed_glob)
@@ -243,7 +356,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"blindness_audit: unreadable transcript {f}: {exc}",
                   file=sys.stderr)
             continue
-        findings += audit_text(text, dataset, allowed, str(f))
+        # An auditor-internal exception while SCANNING (e.g. a residual OSError
+        # from path classification) is a TOOL failure — surface it as a named
+        # AUDIT_ERROR with its own exit code; it must NEVER be reported as a
+        # blindness violation (#480).
+        try:
+            findings += audit_text(text, dataset, allowed, str(f))
+        except Exception as exc:  # noqa: BLE001
+            print(f"blindness_audit: AUDIT_ERROR — internal failure while "
+                  f"scanning {f}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return EXIT_AUDIT_ERROR
 
     if a.json:
         Path(a.json).write_text(json.dumps(findings, indent=2) + "\n")
@@ -256,10 +378,10 @@ def main(argv: list[str] | None = None) -> int:
             what = fd.get("path", fd["class"])
             print(f"  [{fd['kind']}] {loc} -> {what}\n"
                   f"      {fd['class']}\n      | {fd['evidence']}")
-        return 1
+        return EXIT_VIOLATION
     print(f"blindness_audit: PASS — {len(files)} transcript(s) clean "
           f"[allowed prompt globs: {allowed}]")
-    return 0
+    return EXIT_CLEAN
 
 
 if __name__ == "__main__":
