@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 642
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 642)
+- **Total programs (excluding helpers / shims):** 644
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 644)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 633 |
+| `any` | 635 |
 
 ## Alphabetical listing
 
@@ -68,6 +68,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_hw_tb_de10lite_budget_check` | any | — | DE10-Lite board-budget gate. |
 | `analog_lef_gds_outline_check` | any | — | A8 LEF-vs-GDS outline gate. |
 | `analog_liberty_nonzero_delay_check` | any | — | deterministic Liberty non-degeneracy gate. |
+| `analog_mc_yield_run` | any | — | REAL Monte-Carlo yield execution for the |
 | `analog_meas_from_spec_gen` | any | — | deterministic `.meas` statement generator |
 | `analog_netlist_connectivity_check` | any | — | deterministic floating-node / |
 | `analog_netlist_include_order_check` | any | — | deterministic SPICE model-include |
@@ -382,8 +383,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `mipi_spmi_rffe_protocol_synth` | any | v0.1.89 | MIPI System Power Management Interface (SPMI) + RF Front-End Control |
 | `mixed_signal_cosim_check` | any | — | deterministic gate for mixed-signal co-simulation |
 | `mixed_signal_interface_si_check` | any | — | M3 interface signal-integrity gate. |
-| `mixed_signal_merge_check` | any | Wave 88 | gate (v1.6.13 Wave 88). |
+| `mixed_signal_merge_check` | any | v0.2.84 | M1 gate (v0.2.84: SUBSTANCE, not presence). |
 | `mixed_signal_signoff_check` | any | — | gate M4 (hardened, anti-fabrication). |
+| `mixed_signal_top_lvs_run` | any | — | REAL top-level mixed-signal merge + |
 | `modbus_protocol_synth` | any | v0.1.84 | Modbus-class protocol synth helper. |
 | `module_port_audit` | any | v0.36 | Deterministic port-name mismatch detector for multi-module |
 | `mpw_precheck_cleanup` | any | v0.1.51 | mpw_precheck cleanup automator (B4 from spm pilot). |
@@ -714,7 +716,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (633 programs)
+### `any` (635 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -758,6 +760,7 @@ _(no programs in this group)_
 - `analog_hw_tb_de10lite_budget_check` — DE10-Lite board-budget gate.
 - `analog_lef_gds_outline_check` — A8 LEF-vs-GDS outline gate.
 - `analog_liberty_nonzero_delay_check` — deterministic Liberty non-degeneracy gate.
+- `analog_mc_yield_run` — REAL Monte-Carlo yield execution for the
 - `analog_meas_from_spec_gen` — deterministic `.meas` statement generator
 - `analog_netlist_connectivity_check` — deterministic floating-node /
 - `analog_netlist_include_order_check` — deterministic SPICE model-include
@@ -1067,8 +1070,9 @@ _(no programs in this group)_
 - `mipi_spmi_rffe_protocol_synth` — MIPI System Power Management Interface (SPMI) + RF Front-End Control  _[v0.1.89]_
 - `mixed_signal_cosim_check` — deterministic gate for mixed-signal co-simulation
 - `mixed_signal_interface_si_check` — M3 interface signal-integrity gate.
-- `mixed_signal_merge_check` — gate (v1.6.13 Wave 88).  _[Wave 88]_
+- `mixed_signal_merge_check` — M1 gate (v0.2.84: SUBSTANCE, not presence).  _[v0.2.84]_
 - `mixed_signal_signoff_check` — gate M4 (hardened, anti-fabrication).
+- `mixed_signal_top_lvs_run` — REAL top-level mixed-signal merge +
 - `modbus_protocol_synth` — Modbus-class protocol synth helper.  _[v0.1.84]_
 - `module_port_audit` — Deterministic port-name mismatch detector for multi-module  _[v0.36]_
 - `mpw_precheck_cleanup` — mpw_precheck cleanup automator (B4 from spm pilot).  _[v0.1.51]_

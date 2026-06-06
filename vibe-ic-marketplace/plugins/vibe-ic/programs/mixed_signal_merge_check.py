@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 """
-mixed_signal_merge_check.py — gate (v1.6.13 Wave 88).
+mixed_signal_merge_check.py — M1 gate (v0.2.84: SUBSTANCE, not presence).
 
 M1 — A+D top-level GDS merge (no overlap, all macro pins on tracks)
 
+v0.2.84 (flow-completeness review): the v1.6.13 PASS-on-presence stub
+is RETIRED. A merged GDS is a CLAIM; the claim needs the top-level
+LVS that `mixed_signal_top_lvs_run.py` executes (KLayout merge +
+Magic extraction + real netgen compare). PASS now requires
+`reports/analog/mixed_signal/top_lvs.json` with verdict PASS.
+
 Behaviour
 ---------
-* SKIP (rc=2) — required artefacts missing AND step not waived.
+* SKIP (rc=2) — top_merged.gds missing AND step not waived.
 * WAIVED (rc=0) — `waivers.json` declares step waived (evidence + ticket).
-* PASS (rc=0) — required files present; gate-specific predicate is a
-  stub in v1.6.13 (PASS-on-presence).
-* FAIL (rc=1) — files present but predicate fails (not used in v1.6.13).
+* PASS (rc=0) — merged GDS present AND top-level LVS verdict PASS.
+* FAIL (rc=1) — merged GDS present but top-level LVS missing or FAIL
+  (presence is not substance).
 
 chip-AGNOSTIC. No vendor / IC / tool-specific data hard-coded.
-
-Default rationale when SKIP: Top-level GDS merge tool not shipped.
 
 Usage
 -----
@@ -50,7 +54,7 @@ def _step_waived(project, step_label):
 _GATE_NAME = 'mixed_signal_merge_check'
 _GATE_LABEL = 'mixed_signal_merge'
 _REQUIRED_FILES = ['phase3/mixed_signal/top_merged.gds']
-_WAIVER_RATIONALE = 'Top-level GDS merge tool not shipped.'
+_WAIVER_RATIONALE = 'Top-level merge+LVS not runnable in this environment (see mixed_signal_top_lvs_run SKIP reason).'
 
 
 def main(argv=None):
@@ -78,9 +82,41 @@ def main(argv=None):
         findings = [{"severity": "WAIVED", "rule": "STEP_WAIVED",
                       "message": f"waiver={waiver.get('ticket','?')}: {waiver.get('reason','?')}"}]
     else:
-        verdict, rc = "PASS", 0
-        findings = [{"severity": "INFO", "rule": "FILES_PRESENT",
-                      "message": f"all {len(_REQUIRED_FILES)} required artefacts present"}]
+        # v0.2.84 — SUBSTANCE: the merged GDS must be LVS-substantiated
+        # by mixed_signal_top_lvs_run (Magic extraction + real netgen
+        # compare). Presence alone never PASSes again.
+        top_lvs = None
+        for rel in ("reports/analog/mixed_signal/top_lvs.json",
+                     "reports/mixed_signal/top_lvs.json"):
+            cand = project / rel
+            if cand.is_file():
+                try:
+                    top_lvs = json.loads(cand.read_text(errors="replace"))
+                except (OSError, ValueError):
+                    top_lvs = {"verdict": "UNPARSEABLE"}
+                break
+        if top_lvs is None:
+            verdict, rc = "FAIL", 1
+            findings = [{"severity": "ERROR",
+                          "rule": "MERGE_NOT_LVS_SUBSTANTIATED",
+                          "message": ("top_merged.gds present but no "
+                                      "top-level LVS result — run "
+                                      "mixed_signal_top_lvs_run; a merge "
+                                      "claim without LVS is presence, "
+                                      "not substance (v0.2.84)")}]
+        elif str(top_lvs.get("verdict")) == "PASS":
+            verdict, rc = "PASS", 0
+            findings = [{"severity": "INFO", "rule": "MERGE_LVS_OK",
+                          "message": ("merged GDS present + top-level "
+                                      "netgen LVS PASS "
+                                      f"({top_lvs.get('lvs_report', '?')})")}]
+        else:
+            verdict, rc = "FAIL", 1
+            findings = [{"severity": "ERROR", "rule": "MERGE_LVS_FAIL",
+                          "message": ("top-level LVS verdict "
+                                      f"{top_lvs.get('verdict')!r} — the "
+                                      "merged layout does not match the "
+                                      "schematic")}]
 
     out = {
         "gate": _GATE_NAME,

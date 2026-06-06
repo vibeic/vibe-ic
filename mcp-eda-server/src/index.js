@@ -2623,18 +2623,40 @@ server.tool(
       }
     }
 
+    // v0.2.84 — monte_carlo_n was declared since v0.108 but NEVER
+    // consumed (dead parameter; the flow's 95%-yield gate had no data
+    // source). Wire it: N extra runs at nominal temp/VDD using the
+    // FOUNDRY's own statistical model section (sky130 'mc',
+    // gf180 'statistical') with a distinct deterministic seed per run.
+    const mcSection = pdk === "sky130" ? "mc"
+      : pdk === "gf180" ? "statistical" : null;
+    const mcUnsupportedReason = (monte_carlo_n > 0 && !mcSection)
+      ? "pdk=custom has no known statistical model section — MC skipped (surfaced, not faked)"
+      : null;
+    if (monte_carlo_n > 0 && mcSection) {
+      const mcTemp = temperatures.includes(25) ? 25 : temperatures[0];
+      const mcVdd = supplyList[0];
+      for (let i = 1; i <= monte_carlo_n; i++) {
+        matrix.push({ corner: mcSection, temp: mcTemp, vdd: mcVdd,
+                      mcSeed: i });
+      }
+    }
+
     const scriptLines = [
       `export PATH=${TOOLS}/bin:${TOOLS}/ngspice/bin:$PATH`,
       `mkdir -p ${output_dir}`,
     ];
 
-    for (const { corner, temp, vdd } of matrix) {
-      const tag = `${corner}_${temp}C_${vdd}V`.replace(/[.-]/g, "_");
+    for (const { corner, temp, vdd, mcSeed } of matrix) {
+      const tag = (mcSeed ? `mc_${String(mcSeed).padStart(4, "0")}`
+        : `${corner}_${temp}C_${vdd}V`).replace(/[.-]/g, "_");
       const wrapperFile = `${output_dir}/wrap_${tag}.sp`;
       const outFile = `${output_dir}/out_${tag}.txt`;
 
       const wrapperLines = [
-        `* Auto-generated PVT wrapper: ${corner} ${temp}C ${vdd}V`,
+        `* Auto-generated PVT wrapper: ${corner} ${temp}C ${vdd}V`
+          + (mcSeed ? ` (Monte-Carlo seed ${mcSeed})` : ""),
+        ...(mcSeed ? [`.option seed=${mcSeed}`] : []),
         ...(designInclude ? [`.include ${designInclude}`] : []),
         `.lib ${modelLib} ${corner}`,
         `.param temp_val=${temp}`,
@@ -2698,6 +2720,35 @@ server.tool(
       }
     }
 
+    // v0.2.84 — Monte-Carlo yield from the mc_* runs (worst spec
+    // governs). Only computed when MC ran AND specs exist; never
+    // fabricated.
+    let mcYieldPct = null;
+    let mcRunsScored = 0;
+    if (monte_carlo_n > 0 && mcSection && specs
+        && Object.keys(specs).length > 0) {
+      const perSpecYield = {};
+      for (const [specName, limits] of Object.entries(specs)) {
+        let scored = 0, passed = 0;
+        for (const [tag, meas] of Object.entries(pvtResults)) {
+          if (!tag.startsWith("mc_")) continue;
+          const val = meas[specName];
+          if (val === undefined) continue;
+          scored++;
+          let ok = true;
+          if (limits.min !== undefined && val < limits.min) ok = false;
+          if (limits.max !== undefined && val > limits.max) ok = false;
+          if (ok) passed++;
+        }
+        if (scored > 0) {
+          perSpecYield[specName] = (100 * passed) / scored;
+          mcRunsScored = Math.max(mcRunsScored, scored);
+        }
+      }
+      const vals = Object.values(perSpecYield);
+      if (vals.length > 0) mcYieldPct = Math.min(...vals);
+    }
+
     if (success) {
       writeManifest(output_dir, {
         step: "spice_corner_sweep",
@@ -2708,6 +2759,7 @@ server.tool(
         spice_file,
         pvt_results: pvtResults,
         spec_results: specResults,
+        mc_yield_pct: mcYieldPct,
       });
     }
 
@@ -2715,12 +2767,19 @@ server.tool(
     const cornerJson = JSON.stringify({
       spice_file,
       pdk,
-      matrix: matrix.map(m => `${m.corner}_${m.temp}C_${m.vdd}V`),
+      matrix: matrix.map(m => m.mcSeed ? `mc_${m.mcSeed}` : `${m.corner}_${m.temp}C_${m.vdd}V`),
       pvt_results: pvtResults,
       spec_results: specResults,
       all_specs_pass: allPass,
       total_corners: matrix.length,
       results_found: Object.keys(pvtResults).length,
+      ...(mcYieldPct !== null ? {
+        mc_yield_pct: mcYieldPct,
+        mc_runs: monte_carlo_n,
+        mc_runs_scored: mcRunsScored,
+        mc_model_section: mcSection,
+        _mc_provenance: "real_ngspice_mc",
+      } : {}),
     }, null, 2);
     const escJson = cornerJson.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
     dockerExec(`printf "${escJson}" > ${output_dir}/corner_results.json`, 10000);
@@ -2735,6 +2794,13 @@ server.tool(
           all_specs_pass: allPass,
           pvt_results: pvtResults,
           spec_results: specResults,
+          ...(mcYieldPct !== null ? {
+            mc_yield_pct: mcYieldPct,
+            mc_runs: monte_carlo_n,
+            mc_runs_scored: mcRunsScored,
+            mc_model_section: mcSection,
+          } : {}),
+          ...(mcUnsupportedReason ? { mc_unsupported_reason: mcUnsupportedReason } : {}),
           output: result.output.slice(-3000),
         }),
       }],
