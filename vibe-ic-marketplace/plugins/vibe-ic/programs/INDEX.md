@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 646
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 646)
+- **Total programs (excluding helpers / shims):** 647
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 647)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 637 |
+| `any` | 638 |
 
 ## Alphabetical listing
 
@@ -167,6 +167,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `crc_validation_present` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 58 | Wave 58 / BACKLOG-v12 P0.3 plugin gate. |
 | `crc_vector_gen` | any | — | General parametric CRC RTL + reference + test-vector generator. |
 | `cross_constant_invariant_check` | any | — | Verify named timing/protocol constants |
+| `cross_design_identity_check` | any | — | cross-design byte-identity gate |
 | `cross_module_1cycle_handshake_check` | any | v0.116 | BACKLOG-v11 P0.3. |
 | `crypto_arch_extractor` | any | — | Extract crypto architecture parameters from README/text docs. |
 | `cts_quality_check` | any | — | Step 19 CTS substance gate. |
@@ -718,7 +719,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (637 programs)
+### `any` (638 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -858,6 +859,7 @@ _(no programs in this group)_
 - `crc_seed_consistency_check` — Validate that RTL CRC params match spec test vectors.
 - `crc_vector_gen` — General parametric CRC RTL + reference + test-vector generator.
 - `cross_constant_invariant_check` — Verify named timing/protocol constants
+- `cross_design_identity_check` — cross-design byte-identity gate
 - `cross_module_1cycle_handshake_check` — BACKLOG-v11 P0.3.  _[v0.116]_
 - `crypto_arch_extractor` — Extract crypto architecture parameters from README/text docs.
 - `cts_quality_check` — Step 19 CTS substance gate.
