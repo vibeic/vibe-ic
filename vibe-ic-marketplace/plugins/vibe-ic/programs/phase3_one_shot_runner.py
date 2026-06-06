@@ -5643,12 +5643,19 @@ catch {{set_wire_rc -clock -layer {mp}5}}
             "\n# === Full PSM stdout (provenance) ===\n" + log[-3000:] + "\n"
             "# end of ir_drop.rpt\n")
         ir_rpt.write_text(body)
-        # ORGANIC-20260606 #444: the measurement is wired to the SAME
-        # budget logic signoff_ladder_run uses (worst <= budget_uv,
-        # default 35 µV) so the step gate and the PERC memo read ONE
-        # verdict instead of two readers interpreting "MEASURED"
-        # oppositely. The numbers travel with the verdict.
-        _ir_budget_uv = 35.0  # = signoff_ladder_run.check_tier_2_ir default
+        # ORGANIC-20260606 #444: the measurement is wired to a budget
+        # comparison (signoff_ladder_run's worst <= budget_uv logic) so
+        # the step gate and the PERC memo read ONE verdict instead of
+        # two readers interpreting "MEASURED" oppositely. Budget = the
+        # canonical 5%-of-VDD static-IR sign-off rule, with VDD parsed
+        # from the PSM log itself (fallback 1.8 V). The numbers AND the
+        # budget travel with the verdict so any reader re-derives it.
+        _vdd_m = re.search(r"Supply voltage\s*:\s*([0-9.eE+\-]+)\s*V", log)
+        try:
+            _vdd_v = float(_vdd_m.group(1)) if _vdd_m else 1.8
+        except ValueError:
+            _vdd_v = 1.8
+        _ir_budget_uv = 0.05 * _vdd_v * 1e6  # 5% of VDD, in µV
         _worst_ir_uv = worst_ir_v * 1e6
         (ir_rpt.parent / "ir_drop.json").write_text(json.dumps({
             "tool": "openroad-psm",

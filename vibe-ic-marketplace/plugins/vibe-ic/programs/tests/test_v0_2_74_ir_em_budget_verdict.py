@@ -60,8 +60,10 @@ def test_ir_within_budget_passes(tmp_path):
 
 
 def test_runner_ir_emitter_writes_budget_verdict():
-    i = _P3_SRC.index('_ir_budget_uv = 35.0')
-    window = _P3_SRC[i - 800:i + 900]
+    # budget = canonical 5%-of-VDD rule, VDD parsed from the PSM log
+    i = _P3_SRC.index('_ir_budget_uv = 0.05 * _vdd_v * 1e6')
+    window = _P3_SRC[i - 1100:i + 900]
+    assert "Supply voltage" in window
     assert '"worst_ir_uv": _worst_ir_uv' in window
     assert '"verdict": "PASS" if _worst_ir_uv <= _ir_budget_uv else "FAIL"' \
         in window
