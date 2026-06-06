@@ -10,8 +10,11 @@ meaningful crossing analysis content.
 Checks:
   1. At least 1 CDC report exists
   2. Contains clock domain references (clk, clock, domain)
-  3. Contains crossing analysis keywords (crossing, synchronizer, metastab,
-     FIFO, async, CDC)
+  3. Contains crossing analysis keywords (crossing(s), synchronizer,
+     metastab, FIFO, async, CDC) -- OR -- is a legitimate single-clock
+     design (canonical PASS report with <=1 clock / empty crossings list +
+     single-clock evidence). A single-clock design has no crossings to
+     analyse, so an empty crossings list is itself the correct substance.
 
 Usage:
     python3 cdc_crossing_check.py <project_dir>
@@ -73,8 +76,24 @@ CANONICAL_JSON_PATHS = [
 ]
 
 CLOCK_REF_RE = re.compile(r"\bclk\b|\bclock\b|\bdomain\b", re.I)
+# ORGANIC-20260606 #458 — broaden to the plural / JSON-key form
+# (`crossings`). A zero-crossing single-clock report legitimately phrases
+# its substance as "no clock-domain crossings exist" (plural) and the
+# canonical JSON carries a `"crossings"` key — the singular literal
+# `\bcrossing\b` never matched either, which (combined with the
+# crossings-list-must-be-non-empty canonical path) FAILed every legit
+# single-clock design.
 CROSSING_RE = re.compile(
-    r"\bcrossing\b|\bsynchronizer\b|\bmetastab|\bFIFO\b|\basync\b|\bCDC\b",
+    r"\bcrossings?\b|\bsynchronizer\b|\bmetastab|\bFIFO\b|\basync\b|\bCDC\b",
+    re.I,
+)
+
+# ORGANIC-20260606 #458 — wording emitted by phase2_one_shot_runner for a
+# single-clock design ("single clock domain [...] — no clock-domain
+# crossings exist"). Used by the third accept-path to recognise a
+# legitimate zero-crossing PASS whose `crossings` list is (correctly) empty.
+SINGLE_CLOCK_EVIDENCE_RE = re.compile(
+    r"single\s+clock\s+domain|no\s+(?:clock[- ]domain\s+)?crossings",
     re.I,
 )
 
@@ -140,7 +159,22 @@ def audit_cdc(project_dir: Path) -> AuditResult:
     has_crossing = False
     best_file = str(unique[0])
 
+    # ORGANIC-20260606 #458 — the canonical JSON files are evaluated by the
+    # dedicated structured paths below (canonical_substance_pass /
+    # single_clock_pass), NOT by the freeform keyword regex. Running the
+    # broadened `\bcrossings?\b` over canonical JSON text would let the bare
+    # structural key `"crossings": []` (the ABSENCE of crossings) masquerade
+    # as analysis content — which would defeat the corpus-sweep guard for a
+    # multi-clock report. The keyword scan is therefore restricted to
+    # human-readable tool-report files, where the prose word "crossing(s)"
+    # genuinely signals analysis content.
+    canonical_resolved = {
+        (project_dir / rel).resolve() for rel in CANONICAL_JSON_PATHS
+    }
+
     for fp in unique:
+        if fp.resolve() in canonical_resolved:
+            continue
         try:
             text = fp.read_text(errors="replace")
         except OSError:
@@ -154,18 +188,6 @@ def audit_cdc(project_dir: Path) -> AuditResult:
             has_clock_ref = True
         if CROSSING_RE.search(text):
             has_crossing = True
-
-    if not has_clock_ref:
-        result.findings.append(Finding(
-            rule="CDC_CLOCK_REFERENCES", severity="ERROR",
-            message="No clock domain references (clk/clock/domain) found in CDC report",
-            file=best_file))
-
-    if not has_crossing:
-        result.findings.append(Finding(
-            rule="CDC_CROSSING_ANALYSIS", severity="ERROR",
-            message="No crossing analysis keywords (crossing/synchronizer/metastab/FIFO/async/CDC) found",
-            file=best_file))
 
     # v1.6.36 — if any canonical JSON declares verdict=PASS with a
     # populated crossings/async-input/reset-strategy field, accept that
@@ -195,13 +217,88 @@ def audit_cdc(project_dir: Path) -> AuditResult:
             canonical_substance_pass = True
             break
 
-    result.passed = (has_clock_ref and has_crossing) or canonical_substance_pass
+    # ORGANIC-20260606 #458 — THIRD accept-path: a single-clock design has
+    # ZERO clock-domain crossings, so a legitimate canonical PASS report
+    # carries an EMPTY `crossings` list. The pre-#458 paths both failed it:
+    # the keyword path found no singular `crossing` token, and the
+    # canonical-substance path required len(crossings) > 0. Accept a
+    # canonical crossing.json with verdict=PASS when it is provably a
+    # single-clock report — either it explicitly enumerates at most one
+    # clock (`clocks_found` <= 1), or it carries an empty `crossings` list
+    # together with single-clock evidence wording. The corpus-sweep guard
+    # is preserved: a MULTI-clock report (clocks_found > 1) that lists real
+    # crossings can NOT enter this path (it is gated on the single-clock
+    # condition), so a multi-clock report lacking analysis content still
+    # FAILs.
+    single_clock_pass = False
+    for rel in CANONICAL_JSON_PATHS:
+        cand = project_dir / rel
+        if not cand.is_file():
+            continue
+        try:
+            doc = json.loads(cand.read_text())
+        except Exception:
+            continue
+        if doc.get("verdict") != "PASS":
+            continue
+        clocks_found = doc.get("clocks_found")
+        crossings = doc.get("crossings")
+        evidence = str(doc.get("evidence") or "")
+        # (a) explicit single-clock enumeration: <= 1 clock means no
+        #     crossing is even possible.
+        explicit_single = (
+            isinstance(clocks_found, list) and len(clocks_found) <= 1
+        )
+        # (b) empty crossings list backed by single-clock evidence wording.
+        empty_with_evidence = (
+            isinstance(crossings, list) and len(crossings) == 0
+            and bool(SINGLE_CLOCK_EVIDENCE_RE.search(evidence))
+        )
+        if explicit_single or empty_with_evidence:
+            single_clock_pass = True
+            break
+
+    # A single-clock canonical PASS legitimately has NO crossing-analysis
+    # keywords (there is nothing to analyse) — so the CDC_CROSSING_ANALYSIS
+    # ERROR must NOT be raised in that case, otherwise the findings would
+    # contradict the (correct) PASS verdict.
+    crossing_substance_ok = (
+        has_crossing or canonical_substance_pass or single_clock_pass
+    )
+    # The canonical JSONs are excluded from the freeform keyword scan
+    # (above), so a canonical-only project would not set has_clock_ref. A
+    # canonical PASS report inherently references clocks (clocks_found /
+    # evidence), so a recognised canonical substance/single-clock PASS also
+    # satisfies the clock-reference check — keep the finding consistent with
+    # the verdict.
+    clock_ref_ok = (
+        has_clock_ref or canonical_substance_pass or single_clock_pass
+    )
+
+    if not clock_ref_ok:
+        result.findings.append(Finding(
+            rule="CDC_CLOCK_REFERENCES", severity="ERROR",
+            message="No clock domain references (clk/clock/domain) found in CDC report",
+            file=best_file))
+
+    if not crossing_substance_ok:
+        result.findings.append(Finding(
+            rule="CDC_CROSSING_ANALYSIS", severity="ERROR",
+            message="No crossing analysis keywords (crossing(s)/synchronizer/metastab/FIFO/async/CDC) found",
+            file=best_file))
+
+    result.passed = (
+        (has_clock_ref and has_crossing)
+        or canonical_substance_pass
+        or single_clock_pass
+    )
     result.summary = {
         "files_found": len(unique),
         "has_clock_ref": has_clock_ref,
         "has_crossing": has_crossing,
         "canonical_json_pass": canonical_pass,
         "canonical_substance_pass": canonical_substance_pass,
+        "single_clock_pass": single_clock_pass,
     }
     return result
 
