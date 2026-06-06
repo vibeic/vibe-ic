@@ -200,6 +200,17 @@ def main() -> int:
     else:
         plan.append(("phase1", "SKIPPED", 0))
 
+    # ---------------- Analog-applicability decision ----------------
+    # Single source of truth (ORGANIC-20260606 #459): the analog-track
+    # applicability is decided ONCE here, BEFORE phase2 runs, so the same
+    # decision can (a) gate the analog A-track invocation below AND (b)
+    # be forwarded into phase2's final_audit. Previously _need_analog()
+    # was evaluated only AFTER phase2; phase2 therefore never learned that
+    # the orchestrator was skipping the analog track, and final_audit
+    # treated analog A9 as a HARD condition → every pure-digital run
+    # halted at phase2. The two decision points now agree.
+    run_analog = _need_analog(project, args.skip_analog)
+
     # ---------------- Phase 2 ----------------
     if not halted_at:
         runner = _phase_runner("phase2")
@@ -211,7 +222,17 @@ def main() -> int:
             p2_args.append("--skip-hardware")
         # v0.1.54 capture: forward --skip-analog so phase2 final_audit doesn't
         # FAIL a digital-only project on missing phase1/analog/analog_block_list.json.
+        # (1) User explicitly asked to skip the analog track.
         if args.skip_analog:
+            p2_args.append("--skip-analog")
+        # (2) #459: the orchestrator's OWN analog decision is authoritative. If
+        # we are NOT running the A-track because _need_analog()==False (even
+        # without a user --skip-analog), phase2's final_audit must agree — so
+        # inject --skip-analog here too. For analog / mixed-signal projects
+        # (run_analog==True) the flag is NEVER injected, so the A-track and its
+        # final_audit condition stay active (corpus-sweep guard). The membership
+        # guard makes (1)+(2) idempotent (no duplicate append).
+        elif not run_analog:
             p2_args.append("--skip-analog")
         rc = _run_phase("PHASE 2 (= 2a + 2b)", runner, p2_args)
         rep = _read_report(_pl.report_path(project, "phase2_one_shot.json"))
@@ -224,8 +245,13 @@ def main() -> int:
         plan.append(("phase2", "SKIPPED", 0))
 
     # ---------------- Analog A1..A8 ----------------
-    # Run after Phase 2 so L5_ADI_SPEC is populated. Non-blocking on FAIL.
-    if not halted_at and _need_analog(project, args.skip_analog):
+    # Non-blocking on FAIL. Dispatches off the single run_analog decision
+    # computed above (#459) so the A-track invocation and phase2's
+    # --skip-analog forwarding never disagree. The decision is sourced from
+    # phase1 artefacts (L5_ADI_SPEC / analog_block_list), which are produced
+    # before this point — phase2 does not emit them — so moving the decision
+    # ahead of phase2 is behaviourally identical for analog/mixed-signal.
+    if not halted_at and run_analog:
         runner = _phase_runner("analog")
         rc = _run_phase("ANALOG A1..A8", runner,
                          [str(project), "--container", args.container])
