@@ -4431,7 +4431,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(erc_rpt))
             written.append(str(rpt_phase3 / "erc.json"))
 
-    # --- v2.3.0: Step 35 DFM screen (CMP density + via redundancy) ------
+    # --- v2.3: Step 35 DFM screen (CMP density + via redundancy) ------
     # Runs the deterministic dfm_screen_check (it writes the canonical
     # reports/phase3/dfm_screen.json itself); best-effort like the other
     # canonicalize emitters — the gate re-runs it for the verdict.
@@ -4447,7 +4447,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         except Exception as exc:
             notes.append(f"DFM screen emit failed: {exc}")
 
-    # --- ORGANIC-20260601: Step 28 PERC-equivalent coverage aggregate (v2.3.0 numbered step) ----
+    # --- ORGANIC-20260601: Step 28 PERC-equivalent coverage aggregate (v2.3 numbered step) ----
     # Aggregates antenna/IR/EM/floating (AUTOMATED) + EM guardband + ESD/
     # latch-up/x-domain (MANUAL_REVIEW or N/A) into ONE honest report + memo.
     # Runs AFTER the antenna/ir/em/erc emitters above so it reads their
@@ -4714,7 +4714,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         if ok:
             written.append(str(power_rpt))
             # Companion .json for the gate's structured-form aspirations.
-            # v2.3.0: `analysis_mode` discloses vector-vs-vectorless —
+            # v2.3: `analysis_mode` discloses vector-vs-vectorless —
             # parsed back from the report's POWER_ANALYSIS_MODE line.
             _pwr_txt = power_rpt.read_text(errors="replace")
             _mode = ("vector_vcd" if "POWER_ANALYSIS_MODE: vector_vcd"
@@ -5211,7 +5211,7 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
         f"read_liberty {_to_container_path(str(f), container)}"
         for f in pdk.macro_libs
     )
-    # v2.3.0 — VECTOR-BASED dynamic power (opt-in by artifact): when a
+    # v2.3 — VECTOR-BASED dynamic power (opt-in by artifact): when a
     # simulation VCD exists, feed it to OpenSTA `read_power_activities`
     # so switching power comes from REAL activity instead of the
     # vectorless SDC default. The chosen mode is disclosed in power.rpt
@@ -6542,7 +6542,7 @@ exit
 
 # ===========================================================================
 # ORGANIC-20260601 — PERC-equivalent coverage sign-off (the "last commercial
-# gate", Calibre PERC, v2.3.0 Step 28 PERC).
+# gate", Calibre PERC, v2.3 Step 28 PERC).
 #
 # Calibre PERC = Programmable Electrical Rule Check. It needs a commercial tool
 # because it ties LAYOUT (GDS) to CIRCUIT (SPICE) and checks 7 categories:
@@ -6932,7 +6932,7 @@ def _read_verdict(json_path: Path) -> Optional[str]:
 def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                           container: str, notes: List[str]) -> bool:
     """Aggregate the 7 Calibre-PERC categories into ONE honest open-source
-    PERC-equivalent coverage report (v2.3.0 Step 28).
+    PERC-equivalent coverage report (v2.3 Step 28).
 
     Reads the verdicts of the already-emitted antenna / ir_drop / em / erc
     reports (AUTOMATED), states the EM current-density / via-array GUARDBAND,
@@ -7277,7 +7277,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                 f"       {c.get('note', '')}\n")
     body = (
         "# PERC-equivalent coverage report — open-source aggregate\n"
-        "# (ORGANIC-20260601 v2.3.0 Step 28 PERC / 'last commercial gate').\n"
+        "# (ORGANIC-20260601 v2.3 Step 28 PERC / 'last commercial gate').\n"
         "# Calibre PERC = Programmable Electrical Rule Check (ties layout to\n"
         "# circuit). Commercial Calibre PERC was NOT run. This aggregates the\n"
         "# open-source equivalents for the 7 PERC categories.\n"

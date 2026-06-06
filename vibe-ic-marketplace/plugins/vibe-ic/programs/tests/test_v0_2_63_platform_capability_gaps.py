@@ -31,7 +31,7 @@ def _step(sid, name="step", outputs=None):
 def test_gap_table_names_the_gap_steps_with_flags():
     # 11/12/13/29 from #430; 28 added by #437(d) — the runner emits the
     # SDF but never runs an SDF-annotated gate-level re-sim.
-    assert set(F._PLATFORM_CAPABILITY_GAPS) == {5, 11, 12, 13, 29, 30}  # v2.3.0 renumber
+    assert set(F._PLATFORM_CAPABILITY_GAPS) == {5, 11, 12, 13, 29, 30}  # v2.3 renumber
     for sid, flag in F._PLATFORM_CAPABILITY_GAPS.items():
         assert flag.startswith("cap:"), (sid, flag)
 

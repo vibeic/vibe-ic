@@ -88,7 +88,7 @@ STEP_METHOD = {
     "25": ("clean", "EM lifetime within budget"),
     "26": ("clean", "antenna check clean"),
     "27": ("clean", "signal-integrity / crosstalk within budget"),
-    # v2.3.0 renumber: PERC inserted at 28, downstream +1; HTOL at 43.
+    # v2.3 renumber: PERC inserted at 28, downstream +1; HTOL at 43.
     "28": ("clean", "PERC reliability sign-off (ESD/latch-up/x-domain) clean"),
     "29": ("equivalence", "post-layout gate-sim + SDF vs golden"),
     "30": ("metric", "post-layout SPICE critical-path correlation"),

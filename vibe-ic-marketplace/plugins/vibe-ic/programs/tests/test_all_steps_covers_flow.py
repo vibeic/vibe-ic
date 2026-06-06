@@ -8,7 +8,7 @@ The human-readable ALL_STEPS_v2.3.0 docs are hand-maintained — so they DRIFT:
 twice now a step that was added to the yaml (most recently Step 18,
 "Spare-cell + ECO-prep insertion (Design-for-ECO)") silently failed to appear
 in ALL_STEPS, and the doc kept stale 1->33 numbering while the yaml had grown
-to 1->41 (and again at the v2.3.0 43-step restructure). There was no guard, so the drop was only noticed by a human reading
+to 1->41 (and again at the v2.3 43-step restructure). There was no guard, so the drop was only noticed by a human reading
 the doc and asking "where did my step go?".
 
 This test makes that class of drift a CI failure. It is GENERAL: it re-derives

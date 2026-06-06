@@ -2505,8 +2505,8 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
 # `fpga_onboard_test`, `drc`, `lvs`) and bind it to the canonical
 # step-id used by the flow YAML. Chip-AGNOSTIC: keys are step roles,
 # never chip names.
-# v2.3.0 renumber: the map is aligned to the v2.3.0 flow YAML (PERC
-# inserted at 28, DFM at 35, downstream shifted; HTOL at 44). The pre-v2.3.0 map
+# v2.3 renumber: the map is aligned to the v2.3 flow YAML (PERC
+# inserted at 28, DFM at 35, downstream shifted; HTOL at 44). The pre-v2.3 map
 # carried off-by-one legacy ids (drc→29 while PV was 30, ir_drop→23
 # while IR was 24, …) — fixed wholesale here, single source = the YAML.
 _ENV_UNAVAILABLE_STEP_NAME_TO_ID: Dict[str, Any] = {
@@ -2766,7 +2766,7 @@ def _l9_has_analog_modules(project: Path) -> bool:
 # proof leaves step 5's required outputs absent → SKIPPED-CONDITION
 # here. A real proof (authored .sby + sby log + results.json) still
 # gates normally.
-# v2.3.0 renumber: PERC inserted at 28 → SDF-sim is 29, SPICE-corr 30.
+# v2.3 renumber: PERC inserted at 28 → SDF-sim is 29, SPICE-corr 30.
 _PLATFORM_CAPABILITY_GAPS: Dict[int, str] = {
     5:  "cap:formal_property_proof",
     11: "cap:dft_scan_insertion_atpg",

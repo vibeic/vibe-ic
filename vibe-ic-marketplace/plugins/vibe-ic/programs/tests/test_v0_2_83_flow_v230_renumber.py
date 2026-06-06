@@ -1,4 +1,4 @@
-"""v0.2.83 — flow v2.3.0 professional restructure (43 steps).
+"""v0.2.83 — flow v2.3 professional restructure (43 steps).
 
 Pre-release flow correction (no backward-compat debt):
   * Step 14 (synthesis handoff gate) belongs to Stage 2 — it is the

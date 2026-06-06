@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """perc_signoff_check.py — Step 28 PERC / reliability sign-off gate
-(v2.3.0 flow-completeness review).
+(v2.3 flow-completeness review).
 
 The runner's deterministic PERC-equivalent aggregate
 (`reports/phase3/perc_equivalent.json`) already computes the

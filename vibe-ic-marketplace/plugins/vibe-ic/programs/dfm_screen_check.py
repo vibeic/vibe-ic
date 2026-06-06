@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""dfm_screen_check.py — Step 35 DFM screen (v2.3.0).
+"""dfm_screen_check.py — Step 35 DFM screen (v2.3).
 
 Design-for-Manufacturability, scoped HONESTLY for an open-source
 130-180nm flow. Three designer-side measurables + one foundry-side

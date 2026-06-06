@@ -35,7 +35,7 @@
 
 version: 2
 flow_name: phase1_phase2_phase3
-# total_steps counts the canonical integer main-track steps (1..44, v2.3.0).
+# total_steps counts the canonical integer main-track steps (1..44, v2.3).
 # Design-for-ECO added Step 18 (Spare-cell + ECO-prep insertion) as a
 # proper integer step between Placement (17) and CTS (19); every numeric
 # step id >= 18 was renumbered +1, growing the track from 40 to 41.
@@ -477,7 +477,7 @@ steps:
     gate:
       all_of:
         - program_exit_zero: "sdc_syntax_check . --json reports/phase2/sdc_check.json"
-        # v2.3.0 — exception-justification screen (advisory): every
+        # v2.3 — exception-justification screen (advisory): every
         # false_path/multicycle must correlate with the design's own
         # CDC/L8 async evidence; wildcards + large multipliers flagged.
         - optional_program_exit_zero:
@@ -746,7 +746,7 @@ steps:
   # consumes the netlist. Implementation: aggregated by
   # `flow_compliance_check.py:_run_yosys_gates` (combines
   # yosys_hilomap_required_check + yosys_script_template_check).
-  # v2.3.0 — Step 14 belongs to Stage 2: it is the synthesis→PnR
+  # v2.3 — Step 14 belongs to Stage 2: it is the synthesis→PnR
   # handoff QA (synth-script + netlist audit), i.e. the synthesis
   # stage's closing gate, NOT a physical-design step. Open-source-flow
   # specific (Yosys); commercial flows (Genus/DC) have no equivalent.
@@ -1236,7 +1236,7 @@ steps:
     blocks_on: [32]
 
   # ── Step 35: DFM screen ──────────────────────────────────────────
-  # v2.3.0 — Design-for-Manufacturability, scoped HONESTLY for an
+  # v2.3 — Design-for-Manufacturability, scoped HONESTLY for an
   # open-source 130-180nm flow: the designer-side measurables run
   # (per-layer CMP density window, redundant-via ratio counted from
   # the routed DEF, litho/min-width margins cross-referenced to the
@@ -1505,7 +1505,7 @@ steps:
       separate Step 44 (HTOL).
 
   # ── Step 44: Reliability Qualification (HTOL) ────────────────────
-  # v2.3.0 — HTOL (High-Temperature Operating Life) / reliability
+  # v2.3 — HTOL (High-Temperature Operating Life) / reliability
   # qualification is a distinct long-duration stress qual (cumulative
   # device-hours at elevated T/V → FIT rate), NOT the same thing as
   # the Step-42 burn-in screen. Data originates from external burn-in

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """htol_attestation_check.py — Step 43 reliability qualification (HTOL)
-attestation gate (v2.3.0).
+attestation gate (v2.3).
 
 HTOL (High-Temperature Operating Life) is the long-duration stress
 qual — distinct from the Step-42 burn-in infant-mortality screen. The

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """sdc_exception_correlation_check.py — Step 8 SDC EXCEPTION
-justification screen (v2.3.0, advisory).
+justification screen (v2.3, advisory).
 
 Timing exceptions silently waive real paths — a wrong false_path is a
 silicon bug STA can never see. This screen correlates every exception
