@@ -391,7 +391,12 @@ steps:
     gate:
       all_of:
         - files_exist: ["phase2/stage1/formal/results.json"]
-        - json_field_true: {file: "phase2/stage1/formal/results.json", field: "all_proved", expect: true}
+        # ORGANIC-20260606 #448 — all_proved is a CLAIM, not a proof:
+        # the evidence-chain gate verifies an elaboratable .sby + a
+        # SymbiYosys PASS transcript + a dereferenceable evidence
+        # pointer before accepting it (replaces the bare
+        # json_field_true field trust).
+        - program_exit_zero: "formal_proof_evidence_check . --json reports/phase2/gates/formal_evidence.json"
         # Bit-level full-stack tb is mandatory before FPGA compile.
         # The check resolves the top module from L9 if present; the
         # tb file pattern is sim_full_stack/tb_<top>_full.v.

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 639
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 639)
+- **Total programs (excluding helpers / shims):** 640
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 640)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 630 |
+| `any` | 631 |
 
 ## Alphabetical listing
 
@@ -225,6 +225,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_doc_emit` | any | — | auto-generate the RUNNER-MARKER view of the Vibe-IC flow. |
 | `flow_stage_check` | any | — | wrapper for signoff_audit --mode flow. |
 | `formal_complexity_classify` | any | — | deterministic k-induction feasibility |
+| `formal_proof_evidence_check` | any | — | Step 5 formal proof EVIDENCE-CHAIN |
 | `foundry_handoff_pack_gen` | any | — | emit Step 35 foundry handoff package skeleton. |
 | `foundry_handoff_package_check` | any | Wave 88 | gate (v1.6.13 Wave 88, integerised |
 | `foundry_signoff_plan_check` | any | v0.113 | v0.113 (BACKLOG-v10 P1.2). |
@@ -711,7 +712,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (630 programs)
+### `any` (631 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -908,6 +909,7 @@ _(no programs in this group)_
 - `flow_doc_emit` — auto-generate the RUNNER-MARKER view of the Vibe-IC flow.
 - `flow_stage_check` — wrapper for signoff_audit --mode flow.
 - `formal_complexity_classify` — deterministic k-induction feasibility
+- `formal_proof_evidence_check` — Step 5 formal proof EVIDENCE-CHAIN
 - `foundry_handoff_pack_gen` — emit Step 35 foundry handoff package skeleton.
 - `foundry_handoff_package_check` — gate (v1.6.13 Wave 88, integerised  _[Wave 88]_
 - `foundry_signoff_plan_check` — v0.113 (BACKLOG-v10 P1.2).  _[v0.113]_

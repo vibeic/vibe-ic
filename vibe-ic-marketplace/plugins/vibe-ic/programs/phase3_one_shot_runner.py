@@ -4057,7 +4057,10 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
            f"magic -dnull -noconsole -rcfile {shlex.quote(magicrc)} "
            f"{_to_container_path(str(tcl), container)} 2>&1 | "
            f"tee {_to_container_path(str(ext_dir), container)}/ext2spice.log")
-    rc, out, err = _docker_exec(container, cmd, timeout=1800)
+    # #443 field observation (2026-06-06): a 599-cell design took ~40 min
+    # in ext2spice and longer in netgen — 30 min would kill legitimate
+    # runs on anything non-trivial. 4 h ceiling for both phases.
+    rc, out, err = _docker_exec(container, cmd, timeout=14400)
     if not spice_out.is_file() or spice_out.stat().st_size == 0:
         return StepResult(
             "lvs", "FAIL", time.time() - t0,
@@ -4081,7 +4084,7 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"netgen -batch lvs \"{sp_c} {lay_top}\" \"{nl_c} {top}\" "
         f"{shlex.quote(netgen_setup)} {rpt_c}")
-    rc, out, err = _docker_exec(container, cmd, timeout=1800)
+    rc, out, err = _docker_exec(container, cmd, timeout=14400)  # see #443 note
     transcript = (out or "") + "\n" + (err or "")
     rpt_txt = lvs_rpt.read_text(errors="replace") if lvs_rpt.is_file() else ""
     blob = transcript + "\n" + rpt_txt
