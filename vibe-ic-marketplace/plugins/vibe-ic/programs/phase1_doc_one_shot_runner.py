@@ -6837,6 +6837,61 @@ _L19_L23_CODES_AND_NAMES: List[Tuple[str, str]] = [
 ]
 
 
+# ORGANIC-20260606 #451 — deterministic pdk_target extraction. Phase 1
+# never populated L19.fields.pdk_target even when the input docs named
+# the target process, so the #438b PDK-mismatch gate (declared-vs-deck)
+# was structurally silent on real runs. Token table = PDK/process
+# IDENTIFIERS (a namespace like tool names, not chip-specific):
+# open-PDK tokens are unambiguous bare; commercial foundry names only
+# count with PDK/process context nearby (deny-guard against prose).
+_OPEN_PDK_TOKEN_RE = re.compile(
+    r"\b(sky130[a-z]?|gf180mcu[a-z]?|gf180|sg13g2|ihp[- ]?sg13g2|"
+    r"asap7|freepdk\d+|nangate45|scl180)\b", re.IGNORECASE)
+_FOUNDRY_CTX_RE = re.compile(
+    r"\b(tsmc|umc|smic|globalfoundries|tower|x-?fab)\b"
+    r"[^\n]{0,60}?(?:\d+\s?nm|pdk|process|technology|node)|"
+    r"(?:\d+\s?nm|pdk|process|technology|node)[^\n]{0,60}?"
+    r"\b(tsmc|umc|smic|globalfoundries|tower|x-?fab)\b",
+    re.IGNORECASE)
+
+
+def _extract_pdk_target_from_inputs(project: Path):
+    """(pdk_target, evidence_snippet) from the project's own input docs,
+    or (None, None). Deterministic; capped scan (large-doc doctrine)."""
+    texts = []
+    total = 0
+    for base in (project / "phase1" / "input_doc",
+                 project / "input" / "docs", project / "input_doc"):
+        if not base.is_dir():
+            continue
+        for f in sorted(base.rglob("*")):
+            if not f.is_file() or f.suffix.lower() in (
+                    ".png", ".jpg", ".pdf", ".gds", ".zip"):
+                continue
+            try:
+                t = f.read_text(errors="replace")[:200_000]
+            except OSError:
+                continue
+            texts.append(t)
+            total += len(t)
+            if total > 2_000_000:
+                break
+    blob = "\n".join(texts)
+    if not blob:
+        return None, None
+    m = _OPEN_PDK_TOKEN_RE.search(blob)
+    if m:
+        tok = re.sub(r"^ihp[- ]?", "", m.group(1).lower()).replace(" ", "")
+        start = max(0, m.start() - 60)
+        return tok, blob[start:m.end() + 60].replace("\n", " ")[:160]
+    m = _FOUNDRY_CTX_RE.search(blob)
+    if m:
+        tok = (m.group(1) or m.group(2)).lower()
+        start = max(0, m.start() - 20)
+        return tok, blob[start:m.end() + 40].replace("\n", " ")[:160]
+    return None, None
+
+
 def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
     """Invoke phase1_post_process.emit_l_doc_skeleton for L19-L23, then write
     each via _write_l_doc so R11 scrub + R13 applicability gate fire.
@@ -6868,9 +6923,19 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
     except Exception:
         ic_class = "unknown"
 
+    # #451 — pdk_target extraction (once per run, reused for L19)
+    _pdk_tgt, _pdk_ev = _extract_pdk_target_from_inputs(project)
+
     for code, doc_name in _L19_L23_CODES_AND_NAMES:
         try:
             skeleton = _emit_sk(code, ic_class)
+            if code == "L19" and _pdk_tgt and isinstance(
+                    skeleton.get("fields"), dict):
+                skeleton["fields"]["pdk_target"] = _pdk_tgt
+                skeleton["extraction_status"] = "PARTIALLY_EXTRACTED"
+                skeleton.setdefault("extraction_evidence", {})
+                if isinstance(skeleton["extraction_evidence"], dict):
+                    skeleton["extraction_evidence"]["pdk_target"] = _pdk_ev
             # emit_l_doc_skeleton returns a dict; _write_l_doc takes content + evidence.
             evidence = skeleton.pop("evidence", []) if isinstance(skeleton.get("evidence"), list) else {}
             if not isinstance(evidence, dict):
@@ -7499,6 +7564,149 @@ _L1_IC_NAME_PDK_DENY = frozenset({
 })
 
 
+# ─── ORGANIC-20260606 #455 — analog-datasheet pin extraction fixes ───
+# (1) ALL-CAPS PROSE deny: ALL-CAPS English words in narrative ("ONLY",
+#     "NOT", …) and uncorroborated short acronyms must never wear a pin
+#     name. A candidate that is uppercase-alphabetic is kept ONLY when
+#     corroborated: it appears as an exact backticked token somewhere,
+#     or as a standalone word inside a port-context heading range.
+# (2) BANKED-PIN ranges: `IN1..IN6` / `OUT1-OUT6` / `CK4/CK5/CK6` /
+#     `IN[1:6]` expand to the individual pins instead of being missed.
+# chip-AGNOSTIC: structural shapes only.
+_PIN_PROSE_DENY = frozenset({
+    "ONLY", "NOT", "AND", "THE", "FOR", "ALL", "ANY", "USE", "USED",
+    "MUST", "NOTE", "TODO", "TBD", "PASS", "FAIL", "WARNING", "ERROR",
+    "INFO", "TRUE", "FALSE", "NONE", "WITH", "FROM", "THIS", "THAT",
+    "ARE", "CAN", "MAY", "PER", "VIA", "SEE", "PAD",
+})
+_RE_BACKTICK_TOKEN = re.compile(r"`([A-Za-z][A-Za-z0-9_\[\]:.\/]*)`")
+_RE_PIN_RANGE = re.compile(
+    r"^([A-Za-z_]+)(\d+)\s*(?:\.\.|[-\u2013\u2014:])\s*([A-Za-z_]+)?(\d+)$")
+_RE_PIN_BRACKET_RANGE = re.compile(r"^([A-Za-z_]+)\[(\d+):(\d+)\]$")
+
+
+def _v455_expand_pin_token(tok: str) -> List[str]:
+    """`IN1..IN6` → [IN1..IN6]; `CK4/CK5/CK6` → split; plain → [tok]."""
+    tok = tok.strip()
+    if "/" in tok:
+        out: List[str] = []
+        for part in tok.split("/"):
+            out.extend(_v455_expand_pin_token(part))
+        return out
+    m = _RE_PIN_BRACKET_RANGE.match(tok)
+    if m:
+        a, b = int(m.group(2)), int(m.group(3))
+        lo, hi = min(a, b), max(a, b)
+        if hi - lo <= 64:
+            return [f"{m.group(1)}{i}" for i in range(lo, hi + 1)]
+    m = _RE_PIN_RANGE.match(tok)
+    if m and (m.group(3) is None or m.group(3) == m.group(1)):
+        a, b = int(m.group(2)), int(m.group(4))
+        lo, hi = min(a, b), max(a, b)
+        if hi - lo <= 64:
+            return [f"{m.group(1)}{i}" for i in range(lo, hi + 1)]
+    return [tok]
+
+
+def _v455_dir_from_line(line: str) -> str:
+    low = line.lower()
+    if re.search(r"\binputs?\b", low):
+        return "input"
+    if re.search(r"\boutputs?\b", low):
+        return "output"
+    if re.search(r"\bclocks?\b", low):
+        return "input"
+    if re.search(r"\b(suppl|reference|vdd|power|ground)\w*", low):
+        return "inout"
+    return "unspecified"
+
+
+def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
+    """Backticked pin tokens (ranges expanded) found inside port-context
+    heading ranges — the bullet-list interface shape analog datasheets
+    use instead of a pipe table (#455)."""
+    out: List[dict] = []
+    seen: set = set()
+    for body in (extracted or {}).values():
+        if not body:
+            continue
+        for start, end in _port_context_heading_ranges(body):
+            for line in body[start:end].splitlines():
+                direction = _v455_dir_from_line(line)
+                for tok in _RE_BACKTICK_TOKEN.findall(line):
+                    for name in _v455_expand_pin_token(tok):
+                        if (not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name)
+                                or len(name) > 24 or name in seen
+                                or name.upper() in _PIN_PROSE_DENY
+                                or name.islower() and len(name) <= 2):
+                            continue
+                        seen.add(name)
+                        out.append({
+                            "name": name,
+                            "mode": direction,
+                            "aliases": [],
+                            "rtl_name": name.lower(),
+                            "board_name": name,
+                            "io_standard": None,
+                            "no_io_standard_in_input": True,
+                            "function": _infer_pin_function(name, ""),
+                            "description": line.strip()[:160],
+                            "_extraction": "backticked_interface_v455",
+                        })
+    return out
+
+
+def _v455_sanitize_and_merge_pins(pins: List[dict],
+                                  extracted: Dict[str, str]) -> List[dict]:
+    """#455 final pin pass: drop uncorroborated ALL-CAPS prose pins,
+    merge the backticked-interface pins (banked ranges expanded)."""
+    bodies = [b for b in (extracted or {}).values() if b]
+    backticked: set = set()
+    for b in bodies:
+        for tok in _RE_BACKTICK_TOKEN.findall(b):
+            for nm in _v455_expand_pin_token(tok):
+                backticked.add(nm)
+    ctx_ranges = [(b, _port_context_heading_ranges(b)) for b in bodies]
+
+    def _in_port_context(name: str) -> bool:
+        """STRUCTURED occurrence inside a port-context range: a pipe-
+        table row cell or a backticked token — bare prose inside the
+        section ("for the LDO channel") is NOT corroboration (#455)."""
+        pat = re.compile(rf"(?<![\w]){re.escape(name)}(?![\w])")
+        for b, ranges in ctx_ranges:
+            for s_, e_ in ranges:
+                for line in b[s_:e_].splitlines():
+                    if not pat.search(line):
+                        continue
+                    if _is_pipe_table_row(line) or f"`{name}`" in line:
+                        return True
+                    # plaintext COLUMN-table row: the line carries a
+                    # STANDALONE SINGULAR direction token (any case) —
+                    # prose uses plurals ("Analog inputs …") which the
+                    # word boundary rejects (#455)
+                    if re.search(r"(?<![\w])(?:input|output|inout|i/o)"
+                                 r"(?![\w])", line, re.IGNORECASE):
+                        return True
+        return False
+
+    kept: List[dict] = []
+    for entry in pins:
+        name = str(entry.get("name") or "")
+        if name.isupper() and name.isalpha():
+            if name in _PIN_PROSE_DENY and name not in backticked:
+                continue  # ALL-CAPS English prose word — hallucination
+            if name not in backticked and not _in_port_context(name):
+                continue  # uncorroborated ALL-CAPS acronym from prose
+        kept.append(entry)
+
+    have = {str(e.get("name")) for e in kept}
+    for extra in _v455_interface_pins(extracted):
+        if extra["name"] not in have:
+            have.add(extra["name"])
+            kept.append(extra)
+    return kept
+
+
 def _ic_name_from_docs(extracted: Dict[str, str],
                        project: Optional[Path] = None) -> str:
     """Public wrapper around `_ic_name_from_docs_impl` that rejects
@@ -7551,6 +7759,25 @@ def _ic_name_from_docs_impl(extracted: Dict[str, str],
       4. Adjacency: "<X> core / controller / engine / ..."
       5. Chip-style part number (IC-A / USB-HID-TESTER / BC1234A)
     """
+    # ------ Tier -1 (ORGANIC-20260606 #455): YAML-frontmatter chip
+    # declaration. A doc whose frontmatter says `ic: <name>` (or
+    # ic_name/chip) has DECLARED its chip identity — no heuristic may
+    # out-vote it (the audited truncation came from the part-number
+    # tier latching a SUBSTRING of the full part token).
+    _fm_re = re.compile(
+        r"\A---\s*\n(.*?)\n---", re.DOTALL)
+    _fm_key_re = re.compile(
+        r"^(?:ic|ic_name|chip)\s*:\s*([\w.\-]+)\s*$", re.MULTILINE)
+    for text in (extracted or {}).values():
+        if not text:
+            continue
+        fm = _fm_re.match(text)
+        if not fm:
+            continue
+        km = _fm_key_re.search(fm.group(1))
+        if km and len(km.group(1)) >= 3:
+            return km.group(1)
+
     # ------ Tier 0 (v1.6.244, for #105): folder-name + in-doc
     # corroboration. v1.6.233's "Tier 4.5" demotion made Tier-0
     # only fire when every other tier was silent — but real RV
@@ -9500,6 +9727,12 @@ _PIN_ANCHOR_RE = re.compile(
 _RE_PORT_HEADING_SCOPE = re.compile(
     r"(?im)(?:^|\n)"
     r"(?:"
+    # case 1b (ORGANIC-20260606 #455): markdown heading that CONTAINS
+    # the pin/port/interface vocabulary anywhere in its first 60 chars
+    # ("## Externally-observable interface (per the chip's top pins)").
+    # Still heading-anchored — prose paragraphs never match.
+    r"#{1,6}[^\n]{0,60}?\b(?:pin(?:s|out)?|i/?o|ports?|interface|signals?)\b[^\n]*"
+    r"|"
     r"#{1,6}\s+"  # case 1: markdown heading
     r"(?:pin(?:out|s|\s+(?:list|table|map))?|i/?o|"
     r"top[-\s]*level\s+ports?|external\s+ports?|"
@@ -16842,6 +17075,10 @@ def gen_l1_datasheet(project: Path,
     # RISC-V International foundation; applies to every conforming
     # RISC-V IP regardless of vendor.
     isa_classification = _extract_l1_isa_classification(extracted)
+
+    # ORGANIC-20260606 #455 — final pin pass: ALL-CAPS-prose deny +
+    # banked-range backticked-interface merge (analog-datasheet shape).
+    pins = _v455_sanitize_and_merge_pins(pins, extracted)
 
     content = {
         "schema_version": 2,
@@ -27328,6 +27565,108 @@ def _v0_1_62_analog_kw_negated(text: str, kw_start: int, kw_end: int) -> bool:
     return bool(_RE_ANALOG_NEGATION.search(clause))
 
 
+# ─── ORGANIC-20260606 #455 — analog spec-table structurer ───────────
+# Analog datasheets carry per-block spec tables in the canonical shape
+#   ## Block X — `<name>` : <prose>
+#   | Spec | Target | Range | Unit | Note |
+# but L5.analog_blocks[].spec stayed null because nothing ever
+# structured them — the A-track had no spec to verify and degraded to
+# stubs (#434 upstream cause). This walker parses the heading + pipe
+# table into typed spec rows. chip-AGNOSTIC: structural heading/table
+# shapes; numeric coercion handles `≥/≤/—/a–b` forms.
+_RE_BLOCK_SPEC_HEADING = re.compile(
+    r"(?m)^#{2,4}\s+[^\n`]*`([A-Za-z_][\w]*)`\s*[:\u2014-]")
+_RE_NUM = re.compile(r"[-+]?\d+(?:\.\d+)?")
+
+
+def _v455_coerce_spec_value(target: str, rng: str) -> dict:
+    """{target,min,max} floats (when derivable) from Target+Range cells."""
+    out: dict = {}
+    t = (target or "").strip()
+    r = (rng or "").strip()
+    tm = _RE_NUM.search(t)
+    if t.startswith(("\u2265", ">=")) and tm:        # ≥
+        out["min"] = float(tm.group(0))
+    elif t.startswith(("\u2264", "<=")) and tm:      # ≤
+        out["max"] = float(tm.group(0))
+    elif tm and not re.search(r"[A-Za-z]", t.replace("e", "").replace("E", "")):
+        out["target"] = float(tm.group(0))
+    nums = _RE_NUM.findall(r)
+    if len(nums) >= 2 and re.search(r"[\u2013\u2014-]|\.\.", r):
+        a, b = float(nums[0]), float(nums[1])
+        out.setdefault("min", min(a, b))
+        out.setdefault("max", max(a, b))
+    elif r.startswith(("\u2265", ">=")) and nums:
+        out.setdefault("min", float(nums[0]))
+    elif r.startswith(("\u2264", "<=")) and nums:
+        out.setdefault("max", float(nums[0]))
+    return out
+
+
+def _v455_parse_block_spec_tables(extracted: Dict[str, str]) -> Dict[str, dict]:
+    """{block_token: {"specs": [...], "source": fname}} from every doc."""
+    out: Dict[str, dict] = {}
+    for fname, text in (extracted or {}).items():
+        if not text:
+            continue
+        for m in _RE_BLOCK_SPEC_HEADING.finditer(text):
+            block = m.group(1).lower()
+            window = text[m.end():m.end() + 4000]
+            rows = []
+            in_table = False
+            for line in window.splitlines():
+                ls = line.strip()
+                if ls.startswith("|"):
+                    cells = [c.strip() for c in ls.strip("|").split("|")]
+                    if not in_table:
+                        # header row must look like a spec table
+                        head = " ".join(cells).lower()
+                        if "spec" in head and ("target" in head
+                                               or "value" in head):
+                            in_table = True
+                        continue
+                    if set("".join(cells)) <= set("-: "):
+                        continue  # separator row
+                    if len(cells) < 2 or not cells[0]:
+                        continue
+                    row = {"name": cells[0],
+                           "target_raw": cells[1] if len(cells) > 1 else "",
+                           "range_raw": cells[2] if len(cells) > 2 else "",
+                           "unit": (cells[3] if len(cells) > 3 else "") or None,
+                           "note": (cells[4] if len(cells) > 4 else "") or None}
+                    row.update(_v455_coerce_spec_value(
+                        row["target_raw"], row["range_raw"]))
+                    rows.append(row)
+                elif in_table:
+                    break  # table ended
+            if rows and block not in out:
+                out[block] = {"specs": rows, "source": fname}
+    return out
+
+
+def _v455_attach_block_specs(blocks: List[dict],
+                             extracted: Dict[str, str]) -> None:
+    """Fill analog_blocks[].spec from the structured tables; match by
+    block name/type token containment (delta_sigma↔delta_sigma,
+    ldo↔ldo, adc↔delta_sigma via converter rows is NOT guessed —
+    only token matches)."""
+    tables = _v455_parse_block_spec_tables(extracted)
+    if not tables:
+        return
+    for b in blocks:
+        if not isinstance(b, dict) or b.get("spec"):
+            continue
+        cand = {str(b.get("name", "")).lower(),
+                str(b.get("type", "")).lower()}
+        for token, payload in tables.items():
+            if token in cand or any(token in c or c in token
+                                    for c in cand if c):
+                b["spec"] = payload
+                b["low_confidence"] = False
+                b["spec_extraction"] = "block_spec_table_v455"
+                break
+
+
 def gen_l5_adi_spec(project: Path,
                     extracted: Dict[str, str]) -> LDocResult:
     """L5: analog block discovery via Wave-47 keyword scan + chip-AGNOSTIC
@@ -27816,6 +28155,12 @@ def gen_l5_adi_spec(project: Path,
     # LATER block(s)' count to the parsed sub-qualifier. The earlier
     # block keeps the head count because it owns the head subject.
     _v1_6_563_apply_subqualifier_guard(blocks)
+
+    # ORGANIC-20260606 #455 — structure the per-block spec tables into
+    # analog_blocks[].spec (ENOB/OSR/PSRR/dropout matrices) so the
+    # A-track has real targets instead of spec=null stub degradation.
+    _v455_attach_block_specs(blocks, extracted)
+
     content = {
         "schema_version": 2,
         "doc_class": "adi_spec",

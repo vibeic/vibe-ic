@@ -321,6 +321,7 @@ def run_audit(project: Path) -> AuditResult:
     total_pdk_mismatches = 0  # v0.2.68 (#438b)
     declared_target = _declared_pdk_target(project)
     mismatch_waived = _pdk_mismatch_waived(project)
+    _pdk_undeclared_warned = False  # #451 — one named WARNING per run
 
     for sp in sp_files:
         try:
@@ -370,6 +371,22 @@ def run_audit(project: Path) -> AuditResult:
         # #438(b) — deck PDK family vs the project's DECLARED target.
         # Mismatch = declared target is concrete AND the deck's detected
         # family token does not appear in it. Waivable with rationale.
+        # ORGANIC-20260606 #451 — UNDECLARED is VISIBLE, never silent:
+        # an analog deck with no L19 pdk_target gets a named WARNING so
+        # the wrong-process risk surfaces instead of vacuously passing.
+        if pdk and declared_target is None and not _pdk_undeclared_warned:
+            _pdk_undeclared_warned = True
+            result.findings.append(Finding(
+                rule="PDK_TARGET_UNDECLARED",
+                severity="WARNING",
+                message=("decks instantiate "
+                         f"{pdk} device models but L19.fields.pdk_target "
+                         "is not declared — the #438b PDK-mismatch gate "
+                         "cannot compare; populate L19 (Phase 1 extracts "
+                         "it from the input docs since #451) or declare "
+                         "the target explicitly"),
+                file=rel,
+            ))
         if pdk and declared_target and \
                 pdk.lower() not in declared_target.lower():
             if mismatch_waived:
