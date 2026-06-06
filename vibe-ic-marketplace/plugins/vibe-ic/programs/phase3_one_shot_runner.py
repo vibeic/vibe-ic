@@ -4351,7 +4351,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             )
             written.append(str(pre_pnr_rpt))
 
-    # --- v2.3.1 (review R2): Step-10 post-synth POWER PREVIEW ----------
+    # --- flow v2.3.1 (review R2): Step-10 post-synth POWER PREVIEW ----------
     # Advisory early-feedback: OpenSTA report_power on the SYNTH netlist
     # + SDC (the same vectorless run Step 33 signs off post-layout),
     # surfaced at the pre-layout stage so the designer sees a power

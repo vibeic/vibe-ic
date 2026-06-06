@@ -789,7 +789,7 @@ steps:
       - "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done"
     gate:
       all_of:
-        # v2.3.1 (review R3) — IP integration checklist: hard-macro
+        # flow v2.3.1 (review R3) — IP integration checklist: hard-macro
         # LEF/GDS/Liberty file-set alignment + lib corner coverage +
         # L21 power-domain consistency, before the macros enter
         # floorplan. Only fires when macros are present.

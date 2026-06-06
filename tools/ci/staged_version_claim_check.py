@@ -175,6 +175,13 @@ _SKIP_PATH_PATTERNS = (
     "docs/architecture/ALL_STEPS_",
     "docs/architecture/FLOW_STEPS_GENERATED",
     "docs/architecture/v2_validation/",
+    # External reviewer assessment / analysis archives on the FLOW
+    # (Vibe-IC_v2.3.0_Assessment.md, Vibe-IC_Flow_Completeness_Analysis.md, …).
+    # Their prose discusses the flow/doc version scheme (v2.2.0 / v2.3.0 / …)
+    # pervasively and verbatim — archived third-party feedback is not
+    # rephraseable into historical-prefix form. Same doc-version-namespace
+    # rationale as ALL_STEPS_ / CANONICAL_FLOW_ above (ORGANIC-20260606).
+    "docs/architecture/Vibe-IC_",
     "_PROPOSED.md",
     # Dependency LOCKFILES enumerate the versions of every npm/node package
     # in the dependency graph ("version": "0.99.0" of some dep) — none are
@@ -392,6 +399,27 @@ def _is_dependency_tool_version(body: str, match) -> bool:
     return m.group(1).lower() in _DEPENDENCY_TOOL_NAMES
 
 
+# In-repo SIBLING version namespaces. The canonical flow document carries its
+# OWN vX.Y.Z scheme (flow v2.3.1 — the ALL_STEPS / CANONICAL_FLOW doc version),
+# distinct from plugin semver. Plugin sources legitimately cite it in comments
+# ("flow v2.3.1 (review R3) — …"). A version-triple whose immediately-preceding
+# word names the namespace is that namespace's version, never a plugin
+# self-claim. STRICT immediate precedence (same mechanism as the dependency
+# carve-out): "the plugin flow. v0.3.0 adds X" does NOT match (the period is
+# not a stripped separator), so a real forward claim stays gated.
+_SIBLING_NAMESPACE_WORDS = frozenset({"flow"})
+
+
+def _is_sibling_namespace_version(body: str, match) -> bool:
+    """True iff the version-triple is immediately preceded by a declared
+    in-repo sibling-namespace word (`flow v2.3.1` -> True)."""
+    prefix = body[:match.start()].rstrip(" \t([-/:=@")
+    m = _TRAILING_WORD_RE.search(prefix)
+    if not m:
+        return False
+    return m.group(1).lower() in _SIBLING_NAMESPACE_WORDS
+
+
 # Pre-reset historical version bands. vibe-ic's version scheme RESET from the old
 # 1.6.x development series down to the current 0.2.x series. The 1.6.x numbers now
 # live on ONLY as backward provenance references in code comments / docstrings
@@ -438,6 +466,8 @@ def check(diff_text: str,
                 continue   # doc-version namespace (ALL_STEPS_v2.2.0 …), not a claim
             if _is_dependency_tool_version(body, m):
                 continue   # third-party tool / PDK / runtime version, not a claim
+            if _is_sibling_namespace_version(body, m):
+                continue   # in-repo sibling namespace (flow vX.Y.Z), not a claim
             # A numeric triple whose first digit is immediately preceded by
             # an ASCII letter other than v/V is an identifier or spec-section
             # anchor (e.g. `A3.1.1`, `C3.4.1`, `FR3.1` source citations in the

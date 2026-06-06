@@ -2,7 +2,7 @@
 """dfm_screen_check.py — Step 35 DFM screen (v2.3).
 
 Design-for-Manufacturability, scoped HONESTLY for an open-source
-130-180nm flow. v2.3.1 (external review P0-1): the THREE density
+130-180nm flow. Flow v2.3.1 (external review P0-1): the THREE density
 touchpoints have DISTINCT natures and this screen no longer re-gates
 what Step 34 owns —
   Step 31 = RULE compliance (the sign-off DRC deck's min-density
@@ -32,7 +32,7 @@ what Step 34 owns —
 Always writes the canonical step artifact
 `reports/phase3/dfm_screen.json` (in addition to --json).
 
-v2.3.1: ADVANCED-NODE trigger — process node derived from the PDK's
+flow v2.3.1: ADVANCED-NODE trigger — process node derived from the PDK's
 own liberty filenames (the foundry_handoff_pack_gen heuristic); at
 <= 28 nm the FOUNDRY_SIDE items escalate to DESIGNER_COLLAB_REVIEW
 findings (dormant at this flow's 130-180 nm PDKs, mechanism present).
@@ -114,7 +114,7 @@ def audit(project: Path) -> dict:
                 "reason": ("no routed.def and no density artifacts yet — "
                            "run routing + metal fill first")}
 
-    # 1) CMP density — CROSS-REFERENCE Step 34's gate (v2.3.1: no
+    # 1) CMP density — CROSS-REFERENCE Step 34's gate (flow v2.3.1: no
     # duplicate gating; three-natures split 31/34/35).
     gate_json = project / "reports" / "phase2" / "gates" / \
         "metal_fill_density.json"
@@ -193,7 +193,7 @@ def audit(project: Path) -> dict:
                     "by the Step-31 sign-off DRC deck (KLayout) — not "
                     "re-executed here")})
 
-    # v2.3.1 — advanced-node trigger: derive the process node from the
+    # flow v2.3.1 — advanced-node trigger: derive the process node from the
     # PDK's own liberty filenames (input/pdk/liberty/*.lib); at <=28nm
     # the foundry-side items escalate to designer-collaboration REVIEW.
     process_nm = _derive_process_nm(project)
@@ -206,7 +206,7 @@ def audit(project: Path) -> dict:
             "severity": "WARNING", "category": "ADVANCED_NODE_DFM",
             "message": (f"process node {process_nm} nm <= 28 nm — "
                         f"OPC/RET/litho-friendly items escalate to "
-                        f"designer-collaboration review (v2.3.1)")})
+                        f"designer-collaboration review (flow v2.3.1)")})
 
     advisories = [f for f in findings if f["severity"] == "WARNING"]
     verdict = "PASS_WITH_ADVISORIES" if advisories else "PASS"

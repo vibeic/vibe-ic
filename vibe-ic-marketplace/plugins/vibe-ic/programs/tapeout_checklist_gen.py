@@ -124,7 +124,7 @@ def main(argv=None) -> int:
             "severity": severity,
         })
 
-    # v2.3.1 (review P1-5) — PENDING_FOUNDRY tracking closes here: the
+    # flow v2.3.1 (review P1-5) — PENDING_FOUNDRY tracking closes here: the
     # handoff gate's pending_foundry_fields become NAMED checklist open
     # items, owned by the tapeout checklist until the foundry replies
     # and the fields are back-filled into mask_spec.json.
@@ -182,7 +182,7 @@ def main(argv=None) -> int:
         ),
         "items": items,
         "open_waivers": waivers,
-        "pending_foundry_items": pending_foundry,   # v2.3.1 P1-5
+        "pending_foundry_items": pending_foundry,   # flow v2.3.1 P1-5
         "reviewer_todo": [
             f"Review waiver {w['ticket']}: {w['reason']}"
             for w in waivers.values()

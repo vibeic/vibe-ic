@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """ip_integration_check.py — hard-macro / IP integration checklist gate
-(v2.3.1, external review R3).
+(flow v2.3.1, external review R3).
 
 Hard macros (SRAM / PLL / IO / analog A8 packs) flow into Step 15 via
 `input/pdk_local/<vendor>/` and `phase3/analog/hardmacro/` — but no
@@ -105,7 +105,7 @@ def audit(project: Path) -> dict:
                 "message": (f"{rel}: macro handoff set missing "
                             f"{sorted(missing)} — a LEF without its "
                             f"GDS/Liberty (or vice versa) breaks "
-                            f"merge/PV/STA downstream (v2.3.1 R3)")})
+                            f"merge/PV/STA downstream (flow v2.3.1 R3)")})
         if libs and len(corners) <= 1:
             findings.append({
                 "severity": "WARNING", "rule": "IP_SINGLE_CORNER_LIB",

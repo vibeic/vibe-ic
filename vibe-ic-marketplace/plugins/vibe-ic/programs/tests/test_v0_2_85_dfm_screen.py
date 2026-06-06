@@ -69,7 +69,7 @@ def test_balanced_via_mix_passes(tmp_path):
 
 
 def test_density_is_cross_reference_not_duplicate_gate(tmp_path):
-    # v2.3.1 three-natures split: Step 34 OWNS the density gate; the
+    # flow v2.3.1 three-natures split: Step 34 OWNS the density gate; the
     # DFM screen only cross-references its result (advisory).
     import json as _json
     p = _proj(tmp_path, fillers=0, util=10.0)

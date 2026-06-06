@@ -480,3 +480,53 @@ def test_lockfile_carveout_does_not_mask_plugin_json_claim(tmp_path):
         "vibe-ic-marketplace/plugins/vibe-ic/README.md",
         "Now at v0.99.0 with the new gate."))
     assert cp.returncode == 1, cp.stdout + cp.stderr
+
+
+def test_flow_assessment_review_docs_skipped(tmp_path):
+    # ORGANIC-20260606: external reviewer assessment/analysis archives on the
+    # FLOW (docs/architecture/Vibe-IC_*) discuss the flow/doc version scheme
+    # (v2.2.0 / v2.3.0 / …) — a namespace distinct from plugin semver — in
+    # verbatim third-party prose that cannot be rephrased historical. Path
+    # carve-out, same family as ALL_STEPS_ / CANONICAL_FLOW_.
+    _make_plugin_json(tmp_path, "0.2.91")
+    for path in (
+        "docs/architecture/Vibe-IC_v2.3.0_Assessment.md",
+        "opensource_repo/docs/architecture/Vibe-IC_Flow_Completeness_Analysis.md",
+    ):
+        cp = _run(tmp_path, _diff(
+            path,
+            "| 評估面向 | v2.2.0 評分 | v2.3.0 評分 | 提升原因 |",
+            "v2.3.0 作為發佈版本，完整度已達業界可接受水準。"))
+        assert cp.returncode == 0, f"{path}: " + cp.stdout + cp.stderr
+
+
+def test_flow_doc_carveout_does_not_mask_plugin_claim(tmp_path):
+    # the exemption is path-scoped: the SAME flow-version prose in a
+    # non-exempt path (a program comment) still FAILs.
+    _make_plugin_json(tmp_path, "0.2.91")
+    cp = _run(tmp_path, _diff(
+        "vibe-ic-marketplace/plugins/vibe-ic/programs/foo.py",
+        "# upgraded for v2.3.0 of the plugin"))
+    assert cp.returncode == 1, cp.stdout + cp.stderr
+
+
+def test_flow_namespace_version_exempt(tmp_path):
+    # "flow v2.3.1" cites the canonical-flow DOC version (a sibling
+    # namespace), not the plugin's own semver — plugin sources legitimately
+    # carry it in comments ("flow v2.3.1 (review R3) — …").
+    _make_plugin_json(tmp_path, "0.2.91")
+    cp = _run(tmp_path, _diff(
+        "vibe-ic-marketplace/plugins/vibe-ic/programs/foo.py",
+        "# flow v2.3.1 (review R3) — IP integration checklist",
+        '            f"designer-collaboration review (flow v2.3.1)")})'))
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_flow_namespace_requires_immediate_precedence(tmp_path):
+    # strict immediacy: "the plugin flow. v0.3.0 adds X" must STILL fail —
+    # the period is not a stripped separator, so this is a forward claim.
+    _make_plugin_json(tmp_path, "0.2.91")
+    cp = _run(tmp_path, _diff(
+        "vibe-ic-marketplace/plugins/vibe-ic/programs/foo.py",
+        "# the plugin flow. v0.3.0 adds X"))
+    assert cp.returncode == 1, cp.stdout + cp.stderr

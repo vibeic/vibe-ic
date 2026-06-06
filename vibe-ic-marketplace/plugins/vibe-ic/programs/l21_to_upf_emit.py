@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """l21_to_upf_emit.py — render L21 power intent into an IEEE-1801 UPF
-handoff artifact (v2.3.1, external review R1).
+handoff artifact (flow v2.3.1, external review R1).
 
 L21_POWER_INTENT.json has modelled power domains / isolation /
 level-shifters since v0.1.51, and `upf_syntax_check.py` has existed to
@@ -52,7 +52,7 @@ def render_upf(fields: dict, top: str, source_rel: str) -> str:
                if isinstance(d, dict) and d.get("name")]
     lines = [
         "# IEEE-1801 UPF — rendered from L21_POWER_INTENT by",
-        "# l21_to_upf_emit (v2.3.1). HANDOFF ARTIFACT: the open-source",
+        "# l21_to_upf_emit (flow v2.3.1). HANDOFF ARTIFACT: the open-source",
         "# implementation tools (Yosys/OpenROAD) do not consume UPF;",
         "# structural power-intent verification lives in the M2 gates.",
         f"# source: {source_rel}",
