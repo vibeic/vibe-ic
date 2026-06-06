@@ -639,6 +639,20 @@ def _check_sta(project_dir: Path) -> AuditResult:
                         f"{len(digests)} distinct (#437c)",
                 file=str(cd)))
 
+    # ORGANIC-20260606 #442 — explicit single-corner DISCLOSURE: when no
+    # per_corner evidence (>=2 distinct corner reports) exists, the STA
+    # is single-corner and must say so — never silently wear the step's
+    # "multi-corner sign-off" name. Advisory (does not flip passed); the
+    # broken-claim cases above (empty dir / identical copies) still FAIL.
+    multi_corner_executed = corners_ok and corner_distinct >= 2
+    if not multi_corner_executed and corners_ok:
+        result.findings.append(Finding(
+            rule="STA_SINGLE_CORNER_ONLY", severity="WARNING",
+            message=("no multi-corner STA evidence (>=2 distinct "
+                     "per-corner reports) — this is a SINGLE-CORNER "
+                     "analysis and must not be presented as multi-corner "
+                     "sign-off (#442)")))
+
     result.passed = has_wns_tns and has_setup_hold and authentic and corners_ok
     result.summary = {"files_found": len(files), "has_wns_tns": has_wns_tns,
                       "has_setup_hold": has_setup_hold,
@@ -646,7 +660,8 @@ def _check_sta(project_dir: Path) -> AuditResult:
                       "corner_dirs_found": len(corner_dirs),
                       "corner_reports": corner_reports,
                       "corner_reports_distinct": corner_distinct,
-                      "multi_corner_substantiated": corners_ok}
+                      "multi_corner_substantiated": corners_ok,
+                      "multi_corner_executed": multi_corner_executed}
     return result
 
 

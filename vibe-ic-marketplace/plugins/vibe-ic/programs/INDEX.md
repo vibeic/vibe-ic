@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 637
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 637)
+- **Total programs (excluding helpers / shims):** 638
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 638)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 628 |
+| `any` | 629 |
 
 ## Alphabetical listing
 
@@ -490,6 +490,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `psi5_protocol_synth` | any | — | Peripheral Sensor Interface 5 (PSI5) protocol synth helper. |
 | `ptp_protocol_synth` | any | — | IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76). |
 | `pulse_decoder_edge_check` | any | — | Enforce rising-edge-driven classification in |
+| `pvt_matrix_check` | any | — | PVT-matrix substance gate (ORGANIC-20260606 #442). |
 | `qsf_gen` | any | Wave 72 | auto-generate Quartus QSF (FPGA pin assignments). |
 | `qsf_open_drain_assignment_check` | any | v0.119.29 | DEPRECATED in v0.119.29. |
 | `qspi_ospi_protocol_synth` | any | v0.1.91 | JEDEC Expanded SPI (xSPI, JESD251) protocol |
@@ -709,7 +710,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (628 programs)
+### `any` (629 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -1170,6 +1171,7 @@ _(no programs in this group)_
 - `psi5_protocol_synth` — Peripheral Sensor Interface 5 (PSI5) protocol synth helper.
 - `ptp_protocol_synth` — IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76).
 - `pulse_decoder_edge_check` — Enforce rising-edge-driven classification in
+- `pvt_matrix_check` — PVT-matrix substance gate (ORGANIC-20260606 #442).
 - `qsf_gen` — auto-generate Quartus QSF (FPGA pin assignments).  _[Wave 72]_
 - `qsf_open_drain_assignment_check` — DEPRECATED in v0.119.29.  _[v0.119.29]_
 - `qspi_ospi_protocol_synth` — JEDEC Expanded SPI (xSPI, JESD251) protocol  _[v0.1.91]_

@@ -4095,6 +4095,18 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         pvt = dict(_PVT_MATRIX_TEMPLATE)
         pvt["corners"] = corners
         pvt["primary_corner"] = "TT"
+        # ORGANIC-20260606 #442: corners=[] (or a single corner) is NOT a
+        # PVT matrix — say so in the artifact instead of letting an empty
+        # list wear the pvt_matrix name. ≥2 labelled corners = multi.
+        pvt["corner_count"] = len(corners)
+        pvt["multi_corner"] = len(corners) >= 2
+        if len(corners) < 2:
+            pvt["coverage"] = "SINGLE_CORNER_ONLY" if corners else "NO_CORNERS"
+            pvt["note"] = (
+                "fewer than 2 Liberty corners discovered under "
+                "input/pdk/liberty — this matrix does NOT substantiate "
+                "multi-corner sign-off (#442); add ss/tt/ff libs or "
+                "waive with rationale.")
         pvt_path.write_text(json.dumps(pvt, indent=2) + "\n")
         written.append(str(pvt_path))
 

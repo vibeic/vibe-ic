@@ -448,6 +448,10 @@ steps:
       all_of:
         - files_exist: ["phase2/stage2/constraints/*.sdc", "phase2/stage2/constraints/pvt_matrix.json"]
         - program_exit_zero: "sdc_syntax_check . --json reports/phase2/gates/sdc_syntax.json"
+        # ORGANIC-20260606 #442 — pvt_matrix.json with corners=[] is not
+        # a PVT matrix; single-corner must be disclosed, never presented
+        # as multi-corner.
+        - program_exit_zero: "pvt_matrix_check . --json reports/phase2/gates/pvt_matrix.json"
     blocks_on: [1]
 
   - id: 8
