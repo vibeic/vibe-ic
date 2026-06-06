@@ -83,8 +83,14 @@ VER_RE = re.compile(r"\bv?(\d+\.\d+\.\d+)\b")
 # sliced at m.start() — the 'v' itself — so every marker that carried a
 # trailing " v" could NEVER appear inside the window; "iter-5 from v0.2.50"
 # hard-failed despite the documented exemption.)
-HIST_MARKERS = ("supersedes", "(was", "fixes ", "from ", "since ",
-                "history", "deprecates", "replaces ", "predecessor")
+HIST_MARKERS = ("supersedes", "superseded", "(was", "fixes ", "from ",
+                "since ", "history", "deprecates", "replaces ",
+                "predecessor", "ref ", "retire")
+
+# In-repo SIBLING version namespaces (mirrors the staged-diff guard's
+# carve-out): "flow v2.3.2" cites the canonical-flow DOC version, a
+# namespace distinct from plugin semver — never a plugin-version claim.
+SIBLING_NS = ("flow",)
 
 def first_version(line: str):
     """Return the first non-historical vX.Y.Z mention in `line`, or None."""
@@ -94,6 +100,13 @@ def first_version(line: str):
         # version mention in both its "v1.2.3" and "1.2.3" spellings.
         prefix_window = line[max(0, m.start(1) - 30):m.start(1)].lower()
         if any(mk in prefix_window for mk in HIST_MARKERS):
+            continue
+        # sibling-namespace: the immediately-preceding WORD names a
+        # non-plugin version namespace (strict immediacy, same separator
+        # set as the staged-diff guard's dependency carve-out).
+        head = line[:m.start()].rstrip(" \t([-/:=@")
+        w = re.search(r"([A-Za-z][A-Za-z0-9_]*)$", head)
+        if w and w.group(1).lower() in SIBLING_NS:
             continue
         return m.group(1)
     return None

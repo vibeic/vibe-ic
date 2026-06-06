@@ -100,3 +100,28 @@ def test_no_version_in_message_skips(tmp_path):
     r = _run(_stage(tmp_path), tmp_path, "docs: clarify pad-ring viewing notes\n")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "SKIP" in r.stdout
+
+
+def test_flow_namespace_version_is_not_a_claim(tmp_path):
+    # "flow v2.3.2" cites the canonical-flow DOC version (sibling
+    # namespace) — mirrors the staged-diff guard's carve-out.
+    script = _stage(tmp_path, "0.2.92")
+    cp = _run(script, tmp_path,
+              "mirror(docs): docs aligned to flow v2.3.2 step table\n")
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert "SKIP" in cp.stdout
+
+
+def test_superseded_and_retire_markers_are_historical(tmp_path):
+    script = _stage(tmp_path, "0.2.92")
+    cp = _run(script, tmp_path,
+              "docs: retire v2.2.0 docs (superseded by v2.3.2 set)\n")
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+
+
+def test_flow_word_not_immediate_still_blocks(tmp_path):
+    # strict immediacy: "the flow. v9.9.10 ships X" — period is not a
+    # stripped separator, so this stays a forward plugin claim.
+    script = _stage(tmp_path, "9.9.9")
+    cp = _run(script, tmp_path, "feat: the flow. v9.9.10 ships X\n")
+    assert cp.returncode == 1, cp.stdout + cp.stderr
