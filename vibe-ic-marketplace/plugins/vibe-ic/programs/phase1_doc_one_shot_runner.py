@@ -9294,6 +9294,25 @@ def _v466_l5_enumerates_block_types(extracted) -> bool:
     return False
 
 
+def _v466_l5_has_block_headers(extracted) -> bool:
+    """ORGANIC #466 R3 — True iff any source doc declares ≥2 distinct
+    ``## Block <tag>`` headings (the STRONG enumeration shape, where the
+    designable-block layer is explicit). Distinguished from a bare count
+    statement (``two analog block types``) because the heading shape lets
+    us reliably tell a real block (it has a heading) from a
+    product-narrative hallucination (it does not). Chip-AGNOSTIC."""
+    if not isinstance(extracted, dict):
+        return False
+    for _fname, text in extracted.items():
+        if not isinstance(text, str) or not text:
+            continue
+        tags = {m.group("tag").upper()
+                for m in _V466_RE_BLOCK_AB.finditer(text)}
+        if len(tags) >= 2:
+            return True
+    return False
+
+
 def _v466_name_acronyms(ic_name):
     """Return the set of uppercase ≥2-char alpha runs embedded in the
     product / IC name (``XADC9000`` → {``XADC``, ``ADC``-substrings via
@@ -9354,14 +9373,167 @@ def _v466_evidence_is_product_name_only(text, kw_text, ic_name) -> bool:
     return True
 
 
+# ─── ORGANIC-20260606 #466 R3 (field-agent SECOND counter-evidence) ──
+# The R2 guard asked "is the candidate's only evidence the product
+# name (SKU)?" via `_v466_evidence_is_product_name_only`. That test is
+# WRONG for the real-input shape: a datasheet whose PRODUCT is named by
+# a converter acronym ("incremental delta-sigma ADC front-end",
+# "incremental-ADC front-end") contains FREE-STANDING prose occurrences
+# of the acronym that describe the chip AS A WHOLE. R2 saw those as
+# independent non-SKU mentions and KEPT the spurious block — so for a
+# chip whose product IS named by that acronym the R2 guard could never
+# fire.
+#
+# R3 replaces the SKU-embedding test with an L5 BLOCK-LAYER evidence
+# test. The correct distinction is NOT "does the token appear outside
+# the SKU" but "does the token have evidence at the DESIGNABLE-BLOCK
+# layer". A token is BLOCK evidence only when it names a block at the
+# L5 block layer:
+#
+#   * it appears on a markdown Block-HEADING line
+#     (``## … Block … <type> …``), OR
+#   * it appears on a spec-table row that DECLARES it as a block type
+#     (a ``| Block | … |`` / ``| Type | … |`` HEADER row, or a
+#     block-type-designator first cell such as ``converter_type``).
+#
+# Free-standing L1 product-narrative prose (the chip-as-a-whole
+# description) does NOT count. So for the real input the ``adc``
+# candidate — present only in L1 prose + the SKU, with NO L5 Block
+# heading and NO L5 spec-table block-type row naming it — has zero
+# block-layer evidence and is dropped as spurious. The ``ldo`` /
+# ``delta_sigma`` candidates DO sit on L5 ``## Block A/B`` headings, so
+# they survive.
+#
+# Chip-AGNOSTIC: pure structural block-layer cues (markdown headings /
+# table-header rows) + the caller-supplied analog vocabulary pattern;
+# no chip-class / vendor / SKU literal participates.
+_V466_RE_BLOCK_TYPE_ROW_CELL = re.compile(
+    r"\b(?:converter[_\s\-]?type|block[_\s\-]?type|"
+    r"cell[_\s\-]?type|macro[_\s\-]?type|module[_\s\-]?type|"
+    r"ip[_\s\-]?type|component[_\s\-]?type)\b",
+    re.IGNORECASE)
+
+
+def _v466_has_l5_block_layer_evidence(extracted, cls_pat) -> bool:
+    """ORGANIC #466 R3 — True iff the analog class whose keyword pattern
+    is `cls_pat` has evidence at the L5 designable-BLOCK layer in ANY
+    source doc, i.e. a keyword match that lands on:
+
+      * a markdown Block-HEADING line (``## … Block … <type> …``), OR
+      * a spec-table HEADER row (a ``| Block | … |`` / ``| Type | … |``
+        header), OR
+      * a spec-table row whose FIRST cell is a block-type designator
+        (``converter_type`` / ``block_type`` / ``cell_type`` …).
+
+    Free-standing product-narrative prose lines and ordinary spec-value
+    rows do NOT count. Returns False when the keyword appears only in
+    L1/product prose. Chip-AGNOSTIC: structural block-layer cues + the
+    caller-supplied analog vocabulary pattern; no chip-class literal.
+    """
+    if not isinstance(cls_pat, str) or not cls_pat:
+        return False
+    try:
+        kw_re = re.compile(cls_pat, re.IGNORECASE)
+    except re.error:
+        return False
+    for _fname, text in (extracted or {}).items():
+        if not isinstance(text, str) or not text:
+            continue
+        for m in kw_re.finditer(text):
+            ls, le = _v466_line_bounds(text, m.start())
+            line = text[ls:le]
+            # Block-HEADING line (markdown heading mentioning "Block").
+            if _V466_RE_BLOCK_HEADER_LINE.match(line):
+                return True
+            # Spec-table block-type designation.
+            stripped = line.strip()
+            if stripped.startswith("|"):
+                cells = [c.strip() for c in stripped.strip("|").split("|")]
+                # Header row that names the Block/Type column.
+                head = " ".join(cells).lower()
+                if re.search(
+                        r"\bblock\b", head) and re.search(
+                        r"\b(type|multiplicity|count|qty|quantity|"
+                        r"copies|instances)\b", head):
+                    return True
+                # First-cell block-type designator
+                # (``| converter_type | … |``) whose value names this
+                # class — the keyword match sits in the value cell.
+                if cells and _V466_RE_BLOCK_TYPE_ROW_CELL.search(cells[0]):
+                    return True
+    return False
+
+
+def _v466_block_layer_multiplicity(extracted, cls_pat):
+    """ORGANIC #466 R3 — return the multiplicity declared on the analog
+    class's L5 Block-HEADING line (``## Block B — ldo … (×1 …)``) across
+    ALL source docs, or None when no block heading for that class carries
+    an explicit ``×N``.
+
+    The designable-block count lives on the L5 Block heading. The
+    per-doc keyword scan in `gen_l5_adi_spec` anchors a class to the
+    FIRST doc that mentions it (`seen_classes`), which for a multi-doc
+    project is often a constraint/datasheet PROSE line with no ``×N`` —
+    so the block's count falls to None even though its own L5 Block
+    heading (in a LATER doc) says ``(×1)``. This cross-doc post-pass
+    reads the authoritative heading count.
+
+    Chip-AGNOSTIC: structural Block-heading detection + language-generic
+    multiplicity parsing + caller-supplied analog vocabulary pattern; no
+    chip-class literal.
+    """
+    if not isinstance(cls_pat, str) or not cls_pat:
+        return None
+    try:
+        kw_re = re.compile(cls_pat, re.IGNORECASE)
+    except re.error:
+        return None
+    for _fname, text in (extracted or {}).items():
+        if not isinstance(text, str) or not text:
+            continue
+        for m in kw_re.finditer(text):
+            ls, le = _v466_line_bounds(text, m.start())
+            line = text[ls:le]
+            if not _V466_RE_BLOCK_HEADER_LINE.match(line):
+                continue
+            n = _v1_6_402_extract_block_multiplicity(line)
+            if n is not None:
+                return n
+    return None
+
+
+def _v466_apply_block_layer_multiplicity(blocks, extracted) -> None:
+    """ORGANIC #466 R3 — for each block, prefer the multiplicity declared
+    on its own L5 Block-HEADING line (authoritative designable-block
+    count) over a None/prose-anchored count. Mutates `blocks` in place.
+    Only sets / overrides the count when a Block heading for that class
+    carries an explicit ``×N`` — never invents a count for blocks with
+    no heading multiplicity. Chip-AGNOSTIC."""
+    if not isinstance(blocks, list):
+        return
+    for blk in blocks:
+        if not isinstance(blk, dict):
+            continue
+        cls = blk.get("type") or blk.get("name")
+        cls_pat = _ANALOG_KEYWORDS.get(cls) if isinstance(cls, str) else None
+        if not cls_pat:
+            continue
+        n = _v466_block_layer_multiplicity(extracted, cls_pat)
+        if n is not None:
+            blk["count"] = n
+            blk["multiplicity"] = n
+
+
 def _v466_apply_spurious_block_guard(blocks, extracted, ic_name):
-    """ORGANIC #466 R2 (field-agent counter-evidence) — DETERMINISTIC
-    emitter-side guard. When L5 explicitly enumerates the analog block
-    types, any block whose spec is null AND whose only evidence is an
-    L1 product-name keyword match is marked ``spurious: true`` and
-    removed from `blocks` (so it never reaches the sizing-consuming
-    block list). No-op when L5 has no explicit enumeration (the
-    ambiguous case is owned by the skill prose).
+    """ORGANIC #466 R3 (field-agent second counter-evidence) —
+    DETERMINISTIC emitter-side guard. When L5 explicitly enumerates the
+    analog block types, any block whose spec is null AND which has NO
+    L5 BLOCK-LAYER evidence (no Block-heading line and no spec-table
+    block-type row naming it — it lives only in L1/product prose + the
+    SKU) is marked ``spurious: true`` and removed from `blocks` (so it
+    never reaches the sizing-consuming block list). No-op when L5 has
+    no explicit enumeration (the ambiguous case is owned by the skill
+    prose).
 
     Mutates `blocks` in place; returns the list of dropped (spurious-
     marked) block dicts for audit surfacing. Chip-AGNOSTIC.
@@ -9370,6 +9542,7 @@ def _v466_apply_spurious_block_guard(blocks, extracted, ic_name):
         return []
     if not _v466_l5_enumerates_block_types(extracted):
         return []
+    has_headers = _v466_l5_has_block_headers(extracted)
     survivors = []
     dropped = []
     for blk in blocks:
@@ -9377,31 +9550,50 @@ def _v466_apply_spurious_block_guard(blocks, extracted, ic_name):
             survivors.append(blk)
             continue
         spec = blk.get("spec")
-        if spec is not None:
+        # A STRUCTURED block-spec TABLE (dict) is itself L5 block-layer
+        # evidence — keep unconditionally. A paragraph-HARVESTED string
+        # spec is NOT block-layer evidence (it is just numbers near a
+        # prose mention), so a candidate grounded only in product
+        # narrative is still tested below.
+        if isinstance(spec, dict) and spec:
             survivors.append(blk)
             continue
-        kw_text = blk.get("_v466_kw_literal")
-        src_text = None
-        src_name = blk.get("_v466_src_fname")
-        if isinstance(src_name, str):
-            src_text = (extracted or {}).get(src_name)
-        if src_text is None:
-            # Fall back to scanning every doc for the literal.
-            src_text = "\n\n".join(
-                t for t in (extracted or {}).values()
-                if isinstance(t, str))
-        if _v466_evidence_is_product_name_only(src_text, kw_text,
-                                               ic_name):
-            blk["spurious"] = True
-            blk["spurious_reason"] = (
-                "ORGANIC #466 R2: L5 explicitly enumerates analog block "
-                "types and this candidate has spec=null with evidence "
-                "grounded only in the L1 product-name keyword — excluded "
-                "from the sizing-consuming block list.")
-            # leave the entry out of the survivor (sizing) list
-            dropped.append(blk)
+        # For a string spec we only drop when L5 declares the strong
+        # ``## Block`` heading enumeration — that lets us reliably tell a
+        # real block (it has a heading) from a product-narrative
+        # hallucination (it does not). With only a bare count statement
+        # we keep the legacy behaviour for string-spec blocks (the
+        # ambiguous prose-only enumeration is owned by the skill prose).
+        spec_is_string = isinstance(spec, str) and spec.strip() != ""
+        if spec_is_string and not has_headers:
+            survivors.append(blk)
             continue
-        survivors.append(blk)
+        # R3: a spec-null (or product-narrative string-spec) candidate
+        # survives ONLY if it has evidence at the L5 designable-block
+        # layer (a Block heading or a spec-table block-type row). The
+        # candidate's analog vocabulary pattern is looked up from its
+        # detected class; fall back to the matched literal so a defensive
+        # lookup never crashes.
+        cls = blk.get("type") or blk.get("name")
+        cls_pat = _ANALOG_KEYWORDS.get(cls) if isinstance(cls, str) else None
+        if not cls_pat:
+            kw_text = blk.get("_v466_kw_literal")
+            if isinstance(kw_text, str) and kw_text:
+                cls_pat = r"\b" + re.escape(kw_text) + r"\b"
+        if cls_pat and _v466_has_l5_block_layer_evidence(extracted, cls_pat):
+            survivors.append(blk)
+            continue
+        blk["spurious"] = True
+        blk["spurious_reason"] = (
+            "ORGANIC #466 R3: L5 explicitly enumerates analog block "
+            "types and this candidate has NO L5 block-layer evidence "
+            "(no Block-heading line and no spec-table block-type row "
+            "naming it — it occurs only in L1/product-narrative prose; "
+            "any spec it carries was harvested from that prose, not from "
+            "a block spec table) — excluded from the sizing-consuming "
+            "block list.")
+        # leave the entry out of the survivor (sizing) list
+        dropped.append(blk)
     blocks[:] = survivors
     return dropped
 
@@ -10053,6 +10245,203 @@ _VERILOG_RESERVED_KEYWORDS = frozenset({
 })
 
 
+# ORGANIC-20260606 #475 — token-class guard for the L1.pin_table → L9
+# ports promoter. Two non-port token families were observed leaking into
+# L9.top_ports (each emitted as `mode=input`, evidence='promoted from
+# L1.pin_table'), while the real direction-prefixed top ports were
+# dropped:
+#
+#   (a) SDC constraint-directive families. An `.sdc` / constraints file
+#       mistakenly fed into the pin extractor surfaced directive tokens
+#       (`set_input_delay`, `set_output_delay`, `create_clock`, …) — the
+#       `*_delay` / `set_*` tokens carry the word `input`/`output` in
+#       their name, so the legacy direction heuristic mislabelled them as
+#       ports. This is a PATTERN class (a directive-keyword family), not
+#       a single literal. Chip-AGNOSTIC: SDC is an industry-standard
+#       constraint language; none of these are chip/vendor names.
+#
+#   (b) Standard-cell library / cell-name prefix SHAPE. A library token
+#       (e.g. `<process>_fd_sc_<variant>` style names, or tokens ending
+#       in a cell-library suffix shape) leaked from a synth/PDK file.
+#       The guard matches the SHAPE of a stdcell-library identifier, NOT
+#       any one vendor literal — `\w+_fd_sc_\w+` is a structural pattern;
+#       no vendor string (e.g. a specific PDK name) participates. This
+#       keeps the rule chip-AGNOSTIC per the project deny-list policy.
+#
+# Both are PATTERN-on-SHAPE guards, applied inside `_is_real_port_token`
+# so EVERY caller (gen_l1_datasheet line-scan, the L9 promoter, the
+# verilog-port harvester) gets the same protection — defence in depth.
+_SDC_DIRECTIVE_RE = re.compile(
+    r"(?i)^(?:"
+    # `set_*_delay` family (set_input_delay / set_output_delay /
+    # set_max_delay / set_min_delay / set_clock_latency …) — the
+    # specific shape that masquerades as a direction-bearing port.
+    r"set_[a-z0-9_]*_delay"
+    r"|"
+    # generic SDC `set_*` constraint setters
+    r"(?:set_(?:input_transition|output_load|load|driving_cell|"
+    r"clock_groups|clock_latency|clock_transition|clock_uncertainty|"
+    r"false_path|multicycle_path|propagated_clock|case_analysis|"
+    r"disable_timing|max_transition|max_fanout|max_capacitance|"
+    r"min_capacitance|units|operating_conditions|wire_load_model|"
+    r"timing_derate|ideal_network|dont_touch|dont_use|size_only))"
+    r"|"
+    # SDC object-creation / collection directives
+    r"(?:create_(?:clock|generated_clock|voltage_area)"
+    r"|get_(?:ports|pins|clocks|cells|nets)"
+    r"|all_(?:inputs|outputs|registers|clocks)"
+    r"|current_design|read_sdc|write_sdc)"
+    r")$"
+)
+
+# Standard-cell library / cell identifier SHAPE. Two structural anchors:
+#   - the `_fd_sc_` infix that names a stdcell library family
+#     (`<foo>_fd_sc_<bar>` — pattern, not a vendor literal), or
+#   - a token that *ends* in a recognised stdcell-library suffix shape
+#     (`__1`, `_2`, drive-strength tails on a `*_sc_*` body, etc.).
+# These appear in synth / PDK / Liberty files, never as a chip's own
+# top-level port name. Chip-AGNOSTIC: matches the SHAPE only.
+_STDCELL_LIB_SHAPE_RE = re.compile(
+    r"(?i)(?:"
+    r"^\w*_fd_sc_\w+"        # <process>_fd_sc_<variant>[...]  (infix)
+    r"|"
+    r"^\w+_sc_(?:hd|hs|hdll|ls|ms|lp|hvl)\b"  # generic *_sc_<lib-tier>
+    r")"
+)
+
+
+def _is_sdc_directive_token(tok) -> bool:
+    """ORGANIC #475 (a) — True iff `tok` matches an SDC constraint
+    directive family (PATTERN class, not a single literal)."""
+    return bool(isinstance(tok, str) and _SDC_DIRECTIVE_RE.match(tok.strip()))
+
+
+def _is_stdcell_lib_shape_token(tok) -> bool:
+    """ORGANIC #475 (b) — True iff `tok` matches a standard-cell library
+    / cell-name prefix SHAPE (pattern on shape, never one vendor
+    literal)."""
+    return bool(isinstance(tok, str)
+                and _STDCELL_LIB_SHAPE_RE.match(tok.strip()))
+
+
+# ORGANIC #475 (c) — positive port-like-evidence corroboration for the
+# L1.pin_table → L9 promoter. A pin entry promotes ONLY when it carries
+# real port-like evidence, mirroring the existing pin-extraction
+# corroboration patterns (the `extraction_strategy` provenance markers
+# set by the structured extractors, the `_v455_*` direction-convention
+# helpers, and the `_is_pipe_table_row` structured-row anchor). Three
+# accepted forms of evidence:
+#   1. a direction-affix naming convention (i_/o_/io_ prefix, or an
+#      _i/_o/_n/_in/_out/_oe direction suffix) — the same convention the
+#      `_v455_*` helpers already trust;
+#   2. a structured port-table-row source — the source pin's
+#      `extraction_strategy` is one of the known port-table extractors
+#      (pipe table / RST grid interface table / verilog port decl /
+#      markdown bullet / backticked interface), or its evidence string
+#      names a structured row source;
+#   3. a recognisable port-name stem (clk / rst / data / bus / addr /
+#      cs / we / oe / en / dq / irq / valid / ready / …) — the
+#      conventional functional-pin vocabulary the corpus already emits.
+# This is the safety net behind guards (a)/(b): it rejects NOVEL
+# non-port token classes (tool directives, namespaced commands) that the
+# enumerated deny-patterns have not yet captured, without pruning the
+# legitimate functional pins the corpus already produces.
+_PORT_DIR_PREFIX_RE = re.compile(r"(?i)^(?:i|o|io|in|out)_[a-z0-9]")
+_PORT_DIR_SUFFIX_RE = re.compile(
+    r"(?i)[a-z0-9]_(?:i|o|io|n|in|out|oe|en|p|m|b)$")
+# Structured port-table extraction strategies (a token sourced from one
+# of these is, by construction, a real port-table cell).
+_PORT_TABLE_STRATEGIES = frozenset({
+    "markdown_pipe_table",
+    "rst_grid_interface_table", "rst_grid_interface_table_2col",
+    "rst_grid_interface_table_ncol",
+    "rst_grid_interface_table_dir2col_v0262",
+    "rst_list_table_signals", "rst_iface_3col_v1_6_565",
+    "interfaces_section_v1_6_524",
+    "markdown_bullet_under_heading",
+    "md_inline_backtick_port_bullet_v1_6_381",
+    "verilog_port_decl", "verilog_port_bind",
+    "backticked_interface_v455",
+    "peripheral_clock_pin", "l9_port_reset_shape_v1_6_369",
+    "spice_netlist_v1", "aid_class_canonical_pin_augment",
+})
+# Conventional functional-pin name stems. Matched SEGMENT-WISE (the
+# name is split on `_`, each segment compared) rather than as a raw
+# substring, so a 2-char stem like `id` does not spuriously fire inside
+# an unrelated word ("wIDget"). A segment qualifies when it equals a
+# stem, or equals a stem followed only by digits (`clk0`, `data3`), or
+# a stem followed by digits is a prefix of the segment. Deliberately
+# broad — the corpus emits these as real ports across IC classes — yet
+# none coincide with the SDC-directive / stdcell-library shapes already
+# rejected by (a)/(b).
+_PORT_NAME_STEMS = frozenset({
+    "clk", "clock", "rst", "reset", "data", "bus", "addr", "address",
+    "cs", "we", "oe", "en", "ena", "irq", "int", "dq", "dqs", "cke",
+    "req", "ack", "valid", "ready", "sda", "scl", "tx", "rx", "wake",
+    "ovp", "vbg", "vref", "gpio", "sel", "wr", "rd", "id", "din", "dout",
+    "miso", "mosi", "sck", "ss", "byte", "word", "strobe", "stb", "cyc",
+    "mem", "pwm", "adc", "dac", "vin", "vout", "vdd", "vss", "gnd",
+    "scan", "test", "mode", "ctrl", "stat", "flag", "busy", "done",
+    "err", "trig", "sync", "frame", "lane", "phy", "io", "pad", "pin",
+    "precharge", "activate",
+})
+
+
+def _segment_is_port_stem(seg: str) -> bool:
+    """True iff a single `_`-delimited name segment is a functional-pin
+    stem (exact, or stem+trailing-digits)."""
+    if not seg:
+        return False
+    if seg in _PORT_NAME_STEMS:
+        return True
+    # stem followed by trailing digits (clk0 / data3 / addr12)
+    base = seg.rstrip("0123456789")
+    if base != seg and base in _PORT_NAME_STEMS:
+        return True
+    return False
+
+
+def _pin_has_port_like_evidence(pin) -> bool:
+    """ORGANIC #475 (c) — positive corroboration gate. Return True iff
+    `pin` (a dict from L1.pin_table) carries port-like evidence per the
+    three accepted forms above. Chip-AGNOSTIC: name-convention shapes,
+    structured-source provenance, and a generic functional-pin stem
+    vocabulary — no chip/vendor literal participates."""
+    if not isinstance(pin, dict):
+        return False
+    name = str(pin.get("name") or "").strip()
+    if not name:
+        return False
+    low = name.lower()
+    # Form 1 — direction-affix naming convention.
+    if _PORT_DIR_PREFIX_RE.match(name) or _PORT_DIR_SUFFIX_RE.search(name):
+        return True
+    # Form 2 — structured port-table-row source.
+    es = str(pin.get("extraction_strategy") or "").strip()
+    if es in _PORT_TABLE_STRATEGIES:
+        return True
+    ex = str(pin.get("_extraction") or "").strip()
+    if ex in _PORT_TABLE_STRATEGIES:
+        return True
+    ev = str(pin.get("evidence") or "").strip().lower()
+    # A structural evidence string (names a real row source). The bare
+    # placeholder 'promoted from l1.pin_table' is NOT structural — it is
+    # exactly the marker the issue's junk tokens carried.
+    if ev and ev != "promoted from l1.pin_table" and any(
+            k in ev for k in (
+                "pipe", "table row", "grid", "port decl", "port-decl",
+                "interface", "signal", "bullet", "backtick", "netlist",
+                "verilog", "pinout", "column",
+            )):
+        return True
+    # Form 3 — recognisable functional-pin stem (segment-wise, so a
+    # short stem like `id` never fires inside an unrelated word).
+    for seg in re.split(r"[^a-z0-9]+", low):
+        if _segment_is_port_stem(seg):
+            return True
+    return False
+
+
 def _is_real_port_token(tok, l1_chip_name=None):
     """v1.6.85 (#17 Bug A2) — chip-AGNOSTIC reject filter for harvested
     all-caps tokens proposed as top-level ports.
@@ -10074,6 +10463,16 @@ def _is_real_port_token(tok, l1_chip_name=None):
     deny-set is a language-keyword list applicable to any chip.
     """
     if not isinstance(tok, str):
+        return False
+    # ORGANIC-20260606 #475 (a)(b) — token-class guards (PATTERN on
+    # SHAPE, chip-AGNOSTIC). SDC constraint-directive families and
+    # standard-cell library-prefix shapes are never chip top-level
+    # ports; reject them before any direction/length heuristic so they
+    # can't masquerade as `mode=input` ports via their embedded
+    # `input`/`output` substrings.
+    if _is_sdc_directive_token(tok):
+        return False
+    if _is_stdcell_lib_shape_token(tok):
         return False
     up = tok.upper()
     if up in _POWER_RAIL_TOKENS:
@@ -28597,6 +28996,14 @@ def gen_l5_adi_spec(project: Path,
     # A-track has real targets instead of spec=null stub degradation.
     _v455_attach_block_specs(blocks, extracted)
 
+    # ORGANIC-20260606 #466 R3 — cross-doc Block-heading multiplicity.
+    # The per-doc keyword scan anchors a class to the FIRST doc that
+    # mentions it (`seen_classes`); for a multi-doc project that is often
+    # a constraint/datasheet PROSE line with no `×N`, so the count falls
+    # to None even though the class's own L5 `## Block …` heading (in a
+    # LATER doc) declares `(×1)`. Prefer the authoritative heading count.
+    _v466_apply_block_layer_multiplicity(blocks, extracted)
+
     # ORGANIC-20260606 #466 R2 (field-agent counter-evidence) —
     # DETERMINISTIC emitter-side spurious-block guard. Runs ONLY when L5
     # explicitly enumerates the analog block types; a spec-null block
@@ -38640,6 +39047,18 @@ def gen_l9_integration_spec(project: Path,
             if not raw:
                 continue
             if not _is_real_port_token(str(raw), ic_name_l1):
+                continue
+            # ORGANIC-20260606 #475 (c) — positive port-like-evidence
+            # corroboration. The deny/shape guards in _is_real_port_token
+            # reject the enumerated non-port classes; this gate is the
+            # safety net for NOVEL non-port token classes (tool
+            # directives, namespaced commands) that the enumerations have
+            # not yet captured. A pin promotes only when it carries a
+            # direction-affix convention, a structured port-table-row
+            # source, or a recognisable functional-pin stem — mirroring
+            # the existing _v455_/extraction_strategy corroboration
+            # patterns. Chip-AGNOSTIC.
+            if not _pin_has_port_like_evidence(p):
                 continue
             mode = str(p.get("mode", "inout")).strip().lower()
             if mode not in _VALID_PORT_MODES:
