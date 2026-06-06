@@ -1662,7 +1662,7 @@ def _emit_oracle_sim_bridge(project: Path, transcript: Path,
     except ValueError:
         log_rel = str(transcript)
     (sim_dir / "pass.flag").write_text("PASS\n")
-    (sim_dir / "results.xml").write_text(
+    _bridge_xml = (
         "<results><verdict>PASS</verdict>"
         f"<evidence>{log_rel}</evidence>"
         "<source>step_reference_tb oracle TB transcript (#460)</source>"
@@ -1670,6 +1670,38 @@ def _emit_oracle_sim_bridge(project: Path, transcript: Path,
         f"<vectors_total>{n_total}</vectors_total>"
         "<verification_track>oracle_tb</verification_track>"
         "</results>\n")
+    (sim_dir / "results.xml").write_text(_bridge_xml)
+    # ORGANIC-20260606 #460 (reopened) — incidental cleanup: an old run may
+    # have left a stale top-level sim/results.xml at the LEGACY wrong path
+    # (project-root sim/, not the canonical phase2/stage1/sim/) carrying the
+    # #433 verdict-only SKIP shape. If — and ONLY if — such a stale SKIP
+    # artifact exists, overwrite it with this same substantiated PASS bridge
+    # so the legacy pointer no longer contradicts the real functional PASS.
+    # Anything else (a real PASS, any non-SKIP, or no file) is left untouched
+    # — nothing is deleted.
+    legacy = project / "sim" / "results.xml"
+    if legacy.resolve() != (sim_dir / "results.xml").resolve():
+        try:
+            if legacy.is_file():
+                _legacy_txt = legacy.read_text(errors="replace")
+                _is_stale_skip = False
+                _s = _legacy_txt.lstrip()
+                if _s.startswith("{"):
+                    try:
+                        _ld = json.loads(_legacy_txt)
+                        _is_stale_skip = (
+                            isinstance(_ld, dict)
+                            and str(_ld.get("verdict", "")).upper()
+                            .replace("_", "-") == "SKIP")
+                    except ValueError:
+                        _is_stale_skip = False
+                else:
+                    _is_stale_skip = (
+                        "<verdict>SKIP</verdict>" in _legacy_txt)
+                if _is_stale_skip:
+                    legacy.write_text(_bridge_xml)
+        except OSError:
+            pass
     return True
 
 
@@ -1705,6 +1737,25 @@ def _oracle_sim_bridge_evidence(project: Path,
     except ValueError:
         log_rel = str(logs[0])
     return (True, log_rel, vp, vt)
+
+
+def _oracle_coverage_evidence(log_text: str):
+    """ORGANIC-20260606 #460 (reopened) — extract the coverage scenario /
+    vector evidence FROM the oracle.log transcript itself.
+
+    oracle_tb_gen emits one ``ORACLE_VECTOR <name> PASS`` line per matched
+    golden vector and the final ``ORACLE_TB_DONE pass=<n>/<m>`` summary. The
+    transcript is the SOLE evidence source — this parses ONLY what the log
+    actually carries (no canned/template scenario names). Returns
+    (scenarios, n_pass, n_total): the per-vector names that the log reports
+    PASS, plus the real summary counts (None when the summary line is
+    absent). chip-AGNOSTIC."""
+    scen = sorted(set(re.findall(
+        r"\bORACLE_VECTOR\s+([A-Za-z0-9_]+)\s+PASS\b", log_text)))[:24]
+    m = re.search(r"\bORACLE_TB_DONE\s+pass=(\d+)/(\d+)", log_text)
+    n_pass = int(m.group(1)) if m else None
+    n_total = int(m.group(2)) if m else None
+    return scen, n_pass, n_total
 
 
 def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
@@ -4250,6 +4301,38 @@ def step_emit_phase2_manifests(project: Path,
             "note": ("scenarios extracted from this project's own "
                      "reference-TB transcript (#436: never another "
                      "design's canned list)"),
+        })
+    elif orc_ok:
+        # ORGANIC-20260606 #460 (reopened) — the oracle track never produces
+        # a ref_tb.log (only oracle.log), so the rglob('ref_tb.log') above
+        # always missed it and a genuinely-functional N/N oracle PASS got a
+        # SKIPPED-CONDITION coverage verdict — which the Step-4 evidence-
+        # integrity scan then propagated as the WHOLE step's verdict,
+        # excluding it from executed-PASS. When the SAME genuine-oracle-PASS
+        # conditions that gate the sim bridge hold (functional_verified,
+        # vectors_passed==vectors_total>0, oracle.log present non-empty —
+        # all already vetted by _oracle_sim_bridge_evidence into orc_ok),
+        # extract the scenario/vector evidence FROM oracle.log (the sole
+        # evidence source — no canned content) and emit a coverage PASS that
+        # backlinks to the real transcript. Skeleton-WAIVED / FAILed runs
+        # never reach this branch (orc_ok is False for them).
+        _orc_path = project / orc_log
+        try:
+            _orc_txt = _orc_path.read_text(errors="replace")
+        except OSError:
+            _orc_txt = ""
+        _scen, _olp, _olt = _oracle_coverage_evidence(_orc_txt)
+        w("reports/phase2/coverage/coverage_actual.json", {
+            "verdict": "PASS",
+            "evidence": orc_log,
+            "verification_track": "oracle_tb",
+            "scenarios_covered": _scen,
+            "vectors_passed": (_olp if _olp is not None else orc_vp),
+            "vectors_total": (_olt if _olt is not None else orc_vt),
+            "note": ("scenarios/vector counts extracted from this "
+                     "project's own oracle-TB transcript "
+                     "(oracle.log: ORACLE_VECTOR/ORACLE_TB_DONE lines; "
+                     "#460: never another design's canned list)"),
         })
     else:
         w("reports/phase2/coverage/coverage_actual.json", {
