@@ -111,6 +111,132 @@ def _detect_pdk_name(pdk_dir: Path):
     return None
 
 
+def _read_l_doc(project: Path, name: str) -> dict:
+    """Load a phase1/generated_docs L doc. Returns {} on any miss so the
+    fallback chain stays robust against absent/corrupt upstream files."""
+    p = _pl.generated_docs_dir(project) / name
+    try:
+        data = json.loads(p.read_text(errors="replace"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+# ic_name sentinels Phase 1 emits when nothing was extracted — these are
+# NOT real names, so they must not pre-empt the --top / RTL fallbacks.
+_IC_NAME_SENTINELS = {"unknown_ic", "unknown", "n/a", "none", "tbd"}
+
+
+def _l1_ic_name(project: Path):
+    """#467 — the design top from L1_DATASHEET[ic_name], when it is a real
+    populated value (not a Phase-1 not-found sentinel). Returns None
+    otherwise so the caller can fall back to --top / RTL detection."""
+    name = _read_l_doc(project, "L1_DATASHEET.json").get("ic_name")
+    if not isinstance(name, str):
+        return None
+    name = name.strip()
+    if not name or name.lower() in _IC_NAME_SENTINELS:
+        return None
+    return name
+
+
+def _process_nm_from_pdk_text(text: str):
+    """Extract a process-node nanometre integer from a free-text PDK /
+    foundry statement (e.g. '130nm', '0.18um', 'IHP SG13G2 130 nm').
+    Returns None when no node is stated."""
+    if not isinstance(text, str) or not text:
+        return None
+    # explicit nm
+    m = re.search(r"(\d+(?:\.\d+)?)\s*nm", text, re.IGNORECASE)
+    if m:
+        try:
+            return int(round(float(m.group(1))))
+        except ValueError:
+            return None
+    # micron form (0.18um -> 180nm)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:um|µm|micron)", text, re.IGNORECASE)
+    if m:
+        try:
+            return int(round(float(m.group(1)) * 1000))
+        except ValueError:
+            return None
+    return None
+
+
+def _l19_pdk_target(project: Path):
+    """#467 — the target PDK from L19_CONSTRAINTS_PDK[fields][pdk_target],
+    when populated. Returns None on miss/empty."""
+    fields = _read_l_doc(project, "L19_CONSTRAINTS_PDK.json").get("fields")
+    if not isinstance(fields, dict):
+        return None
+    pt = fields.get("pdk_target")
+    if not isinstance(pt, str):
+        return None
+    pt = pt.strip()
+    return pt or None
+
+
+def _l1_tapeout_metadata(project: Path) -> dict:
+    """L1 tapeout_metadata as a dict (or {} when absent)."""
+    tm = _read_l_doc(project, "L1_DATASHEET.json").get("tapeout_metadata")
+    return tm if isinstance(tm, dict) else {}
+
+
+def _l1_tapeout_pdk(project: Path):
+    """#467 — fallback PDK statement from L1 tapeout_metadata. Prefers an
+    explicit foundry name, else the process_node string. Returns None when
+    neither is present."""
+    tm = _l1_tapeout_metadata(project)
+    for key in ("foundry", "process_node"):
+        v = tm.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
+def _l1_tapeout_node_nm(project: Path):
+    """#467 — process-node nm parsed from the L1 tapeout_metadata PDK
+    statement (the process_node field, then the foundry name). Returns None
+    when no node digits are present."""
+    tm = _l1_tapeout_metadata(project)
+    for key in ("process_node", "foundry"):
+        nm = _process_nm_from_pdk_text(tm.get(key))
+        if nm is not None:
+            return nm
+    return None
+
+
+def _resolve_design_top(project: Path, top_arg):
+    """#467 — design_top fallback chain: L1 ic_name → --top argument →
+    RTL-derived top module (legacy). Never a fabricated literal unless even
+    the RTL scan finds nothing (then the historical 'chip_top' default)."""
+    name = _l1_ic_name(project)
+    if name:
+        return name
+    if isinstance(top_arg, str) and top_arg.strip():
+        return top_arg.strip()
+    return _detect_top_name(project)
+
+
+def _resolve_pdk_and_node(project: Path, pdk_from_files, node_from_files):
+    """#467 — pdk / process node fallback chain. Upstream spec facts win
+    over PDK-file derivation:
+      pdk        : L19 pdk_target → L1 tapeout PDK statement → PDK files;
+      process_nm : PDK-file derivation → node parsed from the spec PDK text.
+    Honest null preserved only when ALL sources are empty."""
+    l19 = _l19_pdk_target(project)
+    l1 = _l1_tapeout_pdk(project)
+    pdk = l19 or l1 or pdk_from_files
+    # process node: trust the PDK-file derivation first (it knows the real
+    # library), else parse a node out of the spec PDK text — L19 target
+    # string, then the dedicated L1 tapeout process_node/foundry fields.
+    node = node_from_files
+    if node is None:
+        node = (_process_nm_from_pdk_text(l19)
+                or _l1_tapeout_node_nm(project))
+    return pdk, node
+
+
 def _l10_test_pattern_ids(project: Path):
     """#446 — real ATE-pattern seeds from THIS design's L10 test cases
     (ids/names only; vectors are converted downstream). Empty list when
@@ -136,6 +262,10 @@ def _l10_test_pattern_ids(project: Path):
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     p.add_argument("project", type=Path)
+    p.add_argument(
+        "--top", default=None,
+        help="silicon top module name; #467 fallback used only when "
+             "L1_DATASHEET[ic_name] is an empty / not-found sentinel.")
     args = p.parse_args(argv)
 
     project = args.project.resolve()
@@ -164,23 +294,34 @@ def main(argv=None) -> int:
     pdk_dir = project / "input/pdk"
     # #446: derive the PDK identity from its own files; the old
     # `pdk_dir.name` ("pdk") / "unknown" placeholder fails the gate.
-    pdk_name = _detect_pdk_name(pdk_dir) if pdk_dir.is_dir() else None
-    # PDK / process node detection
-    process_nm = None
+    pdk_from_files = _detect_pdk_name(pdk_dir) if pdk_dir.is_dir() else None
+    # PDK / process node detection from the PDK's own liberty filenames.
+    node_from_files = None
     for tag in ("180", "130", "65", "45", "28", "16", "12", "7"):
         # Heuristic: look for the tag in any .lib filename
         lib_dir = pdk_dir / "liberty"
         if lib_dir.is_dir():
             if any(tag in f.name for f in lib_dir.glob("*.lib")):
-                process_nm = int(tag)
+                node_from_files = int(tag)
                 break
+
+    # #467: upstream spec facts populate design_top / pdk / process node.
+    # design_top  <- L1 ic_name → --top → RTL-derived top (legacy default).
+    # pdk         <- L19 pdk_target → L1 tapeout PDK statement → PDK files.
+    # process_nm  <- PDK-file derivation → node parsed from the spec PDK text.
+    # Honest null is preserved only when ALL upstream sources are empty —
+    # projects genuinely missing the value still get null (corpus-sweep
+    # guard). PENDING_FOUNDRY_* semantics unchanged (#449).
+    design_top = _resolve_design_top(project, args.top)
+    pdk_name, process_nm = _resolve_pdk_and_node(
+        project, pdk_from_files, node_from_files)
 
     # Step 1: mask_spec.json — deterministic starting point. The mask
     # layer table is foundry-specific so we mark it TODO.
     mask_spec = {
         "schema_version": "1.0",
         "generated_by": "foundry_handoff_pack_gen v1.1",
-        "design_top": _detect_top_name(project),
+        "design_top": design_top,
         "process_node_nm": process_nm,
         "pdk": pdk_name,
         "gds_path": (str(primary_gds.relative_to(project))
@@ -211,7 +352,7 @@ def main(argv=None) -> int:
     wat_plan = {
         "schema_version": "1.0",
         "generated_by": "foundry_handoff_pack_gen v1.1",
-        "design_top": _detect_top_name(project),
+        "design_top": design_top,
         "pdk": pdk_name,
         "process_node_nm": process_nm,
         "gds_path": (str(primary_gds.relative_to(project))
@@ -240,7 +381,7 @@ def main(argv=None) -> int:
     corner_kit = {
         "schema_version": "1.0",
         "generated_by": "foundry_handoff_pack_gen v1.1",
-        "design_top": _detect_top_name(project),
+        "design_top": design_top,
         "pdk": pdk_name,
         "test_pattern_seeds_from_l10": l10_ids,
         "test_pattern_seed_count": len(l10_ids),
@@ -279,12 +420,12 @@ def main(argv=None) -> int:
             "+ alignment marks) and is NOT generated here (#446). Obtain "
             "it from the shuttle/foundry kit and place it beside this "
             "note before tapeout.\n"
-            f"# design_top: {_detect_top_name(project)}\n"
+            f"# design_top: {design_top}\n"
             f"# pdk: {pdk_name}\n")
     readme = handoff_dir / "README.txt"
     readme.write_text(
         "Foundry handoff package — auto-generated skeleton (v1.1).\n"
-        f"Design: {_detect_top_name(project)}\n"
+        f"Design: {design_top}\n"
         f"PDK: {pdk_name}\n"
         f"GDS: {str(primary_gds.relative_to(project)) if primary_gds else '(none)'}"
         f" ({primary_gds.stat().st_size if primary_gds else 0} B)\n"
@@ -325,7 +466,7 @@ def main(argv=None) -> int:
                 "phase3/stage4/foundry_handoff/corner_test_vectors.json",
         },
         "design_facts": {
-            "top": _detect_top_name(project),
+            "top": design_top,
             "cell_count": cells,
             "die_area_um2": area["die_area_um2"],
             "core_area_um2": area["core_area_um2"],

@@ -7575,9 +7575,14 @@ def main() -> int:
     ):
         gen_path = PROGRAMS_DIR / gen
         if gen_path.is_file():
+            cmd = [sys.executable, str(gen_path), str(project)]
+            # #467: hand the resolved top to the handoff generator as the
+            # design_top fallback (used only when L1 ic_name is empty).
+            if gen == "foundry_handoff_pack_gen.py" and effective_top:
+                cmd += ["--top", str(effective_top)]
             try:
                 subprocess.run(
-                    [sys.executable, str(gen_path), str(project)],
+                    cmd,
                     timeout=120, check=False,
                     capture_output=True, text=True,
                 )
