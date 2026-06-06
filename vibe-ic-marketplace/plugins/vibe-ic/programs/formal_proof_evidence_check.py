@@ -43,10 +43,41 @@ _SBY_FAIL_RE = re.compile(
     r"DONE \(FAIL|DONE \(ERROR|Status:\s*FAILED|Assert failed",
     re.IGNORECASE)
 # files a .sby references: `read -formal <f>` / `read_verilog <f>` in
-# [script], plus bare filenames in [files].
+# [script], plus the [files] / [file <dst>] section entries.
 _SBY_READ_RE = re.compile(
     r"^\s*read(?:_verilog|_sv)?\s+(?:-formal\s+|-sv\s+)?(\S+)",
     re.IGNORECASE | re.MULTILINE)
+_SBY_SECTION_RE = re.compile(r"^\[(\w+)(?:\s+(\S+))?\]\s*$")
+
+
+def _sby_file_refs(txt: str):
+    """ORGANIC-20260606 #453 — collect referenced files from BOTH the
+    [script] read lines AND the [files]/[file <dst>] sections. A legit
+    SymbiYosys task may list its sources only under [files] (each line
+    `<dst> <src>` or just `<src>`); the old [script]-only walker
+    false-FAILed those as SBY_CHAIN_BROKEN."""
+    refs = list(_SBY_READ_RE.findall(txt))
+    section = None
+    for line in txt.splitlines():
+        m = _SBY_SECTION_RE.match(line.strip())
+        if m:
+            section = m.group(1).lower()
+            continue
+        if section in ("files", "file"):
+            tok = line.strip()
+            if not tok or tok.startswith("#"):
+                continue
+            # `[files]` line shape: `<dst> <src>` (copy-rename) or `<src>`
+            parts = tok.split()
+            refs.append(parts[-1])
+    # de-dup, keep order
+    seen = set()
+    out = []
+    for r in refs:
+        if r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out
 
 
 def _resolve(formal_dir: Path, project: Path, token: str):
@@ -97,21 +128,34 @@ def audit(project: Path) -> dict:
     # (a) an elaboratable .sby ----------------------------------------------
     sby_ok = False
     sby_missing_refs = []
-    for sby in sorted(formal_dir.glob("*.sby")):
+    sby_files = sorted(formal_dir.glob("*.sby"))
+    sby_no_refs = []
+    for sby in sby_files:
         txt = sby.read_text(errors="replace")
-        refs = _SBY_READ_RE.findall(txt)
+        refs = _sby_file_refs(txt)   # [script] reads + [files] entries (#453)
+        if not refs:
+            sby_no_refs.append(sby.name)
+            continue
         missing = [t for t in refs if _resolve(formal_dir, project, t) is None]
-        if not missing and refs:
+        if not missing:
             sby_ok = True
             rep["sby"] = str(sby.relative_to(project))
             break
-        if missing:
-            sby_missing_refs.append(f"{sby.name}: {', '.join(missing[:4])}")
+        sby_missing_refs.append(f"{sby.name}: {', '.join(missing[:4])}")
     if not sby_ok:
+        # #453 — message split: "no .sby at all" vs ".sby present but no
+        # parseable refs" vs "refs missing on disk" (the old single
+        # message claimed "(no .sby found)" while the file existed).
+        if not sby_files:
+            detail = " (no .sby found under formal/)"
+        elif sby_missing_refs:
+            detail = f" — missing: {'; '.join(sby_missing_refs[:3])}"
+        else:
+            detail = (f" — .sby present ({', '.join(sby_no_refs[:3])}) but "
+                      f"carries no parseable [script] read / [files] entry")
         rep["findings"].append(
             "SBY_CHAIN_BROKEN (#448): no .sby whose referenced files all "
-            "exist" + (f" — missing: {'; '.join(sby_missing_refs[:3])}"
-                       if sby_missing_refs else " (no .sby found)"))
+            "exist" + detail)
 
     # (b) a SymbiYosys log with PASS status ---------------------------------
     log_ok = False
