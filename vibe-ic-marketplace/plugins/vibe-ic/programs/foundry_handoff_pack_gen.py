@@ -62,16 +62,75 @@ def _parse_design_area(area_rpt: Path) -> dict:
     return out
 
 
-def _parse_synth_cell_count(synth_log: Path) -> int:
-    """Extract Yosys 'Number of cells' line. Returns -1 on miss."""
+def _parse_synth_cell_count(synth_log: Path):
+    """Extract Yosys 'Number of cells' line. Returns None on miss —
+    ORGANIC-20260606 #446: never -1 (a negative count is the unfilled
+    placeholder the substance gate rightly FAILs)."""
     text = _read_text(synth_log)
     for line in text.splitlines():
         if "Number of cells" in line:
             try:
                 return int(line.split()[-1].replace(",", ""))
             except Exception:
-                return -1
-    return -1
+                return None
+    return None
+
+
+def _count_netlist_instances(synth_dir: Path):
+    """#446 fallback — count cell instantiations in the gate netlist
+    when synth.log lacks the Yosys summary. Yosys names instances
+    `_N_`; generic instantiations are `<cell> <inst> (`. Returns None
+    when no netlist / no instances found (never a fabricated count)."""
+    for nl in sorted(synth_dir.glob("*.v")):
+        text = _read_text(nl)
+        if not text:
+            continue
+        n = len(re.findall(r"^\s*\\?[A-Za-z_][\w$]*\s+\\?_?\w+_?\s*\(",
+                           text, re.MULTILINE))
+        # subtract module headers (they match the same shape)
+        n -= len(re.findall(r"^\s*module\s+\w+\s*\(", text, re.MULTILINE))
+        if n > 0:
+            return n
+    return None
+
+
+def _detect_pdk_name(pdk_dir: Path):
+    """#446 — derive the PDK identity from the PDK's OWN files (liberty
+    stem up to the double-underscore cell-library separator, else tech
+    LEF stem). Returns None when nothing is derivable — never the
+    literal 'unknown' the substance gate FAILs on."""
+    lib_dir = pdk_dir / "liberty"
+    if lib_dir.is_dir():
+        for f in sorted(lib_dir.glob("*.lib")):
+            stem = f.stem
+            return stem.split("__")[0] if "__" in stem else stem
+    lef_dir = pdk_dir / "lef"
+    if lef_dir.is_dir():
+        for f in sorted(lef_dir.glob("*.tlef")) + sorted(lef_dir.glob("*.lef")):
+            return f.stem
+    return None
+
+
+def _l10_test_pattern_ids(project: Path):
+    """#446 — real ATE-pattern seeds from THIS design's L10 test cases
+    (ids/names only; vectors are converted downstream). Empty list when
+    no L10 doc exists."""
+    l10 = project / "phase1" / "generated_docs" / "L10_TEST_CASES.json"
+    try:
+        data = json.loads(l10.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return []
+    cases = (data.get("test_cases") or data.get("fields", {}).get("test_cases")
+             or [])
+    out = []
+    for c in cases:
+        if isinstance(c, dict):
+            ident = c.get("id") or c.get("name") or c.get("title")
+            if ident:
+                out.append(str(ident))
+        elif isinstance(c, str):
+            out.append(c)
+    return out[:200]
 
 
 def main(argv=None) -> int:
@@ -98,10 +157,14 @@ def main(argv=None) -> int:
     primary_gds = gds_files[0] if gds_files else None
 
     cells = _parse_synth_cell_count(synth / "synth.log")
+    if cells is None:
+        cells = _count_netlist_instances(synth)  # #446 netlist fallback
     area = _parse_design_area(pnr / "area.rpt")
 
     pdk_dir = project / "input/pdk"
-    pdk_name = pdk_dir.name if pdk_dir.is_dir() else "unknown"
+    # #446: derive the PDK identity from its own files; the old
+    # `pdk_dir.name` ("pdk") / "unknown" placeholder fails the gate.
+    pdk_name = _detect_pdk_name(pdk_dir) if pdk_dir.is_dir() else None
     # PDK / process node detection
     process_nm = None
     for tag in ("180", "130", "65", "45", "28", "16", "12", "7"):
@@ -116,7 +179,7 @@ def main(argv=None) -> int:
     # layer table is foundry-specific so we mark it TODO.
     mask_spec = {
         "schema_version": "1.0",
-        "generated_by": "foundry_handoff_pack_gen v1.0.0",
+        "generated_by": "foundry_handoff_pack_gen v1.1.0",
         "design_top": _detect_top_name(project),
         "process_node_nm": process_nm,
         "pdk": pdk_name,
@@ -142,10 +205,17 @@ def main(argv=None) -> int:
         json.dumps(mask_spec, indent=2, ensure_ascii=False) + "\n")
 
     # Step 2: wat_plan.json — Wafer Acceptance Test plan.
+    # #446: carries the design/PDK facts so two different designs can
+    # never emit byte-identical plans; TODOs remain only for the
+    # genuinely foundry-supplied content.
     wat_plan = {
         "schema_version": "1.0",
-        "generated_by": "foundry_handoff_pack_gen v1.0.0",
+        "generated_by": "foundry_handoff_pack_gen v1.1.0",
         "design_top": _detect_top_name(project),
+        "pdk": pdk_name,
+        "process_node_nm": process_nm,
+        "gds_path": (str(primary_gds.relative_to(project))
+                     if primary_gds else None),
         "TODO_wat_structures": (
             "Author: list of PCM (Process Control Monitor) structures "
             "to be probed in the scribe line. Common entries: NMOS Vt, "
@@ -163,17 +233,24 @@ def main(argv=None) -> int:
         json.dumps(wat_plan, indent=2, ensure_ascii=False) + "\n")
 
     # Step 3: corner_test_vectors.json — ATE corner test kit.
+    # #446: seed the kit with THIS design's L10 test-case ids so the
+    # pattern list is chip-specific (full vectors are converted from
+    # sim traces downstream); TODOs only for foundry/ATE-supplied data.
+    l10_ids = _l10_test_pattern_ids(project)
     corner_kit = {
         "schema_version": "1.0",
-        "generated_by": "foundry_handoff_pack_gen v1.0.0",
+        "generated_by": "foundry_handoff_pack_gen v1.1.0",
         "design_top": _detect_top_name(project),
+        "pdk": pdk_name,
+        "test_pattern_seeds_from_l10": l10_ids,
+        "test_pattern_seed_count": len(l10_ids),
         "TODO_voltage_corners": ["VDD_min", "VDD_nom", "VDD_max"],
         "TODO_temperature_corners_celsius": [-40, 25, 85, 125],
         "TODO_test_patterns": (
-            "Author: list of ATE test patterns derived from L10_TEST_CASES. "
-            "Each pattern: input vector + expected output + corner constraints. "
-            "Convert from cocotb/Verilator simulation traces — "
-            "see vibe-ic:tapeout-checklist skill for guidance."
+            "Author: convert each L10 seed above into an ATE pattern "
+            "(input vector + expected output + corner constraints) from "
+            "cocotb/Verilator simulation traces — see "
+            "vibe-ic:tapeout-checklist skill for guidance."
         ),
         "TODO_loadboard_id": (
             "Author: ATE loadboard part number + revision."
@@ -182,29 +259,41 @@ def main(argv=None) -> int:
     (handoff_dir / "corner_test_vectors.json").write_text(
         json.dumps(corner_kit, indent=2, ensure_ascii=False) + "\n")
 
-    # Step 4: scribe_line_layout.gds — placeholder marker file.
-    # Real scribe layout is foundry-supplied (PCM structures + alignment
-    # marks). We emit a small placeholder GDS-like file with a clear
-    # TODO marker so the gate's file-presence check passes; a substance
-    # gate later validates the file is non-empty + contains real layers.
+    # Step 4: scribe line — ORGANIC-20260606 #446: NO file wearing the
+    # .gds name unless it IS a GDS. The old 137-byte text placeholder
+    # named scribe_line_layout.gds was a fabricated artifact (and
+    # byte-identical across designs). The need is recorded in a
+    # plainly-named TODO note; a real foundry-supplied scribe GDS, when
+    # present, is left untouched.
     scribe_path = handoff_dir / "scribe_line_layout.gds"
+    if scribe_path.is_file():
+        try:
+            head = scribe_path.read_bytes()[:64]
+        except OSError:
+            head = b""
+        if head.startswith(b"# PLACEHOLDER"):
+            scribe_path.unlink()  # remove the old fabricated placeholder
     if not scribe_path.is_file():
-        # Tiny placeholder GDS header — NOT a valid GDS, intentionally
-        # so a downstream PV reviewer does not mistake it for the real
-        # scribe layout. The README.txt below explains what is needed.
-        scribe_path.write_bytes(
-            b"# PLACEHOLDER scribe_line_layout.gds -- "
-            b"AUTHOR FOUNDRY-SUPPLIED PCM LAYOUT BEFORE TAPEOUT\n"
-            b"# Generated by foundry_handoff_pack_gen v1.0.0\n"
-        )
+        (handoff_dir / "scribe_line_layout.TODO.txt").write_text(
+            "scribe_line_layout.gds is FOUNDRY-SUPPLIED (PCM structures "
+            "+ alignment marks) and is NOT generated here (#446). Obtain "
+            "it from the shuttle/foundry kit and place it beside this "
+            "note before tapeout.\n"
+            f"# design_top: {_detect_top_name(project)}\n"
+            f"# pdk: {pdk_name}\n")
     readme = handoff_dir / "README.txt"
     readme.write_text(
-        "Foundry handoff package — auto-generated skeleton (v1.6.36).\n"
+        "Foundry handoff package — auto-generated skeleton (v1.1.0).\n"
+        f"Design: {_detect_top_name(project)}\n"
+        f"PDK: {pdk_name}\n"
+        f"GDS: {str(primary_gds.relative_to(project)) if primary_gds else '(none)'}"
+        f" ({primary_gds.stat().st_size if primary_gds else 0} B)\n"
         "\n"
         "Required artefacts:\n"
         "  mask_spec.json              — mask layer table + reticle config\n"
         "  wat_plan.json               — WAT probe plan + PCM structures\n"
         "  scribe_line_layout.gds      — foundry-supplied PCM/scribe layout\n"
+        "                                (see scribe_line_layout.TODO.txt)\n"
         "  corner_test_vectors.json    — ATE corner test kit\n"
         "\n"
         "TODO entries inside each JSON mark fields that the production team\n"
@@ -222,14 +311,16 @@ def main(argv=None) -> int:
     audit_path = audit_dir / "foundry_handoff_audit.json"
     audit = {
         "program": "foundry_handoff_pack_gen",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "project": str(project),
         "verdict": "SKELETON_EMITTED",
         "artefacts": {
             "mask_spec": "phase3/stage4/foundry_handoff/mask_spec.json",
             "wat_plan": "phase3/stage4/foundry_handoff/wat_plan.json",
-            "scribe_layout": "phase3/stage4/foundry_handoff/scribe_line_layout.gds",
+            "scribe_layout": ("phase3/stage4/foundry_handoff/scribe_line_layout.gds"
+                              if (handoff_dir / "scribe_line_layout.gds").is_file()
+                              else "phase3/stage4/foundry_handoff/scribe_line_layout.TODO.txt"),
             "corner_test_vectors":
                 "phase3/stage4/foundry_handoff/corner_test_vectors.json",
         },

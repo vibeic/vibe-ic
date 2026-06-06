@@ -18,14 +18,17 @@ def _run(project: Path):
 
 
 def test_emits_all_skeleton_artefacts(tmp_path):
-    """Verifies that the generator emits the 4 canonical handoff files."""
+    """Verifies that the generator emits the canonical handoff files.
+    #446: NO fabricated scribe .gds — the foundry-supplied need is a
+    plainly-named TODO note instead."""
     r = _run(tmp_path)
     assert r.returncode == 0
     handoff = tmp_path / "phase3/stage4/foundry_handoff"
     assert (handoff / "mask_spec.json").is_file()
     assert (handoff / "wat_plan.json").is_file()
     assert (handoff / "corner_test_vectors.json").is_file()
-    assert (handoff / "scribe_line_layout.gds").is_file()
+    assert not (handoff / "scribe_line_layout.gds").exists()
+    assert (handoff / "scribe_line_layout.TODO.txt").is_file()
     assert (handoff / "README.txt").is_file()
 
 
