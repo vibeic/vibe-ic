@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 651
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 651)
+- **Total programs (excluding helpers / shims):** 652
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 652)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 642 |
+| `any` | 643 |
 
 ## Alphabetical listing
 
@@ -632,6 +632,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tpm_protocol_synth` | any | v0.1.84 | TPM 2.0 trusted-platform-module protocol synth helper. |
 | `trailing_delimiter_completeness_check` | any | v0.99 | Verify each cmd packet stimulus |
 | `transient_signal_latch_check` | any | — | Flag 1-cycle pulses read by multi-cycle FSMs without latching. |
+| `triage_record_check` | any | — | self-consistency linter for benchmark |
 | `tristate_active_drive_check` | any | — | P1.1 deterministic gate |
 | `tristate_bus_check` | any | — | Generate general tristate / open-drain bus assertions. |
 | `tristate_pullup_assertion_check` | any | v0.116 | BACKLOG-v11 P1.1. |
@@ -723,7 +724,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (642 programs)
+### `any` (643 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1324,6 +1325,7 @@ _(no programs in this group)_
 - `tpm_protocol_synth` — TPM 2.0 trusted-platform-module protocol synth helper.  _[v0.1.84]_
 - `trailing_delimiter_completeness_check` — Verify each cmd packet stimulus  _[v0.99]_
 - `transient_signal_latch_check` — Flag 1-cycle pulses read by multi-cycle FSMs without latching.
+- `triage_record_check` — self-consistency linter for benchmark
 - `tristate_active_drive_check` — P1.1 deterministic gate
 - `tristate_bus_check` — Generate general tristate / open-drain bus assertions.
 - `tristate_pullup_assertion_check` — BACKLOG-v11 P1.1.  _[v0.116]_

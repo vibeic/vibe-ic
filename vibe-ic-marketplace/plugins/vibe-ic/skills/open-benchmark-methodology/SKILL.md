@@ -180,6 +180,16 @@ and is exempt):
    FULL batch first → resume at narrow width (2–4 concurrent, completion-driven
    dispatch, never barrier fan-out) → disk-truth reconcile remains the resume
    mechanism.
+6. **Module-name source priority when prose and directory disagree**
+   (ORGANIC-20260606 #482, dataset-agnostic): when the prompt's stated module name and the
+   problem's directory / file leaf name DISAGREE (a dataset typo), author the module under the
+   **DIRECTORY-LEAF name** as the TB-facing module name — hidden testbenches are generated against
+   the file layout, and prose typos are common, so the literal prose name will fail to elaborate.
+   Keep the prose name only when no directory/file convention exists. **Note the conflict in the
+   sample header comment.** Close-loop / re-author agents MUST NOT "fix" a passing
+   directory-leaf module name back to the prose typo (a re-author regressed exactly this way).
+   *why_not_bucket_a*: distinguishing a typo from a genuine intended wrapper-name requires
+   contextual judgment (read the prose against the file layout) — no regex separates the two.
 
 #### Shape D — Agentic with runner (SoC / multi-task)
 **When**: agentic benchmarks where the unit-of-work is a full SoC + cocotb harness (CVDP). The
@@ -338,6 +348,16 @@ This rule overrides any "skip, it's a known FLOOR" or "just re-run the fails" in
 > **Section-presence enforced by `programs/benchmark_result_md_lint.py <RESULT.md>`** — fails the
 > run if any of the seven mandatory sections below is missing. (It checks *presence* of each
 > concept; the *quality* of the residual-triage content is still the § 4 LLM judgment.)
+
+> **Residual-triage record self-consistency enforced by
+> `programs/triage_record_check.py <triage-records.json>`** — when the residual triage is emitted
+> as machine-readable records, this linter fails the run if any record's category letter
+> contradicts its own fields: an agent-fixable letter (F/G/H) with `closeloop=false` and no
+> skip justification (§ 6.4 forbids an un-attempted F-H), a FLOOR letter (A-E) marked
+> `closeloop=true`, or an agent-fixable letter whose rationale reads like a FLOOR rationale
+> ("mutually-exclusive readings" / "under-specified" / "benchmark defect") — the last is a REVIEW
+> finding because the letter-vs-prose conflict needs § 4 judgment. Exit 0 clean / 1 violations /
+> 2 IO.
 
 For honesty + reproducibility, every benchmark RESULT.md MUST contain:
 
