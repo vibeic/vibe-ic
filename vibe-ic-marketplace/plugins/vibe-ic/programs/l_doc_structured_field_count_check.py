@@ -260,6 +260,26 @@ def _has_honest_no_lab(data: dict) -> bool:
     return False
 
 
+def _has_honest_no_fsm(data: dict) -> bool:
+    """L6 (#462): doc explicitly declares the input forbids / contains NO control
+    FSM. Accept an explicit `no_fsm_in_input == true`, an explicit
+    `no_fsm == true`, or any explicit no_fsm* True flag — but ONLY when it is
+    explicitly True. A bare missing/empty flag, or `no_fsm == false` (a design
+    that genuinely HAS an FSM), keeps the L6 floor in force (HONESTY GUARD
+    (a)/(b)). This mirrors the existing L3 no-CRC / L11 no-OTP escapes and
+    completes the set begun by L5.no_analog / L12.no_calibration."""
+    if _explicit_true(data.get("no_fsm_in_input")):
+        return True
+    if _explicit_true(data.get("no_fsm")):
+        return True
+    for k, v in data.items():
+        if not isinstance(k, str):
+            continue
+        if k.lower().startswith("no_fsm") and _explicit_true(v):
+            return True
+    return False
+
+
 def _detect_l_layer(name: str) -> int | None:
     """Return the L layer integer (1..13) inferred from filename, or
     None if the file does not name an L doc."""
@@ -558,6 +578,27 @@ def _check_l_doc(layer: int, data: dict,
         states = (data.get("fsm_states") or data.get("states")
                   or data.get("state_table"))
         n_states = _list_len_of_dicts(states)
+        # #462 — honest no-FSM N/A escape (completing the set begun by
+        # L5.no_analog / L12.no_calibration; same shape as the L3 no-CRC /
+        # L11 no-OTP escapes). A pure datapath/compute primitive whose input
+        # spec explicitly forbids a control FSM (fsm_states:[] AND an explicit
+        # no_fsm_in_input:true / no_fsm:true declaration) has no source for FSM
+        # states — phase1 cannot synthesise an FSM the spec does not contain.
+        # DOUBLE-KEYED per the #428/#419 doctrine (class flag AND the doc's OWN
+        # honest declaration, fail-closed): the N/A fires ONLY when (1) the IC
+        # class is a no-command-protocol datapath/compute class AND (2) the doc
+        # carries zero typed FSM states AND (3) the doc carries an explicit
+        # honest no-FSM flag. A doc with a partial FSM (1+ states), or with no
+        # explicit flag, or in a command/protocol/unknown class, keeps the
+        # floor — a real FSM must still hit the L6 floor (corpus-sweep guard).
+        if (n_states == 0
+                and _class_no_cmd_protocol(ic_class)
+                and _has_honest_no_fsm(data)):
+            return True, ("SKIP — L6 FSM floor N/A: ic_class="
+                          f"{ic_class} (no-command-protocol datapath/compute) "
+                          "AND the doc honestly declares no_fsm_in_input with "
+                          "zero typed FSM states (the spec forbids a control "
+                          "FSM; no source to synthesise one).")
         # Wave 35 (v0.119.67) — accept `fsms: [{name, states[]}, ...]`
         # multi-FSM container schema. Sum total state count across
         # all enumerated FSMs.
@@ -681,6 +722,41 @@ def _check_l_doc(layer: int, data: dict,
             if isinstance(v, list) and v:
                 n += 1
         if n < 3:
+            # #462 — flat single-module N/A on structural-fact grounds. A
+            # legitimate flat primitive (e.g. a combinational/datapath block
+            # with no internal hierarchy and no control FSM) has submodules=[]
+            # by design: enumerating submodules / internal wires / a separate
+            # FSM table would be a fabrication. Such a design's structure is
+            # FULLY described by a named top_module + a complete top_ports list.
+            # When the doc HONESTLY records (1) an explicit empty submodules
+            # list AND (2) a complete top-module port list (≥2 ports, i.e. at
+            # least one input and one output worth of structure) AND (3) a named
+            # top_module, the L9 structural floor is satisfied on structural-
+            # fact grounds — the floor is met by what the structure IS, not by
+            # padding it with absent hierarchy. A MULTI-module design (non-empty
+            # submodules) does NOT take this path and must still reach ≥3 typed
+            # structural fields (corpus-sweep guard).
+            _ports = (data.get("top_ports") or data.get("ports")
+                      or data.get("port_list"))
+            _n_ports = (_list_len_of_dicts(_ports)
+                        if isinstance(_ports, list) else 0)
+            if _n_ports == 0 and isinstance(_ports, list):
+                # port entries may be plain scalars/strings, not dicts
+                _n_ports = sum(1 for p in _ports if p not in (None, "", {}, []))
+            _has_top = (isinstance(data.get("top_module"), str)
+                        and bool(data.get("top_module")))
+            _submods_explicit_empty = any(
+                isinstance(data.get(k), list) and len(data.get(k)) == 0
+                for k in ("submodules", "submodule_instances",
+                          "instance_table"))
+            if _has_top and _submods_explicit_empty and _n_ports >= 2:
+                return True, (
+                    "SKIP — L9 flat single-module structure: explicit empty "
+                    "submodules[] AND a complete top_ports list "
+                    f"({_n_ports} ports) AND a named top_module fully describe "
+                    "the structure of a flat primitive; the structural floor "
+                    "is met on structural-fact grounds (no internal hierarchy "
+                    "to enumerate — padding would be a fabrication).")
             return False, (
                 f"L9 integration_spec must carry ≥3 typed structural "
                 f"fields among (top_module string, fsm_states[], "
