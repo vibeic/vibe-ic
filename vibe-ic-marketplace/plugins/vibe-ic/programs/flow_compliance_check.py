@@ -2267,7 +2267,12 @@ def _run_structural_rtl_gates(project: Path,
         if any(project.glob("*.v")) or any(project.glob("*.sv")):
             rtl_dir = project
         else:
-            return True, [], ["no RTL directory found — structural gates skipped"], []
+            # ORGANIC-20260606 #447: 0/N checkers executed is NOT a PASS.
+            # First element None = "not executed" — the caller renders the
+            # P0 umbrella as SKIPPED-CONDITION (excluded from executed-PASS
+            # counts), never as a PASS that pads a strict verdict.
+            return None, [], ["no RTL directory found — structural gates "
+                              "skipped (analog track / pre-RTL)"], []
 
     # Compute thin-input eligibility once. Only matters when the flag
     # is set. v1.6.98: shifted from doc-count to COVERAGE-shape — see
@@ -3339,11 +3344,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             reasons_combined = (failed_gate_lines
                                 + [f"SKIP: {s}" for s in s_skips]
                                 + waiver_lines)
+            # #447 — s_passed is None when NO checker executed (no RTL):
+            # the umbrella reports SKIPPED-CONDITION, never PASS; a
+            # pure-analog project's strict verdict is decided by the
+            # A-track gates, not by 0/226 skipped digital checkers.
             structural_result = StepResult(
                 id="P0",
                 name=f"Structural-RTL gates (P0 umbrella, {len(_STRUCTURAL_RTL_GATES)} checkers)",
                 stage="stage1",
-                status="PASS" if s_passed else "FAIL",
+                status=("SKIPPED-CONDITION" if s_passed is None
+                        else "PASS" if s_passed else "FAIL"),
                 reasons=reasons_combined,
                 evidence=[],
             )
