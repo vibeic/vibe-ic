@@ -4013,8 +4013,91 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
             + ("GDS " if not gds_file.is_file() else "")
             + ("gate-netlist" if not netlist.is_file() else "")
             + " — run PnR/GDS first (#443)")
+    # ORGANIC-20260606 #477 — run-completion honesty check (b): a
+    # 0-byte layout artifact (e.g. a merged GDS that the merge step
+    # truncated / never finished writing) must NEVER feed a "clean"
+    # LVS. Extracting from an empty mask source produces an empty
+    # netlist and a meaningless compare; name the finding and FAIL
+    # here BEFORE launching Magic/netgen. Chip-AGNOSTIC: pure size
+    # guard on the input artifact, no chip/PDK literal.
+    if gds_file.stat().st_size == 0:
+        verdict = _write_lvs_verdict(
+            project, "FAIL", "LVS_INPUT_GDS_EMPTY",
+            f"layout GDS {gds_file.name} is 0 bytes — an empty mask "
+            f"source cannot be compared; extraction would yield an "
+            f"empty netlist and a false-clean LVS (#477).",
+            extras={"gds": str(gds_file)})
+        return StepResult(
+            "lvs", "FAIL", time.time() - t0,
+            f"LVS aborted: layout GDS {gds_file.name} is 0 bytes "
+            f"(#477 — empty mask source, named in lvs_verdict.json; "
+            f"NOT a clean compare)",
+            extras={"finding": "LVS_INPUT_GDS_EMPTY",
+                    "gds": str(gds_file),
+                    "lvs_verdict": verdict})
     return _run_extraction_lvs(project, top, pdk, container, gds_file,
                                netlist, magicrc, netgen_setup, t0)
+
+
+# ORGANIC-20260606 #477 — sane ceiling for the ext2spice extraction
+# error count. Magic's ext2spice prints a `N errors` summary line; a
+# handful of benign warnings is normal, but a count in the thousands
+# (the field case observed 106,250,195) means the extraction itself
+# collapsed and any netlist it emitted is garbage. Above this ceiling
+# the LVS verdict is FAIL with a named finding; between a small
+# tolerance and the ceiling it is a hard WARNING surfaced in the
+# verdict artifact (never silently swallowed). Chip-AGNOSTIC: a pure
+# numeric threshold on a tool-printed count.
+_LVS_EXT_ERROR_FAIL_CEILING = 1000
+_LVS_EXT_ERROR_WARN_FLOOR = 1
+# `N error(s)` / `N errors were encountered` — case-insensitive, the
+# count is the immediately-preceding integer (commas tolerated).
+_LVS_EXT_ERROR_RE = re.compile(
+    r"([0-9][0-9,]*)\s+error(?:s)?\b", re.IGNORECASE)
+
+
+def _parse_ext2spice_error_count(log_text: str) -> Optional[int]:
+    """#477 — return the largest `N errors` count found in an
+    ext2spice / magic extraction log, or None when no such line
+    exists. Commas in the integer are tolerated (106,250,195 → an int).
+    We take the MAX across all matching lines so a late catastrophic
+    summary line is never masked by an earlier benign `0 errors`.
+    chip-AGNOSTIC: pure text parse."""
+    if not log_text:
+        return None
+    counts: List[int] = []
+    for m in _LVS_EXT_ERROR_RE.finditer(log_text):
+        try:
+            counts.append(int(m.group(1).replace(",", "")))
+        except ValueError:
+            continue
+    return max(counts) if counts else None
+
+
+def _write_lvs_verdict(project: Path, status: str, finding: str,
+                       message: str, extras: Optional[Dict[str, Any]] = None
+                       ) -> str:
+    """#477 — persist a machine-readable LVS verdict artifact so an
+    incomplete / aborted compare is NEVER silent. Written to
+    reports/phase3/lvs_verdict.json alongside the netgen transcript.
+    Returns the project-relative artifact path. chip-AGNOSTIC."""
+    rpt_dir = _pl.reports_phase3_dir(project)
+    rpt_dir.mkdir(parents=True, exist_ok=True)
+    path = rpt_dir / "lvs_verdict.json"
+    payload: Dict[str, Any] = {
+        "status": status,          # PASS / FAIL / INCOMPLETE / WARN
+        "result": status,
+        "finding": finding,        # named machine token
+        "message": message,
+        "generated_by": "phase3_one_shot_runner:_run_extraction_lvs (#477)",
+    }
+    if extras:
+        payload.update(extras)
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    try:
+        return str(path.relative_to(project))
+    except ValueError:
+        return str(path)
 
 
 _MAGIC_EXT2SPICE_TCL = """\
@@ -4062,11 +4145,57 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     # runs on anything non-trivial. 4 h ceiling for both phases.
     rc, out, err = _docker_exec(container, cmd, timeout=14400)
     if not spice_out.is_file() or spice_out.stat().st_size == 0:
+        verdict = _write_lvs_verdict(
+            project, "FAIL", "LVS_EXTRACTION_NO_NETLIST",
+            f"Magic ext2spice produced no extracted netlist (rc={rc}); "
+            f"see phase3/stage3/extracted/ext2spice.log (#443).",
+            extras={"transcript_tail": (out + err)[-600:]})
         return StepResult(
             "lvs", "FAIL", time.time() - t0,
             f"Magic ext2spice produced no extracted netlist (rc={rc}); "
             f"see phase3/stage3/extracted/ext2spice.log (#443)",
-            extras={"transcript_tail": (out + err)[-600:]})
+            extras={"finding": "LVS_EXTRACTION_NO_NETLIST",
+                    "lvs_verdict": verdict,
+                    "transcript_tail": (out + err)[-600:]})
+    # ORGANIC-20260606 #477 — run-completion honesty check (c):
+    # parse the `N errors` summary line from ext2spice.log. A count
+    # above the sane ceiling means the extraction collapsed and any
+    # netlist it emitted is garbage — record a named finding and FAIL
+    # rather than feeding garbage into netgen (which would either
+    # crash or, worse, "match" two equally-broken netlists). A smaller
+    # nonzero count is surfaced as a hard WARNING in the verdict
+    # artifact and carried into the final StepResult. chip-AGNOSTIC.
+    ext_log = ext_dir / "ext2spice.log"
+    ext_log_txt = ext_log.read_text(errors="replace") if ext_log.is_file() \
+        else (out or "")
+    ext_err_count = _parse_ext2spice_error_count(ext_log_txt)
+    ext_warning: Optional[str] = None
+    if ext_err_count is not None and ext_err_count >= _LVS_EXT_ERROR_FAIL_CEILING:
+        verdict = _write_lvs_verdict(
+            project, "FAIL", "LVS_EXTRACTION_ERROR_FLOOD",
+            f"Magic ext2spice reported {ext_err_count:,} extraction "
+            f"errors (>= ceiling {_LVS_EXT_ERROR_FAIL_CEILING:,}) — the "
+            f"extracted netlist is not trustworthy; LVS cannot conclude "
+            f"a clean compare from it (#477).",
+            extras={"ext2spice_error_count": ext_err_count,
+                    "ceiling": _LVS_EXT_ERROR_FAIL_CEILING,
+                    "ext2spice_log":
+                        "phase3/stage3/extracted/ext2spice.log"})
+        return StepResult(
+            "lvs", "FAIL", time.time() - t0,
+            f"LVS aborted: Magic ext2spice reported {ext_err_count:,} "
+            f"extraction errors (>= {_LVS_EXT_ERROR_FAIL_CEILING:,}); "
+            f"extracted netlist untrustworthy (#477 — named in "
+            f"lvs_verdict.json, NOT a clean compare)",
+            extras={"finding": "LVS_EXTRACTION_ERROR_FLOOD",
+                    "ext2spice_error_count": ext_err_count,
+                    "lvs_verdict": verdict})
+    if ext_err_count is not None and ext_err_count >= _LVS_EXT_ERROR_WARN_FLOOR:
+        ext_warning = (
+            f"Magic ext2spice reported {ext_err_count:,} extraction "
+            f"warning(s)/error(s) (below the {_LVS_EXT_ERROR_FAIL_CEILING:,} "
+            f"FAIL ceiling) — extracted netlist usable but review "
+            f"ext2spice.log (#477).")
     # Magic may emit the top subckt as `<top>` or `<top>_flat` — feed
     # netgen the name that actually exists in the extracted netlist.
     sub_txt = spice_out.read_text(errors="replace")
@@ -4092,21 +4221,78 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         r"Circuits match uniquely|Netlists match uniquely", blob, re.I))
     mismatched = bool(re.search(
         r"do not match|NET MISMATCH|netlists do not match|失配", blob, re.I))
-    if matched and not mismatched:
+    # ORGANIC-20260606 #477 — run-completion honesty check (a): a real
+    # netgen compare ALWAYS prints one of the two terminal verdict
+    # tokens ("Circuits match uniquely" / "...do NOT match"). When the
+    # transcript+report carry NEITHER (netgen killed mid-run → lvs.rpt
+    # truncated at e.g. "Flattening unmatched ..."), the run is
+    # INCOMPLETE, not a conclusive verdict. Pre-#477 this fell into the
+    # generic FAIL branch whose detail wrongly asserted "a real compare
+    # ran". Distinguish it: record an explicit INCOMPLETE verdict
+    # artifact + named finding and FAIL the step (incomplete is never
+    # silent and never wears the "compare ran" label). chip-AGNOSTIC.
+    if not matched and not mismatched:
+        verdict = _write_lvs_verdict(
+            project, "INCOMPLETE", "LVS_NO_TERMINAL_VERDICT",
+            f"netgen LVS transcript+report carry NO terminal verdict "
+            f"token ('Circuits match uniquely' / 'do NOT match' both "
+            f"absent) — the compare did not run to completion (netgen "
+            f"likely killed mid-run; lvs.rpt truncated). This is an "
+            f"INCOMPLETE run, NOT a clean or even a conclusive-mismatch "
+            f"result (#477).",
+            extras={"lvs_report": "reports/phase3/lvs.rpt",
+                    "netgen_rc": rc,
+                    "ext2spice_warning": ext_warning,
+                    "transcript_tail": transcript[-600:]})
         return StepResult(
-            "lvs", "PASS", time.time() - t0,
+            "lvs", "FAIL", time.time() - t0,
+            f"LVS INCOMPLETE: netgen produced no terminal verdict token "
+            f"(rc={rc}); lvs.rpt has no 'Circuits match' / 'do NOT match' "
+            f"line — the compare was killed mid-run, not a conclusive "
+            f"result (#477 — named in lvs_verdict.json)",
+            extras={"finding": "LVS_NO_TERMINAL_VERDICT",
+                    "lvs_report": "reports/phase3/lvs.rpt",
+                    "lvs_verdict": verdict,
+                    "ext2spice_warning": ext_warning,
+                    "transcript_tail": transcript[-600:]})
+    if matched and not mismatched:
+        verdict = _write_lvs_verdict(
+            project, "PASS", "LVS_MATCH",
+            f"netgen LVS: circuits match uniquely (layout {lay_top} "
+            f"extracted via Magic ext2spice vs gate netlist "
+            f"{netlist.name}).",
+            extras={"lvs_report": "reports/phase3/lvs.rpt",
+                    "ext2spice_warning": ext_warning})
+        detail = (
             f"netgen LVS: circuits match uniquely "
             f"(layout {lay_top} extracted via Magic ext2spice vs gate "
-            f"netlist {netlist.name}); report at reports/phase3/lvs.rpt",
+            f"netlist {netlist.name}); report at reports/phase3/lvs.rpt")
+        if ext_warning:
+            detail += f" [WARN: {ext_warning}]"
+        return StepResult(
+            "lvs", "PASS", time.time() - t0, detail,
             extras={"lvs_report": "reports/phase3/lvs.rpt",
+                    "lvs_verdict": verdict,
+                    "ext2spice_warning": ext_warning,
                     "extracted_netlist": str(
                         spice_out.relative_to(project))})
+    verdict = _write_lvs_verdict(
+        project, "FAIL", "LVS_MISMATCH",
+        f"netgen LVS did not match (rc={rc}) — a real compare ran and "
+        f"reported a mismatch; design/extraction defect, not an env "
+        f"gap (#443).",
+        extras={"lvs_report": "reports/phase3/lvs.rpt",
+                "ext2spice_warning": ext_warning,
+                "transcript_tail": transcript[-600:]})
     return StepResult(
         "lvs", "FAIL", time.time() - t0,
         f"netgen LVS did not match (rc={rc}); see "
         f"reports/phase3/lvs.rpt (#443 — a real compare ran; this is a "
         f"design/extraction defect, not an env gap)",
-        extras={"lvs_report": "reports/phase3/lvs.rpt",
+        extras={"finding": "LVS_MISMATCH",
+                "lvs_report": "reports/phase3/lvs.rpt",
+                "lvs_verdict": verdict,
+                "ext2spice_warning": ext_warning,
                 "transcript_tail": transcript[-600:]})
 
 
