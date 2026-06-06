@@ -1628,6 +1628,85 @@ def _iverilog_compile_with_sv_fallback(
 # -------------------------------------------------------------------------
 # 3. iverilog reference TB
 # -------------------------------------------------------------------------
+def _emit_oracle_sim_bridge(project: Path, transcript: Path,
+                            n_pass: int, n_total: int) -> bool:
+    """ORGANIC-20260606 #460 — write the Step-4 Simulation gate artifacts
+    (phase2/stage1/sim/{results.xml,pass.flag}) from a genuine oracle-TB
+    PASS.
+
+    Contract (caller MUST satisfy before calling): the oracle ran to
+    ORACLE_TB_DONE, the run is functionally verified, vectors_passed ==
+    vectors_total > 0, and the oracle.log transcript exists on disk. This
+    helper re-checks the file existence + vector contract defensively so a
+    skeleton-WAIVED or FAILed oracle run can never produce the bridge even
+    if mis-invoked.
+
+    The emitted results.xml follows the same #433 evidence-pointer shape as
+    the manifest emitter's Step-4 block: a relative `<evidence>` backlink to
+    the real transcript plus a `<source>` line, augmented with the oracle
+    vector counts. Returns True iff the bridge was written.
+
+    chip-AGNOSTIC: no chip/PDK literal.
+    """
+    if not (n_total > 0 and n_pass == n_total):
+        return False
+    try:
+        if not (transcript.is_file() and transcript.stat().st_size > 0):
+            return False
+    except OSError:
+        return False
+    sim_dir = _pl.sim_dir(project)
+    sim_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        log_rel = str(transcript.relative_to(project))
+    except ValueError:
+        log_rel = str(transcript)
+    (sim_dir / "pass.flag").write_text("PASS\n")
+    (sim_dir / "results.xml").write_text(
+        "<results><verdict>PASS</verdict>"
+        f"<evidence>{log_rel}</evidence>"
+        "<source>step_reference_tb oracle TB transcript (#460)</source>"
+        f"<vectors_passed>{n_pass}</vectors_passed>"
+        f"<vectors_total>{n_total}</vectors_total>"
+        "<verification_track>oracle_tb</verification_track>"
+        "</results>\n")
+    return True
+
+
+def _oracle_sim_bridge_evidence(project: Path,
+                                ref_tb_step: Optional["StepResult"]):
+    """ORGANIC-20260606 #460 — decide whether the Step-4 manifest emitter
+    should PRESERVE the oracle bridge rather than clobber sim/results.xml.
+
+    Returns (is_oracle_pass, log_rel, vectors_passed, vectors_total).
+    `is_oracle_pass` is True ONLY for a genuine oracle-track PASS whose
+    transcript exists non-empty on disk: status PASS, verification_track
+    'oracle_tb', functional_verified True, vectors_passed == vectors_total
+    > 0. A skeleton-WAIVED / FAILed run (or a tampered plan with no
+    oracle.log) returns (False, ...) so the honest #433 SKIP refusal stands.
+    chip-AGNOSTIC."""
+    if ref_tb_step is None or ref_tb_step.status != "PASS":
+        return (False, "", None, None)
+    ex = ref_tb_step.extras or {}
+    vp, vt = ex.get("vectors_passed"), ex.get("vectors_total")
+    if not (ex.get("verification_track") == "oracle_tb"
+            and ex.get("functional_verified") is True
+            and isinstance(vp, int) and isinstance(vt, int)
+            and vt > 0 and vp == vt):
+        return (False, "", None, None)
+    sfs = _pl.sim_full_stack_dir(project)
+    logs = sorted(p for p in sfs.rglob("oracle.log")
+                  if p.is_file() and p.stat().st_size > 0) \
+        if sfs.is_dir() else []
+    if not logs:
+        return (False, "", None, None)
+    try:
+        log_rel = str(logs[0].relative_to(project))
+    except ValueError:
+        log_rel = str(logs[0])
+    return (True, log_rel, vp, vt)
+
+
 def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
                    track_reason: str, t0: float,
                    container: str) -> Optional[StepResult]:
@@ -1671,6 +1750,16 @@ def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
             extras={"verification_track": "oracle_tb"})
     n_pass, n_total = int(m.group(1)), int(m.group(2))
     if n_total > 0 and n_pass == n_total:
+        # ORGANIC-20260606 #460 — bridge the genuine oracle-TB PASS to the
+        # Step-4 Simulation gate. That gate (manifest emitter) accepts only
+        # phase2/stage1/sim/{results.xml,pass.flag}; since #433 retired the
+        # canned pass.flag the oracle track earned NOTHING at Step 4 despite
+        # a real functional PASS. Emit sim/results.xml carrying the oracle
+        # vector counts + an evidence backlink to the oracle.log transcript
+        # (same #433 evidence-pointer convention used by the Step-4 emitter).
+        # ONLY a genuine PASS reaches here: skeleton-WAIVED / FAILed oracle
+        # runs return through other branches and never write this bridge.
+        _emit_oracle_sim_bridge(project, transcript, n_pass, n_total)
         return StepResult(
             "reference_tb", "PASS", time.time() - t0,
             (f"per-IC oracle TB {tb_path.name}: {n_pass}/{n_total} "
@@ -2448,6 +2537,58 @@ def _chip_top_extract_param_and_ports(scan: str, start: int):
     return param_block, scan[i:pe + 1]
 
 
+def _chip_top_strip_output_storage(port_block: str) -> str:
+    """ORGANIC-20260606 #463 — normalise an extracted ANSI port block for
+    use as the auto-emitted pass-through wrapper's port list.
+
+    The wrapper's outputs are ALWAYS structurally driven by the inner
+    instance (`.p(p)`), so a registered-storage keyword (`reg`/`logic`)
+    on an OUTPUT chunk is illegal/lint-fatal in strict SystemVerilog
+    (`output reg p` declares a procedural-assign target in a module whose
+    body has no procedural block). The fix: strip the storage keyword
+    from OUTPUT port chunks only — input/inout chunks, width `[N:0]`,
+    and `signed`/`unsigned` qualifiers are preserved byte-for-byte.
+
+    ANSI continuation chunks (e.g. `output reg [7:0] a, b` → the `b`
+    chunk has no direction keyword and inherits `output reg`) are handled
+    correctly: the storage keyword lives only on the leading chunk that
+    also carries the `output` direction, so stripping that chunk
+    normalises the whole declaration group. A bare continuation chunk
+    (`b`) carries no `reg`/`logic` to strip.
+
+    chip-AGNOSTIC: pure Verilog/SV keyword surgery, no chip/PDK literal.
+    """
+    inner = port_block.strip()
+    has_parens = inner.startswith('(') and inner.endswith(')')
+    if has_parens:
+        body = inner[1:-1]
+    else:
+        body = inner
+    # Split on top-level commas only (port chunks never nest parens at the
+    # ANSI port-list level once params are extracted; brackets are fine).
+    chunks = body.split(',')
+    out_chunks = []
+    # `current_dir` tracks the direction in effect for ANSI continuation
+    # chunks that omit it — a continuation only needs stripping if its
+    # group's leading chunk was an output (but continuations never carry
+    # a storage keyword themselves, so this is informational only).
+    for chunk in chunks:
+        # Only touch chunks that explicitly declare `output` with a
+        # storage keyword. Inputs/inouts and width/sign qualifiers stay.
+        if re.search(r'\boutput\b', chunk):
+            # Remove a standalone `reg` or `logic` storage keyword token.
+            # \b…\b keeps `register`-prefixed identifiers / port names like
+            # `reg_out` untouched; only the bare keyword is removed.
+            stripped = re.sub(r'\b(?:reg|logic)\b\s*', '', chunk)
+            out_chunks.append(stripped)
+        else:
+            out_chunks.append(chunk)
+    new_body = ','.join(out_chunks)
+    if has_parens:
+        return '(' + new_body + ')'
+    return new_body
+
+
 # -------------------------------------------------------------------------
 # v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — SystemVerilog-frontend
 # fallback for the Phase-2 yosys-synth step. Runs inside the iic-osic-tools
@@ -2834,6 +2975,12 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             if pnames:
                 inst_params = " #(" + ", ".join(
                     f".{p}({p})" for p in pnames) + ")"
+        # ORGANIC-20260606 #463 — the wrapper's outputs are structurally
+        # driven by the instance, so strip reg/logic storage keywords from
+        # OUTPUT chunks only (input/inout, width, signedness preserved).
+        # `output reg p` on an instance-driven wrapper output is lint-fatal
+        # in strict SV.
+        wrapper_port_block = _chip_top_strip_output_storage(port_block)
         wrapper = (
             f"// SPDX-License-Identifier: Apache-2.0\n"
             f"// v0.1.62 auto-emitted chip_top wrapper (phase2_one_shot_runner).\n"
@@ -2841,7 +2988,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             f"// (in {src_file.name}). This thin pass-through lets yosys synth\n"
             f"// against L9's expected top without modifying the authored RTL.\n"
             f"`default_nettype none\n"
-            f"module {synth_top}{param_header} {port_block};\n"
+            f"module {synth_top}{param_header} {wrapper_port_block};\n"
             f"  {mod_name}{inst_params} u_dut (\n    {connects}\n  );\n"
             f"endmodule\n"
             f"`default_nettype wire\n"
@@ -4054,7 +4201,16 @@ def step_emit_phase2_manifests(project: Path,
     ref_tb_step = by_name.get("reference_tb")
     ref_logs = sorted(p for p in sim_dir.rglob("ref_tb.log")
                       if p.is_file() and p.stat().st_size > 0)
-    if ref_tb_step is not None and ref_tb_step.status == "PASS" and ref_logs:
+    orc_ok, orc_log, orc_vp, orc_vt = _oracle_sim_bridge_evidence(
+        project, ref_tb_step)  # #460: genuine oracle PASS bridges this gate
+    if orc_ok:
+        if (sim_dir / "pass.flag").is_file():
+            written.append("sim/pass.flag")
+        w("sim/results.xml", {
+            "verdict": "PASS", "evidence": orc_log,
+            "verification_track": "oracle_tb",
+            "vectors_passed": orc_vp, "vectors_total": orc_vt})
+    elif ref_tb_step is not None and ref_tb_step.status == "PASS" and ref_logs:
         log_rel = str(ref_logs[0].relative_to(project))
         (sim_dir / "pass.flag").write_text("PASS\n")
         written.append("sim/pass.flag")
