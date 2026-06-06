@@ -179,7 +179,7 @@ def main(argv=None) -> int:
     # layer table is foundry-specific so we mark it TODO.
     mask_spec = {
         "schema_version": "1.0",
-        "generated_by": "foundry_handoff_pack_gen v1.1.0",
+        "generated_by": "foundry_handoff_pack_gen v1.1",
         "design_top": _detect_top_name(project),
         "process_node_nm": process_nm,
         "pdk": pdk_name,
@@ -210,7 +210,7 @@ def main(argv=None) -> int:
     # genuinely foundry-supplied content.
     wat_plan = {
         "schema_version": "1.0",
-        "generated_by": "foundry_handoff_pack_gen v1.1.0",
+        "generated_by": "foundry_handoff_pack_gen v1.1",
         "design_top": _detect_top_name(project),
         "pdk": pdk_name,
         "process_node_nm": process_nm,
@@ -239,7 +239,7 @@ def main(argv=None) -> int:
     l10_ids = _l10_test_pattern_ids(project)
     corner_kit = {
         "schema_version": "1.0",
-        "generated_by": "foundry_handoff_pack_gen v1.1.0",
+        "generated_by": "foundry_handoff_pack_gen v1.1",
         "design_top": _detect_top_name(project),
         "pdk": pdk_name,
         "test_pattern_seeds_from_l10": l10_ids,
@@ -283,7 +283,7 @@ def main(argv=None) -> int:
             f"# pdk: {pdk_name}\n")
     readme = handoff_dir / "README.txt"
     readme.write_text(
-        "Foundry handoff package — auto-generated skeleton (v1.1.0).\n"
+        "Foundry handoff package — auto-generated skeleton (v1.1).\n"
         f"Design: {_detect_top_name(project)}\n"
         f"PDK: {pdk_name}\n"
         f"GDS: {str(primary_gds.relative_to(project)) if primary_gds else '(none)'}"
