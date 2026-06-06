@@ -6854,11 +6854,60 @@ _FOUNDRY_CTX_RE = re.compile(
     r"\b(tsmc|umc|smic|globalfoundries|tower|x-?fab)\b",
     re.IGNORECASE)
 
+# ORGANIC-20260606 #457 (residual 1 of #451) — the foundry deny-guard
+# above is polarity-BLIND: it only verifies that a commercial-foundry
+# name has a process/node/pdk word within ±60 chars, with no negation
+# awareness. Prose like "fabbed at <foundry> but NOT as a process
+# target; target is <open-pdk>" therefore mis-extracts the commercial
+# name as pdk_target. Two complementary guards close this:
+#   (a) NEGATION-DISTANCE: if a negation token (not/no/without/
+#       excluding/非/无/不/否) sits anywhere in the matched span (i.e.
+#       between the foundry token and the process word, in either
+#       order) → do NOT trust the match.
+#   (b) DUAL-EVIDENCE: only trust a commercial-foundry name when the
+#       match span carries BOTH a process word AND a numeric node
+#       (\d+ nm) — a bare "TSMC process" with no node is too weak to
+#       overrule a negation-free reading.
+# Chip-AGNOSTIC: pure structural negation vocabulary; no chip literal.
+_FOUNDRY_NEGATION_RE = re.compile(
+    r"(?:\bnot\b|\bno\b|\bwithout\b|\bexcluding\b|\bexclud\w*\b|"
+    r"\bnever\b|\bnon-?\b|非|无|無|不|否)",
+    re.IGNORECASE)
+_FOUNDRY_NUMERIC_NODE_RE = re.compile(r"\d+\s?nm", re.IGNORECASE)
+
+
+def _foundry_match_trustworthy(span: str) -> bool:
+    """ORGANIC #457 — True iff a commercial-foundry context span may be
+    trusted as a pdk_target. Rejects (a) any span carrying a negation
+    token, and (b) any span lacking a numeric process node (dual-
+    evidence). Chip-AGNOSTIC structural check."""
+    if not isinstance(span, str) or not span:
+        return False
+    if _FOUNDRY_NEGATION_RE.search(span):
+        return False            # polarity-aware deny (negated mention)
+    if not _FOUNDRY_NUMERIC_NODE_RE.search(span):
+        return False            # dual-evidence: need a numeric node
+    return True
+
 
 def _extract_pdk_target_from_inputs(project: Path):
     """(pdk_target, evidence_snippet) from the project's own input docs,
-    or (None, None). Deterministic; capped scan (large-doc doctrine)."""
-    texts = []
+    or (None, None). Deterministic; capped scan (large-doc doctrine).
+
+    Thin shim over `_extract_pdk_target_with_provenance` so the public
+    2-tuple contract (used by callers + test_v0_2_88) stays stable."""
+    tok, snippet, _src, _line = _extract_pdk_target_with_provenance(project)
+    return tok, snippet
+
+
+def _extract_pdk_target_with_provenance(project: Path):
+    """ORGANIC #457 (residual 2 of #451) — like
+    `_extract_pdk_target_from_inputs` but ALSO returns the source file
+    (relative) + 1-based line number of the match so L19 can carry a
+    schema-valid `extraction_evidence` (file + line). Returns
+    (pdk_target, snippet, source_rel, line) or (None, None, None, None).
+    Deterministic; capped scan (large-doc doctrine)."""
+    per_file = []           # (rel_path, text)
     total = 0
     for base in (project / "phase1" / "input_doc",
                  project / "input" / "docs", project / "input_doc"):
@@ -6872,24 +6921,43 @@ def _extract_pdk_target_from_inputs(project: Path):
                 t = f.read_text(errors="replace")[:200_000]
             except OSError:
                 continue
-            texts.append(t)
+            try:
+                rel = str(f.relative_to(project))
+            except ValueError:
+                rel = f.name
+            per_file.append((rel, t))
             total += len(t)
             if total > 2_000_000:
                 break
-    blob = "\n".join(texts)
-    if not blob:
-        return None, None
-    m = _OPEN_PDK_TOKEN_RE.search(blob)
-    if m:
-        tok = re.sub(r"^ihp[- ]?", "", m.group(1).lower()).replace(" ", "")
-        start = max(0, m.start() - 60)
-        return tok, blob[start:m.end() + 60].replace("\n", " ")[:160]
-    m = _FOUNDRY_CTX_RE.search(blob)
-    if m:
-        tok = (m.group(1) or m.group(2)).lower()
-        start = max(0, m.start() - 20)
-        return tok, blob[start:m.end() + 40].replace("\n", " ")[:160]
-    return None, None
+    if not per_file:
+        return None, None, None, None
+
+    def _snip(text, lo, hi):
+        return text[max(0, lo):hi].replace("\n", " ")[:160]
+
+    # Open-PDK tokens are unambiguous bare — scan each file in turn so
+    # the first match's provenance (file + line) is preserved.
+    for rel, text in per_file:
+        m = _OPEN_PDK_TOKEN_RE.search(text)
+        if m:
+            tok = re.sub(r"^ihp[- ]?", "",
+                         m.group(1).lower()).replace(" ", "")
+            line = text.count("\n", 0, m.start()) + 1
+            return (tok, _snip(text, m.start() - 60, m.end() + 60),
+                    rel, line)
+    # Commercial-foundry names: iterate every match in every file so a
+    # negated / weak first mention does not poison a valid later one
+    # (polarity-aware + dual-evidence deny via _foundry_match_trustworthy).
+    for rel, text in per_file:
+        for m in _FOUNDRY_CTX_RE.finditer(text):
+            tok = (m.group(1) or m.group(2)).lower()
+            span = text[max(0, m.start() - 24):m.end()]
+            if not _foundry_match_trustworthy(span):
+                continue
+            line = text.count("\n", 0, m.start()) + 1
+            return (tok, _snip(text, m.start() - 20, m.end() + 40),
+                    rel, line)
+    return None, None, None, None
 
 
 def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
@@ -6923,23 +6991,45 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
     except Exception:
         ic_class = "unknown"
 
-    # #451 — pdk_target extraction (once per run, reused for L19)
-    _pdk_tgt, _pdk_ev = _extract_pdk_target_from_inputs(project)
+    # #451 — pdk_target extraction (once per run, reused for L19).
+    # ORGANIC #457 (residual 2) — capture provenance (file + line) so the
+    # evidence survives into L19.extraction_evidence in schema-valid shape.
+    _pdk_tgt, _pdk_ev, _pdk_src, _pdk_line = (
+        _extract_pdk_target_with_provenance(project))
 
     for code, doc_name in _L19_L23_CODES_AND_NAMES:
         try:
-            skeleton = _emit_sk(code, ic_class)
+            # ORGANIC-20260606 #465 — pass project so emit_l_doc_skeleton
+            # stamps ic_class from the persisted reports/ic_class.json
+            # (single source of truth), never a stale/hardcoded class.
+            skeleton = _emit_sk(code, ic_class, project_dir=project)
+            # emit_l_doc_skeleton returns a dict; _write_l_doc takes
+            # content + evidence. The skeleton's own `evidence` list is
+            # discarded (shape mismatch); evidence map starts empty.
+            evidence = skeleton.pop("evidence", []) if isinstance(skeleton.get("evidence"), list) else {}
+            if not isinstance(evidence, dict):
+                evidence = {}
             if code == "L19" and _pdk_tgt and isinstance(
                     skeleton.get("fields"), dict):
                 skeleton["fields"]["pdk_target"] = _pdk_tgt
                 skeleton["extraction_status"] = "PARTIALLY_EXTRACTED"
-                skeleton.setdefault("extraction_evidence", {})
-                if isinstance(skeleton["extraction_evidence"], dict):
-                    skeleton["extraction_evidence"]["pdk_target"] = _pdk_ev
-            # emit_l_doc_skeleton returns a dict; _write_l_doc takes content + evidence.
-            evidence = skeleton.pop("evidence", []) if isinstance(skeleton.get("evidence"), list) else {}
-            if not isinstance(evidence, dict):
-                evidence = {}
+                # ORGANIC #457 — the pre-#457 code set
+                # skeleton["extraction_evidence"]["pdk_target"] directly,
+                # but _write_l_doc unconditionally does
+                # `content["extraction_evidence"] = evidence`, so that
+                # snippet was OVERWRITTEN to {} on the skeleton path.
+                # Fix: route the pdk_target evidence through the
+                # `evidence` ARGUMENT (which _write_l_doc honors) in the
+                # canonical {source: [{literal,label}]} schema shape so
+                # it lands in L19.extraction_evidence with file + line.
+                _src_key = _pdk_src or "input/docs"
+                _label = "pdk_target"
+                if _pdk_line:
+                    _label = f"pdk_target ({_src_key}:{_pdk_line})"
+                evidence.setdefault(_src_key, []).append({
+                    "literal": _pdk_ev or _pdk_tgt,
+                    "label": _label,
+                })
             r = _write_l_doc(project, doc_name, skeleton, evidence)
             out.append(r)
         except Exception as e:
@@ -8943,6 +9033,19 @@ _V1_6_402_RE_QUANT_DIGIT_MULTIPLIER = re.compile(
     r"\b(?P<digit>\d{1,3})\s*[×x]\s*",
     re.IGNORECASE,
 )
+# ORGANIC-20260606 #466 (Bucket-A) — markdown table-header / enumeration
+# ``×N`` notation: the multiplier sign PRECEDES the digit (``×6``,
+# ``(×1)``, ``× 12``). The v1.6.402 multiplier regex above only matched
+# the ``N×`` order (digit-then-sign), so a per-block ``(×1)`` table
+# header was never recognised and the block silently inherited a
+# sibling's count from the shared evidence paragraph. The leading
+# `(?<![\dxX])` lookbehind prevents a dimension form (``2×6``) from
+# being misread as ``6`` — only a bare ``×N`` (or ``(×N``) counts.
+# Chip-AGNOSTIC: pure structural table-header vocabulary.
+_V1_6_402_RE_QUANT_SIGN_DIGIT = re.compile(
+    r"(?<![\dxX])[×x]\s*(?P<digit>\d{1,3})\b",
+    re.IGNORECASE,
+)
 _V1_6_402_RE_QUANT_DIGIT_SLOT = re.compile(
     r"\b(?P<digit>\d{1,3})\s*-?\s*"
     r"(?:slot|channel|bank|copy|copies|instance|instances)s?\b",
@@ -8975,8 +9078,15 @@ def _v1_6_402_extract_block_multiplicity(evidence: str):
     def _bounded(v: int):
         return v if 1 <= v <= 256 else None
 
-    # Tier 1: digit-multiplier form.
+    # Tier 1: digit-multiplier form (``N×``).
     m = _V1_6_402_RE_QUANT_DIGIT_MULTIPLIER.search(evidence)
+    if m:
+        try:
+            return _bounded(int(m.group("digit")))
+        except (TypeError, ValueError):
+            pass
+    # Tier 1b (#466): sign-then-digit table-header form (``×N`` / ``(×N)``).
+    m = _V1_6_402_RE_QUANT_SIGN_DIGIT.search(evidence)
     if m:
         try:
             return _bounded(int(m.group("digit")))
@@ -8997,6 +9107,58 @@ def _v1_6_402_extract_block_multiplicity(evidence: str):
         if v is not None:
             return _bounded(v)
     return None
+
+
+# ORGANIC-20260606 #466 (Bucket-A) — per-block OWN-entry multiplicity.
+# When several analog blocks are enumerated in ONE markdown table (or one
+# blank-line-delimited paragraph), every block previously inherited the
+# multiplicity of the FIRST `×N` in the shared paragraph, so a per-block
+# `(×1)` was overwritten by a sibling's `(×6)`. The fix: scope the
+# multiplicity scan to the block's OWN enumeration entry — the markdown
+# table ROW (a `| … |` line) or the single text line that contains the
+# block's keyword match — and only fall back to the wider paragraph when
+# the own-entry carries no quantifier. Chip-AGNOSTIC: pure structural
+# table-row / line isolation; no chip-class literal.
+def _v466_block_own_entry(text: str, kw_pos: int) -> str:
+    """Return the block's OWN enumeration entry around `kw_pos`.
+
+    Priority:
+      1. If the line containing `kw_pos` is a markdown table row
+         (starts with ``|`` after stripping), return that single row —
+         a sibling row's ``×N`` must never leak across the row break.
+      2. Otherwise return the single source LINE containing `kw_pos`.
+
+    Defence: non-string / out-of-range → empty string.
+    """
+    if not isinstance(text, str) or not text:
+        return ""
+    if kw_pos < 0 or kw_pos > len(text):
+        return ""
+    line_start = text.rfind("\n", 0, kw_pos) + 1   # 0 when no preceding \n
+    line_end = text.find("\n", kw_pos)
+    if line_end < 0:
+        line_end = len(text)
+    return text[line_start:line_end]
+
+
+def _v466_block_multiplicity_own_entry(text: str, kw_pos: int,
+                                       paragraph: str):
+    """ORGANIC #466 — multiplicity for the block whose keyword match is
+    at `kw_pos`, scoped to its OWN row/line first. Falls back to the
+    shared `paragraph` ONLY when the own entry has no quantifier AND the
+    own entry is NOT a markdown table row (a table row with no ``×N``
+    legitimately means count=None for that block — a sibling row's count
+    must never bleed in). Returns int or None.
+    """
+    own = _v466_block_own_entry(text, kw_pos)
+    n = _v1_6_402_extract_block_multiplicity(own)
+    if n is not None:
+        return n
+    # A markdown table row with no quantifier → no sibling-bleed allowed.
+    if own.strip().startswith("|"):
+        return None
+    # Non-table line with no own quantifier → safe to use paragraph.
+    return _v1_6_402_extract_block_multiplicity(paragraph)
 
 
 # v1.6.66 — closes issue #7 Bug Z. Protocol-class acronyms harvested
@@ -27748,8 +27910,13 @@ def gen_l5_adi_spec(project: Path,
             # Covers `six copies of`, `four PLLs`, `2× bandgap`,
             # `triple modular redundancy`, `8-slot DSP array`.
             # Language-generic; no chip-class vocabulary.
-            _v1_6_402_count = _v1_6_402_extract_block_multiplicity(
-                paragraph)
+            # ORGANIC #466 (Bucket-A) — scope to the block's OWN
+            # table row / line FIRST so a per-block `(×1)` is not
+            # overwritten by a sibling row's `(×6)` from the shared
+            # evidence paragraph. Falls back to the paragraph only for
+            # non-table prose with no own-line quantifier.
+            _v1_6_402_count = _v466_block_multiplicity_own_entry(
+                text, kw_pos, paragraph)
             if _v1_6_402_count is not None:
                 entry["count"] = _v1_6_402_count
                 entry["multiplicity"] = _v1_6_402_count

@@ -263,9 +263,50 @@ def _drop_scrubbed_opcodes(obj: Any, l_doc_name: str) -> List["ScrubLog"]:
 
 
 # ---------------------------------------------------------------------------
+# ic_class single source of truth (ORGANIC-20260606 #465)
+# ---------------------------------------------------------------------------
+def canonical_ic_class(project_dir: Optional[Path]) -> Optional[str]:
+    """Return the project's persisted ic_class from
+    `<project_dir>/reports/ic_class.json` (the single source of truth set by
+    `ic_class_profile.detect_ic_class`).
+
+    ORGANIC-20260606 (#465 / continuation of #435 / #450): doc emitters must
+    NOT stamp a hardcoded class constant nor blindly trust a caller-supplied
+    class — that forks the source of truth and lets e.g. a pure-analog
+    project carry `digital_arithmetic_primitive` in L19 while
+    `reports/ic_class.json` correctly says `pure_analog`. The persisted file
+    is authoritative.
+
+    Returns:
+      - the persisted `ic_class` string when the file exists and is valid,
+      - `"unknown"` when the file is absent / unreadable / has no class
+        (honest fail-closed — never a fabricated class),
+      - `None` when `project_dir` is None (caller did not point at a project;
+        the caller-supplied class is then used verbatim — but a hardcoded
+        default constant is still forbidden by the caller contract).
+    """
+    if project_dir is None:
+        return None
+    persisted = Path(project_dir) / "reports" / "ic_class.json"
+    if not persisted.is_file():
+        return "unknown"
+    try:
+        d = json.loads(persisted.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "unknown"
+    if isinstance(d, dict):
+        cls = d.get("ic_class")
+        if isinstance(cls, str) and cls:
+            return cls
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
 # L14-L23 skeleton emission
 # ---------------------------------------------------------------------------
-def emit_l_doc_skeleton(l_doc_code: str, ic_class: str) -> Dict[str, Any]:
+def emit_l_doc_skeleton(l_doc_code: str,
+                        ic_class: Optional[str] = None,
+                        project_dir: Optional[Path] = None) -> Dict[str, Any]:
     """Produce a typed skeleton for an L doc the legacy runner doesn't
     know how to emit. Each skeleton carries:
       - doc_id / doc_name
@@ -280,7 +321,21 @@ def emit_l_doc_skeleton(l_doc_code: str, ic_class: str) -> Dict[str, Any]:
 
     The shape is the same for every L14-L23 emission so downstream
     consumers can detect "skeleton waiting for content".
+
+    ic_class source of truth (ORGANIC-20260606 #465):
+      - When `project_dir` is supplied, the stamped `ic_class` is ALWAYS read
+        from `<project_dir>/reports/ic_class.json` (via `canonical_ic_class`),
+        overriding any caller-supplied `ic_class`. This guarantees a single
+        source of truth and prevents a stale/hardcoded class from leaking
+        into the emitted doc (the #465 pure-analog/digital fork).
+      - When `project_dir` is None, the caller-supplied `ic_class` is used
+        verbatim, falling back to honest `"unknown"` if it too is None.
+        Hardcoded default class constants are forbidden — never default to a
+        concrete class such as `digital_arithmetic_primitive`.
     """
+    resolved = canonical_ic_class(project_dir)
+    if resolved is None:
+        resolved = ic_class if ic_class else "unknown"
     spec = _tx.l_doc_spec(l_doc_code)
     fields_template = _skeleton_fields_for(l_doc_code)
     hints = _extraction_hints_for(l_doc_code)
@@ -288,7 +343,7 @@ def emit_l_doc_skeleton(l_doc_code: str, ic_class: str) -> Dict[str, Any]:
         "doc_id": spec.code,
         "doc_name": spec.full_name,
         "applicability": "APPLICABLE",
-        "ic_class": ic_class,
+        "ic_class": resolved,
         "fields": fields_template,
         "evidence": [],
         "extraction_hints": hints,
@@ -446,6 +501,15 @@ def post_process(project_dir: Path, ic_class: str) -> PostProcessResult:
     if not docs_dir.exists():
         docs_dir.mkdir(parents=True, exist_ok=True)
 
+    # ORGANIC-20260606 #465 — single source of truth. The persisted
+    # reports/ic_class.json is authoritative; a caller-supplied ic_class is
+    # only a fallback for when the project has not persisted one yet. This
+    # prevents a stale/hardcoded class from forking emitted-doc stamps away
+    # from reports/ic_class.json.
+    persisted_class = canonical_ic_class(project_dir)
+    if persisted_class is not None and persisted_class != "unknown":
+        ic_class = persisted_class
+
     scrub_log: List[ScrubLog] = []
     skeleton: List[str] = []
     na_stubs: List[str] = []
@@ -480,7 +544,8 @@ def post_process(project_dir: Path, ic_class: str) -> PostProcessResult:
 
         # Case (c): applicable but missing → emit skeleton
         if spec.code in applicable:
-            sk = emit_l_doc_skeleton(spec.code, ic_class)
+            sk = emit_l_doc_skeleton(spec.code, ic_class,
+                                     project_dir=project_dir)
             target_path.write_text(
                 json.dumps(sk, indent=2), encoding="utf-8")
             skeleton.append(spec.code)
