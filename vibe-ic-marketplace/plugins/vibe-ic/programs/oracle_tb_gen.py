@@ -29,6 +29,21 @@ structural keys, no chip names):
 
 Exit codes: 0 = TB emitted; 2 = no concrete vectors → fallback-skill
 direction printed as JSON; 1 = error.
+
+testbench-author CONTRACT — $readmem mem-file staging (ORGANIC #476):
+  The runner compiles + runs the oracle TB with cwd =
+  sim_full_stack/oracle_run/ (so oracle.vvp / oracle.log artifacts are
+  collected there). If a hand-authored oracle TB loads firmware / ROM via
+  `$readmemh("fw.hex", mem)` / `$readmemb(...)`, the bare/relative path is
+  resolved at SIM TIME against that run cwd — NOT against the TB source
+  directory. To keep author intent natural, the runner stages every
+  $readmem{h,b}-referenced data file that resolves relative to the TB's own
+  directory into the run cwd before vvp runs (see
+  phase2_one_shot_runner._stage_readmem_files). Author guidance: reference
+  the hex by a path relative to the TB (place fw.hex next to
+  tb_<top>_oracle.v, then write `$readmemh("fw.hex", mem)`); do NOT hard-code
+  an absolute host path. Sub-directory refs (e.g. "rom/fw.hex") are staged
+  preserving that sub-path.
 """
 from __future__ import annotations
 
