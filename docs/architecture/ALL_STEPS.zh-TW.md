@@ -1,23 +1,8 @@
-# Vibe-IC — 全部步驟：Phase → Stage → Step（v2.3.2・繁體中文）
+# Vibe-IC — 全部步驟：Phase → Stage → Step（繁體中文）
 
 整條流程的每一步，以 **Phase → Stage → Step** 階層組織，主軸為**單一連續編號 1 → 44**
 （自 Stage 1 的 Spec-to-RTL 起算）。Phase 1 的文件生成步驟以 **D1–D5** 標示（前置，
 不計入 1→44）；兩條並行支線 **Analog A1–A9** 與 **Mixed-signal M1–M4** 同時進行。
-
-v2.3.2 重點（第二輪外部 review 精修）：
-
-- **Step 28 manual-review 落地**：`perc_equivalent.json` 的 MANUAL_REVIEW 類別新增 `review_criteria`（審查者角色＋具名 PDK/foundry 限值準則）。
-- **Step 8 新增 derived-clock 守門**：手動 ICG／暫存器分頻時脈必須在 SDC 宣告 `create_generated_clock`（`derived_clock_sdc_required_check`；無分頻時脈時 vacuous PASS＝條件不適用自動通過）。
-- **精度與機制寫實**：Step 10 功耗預覽標明 vectorless、Step 35 節點判定寫明 liberty 檔名推導、Step 31 blackbox 操作與 waiver 機制寫實。
-- **E1–E3 編號預留**＋**實測工時附錄**。
-
-v2.3.1 重點（對齊業界標準流程，發佈前一次到位）：
-
-- **Step 14 歸入 Stage 2**：它是合成→PnR 的交接 QA（合成階段收尾），非實體設計步驟；標註「開源 Yosys 專用」。
-- **新 Step 28：PERC / Reliability sign-off**：ESD 焊環＋放電拓樸、latch-up well-tap、跨電壓域保護——比照業界 Calibre-PERC 獨立簽核 deck，升為強制編號步驟（原 28–41 順移）。
-- **新 Step 35：DFM screen**：CMP 密度窗＋redundant-via 比率（DEF 確定性計數）＋ OPC/RET/SRAF/PSM 以 `FOUNDRY_SIDE` 具名揭露（mask 合成屬 foundry 端；≤28nm 升級為設計者協作項）。
-- **新 Step 44：可靠度驗證（HTOL）**：長時操作壽命 qual，與 Step 43 的 burn-in（嬰兒期篩選）區分。
-- 每步新增**輸入 / 輸出**兩欄（輸出取自 flow yaml 的 required_outputs）。
 
 **Phase → Stage 對照**
 
@@ -113,7 +98,7 @@ v2.3.1 重點（對齊業界標準流程，發佈前一次到位）：
 | 25 | 🔁 EM check | 檢查電流密度、確保金屬線壽命。 | routed.def（PSM -enable_em） | EM 報告 + 分段電流 | OpenROAD PSM -enable_em | `em_report_check`<br>skills：`em-check` |
 | 26 | 🔁 Antenna check | 檢查並修復製程天線效應。 | routed.def | antenna 報告 | OpenROAD check_antennas/repair | `antenna_report_check` |
 | 27 | 🔁 Signal integrity | 串擾 / 雜訊影響分析（SPEF 耦合電容篩查，advisory tier 明示）。 | SPEF | SI 報告（含 >0.9 耦合 watch-list） | 自研 SPEF 耦合篩查（OpenSTA 視窗 advisory） | `si_crosstalk_check` |
-| 28 | 🔁 PERC / Reliability sign-off | **（新）** ESD 焊環＋放電拓樸、latch-up well-tap、跨電壓域保護的強制簽核；對應 PERC 四類——netlist 檢查＋netlist 驅動的 layout 檢查（自動化）、電流密度＋P2P 電阻（具名 manual-review）。manual-review 由資深實體設計／可靠度工程師簽核，準則記入 `perc_equivalent.json`（categories[].status=MANUAL_REVIEW＋`review_criteria`：PDK Jmax 表、ESD 放電路徑 P2P 上限、Vhold>Vdd、L21 跨域契約等具名限值），結果回填 checklist[].confirmed。 | 閘級網表・routed.def・L21 power intent・L3 ESD 規格・24–27 報告 | `perc_equivalent.json`・PERC memo・gate 判定 | 自研 PERC-equivalent（DEF 驅動） | `perc_signoff_check` |
+| 28 | 🔁 PERC / Reliability sign-off | ESD 焊環＋放電拓樸、latch-up well-tap、跨電壓域保護的強制簽核；對應 PERC 四類——netlist 檢查＋netlist 驅動的 layout 檢查（自動化）、電流密度＋P2P 電阻（具名 manual-review）。manual-review 由資深實體設計／可靠度工程師簽核，準則記入 `perc_equivalent.json`（categories[].status=MANUAL_REVIEW＋`review_criteria`：PDK Jmax 表、ESD 放電路徑 P2P 上限、Vhold>Vdd、L21 跨域契約等具名限值），結果回填 checklist[].confirmed。 | 閘級網表・routed.def・L21 power intent・L3 ESD 規格・24–27 報告 | `perc_equivalent.json`・PERC memo・gate 判定 | 自研 PERC-equivalent（DEF 驅動） | `perc_signoff_check` |
 | 29 | Post-layout gate-level sim | 帶 SDF 延遲的閘級模擬，確認佈局後功能正確（無 SDF 重模擬即誠實 SKIP）。 | 閘級網表・SDF・TB | post-sim 結果 | iverilog + SDF<br>`eda_simulate` | `post_layout_sim_check` |
 | 30 | Post-layout SPICE verification | 關鍵路徑與 analog 區塊的電晶體級模擬比對。 | SPICE deck・SPEF | SPICE 比對報告 | ngspice<br>`eda_spice` | `spice_correlation_check`<br>skills：`ams-sim` |
 | 31 | 🔁 Physical verification | DRC / LVS / ERC / 密度實體規則簽核；密度在此屬**規則符合性**（KLayout deck 逐層 CMP 窗；執行驗證歸 Step 34、優化建議歸 Step 35）；LVS 走 Magic 抽取 + netgen 真比對（含 macro 的設計——如 Caravel 類 harness——可對 macro blackbox：Magic 以 `lef write -hide` 將 macro 遮為介面殼、netgen 補充 setup 以同名 blackbox 比對；waiver 依據＝device-level match＋KLayout 交叉驗證，由 `signoff_waiver_emit` 寫入專案 `waivers.json`，Step 36 checklist 以 open_waivers 交叉引用為 reviewer to-do）。 | GDS・閘級網表・PDK deck | 簽核 DRC・LVS・ERC 報告 | KLayout DRC・Magic ext2spice + netgen LVS・OpenROAD ERC<br>`eda_drc_klayout`・`eda_lvs` | `erc_density_check`<br>skills：`drc-fix`・`lvs-triage`・`perc-check` |
@@ -125,7 +110,7 @@ v2.3.1 重點（對齊業界標準流程，發佈前一次到位）：
 |---|---|---|---|---|---|---|
 | 33 | Power analysis | 全晶片功耗簽核（post-layout vectorless OpenSTA report_power；VCD 向量模式可選）。 | 網表・SDC・liberty（＋選用 VCD） | power 報告（leakage+dynamic, analysis_mode） | OpenSTA report_power（＋選用 VCD） | `power_report_check`<br>skills：`power-analysis` |
 | 34 | Metal fill | 標準元件列 filler placement（white-space 填充）；密度在此屬**執行驗證**（`metal_fill_density_check` 閘擁有密度判定；規則符合性歸 Step 31、優化建議歸 Step 35）。 | routed.def | `filled.def`・密度報告 | OpenROAD filler_placement<br>`eda_pnr` | `metal_fill_density_check`・`spare_cell_preservation_check` |
-| 35 | DFM screen | **（新）** 可製造性篩查：redundant-via 比率（single-cut 比例 advisory）＋密度**優化建議**（僅交叉引用 Step 34 閘結果，永不重複 FAIL）；OPC/RET/SRAF/PSM 以 FOUNDRY_SIDE 具名揭露（≤28nm 升級為 DESIGNER_COLLAB_REVIEW 設計者協作項；節點由 `dfm_screen_check` 自 `input/pdk/liberty` 檔名推導，記入同一 `dfm_screen.json` 的 process_nm／advanced_node／foundry_side 欄）。 | routed.def・密度報告 | `dfm_screen.json`（via 統計＋foundry-side 清單） | 自研 DEF via 統計＋密度交叉引用 | `dfm_screen_check` |
+| 35 | DFM screen | 可製造性篩查：redundant-via 比率（single-cut 比例 advisory）＋密度**優化建議**（僅交叉引用 Step 34 閘結果，永不重複 FAIL）；OPC/RET/SRAF/PSM 以 FOUNDRY_SIDE 具名揭露（≤28nm 升級為 DESIGNER_COLLAB_REVIEW 設計者協作項；節點由 `dfm_screen_check` 自 `input/pdk/liberty` 檔名推導，記入同一 `dfm_screen.json` 的 process_nm／advanced_node／foundry_side 欄）。 | routed.def・密度報告 | `dfm_screen.json`（via 統計＋foundry-side 清單） | 自研 DEF via 統計＋密度交叉引用 | `dfm_screen_check` |
 | 36 | Tapeout checklist | 最終簽核清單逐項確認（實質判定：DRC 計數、證據鏈）。 | 全部簽核報告 | `tapeout_checklist.json` | —（清單彙整） | `tapeout_signoff_check`<br>skills：`tapeout-checklist` |
 | 37 | GDSII output | 產出交付晶圓廠的 GDSII（僅當 Step 31 PV 全淨）。 | routed.def・merged GDS | 簽核級 `*.gds` | Magic/KLayout stream-out<br>`eda_gds` | `gds_size_check`・`provenance_check` |
 | 38 | Foundry handoff | foundry 實體 mask kit：mask spec＋WAT 計畫＋scribe PCM＋corner ATE 向量（chip-specific；foundry 待供欄位以 `PENDING_FOUNDRY_*` 具名——由 Step 36 checklist 追蹤、foundry 回覆後回填）。 | GDS・netlist 統計・L10 測項 | `mask_spec.json`・`wat_plan.json`・scribe・`corner_test_vectors.json` | —（pack 產生器） | `foundry_handoff_package_check`<br>skills：`tapeout-checklist` |
@@ -139,7 +124,7 @@ v2.3.1 重點（對齊業界標準流程，發佈前一次到位）：
 | 41 | Wafer sort / probe test | 晶圓針測、挑出良品裸晶；獨立重算良率並比對目標。 | wafer lot・probe 卡 | `wafer_sort_yield.json`・`wafer_map.csv` | ATE + probe card（外部） | `wafer_sort_yield_check` |
 | 42 | Packaging | 封裝（wirebond / FC-CSP / WLCSP）。 | 良品裸晶 | `packaging_log.json` | 封裝廠（外部） | `packaging_intake_check` |
 | 43 | Final test | 封裝後最終測試（functional + parametric + burn-in 嬰兒期篩選）。 | 封裝品・ATE 圖樣 | `final_test_yield.json`・`burn_in_results.json` | ATE（外部） | `final_test_attestation_check` |
-| 44 | Reliability qualification | **（新）** HTOL 長時壽命 qual（device-hours／failures／FIT attestation；車規/醫療等級必跑；消費級 MPW 可休眠＝DEFERRED，不阻塞 tapeout）。 | HTOL 爐結果 | `htol_results.json` 判定 | HTOL 爐（外部） | `htol_attestation_check` |
+| 44 | Reliability qualification | HTOL 長時壽命 qual（device-hours／failures／FIT attestation；車規/醫療等級必跑；消費級 MPW 可休眠＝DEFERRED，不阻塞 tapeout）。 | HTOL 爐結果 | `htol_results.json` 判定 | HTOL 爐（外部） | `htol_attestation_check` |
 
 > 流程外實驗室步驟（不列編號）：PFA/EFA（FIB/SEM/EMMI 破壞性失效分析）、silicon characterization（shmoo）——資料來自外部設備，plugin 提供 `wafer_map_pattern_classify` 等根因分析層。
 
@@ -213,4 +198,4 @@ MBIST/LBIST/EDT 壓縮（開源無引擎）、BSR/BSDL、自動 clock-gating
 | Step 31 LVS（Magic＋netgen） | 本批樣本走輕量/跳過路徑，故無代表性數字；含 macro 真比對（如 Caravel 類 harness）為**分鐘級到小時級**，依 macro 數量而異（現場曾因此將 timeout 設為 4 小時） | — |
 | Step 40–43 製造端（fab/sort/pkg/final test） | 外部週期，數週級 | 無本地實測 |
 
-英文正本：`ALL_STEPS_v2.3.2.md`。
+英文正本：`ALL_STEPS.md`。

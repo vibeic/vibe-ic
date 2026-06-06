@@ -9,7 +9,7 @@ Pins:
   * the criteria reference PDK/foundry limit NAMES (Jmax tables, P2P
     discharge-path limit, max-tap-distance, Vhold>Vdd, L21 contract),
     never fabricated numeric thresholds;
-  * doc coverage guard points at ALL_STEPS_v2.3.2 (separate test file).
+  * doc coverage guard points at the unversioned ALL_STEPS docs (separate test file).
 """
 import re
 from pathlib import Path

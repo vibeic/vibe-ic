@@ -1,37 +1,10 @@
-# Vibe-IC — All Steps: Phase → Stage → Step (v2.3.2)
+# Vibe-IC — All Steps: Phase → Stage → Step
 
 Every step of the full flow, organised as **Phase → Stage → Step** with a
 **single continuous numbering 1 → 44** (starting from Stage 1's Spec-to-RTL).
 Phase 1's document-generation steps are labelled **D1–D5** (pre-flow, not
 counted in 1→44); two parallel tracks — **Analog A1–A9** and **Mixed-signal
 M1–M4** — run alongside.
-
-v2.3.2 highlights (second external-review refinement round):
-
-- **Step 28 manual-review made concrete**: `perc_equivalent.json` MANUAL_REVIEW categories now carry `review_criteria` (reviewer role + named PDK/foundry limit criteria).
-- **Step 8 derived-clock guard**: manual ICG / register-divided clocks must declare `create_generated_clock` in the SDC (`derived_clock_sdc_required_check`; vacuous PASS = auto-pass when not applicable).
-- **Mechanisms documented as-built**: Step 10 power preview marked vectorless, Step 35 node derivation from liberty filenames, Step 31 blackbox operations + real waiver mechanism.
-- **E1–E3 reserved numbering** + **measured wall-clock appendix**.
-
-v2.3.1 highlights (aligned with the industry-standard flow, fixed once
-before official release):
-
-- **Step 14 moved into Stage 2**: it is the synthesis→PnR handoff QA (the
-  synthesis stage's closing gate), not a physical-design step; marked
-  open-source-Yosys-specific.
-- **New Step 28: PERC / Reliability sign-off** — ESD pad-ring + discharge
-  topology, latch-up well-tap, cross-voltage-domain protection; mirrors the
-  industry's standalone Calibre-PERC sign-off deck as an enforced numbered
-  step (old 28–41 renumbered to 29–42).
-- **New Step 35: DFM screen** — CMP density window + redundant-via
-  ratio (deterministic DEF count) + OPC/RET/SRAF/PSM as NAMED
-  `FOUNDRY_SIDE` disclosure items (mask synthesis is foundry-side; at
-  <=28nm they become designer-collaboration items).
-- **New Step 44: Reliability qualification (HTOL)** — long-duration
-  operating-life qual, distinct from Step 43's burn-in (infant-mortality
-  screen).
-- Every step now carries **Input / Output** columns (outputs derive from the
-  flow yaml's required_outputs).
 
 **Phase → Stage map**
 
@@ -130,7 +103,7 @@ Front-end precedence (**artifact-driven**): existing RTL > C/SystemC model (hls-
 | 25 | 🔁 EM check (electromigration) | Current-density / metal-lifetime screen. | routed.def (PSM -enable_em) | EM report + per-segment currents | OpenROAD PSM -enable_em | `em_report_check`<br>skills: `em-check` |
 | 26 | 🔁 Antenna check | Detect + repair process-antenna violations. | routed.def | antenna report | OpenROAD check_antennas/repair | `antenna_report_check` |
 | 27 | 🔁 Signal integrity (crosstalk) | Crosstalk/noise screen (SPEF coupling-cap; advisory tier explicitly named). | SPEF | SI report (incl. >0.9 coupling watch-list) | in-house SPEF coupling screen (OpenSTA window advisory) | `si_crosstalk_check` |
-| 28 | 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) | **(new)** Enforced sign-off: ESD pad-ring + discharge topology, latch-up well-tap, cross-voltage-domain protection; maps to the four PERC categories — netlist checks + netlist-driven layout checks (automated), current density + P2P resistance (named manual-review). Manual review is signed off by a senior physical-design / reliability engineer; criteria live in `perc_equivalent.json` (categories[].status=MANUAL_REVIEW + `review_criteria`: PDK Jmax tables, foundry ESD discharge-path P2P limit, Vhold>Vdd, L21 cross-domain contract), results back-filled into checklist[].confirmed. | gate netlist · routed.def · L21 power intent · L3 ESD spec · step-24–27 reports | `perc_equivalent.json` · PERC memo · gate verdict | in-house PERC-equivalent (DEF-driven) | `perc_signoff_check` |
+| 28 | 🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain) | Enforced sign-off: ESD pad-ring + discharge topology, latch-up well-tap, cross-voltage-domain protection; maps to the four PERC categories — netlist checks + netlist-driven layout checks (automated), current density + P2P resistance (named manual-review). Manual review is signed off by a senior physical-design / reliability engineer; criteria live in `perc_equivalent.json` (categories[].status=MANUAL_REVIEW + `review_criteria`: PDK Jmax tables, foundry ESD discharge-path P2P limit, Vhold>Vdd, L21 cross-domain contract), results back-filled into checklist[].confirmed. | gate netlist · routed.def · L21 power intent · L3 ESD spec · step-24–27 reports | `perc_equivalent.json` · PERC memo · gate verdict | in-house PERC-equivalent (DEF-driven) | `perc_signoff_check` |
 | 29 | Post-layout gate-level simulation (SDF) | Gate-level sim with SDF delays to confirm post-layout function (honest SKIP when no SDF re-sim ran). | gate netlist · SDF · TB | post-sim results | iverilog + SDF<br>`eda_simulate` | `post_layout_sim_check` |
 | 30 | Post-layout SPICE verification | Transistor-level correlation for critical paths + analog blocks. | SPICE decks · SPEF | SPICE correlation report | ngspice<br>`eda_spice` | `spice_correlation_check`<br>skills: `ams-sim` |
 | 31 | 🔁 Physical verification (DRC + LVS + ERC + density) | Sign-off physical rules; density here is **RULE COMPLIANCE** (KLayout per-layer CMP-window deck; execution verification → Step 34, optimization advisory → Step 35); LVS = Magic extraction + real netgen compare (macro-bearing designs — e.g. Caravel-class harnesses — may blackbox macros: Magic `lef write -hide` masks the macro to its interface shell, a netgen supplementary setup compares it as a same-name blackbox; the waiver basis = device-level match + KLayout cross-check, written by `signoff_waiver_emit` into the project's `waivers.json`, cross-referenced as reviewer to-dos by the Step 36 checklist's open_waivers). | GDS · gate netlist · PDK decks | sign-off DRC · LVS · ERC reports | KLayout DRC · Magic ext2spice + netgen LVS · OpenROAD ERC<br>`eda_drc_klayout`・`eda_lvs` | `erc_density_check`<br>skills: `drc-fix`・`lvs-triage`・`perc-check` |
@@ -142,7 +115,7 @@ Front-end precedence (**artifact-driven**): existing RTL > C/SystemC model (hls-
 |---|---|---|---|---|---|---|
 | 33 | Power analysis (post-layout) | Full-chip power sign-off (post-layout vectorless OpenSTA report_power; optional VCD vector mode). | netlist · SDC · liberty (+ optional VCD) | power report (leakage+dynamic, analysis_mode) | OpenSTA report_power (+ optional VCD) | `power_report_check`<br>skills: `power-analysis` |
 | 34 | Metal fill (density fill insertion) | Std-cell-row filler placement (white-space); density here is **EXECUTION VERIFICATION** (the `metal_fill_density_check` gate owns the density verdict; rule compliance → Step 31, optimization advisory → Step 35). | routed.def | `filled.def` · density report | OpenROAD filler_placement<br>`eda_pnr` | `metal_fill_density_check`・`spare_cell_preservation_check` |
-| 35 | DFM screen (manufacturability) | **(new)** Manufacturability screen: redundant-via ratio (single-cut fraction advisory) + density **OPTIMIZATION ADVISORY** (cross-references the Step 34 gate result only — never a duplicate FAIL); OPC/RET/SRAF/PSM as FOUNDRY_SIDE disclosure items (escalated to DESIGNER_COLLAB_REVIEW at ≤28nm; the node is derived by `dfm_screen_check` from the `input/pdk/liberty` filenames and recorded in the same `dfm_screen.json` — process_nm / advanced_node / foundry_side fields). | routed.def · density report | `dfm_screen.json` (via stats + foundry-side list) | in-house DEF via statistics + density cross-ref | `dfm_screen_check` |
+| 35 | DFM screen (manufacturability) | Manufacturability screen: redundant-via ratio (single-cut fraction advisory) + density **OPTIMIZATION ADVISORY** (cross-references the Step 34 gate result only — never a duplicate FAIL); OPC/RET/SRAF/PSM as FOUNDRY_SIDE disclosure items (escalated to DESIGNER_COLLAB_REVIEW at ≤28nm; the node is derived by `dfm_screen_check` from the `input/pdk/liberty` filenames and recorded in the same `dfm_screen.json` — process_nm / advanced_node / foundry_side fields). | routed.def · density report | `dfm_screen.json` (via stats + foundry-side list) | in-house DEF via statistics + density cross-ref | `dfm_screen_check` |
 | 36 | Tapeout checklist (final sign-off) | Item-by-item final confirmation (substance checks: DRC counts, evidence chains). | all sign-off reports | `tapeout_checklist.json` | — (inventory aggregation) | `tapeout_signoff_check`<br>skills: `tapeout-checklist` |
 | 37 | GDSII output | Stream the foundry-deliverable GDSII (only when Step 31 PV is fully clean). | routed.def · merged GDS | sign-off `*.gds` | Magic/KLayout stream-out<br>`eda_gds` | `gds_size_check`・`provenance_check` |
 | 38 | Foundry handoff (mask spec + WAT + scribe + corner vectors) | Foundry physical mask kit: mask spec + WAT plan + scribe PCM + corner ATE vectors (chip-specific; foundry-supplied fields named `PENDING_FOUNDRY_*` — tracked in the Step 36 checklist and back-filled after the foundry replies). | GDS · netlist stats · L10 cases | `mask_spec.json` · `wat_plan.json` · scribe · `corner_test_vectors.json` | — (pack generator) | `foundry_handoff_package_check`<br>skills: `tapeout-checklist` |
@@ -156,7 +129,7 @@ Front-end precedence (**artifact-driven**): existing RTL > C/SystemC model (hls-
 | 41 | Wafer sort / probe test | Wafer probing, good-die selection; yield independently re-derived vs target. | wafer lot · probe card | `wafer_sort_yield.json` · `wafer_map.csv` | ATE + probe card (external) | `wafer_sort_yield_check` |
 | 42 | Packaging (assembly) | wirebond / FC-CSP / WLCSP assembly. | good dies | `packaging_log.json` | assembly house (external) | `packaging_intake_check` |
 | 43 | Final test (ATE + burn-in) | Post-package final test (functional + parametric + burn-in infant-mortality screen). | packaged units · ATE patterns | `final_test_yield.json` · `burn_in_results.json` | ATE (external) | `final_test_attestation_check` |
-| 44 | Reliability qualification (HTOL / FIT) | **(new)** Long-duration HTOL qual (device-hours / failures / FIT attestation; required for automotive/medical grades; consumer MPW may stay dormant = DEFERRED, never blocks tapeout). | HTOL chamber results | `htol_results.json` verdict | HTOL chamber (external) | `htol_attestation_check` |
+| 44 | Reliability qualification (HTOL / FIT) | Long-duration HTOL qual (device-hours / failures / FIT attestation; required for automotive/medical grades; consumer MPW may stay dormant = DEFERRED, never blocks tapeout). | HTOL chamber results | `htol_results.json` verdict | HTOL chamber (external) | `htol_attestation_check` |
 
 > Out-of-flow lab steps (unnumbered): PFA/EFA (destructive FIB/SEM/EMMI
 > failure analysis) and silicon characterization (shmoo) — data originates
@@ -237,4 +210,4 @@ Numbers come from REAL local sky130 open-source-flow runs (the `duration_s` fiel
 | Step 31 LVS (Magic + netgen) | this batch's samples took the light/skip path, so no representative figure; with real macro compares (e.g. Caravel-class harnesses) it runs **minutes to hours**, scaling with macro count (a field run motivated the 4-hour timeout) | — |
 | Steps 40–43 manufacturing (fab/sort/pkg/final test) | external, weeks-scale | no local measurement |
 
-繁體中文版：`ALL_STEPS_v2.3.2.zh-TW.md`.
+繁體中文版：`ALL_STEPS.zh-TW.md`.
