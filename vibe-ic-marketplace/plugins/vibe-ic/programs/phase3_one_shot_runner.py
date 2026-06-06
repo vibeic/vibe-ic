@@ -7049,6 +7049,22 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
             {"item": "Primary + secondary clamps sized for target HBM/CDM level",
              "confirmed": None},
         ]
+        # flow v2.3.2 (review A3): WHO reviews + WHAT quantitative criteria —
+        # criteria NAME the PDK/foundry limits (no invented numbers).
+        esd_cat["review_criteria"] = {
+            "reviewer_role": ("senior physical-design / reliability engineer "
+                              "(human sign-off — never the authoring agent)"),
+            "quantitative_criteria": [
+                ("ESD discharge-path metal current density stays below the "
+                 "PDK Jmax (EM) tables at the rated HBM/CDM peak current"),
+                ("pad-to-clamp / clamp-to-rail point-to-point (P2P) resistance "
+                 "below the foundry ESD design guideline's discharge-path "
+                 "limit"),
+                ("primary + secondary clamp sizing meets the target HBM/CDM "
+                 "level per the PDK ESD cell datasheet (TLP/It2)"),
+            ],
+            "record_to": "categories[].checklist[].confirmed (this report)",
+        }
     categories.append(esd_cat)
 
     # ESD discharge-path TOPOLOGY (v0.2.9) — AUTOMATES the connectivity half:
@@ -7120,6 +7136,20 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
             {"item": "Guard rings present + effective around IO / high-current cells",
              "confirmed": None},
         ],
+        # flow v2.3.2 (review A3): reviewer role + quantitative criteria.
+        "review_criteria": {
+            "reviewer_role": ("senior physical-design / reliability engineer "
+                              "(human sign-off — never the authoring agent)"),
+            "quantitative_criteria": [
+                ("tap spacing within the PDK max-tap-distance rule "
+                 "(DRC-deck screened; confirm deck coverage)"),
+                ("parasitic-SCR holding voltage Vhold > Vdd per the PDK "
+                 "latch-up characterisation"),
+                ("guard-ring efficacy under the foundry's injected "
+                 "substrate-current test condition"),
+            ],
+            "record_to": "categories[].checklist[].confirmed (this report)",
+        },
     })
 
     # Cross-voltage-domain (v0.2.11): robust multi-domain count (NETS+SPECIALNETS
@@ -7148,6 +7178,18 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
             {"item": "Isolation cells on every signal crossing a "
                      "power-gating boundary", "confirmed": None},
         ]
+        # flow v2.3.2 (review A3): reviewer role + quantitative criteria.
+        xdomain_cat["review_criteria"] = {
+            "reviewer_role": ("senior physical-design / reliability engineer "
+                              "(human sign-off — never the authoring agent)"),
+            "quantitative_criteria": [
+                ("level-shifter direction (lo->hi / hi->lo) correct per "
+                 "crossing, against the L21 domain voltage map"),
+                ("isolation clamp value matches the L21 sleep-state "
+                 "contract on every power-gating boundary"),
+            ],
+            "record_to": "categories[].checklist[].confirmed (this report)",
+        }
     categories.append(xdomain_cat)
 
     # --- v0.2.35: PERC GEOMETRY-LAYER screen (CONCLUSIVE-FAIL-ONLY) --------

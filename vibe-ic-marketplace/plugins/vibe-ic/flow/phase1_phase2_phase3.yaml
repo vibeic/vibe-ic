@@ -472,6 +472,9 @@ steps:
       # L8_TIMING_WAVEFORM constraints; complements sdc_syntax_check
       # which only validates SDC syntax.
       - sdc_validator_check
+      # flow v2.3.2 (review B-1) — register-divided / manually-gated
+      # clocks must declare create_generated_clock in the SDC.
+      - derived_clock_sdc_required_check
     required_outputs:
       - "reports/phase2/sdc_check.json"
     gate:
@@ -487,6 +490,13 @@ steps:
         - optional_program_exit_zero:
             command: "sdc_validator_check phase2/stage2/constraints --l8 phase1/generated_docs/L8_TIMING_WAVEFORM.json --json reports/sdc_validator.json"
             condition_files_exist: ["phase1/generated_docs/L8_TIMING_WAVEFORM.json"]
+        # flow v2.3.2 (review B-1) — manual ICG / register-divided clocks
+        # need a create_generated_clock in the SDC; otherwise STA
+        # mis-reports every crossing path and CTS will not balance the
+        # divider's tree. Vacuous PASS when no derived clock exists.
+        - optional_program_exit_zero:
+            command: "derived_clock_sdc_required_check phase2/stage1/rtl --sdc phase2/stage2/constraints --json reports/phase2/gates/derived_clock_sdc.json"
+            condition_files_exist: ["phase2/stage1/rtl", "phase2/stage2/constraints"]
     blocks_on: [7]
 
   - id: 9
