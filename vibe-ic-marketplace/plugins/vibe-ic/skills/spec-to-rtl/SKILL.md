@@ -111,6 +111,35 @@ existed — leading 5 disciplined RTLLM Shape B agents to interpret the
 absence as "no path forward" and emit 0/50 in the first attempt. v0.1.32
 ships this skill so the WAIVE → handoff is unambiguous + reproducible.
 
+## Error-flag behavior — classify recoverable vs fatal from L3/L5 (#468)
+
+When you author RTL that raises an error flag on an undefined-access /
+illegal-command / out-of-range path, decide from the **L3/L5 protocol prose**
+(not from convenience) whether the FSM should **recover** or **halt**, and encode
+that decision so the downstream `fsm_error_invariant` gate and `/rtl-review` can
+audit it:
+
+- **recoverable** — if L3 (transaction protocol) / L5 (error-handling spec) says the
+  block sets the error flag and **continues serving the next transaction** (returns to
+  IDLE/ready), implement exactly that: raise the flag, then transition back to the
+  serving state. Add a `// fsm_error: recoverable` annotation at the error-assign site
+  so the reviewer can confirm without re-deriving the semantics.
+- **fatal** — if L3/L5 binds the error to a **halt/lockup state** or says it
+  **requires a reset (or explicit clear) to clear**, implement the halt and do NOT add
+  the recoverable annotation; the FSM stays in the error state until reset.
+
+**FORBIDDEN:** annotating a site `// fsm_error: recoverable` (or, in review, silencing
+the gate) **without** the L3/L5 sentence(s) that establish the halt-vs-continue
+behavior. The annotation is a claim about the spec and must be backed by spec text.
+
+**why_not_bucket_a:** the gate program already does its half — it flags the
+error-flag sites structurally. The recoverable-vs-fatal call is a semantic judgment
+that lives in protocol prose (L3/L5), not in RTL structure; the identical
+`error <= 1'b1` line means "keep going" in one protocol and "lock until reset" in
+another, so no deterministic rule over the RTL can decide it. This is the residual LLM
+authoring judgment, cross-referenced with `/rtl-review`'s matching classification
+section.
+
 
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
 

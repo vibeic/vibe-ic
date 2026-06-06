@@ -25,6 +25,17 @@ A1 (this skill) PASS criterion is keyword-grep cleanliness, not human judgment t
 
 **Residual LLM judgment (not a program):** the keyword scan is a *recall floor*, not a complete detector — recognising a NON-keyword analog block (a custom sensor-readout front-end described only functionally, with no token in the 8-class list) is exactly where your judgment is needed. Catch what the grep misses and add it to `analog_blocks[]` anyway.
 
+**Spurious-block flip-side (cross-ref → `analog-topology-select`, #466B):** the recall floor
+also OVER-fires. A candidate emitted **only** because a product-name keyword in L1 matched a
+class — with no spec ever bound (`spec == null`) — is *presumed spurious* and must be
+confirmed against the L5 type enumeration (the "N analog blocks" count sentence and/or the
+Block A/B table headers) **before** A2 spends any sizing compute. Drop it if L5 doesn't
+enumerate that class; keep + spec-bind it if L5 does. A block's multiplicity (`×N`) must
+come from the block's OWN enumeration row, never a sibling block's evidence paragraph. The
+full sanity procedure + `why_not_bucket_a` rationale lives in `analog-topology-select`'s
+"spurious-block sanity check" capture; do not re-implement it here as a deny-list — whether
+a name-only block is real requires reading L5, not a static rule.
+
 
 ## When to use
 

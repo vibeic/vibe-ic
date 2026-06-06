@@ -164,3 +164,54 @@ Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
 **Why this is GENERAL**: Standard textbook ΔΣ topology (any Schreier / Norsworthy reference). Applies across audio ADCs, sensor readout, incremental high-resolution conversion. Doesn't depend on the specific spec target.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
+
+
+## Captured by benchmark-enhancement-capture — 2026-06-06 (analog block-list sanity vs L5 enumeration)
+
+### Skill: spurious-block sanity check — confirm against the L5 type enumeration BEFORE sizing
+
+**Pattern**: When L5 explicitly states the **number of analog block TYPES** (a sentence
+like "the chip contains N analog blocks", or a "Block A / Block B / …" table whose header
+rows enumerate the blocks), treat that enumeration as the authoritative block roster. Any
+candidate block carried into A2 whose:
+
+1. `spec` is `null` (no electrical numbers were ever bound to it in A1), **AND**
+2. only evidence is a **product-name keyword match from L1** (the block "exists" solely
+   because a token in the datasheet/product title looked like an analog class),
+
+is **presumed SPURIOUS**. Do NOT spend any sizing/topology compute on it until you have
+**confirmed it against the L5 enumeration**. If the L5 type list does not include a block
+of that class, drop the candidate (it was an L1-name false-positive); if L5 *does* enumerate
+it, the block is real — proceed, and bind its spec from the L5 entry.
+
+**Multiplicity rule**: a block's multiplicity (`×N` — "four identical comparators",
+"dual LDO") must come from **that block's OWN table-header / enumeration entry**, never
+from a sibling block's evidence paragraph. A "×4" stated in the LDO row does not make the
+comparator a ×4 block. Read each block's own enumeration row for its own count; if the
+block has no count of its own, it is ×1.
+
+**When to apply**: A2 topology selection, as the first sanity pass over the A1 block list,
+*before* mapping any candidate to candidate topologies. Cheapest possible gate — one read
+of the L5 enumeration saves 10+ wasted sizing iterations on a phantom block.
+
+**What to do**:
+1. Read the L5 block-type enumeration (count sentence and/or Block A/B table headers).
+2. For each A1 candidate with `spec == null`, check whether its only provenance is an
+   L1 product-name keyword. If so, require an L5 enumeration entry to keep it.
+3. Drop candidates with no L5 backing; keep + spec-bind those with an L5 entry.
+4. Read each kept block's OWN enumeration row for its multiplicity; default ×1.
+
+**Why this is GENERAL**: every analog datasheet that enumerates its blocks (count or
+Block-table headers) admits this check; it names no chip and depends on no SKU. The
+provenance test (null-spec + name-only evidence) is a structural property of the A1 output,
+not a hard-coded block list.
+
+**why_not_bucket_a (cannot be a deterministic deny-list)**: whether a product-name-matched
+block is real cannot be safely deny-listed. Some chips' blocks genuinely appear only in the
+datasheet/product name (the name *is* the evidence), so a static "ignore name-only blocks"
+rule would silently delete real blocks. The decision requires *reading the L5 enumeration*
+to confirm-or-deny each candidate — a judgment over prose/table semantics, not a regex over
+the block name. The program's job stays "surface every name-keyword hit" (recall floor in
+`analog-spec-extract`); the confirm-against-L5 judgment is the residual LLM step.
+
+_Captured by benchmark-enhancement-capture 2026-06-06 (#466B)._
