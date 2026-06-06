@@ -283,8 +283,9 @@ minute interval; field-agent self-paces from there.
 
 ## Verification traps (MANDATORY audit hygiene)
 
-Two traps corrupted audit verdicts in a real session (2026-06-06,
-ORGANIC #456) — both are now standing rules for EVERY fix audit:
+Traps that corrupted audit verdicts in real sessions (rules 1-2:
+2026-06-06, ORGANIC #456; rule 3: 2026-06-07, ORGANIC #460/#466
+verification round) — all are now standing rules for EVERY fix audit:
 
 1. **Pipeline exit-code masking.** `prog … | tail; echo $?` reports
    `tail`'s exit code, not the gate's — a FAILing gate reads as exit 0.
@@ -299,6 +300,27 @@ ORGANIC #456) — both are now standing rules for EVERY fix audit:
    (installed cache vs repo checkout vs marketplace origin); when the
    cache lags, check out / worktree the origin commit under audit,
    run against THAT, and STATE the tree+version in the verify comment.
+
+3. **Acceptance-criterion audit, not unit-test trust.** A core-closed
+   issue's fix comment will report the new tests green + full suite
+   green — but those are the *intermediate products of the new code*,
+   not proof the defect is gone. RULE: audit a core-closed issue by
+   FIRST running the issue's own `## 驗收` (acceptance) command(s)
+   end-to-end on the **real benchmark** — the actual program / gate
+   invocation, observing its end-state output. The unit-test / suite
+   evidence quoted in the fix comment is **secondary**; treat a fix
+   whose acceptance command still fails as NOT adequate and reopen it,
+   regardless of how green the suite is. This pattern recurred twice in
+   one verification round (2026-06-07): one fix's tests asserted only
+   that a generated bridge artifact existed and never exercised the
+   `all_of` coverage sub-gate that actually decided the step verdict;
+   another's rule landed in skill prose instead of the runner that
+   executes it — both passed their own suites yet failed the moment the
+   acceptance command was run end-to-end. Reproduce a defect-artifact
+   fixture shaped like the issue's `現象`, run the acceptance command,
+   and assert the END state — never the intermediate. (When an issue
+   genuinely has no `## 驗收` section, fall back to reproducing the
+   `現象` to an end-state; do not substitute unit-test trust.)
 
 ## Reference
 

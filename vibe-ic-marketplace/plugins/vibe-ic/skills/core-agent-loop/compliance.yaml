@@ -86,3 +86,20 @@ requirements:
       titlecased), never "debug agent". Project terminology
       decided 2026-05-10.
     pattern: 'field agent'
+
+  - id: R9_acceptance_execution_trace
+    description: >-
+      The 本機驗證 section MUST carry an acceptance-execution trace,
+      not merely an "N/N PASS" suite line (#479 / #478). New-tests-
+      green + full-suite-green ALONE is insufficient to close: the
+      comment must show the core-agent ran the issue's ## 驗收
+      command(s) verbatim and reached an end-state. Satisfied by EITHER
+      (a) the token 驗收 appearing in the comment body (quoting the
+      issue's acceptance command), OR (b) the explicit 無驗收區
+      disclosure wording the SKILL.md prescribes for issues that
+      genuinely have no acceptance section. Pattern alternation makes
+      this tolerant of the no-acceptance-section case; a bare N/N PASS
+      with neither phrase fails. The deterministic verbatim-execution
+      check lives in acceptance_evidence_in_fix_comment_check.py (#478);
+      this requirement is the publish-layer second line of defence.
+    pattern: '(驗收|無驗收區)'

@@ -87,13 +87,49 @@ For each actionable issue:
    literals; the fix must work across **every** benchmark chip.
 4. Add tests covering BOTH the new path AND a regression-guard for
    the prior behaviour. Convention: `tests/test_v1_<MAJOR>_<MINOR>_<PATCH>_<slug>.py`.
-5. **Self-verify** before closing: reproduce the original failing
-   scenario and confirm it now passes, AND run the FULL plugin test
-   suite the CI way (see Step 3 — both test trees, not a `-k`/single
-   file subset). Capture the result (e.g. `N/N PASS`) — it becomes
-   the `本機驗證` evidence in the Step 4 close comment. Closing is
-   the core-agent's responsibility precisely because the core-agent
-   self-verifies first; the field-agent is the downstream audit net.
+5. **Self-verify** before closing. New-tests-green +
+   full-suite-green ALONE is **insufficient** to close — that only
+   proves the *intermediate products of the new code*, never that the
+   defect the issue described is actually gone. Self-verification MUST,
+   in this order:
+   - **(5a) Execute the issue's `## 驗收` commands VERBATIM** against
+     the issue-named defect artifact (or a faithfully reproduced
+     fixture shaped like the issue's `現象`). Run the issue's
+     acceptance command(s) exactly as written — the real program /
+     gate invocation, not a unit-test paraphrase — and capture the
+     **end-state output** (the gate verdict / exit-code / final line,
+     not an intermediate file's mere existence). If the issue has NO
+     `## 驗收` / acceptance section, say so explicitly with the
+     `無驗收區` disclosure wording (see Step 4) and fall back to a
+     reproduce-the-`現象` end-state instead.
+   - **(5b)** Reproduce the original failing scenario and confirm it
+     now passes.
+   - **(5c)** Run the FULL plugin test suite the CI way (see Step 3 —
+     both test trees, not a `-k`/single-file subset).
+   The `本機驗證` section of the Step-4 close comment MUST quote
+   **(a) the acceptance command text** (verbatim, in a code block) and
+   **(b) its end-state output**, in addition to the `N/N PASS` suite
+   line. Before posting, run the two deterministic gates (#478):
+   ```bash
+   python3 plugins/vibe-ic/programs/acceptance_evidence_in_fix_comment_check.py \
+       --issue-number <num> <comment_file.md>     # exit 0 required
+   python3 plugins/vibe-ic/programs/defect_artifact_fixture_check.py \
+       --issue-number <num> <new_test_file.py>    # exit 0 required
+   ```
+   Closing is the core-agent's responsibility precisely because the
+   core-agent self-verifies the acceptance criterion first; the
+   field-agent is the downstream audit net.
+
+   > **why_not_bucket_a (the judgment residual):** the *deterministic*
+   > half — does the `本機驗證` section literally contain the issue's
+   > acceptance command + an end-state line; does the regression test
+   > load the named defect artifact and assert an end state — lives in
+   > the two #478 programs above. The *reading-judgment* half stays
+   > here: deciding whether a quoted command **truly IS** the
+   > acceptance criterion (vs a superficially-similar command) and
+   > whether its output has reached **end-state** (vs a misleading
+   > intermediate) requires reading the issue for a novel defect, which
+   > no regex can settle.
 
 ### Step 3 — push
 
@@ -133,7 +169,10 @@ git push origin main
 
 Post a 繁體中文 fix comment on the issue. **5 mandatory sections
 in this exact shape** (the `本機驗證` section carries the Step-2.5
-self-verify evidence; the trailing line is the field-audit anchor):
+self-verify evidence; the trailing line is the field-audit anchor).
+The `本機驗證` section MUST carry an **acceptance-execution trace** —
+it quotes the issue's `## 驗收` command(s) verbatim AND their
+end-state output — not just an `N/N PASS` suite line:
 
 ```
 Core agent 已推送修復：<commit_sha_short>
@@ -141,10 +180,26 @@ Core agent 已推送修復：<commit_sha_short>
 **問題**：<重述 field-agent 的問題>
 **根因**：<root cause analysis>
 **修法**：<chip-AGNOSTIC fix description + files changed>
-**本機驗證**：<gates/tests run + result, e.g. "N/N PASS">
+**本機驗證**：
+- 驗收指令（逐字執行 issue 的 `## 驗收`）：
+  ```
+  <issue 的 ## 驗收 指令原文>
+  ```
+- 端態輸出：
+  ```
+  <該指令的端態輸出，例如 gate 的最終 verdict / exit-code>
+  ```
+- 全測試套件（CI 方式，雙樹）：N/N PASS
 
 Core agent 已自行驗證並關閉此 issue（已加 core-closed 標籤）。field agent 複查若發現未完整，請 reopen 並補反證。
 ```
+
+**No-acceptance-section case.** If the issue genuinely has no `##
+驗收` / acceptance section, the `本機驗證` section MUST state
+`無驗收區（issue 未提供 ## 驗收）` and instead quote the
+reproduce-the-`現象` command + its end-state output. The
+compliance gate accepts either the `驗收` trace OR the `無驗收區`
+disclosure — but NOT a bare `N/N PASS` with neither.
 
 Then **close** the issue and apply the `core-closed` label:
 
@@ -225,9 +280,15 @@ Each tick must:
      c. Bump patch version (plugin.json + marketplace.json),
         commit (`vX.Y.Z — for #<num> <summary>`), push origin main
         (NO --force, NO --no-verify).
-     d. Self-verify: reproduce the original failure now passes AND
-        run the FULL plugin test suite the CI way; capture the
-        result as the `本機驗證` evidence.
+     d. Self-verify: FIRST execute the issue's `## 驗收` commands
+        VERBATIM on the named defect artifact / reproduced fixture
+        and capture the END-STATE output, THEN confirm the original
+        failure now passes, THEN run the FULL plugin test suite the
+        CI way; the `本機驗證` evidence MUST quote the acceptance
+        command + its end-state output (not just `N/N PASS`). Run
+        acceptance_evidence_in_fix_comment_check.py +
+        defect_artifact_fixture_check.py (#478, exit 0 each) before
+        posting.
      e. Post 繁體中文 fix comment in the canonical 5-section shape
         (see SKILL.md §Step 4), then `gh issue close` <num> and add
         label `core-closed`.
@@ -259,8 +320,12 @@ Deterministic gates backing this skill (the loop SCAFFOLD is fully
 programmable; only Step 2 fix-authoring is genuine LLM judgment):
 
 - Poll / actionability (every open non-PR issue): `programs/poll.py`
-- Close-comment 5-section shape: `compliance.yaml`
-  (+ `_shared/skill_compliance_check.py`)
+- Close-comment 5-section shape + acceptance-execution trace:
+  `compliance.yaml` (+ `_shared/skill_compliance_check.py`)
+- Acceptance-criterion executed + quoted in `本機驗證` (#478):
+  `programs/acceptance_evidence_in_fix_comment_check.py`
+- Regression test loads the named defect artifact + asserts end-state
+  (#478): `programs/defect_artifact_fixture_check.py`
 - Forbidden git/gh ops (prohibitions 1–4): `programs/git_prohibition_guard.py`
   (`gh issue close` / `gh issue reopen` are NOT flagged)
 - Chip-AGNOSTIC source scan (prohibition 5): `programs/source_chip_agnostic_check.py`
