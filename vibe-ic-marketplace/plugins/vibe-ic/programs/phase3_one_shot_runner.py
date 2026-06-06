@@ -2736,7 +2736,7 @@ write_def {out_dir_c}/placed.def
 # === Design-for-ECO Step 18: spare-cell insertion + PROTECTION ===
 # Runs AFTER detailed placement, BEFORE CTS. Every spare is set
 # dont_touch so the CTS / hold-fix / route / opt passes below — and the
-# Step 33 metal fill — cannot remove or overlap it. A re-legalizing
+# Step 34 metal fill — cannot remove or overlap it. A re-legalizing
 # detailed_placement after insertion fixes any minor overlap from the
 # inserted physical instances while honouring their dont_touch status.
 {spare_protection_tcl}if {{[catch {{detailed_placement}} _sp_dp_err]}} {{
@@ -4417,21 +4417,21 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(si_rpt))
             written.append(str(rpt_phase3 / "si_crosstalk.json"))
 
-    # --- ORGANIC-20260531: Step 33 metal fill (filler_placement) --------
+    # --- ORGANIC-20260531: Step 34 metal fill (filler_placement) --------
     filled_def = pnr_out / "filled.def"
     if primary_def.is_file() and not filled_def.is_file():
         if _emit_metal_fill(project, top, pdk, container, filled_def, notes):
             written.append(str(filled_def))
             written.append(str(pnr_out / "metal_fill.done"))
 
-    # --- ORGANIC-20260531: Step 30 ERC sub-item (open-source path) ------
+    # --- ORGANIC-20260531: Step 31 ERC sub-item (open-source path) ------
     erc_rpt = rpt_phase3 / "erc.rpt"
     if primary_def.is_file() and not erc_rpt.is_file():
         if _emit_erc_report(project, top, pdk, container, erc_rpt, notes):
             written.append(str(erc_rpt))
             written.append(str(rpt_phase3 / "erc.json"))
 
-    # --- ORGANIC-20260601: Step 32 PERC-equivalent coverage aggregate ----
+    # --- ORGANIC-20260601: Step 28 PERC-equivalent coverage aggregate (v2.3.0 numbered step) ----
     # Aggregates antenna/IR/EM/floating (AUTOMATED) + EM guardband + ESD/
     # latch-up/x-domain (MANUAL_REVIEW or N/A) into ONE honest report + memo.
     # Runs AFTER the antenna/ir/em/erc emitters above so it reads their
@@ -4644,7 +4644,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         )
         written.append(str(clock_rpt))
 
-    # --- Step 28: SDF emit + honest SDF-sim self-report (#437d) --------
+    # --- Step 29: SDF emit + honest SDF-sim self-report (#437d) --------
     # OpenROAD's `write_sdf` produces the SDF the gate's check looks for.
     sdf_out = sim_pl_out / f"{top}.sdf"
     if primary_def.is_file() and not sdf_out.is_file():
@@ -4679,7 +4679,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         }, indent=2) + "\n")
         written.append(str(skip_note))
 
-    # --- Step 31: ECO no-op flag ----------------------------------------
+    # --- Step 32: ECO no-op flag ----------------------------------------
     if tns_zero:
         flag = eco_out / "no_eco_needed.flag"
         if not flag.is_file():
@@ -4691,7 +4691,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             )
             written.append(str(flag))
 
-    # --- Step 32: power.rpt (OpenSTA report_power best-effort) ---------
+    # --- Step 33: power.rpt (OpenSTA report_power best-effort) ---------
     power_rpt = rpt_phase3 / "power.rpt"
     if not power_rpt.is_file() and primary_def.is_file():
         ok = _emit_power_report(project, top, pdk, container, power_rpt, notes)
@@ -4749,7 +4749,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             f"# Substance: post-route DRC count derived from openroad\n"
             f"# detailed_route's per-net congestion/violation log lines.\n"
             f"# This is the runner's open-source DRC pass; sign-off DRC\n"
-            f"# (Calibre) is invoked separately at Step 30 (waivable when\n"
+            f"# (Calibre) is invoked separately at Step 31 (waivable when\n"
             f"# Calibre is unavailable in the sandbox).\n"
             f"#\n"
             f"# To upgrade to sign-off-grade DRC, run\n"
@@ -4782,9 +4782,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         if str(rpt_phase3 / "drc_router.rpt") not in written:
             written.append(str(rpt_phase3 / "drc_router.rpt"))
 
-    # --- ORGANIC-20260531: Step 30 sign-off DRC report-path alias -------
+    # --- ORGANIC-20260531: Step 31 sign-off DRC report-path alias -------
     # The KLayout sign-off DRC step (step_drc) emits its report at
-    # phase3/reports/drc.rpt, but Step 30's gate reads
+    # phase3/reports/drc.rpt, but Step 31's gate reads
     # reports/phase3/drc_signoff.rpt + requires a klayout/magic provenance
     # tool. Re-stage the KLayout report (the authentic sign-off DRC source)
     # to the audit path. Fall back to the router-DRC projection only when
@@ -4795,14 +4795,14 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         src_drc = klayout_drc if klayout_drc.is_file() else routed_drc
         if src_drc.is_file():
             header = (
-                "# Sign-off DRC report (ORGANIC-20260531 Step 30 alias).\n"
+                "# Sign-off DRC report (ORGANIC-20260531 Step 31 alias).\n"
                 f"# Source: {src_drc.relative_to(project)}\n"
                 f"# Tool: {'klayout' if src_drc == klayout_drc else 'openroad'}\n"
                 "#\n")
             drc_signoff.write_text(header + src_drc.read_text(errors="ignore"))
             written.append(str(drc_signoff))
 
-    # --- Step 35: GDS canonical alias (REAL FILE, NOT SYMLINK — rule #1)
+    # --- Step 36: GDS canonical alias (REAL FILE, NOT SYMLINK — rule #1)
     if primary_gds.is_file():
         canon_gds = gds_out / f"{top}.gds"
         if not canon_gds.is_file():
@@ -4815,7 +4815,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     dst.write(chunk)
             written.append(str(canon_gds))
 
-    # --- Step 37: FPGA on_board_pass.json schema alignment --------------
+    # --- Step 38: FPGA on_board_pass.json schema alignment --------------
     # The fpga_on_board_attestation_check requires:
     #   all_scenarios_passed, bitstream_path, bitstream_sha, board,
     #   programmed_at, scenarios
@@ -5315,8 +5315,8 @@ exit
 #   * IR drop (Step 24) + EM (Step 25)   — OpenROAD PSM analyze_power_grid
 #   * Antenna (Step 26)                  — OpenROAD check_antennas
 #   * SI / crosstalk (Step 27)           — coupling-cap projection from PSM
-#   * Metal fill (Step 33)               — OpenROAD filler_placement → filled.def
-#   * ERC (Step 30 sub-item)             — OpenROAD report_erc_metrics + antenna
+#   * Metal fill (Step 34)               — OpenROAD filler_placement → filled.def
+#   * ERC (Step 31 sub-item)             — OpenROAD report_erc_metrics + antenna
 #
 # IMPORTANT (honest provenance): OpenROAD's PSM (analyze_power_grid),
 # check_antennas, and filler_placement all operate on the ROUTED DEF
@@ -6290,7 +6290,7 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
 def _emit_metal_fill(project: Path, top: str, pdk: PdkConfig,
                      container: str, filled_def: Path,
                      notes: List[str]) -> bool:
-    """OpenROAD filler_placement metal-fill stage (Step 33).
+    """OpenROAD filler_placement metal-fill stage (Step 34).
 
     Runs `filler_placement <fill masters>` on the routed DEF and writes
     filled.def + metal_fill.done + a reports/density.{rpt,json} computed
@@ -6373,7 +6373,7 @@ exit
     if fill_substantiated:
         (pnr_out / "metal_fill.done").write_text(
             "metal_fill_done\n"
-            "# OpenROAD filler_placement (ORGANIC-20260531 Step 33).\n"
+            "# OpenROAD filler_placement (ORGANIC-20260531 Step 34).\n"
             f"# fillers placed: {placed_n}\n"
             f"# fill masters: {fill_list}\n"
             f"# source: {(out_dir / 'metal_fill.log').relative_to(project)}\n")
@@ -6398,7 +6398,7 @@ exit
     density_rpt.parent.mkdir(parents=True, exist_ok=True)
     density_rpt.write_text(
         "# Metal-fill / density report — OpenROAD filler_placement\n"
-        "# (ORGANIC-20260531 Step 33). Tool: openroad.\n"
+        "# (ORGANIC-20260531 Step 34). Tool: openroad.\n"
         f"# filler instances placed: {placed_n}\n"
         # v0.2.69 label fix: report_design_area reports design-area /
         # core-area utilization (integer-rounded), not row occupancy.
@@ -6430,7 +6430,7 @@ exit
 
 def _emit_erc_report(project: Path, top: str, pdk: PdkConfig,
                      container: str, erc_rpt: Path, notes: List[str]) -> bool:
-    """ERC (Electrical Rule Check) — Step 30 sub-item, open-source path.
+    """ERC (Electrical Rule Check) — Step 31 sub-item, open-source path.
 
     sky130 ships only a Calibre PERC deck; the open-source path uses
     OpenROAD report_erc_metrics (floating-net / unconnected-pin electrical
@@ -6477,7 +6477,7 @@ exit
     floating = int(floating_m.group(1)) if floating_m else 0
     body = (
         "# Electrical Rule Check (ERC) — OpenROAD open-source path\n"
-        "# (ORGANIC-20260531 Step 30 sub-item). Tool: openroad.\n"
+        "# (ORGANIC-20260531 Step 31 sub-item). Tool: openroad.\n"
         "# sky130 ships only a Calibre PERC deck; this is the open-source\n"
         "# electrical-rule screen (floating nets + ERC metrics) on the\n"
         "# routed DEF. Full PERC (latch-up / ESD topology) needs Calibre.\n"
@@ -6504,7 +6504,7 @@ exit
 
 # ===========================================================================
 # ORGANIC-20260601 — PERC-equivalent coverage sign-off (the "last commercial
-# gate", Calibre PERC, Step 32 ERC residual).
+# gate", Calibre PERC, v2.3.0 Step 28 PERC).
 #
 # Calibre PERC = Programmable Electrical Rule Check. It needs a commercial tool
 # because it ties LAYOUT (GDS) to CIRCUIT (SPICE) and checks 7 categories:
@@ -6894,7 +6894,7 @@ def _read_verdict(json_path: Path) -> Optional[str]:
 def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                           container: str, notes: List[str]) -> bool:
     """Aggregate the 7 Calibre-PERC categories into ONE honest open-source
-    PERC-equivalent coverage report (Step 32 residual).
+    PERC-equivalent coverage report (v2.3.0 Step 28).
 
     Reads the verdicts of the already-emitted antenna / ir_drop / em / erc
     reports (AUTOMATED), states the EM current-density / via-array GUARDBAND,
@@ -7239,7 +7239,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                 f"       {c.get('note', '')}\n")
     body = (
         "# PERC-equivalent coverage report — open-source aggregate\n"
-        "# (ORGANIC-20260601 Step 32 ERC residual / 'last commercial gate').\n"
+        "# (ORGANIC-20260601 v2.3.0 Step 28 PERC / 'last commercial gate').\n"
         "# Calibre PERC = Programmable Electrical Rule Check (ties layout to\n"
         "# circuit). Commercial Calibre PERC was NOT run. This aggregates the\n"
         "# open-source equivalents for the 7 PERC categories.\n"

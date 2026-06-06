@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""tapeout_checklist_gen.py — emit Step 33 reports/audit/tapeout_checklist.json.
+"""tapeout_checklist_gen.py — emit Step 35 (v2.3.0) reports/audit/tapeout_checklist.json.
 
-v1.6.36 — closes the Step 33 runner-vs-flow drift waiver. The flow YAML's
+v1.6.36 — closes the tapeout-checklist runner-vs-flow drift waiver. The flow YAML's
 gate runs `tapeout_signoff_check` (= signoff_audit --mode tapeout), which
 expects a structured tapeout-checklist artefact at `reports/audit/
 tapeout_checklist.json`. The audit walks the project's known sign-off
@@ -163,7 +163,7 @@ def main(argv=None) -> int:
             "the dedicated upstream gates — this generator does not "
             "re-validate their content. Foundry-side acceptance of mask "
             "spec, WAT plan, scribe layout, corner test kit is also "
-            "enforced by foundry_handoff_package_check (Step 35)."
+            "enforced by foundry_handoff_package_check (Step 37, v2.3.0)."
         ),
     }
     out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")

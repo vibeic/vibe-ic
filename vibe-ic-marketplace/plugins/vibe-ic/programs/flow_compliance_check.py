@@ -50,7 +50,7 @@ Usage:
 Waivers (<project>/waivers.json):
     {
       "waived_steps": [
-        {"id": 28, "reason": "No FPGA board this session", "approver": "user"}
+        {"id": 38, "reason": "No FPGA board this session", "approver": "user"}
       ]
     }
 """
@@ -2505,29 +2505,35 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
 # `fpga_onboard_test`, `drc`, `lvs`) and bind it to the canonical
 # step-id used by the flow YAML. Chip-AGNOSTIC: keys are step roles,
 # never chip names.
+# v2.3.0 renumber: the map is aligned to the v2.3.0 flow YAML (PERC
+# inserted at 28, downstream +1; HTOL added at 43). The pre-v2.3.0 map
+# carried off-by-one legacy ids (drc→29 while PV was 30, ir_drop→23
+# while IR was 24, …) — fixed wholesale here, single source = the YAML.
 _ENV_UNAVAILABLE_STEP_NAME_TO_ID: Dict[str, Any] = {
     "fpga_compile":         6,
     "fpga_early_prototype": 6,
-    # Step 37 (not 36) is "FPGA final sign-off (recompile + on-board test)";
-    # step 36 is "Foundry Handoff" and is NOT FPGA. The prior 36 mapping
-    # meant an FPGA-no-board ENV_UNAVAILABLE waiver could never waive the
-    # actual FPGA final-signoff step. chip-AGNOSTIC step-id correction.
-    "fpga_onboard_test":    37,
-    "fpga_final_signoff":   37,
-    "fpga_signoff":         37,
-    "drc":                  29,
-    "lvs":                  29,
-    "erc":                  29,
-    "physical_verification": 29,
-    "ir_drop":              23,
-    "em":                   24,
-    "antenna":              25,
-    "si":                   26,
-    "signal_integrity":     26,
-    "extraction":           21,
-    "parasitic_extraction": 21,
-    "post_layout_spice":    28,
-    "metal_fill":           32,
+    "fpga_onboard_test":    38,
+    "fpga_final_signoff":   38,
+    "fpga_signoff":         38,
+    "drc":                  31,
+    "lvs":                  31,
+    "erc":                  31,
+    "physical_verification": 31,
+    "ir_drop":              24,
+    "em":                   25,
+    "antenna":              26,
+    "si":                   27,
+    "signal_integrity":     27,
+    "extraction":           22,
+    "parasitic_extraction": 22,
+    "perc":                 28,
+    "esd":                  28,
+    "latch_up":             28,
+    "reliability_signoff":  28,
+    "post_layout_sim":      29,
+    "post_layout_spice":    30,
+    "metal_fill":           34,
+    "htol":                 43,
 }
 
 
@@ -2759,13 +2765,14 @@ def _l9_has_analog_modules(project: Path) -> bool:
 # proof leaves step 5's required outputs absent → SKIPPED-CONDITION
 # here. A real proof (authored .sby + sby log + results.json) still
 # gates normally.
+# v2.3.0 renumber: PERC inserted at 28 → SDF-sim is 29, SPICE-corr 30.
 _PLATFORM_CAPABILITY_GAPS: Dict[int, str] = {
     5:  "cap:formal_property_proof",
     11: "cap:dft_scan_insertion_atpg",
     12: "cap:post_dft_optimization",
     13: "cap:logic_equivalence_check",
-    28: "cap:sdf_annotated_gatelevel_sim",
-    29: "cap:post_layout_spice_correlation",
+    29: "cap:sdf_annotated_gatelevel_sim",
+    30: "cap:post_layout_spice_correlation",
 }
 
 

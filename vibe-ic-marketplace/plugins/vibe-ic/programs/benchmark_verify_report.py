@@ -88,22 +88,24 @@ STEP_METHOD = {
     "25": ("clean", "EM lifetime within budget"),
     "26": ("clean", "antenna check clean"),
     "27": ("clean", "signal-integrity / crosstalk within budget"),
-    "28": ("equivalence", "post-layout gate-sim + SDF vs golden"),
-    "29": ("metric", "post-layout SPICE critical-path correlation"),
-    "30": ("clean", "PV: DRC clean + LVS clean (both, non-vacuous)"),
-    "31": ("clean", "ECO repair loop (only if PV failed)"),
-    "32": ("metric", "power analysis compare"),
-    "33": ("metric", "metal-fill density compare"),
-    "34": ("clean", "tapeout checklist parity"),
-    "35": ("layout-endpoint", "GDSII: NOT pixel-comparable across micro-arch -> both DRC/LVS-clean + functional-equiv"),
-    "36": ("doc", "foundry handoff (mask/WAT/scribe) parity"),
-    "37": ("metric", "FPGA final sign-off (recompile + on-board)"),
+    # v2.3.0 renumber: PERC inserted at 28, downstream +1; HTOL at 43.
+    "28": ("clean", "PERC reliability sign-off (ESD/latch-up/x-domain) clean"),
+    "29": ("equivalence", "post-layout gate-sim + SDF vs golden"),
+    "30": ("metric", "post-layout SPICE critical-path correlation"),
+    "31": ("clean", "PV: DRC clean + LVS clean (both, non-vacuous)"),
+    "32": ("clean", "ECO repair loop (only if PV failed)"),
+    "33": ("metric", "power analysis compare"),
+    "34": ("metric", "metal-fill density compare"),
+    "35": ("clean", "tapeout checklist parity"),
+    "36": ("layout-endpoint", "GDSII: NOT pixel-comparable across micro-arch -> both DRC/LVS-clean + functional-equiv"),
+    "37": ("doc", "foundry handoff (mask/WAT/scribe) parity"),
+    "38": ("metric", "FPGA final sign-off (recompile + on-board)"),
 }
 for a in ["A1","A2","A3","A4","A5","A6","A7","A8","A9"]:
     STEP_METHOD[a] = ("analog", "analog step — applicable only for mixed-signal ICs")
 for m in ["M1","M2","M3","M4"]:
     STEP_METHOD[m] = ("analog", "mixed-signal step — applicable only for A+D ICs")
-for s in ["38","39","40","41"]:
+for s in ["39","40","41","42","43"]:
     STEP_METHOD[s] = ("mfg", "manufacturing step — requires physical silicon")
 
 
@@ -117,10 +119,10 @@ def _load_steps(flow_yaml: Path):
         print(f"[warn] could not parse flow yaml ({e}); using built-in 56-step ids",
               file=sys.stderr)
         ids = (["D1"] + [str(i) for i in range(1, 7)] + ["P0"]
-               + [str(i) for i in range(7, 14)]
+               + [str(i) for i in range(7, 15)]
                + ["A1","A2","A3","A4","A5","A6","A7","A8","A9"]
-               + [str(i) for i in range(14, 38)]
-               + ["M1","M2","M3","M4"] + [str(i) for i in range(38, 42)])
+               + [str(i) for i in range(15, 39)]
+               + ["M1","M2","M3","M4"] + [str(i) for i in range(39, 44)])
         return [(i, "", "") for i in dict.fromkeys(ids)]
 
 

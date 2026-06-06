@@ -44,7 +44,7 @@ def _write_erc(tmp_path, text):
 
 _REAL_DENSITY_RPT = (
     "# Metal-fill / density report — OpenROAD filler_placement\n"
-    "# (Step 33). Tool: openroad.\n"
+    "# (Step 34). Tool: openroad.\n"
     "# filler instances placed: 0\n"
     "# std-cell row utilization (post-fill): 14.0%\n"
     "# Note: per-metal-layer CMP density (20-80% rule) is screened by\n"

@@ -144,7 +144,7 @@ def test_sta_no_per_corner_dir_is_no_claim(tmp_path):
 # ── (d) runner source no longer fabricates sim_postlayout/pass.flag ───────
 
 def test_runner_emits_skip_selfreport_not_pass_flag():
-    i = _P3_SRC.index("Step 28: SDF emit")
+    i = _P3_SRC.index("Step 29: SDF emit")  # v2.3.0 renumber
     window = _P3_SRC[i:i + 2600]
     assert 'sim_pl_out / "pass.flag"' not in window
     assert "sdf_sim_skipped.json" in window
@@ -161,7 +161,7 @@ def test_runner_no_single_corner_standin_in_multicorner_sta():
 
 
 def test_capability_gap_covers_step_28():
-    assert F._PLATFORM_CAPABILITY_GAPS[28] == "cap:sdf_annotated_gatelevel_sim"
+    assert F._PLATFORM_CAPABILITY_GAPS[29] == "cap:sdf_annotated_gatelevel_sim"  # v2.3.0 renumber
 
 
 # ── (e) waiver parser honours the `rationale` field ────────────────────────

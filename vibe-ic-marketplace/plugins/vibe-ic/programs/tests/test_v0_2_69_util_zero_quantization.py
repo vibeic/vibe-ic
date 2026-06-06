@@ -51,7 +51,7 @@ def test_observed_corpus_shape_no_longer_false_fails(tmp_path):
     p.parent.mkdir(parents=True)
     p.write_text(
         "# Metal-fill / density report — OpenROAD filler_placement\n"
-        "# (ORGANIC-20260531 Step 33). Tool: openroad.\n"
+        "# (ORGANIC-20260531 Step 34). Tool: openroad.\n"
         "# filler instances placed: 0\n"
         "# std-cell row utilization (post-fill): 0.0%\n")
     verdict, _ = u.classify(*u.read_utilization(tmp_path))

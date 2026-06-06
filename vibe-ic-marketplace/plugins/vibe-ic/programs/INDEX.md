@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 640
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 640)
+- **Total programs (excluding helpers / shims):** 642
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 642)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 631 |
+| `any` | 633 |
 
 ## Alphabetical listing
 
@@ -287,6 +287,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `hold_corner_coverage_check` | any | — | confirm hold is analysed at the FAST (FF) |
 | `hold_fix_planner` | any | v0.1.50 | Hold-fix planner (Pattern-B → program). |
 | `host_soft_reset_unwake_path_check` | any | — | Verify that any soft-reset / abort |
+| `htol_attestation_check` | any | — | Step 43 reliability qualification (HTOL) |
 | `hw_acceptance_test_passed_check` | any | v0.119.15 | final-step gate for the closed |
 | `hw_vs_rtl_verdict_check` | any | v0.45 | Require N byte-identical FAILs before blaming hardware. |
 | `hyperbus_protocol_synth` | any | — | HyperBus (HyperRAM / HyperFlash) protocol synth helper (protocol #55). |
@@ -426,6 +427,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pdk_yosys_flatten_for_quartus` | any | — | v1.6.222 (ORGANIC-20260512-followup-2). |
 | `per_opcode_response_latency_table_check` | any | v0.119.30 | gate (LL-33) catching |
 | `perc_corpus_sweep` | any | v0.2.4 | run the v0.2.4-2.11 PERC-equivalent sign-off chain across a CORPUS |
+| `perc_signoff_check` | any | — | Step 28 PERC / reliability sign-off gate |
 | `periodic_signal_required_check` | any | — | Verify that for every protocol-mandated |
 | `periodic_timer_vs_rx_activity_check` | any | — | Periodic TX-triggering timer |
 | `phase1_all_l_docs_present_check` | any | Wave 23 | gate (Wave 23, v0.119.55). |
@@ -603,7 +605,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `synth_netlist_check` | any | — | Deterministic synthesis netlist validation checker. |
 | `synth_wrapper_check` | any | — | Deterministic compliance check for synth-wrapper-gen. |
 | `synth_wrapper_gen` | any | — | auto-generate synthesis wrapper for inout-port designs. |
-| `tapeout_checklist_gen` | any | — | emit Step 33 reports/audit/tapeout_checklist.json. |
+| `tapeout_checklist_gen` | any | — | emit Step 35 (v2.3.0) reports/audit/tapeout_checklist.json. |
 | `tapeout_signoff_check` | any | — | wrapper for signoff_audit --mode tapeout. |
 | `tb_timing_extremes_check` | any | — | LL-6. |
 | `tb_vcs_only_construct_detect` | any | — | detect VCS/Xcelium-only |
@@ -712,7 +714,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (631 programs)
+### `any` (633 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -971,6 +973,7 @@ _(no programs in this group)_
 - `hold_corner_coverage_check` — confirm hold is analysed at the FAST (FF)
 - `hold_fix_planner` — Hold-fix planner (Pattern-B → program).  _[v0.1.50]_
 - `host_soft_reset_unwake_path_check` — Verify that any soft-reset / abort
+- `htol_attestation_check` — Step 43 reliability qualification (HTOL)
 - `hw_acceptance_test_passed_check` — final-step gate for the closed  _[v0.119.15]_
 - `hw_vs_rtl_verdict_check` — Require N byte-identical FAILs before blaming hardware.  _[v0.45]_
 - `hyperbus_protocol_synth` — HyperBus (HyperRAM / HyperFlash) protocol synth helper (protocol #55).
@@ -1109,6 +1112,7 @@ _(no programs in this group)_
 - `pdk_yosys_flatten_for_quartus` — v1.6.222 (ORGANIC-20260512-followup-2).
 - `per_opcode_response_latency_table_check` — gate (LL-33) catching  _[v0.119.30]_
 - `perc_corpus_sweep` — run the v0.2.4-2.11 PERC-equivalent sign-off chain across a CORPUS  _[v0.2.4]_
+- `perc_signoff_check` — Step 28 PERC / reliability sign-off gate
 - `periodic_signal_required_check` — Verify that for every protocol-mandated
 - `periodic_timer_vs_rx_activity_check` — Periodic TX-triggering timer
 - `phase1_all_l_docs_present_check` — gate (Wave 23, v0.119.55).  _[Wave 23]_
@@ -1284,7 +1288,7 @@ _(no programs in this group)_
 - `synth_netlist_check` — Deterministic synthesis netlist validation checker.
 - `synth_wrapper_check` — Deterministic compliance check for synth-wrapper-gen.
 - `synth_wrapper_gen` — auto-generate synthesis wrapper for inout-port designs.
-- `tapeout_checklist_gen` — emit Step 33 reports/audit/tapeout_checklist.json.
+- `tapeout_checklist_gen` — emit Step 35 (v2.3.0) reports/audit/tapeout_checklist.json.
 - `tapeout_signoff_check` — wrapper for signoff_audit --mode tapeout.
 - `tb_timing_extremes_check` — LL-6.
 - `tb_vcs_only_construct_detect` — detect VCS/Xcelium-only

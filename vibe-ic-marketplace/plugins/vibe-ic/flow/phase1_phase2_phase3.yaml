@@ -35,11 +35,11 @@
 
 version: 2
 flow_name: phase1_phase2_phase3
-# total_steps counts the canonical integer main-track steps (1..41).
+# total_steps counts the canonical integer main-track steps (1..43, v2.3.0).
 # Design-for-ECO added Step 18 (Spare-cell + ECO-prep insertion) as a
 # proper integer step between Placement (17) and CTS (19); every numeric
 # step id >= 18 was renumbered +1, growing the track from 40 to 41.
-total_steps: 41
+total_steps: 43
 analog_steps: 9
 
 # When a step maps to a plugin skill, use the `skill:` field with the
@@ -740,9 +740,13 @@ steps:
   # consumes the netlist. Implementation: aggregated by
   # `flow_compliance_check.py:_run_yosys_gates` (combines
   # yosys_hilomap_required_check + yosys_script_template_check).
+  # v2.3.0 — Step 14 belongs to Stage 2: it is the synthesis→PnR
+  # handoff QA (synth-script + netlist audit), i.e. the synthesis
+  # stage's closing gate, NOT a physical-design step. Open-source-flow
+  # specific (Yosys); commercial flows (Genus/DC) have no equivalent.
   - id: 14
-    name: "🔁 pre-PnR Yosys gate (phase2/stage2/synth script template + hilomap-ordering audit)"
-    stage: stage3
+    name: "🔁 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific)"
+    stage: stage2
     closed_loop:
       fallback_to: 9
       trigger: "Yosys phase2/stage2/synth script missing -sv/-flatten/hilomap or unresolved zero_ nets"
@@ -868,7 +872,7 @@ steps:
       The cells look like dead logic and WILL be stripped by any
       optimizer unless protected — the runner marks every spare with a
       keep / dont_touch attribute and excludes them from opt_clean /
-      clean -purge / remove_buffers / repair_design, and Step 33 metal
+      clean -purge / remove_buffers / repair_design, and Step 34 metal
       fill is constrained not to overlap or delete them.
 
   - id: 19
@@ -965,7 +969,7 @@ steps:
     name: "🔁 Post-route STA (multi-corner multi-mode sign-off)"
     stage: stage3
     closed_loop:
-      fallback_to: 31
+      fallback_to: 32
       trigger: "Setup/Hold violation; ECO loop required"
     skills: [sta-review]
     mcp_tools: [eda_sta]
@@ -1042,14 +1046,39 @@ steps:
             condition_files_exist: ["reports/phase3/si_crosstalk.rpt"]
     blocks_on: [22]
 
-  # ── Step 28: Post-Layout Gate-Level Simulation ───────────
+  # ── Step 28: PERC / Reliability Sign-off ─────────────────
+  # Industry standard: Calibre-PERC-class reliability verification is
+  # its own sign-off deck beside DRC/LVS — ESD pad-ring presence +
+  # discharge topology, latch-up well-tap coverage, and cross-voltage-
+  # domain protection. The open flow's deterministic PERC-equivalent
+  # (DEF-driven) already computes all of these; this step makes the
+  # conclusive categories an ENFORCED gate instead of a memo
+  # (ORGANIC-20260606 flow-completeness review). Device-physics sizing
+  # (clamp W/L vs HBM target) stays a NAMED manual-review open item.
+  - id: 28
+    name: "🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain)"
+    stage: stage3
+    closed_loop:
+      fallback_to: 15
+      trigger: "ESD ring/topology gap, well-tap gap, or unprotected cross-domain crossing"
+    programs:
+      - perc_signoff_check
+    required_outputs:
+      - "reports/phase3/perc_equivalent.json"
+    gate:
+      all_of:
+        - files_exist: ["reports/phase3/perc_equivalent.json"]
+        - program_exit_zero: "perc_signoff_check . --json reports/phase2/gates/perc_signoff.json"
+    blocks_on: [21, 24, 25, 26, 27]
+
+  # ── Step 29: Post-Layout Gate-Level Simulation ───────────
   # Industry standard ⑮: Gate-level netlist + SDF back-annotation
   # simulation. Verifies that the physical implementation preserves
   # RTL functional correctness after synthesis, DFT, CTS, and
   # routing transformations. This is *not* the same as pre-layout
   # RTL sim (Step 4) — it catches timing-induced functional failures
   # that only manifest with real parasitic delays.
-  - id: 28
+  - id: 29
     name: "Post-Layout Gate-Level Simulation (Post-Sim + SDF)"
     stage: stage3
     mcp_tools: [eda_simulate]
@@ -1064,14 +1093,14 @@ steps:
         - program_exit_zero: "post_layout_sim_check . --json reports/phase2/gates/post_layout_sim.json"
     blocks_on: [22]
 
-  # ── Step 29: Post-Layout SPICE Verification ──────────────────
+  # ── Step 30: Post-Layout SPICE Verification ──────────────────
   # Industry standard: transistor-level SPICE simulation is the only
   # way to verify that liberty timing models accurately represent
   # post-layout behavior. STA and gate-level SDF sim both rely on
   # the same liberty abstractions — if the model is wrong, both are
   # wrong together. SPICE catches model inaccuracies, analog block
   # failures, and timing correlation issues that no other step can.
-  - id: 29
+  - id: 30
     name: "Post-Layout SPICE Verification (critical-path correlation + analog)"
     stage: stage3
     skills: [ams-sim]
@@ -1088,11 +1117,11 @@ steps:
         - program_exit_zero: "spice_correlation_check . --json reports/phase2/gates/spice_correlation.json"
     blocks_on: [22, 23]
 
-  - id: 30
+  - id: 31
     name: "🔁 Physical Verification (DRC + LVS + ERC + Density)"
     stage: stage3
     closed_loop:
-      fallback_to: 31
+      fallback_to: 32
       trigger: "DRC/LVS/ERC fail; ECO"
     skills: [drc-fix, lvs-triage, perc-check]
     mcp_tools: [eda_drc_klayout, eda_lvs]
@@ -1111,7 +1140,7 @@ steps:
       - program_exit_zero: "provenance_check . --output reports/phase3/lvs.rpt --tool netgen,magic"
       # Step-30 ERC + sign-off density substance (replaces the dangling
       # density_check that referenced a non-existent program). This is a
-      # DIFFERENT check from metal_fill_density_check (Step 33): Step 30 runs
+      # DIFFERENT check from metal_fill_density_check (Step 34): Step 31 runs
       # BEFORE metal fill, so filled.def / metal_fill.done do not exist yet.
       # erc_density_check (a) verifies any PER-LAYER metal CMP density is in
       # the foundry 20-80% window (foundry rejects at CMP otherwise), (b) when
@@ -1126,19 +1155,19 @@ steps:
       - optional_program_exit_zero:
           command: "erc_density_check . --json reports/phase2/gates/erc_density.json"
           condition_files_exist: ["reports/density.rpt", "reports/density.json", "reports/phase3/erc.rpt", "reports/phase3/density.rpt"]
-    blocks_on: [23, 24, 25, 26, 27, 28, 29]
+    blocks_on: [23, 24, 25, 26, 27, 29, 30]
 
-  # ── Step 31: ECO ─────────────────────────────────────────────
+  # ── Step 32: ECO ─────────────────────────────────────────────
   # Industry standard: Engineering Change Order repair loop.
   # If any sign-off step (STA, PV, IR Drop, EM, SI, Post-Sim, SPICE)
   # fails, ECO applies targeted netlist patches and re-runs the
   # failing checks. If all sign-off steps passed on first attempt,
   # the ECO step records "no_eco_needed" and passes through.
-  - id: 31
+  - id: 32
     name: "🔁 ECO (Engineering Change Order — repair loop)"
     stage: stage3
     closed_loop:
-      fallback_to: 31
+      fallback_to: 32
       trigger: "Aggregator: re-run #21-#28 after ECO"
     skills: [eco-plan]
     required_outputs:
@@ -1150,9 +1179,9 @@ steps:
         - optional_program_exit_zero:
             command: "eco_loop_audit . --json reports/phase2/gates/eco_audit.json"
             condition_files_exist: ["phase3/stage3/eco/eco_log.json"]
-    blocks_on: [23, 24, 25, 26, 27, 28, 29, 30]
+    blocks_on: [23, 24, 25, 26, 27, 29, 30, 31]
 
-  - id: 32
+  - id: 33
     name: "Power analysis (pre/post-layout)"
     stage: stage4
     skills: [power-analysis]
@@ -1163,7 +1192,7 @@ steps:
       program_exit_zero: "power_report_check . --mode power --json reports/phase3/power.json"
     blocks_on: [23]
 
-  # ── Step 33: Metal Fill (ECO-aware density fill insertion) ───
+  # ── Step 34: Metal Fill (ECO-aware density fill insertion) ───
   # Industry standard (pre-GDS): Insert dummy metal fill to meet
   # foundry density requirements. Without metal fill, CMP
   # (Chemical-Mechanical Polishing) causes uneven planarization and
@@ -1177,7 +1206,7 @@ steps:
   # fill, spare_cell_preservation_check re-confirms every spare from
   # phase3/stage3/pnr/spare_cells.json survives in filled.def / GDS
   # with its keep attribute intact.
-  - id: 33
+  - id: 34
     name: "Metal Fill (ECO-aware density fill insertion)"
     stage: stage4
     mcp_tools: [eda_pnr]
@@ -1198,9 +1227,9 @@ steps:
         - optional_program_exit_zero:
             command: "spare_cell_preservation_check . --json reports/phase2/gates/spare_preservation_postfill.json"
             condition_files_exist: ["phase3/stage3/pnr/spare_cells.json"]
-    blocks_on: [31]
+    blocks_on: [32]
 
-  - id: 34
+  - id: 35
     name: "Tapeout checklist (final sign-off confirmation)"
     stage: stage4
     skills: [tapeout-checklist]
@@ -1210,10 +1239,10 @@ steps:
       - "reports/audit/tapeout_checklist.json"
     gate:
       program_exit_zero: "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
-    blocks_on: [30, 31, 32, 33]
+    blocks_on: [31, 32, 33, 34]
 
-  - id: 35
-    name: "GDSII output (only if Step 30 PV fully clean)"
+  - id: 36
+    name: "GDSII output (only if Step 31 PV fully clean)"
     stage: stage4
     mcp_tools: [eda_gds]
     required_outputs:
@@ -1226,9 +1255,31 @@ steps:
         # (KLayout def2gds, Magic gds write, etc.). This closes the
         # "rename old .def to .gds" loophole.
         - program_exit_zero: "provenance_check . --require-entries 1"
-    blocks_on: [33, 34]
+    blocks_on: [34, 35]
 
   - id: 37
+    name: "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)"
+    stage: stage4
+    skills: [tapeout-checklist]
+    programs:
+      - foundry_handoff_package_check
+    required_outputs:
+      - "phase3/stage4/foundry_handoff/mask_spec.json"
+      - "phase3/stage4/foundry_handoff/wat_plan.json"
+      - "phase3/stage4/foundry_handoff/scribe_line_layout.gds"
+      - "phase3/stage4/foundry_handoff/corner_test_vectors.json"
+      - "reports/phase3/foundry_handoff_audit.json"
+    gate:
+      program_exit_zero: "foundry_handoff_package_check . --json reports/phase3/foundry_handoff_audit.json"
+    blocks_on: [36]
+    notes: |
+      Final foundry-deliverable kit: mask reticle spec, WAT
+      (Wafer Acceptance Test) probe plan, scribe-line PCM
+      structures, corner-test ATE vector kit. Without this kit
+      the foundry cannot accept the GDS for fab. Distinct from
+      Step 35 tapeout_checklist which is internal sign-off.
+
+  - id: 38
     name: "FPGA final sign-off (recompile + on-board test)"
     stage: stage4
     skills: [fpga-test-harness]
@@ -1278,7 +1329,7 @@ steps:
     notes: |
       Each analog block must have DRC-clean + LVS-match BEFORE A7
       post-layout resim runs. Catches per-block layout errors that
-      top-level PV (Step 30) would otherwise mask via merge.
+      top-level PV (Step 31) would otherwise mask via merge.
 
   - id: M1
     name: "Mixed-Signal Top-Level Integration (A+D GDS merge + macro placement)"
@@ -1358,29 +1409,8 @@ steps:
       program_exit_zero: "mixed_signal_signoff_check . --json reports/analog/mixed_signal/signoff_audit.json"
     blocks_on: [M3]
 
-  - id: 36
-    name: "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)"
-    stage: stage4
-    skills: [tapeout-checklist]
-    programs:
-      - foundry_handoff_package_check
-    required_outputs:
-      - "phase3/stage4/foundry_handoff/mask_spec.json"
-      - "phase3/stage4/foundry_handoff/wat_plan.json"
-      - "phase3/stage4/foundry_handoff/scribe_line_layout.gds"
-      - "phase3/stage4/foundry_handoff/corner_test_vectors.json"
-      - "reports/phase3/foundry_handoff_audit.json"
-    gate:
-      program_exit_zero: "foundry_handoff_package_check . --json reports/phase3/foundry_handoff_audit.json"
-    blocks_on: [35]
-    notes: |
-      Final foundry-deliverable kit: mask reticle spec, WAT
-      (Wafer Acceptance Test) probe plan, scribe-line PCM
-      structures, corner-test ATE vector kit. Without this kit
-      the foundry cannot accept the GDS for fab. Distinct from
-      Step 34 tapeout_checklist which is internal sign-off.
 
-  - id: 38
+  - id: 39
     name: "Fabrication (foundry mask-set + wafer fab — external)"
     stage: stage5_manufacturing
     condition:
@@ -1392,13 +1422,13 @@ steps:
       - "phase3/stage5_manufacturing/wafer_lot_received.json"
     gate:
       program_exit_zero: "manufacturing_fab_intake_check . --json reports/manufacturing/fab_intake.json"
-    blocks_on: [36]
+    blocks_on: [37]
     notes: |
       External step. Plugin records lot id, mask set version, and
       foundry status; verifies wafer-lot file lands when foundry
       ships. Not waivable for production tape-out.
 
-  - id: 39
+  - id: 40
     name: "Wafer Sort / Probe Test (ATE + probe card)"
     stage: stage5_manufacturing
     condition:
@@ -1410,9 +1440,9 @@ steps:
       - "phase3/stage5_manufacturing/wafer_map.csv"
     gate:
       program_exit_zero: "wafer_sort_yield_check . --json reports/manufacturing/wafer_sort.json"
-    blocks_on: [38]
+    blocks_on: [39]
 
-  - id: 40
+  - id: 41
     name: "Packaging (assembly: wirebond / FC-CSP / WLCSP)"
     stage: stage5_manufacturing
     condition:
@@ -1423,9 +1453,9 @@ steps:
       - "phase3/stage5_manufacturing/packaging_log.json"
     gate:
       program_exit_zero: "packaging_intake_check . --json reports/manufacturing/packaging.json"
-    blocks_on: [39]
+    blocks_on: [40]
 
-  - id: 41
+  - id: 42
     name: "Final Test (ATE: functional + parametric + burn-in)"
     stage: stage5_manufacturing
     condition:
@@ -1437,11 +1467,39 @@ steps:
       - "phase3/stage5_manufacturing/burn_in_results.json"
     gate:
       program_exit_zero: "final_test_attestation_check . --json reports/manufacturing/final_test.json"
-    blocks_on: [40]
+    blocks_on: [41]
     notes: |
       Final-test sign-off before product ship. Functional test
       across PVT corners, parametric trim, optional burn-in for
-      automotive / medical grades.
+      automotive / medical grades. Burn-in here is the production
+      infant-mortality SCREEN; long-duration reliability qual is the
+      separate Step 43 (HTOL).
+
+  # ── Step 43: Reliability Qualification (HTOL) ────────────────────
+  # v2.3.0 — HTOL (High-Temperature Operating Life) / reliability
+  # qualification is a distinct long-duration stress qual (cumulative
+  # device-hours at elevated T/V → FIT rate), NOT the same thing as
+  # the Step-42 burn-in screen. Data originates from external burn-in
+  # / HTOL chambers; the gate verifies the attestation artifact is
+  # substantive (device-hours, failures, derived FIT), never
+  # fabricates reliability numbers.
+  - id: 43
+    name: "Reliability qualification (HTOL / FIT attestation)"
+    stage: stage5_manufacturing
+    condition:
+      files_exist: ["phase3/stage5_manufacturing/htol_results.json"]
+    programs:
+      - htol_attestation_check
+    required_outputs:
+      - "phase3/stage5_manufacturing/htol_results.json"
+    gate:
+      program_exit_zero: "htol_attestation_check . --json reports/manufacturing/htol.json"
+    blocks_on: [42]
+    notes: |
+      Optional / grade-driven: required for automotive (AEC-Q100) /
+      medical / industrial qualification; consumer MPW runs may skip
+      (the condition gate keeps it dormant until htol_results.json
+      exists).
 
   # ── P0 (Wave 91 / v1.6.15): structural-RTL umbrella ─────────────
   # Renamed from synthetic Step -1. Aggregates all _STRUCTURAL_RTL_GATES
