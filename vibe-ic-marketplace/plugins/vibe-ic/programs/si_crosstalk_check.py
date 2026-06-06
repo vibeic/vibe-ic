@@ -43,6 +43,32 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
 
         violations = data.get("violations_count", 0)
         stats["violations"] = violations
+
+        # ORGANIC-20260606 (#437 follow-up comment) — advisory-screen
+        # DISCLOSURE: the open-flow emitter's capacitive (floating-
+        # victim) screen hardwires violations_count=0 and honestly says
+        # so; the gate must not launder that into a clean sign-off PASS.
+        # Surface the tier + the coupling-dominated watch-list.
+        verdict_str = str(data.get("verdict", ""))
+        method_str = str(data.get("method", ""))
+        is_advisory = (verdict_str in ("ADVISORY_SCREEN_ONLY",
+                                       "SI_SPEF_SCREEN_PASS")
+                       or "advisory" in method_str.lower())
+        stats["advisory_screen_only"] = is_advisory
+        dominated = data.get("nets_coupling_dominated_gt0p9")
+        if is_advisory:
+            findings.append(Finding(
+                "WARNING", "SI_ADVISORY_SCREEN_ONLY",
+                "SI artifact is a capacitive ADVISORY screen "
+                "(floating-victim bound, violations_count hardwired 0) — "
+                "NOT timing-window SI sign-off; review required before "
+                "presenting as sign-off (#437)"))
+            if isinstance(dominated, (int, float)) and dominated > 0:
+                findings.append(Finding(
+                    "WARNING", "SI_COUPLING_DOMINATED_WATCHLIST",
+                    f"{int(dominated)} net(s) coupling-dominated "
+                    f"(Cc/(Cc+Cg) > 0.9) on the advisory watch-list — "
+                    f"review with a timing-window SI tool (#437)"))
         if isinstance(violations, (int, float)) and violations > 0:
             has_waiver = False
             if waiver.exists():
@@ -75,17 +101,24 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
 
 def build_report(findings: List[Finding], stats: dict,
                  project_dir: str) -> dict:
+    ok = all(f.severity != "ERROR" for f in findings)
+    advisory = stats.get("advisory_screen_only", False)
     return {
         "program": "si_crosstalk_check",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "project_dir": project_dir,
+        # #437 follow-up: the headline names the tier — an advisory
+        # capacitive screen is never presented as plain sign-off PASS.
+        "verdict": ("ADVISORY_SCREEN_ONLY" if ok and advisory
+                    else "PASS" if ok else "FAIL"),
         "summary": {
             "report_found": stats["report_found"],
             "format": stats["format"],
             "violations": stats["violations"],
+            "advisory_screen_only": advisory,
             "findings_count": len(findings),
             "errors_count": sum(1 for f in findings if f.severity == "ERROR"),
-            "pass": all(f.severity != "ERROR" for f in findings),
+            "pass": ok,
         },
         "findings": [asdict(f) for f in findings],
     }

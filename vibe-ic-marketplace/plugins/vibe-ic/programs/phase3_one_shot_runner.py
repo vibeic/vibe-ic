@@ -6182,7 +6182,10 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
                 "nets_elevated_coupling_gt0p5": m["nets_elevated_gt0p5"],
                 "nets_coupling_dominated_gt0p9": dominated,
                 "violations_count": 0,
-                "verdict": "SI_SPEF_SCREEN_PASS",
+                # #437-comment (2026-06-06): the verdict NAMES the tier —
+                # this is a capacitive ADVISORY screen, not SI sign-off;
+                # the gate surfaces it as such instead of a clean PASS.
+                "verdict": "ADVISORY_SCREEN_ONLY",
             }
             # v0.2.35 ADVISORY upgrade: when a post-route STA run is available,
             # ALSO produce the OpenSTA SI timing JSON and merge the
