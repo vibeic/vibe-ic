@@ -9,7 +9,7 @@ M1–M4** — run alongside.
 v2.3.2 highlights (second external-review refinement round):
 
 - **Step 28 manual-review made concrete**: `perc_equivalent.json` MANUAL_REVIEW categories now carry `review_criteria` (reviewer role + named PDK/foundry limit criteria).
-- **Step 8 derived-clock guard**: manual ICG / register-divided clocks must declare `create_generated_clock` in the SDC (`derived_clock_sdc_required_check`; vacuous PASS without derived clocks).
+- **Step 8 derived-clock guard**: manual ICG / register-divided clocks must declare `create_generated_clock` in the SDC (`derived_clock_sdc_required_check`; vacuous PASS = auto-pass when not applicable).
 - **Mechanisms documented as-built**: Step 10 power preview marked vectorless, Step 35 node derivation from liberty filenames, Step 31 blackbox operations + real waiver mechanism.
 - **E1–E3 reserved numbering** + **measured wall-clock appendix**.
 
@@ -101,7 +101,7 @@ Front-end precedence (**artifact-driven**): existing RTL > C/SystemC model (hls-
 | # | Step | What it does | Input | Output | Tools (EDA) | Programs / Skills |
 |---|---|---|---|---|---|---|
 | 7 | Constraint setup (SDC + PVT matrix) | Author timing constraints (SDC) + PVT corner matrix; power intent modelled via L21 and rendered to UPF (handoff artifact — open-source tools do not consume UPF; structural verification stays with M2). | L8 timing · L21 · PDK liberty | `*.sdc` · `pvt_matrix.json` · `<top>.upf` (optional, when L21 declares power domains) | — (UPF emitted by the `l21_to_upf_emit` script, not an EDA engine) | `sdc_syntax_check`・`pvt_matrix_check`・`l21_to_upf_emit`・`upf_syntax_check`<br>skills: `constraint-gen` |
-| 8 | 🔁 SDC validation (incl. derived-clock guard) | Validate constraint correctness, completeness, and exception (false_path/multicycle) justification; manual ICG / register-divided clocks must declare a matching `create_generated_clock` (vacuous PASS without derived clocks). | SDC · L8 · RTL | SDC check report · `derived_clock_sdc.json` | — | `sdc_syntax_check`・`sdc_validator_check`・`sdc_exception_correlation_check`・`derived_clock_sdc_required_check`<br>skills: `sdc-validator` |
+| 8 | 🔁 SDC validation (incl. derived-clock guard) | Validate constraint correctness, completeness, and exception (false_path/multicycle) justification; manual ICG / register-divided clocks must declare a matching `create_generated_clock` (vacuous PASS without derived clocks — i.e. it passes automatically when the condition does not apply: no divided clocks in the design means the check self-skips). | SDC · L8 · RTL | SDC check report · `derived_clock_sdc.json` | — | `sdc_syntax_check`・`sdc_validator_check`・`sdc_exception_correlation_check`・`derived_clock_sdc_required_check`<br>skills: `sdc-validator` |
 | 9 | Synthesis (Yosys → mapped netlist) | Synthesize RTL and technology-map (dfflibmap + abc -liberty) to the standard-cell netlist. | RTL · SDC · liberty | `synth/netlist.v` · area stats | Yosys + abc<br>`eda_synth` | `synth_wrapper_gen`・`synth_netlist_check`・`provenance_check`<br>skills: `synth-doctor` |
 | 10 | 🔁 Pre-layout STA (multi-corner) | Pre-layout static timing analysis (SS/TT/FF) + post-synth power preview (gate-level vectorless, default toggle rate, disclosed via `analysis_mode`; a different accuracy tier from Step 33's post-layout, optionally VCD-vector, analysis). | netlist · SDC · liberty | pre-PnR timing report + summary · `pre_pnr_power_preview.rpt` | OpenSTA<br>`eda_sta` | `sta_report_check`<br>skills: `sta-review` |
 | 11 | DFT insertion (scan chain + ATPG) | Insert scan chains + generate patterns (open-source Fault: scan + stuck-at ATPG + TAP; MBIST/LBIST/compression out of open-source scope). | netlist | scan netlist · ATPG coverage report | Fault (scan+ATPG+TAP)<br>`eda_dft` | `fault_atpg_run`・`dft_atpg_coverage_check`<br>skills: `dft-insert`・`atpg` |
@@ -234,7 +234,7 @@ Numbers come from REAL local sky130 open-source-flow runs (the `duration_s` fiel
 | Steps 15–22 PnR (OpenROAD, full) | ~3 s – 31 min | 3.4k cells (subservient) → 21k cells (sha256) |
 | Step 37 GDS write | ~2 – 4 s | all samples |
 | Step 31 DRC (KLayout sky130 deck) | ~8 – 84 s | 0.5k → 20k cells |
-| Step 31 LVS (Magic + netgen) | this batch's reports took the light/skip path — not representative; with real macro compares it is minutes-scale (4h timeout set per a #443 field observation) | — |
+| Step 31 LVS (Magic + netgen) | this batch's samples took the light/skip path, so no representative figure; with real macro compares (e.g. Caravel-class harnesses) it runs **minutes to hours**, scaling with macro count (a field run motivated the 4-hour timeout) | — |
 | Steps 40–43 manufacturing (fab/sort/pkg/final test) | external, weeks-scale | no local measurement |
 
 繁體中文版：`ALL_STEPS_v2.3.2.zh-TW.md`.

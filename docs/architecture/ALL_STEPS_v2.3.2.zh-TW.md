@@ -7,7 +7,7 @@
 v2.3.2 重點（第二輪外部 review 精修）：
 
 - **Step 28 manual-review 落地**：`perc_equivalent.json` 的 MANUAL_REVIEW 類別新增 `review_criteria`（審查者角色＋具名 PDK/foundry 限值準則）。
-- **Step 8 新增 derived-clock 守門**：手動 ICG／暫存器分頻時脈必須在 SDC 宣告 `create_generated_clock`（`derived_clock_sdc_required_check`，無分頻時脈時 vacuous PASS）。
+- **Step 8 新增 derived-clock 守門**：手動 ICG／暫存器分頻時脈必須在 SDC 宣告 `create_generated_clock`（`derived_clock_sdc_required_check`；無分頻時脈時 vacuous PASS＝條件不適用自動通過）。
 - **精度與機制寫實**：Step 10 功耗預覽標明 vectorless、Step 35 節點判定寫明 liberty 檔名推導、Step 31 blackbox 操作與 waiver 機制寫實。
 - **E1–E3 編號預留**＋**實測工時附錄**。
 
@@ -84,7 +84,7 @@ v2.3.1 重點（對齊業界標準流程，發佈前一次到位）：
 | # | 步驟 | 做什麼 | 輸入 | 輸出 | 工具 (EDA) | Programs / Skills |
 |---|---|---|---|---|---|---|
 | 7 | Constraint setup | 撰寫時序約束（SDC）與 PVT 角點矩陣；power intent 由 L21 建模並輸出 UPF（交接工件——開源工具不消費 UPF，結構驗證歸 M2）。 | L8 時序・L21・PDK liberty | `*.sdc`・`pvt_matrix.json`・`<top>.upf`（選用，L21 有 power domain 時） | —（UPF 由 `l21_to_upf_emit` 腳本產出，非 EDA 引擎） | `sdc_syntax_check`・`pvt_matrix_check`・`l21_to_upf_emit`・`upf_syntax_check`<br>skills：`constraint-gen` |
-| 8 | 🔁 SDC validation（含 derived-clock 守門） | 驗證時序約束的正確性、完整性與例外（false_path/multicycle）正當性；手動 ICG／暫存器分頻時脈必須有對應 `create_generated_clock`（無分頻時脈時 vacuous PASS）。 | SDC・L8・RTL | SDC 檢查報告・`derived_clock_sdc.json` | — | `sdc_syntax_check`・`sdc_validator_check`・`sdc_exception_correlation_check`・`derived_clock_sdc_required_check`<br>skills：`sdc-validator` |
+| 8 | 🔁 SDC validation（含 derived-clock 守門） | 驗證時序約束的正確性、完整性與例外（false_path/multicycle）正當性；手動 ICG／暫存器分頻時脈必須有對應 `create_generated_clock`（無分頻時脈時 vacuous PASS——即條件不適用時自動通過：設計中沒有分頻電路，此檢查自動跳過）。 | SDC・L8・RTL | SDC 檢查報告・`derived_clock_sdc.json` | — | `sdc_syntax_check`・`sdc_validator_check`・`sdc_exception_correlation_check`・`derived_clock_sdc_required_check`<br>skills：`sdc-validator` |
 | 9 | Synthesis | RTL 合成並做技術映射（dfflibmap + abc -liberty）為標準元件閘級網表。 | RTL・SDC・liberty | `synth/netlist.v`・面積統計 | Yosys + abc<br>`eda_synth` | `synth_wrapper_gen`・`synth_netlist_check`・`provenance_check`<br>skills：`synth-doctor` |
 | 10 | 🔁 Pre-layout STA | 佈局前多角點靜態時序分析（SS/TT/FF）＋合成後功耗預覽（gate-level vectorless、預設 toggle rate，`analysis_mode` 欄揭露；與 Step 33 post-layout 可選 VCD vector 的精度不同）。 | 網表・SDC・liberty | pre-PnR 時序報告 + 摘要・`pre_pnr_power_preview.rpt` | OpenSTA<br>`eda_sta` | `sta_report_check`<br>skills：`sta-review` |
 | 11 | DFT insertion | 插入掃描鏈並產生測試圖樣（開源 Fault：scan + stuck-at ATPG + TAP；MBIST/LBIST/壓縮不在開源範圍）。 | 網表 | scan 網表・ATPG 覆蓋率報告 | Fault (scan+ATPG+TAP)<br>`eda_dft` | `fault_atpg_run`・`dft_atpg_coverage_check`<br>skills：`dft-insert`・`atpg` |
@@ -210,7 +210,7 @@ MBIST/LBIST/EDT 壓縮（開源無引擎）、BSR/BSDL、自動 clock-gating
 | Step 15–22 PnR（OpenROAD 全程） | ~3 s – 31 min | 3.4k cells（subservient）→ 21k cells（sha256） |
 | Step 37 GDS 寫出 | ~2 – 4 s | 全部樣本 |
 | Step 31 DRC（KLayout sky130 deck） | ~8 – 84 s | 0.5k → 20k cells |
-| Step 31 LVS（Magic＋netgen） | 本批報告為輕量/跳過路徑，不具代表性——含 macro 真比對時為分鐘級（per #443 現場觀察設 4h timeout） | — |
+| Step 31 LVS（Magic＋netgen） | 本批樣本走輕量/跳過路徑，故無代表性數字；含 macro 真比對（如 Caravel 類 harness）為**分鐘級到小時級**，依 macro 數量而異（現場曾因此將 timeout 設為 4 小時） | — |
 | Step 40–43 製造端（fab/sort/pkg/final test） | 外部週期，數週級 | 無本地實測 |
 
 英文正本：`ALL_STEPS_v2.3.2.md`。
