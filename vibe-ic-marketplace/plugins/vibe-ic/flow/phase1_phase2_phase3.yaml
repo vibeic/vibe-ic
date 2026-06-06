@@ -1154,30 +1154,31 @@ steps:
       - "reports/phase3/drc_signoff.rpt"
       - "reports/phase3/lvs.rpt"
       - "reports/phase3/erc.rpt"
-    all_of:
-      - program_exit_zero: "drc_report_check . --mode drc --json reports/phase3/drc_signoff.json"
-      - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
-      # Provenance required: sign-off DRC / LVS reports must come
-      # from real tool runs (klayout / magic for DRC; netgen for LVS).
-      - program_exit_zero: "provenance_check . --output reports/phase3/drc_signoff.rpt --tool klayout,magic,openroad"
-      - program_exit_zero: "provenance_check . --output reports/phase3/lvs.rpt --tool netgen,magic"
-      # Step-30 ERC + sign-off density substance (replaces the dangling
-      # density_check that referenced a non-existent program). This is a
-      # DIFFERENT check from metal_fill_density_check (Step 34): Step 31 runs
-      # BEFORE metal fill, so filled.def / metal_fill.done do not exist yet.
-      # erc_density_check (a) verifies any PER-LAYER metal CMP density is in
-      # the foundry 20-80% window (foundry rejects at CMP otherwise), (b) when
-      # the artefact only carries OpenROAD filler_placement std-cell ROW
-      # utilization it requires a real, sane number + tool provenance and does
-      # NOT mis-apply the per-LAYER 20-80% rule to it (that rule is screened by
-      # the KLayout DRC deck, verified by drc_report_check above), and (c)
-      # parses reports/phase3/erc.rpt — floating signal nets / "ERC clean: NO"
-      # are a real electrical-rule failure -> FAIL. Missing/empty/provenance-
-      # less/metric-less artefact => honest FAIL (never a vacuous pass).
-      # Fires when either the density report or the ERC report exists.
-      - optional_program_exit_zero:
-          command: "erc_density_check . --json reports/phase2/gates/erc_density.json"
-          condition_files_exist: ["reports/density.rpt", "reports/density.json", "reports/phase3/erc.rpt", "reports/phase3/density.rpt"]
+    gate:
+      all_of:
+        - program_exit_zero: "drc_report_check . --mode drc --json reports/phase3/drc_signoff.json"
+        - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
+        # Provenance required: sign-off DRC / LVS reports must come
+        # from real tool runs (klayout / magic for DRC; netgen for LVS).
+        - program_exit_zero: "provenance_check . --output reports/phase3/drc_signoff.rpt --tool klayout,magic,openroad"
+        - program_exit_zero: "provenance_check . --output reports/phase3/lvs.rpt --tool netgen,magic"
+        # Step-30 ERC + sign-off density substance (replaces the dangling
+        # density_check that referenced a non-existent program). This is a
+        # DIFFERENT check from metal_fill_density_check (Step 34): Step 31 runs
+        # BEFORE metal fill, so filled.def / metal_fill.done do not exist yet.
+        # erc_density_check (a) verifies any PER-LAYER metal CMP density is in
+        # the foundry 20-80% window (foundry rejects at CMP otherwise), (b) when
+        # the artefact only carries OpenROAD filler_placement std-cell ROW
+        # utilization it requires a real, sane number + tool provenance and does
+        # NOT mis-apply the per-LAYER 20-80% rule to it (that rule is screened by
+        # the KLayout DRC deck, verified by drc_report_check above), and (c)
+        # parses reports/phase3/erc.rpt — floating signal nets / "ERC clean: NO"
+        # are a real electrical-rule failure -> FAIL. Missing/empty/provenance-
+        # less/metric-less artefact => honest FAIL (never a vacuous pass).
+        # Fires when either the density report or the ERC report exists.
+        - optional_program_exit_zero:
+            command: "erc_density_check . --json reports/phase2/gates/erc_density.json"
+            condition_files_exist: ["reports/density.rpt", "reports/density.json", "reports/phase3/erc.rpt", "reports/phase3/density.rpt"]
     blocks_on: [23, 24, 25, 26, 27, 29, 30]
 
   # ── Step 32: ECO ─────────────────────────────────────────────

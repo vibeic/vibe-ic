@@ -3006,6 +3006,38 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
 
     # Now evaluate the gate predicate
     gate = step.get("gate")
+
+    # ── ORGANIC-20260606 #470 DEFENSE: gate-promotion safety net ──────────
+    # A hand-authoring slip can place a gate-shaped predicate block (all_of /
+    # any_of / program_exit_zero / optional_program_exit_zero / files_exist)
+    # at the STEP level — a sibling of `gate:` — instead of nested inside it.
+    # When that happens, `step.get("gate")` returns None, the whole gate
+    # silently becomes DEAD CODE, and the step degrades to "outputs present →
+    # PASS" (effectively any-of-one of its required_outputs). For a sign-off
+    # step (e.g. Step 31 PV: DRC+LVS+ERC+Density) that means a run with NO
+    # DRC sign-off, NO ERC report and a verdict-less LVS log would PASS the
+    # most safety-critical gate. The structural fix lives in the flow YAML and
+    # is regression-guarded by a meta-test, but a future hand-slip must NEVER
+    # silently void a whole gate again — so PROMOTE any stray predicate keys
+    # carried directly on the step node into the gate dict here, and emit a
+    # visible WARNING finding so the authoring slip is surfaced, not hidden.
+    _GATE_PREDICATE_KEYS = (
+        "all_of", "any_of", "program_exit_zero",
+        "optional_program_exit_zero", "files_exist", "json_field_true",
+    )
+    if not gate:
+        _stray = {k: step[k] for k in _GATE_PREDICATE_KEYS if k in step}
+        if _stray:
+            gate = _stray
+            result.reasons.append(
+                "WARNING: gate-shaped predicate key(s) "
+                f"{sorted(_stray.keys())} found at the STEP level instead of "
+                "inside `gate:` — promoting them into the gate so the sign-off "
+                "predicates execute. FIX THE FLOW YAML: nest them under "
+                "`gate:` (authoring slip; a meta-test guards against "
+                "regression). [ORGANIC-20260606 #470]"
+            )
+
     if gate:
         passed, reasons = _evaluate_gate(project, gate)
         # Wave 93 — VACUOUS_PASS verdict tier promotion. If the gate
