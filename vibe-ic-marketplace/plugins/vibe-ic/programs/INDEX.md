@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 647
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 647)
+- **Total programs (excluding helpers / shims):** 649
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 649)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 638 |
+| `any` | 640 |
 
 ## Alphabetical listing
 
@@ -311,6 +311,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ip_catalog_reproduce_pull` | any | — | Reproducibility check. |
 | `ip_catalog_upstream_audit` | any | — | Verify catalog manifests against canonical |
 | `ip_catalog_validate` | any | — | Validate catalog manifests against schema + |
+| `ip_integration_check` | any | — | hard-macro / IP integration checklist gate |
 | `ir_drop_budget_check` | any | — | numeric IR-drop budget gate for tapeout sign-off. |
 | `ir_drop_report_check` | any | — | wrapper for eda_report_audit --mode ir_drop. |
 | `ir_drop_triage_classify` | any | v0.1.50 | IR-drop triage classifier (Pattern-B → program). |
@@ -329,6 +330,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l12_tb_coverage_check` | any | v0.52 | v0.52 plugin gate |
 | `l1_electrical_specs_typed_depth_check` | any | Wave 38 | Wave 38 / B1 |
 | `l1_pin_table_aliases_typed_check` | any | Wave 38 | Wave 38 / B2 |
+| `l21_to_upf_emit` | any | v0.1.51 | render L21 power intent into an IEEE-1801 UPF |
 | `l2_timing_completeness_check` | any | v0.119.30 | gate (LL-32) catching frs-gen |
 | `l3_opcode_argument_constraints_check` | any | Wave 37 | Wave 37 / A3 |
 | `l3_opcode_name_coverage_check` | any | — | v1.6.131 (#51 Fix 6) |
@@ -719,7 +721,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (638 programs)
+### `any` (640 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
@@ -1002,6 +1004,7 @@ _(no programs in this group)_
 - `ip_catalog_reproduce_pull` — Reproducibility check.
 - `ip_catalog_upstream_audit` — Verify catalog manifests against canonical
 - `ip_catalog_validate` — Validate catalog manifests against schema +
+- `ip_integration_check` — hard-macro / IP integration checklist gate
 - `ir_drop_budget_check` — numeric IR-drop budget gate for tapeout sign-off.
 - `ir_drop_report_check` — wrapper for eda_report_audit --mode ir_drop.
 - `ir_drop_triage_classify` — IR-drop triage classifier (Pattern-B → program).  _[v0.1.50]_
@@ -1020,6 +1023,7 @@ _(no programs in this group)_
 - `l12_tb_coverage_check` — v0.52 plugin gate  _[v0.52]_
 - `l1_electrical_specs_typed_depth_check` — Wave 38 / B1  _[Wave 38]_
 - `l1_pin_table_aliases_typed_check` — Wave 38 / B2  _[Wave 38]_
+- `l21_to_upf_emit` — render L21 power intent into an IEEE-1801 UPF  _[v0.1.51]_
 - `l2_timing_completeness_check` — gate (LL-32) catching frs-gen  _[v0.119.30]_
 - `l3_opcode_argument_constraints_check` — Wave 37 / A3  _[Wave 37]_
 - `l3_opcode_name_coverage_check` — v1.6.131 (#51 Fix 6)
