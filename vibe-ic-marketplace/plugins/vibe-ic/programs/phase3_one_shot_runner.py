@@ -4351,6 +4351,20 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             )
             written.append(str(pre_pnr_rpt))
 
+    # --- v2.3.1 (review R2): Step-10 post-synth POWER PREVIEW ----------
+    # Advisory early-feedback: OpenSTA report_power on the SYNTH netlist
+    # + SDC (the same vectorless run Step 33 signs off post-layout),
+    # surfaced at the pre-layout stage so the designer sees a power
+    # picture BEFORE committing to PnR. Best-effort; never gates.
+    power_preview = sta_out / "pre_pnr_power_preview.rpt"
+    if primary_sta.is_file() and not power_preview.is_file():
+        try:
+            if _emit_power_report(project, top, pdk, container,
+                                  power_preview, notes):
+                written.append(str(power_preview))
+        except Exception as exc:
+            notes.append(f"post-synth power preview failed: {exc}")
+
     # --- Step 23: post-route STA report (alias) -------------------------
     post_route_rpt = sta_out / "post_route_timing.rpt"
     if primary_sta.is_file() and not post_route_rpt.is_file():
