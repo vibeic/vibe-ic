@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 649
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 649)
+- **Total programs (excluding helpers / shims):** 651
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 651)
 
 ### Per-class applicability counts
 
@@ -19,13 +19,14 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 640 |
+| `any` | 642 |
 
 ## Alphabetical listing
 
 | Program | Applicable classes | Wave | Title |
 |---|---|---|---|
 | `a2b_protocol_synth` | any | — | Automotive Audio Bus (A2B) protocol synth helper. |
+| `acceptance_evidence_in_fix_comment_check` | any | v0.2.97 | v0.2.97 |
 | `ace_protocol_synth` | any | — | AMBA AXI/ACE coherency-extension protocol synth helper. |
 | `afdx_protocol_synth` | any | — | AFDX / ARINC 664 Part 7 protocol synth helper. |
 | `agent_report_presence_check` | any | — | verify the project ships a structured |
@@ -179,6 +180,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dead_timing_constant_warn` | any | — | R4 cheap WARN gate |
 | `debug_first_pass` | any | — | single dispatcher for debug-skill deterministic first-pass. |
 | `def_stage_progression_check` | any | v0.47 | Catch fabricated PnR stage DEF files. |
+| `defect_artifact_fixture_check` | any | v0.2.97 | v0.2.97 |
 | `derived_clock_sdc_required_check` | any | — | Verify any register-divided clock |
 | `design_complexity_estimator` | any | — | design_complexity_estimator.py -- Heuristic design-complexity score and |
 | `deterministic_rtl_dispatcher` | any | v0.1.9 | Phase-2 program-first RTL router. |
@@ -721,9 +723,10 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (640 programs)
+### `any` (642 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
+- `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
 - `afdx_protocol_synth` — AFDX / ARINC 664 Part 7 protocol synth helper.
 - `agent_report_presence_check` — verify the project ships a structured
@@ -873,6 +876,7 @@ _(no programs in this group)_
 - `dead_timing_constant_warn` — R4 cheap WARN gate
 - `debug_first_pass` — single dispatcher for debug-skill deterministic first-pass.
 - `def_stage_progression_check` — Catch fabricated PnR stage DEF files.  _[v0.47]_
+- `defect_artifact_fixture_check` — v0.2.97  _[v0.2.97]_
 - `derived_clock_sdc_required_check` — Verify any register-divided clock
 - `design_complexity_estimator` — design_complexity_estimator.py -- Heuristic design-complexity score and
 - `deterministic_rtl_dispatcher` — Phase-2 program-first RTL router.  _[v0.1.9]_
