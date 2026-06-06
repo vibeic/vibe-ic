@@ -81,12 +81,27 @@ def test_fail_over_100(tmp_path):
     assert any(f["category"] == "UTIL_OVER_100" for f in rep["findings"])
 
 
-def test_fail_nonpositive_via_direct_arg():
-    rc = u.main(["--util", "0"])
+def test_fail_negative_via_direct_arg():
+    rc = u.main(["--util", "-5"])
     assert rc == 1
-    verdict, findings = u.classify(0.0, "--util")
+    verdict, findings = u.classify(-5.0, "--util")
     assert verdict == "FAIL"
     assert any(f.category == "UTIL_NONPOSITIVE" for f in findings)
+
+
+def test_zero_is_precision_floor_not_corruption(tmp_path):
+    # v0.2.69 — report_design_area prints integer-rounded utilization:
+    # a parsed 0 means "< 0.5%, below report precision", NOT a corrupt
+    # report. WARN UTIL_ZERO_UNRESOLVED, rc=0. Negative still FAILs.
+    proj = _make_density(tmp_path, 0.0)
+    rc = u.main([str(proj), "--json", str(tmp_path / "r.json")])
+    assert rc == 0
+    rep = json.loads((tmp_path / "r.json").read_text())
+    assert rep["verdict"] == "WARN"
+    assert any(f["category"] == "UTIL_ZERO_UNRESOLVED"
+               for f in rep["findings"])
+    # it must NOT claim a band was verified
+    assert all(f["category"] != "UTIL_IN_BAND" for f in rep["findings"])
 
 
 # --------------------------------------------------------------------------

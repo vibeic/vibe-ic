@@ -6213,6 +6213,14 @@ exit
     util_m = re.findall(r"Design area\s+\d+\s+um\^2\s+([0-9.]+)%\s+utilization",
                         log, re.I)
     util_pct = float(util_m[-1]) if util_m else None
+    # v0.2.69 — report_design_area prints INTEGER-rounded utilization, so
+    # a parsed 0 means "true value < 0.5%, below report precision" — a
+    # placed design cannot be at exactly 0. Recording a fabricated-
+    # precision "0.0%" made utilization_band_check classify the report as
+    # corrupt. Record the quantization honestly instead of the 0.
+    util_below_precision = (util_pct == 0)
+    if util_below_precision:
+        util_pct = None
     # metal_fill.done flag.
     (pnr_out / "metal_fill.done").write_text(
         "metal_fill_done\n"
@@ -6234,15 +6242,22 @@ exit
         "# Metal-fill / density report — OpenROAD filler_placement\n"
         "# (ORGANIC-20260531 Step 33). Tool: openroad.\n"
         f"# filler instances placed: {placed_n}\n"
-        f"# std-cell row utilization (post-fill): "
-        f"{util_pct if util_pct is not None else 'n/a'}%\n"
-        "# Note: per-metal-layer CMP density (20-80% rule) is screened by\n"
+        # v0.2.69 label fix: report_design_area reports design-area /
+        # core-area utilization (integer-rounded), not row occupancy.
+        f"# core-area utilization (report_design_area, post-fill): "
+        f"{util_pct if util_pct is not None else 'unresolved'}"
+        f"{'%' if util_pct is not None else ''}\n"
+        + ("# (report_design_area printed 0% — integer-rounded floor; "
+           "true value < 0.5%, below report precision)\n"
+           if util_below_precision else "")
+        + "# Note: per-metal-layer CMP density (20-80% rule) is screened by\n"
         "# the KLayout met_min_ca_density deck at sign-off DRC; this report\n"
         "# records the std-cell row fill achieved by filler_placement.\n")
     density_json.write_text(json.dumps({
         "tool": "openroad-filler_placement",
         "filler_instances": placed_n,
         "row_utilization_pct": util_pct,
+        "utilization_below_report_precision": util_below_precision,
         # No per-layer metal density extracted in the open flow — omit the
         # "layers" key so metal_fill_density_check does not flag OOB. The
         # gate passes on filled.def presence + no OOB layer.

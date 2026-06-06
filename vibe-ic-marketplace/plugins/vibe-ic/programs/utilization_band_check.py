@@ -19,8 +19,12 @@ lpc 14%, …). The HARD project rule is: a guard must run CLEAN on the real
 corpus — so the band is reported as advisory WARN, not FAIL.
 
 The ONLY hard FAILs are universal, non-fabricated structural facts:
-  * a derivable utilization <= 0%  (impossible / corrupt report), or
-  * a derivable utilization  > 100% (cell-area overlap / illegal).
+  * a derivable utilization < 0%  (impossible / corrupt report), or
+  * a derivable utilization > 100% (cell-area overlap / illegal).
+A literal 0% is NOT a hard FAIL (v0.2.69): OpenROAD's report_design_area
+prints integer-rounded percentages, so any true value below 0.5% reads
+"0%" — that is a precision floor, not corruption. It classifies as WARN
+UTIL_ZERO_UNRESOLVED (no usable band datum).
 These mirror the universal (0,100]% sanity that
 `placement_legality_check.py` owns for DEF-derived density; this program
 applies the same universal rule to the *utilization-report* artefacts the
@@ -48,9 +52,9 @@ Usage
 
 Exit codes
 ----------
-    0 = utilization within (0,100]% (PASS; WARN if outside the 50-75 band),
-        OR NO_DATA without --strict
-    1 = derivable utilization <= 0 or > 100 (FAIL), OR NO_DATA with --strict
+    0 = utilization within [0,100]% (PASS; WARN if outside the 50-75 band
+        or a quantized 0 reading), OR NO_DATA without --strict
+    1 = derivable utilization < 0 or > 100 (FAIL), OR NO_DATA with --strict
     2 = bad arguments / project dir not found
 
 Generality: chip-AGNOSTIC. The band numbers are advisory design
@@ -113,7 +117,7 @@ def _coerce_pct(val) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     if f <= 0:
-        return f  # caller flags <= 0 as FAIL
+        return f  # caller classifies: negative → FAIL, 0 → WARN unresolved
     if f <= 1.0:
         return f * 100.0
     return f
@@ -178,12 +182,27 @@ def classify(util_pct: Optional[float], source: Optional[str]) -> Tuple[str, Lis
             "NOT fabricated"))
         return "NO_DATA", findings
 
-    if util_pct <= 0:
+    if util_pct < 0:
         findings.append(Finding(
             "ERROR", "UTIL_NONPOSITIVE",
-            f"utilization {util_pct:.3f}% from {source} is <= 0 — "
+            f"utilization {util_pct:.3f}% from {source} is negative — "
             f"impossible / corrupt report"))
         return "FAIL", findings
+    if util_pct == 0:
+        # v0.2.69 — a literal 0 is NOT corruption evidence: OpenROAD's
+        # `report_design_area` prints INTEGER-rounded utilization, so any
+        # true value in [0, 0.5)% prints as "0%". A placed design cannot
+        # have exactly-zero utilization, so a parsed 0 means "below the
+        # report's precision floor", not "impossible". Corruption is
+        # indicated by NEGATIVE or >100 values only. Advisory, rc=0.
+        findings.append(Finding(
+            "WARNING", "UTIL_ZERO_UNRESOLVED",
+            f"utilization reads 0% from {source} — integer-rounded "
+            f"report floor (true value < 0.5%, below report precision); "
+            f"no usable band datum. Advisory only: extremely low fill is "
+            f"already advisory territory, and a quantized 0 is not a "
+            f"corrupt report (negative / >100 would be)."))
+        return "WARN", findings
     if util_pct > 100.0 + 1e-6:
         findings.append(Finding(
             "ERROR", "UTIL_OVER_100",

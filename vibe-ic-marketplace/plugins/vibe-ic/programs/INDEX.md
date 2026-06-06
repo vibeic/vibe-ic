@@ -636,7 +636,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `usb4_protocol_synth` | any | v0.1.89 | USB4 protocol synth helper. |
 | `usb_pd_protocol_synth` | any | — | USB Power Delivery (USB-PD) protocol synth helper. |
 | `usb_protocol_synth` | any | v0.1.82 | USB-class protocol synth helper. |
-| `utilization_band_check` | any | — | Floorplan/placement utilization band classifier. |
+| `utilization_band_check` | any | v0.2.69 | Floorplan/placement utilization band classifier. |
 | `vector_op_rtl_gen` | any | v0.1.8 | deterministic vector-operation → RTL generator. |
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that |
 | `verilator_coverage_measure` | any | v0.53 | v0.53 plugin gate |
@@ -1314,7 +1314,7 @@ _(no programs in this group)_
 - `usb4_protocol_synth` — USB4 protocol synth helper.  _[v0.1.89]_
 - `usb_pd_protocol_synth` — USB Power Delivery (USB-PD) protocol synth helper.
 - `usb_protocol_synth` — USB-class protocol synth helper.  _[v0.1.82]_
-- `utilization_band_check` — Floorplan/placement utilization band classifier.
+- `utilization_band_check` — Floorplan/placement utilization band classifier.  _[v0.2.69]_
 - `vector_op_rtl_gen` — deterministic vector-operation → RTL generator.  _[v0.1.8]_
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that  _[v0.119.30]_
 - `verilator_coverage_measure` — v0.53 plugin gate  _[v0.53]_
