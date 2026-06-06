@@ -281,6 +281,25 @@ LLM-review prompt body (Step 1):
 Save this prompt as the CronCreate `prompt` field; pick a 4–6
 minute interval; field-agent self-paces from there.
 
+## Verification traps (MANDATORY audit hygiene)
+
+Two traps corrupted audit verdicts in a real session (2026-06-06,
+ORGANIC #456) — both are now standing rules for EVERY fix audit:
+
+1. **Pipeline exit-code masking.** `prog … | tail; echo $?` reports
+   `tail`'s exit code, not the gate's — a FAILing gate reads as exit 0.
+   RULE: run the gate program BARE first and capture its exit code
+   (`prog …; rc=$?`), THEN pretty-print output separately (or use
+   `set -o pipefail`). Never derive a verdict from a piped invocation.
+
+2. **Which-tree-runs resolution.** Verifying a fix against the repo
+   tree proves nothing if the INSTALLED PLUGIN CACHE is what actually
+   executes — the cache can lag the marketplace origin by several
+   versions. RULE: before auditing a fix, resolve which tree will run
+   (installed cache vs repo checkout vs marketplace origin); when the
+   cache lags, check out / worktree the origin commit under audit,
+   run against THAT, and STATE the tree+version in the verify comment.
+
 ## Reference
 
 - Helper script: `programs/check_closed_for_field_audit.sh`
