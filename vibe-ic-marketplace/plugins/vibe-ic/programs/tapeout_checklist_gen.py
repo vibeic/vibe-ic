@@ -124,6 +124,37 @@ def main(argv=None) -> int:
             "severity": severity,
         })
 
+    # v2.3.1 (review P1-5) — PENDING_FOUNDRY tracking closes here: the
+    # handoff gate's pending_foundry_fields become NAMED checklist open
+    # items, owned by the tapeout checklist until the foundry replies
+    # and the fields are back-filled into mask_spec.json.
+    pending_foundry = []
+    for rel in ("reports/phase2/gates/foundry_handoff.json",
+                 "reports/phase3/foundry_handoff_audit.json"):
+        gp = project / rel
+        if not gp.is_file():
+            continue
+        try:
+            gd = json.loads(gp.read_text(errors="replace"))
+        except Exception:
+            continue
+        pf = gd.get("pending_foundry_fields")
+        if isinstance(pf, list) and pf:
+            pending_foundry = pf
+            break
+    if not pending_foundry:
+        # fall back to scanning the pack members directly
+        for mf in sorted(project.glob(
+                "phase3/stage4/foundry_handoff/*.json")):
+            try:
+                md = json.loads(mf.read_text(errors="replace"))
+            except Exception:
+                continue
+            for k in md:
+                if str(k).startswith("PENDING_FOUNDRY_"):
+                    pending_foundry.append(
+                        f"{mf.relative_to(project)}:{k}")
+
     # Cross-reference outstanding waivers — anything not satisfied here
     # but waived in waivers.json is a reviewer to-do (sub-task) not a fail.
     out_path = Path(args.out) if args.out else (
@@ -151,10 +182,14 @@ def main(argv=None) -> int:
         ),
         "items": items,
         "open_waivers": waivers,
+        "pending_foundry_items": pending_foundry,   # v2.3.1 P1-5
         "reviewer_todo": [
             f"Review waiver {w['ticket']}: {w['reason']}"
             for w in waivers.values()
             if w.get("ticket")
+        ] + [
+            f"PENDING_FOUNDRY open item (back-fill after foundry "
+            f"reply): {x}" for x in pending_foundry
         ],
         "notes": (
             "This checklist is a derived inventory of present artefacts. "
