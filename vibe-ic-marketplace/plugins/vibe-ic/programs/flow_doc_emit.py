@@ -8,7 +8,7 @@ artefact, the same way `tools/gen_programs_index.py` makes `INDEX.md` derived.
 
 Source of truth = the runner files. This script parses them and emits
 `docs/architecture/FLOW_STEPS_GENERATED.md`. The narrative docs (CANONICAL_FLOW_v2.2.0,
-ALL_STEPS_v2.2.0) and the curated 33-step / LVS-chain / sign-off tables stay hand-authored
+ALL_STEPS_v2.3.2) and the curated 33-step / LVS-chain / sign-off tables stay hand-authored
 (they are not derivable from markers) and link to this generated file for the live step lists.
 
 Usage:
@@ -135,7 +135,7 @@ def render() -> str:
         "> list parsed directly from the runners. **One CONTINUOUS global step number** across the\n"
         "> sequential flow Phase 1 → 2 → 3 (Phase 3 does NOT restart at 1). Analog A1-A8 / Mixed\n"
         "> M1-M4 run PARALLEL to Phase 2 and keep their native A*/M* ids. The narrative docs\n"
-        "> (`CANONICAL_FLOW_v2.2.0.md`, `ALL_STEPS_v2.2.0.md`) link here. Regenerate:\n"
+        "> (`CANONICAL_FLOW_v2.2.0.md`, `ALL_STEPS_v2.3.2.md`) link here. Regenerate:\n"
         "> `python3 flow_doc_emit.py`.\n"
     )
 

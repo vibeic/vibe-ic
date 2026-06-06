@@ -4,7 +4,7 @@
 > list parsed directly from the runners. **One CONTINUOUS global step number** across the
 > sequential flow Phase 1 → 2 → 3 (Phase 3 does NOT restart at 1). Analog A1-A8 / Mixed
 > M1-M4 run PARALLEL to Phase 2 and keep their native A*/M* ids. The narrative docs
-> (`CANONICAL_FLOW_v2.2.0.md`, `ALL_STEPS_v2.2.0.md`) link here. Regenerate:
+> (`CANONICAL_FLOW_v2.2.0.md`, `ALL_STEPS_v2.3.2.md`) link here. Regenerate:
 > `python3 flow_doc_emit.py`.
 
 
