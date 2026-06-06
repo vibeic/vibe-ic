@@ -692,6 +692,17 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
             profile["ic_class"] = "serial_peripheral_protocol"
             return profile
 
+    # ORGANIC-20260606 #450 — processor_cpu BEFORE the arithmetic
+    # catch-all: a CPU verifies by executing instructions + checking
+    # architectural state, not by arithmetic-primitive semantics. The
+    # detector requires ISA-bearing evidence (deny-guarded), so datapath
+    # primitives (multipliers, hash cores) keep falling through.
+    if l1 is not None or l2 is not None:
+        if (not profile["has_analog"]
+                and _looks_like_processor_cpu(l1, l2)):
+            profile["ic_class"] = "processor_cpu"
+            return profile
+
     # v1.6.523 — for #358 P2 root fix. Pure digital + no protocol + no analog +
     # L1/L2 present → digital_arithmetic_primitive (NOT bare_fpga, which
     # implies FPGA-only with no silicon target — wrong for ASIC datapath
@@ -852,6 +863,54 @@ _SERIAL_PROTO_FEATURES: List[tuple[str, re.Pattern]] = [
                 r"start\s+of\s+frame|end\s+of\s+frame|frame\s+delimiter)\b",
                 re.IGNORECASE)),
 ]
+
+
+# ---------------------------------------------------------------------
+# ORGANIC-20260606 #450 — processor_cpu detector. The registry has had
+# the class since v1.6.522 (rtl_gen=null → spec-to-rtl / IP-catalog
+# glue) but NO inference branch ever returned it: every CPU fell to the
+# digital_arithmetic_primitive catch-all, so class-gated gates, #439
+# tb_gen routing and oracle shapes used arithmetic semantics on cores
+# that need instruction-execution + architectural-state verification.
+# Structural, brand-free features; the ISA-bearing feature (f1/f2) is
+# MANDATORY so prose like "command processor" can never false-fire.
+_PROCESSOR_CPU_FEATURES = [
+    ("isa_family", re.compile(
+        r"\bRISC[-_ ]?V\b|\bRV(?:32|64)[IMAFDCEB]*\b", re.IGNORECASE)),
+    ("instruction_semantics", re.compile(
+        r"\binstruction\s+(?:set|fetch|decode|memory|bus|stream)\b|"
+        r"\bISA\b", re.IGNORECASE)),
+    ("architectural_state", re.compile(
+        r"\bprogram\s+counter\b|\bregister\s+file\b|"
+        r"\barchitectural\s+state\b", re.IGNORECASE)),
+    ("core_noun", re.compile(
+        r"\b(?:CPU|processor|microprocessor|soft[- ]?core)\b",
+        re.IGNORECASE)),
+    ("memory_bus", re.compile(
+        r"\b(?:wishbone|ibus|dbus)\b|memory[- ]mapped|"
+        r"\bsram_(?:addr|rdata|wdata)\b", re.IGNORECASE)),
+    ("execution_units", re.compile(
+        r"\bload[/-]store\b|\bbranch\s+instruction|\bALU\b",
+        re.IGNORECASE)),
+]
+
+
+def _looks_like_processor_cpu(l1, l2) -> bool:
+    """True iff L1+L2 exhibit >=3 processor features AND at least one
+    ISA-bearing feature (isa_family / instruction_semantics). Walks all
+    string leaves; NO benchmark-specific core names (#450)."""
+    parts = []
+    for layer in (l1, l2):
+        if isinstance(layer, dict):
+            _harvest_strings(layer, parts)
+    text = "\n".join(parts)
+    if not text:
+        return False
+    hit_names = {name for name, pat in _PROCESSOR_CPU_FEATURES
+                 if pat.search(text)}
+    if not ({"isa_family", "instruction_semantics"} & hit_names):
+        return False        # deny-guard: no ISA context, no CPU claim
+    return len(hit_names) >= 3
 
 
 def _looks_like_serial_peripheral_protocol(
@@ -1074,6 +1133,7 @@ ALL_IC_CLASSES: frozenset = frozenset({
     "unknown",
     "bare_fpga",
     "aid_class_half_duplex",
+    "processor_cpu",          # ORGANIC-20260606 #450
     "pure_analog",
     "mixed_signal_otp",
     "digital_cmd_driven",
