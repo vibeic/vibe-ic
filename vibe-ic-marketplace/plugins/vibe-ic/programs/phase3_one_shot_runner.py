@@ -4102,10 +4102,13 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
         d_cands = (sorted(_pl.pnr_dir(project).glob("*.routed.def"))
                    + sorted(_pl.pnr_dir(project).glob("*.def")))
         def_file = d_cands[0] if d_cands else def_file
-    netlist = _pl.synth_dir(project) / f"{top}_synth.v"
-    if not netlist.is_file():
-        nl_cands = sorted(_pl.synth_dir(project).glob("*.v"))
-        netlist = nl_cands[0] if nl_cands else netlist
+    # v0.3.15 — ORGANIC #509 round-4: pick the POST-PnR schematic netlist
+    # whose cell population matches the routed layout (the pre-PnR synth
+    # netlist has 0 spares → netgen mismatch). #512 lesson: the netlist
+    # CHOICE was the runner's blind spot vs the field's manual run.
+    netlist, _nl_reason = _v0_3_15_select_lvs_netlist(project, top, def_file)
+    if netlist is None:
+        netlist = _pl.synth_dir(project) / f"{top}_synth.v"  # for the guard msg
     if not def_file.is_file() or not netlist.is_file():
         return StepResult(
             "lvs", "WAIVED", time.time() - t0,
@@ -4262,6 +4265,65 @@ ext2spice -o $env(SPICE_OUT)
 puts "MAGIC_EXT2SPICE_DONE $env(SPICE_OUT)"
 quit -noprompt
 """
+
+
+def _v0_3_15_count_pnr_inserted(text: str) -> int:
+    """v0.3.15 — ORGANIC #509 round-4. Count PnR/ECO-inserted instances
+    (spare cells + CTS clock-tree buffers) — the pre-vs-post-PnR signature.
+    A pre-PnR synth netlist has ~0 of these; a post-PnR netlist (the LVS
+    schematic that must match the routed layout) carries them. Used to
+    pick the netlist whose cell population matches the layout DEF, so the
+    LVS compare is post-vs-post (not post-layout-vs-pre-synth). Spare
+    count is the cleanest discriminator (spares are never in synth).
+    chip-AGNOSTIC: generic spare/clkbuf conventions."""
+    spares = len(re.findall(r'spare', text or "", re.I))
+    clkbuf = len(re.findall(
+        r'sky130_\w+?__(?:clkbuf|clkdlybuf|dlygate|dlymetal)', text or ""))
+    return spares + clkbuf
+
+
+def _v0_3_15_select_lvs_netlist(project: Path, top: str,
+                                def_file: Path) -> Tuple[Optional[Path], str]:
+    """v0.3.15 — ORGANIC #509 round-4. Choose the LVS SCHEMATIC netlist
+    that matches the routed layout's cell population. The runner used to
+    pick `synth/<top>_synth.v` (PRE-PnR: 0 spares) but the layout DEF
+    carries PnR-inserted spares/clkbufs → netgen mismatch. Field lesson
+    (#512): the netlist CHOICE was the blind spot. Fix: prefer the
+    POST-PnR netlist (pnr dir), and sanity-check the pre-vs-post signature
+    — if the layout DEF has spare/PnR cells but the chosen netlist has
+    none, it is the wrong (pre-PnR) netlist → switch to a post-PnR one.
+    chip/PDK-AGNOSTIC: pure pre-vs-post signature, no chip literal.
+    Returns (netlist_path or None, reason)."""
+    pnr = _pl.pnr_dir(project)
+    synth = _pl.synth_dir(project)
+    ordered: List[Path] = []
+    for c in ([pnr / f"{top}_pnr.v"]
+              + sorted(pnr.glob("*_pnr.v")) + sorted(pnr.glob("*.v"))
+              + [synth / f"{top}_synth.v"] + sorted(synth.glob("*.v"))):
+        if c.is_file() and c.stat().st_size > 0 and c not in ordered:
+            ordered.append(c)
+    if not ordered:
+        return None, "no netlist found"
+    # layout signature: does the DEF carry PnR-inserted spare/clk cells?
+    try:
+        layout_sig = _v0_3_15_count_pnr_inserted(
+            def_file.read_text(errors="replace"))
+    except OSError:
+        layout_sig = 0
+    if layout_sig > 0:
+        # the schematic MUST carry them too — pick the first candidate
+        # whose signature is non-zero (post-PnR), preferring pnr-dir order.
+        for c in ordered:
+            try:
+                if _v0_3_15_count_pnr_inserted(c.read_text(errors="replace")) > 0:
+                    return c, (f"post-PnR netlist {c.name} (layout has "
+                               f"PnR-inserted cells; pre-vs-post signature "
+                               f"match)")
+            except OSError:
+                continue
+    # layout has no PnR cells (or none of the netlists do): default to the
+    # priority order (pnr-dir first).
+    return ordered[0], f"default priority {ordered[0].name}"
 
 
 def _v0_3_14_detect_spare_only_classes(netlist_text: str) -> List[str]:

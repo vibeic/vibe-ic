@@ -119,6 +119,37 @@ to anchor (flat layout nets ≠ schematic nets, disjoint naming). Two general pr
 Both are deterministic + pytest-pinned (`programs/tests/test_magic_port_extract_emit.py`,
 `programs/tests/test_lvs_def_port_seed.py`).
 
+## When a field design-side recipe SUCCEEDS but runner automation FAILS: DIFF the two runs' INPUTS first (captured #512)
+
+When you are field-verifying a plugin's automation of a recipe the field agent
+ALREADY proved by hand — the runner's automated run FAILs at some step while the
+field's manual run SUCCEEDED at that same step — **do NOT re-triage the failure
+from scratch.** Chasing the failure text (e.g. a netgen "Netlists do not match"
+/ "failed pin matching") leads to round after round of symptom fixes.
+
+Instead, **DIFF what the successful field run fed vs what the runner fed** at that
+step: which netlist, which env var, which extraction path, which artifact
+version. That single differing INPUT is almost always the plugin's blind spot —
+the runner's automation silently selected a different (wrong) input that the
+field, running by hand, implicitly avoided.
+
+**Worked evidence (the same GDSII-LVS feature, twice):**
+- **#508** — the env var was `export`ed in the magic-extraction shell, but the
+  tool that consumes it (`netgen`) runs in a SEPARATE shell (`_docker_exec` =
+  fresh `bash -lc` per call, env does not persist). *Input delta = shell scope.*
+- **#509** — the LVS schematic side used the PRE-PnR synth netlist (spare=0,
+  clkbuf=0) while the field used the POST-PnR netlist (spare=18, clkbuf=89).
+  *Input delta = netlist choice.* The fix is itself programmable + chip-AGNOSTIC:
+  prefer the post-PnR netlist and sanity-check the pre-vs-post signature (a
+  layout DEF carrying spare/PnR-inserted cells must be compared against a
+  schematic netlist that also has them) — see `_v0_3_15_select_lvs_netlist`.
+
+Neither root cause is visible in the failure text; both surface INSTANTLY from a
+field-input-vs-runner-input diff — short-circuiting N rounds of surface fixes.
+**General rule:** every field→core handoff where the field has manually proven the
+recipe — the runner's automation has likely picked a different input than the
+field did; diff the inputs first.
+
 ## Handoff
 
 - Re-run DRC after LVS fix → `/drc-fix`
