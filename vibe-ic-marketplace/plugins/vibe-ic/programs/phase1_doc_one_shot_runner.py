@@ -4036,16 +4036,28 @@ def _v1_6_572_extract_port_rows_in_seed_mode(text: str):
 _V0_3_2_HEADER_NAME_TOKENS = frozenset({
     "signal", "signals", "port", "ports", "pin", "pins", "name",
     "port name", "signal name", "pin name",
+    # #491 round-3 — multi-word GROUP name headers (a row names a port
+    # or a port group) + universal CJK port-table vocabulary. These are
+    # generic documentation header words, chip-AGNOSTIC.
+    "port group", "pin group", "signal group", "port groups",
+    "訊號", "信號", "埠", "接腳", "腳位", "引腳", "名稱", "訊號名稱",
+    "信號名稱", "埠名",
 })
 _V0_3_2_HEADER_DIR_TOKENS = frozenset({
     "direction", "dir", "mode", "i/o", "io", "in/out", "type",
+    # #491 round-3 — CJK direction headers.
+    "方向", "輸入/輸出", "輸入輸出",
 })
 _V0_3_2_HEADER_WIDTH_TOKENS = frozenset({
     "width", "bits", "size", "[bits]", "msb:lsb",
+    # #491 round-3 — CJK width headers.
+    "寬度", "位寬", "位元寬度", "位元數",
 })
 _V0_3_2_HEADER_DESC_TOKENS = frozenset({
     "description", "desc", "function", "purpose", "notes", "note",
     "meaning", "comment", "comments",
+    # #491 round-3 — CJK description headers.
+    "描述", "說明", "功能", "備註", "用途",
 })
 # A pipe-table separator row: every cell is `:?---:?` (GFM) or `:?===:?`
 # (RST/AsciiDoc), with or without outer `|` borders.
