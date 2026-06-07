@@ -1966,6 +1966,121 @@ def _design_identity_fields(project: Path, top_name: str = "") -> dict:
     return ident
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# ORGANIC-20260606 #497 ROUND-2 (MEDIUM) — caller-side gate/lint JSON stamp.
+#
+# Round-1 (#497) stamped the phase2 CENTRAL manifest writer
+# (step_emit_phase2_manifests' `w()`) + the complexity-advisory writer, so
+# those families differ per design. But the gate-checker programs run by the
+# YAML workflow (executed via flow_compliance_check.py during step_final_audit)
+# write their OWN reports under reports/phase2/gates/*.json and
+# reports/phase2/lint/*.json via `--json PATH` → json.dumps(asdict(result))
+# with NO identity. They run AFTER step_emit_phase2_manifests and OVERWRITE the
+# manifest writer's stamped rtl_hygiene.json / rom_init_lint.json with bare,
+# identity-less payloads (the lint families even collapse to an empty list
+# `[]`). A fresh two-design regeneration WITH gate audits therefore still ships
+# byte-identical-but-honest gate jsons across DIFFERENT chips, and their
+# verdict=PASS shape is hard-excluded from the honest-N/A exemption, so the
+# only honest fix is to make the bytes DIFFER per design via the #484 stamp.
+#
+# FIX (caller-side, generic post-write sweep — chosen over per-call edits so
+# coverage is GUARANTEED for every file ever written under those two dirs,
+# present and future): after the gate audit has produced the gate/lint jsons,
+# the runner sweeps reports/phase2/gates/ and reports/phase2/lint/ and
+# idempotently stamps each *.json with the SAME #484 identity field shape
+# (ic_name/top + project-relative `design`). The checker's payload is preserved
+# byte-for-byte otherwise: a dict gets a `design_identity` key via setdefault; a
+# list (the lint findings shape) is wrapped as
+# {"findings": <original list>, "design_identity": {...}} so the per-design
+# stamp survives without dropping any finding (the lint jsons are consumed only
+# as evidence-presence pointers in the YAML `required_outputs`, never parsed for
+# their top-level shape). A scalar / parse-error / already-stamped file is left
+# untouched. chip-AGNOSTIC: reads only the project's own L docs + dir name.
+_GATE_REPORT_DIRS = ("reports/phase2/gates", "reports/phase2/lint")
+
+
+def _stamp_design_identity_in_file(fp: Path, ident: dict) -> bool:
+    """Idempotently fold the #484 `design_identity` stamp into one gate/lint
+    JSON file, preserving the checker's payload byte-for-byte otherwise.
+
+    Returns True iff the file was rewritten (a fresh stamp was added). A file
+    that already carries an identical `design_identity`, a non-JSON / scalar
+    payload, or an unreadable path is left untouched and returns False.
+
+    dict  → setdefault("design_identity", ident)            (payload preserved)
+    list  → {"findings": <list>, "design_identity": ident}  (no finding dropped)
+    """
+    try:
+        raw = fp.read_text(errors="replace")
+        payload = json.loads(raw)
+    except (OSError, ValueError):
+        return False
+    if isinstance(payload, dict):
+        if payload.get("design_identity") == ident:
+            return False  # already stamped (idempotent)
+        if "design_identity" in payload:
+            return False  # never clobber a pre-existing stamp
+        payload["design_identity"] = ident
+        new = payload
+    elif isinstance(payload, list):
+        # An empty / non-empty findings LIST has no place for a top-level key;
+        # wrap it so the per-design stamp can ride along without dropping data.
+        new = {"findings": payload, "design_identity": ident}
+    else:
+        # scalar (str/int/float/bool/null) — no per-design substance to carry a
+        # stamp on; leave it (it is not a report-class artifact CDI flags).
+        return False
+    try:
+        fp.write_text(json.dumps(new, indent=2, ensure_ascii=False) + "\n")
+    except OSError:
+        return False
+    return True
+
+
+def _stamp_gate_report_dirs(project: Path) -> List[str]:
+    """Sweep reports/phase2/gates/ + reports/phase2/lint/ and stamp every
+    *.json with this project's #484 identity. Returns the project-relative
+    paths that were freshly stamped (for the StepResult detail / transcript).
+    Generic by design: catches ALL gate/lint jsons however they were produced
+    (YAML workflow, direct checker invocation, manual), not a hand-maintained
+    per-file list. chip-AGNOSTIC."""
+    ident = _design_identity_fields(project)
+    stamped: List[str] = []
+    for rel_dir in _GATE_REPORT_DIRS:
+        d = project / rel_dir
+        if not d.is_dir():
+            continue
+        for fp in sorted(d.glob("*.json")):
+            if _stamp_design_identity_in_file(fp, ident):
+                stamped.append(str(fp.relative_to(project)))
+    return stamped
+
+
+def step_stamp_gate_reports(project: Path) -> StepResult:
+    """ORGANIC-20260606 #497 ROUND-2: caller-side identity stamp of every
+    gate/lint JSON the gate-audit step produced. Runs AFTER step_final_audit
+    (which is what drives flow_compliance_check.py → the YAML gate checkers
+    that write reports/phase2/gates/*.json + reports/phase2/lint/*.json). Pure
+    post-processing — never changes a verdict, never fails the run."""
+    t0 = time.time()
+    try:
+        stamped = _stamp_gate_report_dirs(project)
+    except Exception as e:  # noqa: BLE001 — stamping must never fail the run
+        return StepResult("stamp_gate_reports", "ADVISORY",
+                          time.time() - t0,
+                          f"gate/lint identity stamp skipped (non-fatal): {e}",
+                          extras={"advisory_only": True, "error": str(e)})
+    detail = (f"stamped #484 identity into {len(stamped)} gate/lint json(s) "
+              f"under {', '.join(_GATE_REPORT_DIRS)}"
+              if stamped else
+              "no unstamped gate/lint json found (already stamped or none "
+              "produced)")
+    return StepResult("stamp_gate_reports", "PASS",
+                      time.time() - t0, detail,
+                      sorted(stamped),
+                      extras={"stamped_count": len(stamped)})
+
+
 # ORGANIC-20260606 #476 (LOW) — $readmemh / $readmemb relative-path
 # resolution contract for the oracle run.
 #   The oracle TB is compiled+run with cwd = sim_full_stack/oracle_run/ (so
@@ -5472,6 +5587,14 @@ def main() -> int:
     # spurious FAIL on CVDP-class atomic runs (captured from v0.1.57).
     _pl.emit_final_summary(project, PROGRAMS_DIR)
     plan.append(step_final_audit(project, phase=2, skip_analog=args.skip_analog))
+
+    # #497 ROUND-2 — the final audit just drove flow_compliance_check.py, which
+    # ran the YAML gate checkers that (over)write reports/phase2/gates/*.json +
+    # reports/phase2/lint/*.json with identity-less payloads. Stamp them now,
+    # caller-side, so a cross-design byte-identity audit no longer flags honest
+    # gate jsons as canned cross-design reports. Runs LAST so it catches every
+    # gate/lint json produced during this run.
+    plan.append(step_stamp_gate_reports(project))
 
     summary = {
         "project": str(project),
