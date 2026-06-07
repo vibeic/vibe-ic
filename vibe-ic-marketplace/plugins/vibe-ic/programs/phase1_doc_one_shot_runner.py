@@ -49996,6 +49996,36 @@ def _backfill_auto_literals_into_typed(project: Path,
         _patch("L2_FRS", "auto_cited_sections", sections)
 
 
+def _v0_3_7_classify_phase1_exit(cov_gate_failed: bool, strict: bool,
+                                 pct: float, total_todo: int) -> dict:
+    """v0.3.7 — ORGANIC #505. Classify the phase1 (doc-extraction) exit at
+    the END of main(), where all L docs are already emitted (a hard
+    ingest / protocol error sys.exit's earlier, never reaching here — so
+    the only failing axes possible at this point are doc-extraction
+    coverage and/or TODO stubs).
+
+    Returns a structured exit-reason dict. ``coverage_only_failure`` is
+    True iff the run will FAIL and the SOLE cause is doc-extraction
+    coverage (the opcode-name coverage gate and/or overall coverage < 80%
+    under --strict) with ZERO TODO stubs. That axis is orthogonal to the
+    RTL deliverable, so a standalone-design orchestrator run
+    (`--skip-phase3`) may demote it to a non-gating advisory.
+
+    A TODO-stub failure is NOT coverage-only — TODO stubs are a real
+    generated-doc incompleteness that keeps the FAIL. Chip-AGNOSTIC:
+    pure arithmetic over the runner's own counters."""
+    will_fail = bool(cov_gate_failed) or (strict and (pct < 80.0 or total_todo > 0))
+    coverage_only = will_fail and total_todo == 0
+    return {
+        "verdict": "FAIL" if will_fail else "PASS",
+        "coverage_pct": round(float(pct), 1),
+        "total_todo": int(total_todo),
+        "cov_gate_failed": bool(cov_gate_failed),
+        "strict": bool(strict),
+        "coverage_only_failure": bool(coverage_only),
+    }
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         description=__doc__.split("\n\n")[0]
@@ -53779,6 +53809,24 @@ def main() -> int:
     # parent runner still saw exit 0 and kept going. Now any cov
     # gate FAIL produces exit 1 unconditionally; downstream
     # phase2 spec-to-RTL emit cannot run on placeholder L3.
+    # v0.3.7 — ORGANIC #505: emit a structured exit-reason sidecar so the
+    # orchestrator can distinguish a coverage-ONLY phase1 failure (a
+    # doc-extraction axis, orthogonal to the RTL deliverable) from a
+    # substantive one (TODO stubs). The orchestrator reads this in the
+    # standalone-design shape (--skip-phase3) to demote a coverage-only
+    # FAIL to a non-gating COVERAGE-INCOMPLETE advisory. Advisory file:
+    # never let it abort the run.
+    _exit_reason = _v0_3_7_classify_phase1_exit(
+        cov_gate_failed, bool(args.strict), pct, total_todo)
+    try:
+        _rd = project / "reports" / "phase1"
+        _rd.mkdir(parents=True, exist_ok=True)
+        (_rd / "phase1_exit_reason.json").write_text(
+            json.dumps(_exit_reason, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8")
+    except OSError:
+        pass
+
     if cov_gate_failed:
         print("FAIL: l3_opcode_name_coverage gate FAILed — see "
               "reports/audit/phase1/l3_opcode_name_coverage.json")

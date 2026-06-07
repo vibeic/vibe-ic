@@ -149,9 +149,30 @@ def _read_report(p: Path) -> Dict[str, Any]:
 def _aggregate(verdicts: List[str]) -> str:
     if any(v == "FAIL" for v in verdicts):
         return "FAIL"
-    if any(v in ("PASS_WITH_WAIVERS", "WAIVED") for v in verdicts):
+    # v0.3.7 — ORGANIC #505: COVERAGE-INCOMPLETE is a non-gating advisory
+    # tier (a demoted coverage-only phase1 failure in the standalone-design
+    # shape). It does NOT fail the run but DOES surface as PASS_WITH_WAIVERS
+    # so the overall verdict never hides the documented doc-extraction gap.
+    if any(v in ("PASS_WITH_WAIVERS", "WAIVED", "COVERAGE-INCOMPLETE")
+           for v in verdicts):
         return "PASS_WITH_WAIVERS"
     return "PASS"
+
+
+def _phase1_failure_is_coverage_only(project: Path) -> Tuple[bool, dict]:
+    """v0.3.7 — ORGANIC #505. Read the phase1 exit-reason sidecar
+    (``reports/phase1/phase1_exit_reason.json``, written by
+    phase1_doc_one_shot_runner) and report whether phase1's FAIL is
+    attributable SOLELY to doc-extraction coverage (orthogonal to the RTL
+    deliverable). Returns ``(coverage_only, reason_dict)``; ``(False, {})``
+    when the sidecar is absent/unreadable (e.g. prompt-mode phase1 that
+    never wrote one) so the default halting behaviour is preserved."""
+    f = project / "reports" / "phase1" / "phase1_exit_reason.json"
+    try:
+        d = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False, {}
+    return bool(d.get("coverage_only_failure")), d
 
 
 def main() -> int:
@@ -188,6 +209,7 @@ def main() -> int:
     plan: List[Tuple[str, str, int]] = []   # (phase, verdict, rc)
     halted_at: str = ""
     reports: Dict[str, Any] = {}
+    advisories: List[str] = []   # v0.3.7 #505 — non-gating notes
 
     # ---------------- Phase 1 ----------------
     run_phase1, p1_mode = _phase1_decision(project, args.skip_phase1)
@@ -206,7 +228,28 @@ def main() -> int:
         plan.append(("phase1", verdict, rc))
         reports["phase1"] = rep
         if verdict == "FAIL":
-            halted_at = "phase1"
+            # v0.3.7 — ORGANIC #505: in the standalone-design shape
+            # (--skip-phase3 → the RTL is the deliverable, no silicon
+            # backend), a phase1 failure that is PURELY doc-extraction
+            # coverage is orthogonal to the RTL verdict. Demote it to a
+            # non-gating COVERAGE-INCOMPLETE advisory and let phase2 run,
+            # so the overall verdict reflects the actual RTL deliverable
+            # (synth / lint / sdc). A TODO-stub or hard phase1 failure is
+            # NOT coverage-only and still halts. Full-chip flows (phase3
+            # in scope) keep halting — doc-extraction feeds the backend.
+            cov_only, cov_reason = _phase1_failure_is_coverage_only(project)
+            if args.skip_phase3 and cov_only:
+                plan[-1] = ("phase1", "COVERAGE-INCOMPLETE", rc)
+                advisories.append(
+                    f"phase1 doc-extraction COVERAGE-INCOMPLETE "
+                    f"(coverage {cov_reason.get('coverage_pct')}%, "
+                    f"todo {cov_reason.get('total_todo')}): non-gating in "
+                    f"the standalone-design shape — the RTL deliverable "
+                    f"verdict follows phase2; close the doc-extraction gap "
+                    f"before a full-chip (phase3) flow."
+                )
+            else:
+                halted_at = "phase1"
     else:
         plan.append(("phase1", "SKIPPED", 0))
 
@@ -305,6 +348,7 @@ def main() -> int:
         "duration_s": time.time() - t0,
         "halted_at": halted_at or None,
         "phases": [{"name": n, "verdict": v, "rc": rc} for n, v, rc in plan],
+        "advisories": advisories,   # v0.3.7 #505 — non-gating notes
         "verdict": overall,
     }
     out = _pl.report_path(project, "vibe_ic_one_shot.json")
@@ -324,6 +368,8 @@ def main() -> int:
         print(f"  halted at         : {halted_at}")
     for n, v, _ in plan:
         print(f"    {n:8} : {v}")
+    for adv in advisories:   # v0.3.7 #505 — non-gating advisories
+        print(f"  advisory          : {adv}")
     print(f"  duration          : {summary['duration_s']:.1f}s")
     print(f"  final summary     : {'reports/final_summary.md' if fs_ok else 'NOT generated'}")
     print(f"{'='*72}")
