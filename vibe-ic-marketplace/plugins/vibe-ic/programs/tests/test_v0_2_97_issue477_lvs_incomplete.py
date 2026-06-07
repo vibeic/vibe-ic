@@ -51,10 +51,13 @@ def _pdk():
         cell_lef="/c.lef", cell_gds=None, site="s", drc_deck=None)
 
 
-def _proj(tmp_path, gds_bytes=b"\x00\x06\x00\x02gds"):
-    gds = tmp_path / "phase3" / "stage4" / "gds"
-    gds.mkdir(parents=True)
-    (gds / "chip_top.gds").write_bytes(gds_bytes)
+def _proj(tmp_path, def_bytes=b"VERSION 5.8 ;\nDESIGN chip_top ;\nEND DESIGN\n"):
+    # v0.3.13 #508/#509: the LVS layout source is the routed DEF (read
+    # directly by Magic), NOT the GDS. The pnr DEF lives under
+    # phase3/stage3/pnr/<top>.def.
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "chip_top.def").write_bytes(def_bytes)
     synth = tmp_path / "phase2" / "stage2" / "synth"
     synth.mkdir(parents=True)
     (synth / "chip_top_synth.v").write_text(
@@ -125,21 +128,21 @@ def test_truncated_verdict_less_report_is_incomplete_fail(tmp_path,
 # --------------------------------------------------------------------------
 # (b) 0-byte layout GDS input → FAIL before tools even launch
 # --------------------------------------------------------------------------
-def test_zero_byte_gds_input_is_named_fail(tmp_path, monkeypatch):
-    p = _proj(tmp_path, gds_bytes=b"")  # 0-byte merged/layout GDS
+def test_zero_byte_def_input_is_named_fail(tmp_path, monkeypatch):
+    p = _proj(tmp_path, def_bytes=b"")  # 0-byte routed/layout DEF
     # Tools all "present"; the size guard must fire before any compare.
     monkeypatch.setattr(runner, "_docker_exec",
                         lambda c, cmd, timeout=0: (0, "", ""))
     monkeypatch.setattr(runner, "_to_container_path", lambda s, c: s)
     r = runner.step_lvs(p, "chip_top", _pdk(), "x")
     assert r.status == "FAIL", (r.status, r.detail)
-    assert r.extras.get("finding") == "LVS_INPUT_GDS_EMPTY"
+    assert r.extras.get("finding") == "LVS_INPUT_DEF_EMPTY"
     assert "0 bytes" in r.detail
     vpath = p / "reports" / "phase3" / "lvs_verdict.json"
     assert vpath.is_file()
     v = json.loads(vpath.read_text())
     assert v["status"] == "FAIL"
-    assert v["finding"] == "LVS_INPUT_GDS_EMPTY"
+    assert v["finding"] == "LVS_INPUT_DEF_EMPTY"
 
 
 # --------------------------------------------------------------------------
@@ -277,7 +280,8 @@ def test_gate_consumer_still_exits1_on_verdictless_log(tmp_path):
 def test_source_carries_honesty_checks():
     assert "_write_lvs_verdict" in _SRC
     assert "LVS_NO_TERMINAL_VERDICT" in _SRC
-    assert "LVS_INPUT_GDS_EMPTY" in _SRC
+    # v0.3.13 #508/#509: the layout source is the routed DEF now.
+    assert "LVS_INPUT_DEF_EMPTY" in _SRC
     assert "LVS_EXTRACTION_ERROR_FLOOD" in _SRC
     assert "_parse_ext2spice_error_count" in _SRC
     assert "lvs_verdict.json" in _SRC

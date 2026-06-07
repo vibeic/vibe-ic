@@ -52,29 +52,47 @@ def test_extraction_still_emits_ext2spice_lvs():
     assert "ext2spice -o $env(SPICE_OUT)" in tcl
 
 
-def test_extraction_env_sets_magic_ext_use_gds(monkeypatch, tmp_path):
-    # the Magic-extraction subprocess must export MAGIC_EXT_USE_GDS=1.
-    import inspect
-    src = inspect.getsource(R._run_extraction_lvs)
-    assert "MAGIC_EXT_USE_GDS=1" in src
+def test_extraction_is_def_direct_not_gds():
+    # #508/#509 round-2 FINAL: the field-validated LVS extraction reads the
+    # routed DEF DIRECTLY (which builds the top pins as labels) and
+    # `port makeall` promotes them to ports BEFORE extraction — the only
+    # path that reached real top-port recognition. The GDS-based path
+    # (gds read) is GONE from the LVS extraction.
+    tcl = R._MAGIC_EXT2SPICE_TCL
+    assert "def read $env(DEF)" in tcl
+    assert "port makeall" in tcl
+    assert "lef read $env(TLEF)" in tcl and "lef read $env(CLEF)" in tcl
+    assert "gds read" not in tcl
+    # port makeall must precede the extract pass.
+    assert tcl.index("port makeall") < tcl.index("extract no all")
 
 
-def test_netgen_shell_exports_magic_ext_use_gds():
-    # #508 ROUND-2 (dormant-feature, the #511 lesson): MAGIC_EXT_USE_GDS=1
-    # was exported ONLY in the Magic-extraction shell, but the ignore-class
-    # block lives in the NETGEN setup loaded by a SEPARATE _docker_exec
-    # (env does not persist across calls) — so at netgen time the block was
-    # OFF. The env MUST be wired into the netgen command's own shell. Pin
-    # it structurally: the export must appear in the ~600 chars preceding
-    # the `netgen -batch lvs` invocation (i.e. in the netgen shell, not
-    # merely somewhere in the function).
+def test_lvs_path_does_not_force_magic_ext_use_gds():
+    # field anti-lesson (#508/#509 r2): MAGIC_EXT_USE_GDS forces a leaf GDS
+    # re-extract that floods 2900+ cell-internal disconnects on the
+    # cell-level DEF-direct compare. Neither the extraction shell nor the
+    # netgen shell may EXPORT it. Assert no CODE form sets it (the string
+    # still appears in explanatory comments, which is fine).
     import inspect
     src = inspect.getsource(R._run_extraction_lvs)
-    i = src.index("netgen -batch lvs")
-    window = src[max(0, i - 600):i]
-    assert "MAGIC_EXT_USE_GDS=1" in window, (
-        "MAGIC_EXT_USE_GDS=1 not wired into the netgen shell — the "
-        "ignore-class block would be OFF at netgen time (#508 r2)")
+    assert "export MAGIC_EXT_USE_GDS=1" not in src      # shell export
+    assert 'f"MAGIC_EXT_USE_GDS=1 "' not in src         # f-string env prefix
+    assert 'f"export MAGIC_EXT_USE_GDS' not in src      # f-string export
+
+
+def test_local_netgen_setup_ignores_physical_cells(tmp_path):
+    # the project-local netgen setup sources the PDK setup and
+    # UNCONDITIONALLY ignores fill/tap/decap/fakediode on BOTH circuits.
+    pdk = R._detect_pdk(Path("/nonexistent"), override="sky130A")
+    host, cpath = R._emit_local_netgen_setup(tmp_path, pdk, "iic-eda")
+    body = host.read_text()
+    assert "sky130A_setup.tcl" in body          # sources PDK setup
+    for cls in ("fill_", "tapvpwrvgnd_", "decap_", "fakediode_"):
+        assert cls in body
+    assert "$cells1" in body and "$cells2" in body  # both circuits
+    # must NOT hardcode a design-specific functional class as ignored
+    # (that could hide a real defect in another design).
+    assert "dfrtp_1" not in body and "__inv_1" not in body
 
 
 # ── #509 — streamout promotes DEF pins to ports ──────────────────────

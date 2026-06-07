@@ -4090,46 +4090,56 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
             "open-source LVS needs the PDK Magic tech + netgen setup; "
             "missing: " + ", ".join(missing_tech) + " (#443)",
             extras={"missing_tech": missing_tech})
-    gds_file = _pl.gds_dir(project) / f"{top}.gds"
-    if not gds_file.is_file():
-        cands = sorted(_pl.gds_dir(project).glob("*.gds")) + \
-            sorted(_pl.pnr_dir(project).glob("*.gds"))
-        gds_file = cands[0] if cands else gds_file
+    # v0.3.13 — ORGANIC #508/#509 FINAL: DEF-DIRECT cell-level LVS. The
+    # layout source is the ROUTED DEF (not the GDS) — Magic reads it
+    # directly + `port makeall` promotes the DEF top pins to ports, the
+    # only path the field reached "Circuits match uniquely" on. The
+    # KLayout-streamed GDS was either compact-layermapped (Magic-unreadable)
+    # or a 70-byte abstract-view shell → portless extraction → all-top
+    # disconnected. Prefer the routed DEF; fall back to any pnr DEF.
+    def_file = _pl.pnr_dir(project) / f"{top}.def"
+    if not def_file.is_file():
+        d_cands = (sorted(_pl.pnr_dir(project).glob("*.routed.def"))
+                   + sorted(_pl.pnr_dir(project).glob("*.def")))
+        def_file = d_cands[0] if d_cands else def_file
     netlist = _pl.synth_dir(project) / f"{top}_synth.v"
     if not netlist.is_file():
         nl_cands = sorted(_pl.synth_dir(project).glob("*.v"))
         netlist = nl_cands[0] if nl_cands else netlist
-    if not gds_file.is_file() or not netlist.is_file():
+    if not def_file.is_file() or not netlist.is_file():
         return StepResult(
             "lvs", "WAIVED", time.time() - t0,
             "LVS inputs missing: "
-            + ("GDS " if not gds_file.is_file() else "")
+            + ("routed-DEF " if not def_file.is_file() else "")
             + ("gate-netlist" if not netlist.is_file() else "")
-            + " — run PnR/GDS first (#443)")
-    # ORGANIC-20260606 #477 — run-completion honesty check (b): a
-    # 0-byte layout artifact (e.g. a merged GDS that the merge step
-    # truncated / never finished writing) must NEVER feed a "clean"
-    # LVS. Extracting from an empty mask source produces an empty
-    # netlist and a meaningless compare; name the finding and FAIL
-    # here BEFORE launching Magic/netgen. Chip-AGNOSTIC: pure size
-    # guard on the input artifact, no chip/PDK literal.
-    if gds_file.stat().st_size == 0:
+            + " — run PnR first (#443/#509)")
+    # ORGANIC-20260606 #477 — run-completion honesty check (b): a 0-byte
+    # layout source must NEVER feed a "clean" LVS. Extracting from an empty
+    # DEF yields an empty netlist + a meaningless compare; FAIL here BEFORE
+    # launching Magic/netgen. Chip-AGNOSTIC: pure size guard.
+    if def_file.stat().st_size == 0:
         verdict = _write_lvs_verdict(
-            project, "FAIL", "LVS_INPUT_GDS_EMPTY",
-            f"layout GDS {gds_file.name} is 0 bytes — an empty mask "
-            f"source cannot be compared; extraction would yield an "
-            f"empty netlist and a false-clean LVS (#477).",
-            extras={"gds": str(gds_file)})
+            project, "FAIL", "LVS_INPUT_DEF_EMPTY",
+            f"routed DEF {def_file.name} is 0 bytes — an empty layout "
+            f"source cannot be compared; extraction would yield an empty "
+            f"netlist and a false-clean LVS (#477/#509).",
+            extras={"def": str(def_file)})
         return StepResult(
             "lvs", "FAIL", time.time() - t0,
-            f"LVS aborted: layout GDS {gds_file.name} is 0 bytes "
-            f"(#477 — empty mask source, named in lvs_verdict.json; "
+            f"LVS aborted: routed DEF {def_file.name} is 0 bytes "
+            f"(#477/#509 — empty layout source, named in lvs_verdict.json; "
             f"NOT a clean compare)",
-            extras={"finding": "LVS_INPUT_GDS_EMPTY",
-                    "gds": str(gds_file),
+            extras={"finding": "LVS_INPUT_DEF_EMPTY",
+                    "def": str(def_file),
                     "lvs_verdict": verdict})
-    return _run_extraction_lvs(project, top, pdk, container, gds_file,
-                               netlist, magicrc, netgen_setup, t0)
+    # v0.3.13 — emit the project-local netgen setup (unconditional
+    # fill/tap/decap/fakediode ignore) and use it instead of the bare PDK
+    # setup, so the cell-level compare is not flooded by physical-only
+    # device-count deltas and does not need MAGIC_EXT_USE_GDS (#508/#509).
+    _local_setup_host, local_setup_c = _emit_local_netgen_setup(
+        project, pdk, container)
+    return _run_extraction_lvs(project, top, pdk, container, def_file,
+                               netlist, magicrc, local_setup_c, t0)
 
 
 # ORGANIC-20260606 #477 — sane ceiling for the ext2spice extraction
@@ -4208,13 +4218,35 @@ def _write_lvs_verdict(project: Path, status: str, finding: str,
 # prefix) is also REQUIRED: the netgen setup's fill/tap/decap ignore-class
 # block is gated behind it; without it netgen sees fill/tap device-count
 # mismatches or SIGSEGVs (139). chip-AGNOSTIC: pure Magic recipe.
+# v0.3.13 — ORGANIC #509/#508 round-2 FINAL: DEF-DIRECT cell-level LVS
+# extraction (the field-validated recipe that reached "Circuits match
+# uniquely" on real spm + subservient). The GDS-based path (gds read +
+# extract) failed because the KLayout-streamed GDS either used a compact
+# layermap Magic can't read OR was a 70-byte empty shell (std cells are
+# LEF abstracts → `gds write` refuses) → the extracted `.subckt` carried
+# NO port list → every top port disconnected. Reading the routed DEF
+# DIRECTLY builds the top pins as labels (from the DEF PINS section);
+# `port makeall` then promotes ALL of them to ports BEFORE extraction, so
+# the extracted subckt carries the full port list. Cell-level black-box
+# (`extract no all; extract do local`) matches the structural gate
+# netlist. chip-AGNOSTIC: LEF/DEF/top come from env; no chip literal.
+#
+# Anti-lesson (field, with #508): do NOT set MAGIC_EXT_USE_GDS for this
+# cell-level DEF-direct compare — it forces a GDS re-extract of every leaf
+# cell and floods 2900+ cell-internal power-pin disconnected nodes. The
+# fill/tap/decap ignore is done UNCONDITIONALLY by the project-local
+# netgen setup (see _emit_local_netgen_setup), not gated behind that env.
 _MAGIC_EXT2SPICE_TCL = """\
 crashbackups stop
-gds readonly true
-gds rescale false
-gds read $env(GDS)
+drc off
+lef read $env(TLEF)
+lef read $env(CLEF)
+eval $env(MACRO_LEF_READS)
+def read $env(DEF)
 load $env(TOP)
 select top cell
+port makeall
+puts "PORTS_PROMOTED [port first]..[port last]"
 extract no all
 extract do local
 extract all
@@ -4225,30 +4257,89 @@ quit -noprompt
 """
 
 
+def _emit_local_netgen_setup(project: Path, pdk: PdkConfig,
+                             container: str) -> Tuple[Path, str]:
+    """v0.3.13 — ORGANIC #508/#509 round-2 FINAL. Emit a PROJECT-LOCAL
+    netgen setup that `source`s the PDK's own setup then UNCONDITIONALLY
+    ignores the physical-only filler / tap / decap / fakediode cells on
+    BOTH circuits. The field validated that relying on the PDK setup's
+    MAGIC_EXT_USE_GDS-gated ignore block is the wrong lever for the
+    cell-level DEF-direct compare (that env forces a leaf GDS re-extract
+    that floods cell-internal disconnects); ignoring the physical-only
+    classes here, unconditionally, is the correct + safe generalisation
+    (these cells carry no functional connectivity in any design, so the
+    ignore can never hide a real defect). Returns (host_path, container_path).
+
+    chip/PDK-AGNOSTIC: the ignore patterns are generic sky-family physical
+    cell-class regexes; design-specific directives (e.g. ECO spare-cell
+    classes that happen to be spare-ONLY in a given design, buffer-merged
+    output-port aliasing) are NOT emitted here — those need per-design
+    confirmation and remain design-side, since a class that is spare-only
+    in one design may be functional in another."""
+    pdk_setup = (f"{PDKS_IN_CONTAINER}/{pdk.name}/libs.tech/netgen/"
+                 f"{pdk.name}_setup.tcl")
+    body = (
+        "# v0.3.13 ORGANIC #508/#509 — project-local netgen setup.\n"
+        "# Sources the PDK setup, then unconditionally ignores the\n"
+        "# physical-only fill/tap/decap/fakediode classes on both\n"
+        "# circuits (no functional connectivity → safe to ignore; not\n"
+        "# gated behind MAGIC_EXT_USE_GDS, which floods cell-internal\n"
+        "# disconnects on the cell-level DEF-direct compare).\n"
+        f"source {pdk_setup}\n"
+        "foreach _c $cells1 {\n"
+        "    if {[regexp {sky130_fd_sc_[^_]+__fill_[[:digit:]]+} $_c]}        { ignore class \"-circuit1 $_c\" }\n"
+        "    if {[regexp {sky130_fd_sc_[^_]+__tapvpwrvgnd_[[:digit:]]+} $_c]} { ignore class \"-circuit1 $_c\" }\n"
+        "    if {[regexp {sky130_fd_sc_[^_]+__decap_[[:digit:]]+} $_c]}       { ignore class \"-circuit1 $_c\" }\n"
+        "    if {[regexp {sky130_ef_sc_[^_]+__fakediode_[[:digit:]]+} $_c]}   { ignore class \"-circuit1 $_c\" }\n"
+        "}\n"
+        "foreach _c $cells2 {\n"
+        "    if {[regexp {sky130_fd_sc_[^_]+__fill_[[:digit:]]+} $_c]}        { ignore class \"-circuit2 $_c\" }\n"
+        "    if {[regexp {sky130_fd_sc_[^_]+__tapvpwrvgnd_[[:digit:]]+} $_c]} { ignore class \"-circuit2 $_c\" }\n"
+        "    if {[regexp {sky130_fd_sc_[^_]+__decap_[[:digit:]]+} $_c]}       { ignore class \"-circuit2 $_c\" }\n"
+        "    if {[regexp {sky130_ef_sc_[^_]+__fakediode_[[:digit:]]+} $_c]}   { ignore class \"-circuit2 $_c\" }\n"
+        "}\n"
+    )
+    ext_dir = _pl.extracted_dir(project)
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    host = ext_dir / "local_netgen_setup.tcl"
+    host.write_text(body)
+    return host, _to_container_path(str(host), container)
+
+
 def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
-                        container: str, gds_file: Path, netlist: Path,
+                        container: str, def_file: Path, netlist: Path,
                         magicrc: str, netgen_setup: str,
                         t0: float) -> StepResult:
-    """#443 — the layout-extraction step that was structurally missing:
-    Magic `extract all` + `ext2spice lvs` (hierarchy-preserved) on the
-    routed GDS, then netgen LVS vs the gate-level Verilog netlist with
-    the PDK's own netgen setup. The verdict comes from netgen's real
-    compare result; reports/phase3/lvs.rpt carries the netgen
-    transcript (tool signature included). chip-AGNOSTIC: PDK paths are
-    derived from pdk.name, nothing chip-specific."""
+    """#443 → v0.3.13 ORGANIC #508/#509 FINAL — DEF-DIRECT cell-level LVS:
+    Magic reads the routed DEF directly (building top pins as labels),
+    `port makeall` promotes them to ports, cell-level black-box extraction
+    (`extract no all; extract do local; extract all`) + `ext2spice lvs`
+    yields a `.subckt` with the full top port list, then netgen LVS vs the
+    gate-level Verilog netlist using a PROJECT-LOCAL setup that
+    unconditionally ignores the physical-only fill/tap/decap/fakediode
+    classes. `netgen_setup` is the local setup's container path. The
+    verdict comes from netgen's real compare; reports/phase3/lvs.rpt
+    carries the transcript. chip-AGNOSTIC. NOTE (field/#508): this path
+    deliberately does NOT set MAGIC_EXT_USE_GDS — that env forces a leaf
+    GDS re-extract that floods 2900+ cell-internal disconnects on the
+    cell-level compare; the ignore is handled by the local setup."""
     ext_dir = _pl.extracted_dir(project)
     ext_dir.mkdir(parents=True, exist_ok=True)
     spice_out = ext_dir / f"{top}_extracted.sp"
     tcl = ext_dir / f"ext2spice_{top}.tcl"
     tcl.write_text(_MAGIC_EXT2SPICE_TCL)
+    tlef_c = _to_container_path(str(pdk.tech_lef), container)
+    clef_c = _to_container_path(str(pdk.cell_lef), container)
+    # `eval`-ed inside the TCL; empty string → no-op when no macro LEFs.
+    macro_lef_reads = "; ".join(
+        f"lef read {_to_container_path(str(f), container)}"
+        for f in pdk.macro_lefs)
     env_prefix = (
-        f"export GDS={_to_container_path(str(gds_file), container)} "
+        f"export TLEF={shlex.quote(tlef_c)} "
+        f"CLEF={shlex.quote(clef_c)} "
+        f"MACRO_LEF_READS={shlex.quote(macro_lef_reads)} "
+        f"DEF={_to_container_path(str(def_file), container)} "
         f"TOP={top} "
-        # v0.3.9 — ORGANIC #508: REQUIRED so the netgen setup's
-        # fill/tap/decap ignore-class block (gated behind this env var)
-        # activates — without it netgen mismatches fill/tap device counts
-        # or SIGSEGVs (139).
-        f"MAGIC_EXT_USE_GDS=1 "
         f"SPICE_OUT={_to_container_path(str(spice_out), container)} && "
         f"cd {_to_container_path(str(ext_dir), container)} && ")
     cmd = (env_prefix +
@@ -4324,15 +4415,15 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     nl_c = _to_container_path(str(netlist), container)
     rpt_c = _to_container_path(str(lvs_rpt), container)
     cmd = (
-        # v0.3.9 #508 → v0.3.11 #508 round-2: MAGIC_EXT_USE_GDS=1 MUST be
-        # exported in THIS (netgen) shell — the fill/tap/decap ignore-class
-        # block lives in the netgen setup TCL, loaded by netgen here, NOT
-        # in the Magic-extraction shell. `_docker_exec` runs a fresh
-        # `bash -lc` per call so env never persists across the two calls;
-        # exporting it only in the extraction shell left the block OFF at
-        # netgen time (dormant) → fill/tap device-count mismatch / SIGSEGV
-        # (139). Setting it here is what actually activates the block.
-        f"export MAGIC_EXT_USE_GDS=1 && "
+        # v0.3.11 #508 set MAGIC_EXT_USE_GDS=1 here to activate the PDK
+        # setup's gated ignore block — but the field (#508/#509 round-2)
+        # proved that for the cell-level DEF-direct compare that env FORCES
+        # a leaf GDS re-extract that floods 2900+ cell-internal power-pin
+        # disconnects (2942 nodes). v0.3.13 removes it: the fill/tap/decap/
+        # fakediode ignore is now done UNCONDITIONALLY by the project-local
+        # netgen setup (_emit_local_netgen_setup), which is the correct
+        # lever and needs no env gating. MAGIC_EXT_USE_GDS belongs ONLY to
+        # a (future) full transistor-level GDS re-extract path, never here.
         f"export PATH={TOOLS_IN_CONTAINER}/netgen/bin:"
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"netgen -batch lvs \"{sp_c} {lay_top}\" \"{nl_c} {top}\" "

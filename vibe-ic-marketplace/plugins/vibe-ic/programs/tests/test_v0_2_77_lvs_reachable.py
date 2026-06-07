@@ -33,9 +33,12 @@ def _pdk():
 
 
 def _proj(tmp_path):
-    gds = tmp_path / "phase3" / "stage4" / "gds"
-    gds.mkdir(parents=True)
-    (gds / "chip_top.gds").write_bytes(b"\x00\x06\x00\x02gds")
+    # v0.3.13 #508/#509: LVS layout source is the routed DEF (Magic reads
+    # it directly via def read + port makeall), not the GDS.
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "chip_top.def").write_bytes(
+        b"VERSION 5.8 ;\nDESIGN chip_top ;\nEND DESIGN\n")
     synth = tmp_path / "phase2" / "stage2" / "synth"
     synth.mkdir(parents=True)
     (synth / "chip_top_synth.v").write_text("module chip_top();\nendmodule\n")
