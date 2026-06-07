@@ -254,6 +254,12 @@ def extract_l9_ports(l9: dict) -> list[dict]:
                     "name": name,
                     "direction": d,
                     "open_drain": bool(entry.get("open_drain", False)),
+                    # v0.3.4 — ORGANIC #491 R4. Doc-declared optionality
+                    # (`(optional)` name annotation / optionality width
+                    # cell, modelled by the phase1 promoter) reaches the
+                    # gate so an optional pin absent from the RTL top is
+                    # advisory, not FAIL.
+                    "optional": bool(entry.get("optional", False)),
                 }
                 by_name[name] = rec
                 out.append(rec)
@@ -265,6 +271,8 @@ def extract_l9_ports(l9: dict) -> list[dict]:
                     prev["direction"] = d
                 if entry.get("open_drain"):
                     prev["open_drain"] = True
+                if entry.get("optional"):
+                    prev["optional"] = True
     return out
 
 
@@ -500,8 +508,16 @@ def main(argv: list[str]) -> int:
     l9_names = {n for n in l9_names if not _is_implicit_pin(n)}
     rtl_names = {n for n in rtl_names if not _is_implicit_pin(n)}
 
-    only_l9 = sorted(l9_names - rtl_names)
+    only_l9_all = sorted(l9_names - rtl_names)
     only_rtl_all = sorted(rtl_names - l9_names)
+
+    # v0.3.4 — ORGANIC #491 R4. Split L9-only pins into doc-declared
+    # OPTIONAL vs required. A doc says "(optional) pin" → the RTL top
+    # legitimately may omit it; absence is advisory, not FAIL (mirror
+    # of the debug/scan/tb split on the RTL side below).
+    l9_optional_names = {p["name"] for p in l9_ports if p.get("optional")}
+    only_l9_optional = [n for n in only_l9_all if n in l9_optional_names]
+    only_l9 = [n for n in only_l9_all if n not in l9_optional_names]
 
     # Wave 82 Fix G — split RTL-only ports into debug-allowed vs real.
     # debug_*/scan_*/tb_*/_dbg* / probe_* / etc. are test hooks that
@@ -549,6 +565,13 @@ def main(argv: list[str]) -> int:
                 f"ignored: {only_rtl_debug})"
             )
         print(msg)
+        if only_l9_optional:
+            # v0.3.4 — #491 R4 advisory (non-gating): doc-optional
+            # pins the RTL top legitimately omits.
+            print(
+                f"  WARN (advisory) — L9 doc-OPTIONAL pin(s) not in "
+                f"RTL top: {only_l9_optional}"
+            )
         return 0
 
     is_waived, rationale = waived(project)

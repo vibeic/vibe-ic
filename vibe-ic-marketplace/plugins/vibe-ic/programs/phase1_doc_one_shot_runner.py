@@ -117,6 +117,14 @@ import _path_layout as _pl
 # never ends up cited as a spec source (RTL-as-oracle prohibition).
 import readme_deep_parser as _rdp
 import readme_vendor_extractor as _rve
+# Issue #500 (MEDIUM) — ONE shared bilingual (CJK + English) header
+# lexicon. Every per-family header token-set constant below derives its
+# vocabulary from `_header_lexicon.tokens_for(...)` so a new CJK / English
+# synonym propagates to every table classifier (pin / register-map /
+# opcode / memory-map / field / parameter / bullet-port) at once. The pin
+# family's #491 round-3 CJK tokens are folded into the lexicon role sets
+# (reused, not duplicated). Chip-AGNOSTIC.
+import _header_lexicon as _hlex
 
 
 # ---------------------------------------------------------------------------
@@ -2641,24 +2649,37 @@ _RE_L1_BULLET_NAME_BARE = re.compile(
 # These are NEVER real port names; reject them at the L1 bullet
 # emit gate. Lower-case match against the captured name.
 # Chip-AGNOSTIC: pure doc-table vocabulary.
-_BULLET_PORT_COMMON_HEADER_TOKENS = frozenset({
-    "signal", "width", "direction", "dir",
-    "description", "desc", "function",
-    "name", "values", "value", "default",
-    "parameter", "param", "bits", "bit",
-    "access", "rw", "address",
-    "type", "size", "range", "units", "unit",
-    "synchronous", "async",
-    "enables", "out", "in", "inout",
-    "field", "fields", "column", "row",
-    "notes", "note", "remark", "remarks",
-    # Deliberately NOT denying: `data`, `addr`, `clock`, `clk`,
-    # `io` — those ARE common legitimate port-name stems
-    # (`data[7:0]`, `clk_i`, `clock`, `io`); only the list-table
-    # *header-row* shape would emit them as standalone tokens,
-    # and the `.. list-table::` directive-skip handles that case
-    # without needing them on the deny-list.
+# Issue #500 — the bullet-port header deny-list draws its column-role
+# vocabulary from the ONE shared bilingual lexicon (name / direction /
+# width / description / address / access / default / value / parameter /
+# field / range / units) UNION a few bullet-list-specific structure
+# tokens (synchronous / async / enables / out / in / inout / column /
+# row). CJK header words (寬度 / 方向 / 描述 …) leaked from a CJK list-
+# table header row are now denied as standalone bullet-port names too.
+#
+# Deliberately NOT denying: `data`, `addr`, `clock`, `clk`, `io` — those
+# ARE common legitimate port-name stems (`data[7:0]`, `clk_i`, `clock`,
+# `io`); only the list-table *header-row* shape would emit them as
+# standalone tokens, and the `.. list-table::` directive-skip handles
+# that case. Hence the lexicon `address` role's `addr` token would
+# over-deny, so we draw the address role-tokens MINUS `addr`.
+_BULLET_PORT_STRUCTURE_TOKENS = frozenset({
+    "synchronous", "async", "enables", "out", "in", "inout",
+    "column", "row", "type", "size",
 })
+_BULLET_PORT_COMMON_HEADER_TOKENS = (
+    _hlex.tokens_for(
+        "name", "direction", "width", "description", "access",
+        "default", "value", "parameter", "field", "range", "units",
+    )
+    # `addr`, `data`, `io` are legitimate port-name stems; exclude them so
+    # a bullet port literally named `data` / `addr` / `io` is not swallowed
+    # (lexicon `value` role carries `data`, `address` carries `addr`,
+    # `direction` carries `io`). The original bullet-port deny-list
+    # deliberately omitted these stems.
+    - {"addr", "data", "io"}
+    | _BULLET_PORT_STRUCTURE_TOKENS
+)
 
 # v1.6.258 — for #118 ORGANIC. RST `.. list-table::` directive
 # regex. Used to identify ranges where `* -` items are list-table
@@ -4033,32 +4054,16 @@ def _v1_6_572_extract_port_rows_in_seed_mode(text: str):
 #
 # Chip-AGNOSTIC: pure GFM/RST pipe-table grammar + universal port-table
 # header vocabulary + RTL direction keywords; no chip-class literal.
-_V0_3_2_HEADER_NAME_TOKENS = frozenset({
-    "signal", "signals", "port", "ports", "pin", "pins", "name",
-    "port name", "signal name", "pin name",
-    # #491 round-3 — multi-word GROUP name headers (a row names a port
-    # or a port group) + universal CJK port-table vocabulary. These are
-    # generic documentation header words, chip-AGNOSTIC.
-    "port group", "pin group", "signal group", "port groups",
-    "訊號", "信號", "埠", "接腳", "腳位", "引腳", "名稱", "訊號名稱",
-    "信號名稱", "埠名",
-})
-_V0_3_2_HEADER_DIR_TOKENS = frozenset({
-    "direction", "dir", "mode", "i/o", "io", "in/out", "type",
-    # #491 round-3 — CJK direction headers.
-    "方向", "輸入/輸出", "輸入輸出",
-})
-_V0_3_2_HEADER_WIDTH_TOKENS = frozenset({
-    "width", "bits", "size", "[bits]", "msb:lsb",
-    # #491 round-3 — CJK width headers.
-    "寬度", "位寬", "位元寬度", "位元數",
-})
-_V0_3_2_HEADER_DESC_TOKENS = frozenset({
-    "description", "desc", "function", "purpose", "notes", "note",
-    "meaning", "comment", "comments",
-    # #491 round-3 — CJK description headers.
-    "描述", "說明", "功能", "備註", "用途",
-})
+# Issue #500 — the pin family's per-role header token sets now derive
+# from the ONE shared bilingual lexicon. The #491 round-3 CJK vocabulary
+# is folded into `_header_lexicon.ROLE_TOKENS` (reused, not duplicated),
+# so these constants keep the exact #491 behaviour while every sibling
+# family (register-map / opcode / field / parameter) draws from the same
+# source pin. Chip-AGNOSTIC.
+_V0_3_2_HEADER_NAME_TOKENS = _hlex.tokens_for("name")
+_V0_3_2_HEADER_DIR_TOKENS = _hlex.tokens_for("direction")
+_V0_3_2_HEADER_WIDTH_TOKENS = _hlex.tokens_for("width")
+_V0_3_2_HEADER_DESC_TOKENS = _hlex.tokens_for("description")
 # A pipe-table separator row: every cell is `:?---:?` (GFM) or `:?===:?`
 # (RST/AsciiDoc), with or without outer `|` borders.
 _V0_3_2_RE_SEP_CELL = re.compile(r"^:?[-=]{1,}:?$")
@@ -4186,13 +4191,69 @@ def _v0_3_2_iter_gfm_pin_tables(text: str):
         i += 1
 
 
+# v0.3.4 — ORGANIC #491 ROUND-4. Generic table-annotation optionality
+# vocabulary. A real port-table row may carry an OPTIONALITY annotation
+# either as a parenthesised prefix on the name cell — `(optional)
+# `i_gpio`` — or as the entire width cell (`optional`). These are
+# GENERIC documentation words (EN + CJK), never chip-class literals.
+_V0_3_4_OPTIONALITY_TOKENS = frozenset({
+    "optional", "option", "reserved",
+    "可選", "可选", "選用", "选用", "選配", "选配", "保留",
+})
+
+# Parenthesised annotation groups (ASCII + fullwidth parens).
+_V0_3_4_RE_PAREN = re.compile(r"[(（]([^()（）]*)[)）]")
+
+
+def _v0_3_4_sanitize_pin_name_cell(raw: str):
+    """v0.3.4 — ORGANIC #491 ROUND-4. Sanitise a port-table NAME cell.
+
+    Real vendor tables annotate the identifier in-cell:
+      * ``(optional) `i_gpio```      → annotation prefix + backticks;
+      * ```o_data` (or `o_wdata`)``  → alternative-name annotation.
+
+    Returns ``(clean_name, optional, aliases)``:
+      * parenthesised groups are STRIPPED from the name; a group whose
+        text contains a generic optionality token (EN/CJK,
+        `_V0_3_4_OPTIONALITY_TOKENS`) sets ``optional=True``; a group
+        of the shape ``or <ident>`` / ``或 <ident>`` contributes the
+        identifier to ``aliases``;
+      * emphasis (`*`), backticks and surrounding whitespace are
+        removed from what remains.
+
+    Chip-AGNOSTIC: only generic annotation vocabulary participates; the
+    identifier itself is never pattern-matched against chip names."""
+    optional = False
+    aliases: List[str] = []
+    def _eat(m):
+        nonlocal optional
+        body = (m.group(1) or "").strip().strip("`* ").lower()
+        if any(tok in body for tok in _V0_3_4_OPTIONALITY_TOKENS):
+            optional = True
+        alias_m = re.match(r"^(?:or|或)\s+(.+)$", body)
+        if alias_m:
+            cand = alias_m.group(1).strip().strip("`* ")
+            if cand and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_\[\]:]*", cand):
+                aliases.append(cand)
+        return " "
+    no_paren = _V0_3_4_RE_PAREN.sub(_eat, raw or "")
+    clean = no_paren.replace("`", " ").replace("*", " ").strip()
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean, optional, aliases
+
+
 def _v0_3_2_emit_pins_from_gfm_tables(text: str):
     """v0.3.2 — for #491 R2. Resolve `_v0_3_2_iter_gfm_pin_tables` blocks
     into canonical port records `{name, direction, width, description,
     source_row}` (direction normalised to input/output/inout). Header /
     separator-leak rows are rejected; rows whose direction cell is not a
     recognised direction keyword are skipped (NOT emitted with a null
-    direction). Chip-AGNOSTIC."""
+    direction).
+
+    v0.3.4 — ORGANIC #491 ROUND-4: the NAME cell is sanitised via
+    `_v0_3_4_sanitize_pin_name_cell` (parenthesised annotations + backticks
+    stripped) and rows annotated optional — `(optional)` name prefix or an
+    `optional`-class width cell — carry ``optional: True``. Chip-AGNOSTIC."""
     for roles, rows, ncols in _v0_3_2_iter_gfm_pin_tables(text):
         name_i = roles["name"]
         dir_i = roles["direction"]
@@ -4201,7 +4262,10 @@ def _v0_3_2_emit_pins_from_gfm_tables(text: str):
         for cells in rows:
             if name_i >= len(cells) or dir_i >= len(cells):
                 continue
-            name = (cells[name_i] or "").strip(" *`").strip()
+            # v0.3.4 — #491 R4: sanitise annotations/backticks out of the
+            # name cell and pick up the row's optionality marker.
+            name, row_optional, _name_aliases = (
+                _v0_3_4_sanitize_pin_name_cell(cells[name_i] or ""))
             raw_dir = (cells[dir_i] or "").strip(" *`").strip().lower()
             raw_dir = raw_dir.replace("/", "")  # `i/o` → `io`
             if not name:
@@ -4222,22 +4286,31 @@ def _v0_3_2_emit_pins_from_gfm_tables(text: str):
             width_arg = None
             if width_i is not None and width_i < len(cells):
                 wraw = (cells[width_i] or "").strip(" *`").strip()
-                try:
-                    w_int, _w_sym = _v1_6_420_parse_width_cell(wraw)
-                except NameError:
-                    w_int = int(wraw) if wraw.isdigit() else None
-                if w_int is not None:
-                    width_arg = str(w_int)
+                # v0.3.4 — #491 R4: an optionality word as the ENTIRE
+                # width cell ('optional' / '可選' / 'reserved' …) marks
+                # the row optional; it is not a width.
+                if wraw.lower() in _V0_3_4_OPTIONALITY_TOKENS:
+                    row_optional = True
+                else:
+                    try:
+                        w_int, _w_sym = _v1_6_420_parse_width_cell(wraw)
+                    except NameError:
+                        w_int = int(wraw) if wraw.isdigit() else None
+                    if w_int is not None:
+                        width_arg = str(w_int)
             desc_arg = None
             if desc_i is not None and desc_i < len(cells):
                 desc_arg = (cells[desc_i] or "").strip() or None
-            yield {
+            rec = {
                 "name": name,
                 "direction": dir_full,
                 "width": width_arg,
                 "description": desc_arg,
                 "source_row": " | ".join(cells)[:120],
             }
+            if row_optional:
+                rec["optional"] = True
+            yield rec
 
 
 # v1.6.463 — for #328 R2 ORGANIC. Cascade L1.pin_table[].description
@@ -4553,13 +4626,13 @@ def _v1_6_399_extract_param_list_table(text: str, fname: str) -> list:
 # pipeline regardless of section heading. Pure structural —
 # header-cell check uses a frozenset of grammar tokens, no
 # chip-class vocabulary participates.
-_V1_6_400_PARAMETER_HEADER_TOKENS = frozenset({
-    "parameter", "parameters",
-    "generic", "generics",
-    "config", "configuration",
-    "constant", "constants",
-    "macro", "macros",
-})
+# Issue #500 — parameter-table header vocabulary now derives from the
+# ONE shared bilingual lexicon (`parameter` role), so a CJK-headed
+# `參數 | 型別 | 預設值 | 描述` parameter table is recognised the same
+# as the English `Parameter | Type | Default | Description`. The original
+# English vocabulary is the English subset of the `parameter` role.
+# Chip-AGNOSTIC.
+_V1_6_400_PARAMETER_HEADER_TOKENS = _hlex.tokens_for("parameter")
 
 
 def _v1_6_400_is_parameter_table_header(
@@ -17165,6 +17238,7 @@ def gen_l1_datasheet(project: Path,
                  description: Optional[str] = None,
                  extraction_strategy: str = "pin_table_keyword_scan",
                  source_row: str = "",
+                 optional: Optional[bool] = None,
                  ) -> None:
         """v1.6.248 — shared pin-emit helper. Used by the legacy
         `input|output|inout` keyword scan AND the new RST grid /
@@ -17256,6 +17330,12 @@ def gen_l1_datasheet(project: Path,
                 entry["width_symbolic"] = w_sym
         if description:
             entry["description"] = description
+        # v0.3.4 — ORGANIC #491 R4. Doc-declared optionality survives
+        # to L1.pin_table (and from there to L9.top_ports) so the
+        # L9↔RTL consistency gate can treat a doc-optional pin absent
+        # from the RTL top as advisory, not FAIL.
+        if optional:
+            entry["optional"] = True
         existing_idx = pin_index.get(name)
         if existing_idx is None or existing_idx < 0:
             pins.append(entry)
@@ -17273,6 +17353,11 @@ def gen_l1_datasheet(project: Path,
             if winner.get(k) in (None, "", "see datasheet") \
                     and loser.get(k) not in (None, "", "see datasheet"):
                 winner[k] = loser[k]
+        # v0.3.4 — #491 R4: optionality is sticky across extractor
+        # merges — if EITHER extractor saw the doc-optional marker the
+        # merged entry keeps it.
+        if loser.get("optional") and not winner.get("optional"):
+            winner["optional"] = True
         if winner is entry:
             pins[existing_idx] = entry
 
@@ -17558,6 +17643,7 @@ def gen_l1_datasheet(project: Path,
                 description=_row_v032.get("description"),
                 extraction_strategy="gfm_multitable_header_role_v0_3_2",
                 source_row=_row_v032.get("source_row") or "",
+                optional=_row_v032.get("optional"),
             )
             if len(ev) < 24:
                 ev.append({
@@ -25676,38 +25762,60 @@ def _v1_6_491_extract_csr_definitions(text: str,
 # v1.6.566 — header detection is permutation-tolerant. Match any
 # pipe-bounded row that contains BOTH an address-class token AND
 # a name-class token, in any order.
+# Issue #500 — the CSR RST-grid header PRE-FILTER regex was English-only
+# (`csr address|address|number|... ` + `name|register|mnemonic`), so a
+# CJK-headed CSR grid (`| 位址 | 名稱 | 存取 | 描述 |`) never reached the
+# (already-bilingual) `_v1_6_566_classify_header_cells` walker and every
+# row was silently dropped — the SAME English-only failure the pin family
+# had before #491. Build the address-token and name-token alternations
+# from the ONE shared bilingual lexicon so CJK + English are recognised
+# together. `\b` word boundaries are unreliable around CJK (no ASCII
+# word chars), so for CJK tokens we match the literal without `\b`;
+# ASCII tokens keep `\b`. Chip-AGNOSTIC.
+def _v1_6_566_header_alt(*roles: str) -> str:
+    """Build a regex alternation of header tokens for ``roles`` from the
+    shared lexicon. ASCII tokens get `\\b` boundaries; CJK tokens (no
+    ASCII word chars) are matched as bare literals. Longest-first so
+    multi-word phrases win. Chip-AGNOSTIC."""
+    toks = sorted(_hlex.tokens_for(*roles), key=len, reverse=True)
+    parts = []
+    for t in toks:
+        # Collapse internal runs of spaces into `\s*` so `csr address`
+        # matches `csr  address` / `csr\taddress`.
+        esc = re.escape(t).replace(r"\ ", r"\s*")
+        if any(ord(ch) > 0x2E7F for ch in t):
+            parts.append(esc)            # CJK literal, no \b
+        else:
+            parts.append(r"\b" + esc + r"\b")
+    return "(?:" + "|".join(parts) + ")"
+
+
 _V1_6_566_RE_RST_HEADER_TOKEN = re.compile(
     r"^\s*\|[^\n]*"
     r"(?:"
-    r"\b(?:csr\s*address|address|number|num|csr\s*num)\b"
-    r"[^\n]*"
-    r"\b(?:name|register|mnemonic)\b"
-    r"|"
-    r"\b(?:name|register|mnemonic)\b"
-    r"[^\n]*"
-    r"\b(?:csr\s*address|address|number|num|csr\s*num)\b"
-    r")"
+    + _v1_6_566_header_alt("address")
+    + r"[^\n]*"
+    + _v1_6_566_header_alt("name", "register")
+    + r"|"
+    + _v1_6_566_header_alt("name", "register")
+    + r"[^\n]*"
+    + _v1_6_566_header_alt("address")
+    + r")"
     r"[^\n]*\|",
     re.IGNORECASE | re.MULTILINE,
 )
 # Header-cell role keyword sets. Order matters for tie-breaking
 # (a cell that matches multiple sets resolves to the first set's
 # role).
-_V1_6_566_HEADER_ADDR_TOKENS = frozenset({
-    "csr address", "address", "addr", "number", "num", "csr num",
-    "csr number", "offset",
-})
-_V1_6_566_HEADER_NAME_TOKENS = frozenset({
-    "name", "register", "mnemonic", "csr", "field",
-})
-_V1_6_566_HEADER_ACCESS_TOKENS = frozenset({
-    "access", "privilege", "priv", "rw", "type", "mode",
-    "permission",
-})
-_V1_6_566_HEADER_DESC_TOKENS = frozenset({
-    "description", "desc", "summary", "comment", "notes",
-    "definition", "purpose",
-})
+# Issue #500 — register-map (CSR) header token sets now derive from the
+# ONE shared bilingual lexicon (was English-only, dropped CJK-headed CSR
+# tables the same way the pin family did before #491). The original
+# English vocabulary is a subset of the lexicon role sets; CJK CSR
+# vocabulary (位址 / 名稱 / 存取 / 描述 …) is now recognised. Chip-AGNOSTIC.
+_V1_6_566_HEADER_ADDR_TOKENS = _hlex.tokens_for("address")
+_V1_6_566_HEADER_NAME_TOKENS = _hlex.tokens_for("name", "register")
+_V1_6_566_HEADER_ACCESS_TOKENS = _hlex.tokens_for("access")
+_V1_6_566_HEADER_DESC_TOKENS = _hlex.tokens_for("description")
 # Row regex: 4 generic pipe-delimited cells. We do NOT enforce
 # column order here — caller routes captured cells via the
 # header-derived role mapping.
@@ -36163,14 +36271,27 @@ def _classify_timing_constants_into_groups(
 # match `submodule | block | component  <name>` patterns. Chip-
 # AGNOSTIC: only structural English tokens, no chip-specific
 # vocabulary.
-_DOC_TABLE_HEADER_TOKENS = frozenset({
-    "type", "name", "submodule", "module", "description", "notes",
-    "function", "owner", "status", "source", "field", "value", "id",
+# Issue #500 — the doc-table (field-table) header deny-list now draws its
+# column-role vocabulary from the ONE shared bilingual lexicon
+# (name / direction / width / description / address / access / default /
+# value / parameter / field / range / units / register) UNION a small set
+# of doc-STRUCTURE tokens that are not column-role words (submodule /
+# module / owner / status / section / page / …). Folding the role
+# vocabulary in means CJK-headed field tables (描述 / 預設值 / 範圍 …) are
+# recognised as header rows the same as English ones. Chip-AGNOSTIC.
+_DOC_TABLE_STRUCTURE_TOKENS = frozenset({
+    "submodule", "module", "owner", "status", "source", "id",
     "category", "section", "table", "row", "column", "page",
-    "parameter", "param", "default", "range", "units", "unit", "comment",
-    "remark", "remarks", "ref", "reference", "purpose", "role",
-    "block", "component", "input", "output", "signal", "pin",
+    "ref", "reference", "role", "block", "component", "input", "output",
 })
+_DOC_TABLE_HEADER_TOKENS = (
+    _hlex.tokens_for(
+        "name", "direction", "width", "description", "address",
+        "access", "default", "value", "parameter", "field", "range",
+        "units", "register",
+    )
+    | _DOC_TABLE_STRUCTURE_TOKENS
+)
 
 # v1.6.90 (#22 Bug 2 P2) — common English verbs that consistently leak
 # from prose extractors into L9.submodules (e.g. "the host reads the
@@ -39426,7 +39547,11 @@ def gen_l9_integration_spec(project: Path,
             # across ALL 8 chips". Forward the typed width / msb /
             # lsb / width_symbolic fields from the source L1 entry
             # so L9.top_module_pins carries the same provenance.
-            for _k in ("width", "msb", "lsb", "width_symbolic"):
+            # v0.3.4 — #491 R4: `optional` forwarded alongside the
+            # typed-width fields so the L9↔RTL gate sees doc-declared
+            # optionality on L9.top_ports too.
+            for _k in ("width", "msb", "lsb", "width_symbolic",
+                       "optional"):
                 _v = p.get(_k)
                 if _v is not None:
                     entry_l9[_k] = _v
