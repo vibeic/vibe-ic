@@ -1700,6 +1700,42 @@ _OPEN_SOURCE_CONTAINER_BLOCKED_STEPS: Dict[Any, str] = {
            "the tooling path only — Brokaw bandgap, multi-phase "
            "charge-pump, pull-device topology refinement all require "
            "commercial AMS sign-off)"),
+    # v0.2.103 (#496) — PDK-substitution deferral for the analog A-steps
+    # whose deck instantiation depends on a foundry PDK that has no public
+    # ngspice models. When L19 declares a non-default target process and
+    # the runner's OWN sizing/netlist decks HONESTLY disclose that they
+    # substitute the open-source default PDK (sky130A / gf180mcuD), the
+    # #438b PDK-mismatch gate (correctly) intercepts even those decks — so
+    # A3 (and the downstream A5-A9 steps that consume A3's decks) become
+    # PERMANENTLY unpassable on the open-source path: fabrication forbidden,
+    # no waiver, no disclosure route. These entries give the SAME shape of
+    # deferral that A4 / Steps 5/11-13/21-32 already carry: routed through
+    # the OS-constraints promotion (review_required, named commercial-tool
+    # requirement) AND, more precisely, through the pdk-substitution
+    # ENV_UNAVAILABLE waiver synthesised in `_load_waivers` so the step is
+    # WAIVED-DEFERRED (named reason + ticket), never counted executed-PASS.
+    # Applicable ONLY under the disclosed-substitution predicate; an
+    # UNDISCLOSED deck mismatch still hard-FAILs. chip-AGNOSTIC: keyed on
+    # PDK-availability, never any chip-class literal.
+    "A3": ("Analog netlist generation against the L19 target process "
+           "(Cadence Virtuoso schematic + foundry PDK device models; the "
+           "open-source default PDKs sky130A / gf180mcuD ship public "
+           "ngspice models only — a non-default target's decks must "
+           "substitute the open-source default, which the #438b "
+           "PDK-mismatch gate correctly intercepts)"),
+    "A5": ("Analog layout against the L19 target process (Magic / Cadence "
+           "Virtuoso Layout XL + foundry PDK; non-default target has no "
+           "public layout tech, so layout runs against the substituted "
+           "open-source PDK)"),
+    "A7": ("Post-layout resimulation against the L19 target process "
+           "(parasitic models for the non-default target need the foundry "
+           "PDK; only the substituted open-source PDK has public models)"),
+    "A8": ("Hardmacro generation (LEF/Liberty/GDS/Verilog) against the "
+           "L19 target process (characterised against the foundry PDK; the "
+           "substituted open-source PDK is what the open path can deliver)"),
+    "A9": ("Mixed-signal co-sim / HW verification against the L19 target "
+           "process (AMS environment + foundry PDK; the open path runs the "
+           "substituted open-source PDK)"),
 }
 
 # v1.6.211 (#92) — structural-RTL sub-gates inside the P0 umbrella
@@ -2535,7 +2571,160 @@ _ENV_UNAVAILABLE_STEP_NAME_TO_ID: Dict[str, Any] = {
     "metal_fill":           34,
     "dfm":                  35,
     "htol":                 44,
+    # v0.2.103 (#496) — analog A-step role-names so a pdk-substitution
+    # ENV_UNAVAILABLE waiver (auto-synthesised in `_load_waivers` under
+    # the disclosed-substitution predicate, or hand-authored) binds to the
+    # canonical A-step ids. The A-step ids are STRING ids ("A3"…) in the
+    # flow YAML; the map values mirror that exactly. chip-AGNOSTIC: role
+    # names only, never chip-class literals.
+    "analog_netlist":          "A3",
+    "analog_netlist_gen":      "A3",
+    "analog_layout":           "A5",
+    "analog_post_layout_resim": "A7",
+    "analog_hardmacro":        "A8",
+    "analog_cosim":            "A9",
+    "mixed_signal_cosim":      "A9",
 }
+
+
+# ── v0.2.103 (#496): analog PDK-substitution waiver path ───────────────────
+# When a project's L19 declares a target process with NO public ngspice
+# models (e.g. an IHP/TSMC node), the runner's own sizing/netlist decks
+# must substitute the open-source default PDK (sky130A / gf180mcuD). The
+# (correct) #438b PDK-mismatch gate then honestly intercepts even those
+# OWN decks → A3 hard-FAILs with no waiver, no disclosure route, leaving a
+# non-default-PDK-target analog chip on the open-source path PERMANENTLY
+# unpassable (fabrication forbidden, no waiver exists).
+#
+# This is the EXACT shape the digital ENV_UNAVAILABLE waivers already
+# handle for Quartus/Calibre. We mirror them: under the disclosed-
+# substitution predicate, synthesise an ENV_UNAVAILABLE-tier waiver for the
+# affected A-steps so `check_step()` downgrades the natural FAIL/MISSING to
+# WAIVED-DEFERRED (named reason + ticket + review_required, NOT counted as
+# executed-PASS). An UNDISCLOSED mismatch synthesises nothing → hard-FAIL.
+#
+# Predicate (BOTH must hold):
+#   (a) the deck HONESTLY discloses the substitute PDK — a structured
+#       `pdk_substitution` marker line in the SPICE deck head that names the
+#       substituted open-source PDK family; AND
+#   (b) L19 declares the real target AND it differs from the deck's family.
+# chip-AGNOSTIC: structural marker + L19 field containment, no chip literals.
+
+# Analog steps that depend on A3's substituted-PDK decks. A4 already has a
+# top-level OS-constraints deferral; A3/A5/A7/A8/A9 are added by #496.
+_PDK_SUBSTITUTION_AFFECTED_A_STEPS = ("A3", "A5", "A7", "A8", "A9")
+
+_PDK_SUBSTITUTION_TICKET = "pdk-substitution-v0.2.103"
+
+# Structured deck disclosure marker. The deck author writes a comment line
+# in the SPICE deck head naming the substitution, e.g.:
+#   * pdk_substitution: target=sg13g2 substitute=sky130A reason=no public ngspice models
+# Matching is token-based (the literal `pdk_substitution`), case-insensitive.
+_PDK_SUBSTITUTION_MARKER_RE = re.compile(
+    r"pdk[_\s\-]?substitution", re.IGNORECASE)
+
+
+def _pdk_substitution_disclosed(project: Path) -> Optional[Dict[str, str]]:
+    """Return a disclosure dict {substitute, target, deck} when the project
+    HONESTLY discloses that its analog decks substitute the open-source
+    default PDK for a non-default L19 target — else None.
+
+    Both halves of the #496 predicate are enforced here:
+      (a) at least one analog deck (.sp under the canonical analog dir)
+          carries a `pdk_substitution` disclosure marker in its head AND
+          its detected PDK family is named on that marker line; AND
+      (b) L19.fields.pdk_target is concrete AND the deck's detected family
+          token does NOT appear in it (a real mismatch).
+    An undisclosed deck (no marker) → None → no waiver → the #438b gate
+    hard-FAILs. chip-AGNOSTIC: structural marker scan + family-token
+    containment, no chip-class literals.
+    """
+    try:
+        import analog_netlist_pdk_check as _npc
+    except ImportError:
+        return None
+
+    declared = _npc._declared_pdk_target(project)
+    if not declared:
+        return None  # (b) requires L19 to declare a concrete real target
+
+    analog_dir = _pl.analog_dir(project)
+    if not analog_dir.is_dir():
+        return None
+    for sp in sorted(analog_dir.rglob("*.sp")):
+        try:
+            text = sp.read_text(errors="replace")
+        except OSError:
+            continue
+        head = "\n".join(text.splitlines()[:24])
+        # (a) honest disclosure marker present in the deck head.
+        m = _PDK_SUBSTITUTION_MARKER_RE.search(head)
+        if not m:
+            continue
+        marker_line = _line_containing(head, m.start())
+        pdk = _npc._detect_pdk(text)
+        if not pdk:
+            continue
+        # The disclosure must NAME the substituted family it actually uses
+        # (so a stray "pdk_substitution: none" cannot game it).
+        if pdk.lower() not in marker_line.lower():
+            continue
+        # (b) the deck family must genuinely differ from the declared target.
+        if pdk.lower() in declared.lower():
+            continue
+        return {"substitute": pdk, "target": declared, "deck": str(
+            sp.relative_to(project))}
+    return None
+
+
+def _line_containing(text: str, pos: int) -> str:
+    ls = text.rfind("\n", 0, pos) + 1
+    le = text.find("\n", pos)
+    if le < 0:
+        le = len(text)
+    return text[ls:le]
+
+
+def _synthesise_pdk_substitution_waivers(
+        project: Path, out: Dict[Any, Dict[str, Any]]) -> None:
+    """v0.2.103 (#496) — when the disclosed-substitution predicate holds,
+    add an ENV_UNAVAILABLE-tier waiver for each affected analog A-step that
+    is not already explicitly waived. Mutates `out` in place; mirrors the
+    shape of the digital ENV_UNAVAILABLE waivers (reason + ticket +
+    review_required + evidence + `_env_unavailable` flag) so `check_step`'s
+    existing fallback path converts the natural FAIL/MISSING to
+    WAIVED-DEFERRED. No-op when nothing is disclosed (→ undisclosed
+    mismatch hard-FAILs as before)."""
+    disclosure = _pdk_substitution_disclosed(project)
+    if not disclosure:
+        return
+    for sid in _PDK_SUBSTITUTION_AFFECTED_A_STEPS:
+        if sid in out:
+            continue  # explicit waiver takes precedence
+        rationale = (
+            f"PDK_SUBSTITUTION: L19 declares target process "
+            f"'{disclosure['target']}' which has no public ngspice models; "
+            f"the analog deck ({disclosure['deck']}) HONESTLY discloses it "
+            f"substitutes the open-source default PDK '{disclosure['substitute']}'. "
+            f"The #438b PDK-mismatch gate correctly intercepts this own-deck "
+            f"substitution, so step {sid} is DEFERRED for foundry "
+            f"re-characterisation against the real target PDK (not "
+            f"executed-PASS)."
+        )
+        out[sid] = {
+            "id": sid,
+            "reason": (
+                f"ENV_UNAVAILABLE (pdk-substitution): {rationale} "
+                f"[ticket={_PDK_SUBSTITUTION_TICKET}, review_required=True]"
+            ),
+            "approver": "field-agent-attest (pdk-substitution tier)",
+            "ticket": _PDK_SUBSTITUTION_TICKET,
+            "verdict_tier": "ENV_UNAVAILABLE",
+            "review_required": True,
+            "evidence": [disclosure["deck"]],
+            "_env_unavailable": True,
+            "_pdk_substitution": True,
+        }
 
 
 def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]]:
@@ -2543,7 +2732,13 @@ def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]
     Raises SystemExit(1) if waivers.json exists but is malformed/rubber-stamped."""
     wpath = project / "waivers.json"
     if not wpath.exists():
-        return {}
+        # v0.2.103 (#496) — even with no waivers.json, the disclosed
+        # PDK-substitution predicate auto-synthesises the A-step deferral
+        # waivers so a non-default-target analog chip on the open path is
+        # not permanently unpassable. An UNDISCLOSED mismatch → {} → FAIL.
+        out: Dict[Any, Dict[str, Any]] = {}
+        _synthesise_pdk_substitution_waivers(project, out)
+        return out
     # Reuse waivers_schema_check for validation
     try:
         from waivers_schema_check import validate as _validate
@@ -2649,6 +2844,10 @@ def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]
                 "evidence": evidence,
                 "_env_unavailable": True,
             }
+        # v0.2.103 (#496) — auto-synthesise the analog PDK-substitution
+        # deferral waivers (no-op when nothing is disclosed). Runs after
+        # explicit waivers so hand-authored A-step entries take precedence.
+        _synthesise_pdk_substitution_waivers(project, out)
         return out
     except Exception as exc:
         print(f"flow_compliance_check: cannot parse {wpath}: {exc}",
