@@ -503,8 +503,15 @@ def _extension_excluded(ext: str, field_str: str, scoped_text: str,
 #
 # Base-ISA detection mirrors phase1's canonical RISC-V base token:
 #   rv(32|64|128)[base + extension letters], e.g. rv32imf, rv64gc.
+# The post-base block must be parsed per the canonical RISC-V ISA-string
+# grammar (see _parse_canonical_single_letters): a run of single-letter
+# extensions terminates at the first z*/x* multi-letter token, and z*/x*
+# tokens (zifencei, zfinx, zicsr, xcustom, ...) are whole tokens — a
+# single-letter query like 'f' must NOT match the 'f' buried inside one.
+# `_` is allowed as an explicit separator (rv64gc_zifencei), so the token
+# regex permits underscores inside the captured block.
 _RE_RV_BASE_TOKEN = re.compile(
-    r"\brv(?:32|64|128)([a-z]+)\b", re.IGNORECASE)
+    r"\brv(?:32|64|128)([a-z_]+)\b", re.IGNORECASE)
 
 # Required-extension field markers (chip-AGNOSTIC field-name vocabulary).
 _REQUIRED_EXT_FIELD_MARKERS = (
@@ -515,18 +522,137 @@ _REQUIRED_EXT_FIELD_MARKERS = (
 )
 
 
+def _parse_canonical_single_letters(block: str) -> str:
+    """Parse the post-base letter block of a RISC-V ISA string and return
+    ONLY the canonical single-letter extensions (i/e/m/a/f/d/g/q/c/...).
+
+    Per the RISC-V ISA-string grammar, after the base width the string is
+        <single-letter extensions> ( z<multi> | x<multi> | s<multi> )*
+    where the single-letter run terminates at the FIRST z/x/s token that
+    starts a multi-letter extension, and multi-letter extensions are whole
+    tokens (zifencei, zfinx, zicsr, zba, xcustom, ...). Tokens may also be
+    separated by '_'. So the 'f' inside 'zifencei' / 'zfinx' is part of a
+    multi-letter token and must NOT be reported as a single-letter 'f'.
+
+    Returns the concatenated single-letter extensions (lower-case). The
+    multi-letter tail is intentionally dropped here — single-letter
+    membership is decided from the returned run, multi-letter tokens are
+    matched whole by _multi_letter_tokens().
+    """
+    out = []
+    for seg in block.lower().split("_"):
+        # The first segment carries the implicit single-letter run; any
+        # later underscore-separated segment is a whole z*/x*/s* token.
+        if not seg:
+            continue
+        if seg[0] in ("z", "x", "s"):
+            # Whole multi-letter token segment — contributes no single
+            # letters. (A bare single 's' is ambiguous but z/x/s as the
+            # first char of an underscore-delimited segment is canonical
+            # multi-letter; stop scanning this segment.)
+            continue
+        for ch in seg:
+            if ch in ("z", "x"):
+                # Start of a multi-letter token inside an implicit run —
+                # the single-letter run ends here.
+                break
+            out.append(ch)
+    return "".join(out)
+
+
+def _multi_letter_tokens(block: str) -> List[str]:
+    """Return whole z*/x*/s* multi-letter extension tokens from a post-base
+    block, e.g. 'rv32izifencei_zfinx' → ['zifencei', 'zfinx']. A
+    single-letter query never matches inside these; only a full-token query
+    (e.g. 'zfinx') matches one."""
+    toks: List[str] = []
+    for seg in block.lower().split("_"):
+        if not seg:
+            continue
+        if seg[0] in ("z", "x", "s"):
+            toks.append(seg)
+            continue
+        # implicit run that may transition into a z*/x* token without '_'
+        i = 0
+        while i < len(seg):
+            if seg[i] in ("z", "x"):
+                toks.append(seg[i:])
+                break
+            i += 1
+    return toks
+
+
 def _ext_in_base_isa(ext: str, blob: str) -> bool:
-    """True when `ext` is a letter inside a base rvXX... ISA token
-    (a mandatory part of the base ISA), e.g. 'f' inside 'rv32imf'."""
+    """True when `ext` is a MANDATORY extension inside a base rvXX... ISA
+    token, parsed per the canonical RISC-V ISA-string grammar.
+
+      * A single-letter query (e.g. 'f', 'g') matches ONLY a canonical
+        single-letter extension in the base run — never the 'f' buried in
+        a multi-letter token like 'zifencei' or 'zfinx'.
+      * A multi-letter query (e.g. 'zfinx', 'zicsr', 'zifencei') matches
+        ONLY a whole z*/x* token (split on '_' or implicit boundary).
+    """
     ext_l = ext.strip().lower()
-    if len(ext_l) != 1:
-        # Multi-letter (Z*/X*) extensions are never packed into the
-        # single-letter base block; treat as not-in-base here.
+    if not ext_l:
         return False
     for m in _RE_RV_BASE_TOKEN.finditer(blob):
-        if ext_l in m.group(1).lower():
-            return True
+        block = m.group(1).lower()
+        if len(ext_l) == 1:
+            if ext_l in _parse_canonical_single_letters(block):
+                return True
+        else:
+            if ext_l in _multi_letter_tokens(block):
+                return True
     return False
+
+
+# A standalone single-letter ISA-extension token: the letter must be
+# bounded by non-alphabetic delimiters on BOTH sides (start/end, comma,
+# space, slash, ...). This is what stops a single-letter query 'F' from
+# matching the 'f' buried inside a multi-letter alphabetic run such as the
+# RISC-V token 'zifencei'/'zfinx' or the English word 'floating'. Digits
+# are allowed neighbours so 'rv32f'-style fragments are not falsely barred,
+# but the rvXX base token is handled separately by _ext_in_base_isa.
+def _single_letter_ext_token_present(ext: str, blob: str) -> bool:
+    ext_l = ext.strip().lower()
+    if len(ext_l) != 1 or not ext_l.isalpha():
+        return False
+    # bounded by anything that is NOT an ASCII letter on both sides
+    return re.search(rf"(?<![a-z]){re.escape(ext_l)}(?![a-z])",
+                     blob.lower()) is not None
+
+
+def _ext_field_contains(ext: str, field_str: str, scoped_text: str,
+                        full_text: str) -> bool:
+    """Token-aware membership test for a single ISA-extension query against
+    a cpu_extensions / cpu_isa field.
+
+    A single-letter query (e.g. 'F') is present only when it is EITHER a
+    canonical single-letter extension inside an rvXX... ISA token, OR a
+    standalone list/word token (delimited by non-letters). It is NEVER
+    counted when it is merely a letter buried inside a multi-letter
+    alphabetic run (the 'f' inside 'zifencei'/'zfinx'/'floating'). A
+    multi-letter query (e.g. 'zfinx') matches a whole z*/x* token or a
+    plain substring as before.
+
+    chip-AGNOSTIC: pure RISC-V ISA-string grammar; no chip literal.
+    """
+    ext_l = ext.strip().lower()
+    if not ext_l:
+        return False
+    haystacks = [s for s in (field_str, scoped_text, full_text) if s]
+    blob = "\n".join(haystacks)
+    if not blob:
+        return False
+    if len(ext_l) == 1:
+        # Canonical single-letter inside an rvXX token, OR a standalone
+        # delimited token — but not buried in a multi-letter run.
+        return (_ext_in_base_isa(ext_l, blob)
+                or _single_letter_ext_token_present(ext_l, blob))
+    # Multi-letter query: whole z*/x* token or plain substring.
+    if _ext_in_base_isa(ext_l, blob):
+        return True
+    return ext_l in blob.lower()
 
 
 def _ext_in_required_field(ext: str, blob: str) -> bool:
@@ -682,6 +808,23 @@ def _evaluate_match_rule(pattern: str, facts: Dict[str, Any]) -> Tuple[bool, flo
             # (base ISA / required-field membership overrides this).
             if ext_field and _extension_optional_only(
                     v, field_str, scoped, full_text):
+                continue
+            # v0.3.2 — for #493 ROUND-2. ISA-extension membership must be
+            # token-aware: a single-letter query ('F') must NOT match the
+            # 'f' buried inside a multi-letter ISA token ('zifencei',
+            # 'zfinx') in the field / scoped section / full text. The raw
+            # substring `in` checks below over-fire on packed ISA strings.
+            if ext_field:
+                # Discrete structured key present → high-confidence hit
+                # only when the ext is a genuine token in that field.
+                if field_str and _ext_field_contains(v, field_str, "", ""):
+                    return (True, 0.9)
+                # Structured field with no discrete key → SCOPED fallback.
+                if _ext_field_contains(v, "", scoped, ""):
+                    return (True, _CONF_SCOPED_SUBSTR)
+                # Whole-doc fallback (token-aware over the full text).
+                if _ext_field_contains(v, "", "", full_text):
+                    return (True, _CONF_FULLTEXT_SUBSTR)
                 continue
             # Discrete structured key present → high-confidence hit.
             if v.lower() in field_str:
