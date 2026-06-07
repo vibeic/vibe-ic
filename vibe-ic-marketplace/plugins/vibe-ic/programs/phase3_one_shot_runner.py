@@ -762,6 +762,18 @@ class PdkConfig:
     calibre_drc: Optional[str] = None
     calibre_lvs: Optional[str] = None
     calibre_lvs_device: Optional[str] = None
+    # v0.3.12 — ORGANIC #509 round-2: KLayout LEF/DEF reader layer-map. The
+    # bare KLayout DEF reader assigns a COMPACT layer numbering (met1..met5 =
+    # 10..14) instead of the foundry GDS numbers; the streamed GDS is then
+    # unreadable by Magic (whose tech expects met3=70/20, met3.pin=70/16,
+    # met3.label=70/5) → signoff-LVS extraction loses ALL top routing + pin
+    # labels → every top port extracts disconnected. Pointing the DEF reader
+    # at the PDK's own foundry layer-map (`<pdk>/libs.tech/klayout/tech/
+    # <pdk>.map`) makes the GDS land on the foundry numbers Magic reads;
+    # empirically validated: with this map Magic recognises all 36 top ports
+    # (port indices 1..36) on the real spm GDS vs 0 before. None → keep the
+    # legacy (compact) numbering (no foundry map shipped for that PDK).
+    lefdef_layermap: Optional[str] = None
 
 
 def _detect_pdk(project: Path, override: Optional[str] = None
@@ -792,6 +804,9 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 pnr_exclude_cell_file=f"{PDKS_IN_CONTAINER}/sky130A/libs.tech/"
                 "openlane/sky130_fd_sc_hd/drc_exclude.cells",
                 tapcell_distance_um=14.0,
+                # v0.3.12 #509 r2 — foundry LEF/DEF layer-map (validated).
+                lefdef_layermap=f"{PDKS_IN_CONTAINER}/sky130A/libs.tech/"
+                "klayout/tech/sky130A.map",
             )
 
     pdk_dir = project / "input" / "pdk"
@@ -3061,7 +3076,28 @@ for lp in lefs:
     if lp.strip():
         try: ly.read(lp.strip())
         except Exception as e: print(f"warn lef: {e}")
-ly.read(def_path, pya.LoadLayoutOptions())
+# v0.3.12 — ORGANIC #509 round-2: drive the DEF reader with the PDK's
+# foundry LEF/DEF layer-map when provided, so metal/pin/label land on the
+# foundry GDS numbers Magic's tech reads (met3=70/20, .pin=70/16,
+# .label=70/5) instead of KLayout's compact default (10..14). Without it,
+# signoff-LVS Magic extraction sees no top routing/labels → every top port
+# extracts disconnected. Validated: with the map Magic recognises all top
+# ports on the real spm GDS (0 → all). LEFs go through the SAME options so
+# DEF references resolve. Empty/missing map → legacy numbering preserved.
+_lefdef_map = os.environ.get('LEFDEF_MAP', '').strip()
+_def_opts = pya.LoadLayoutOptions()
+try:
+    _cfg = _def_opts.lefdef_config
+    if lefs and any(p.strip() for p in lefs):
+        _cfg.lef_files = [p.strip() for p in lefs if p.strip()]
+    if _lefdef_map and os.path.exists(_lefdef_map):
+        _cfg.map_file = [_lefdef_map]
+        print(f"LEFDEF_MAP applied: {_lefdef_map}")
+    else:
+        print("LEFDEF_MAP not applied (none/missing) — legacy numbering")
+except Exception as e:
+    print(f"warn lefdef_config: {e}")
+ly.read(def_path, _def_opts)
 # v1.6.560 sub-defect C: also read std-cell GDS so DEF cell instances
 # resolve into proper physical hierarchy under the design top — without
 # this, klayout writes the LEF abstracts as siblings at GDS top level
@@ -3231,11 +3267,17 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # multiple top cells in the resulting GDS).
     cell_gds_c = _to_container_path(str(pdk.cell_gds), container) \
                  if pdk.cell_gds else ""
+    # v0.3.12 — ORGANIC #509 round-2: pass the foundry LEF/DEF layer-map so
+    # the DEF reader lands metal/pin/label on the foundry GDS numbers Magic
+    # reads (vs the compact 10..14 default). Empty when the PDK ships none
+    # → legacy numbering preserved.
+    lefdef_map_c = (_to_container_path(str(pdk.lefdef_layermap), container)
+                    if pdk.lefdef_layermap else "")
     cmd = (
         f"export QT_QPA_PLATFORM=offscreen && "
         f"export TOP={top} DEF={def_c} GDS_OUT={gds_out_c} "
         f"LEFS=\"{lefs}\" MACRO_GDS=\"{macro_gds_arg}\" "
-        f"CELL_GDS=\"{cell_gds_c}\" && "
+        f"CELL_GDS=\"{cell_gds_c}\" LEFDEF_MAP=\"{lefdef_map_c}\" && "
         f"klayout -zz -b -r {script_c}"
     )
     rc, out, err = _docker_exec(container, cmd, timeout=600)
