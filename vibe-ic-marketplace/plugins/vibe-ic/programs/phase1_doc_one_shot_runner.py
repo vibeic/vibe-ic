@@ -120,6 +120,72 @@ import readme_vendor_extractor as _rve
 
 
 # ---------------------------------------------------------------------------
+# ORGANIC-20260606 #497 (MEDIUM) — phase1 half of the #484 identity-stamp
+# coverage gap. #484 stamped the phase2 central manifest helper + phase3
+# emitters, but the phase1 AUDIT/REPORT JSONs (extraction_skipped.json,
+# the l3_opcode_name_coverage subprocess gate report, …) were left
+# identity-less, so a fresh 4-design campaign still ships those byte-
+# identical-but-honest artifacts across DIFFERENT chips and
+# cross_design_identity_check (#454) flags them as canned.
+#
+# This is the SAME per-design identity stamp shape as phase2/phase3's
+# `_design_identity_fields` (replicated here because phase1 does not import
+# those runners): ``design`` = the project directory name (always present),
+# ``ic_name`` from L1_DATASHEET.json (fallback part_number, then L2_FRS),
+# ``top`` from L9_INTEGRATION_SPEC.json. Honest-null: a field is OMITTED
+# (not faked) when its source L doc is absent — at minimum every report
+# carries the project name, so even a pre-L-doc project differs per design.
+# chip-AGNOSTIC: reads only the project's own L docs + its own dir name.
+def _design_identity_fields(project: Path) -> dict:
+    gd = _pl.generated_docs_dir(project)
+    ic_name = None
+    for cand in ("L1_DATASHEET.json", "L2_FRS.json"):
+        try:
+            d = json.loads((gd / cand).read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(d, dict):
+            ic_name = d.get("ic_name") or d.get("part_number")
+            if ic_name:
+                break
+    top = None
+    try:
+        l9 = json.loads(
+            (gd / "L9_INTEGRATION_SPEC.json").read_text(errors="replace"))
+        if isinstance(l9, dict):
+            top = l9.get("top_module") or None
+    except (OSError, ValueError):
+        pass
+    ident: dict = {"design": project.name}
+    if ic_name:
+        ident["ic_name"] = str(ic_name)
+    if top:
+        ident["top"] = str(top)
+    return ident
+
+
+def _stamp_design_identity(project: Path, report_path: Path) -> bool:
+    """Re-read a JSON report a subprocess gate wrote, fill in the #497
+    per-design identity stamp (idempotent — never clobbers a pre-existing
+    `design_identity`), and write it back. Best-effort: a non-dict / parse-
+    error / unwritable report is left untouched. Returns True when stamped.
+    chip-AGNOSTIC."""
+    try:
+        d = json.loads(report_path.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(d, dict) or "design_identity" in d:
+        return False
+    d["design_identity"] = _design_identity_fields(project)
+    try:
+        report_path.write_text(
+            json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    except OSError:
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # 0. Helpers — text extraction + utility
 # ---------------------------------------------------------------------------
 
@@ -6467,6 +6533,10 @@ def extract_text_pipeline(project: Path,
 
     # Emit the skip log. Empty list = clean run; non-empty = audit
     # surface for what was visited but not extracted.
+    # #497: stamp the per-design identity so an honestly-empty skip log
+    # (the common clean-run shape) DIFFERS per design and is not flagged
+    # as a canned cross-design report. At Step 1 only the project name is
+    # known (L docs are generated later); that already differs per design.
     skip_log_payload = json.dumps({
         "_schema_version": "1",
         "_comment": (
@@ -6474,6 +6544,7 @@ def extract_text_pipeline(project: Path,
             "but produced no text. Empty list means every input "
             "rendered. Non-empty entries indicate either deliberate "
             "skip (binary/archive/raster) or converter gap — investigate."),
+        "design_identity": _design_identity_fields(project),
         "skipped": skipped,
         "total_visited": len(out) + len(skipped),
         "total_extracted": len(out),
@@ -49637,6 +49708,14 @@ def main() -> int:
              "--json", str(cov_report_path)],
             capture_output=True, text=True, timeout=60,
         )
+        # #497: the gate subprocess writes an identity-less verdict JSON;
+        # a non-protocol IP honestly produces an empty-L3 VACUOUS_PASS that
+        # is byte-identical across DIFFERENT designs. Stamp the per-design
+        # identity into the report the runner just routed so it differs per
+        # design (idempotent; honest — L1/L9 are now emitted so ic_name/top
+        # are available). Best-effort: a missing/parse-error report is left
+        # untouched (it carries its own error surface already).
+        _stamp_design_identity(project, cov_report_path)
         # Print the gate's stdout/stderr line so the runner log
         # shows the verdict alongside the L-doc emit summary.
         if cov_cp.stdout:
@@ -51596,8 +51675,13 @@ def main() -> int:
             try:
                 _reports_disp = project / "reports" / "phase1"
                 _reports_disp.mkdir(parents=True, exist_ok=True)
+                # #497: stamp per-design identity so two same-class
+                # unreachable designs do not emit a byte-identical signal.
+                _disp_signal = dict(_disp_dec_r55["signal"])
+                _disp_signal.setdefault(
+                    "design_identity", _design_identity_fields(project))
                 (_reports_disp / "protocol_dispatch_skipped.json").write_text(
-                    json.dumps(_disp_dec_r55["signal"], indent=2,
+                    json.dumps(_disp_signal, indent=2,
                                ensure_ascii=False) + "\n")
             except Exception:
                 pass

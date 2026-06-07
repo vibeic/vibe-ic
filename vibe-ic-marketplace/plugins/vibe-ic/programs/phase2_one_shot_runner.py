@@ -4460,6 +4460,12 @@ def step_complexity_advisory(project: Path) -> StepResult:
         payload = dict(_asdict(result))
         payload["advisory_only"] = True
         payload["source"] = "design_complexity_estimator.features_from_project"
+        # #497: this per-design report bypasses step_emit_phase2_manifests'
+        # stamped w() writer — a trivial/empty design can yield byte-identical
+        # complexity features across DIFFERENT chips. Carry the same #484
+        # per-design identity stamp so it differs per design.
+        payload.setdefault("design_identity",
+                           _design_identity_fields(project))
         out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
         recs = result.recommendations
