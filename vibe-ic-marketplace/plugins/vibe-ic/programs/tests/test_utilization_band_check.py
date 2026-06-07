@@ -164,3 +164,26 @@ def test_real_corpus_no_false_fail():
         if verdict == "FAIL":
             fails.append(str(proj))
     assert fails == [], f"utilization band FALSE-FIRED on legit designs: {fails}"
+
+
+def test_unresolved_disclosure_named_verdict(tmp_path):
+    # honest unresolved disclosure (quantized-floor class, the shape a
+    # real post-fill report emits) → named UNRESOLVED_DISCLOSED, not
+    # NO_DATA; default rc stays 0, --strict flags it.
+    rpt = tmp_path / "reports"; rpt.mkdir()
+    (rpt / "density.rpt").write_text(
+        "# Metal-fill / density report\n"
+        "# core-area utilization (report_design_area, post-fill): unresolved\n"
+        "# (report_design_area printed 0% — integer-rounded floor)\n")
+    pct, src = u.read_utilization(tmp_path)
+    assert pct is None and src is not None
+    verdict, findings = u.classify(pct, src)
+    assert verdict == "UNRESOLVED_DISCLOSED"
+    assert any(f.category == "UNRESOLVED_DISCLOSED" for f in findings)
+
+
+def test_truly_absent_artefact_still_no_data(tmp_path):
+    pct, src = u.read_utilization(tmp_path)
+    assert pct is None and src is None
+    verdict, _ = u.classify(pct, src)
+    assert verdict == "NO_DATA"

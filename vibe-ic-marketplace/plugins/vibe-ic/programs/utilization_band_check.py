@@ -102,6 +102,13 @@ _UTIL_TEXT = re.compile(
     r"([0-9]*\.?[0-9]+)\s*%",
     re.IGNORECASE)
 
+# An HONEST unresolved disclosure (e.g. "core-area utilization
+# (report_design_area, post-fill): unresolved" with the quantized-floor
+# explanation) is DATA-QUALITY information, not absence of an artefact —
+# it must classify as a NAMED verdict, never fold into NO_DATA.
+_UTIL_UNRESOLVED = re.compile(
+    r"utili[sz]ation\b[^:\n]*:\s*unresolved\b", re.IGNORECASE)
+
 
 @dataclass
 class Finding:
@@ -137,6 +144,11 @@ def _read_from_text(project: Path) -> Tuple[Optional[float], Optional[str]]:
             pct = _coerce_pct(m.group(1))
             if pct is not None:
                 return pct, rel
+        # No numeric value — but an explicit unresolved disclosure is
+        # still a real artefact reading: return (None, rel) so classify
+        # yields the named UNRESOLVED_DISCLOSED verdict, not NO_DATA.
+        if _UTIL_UNRESOLVED.search(text):
+            return None, rel
     return None, None
 
 
@@ -176,6 +188,17 @@ def classify(util_pct: Optional[float], source: Optional[str]) -> Tuple[str, Lis
     """
     findings: List[Finding] = []
     if util_pct is None:
+        if source is not None:
+            # the artefact exists and EXPLICITLY discloses an unresolved
+            # reading (e.g. report_design_area integer-rounded to 0%,
+            # true value below report precision) — named verdict, never
+            # folded into NO_DATA.
+            findings.append(Finding(
+                "INFO", "UNRESOLVED_DISCLOSED",
+                f"{source} explicitly discloses an unresolved utilization "
+                f"reading (quantized-floor class) — band check skipped on "
+                f"disclosed data-quality grounds, NOT fabricated"))
+            return "UNRESOLVED_DISCLOSED", findings
         findings.append(Finding(
             "INFO", "NO_DATA",
             "no utilization/density artefact present — band check skipped, "
@@ -294,7 +317,7 @@ def main(argv: Optional[list] = None) -> int:
 
     if verdict == "FAIL":
         return 1
-    if verdict == "NO_DATA" and args.strict:
+    if verdict in ("NO_DATA", "UNRESOLVED_DISCLOSED") and args.strict:
         return 1
     return 0
 

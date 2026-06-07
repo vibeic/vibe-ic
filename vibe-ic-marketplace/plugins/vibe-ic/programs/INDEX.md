@@ -500,7 +500,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `provenance_check` | any | — | Verify a file was produced by a logged tool run. |
 | `provenance_hash_audit` | any | v0.114 | v0.114 (BACKLOG-v10 P2.3). |
 | `provenance_logger` | any | — | Wrap a tool invocation, record hashed provenance. |
-| `provenance_output_hash_completeness_check` | any | — | verify that |
+| `provenance_output_hash_completeness_check` | any | v0.2.102 | verify that |
 | `psi5_protocol_synth` | any | — | Peripheral Sensor Interface 5 (PSI5) protocol synth helper. |
 | `ptp_protocol_synth` | any | — | IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76). |
 | `pulse_decoder_edge_check` | any | — | Enforce rising-edge-driven classification in |
@@ -1197,7 +1197,7 @@ _(no programs in this group)_
 - `provenance_check` — Verify a file was produced by a logged tool run.
 - `provenance_hash_audit` — v0.114 (BACKLOG-v10 P2.3).  _[v0.114]_
 - `provenance_logger` — Wrap a tool invocation, record hashed provenance.
-- `provenance_output_hash_completeness_check` — verify that
+- `provenance_output_hash_completeness_check` — verify that  _[v0.2.102]_
 - `psi5_protocol_synth` — Peripheral Sensor Interface 5 (PSI5) protocol synth helper.
 - `ptp_protocol_synth` — IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76).
 - `pulse_decoder_edge_check` — Enforce rising-edge-driven classification in
