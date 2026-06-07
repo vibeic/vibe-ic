@@ -42,6 +42,38 @@ Two mutually-exclusive input modes, mirroring the CLI style of
 
   2. Offline mode (used by tests + air-gapped pre-close gating; no network):
        --issue-body-file PATH --comment-file PATH
+       [--reopen-comment-file PATH]   # the LATEST reopen/counter-evidence
+                                      # comment body (round-2+ closes)
+
+REOPEN-BINDING ACCEPTANCE (issue #499)
+--------------------------------------
+A reopened issue's binding acceptance has MOVED. The original body's
+`## 驗收` is what round-1 had to satisfy; once the field agent reopens
+with counter-evidence carrying a fresh fenced repro, THAT repro becomes
+the binding acceptance for the round-2+ close. Before #499 the gate read
+only the original body, so a round-2 close could pass on a synthetic
+fixture while the reopen comment's fenced clean-room repro still exits 1
+(one issue was closed twice in exactly this state).
+
+  * Network mode: the issue's comments are fetched and the LATEST comment
+    that is a *reopen / counter-evidence* comment is selected.
+  * Offline mode: pass that comment body via --reopen-comment-file.
+
+  Reopen-comment DETECTION RULE (chip-AGNOSTIC, documented so it is
+  auditable): a comment is a reopen/counter-evidence comment iff it
+  carries a fenced code block AND its prose contains a reopen marker —
+  any of the case-insensitive tokens 'REOPEN', 'RE-OPEN', '複查', '反證',
+  '重開', or 'counter-evidence'. (These are the established shapes the
+  field-agent loop posts.) The "latest" such comment wins.
+
+  When a reopen comment is present, its fenced commands are UNIONED with
+  (and take PRECEDENCE over) the original body's acceptance commands: the
+  fix comment must quote THOSE reopen-repro commands + carry end-state
+  output, else exit 1 naming the unquoted reopen-repro commands. A
+  reopen comment with NO fenced command (narrative-only) does not add
+  binding commands — behavior falls back to the body acceptance (and the
+  body's own NARRATIVE_ONLY path applies if the body too has none). No
+  reopen comment at all → behavior unchanged from round-1.
 
 DETECTION RULES (documented so they are auditable)
 --------------------------------------------------
@@ -79,7 +111,9 @@ EXIT CODES
             warning, flow #485 — never a silent SKIP; the trace must be
             supplied and audited manually).
   1  FAIL  — acceptance section present but the comment does not quote every
-            command, or has no end-state evidence near them.
+            command, or has no end-state evidence near them. On a round-2+
+            close (a reopen comment is present), the LATEST reopen repro's
+            fenced commands are part of that binding set (issue #499).
   2  usage / I/O error (bad args, missing file, no token, empty body).
 
 OPTIONAL OUTPUT
@@ -138,6 +172,37 @@ def _fetch_issue_body(repo: str, issue_number: int, token: str) -> str:
     return d.get("body") or ""
 
 
+def _fetch_issue_comments(repo: str, issue_number: int,
+                          token: str) -> List[str]:
+    """Return the comment bodies for a GitHub issue, oldest→newest.
+
+    Used (issue #499) to find the LATEST reopen/counter-evidence comment
+    whose fenced repro becomes the binding acceptance for a round-2+ close.
+    """
+    bodies: List[str] = []
+    page = 1
+    while True:
+        url = (f"https://api.github.com/repos/{repo}/issues/"
+               f"{issue_number}/comments?per_page=100&page={page}")
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310
+            chunk = json.loads(r.read())
+        if not chunk:
+            break
+        for c in chunk:
+            bodies.append(c.get("body") or "")
+        if len(chunk) < 100:
+            break
+        page += 1
+    return bodies
+
+
 # --------------------------------------------------------------------------
 # Acceptance-section extraction
 # --------------------------------------------------------------------------
@@ -183,6 +248,65 @@ def extract_acceptance_section(body: str) -> Optional[str]:
 
 def _looks_like_command(text: str) -> bool:
     return bool(_CMD_HINT_RE.search(text))
+
+
+# --------------------------------------------------------------------------
+# Reopen-comment detection + acceptance extraction (issue #499)
+# --------------------------------------------------------------------------
+# A comment is a reopen / counter-evidence comment iff it (a) carries a
+# fenced code block AND (b) its prose contains a reopen marker. The marker
+# tokens are the established shapes the field-agent loop posts. chip-AGNOSTIC
+# (structural / process vocabulary only — no chip / vendor / SKU literals).
+_REOPEN_MARKER_RE = re.compile(
+    r"REOPEN|RE-?OPEN|複查|反證|重開|counter[\s-]?evidence",
+    re.IGNORECASE,
+)
+_FENCE_RE = re.compile(r"```[a-zA-Z0-9_+-]*\n(.*?)```", re.DOTALL)
+
+
+def _has_fenced_block(text: str) -> bool:
+    return bool(_FENCE_RE.search(text or ""))
+
+
+def is_reopen_comment(comment: str) -> bool:
+    """True if `comment` is a reopen/counter-evidence comment per the
+    documented detection rule: fenced code block AND a reopen marker."""
+    if not comment:
+        return False
+    return _has_fenced_block(comment) and bool(
+        _REOPEN_MARKER_RE.search(comment))
+
+
+def select_latest_reopen_comment(
+        comments: List[str]) -> Optional[str]:
+    """From an ordered (oldest→newest) list of comment bodies, return the
+    LATEST one that is a reopen/counter-evidence comment, or None."""
+    for c in reversed(comments):
+        if is_reopen_comment(c):
+            return c
+    return None
+
+
+def extract_reopen_commands(reopen_comment: str) -> List[str]:
+    """Extract the fenced-block commands from a reopen comment.
+
+    These become binding acceptance for a round-2+ close. We reuse the
+    same fenced-line semantics as extract_commands (one command per
+    non-blank fenced line, leading shell prompt stripped)."""
+    commands: List[str] = []
+    for fm in _FENCE_RE.finditer(reopen_comment or ""):
+        for ln in fm.group(1).splitlines():
+            s = ln.strip()
+            if not s:
+                continue
+            s = re.sub(r"^\$\s+", "", s)
+            # Skip fenced lines that are plainly OUTPUT, not commands
+            # (the reopen repro typically pastes both the command and its
+            # exit-1 end state). A line counts as a command only if it
+            # looks like one; everything else is treated as evidence.
+            if s and _looks_like_command(s):
+                commands.append(s)
+    return _dedup(commands)
 
 
 def extract_commands(section: str) -> Tuple[List[str], List[str]]:
@@ -391,19 +515,52 @@ class Verdict:
     unquoted_commands: List[str] = field(default_factory=list)
     end_state_evidence: bool = False
     notes: List[str] = field(default_factory=list)
+    # issue #499 — reopen-binding acceptance (round-2+ close).
+    has_reopen: bool = False
+    reopen_commands: List[str] = field(default_factory=list)
+    unquoted_reopen_commands: List[str] = field(default_factory=list)
 
 
-def evaluate(issue_body: str, comment_body: str) -> Verdict:
+def evaluate(issue_body: str, comment_body: str,
+             reopen_comment: Optional[str] = None) -> Verdict:
     section = extract_acceptance_section(issue_body)
-    if section is None:
+
+    # issue #499 — a reopen comment's fenced repro is binding acceptance
+    # for a round-2+ close. UNION it with (precedence over) the body
+    # acceptance. A narrative-only reopen comment adds no binding command
+    # → behavior falls back to the body acceptance.
+    reopen_commands: List[str] = []
+    has_reopen = bool(reopen_comment) and is_reopen_comment(reopen_comment)
+    if has_reopen:
+        reopen_commands = extract_reopen_commands(reopen_comment)
+
+    if section is None and not reopen_commands:
+        # No body acceptance and no binding reopen repro → vacuous.
+        notes = ["issue has no '## 驗收'/acceptance section — "
+                 "nothing to replay (vacuous PASS)"]
+        if has_reopen and not reopen_commands:
+            notes.append("a reopen comment was present but carried no "
+                         "fenced command (narrative-only) — no binding "
+                         "reopen repro to enforce")
         return Verdict(
             verdict="SKIP",
             has_acceptance=False,
-            notes=["issue has no '## 驗收'/acceptance section — "
-                   "nothing to replay (vacuous PASS)"],
+            has_reopen=has_reopen,
+            notes=notes,
         )
 
-    commands, criteria = extract_commands(section)
+    commands, criteria = ([], [])
+    if section is not None:
+        commands, criteria = extract_commands(section)
+
+    # issue #499 — the binding command set is the UNION, reopen-first
+    # (precedence), de-duplicated. When a reopen repro exists, its
+    # commands are the ones the fix comment must quote (and they are also
+    # surfaced separately so a FAIL can name THEM specifically).
+    if reopen_commands:
+        merged = _dedup(reopen_commands + commands)
+        commands = merged
+
     if not commands:
         # flow #485: an acceptance section that carries NO concrete
         # command is no longer a silent vacuous SKIP — it gets a NAMED
@@ -415,6 +572,8 @@ def evaluate(issue_body: str, comment_body: str) -> Verdict:
             verdict="ACCEPTANCE_NARRATIVE_ONLY",
             has_acceptance=True,
             criteria=criteria,
+            has_reopen=has_reopen,
+            reopen_commands=reopen_commands,
             notes=["acceptance section present but no concrete command "
                    "lines extractable — only narrative criteria; the "
                    "deterministic command-quote check cannot bite. "
@@ -432,6 +591,9 @@ def evaluate(issue_body: str, comment_body: str) -> Verdict:
             criteria=criteria,
             unquoted_commands=list(commands),
             end_state_evidence=False,
+            has_reopen=has_reopen,
+            reopen_commands=reopen_commands,
+            unquoted_reopen_commands=list(reopen_commands),
             notes=["fix comment has no '**本機驗證**：' section — "
                    "R5 would already flag this; acceptance commands "
                    "cannot be verified as run"],
@@ -443,12 +605,23 @@ def evaluate(issue_body: str, comment_body: str) -> Verdict:
     unquoted = [c for c in commands
                 if not _command_is_quoted(c, section_norm,
                                           section_lines_norm)]
+    # issue #499 — surface which of the UNQUOTED commands are reopen-repro
+    # commands, so a round-2+ FAIL names exactly the reopen repro that the
+    # fix comment failed to quote.
+    reopen_norm = {_norm_ws(c) for c in reopen_commands}
+    unquoted_reopen = [c for c in unquoted if _norm_ws(c) in reopen_norm]
     has_evidence = _has_end_state_evidence(local, commands)
 
     notes: List[str] = []
     if unquoted:
         notes.append(
             f"{len(unquoted)} acceptance command(s) not quoted in 本機驗證")
+    if unquoted_reopen:
+        notes.append(
+            f"{len(unquoted_reopen)} of them are the LATEST reopen "
+            "comment's binding repro command(s) — a round-2+ close MUST "
+            "quote the reopen repro + its end-state, not only the "
+            "original body acceptance (issue #499)")
     if not has_evidence:
         notes.append(
             "本機驗證 quotes commands but carries no end-state output "
@@ -461,6 +634,9 @@ def evaluate(issue_body: str, comment_body: str) -> Verdict:
         commands=commands,
         criteria=criteria,
         unquoted_commands=unquoted,
+        has_reopen=has_reopen,
+        reopen_commands=reopen_commands,
+        unquoted_reopen_commands=unquoted_reopen,
         end_state_evidence=has_evidence,
         notes=notes,
     )
@@ -469,8 +645,14 @@ def evaluate(issue_body: str, comment_body: str) -> Verdict:
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
-def _load_inputs(args: argparse.Namespace) -> Tuple[str, str]:
-    """Return (issue_body, comment_body). Raises on usage / I/O error."""
+def _load_inputs(
+        args: argparse.Namespace) -> Tuple[str, str, Optional[str]]:
+    """Return (issue_body, comment_body, reopen_comment).
+
+    reopen_comment is the LATEST reopen/counter-evidence comment body, or
+    None. In offline mode it comes from --reopen-comment-file; in network
+    mode the issue's comments are fetched and the latest reopen comment is
+    selected (issue #499). Raises on usage / I/O error."""
     # Comment file is mandatory in both modes.
     if not args.comment_file:
         raise ValueError("--comment-file is required")
@@ -488,7 +670,14 @@ def _load_inputs(args: argparse.Namespace) -> Tuple[str, str]:
         issue_body = ipath.read_text(encoding="utf-8")
         if not issue_body.strip():
             raise ValueError("--issue-body-file is empty")
-        return issue_body, comment_body
+        reopen_comment: Optional[str] = None
+        if args.reopen_comment_file:
+            rpath = Path(args.reopen_comment_file)
+            if not rpath.is_file():
+                raise FileNotFoundError(
+                    f"--reopen-comment-file not found: {rpath}")
+            reopen_comment = rpath.read_text(encoding="utf-8")
+        return issue_body, comment_body, reopen_comment
 
     if args.issue_number is not None:
         # Network mode.
@@ -497,7 +686,20 @@ def _load_inputs(args: argparse.Namespace) -> Tuple[str, str]:
         if not issue_body.strip():
             raise ValueError(
                 f"issue #{args.issue_number} has an empty body")
-        return issue_body, comment_body
+        # issue #499 — fetch comments and select the LATEST reopen comment.
+        # An explicit --reopen-comment-file overrides the fetch.
+        reopen_comment = None
+        if args.reopen_comment_file:
+            rpath = Path(args.reopen_comment_file)
+            if not rpath.is_file():
+                raise FileNotFoundError(
+                    f"--reopen-comment-file not found: {rpath}")
+            reopen_comment = rpath.read_text(encoding="utf-8")
+        else:
+            comments = _fetch_issue_comments(
+                args.repo, args.issue_number, token)
+            reopen_comment = select_latest_reopen_comment(comments)
+        return issue_body, comment_body, reopen_comment
 
     raise ValueError(
         "provide either --issue-body-file (offline) or --issue-number "
@@ -515,6 +717,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--token-file", default=None)
     # Offline mode arg.
     ap.add_argument("--issue-body-file", default=None)
+    # issue #499 — the LATEST reopen/counter-evidence comment body whose
+    # fenced repro is the binding acceptance for a round-2+ close. In
+    # network mode this is auto-selected from the fetched comments unless
+    # this flag is given (which then overrides).
+    ap.add_argument("--reopen-comment-file", default=None,
+                    help="the latest reopen/counter-evidence comment body "
+                         "(round-2+ closes; binding acceptance per #499)")
     # Common.
     ap.add_argument("--comment-file", default=None,
                     help="the candidate fix-comment body")
@@ -523,12 +732,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     try:
-        issue_body, comment_body = _load_inputs(args)
+        issue_body, comment_body, reopen_comment = _load_inputs(args)
     except (ValueError, FileNotFoundError, RuntimeError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
 
-    v = evaluate(issue_body, comment_body)
+    v = evaluate(issue_body, comment_body, reopen_comment=reopen_comment)
 
     if args.json:
         out = Path(args.json)
@@ -557,6 +766,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     # FAIL
     print("FAIL: fix comment does not satisfy the acceptance-execution "
           "doctrine.", file=sys.stderr)
+    if v.unquoted_reopen_commands:
+        # issue #499 — name the binding reopen repro the close must quote.
+        print("  LATEST reopen-comment repro command(s) NOT quoted in "
+              "本機驗證 (round-2+ binding acceptance, issue #499):",
+              file=sys.stderr)
+        for c in v.unquoted_reopen_commands:
+            print(f"    - {c}", file=sys.stderr)
     if v.unquoted_commands:
         print("  Acceptance commands NOT quoted in 本機驗證:",
               file=sys.stderr)

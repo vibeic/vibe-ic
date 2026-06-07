@@ -1355,3 +1355,17 @@ _Captured by benchmark-enhancement-capture 2026-06-05._
 **Why this is GENERAL**: Applies to every radix-limited ripple structure in benchmarks and production RTL; the run-past-full-wrap test rule is universal.
 
 _Captured by benchmark-enhancement-capture 2026-06-05._
+
+### Skill: Root-cause reopened extraction bugs on the REAL artifact before authoring fixtures
+
+**Pattern**: A round-2+ fix for a reopened doc-extraction issue can rebuild the parser's STRUCTURE (dual-table, borderless, column order) and ship an all-green self-test whose fixture uses the wrong AXIS — so the reopen repro survives untouched. The failure axis (vocabulary vs structure vs encoding) is a property of the REAL INPUT, not of the issue prose; a fixture that paraphrases the input silently re-selects the axis the fix author already understood.
+
+**When to apply**: A doc-extraction ORGANIC issue is reopened with counter-evidence naming a real input document, and you are the fix agent for round 2+.
+
+**What to do**: (1) FIRST run the extractor on the real named artifact and locate the exact stage that returns empty — which classifier returned None, which token missed; (2) fix THAT axis; (3) the new self-test fixture MUST embed the real document's discriminating line VERBATIM (e.g. its literal header row), never a same-shape paraphrase. #491 round-2 rebuilt the table SHAPE (two tables, borderless, column order) with English headers, so its 8/8-green suite never exercised the real failure axis (CJK + a multi-word `Port group` group header) and the reopen repro survived the fix verbatim.
+
+**Worked pattern** (anonymized): real header `Port group | 寬度 | 方向 | 描述` → the name-column classifier returns None on the multi-word + CJK row; the fixture must quote that row verbatim and the fix extends the accepted vocabulary, not the shape walker.
+
+**Why this is GENERAL**: Applies to every parser/extractor fix loop. The programmable residue — the reopen repro must pass before close — is #499's Bucket-A rule; this skill covers the reading-judgment half (picking the right axis by reading the artifact through the parser's branch structure, and quoting the real line verbatim).
+
+_Captured by benchmark-enhancement-capture 2026-06-07._

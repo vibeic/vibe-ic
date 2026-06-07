@@ -116,6 +116,11 @@ For each actionable issue:
    python3 plugins/vibe-ic/programs/defect_artifact_fixture_check.py \
        --issue-number <num> <new_test_file.py>    # exit 0 required
    ```
+   For a **round-2+ close** (the issue was reopened), the first gate
+   binds the LATEST reopen comment's fenced repro as acceptance (issue
+   #499): in network mode it auto-fetches+selects that comment; offline,
+   pass it via `--reopen-comment-file`. The `本機驗證` MUST then quote the
+   reopen repro + its end-state, not only the original body acceptance.
    Closing is the core-agent's responsibility precisely because the
    core-agent self-verifies the acceptance criterion first; the
    field-agent is the downstream audit net.
@@ -130,6 +135,51 @@ For each actionable issue:
    > whether its output has reached **end-state** (vs a misleading
    > intermediate) requires reading the issue for a novel defect, which
    > no regex can settle.
+
+#### Step 2.6 — REOPENED doc-extraction issues: root-cause on the REAL artifact, fixture quotes the real line VERBATIM
+
+This is round-2+ doctrine, triggered when a **doc-extraction**
+ORGANIC issue is **reopened** with counter-evidence that names a
+real input document. A round-2 fix can rebuild the extractor's
+*structure* (dual-table / borderless / column-order walker) and
+still ship a self-test whose fixture uses the wrong **axis** — the
+synthetic-fixture-vs-real-input gap. Concrete recurrence: a #491
+round-2 fix rebuilt the table SHAPE but its fixture used English
+headers, while the real document's failure axis was **VOCABULARY**
+(CJK + a multi-word group header like `Port group | 寬度 | 方向`).
+The 8/8-green self-tests never exercised the real axis, so the
+reopen repro survived the fix verbatim. (Second recurrence of this
+gap.)
+
+For a reopened doc-extraction issue, the round-2+ fix agent MUST,
+in this order:
+
+1. **FIRST run the extractor on the real named artifact** and
+   locate the exact stage that returns empty — *which classifier
+   returned `None`, which token missed*. Do not author a fix or a
+   fixture before this.
+2. **Fix that axis** (e.g. extend the vocabulary the classifier
+   accepts), not a same-shape sibling.
+3. The new fixture **embeds the real document's discriminating
+   line VERBATIM** — e.g. the literal header row that the parser
+   chokes on — **never a same-shape paraphrase**.
+
+**General principle:** the failure axis — *vocabulary vs structure
+vs encoding* — is a property of the **REAL INPUT**, not of the
+issue text. Paraphrasing the input (even into a structurally
+identical fixture) silently selects back the axis the fix author
+already understood, so a green suite proves nothing about the axis
+that actually failed. Where the issue names a discriminating line,
+the fixture must quote it verbatim.
+
+> **why_not_bucket_a (the judgment residual):** judging *which
+> axis* a real document fails on requires reading the artifact
+> **through the parser's own branch structure** (which branch
+> returned empty on which token) — open-ended reading that no
+> regex settles. The *programmable* residue — the reopen repro
+> must pass before close — is **#499's Bucket-A rule**; cross-reference
+> it. This Step-2.6 prose covers only the reading-judgment half:
+> picking the right axis and quoting the real line verbatim.
 
 ### Step 3 — push
 
