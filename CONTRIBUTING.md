@@ -175,7 +175,34 @@ Use the bug-report issue template. Please include:
 
 **Do not open a public issue.** See [SECURITY.md](SECURITY.md).
 
-## License
+## License, DCO, and patent pledge
 
 By contributing you agree that your contributions are licensed under
 the [Apache License 2.0](LICENSE) along with the rest of the project.
+Apache-2.0 §5 makes this automatic (inbound = outbound), and §3 grants
+every downstream user an explicit **patent license** covering your
+contribution — with the built-in defensive termination clause.
+
+**DCO (Developer Certificate of Origin).** Every commit must carry a
+`Signed-off-by:` trailer certifying you have the right to submit the
+work under Apache-2.0 (the [DCO 1.1](https://developercertificate.org/)
+text):
+
+```bash
+git commit -s -m "your message"
+```
+
+**Patent non-assertion pledge.** In addition to the Apache-2.0 §3 grant,
+by contributing you pledge that:
+
+1. you retain the copyright in your contribution;
+2. you grant the Vibe-IC project and its users a perpetual, worldwide,
+   irrevocable, royalty-free patent license covering your contribution
+   (this restates Apache-2.0 §3 — nothing extra to do);
+3. you will not assert, against any user of Vibe-IC, any patent claim
+   that reads on your contribution as integrated into the project.
+
+This mirrors the practice of patent-sensitive open-hardware communities
+(RISC-V International's non-assertion covenants; the Linux Foundation's
+DCO). If your employer holds patents in EDA/IC-design methodology,
+please clear your contribution with them before signing off.

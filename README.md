@@ -179,8 +179,43 @@ do **not** open a public issue.
 Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 This license is compatible with bundling Vibe-IC alongside open-source
-PDKs (SkyWater, GF180MCU, IHP), open-source EDA tools (Yosys / OpenROAD /
-KLayout / Magic), and commercial workflows. Patent grant is explicit.
+PDKs (SkyWater, GF180MCU, IHP — all Apache-2.0) and open-source EDA
+tools (Yosys — ISC; OpenROAD — BSD-3-Clause; KLayout — GPL-3.0 invoked
+as a separate program; Magic / netgen — MIT-style). Patent grant is
+explicit (Apache-2.0 §3).
+
+## IP ownership & commercial-tool firewall
+
+**Tool vs design.** Vibe-IC is a *tool*, not a *design*. Designs you
+produce with it (RTL, netlists, GDS, constraints, test vectors) are
+**yours**: Apache-2.0 places no claim and no copyleft on tool outputs —
+they are not derivative works of the flow, exactly as a binary compiled
+by GCC is not a derivative work of GCC.
+
+**AI-generated RTL.** Where a flow step is AI-authored (spec-to-RTL,
+oracle testbenches), the resulting code is held by **you, the user**,
+as your work product. Note the current US posture: an AI cannot be
+named *inventor* (Thaler v. Vidal, Fed. Cir. 2022), but AI-assisted
+output with significant human contribution is ordinary, ownable IP.
+Generated flow artifacts carry a provenance header stating exactly
+this.
+
+**Manufacturing responsibility.** Foundry sign-off, fabrication
+qualification, and product certification are the user's responsibility
+— Vibe-IC's sign-off gates are open-source equivalents and named
+honest disclosures, not a foundry guarantee.
+
+**Commercial-tool firewall.** The entire 1–44 flow runs on open-source
+tools only; Vibe-IC neither bundles nor requires any commercial EDA.
+If you substitute a commercial tool for a step (e.g. PrimeTime in
+place of OpenSTA), that tool's **outputs are governed by its EULA**,
+are your responsibility, and must **not** be contributed back into
+this repository. Open↔commercial substitutions are disclosed via
+`programs/tool_substitution_disclose.py`.
+
+**Contributions.** Inbound contributions follow Apache-2.0 §5 with an
+explicit DCO + patent non-assertion pledge — see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
