@@ -256,6 +256,44 @@ instead.
 - **Sanitize before file**: every YAML, every time, even when
   you're sure it's clean.
 
+## Campaign orchestration — single-driver principle
+
+A multi-tick field campaign drives the one-shot runners against a
+project directory over and over, often handing the project from a
+background agent to a successor agent across cron ticks. These are the
+host lessons for keeping that hand-off clean:
+
+- **One runner per project dir at a time.** A project directory is a
+  single-writer resource: the run logs, manifests, and provenance under
+  its `reports/` tree are written by exactly one driving runner. Two
+  runners pointed at the same project will co-write that tree and
+  corrupt the run record. The runner now enforces this with a
+  `<proj>/.runner.lock` (pid + ISO timestamp + runner name): a second
+  concurrent invocation against a live-held project is refused by name
+  (`CONCURRENT_RUN_REFUSED`, naming the holder pid) and exits non-zero;
+  a lock left behind by a dead runner is cleaned as stale and the new
+  runner proceeds. Treat a `CONCURRENT_RUN_REFUSED` as a signal to find
+  and resolve the other driver — never to delete the lock by hand and
+  retry.
+
+- **Never abandon a background runner that still holds a project.**
+  Before handing a project to a successor agent (or before STOP), the
+  driving agent MUST either `wait` for its background runner to finish
+  or `kill` it. An abandoned, still-alive background runner keeps its
+  lock and will (correctly) refuse the successor — and worse, if the
+  lock is force-removed, both runners co-write and the run record is
+  silently corrupted.
+
+- **The double-driver incident (generic).** In a real campaign an
+  orphaned background runner was left driving a project while the cron
+  advanced and a successor agent launched a fresh runner on the SAME
+  project; both wrote logs / manifests / provenance concurrently. There
+  was no refusal mechanism, so the corruption went unnoticed until the
+  artifacts were audited. The single-driver lock above is the
+  deterministic fix; the operational rule is: account for every
+  background runner you spawn — wait or kill — before relinquishing a
+  project.
+
 ## Cron-invocation template
 
 ```

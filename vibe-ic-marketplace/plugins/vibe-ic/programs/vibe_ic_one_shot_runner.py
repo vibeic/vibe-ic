@@ -49,6 +49,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import _path_layout as _pl
+import _runner_lock
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -173,6 +174,15 @@ def main() -> int:
     if not project.is_dir():
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
         return 2
+
+    # ---------------- Single-driver project lock (ORGANIC #498) ----------
+    # Refuse a second concurrent invocation on a project already being
+    # driven by a LIVE runner; clean a stale lock left by a dead one.
+    # Acquired BEFORE any reports/manifests/provenance are written so two
+    # racing orchestrators can never co-write the same reports/ tree.
+    lock = _runner_lock.acquire(project, "vibe_ic_one_shot_runner")
+    if lock is None:
+        return 3
 
     t0 = time.time()
     plan: List[Tuple[str, str, int]] = []   # (phase, verdict, rc)
@@ -317,6 +327,7 @@ def main() -> int:
     print(f"  duration          : {summary['duration_s']:.1f}s")
     print(f"  final summary     : {'reports/final_summary.md' if fs_ok else 'NOT generated'}")
     print(f"{'='*72}")
+    lock.release()  # explicit; atexit/signal handlers are the backstop
     return 0 if overall in ("PASS", "PASS_WITH_WAIVERS") else 1
 
 
