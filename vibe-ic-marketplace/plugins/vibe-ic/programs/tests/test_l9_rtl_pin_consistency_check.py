@@ -69,12 +69,16 @@ def test_pass_when_l9_and_rtl_agree(tmp_path):
     assert r.returncode == 0, r.stdout
     assert "PASS" in r.stdout
     # fixture-flip-acknowledged: test_pass_when_l9_and_rtl_agree:
-    # "agree on 3 pins" -> "agree on 2 pins". v1.6.85 (#17 Bug B) strips
-    # implicit `clk` / `reset_n` from BOTH sides of the diff before
-    # comparing, so the count drops from 3 (clk/rst_n/id_bus_tx) to 2
-    # (rst_n/id_bus_tx). `clk` is the only implicit-stripped name in
-    # this fixture (`rst_n` is NOT in _IMPLICIT_PINS — only `reset_n`).
-    assert "agree on 2 pins" in r.stdout
+    # "agree on 3 pins" -> "agree on 1 pins". v1.6.85 (#17 Bug B)
+    # originally stripped only the EXACT names `clk` / `reset_n`, so this
+    # fixture (clk/rst_n/id_bus_tx) dropped just `clk` and reported
+    # "agree on 2 pins". ORGANIC-20260606 #491 (b) widened the strip to a
+    # NAME-PATTERN over the clock + reset families, so `rst_n` is now ALSO
+    # recognised as an implicit reset port and stripped. Only the real
+    # functional port `id_bus_tx` remains → "agree on 1 pins". This is the
+    # intended behavioural change (the old comment's "rst_n is NOT in
+    # _IMPLICIT_PINS" was exactly the #491 false-mismatch bug).
+    assert "agree on 1 pins" in r.stdout
 
 
 # ─── v1.6.19 regression — schema-v2 top_module field is honoured ──

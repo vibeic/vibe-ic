@@ -121,7 +121,52 @@ def _is_debug_port(name: str) -> bool:
 # obvious / always-required infrastructure ports). Whitelisting them
 # from BOTH sides of the diff prevents false-FAIL when L9 omits clk
 # / reset_n while RTL declares them, or vice-versa. Chip-AGNOSTIC.
-_IMPLICIT_PINS = frozenset({"clk", "reset_n"})
+#
+# ORGANIC-20260606 #491 (b) — widened from an EXACT-name set to a
+# NAME-PATTERN set. The exact set `{"clk", "reset_n"}` only stripped
+# those two literal spellings, so when L9 carries `i_clk`/`rst_n` but
+# the RTL emitter (or the AID-class canonical-pin augment) declares the
+# OTHER conventional spelling (`clk`/`reset`), the asymmetric pair
+# survived the strip and produced a false "RTL has ports not in L9" /
+# "L9 declares pins missing from RTL" FAIL. The pattern set now covers
+# the common infra-port spellings on BOTH the clock and reset families:
+#
+#   clock:  clk, i_clk, o_clk, clk_i, clock, sys_clk, core_clk, …
+#           (a `clk`/`clock` segment, with an optional i_/o_ direction
+#            prefix, an optional `_i`/`_o` suffix, and optional descriptive
+#            qualifier segments — `sys_clk`, `core_clk`, `clk_i`)
+#   reset:  rst, i_rst, rst_n, reset, reset_n, i_reset_n, por_rst_n, …
+#           (a `rst`/`reset`/`por` segment, optional i_/o_ prefix,
+#            optional active-low `_n`/`n` suffix, optional qualifiers)
+#
+# GPIO is DELIBERATELY NOT whitelisted here — per the issue, GPIO must
+# come from the L3 pin table (the promoter already extracts every
+# direction-bearing table row, verified end-to-end), not from a gate-side
+# convenience whitelist that would mask a genuinely-dropped GPIO pin.
+# Chip-AGNOSTIC: pure naming-convention SHAPE; no chip/vendor literal.
+_IMPLICIT_PIN_PATTERNS = tuple(
+    re.compile(p, re.IGNORECASE) for p in [
+        # clock family: optional i_/o_ prefix, a clk/clock segment
+        # (optionally qualified, e.g. sys_clk / core_clk), optional
+        # _i/_o direction suffix, optional trailing digits.
+        r"^(?:[io]_)?(?:[a-z][a-z0-9]*_)*"
+        r"(?:clk|clock)(?:_[io])?\d*$",
+        # reset family: optional i_/o_ prefix, a rst/reset/por segment
+        # (optionally qualified, e.g. por_rst / soft_reset), optional
+        # active-low _n / n suffix, optional _i/_o direction suffix.
+        r"^(?:[io]_)?(?:[a-z][a-z0-9]*_)*"
+        r"(?:rst|reset|por)(?:_?n)?(?:_[io])?\d*$",
+    ]
+)
+
+
+def _is_implicit_pin(name: str) -> bool:
+    """ORGANIC #491 (b) — True iff `name` matches a conventional
+    implicit infra-port (clock / reset) spelling that L9 frequently
+    does not enumerate. Pattern-on-SHAPE, chip-AGNOSTIC."""
+    if not isinstance(name, str) or not name:
+        return False
+    return any(p.match(name) for p in _IMPLICIT_PIN_PATTERNS)
 
 
 # ─── L9 ingestion ─────────────────────────────────────────────────
@@ -140,18 +185,55 @@ def _normalise_dir(raw: str) -> Optional[str]:
     return _DIR_NORMALIZE.get(raw.lower().strip())
 
 
+# ORGANIC-20260606 #490 — L9 port-key fragmentation. The L9 schema has
+# accreted THREE port-list keys over its history:
+#   - `top_ports`        — the CANONICAL key the promoter writes (also
+#                          read by the RTL emitter, the SDC/QSF/clock
+#                          generators, and most post-emit hooks);
+#   - `ports`            — the alias gen_l9 emits alongside `top_ports`;
+#   - `top_level_ports`  — the original Wave-79 schema-v1 key this gate
+#                          was first written against;
+#   - `top_module_pins`  — the legacy compat name;
+#   - `dtop_top_level.ports` — schema-v1 nested form.
+# `full_stack_tb_gen` + the L9 promoter populate `top_ports`, but this
+# gate historically read ONLY `top_level_ports` / `top_module_pins` /
+# `dtop_top_level.ports`. A correct RTL top therefore got NO verification
+# (silent SKIP) when the promoted port set landed in `top_ports`/`ports`
+# — and a field run had to write the same pins into BOTH keys to clear
+# the gate. Fix: read the UNION of every known key (deduped by name, so
+# the dual-write that field runs used is harmless and the order-of-
+# precedence between aliases no longer matters). The promoter side
+# (gen_l9_integration_spec) writes the canonical `top_ports` AND mirrors
+# into whatever legacy keys it finds populated, so no consumer is
+# orphaned regardless of which key it reads.
+_L9_PORT_KEYS = (
+    "top_ports",          # canonical (promoter + TB-gen + emitters)
+    "ports",              # promoter alias
+    "top_level_ports",    # original Wave-79 schema-v1 key
+    "top_module_pins",    # legacy compat alias
+)
+
+
 def extract_l9_ports(l9: dict) -> list[dict]:
-    """Return [{name, direction, open_drain}] from any of the
-    accepted L9 schema variants."""
-    raw_lists = []
-    if isinstance(l9.get("top_level_ports"), list):
-        raw_lists.append(l9["top_level_ports"])
-    if isinstance(l9.get("top_module_pins"), list):
-        raw_lists.append(l9["top_module_pins"])
+    """Return [{name, direction, open_drain}] from the UNION of every
+    accepted L9 schema port-key variant (#490).
+
+    The union is deduped by name (first occurrence wins, but a later
+    occurrence that carries a direction backfills a missing one) so a
+    dual-written L9 (the same pins under both `top_ports` and
+    `top_module_pins`) yields the same single port set as a singly-keyed
+    L9. This is what makes the gate read ports that landed in ANY one
+    key without requiring producers to mirror into every key."""
+    raw_lists: list[list] = []
+    for key in _L9_PORT_KEYS:
+        v = l9.get(key)
+        if isinstance(v, list):
+            raw_lists.append(v)
     dtop = l9.get("dtop_top_level", {})
     if isinstance(dtop, dict) and isinstance(dtop.get("ports"), list):
         raw_lists.append(dtop["ports"])
     out: list[dict] = []
+    by_name: dict[str, dict] = {}
     for lst in raw_lists:
         for entry in lst:
             if not isinstance(entry, dict):
@@ -164,14 +246,25 @@ def extract_l9_ports(l9: dict) -> list[dict]:
             )
             if not name:
                 continue
+            name = str(name)
             d = _normalise_dir(direction) if direction else None
-            out.append(
-                {
-                    "name": str(name),
+            prev = by_name.get(name)
+            if prev is None:
+                rec = {
+                    "name": name,
                     "direction": d,
                     "open_drain": bool(entry.get("open_drain", False)),
                 }
-            )
+                by_name[name] = rec
+                out.append(rec)
+            else:
+                # Same pin under another key: backfill a missing
+                # direction / open_drain so a dual-write where only one
+                # copy carries the direction still yields it.
+                if prev.get("direction") is None and d is not None:
+                    prev["direction"] = d
+                if entry.get("open_drain"):
+                    prev["open_drain"] = True
     return out
 
 
@@ -394,14 +487,18 @@ def main(argv: list[str]) -> int:
     l9_names = {p["name"] for p in l9_ports}
     rtl_names = {p["name"] for p in rtl_ports}
 
-    # v1.6.85 (#17 Bug B) — strip implicit pins (clk / reset_n) from
+    # v1.6.85 (#17 Bug B) — strip implicit pins (clk / reset family) from
     # BOTH sides of the diff before comparing. They're always required
     # but L9 sometimes doesn't enumerate them (relying on the
     # canonical-fallback in aid_class_rtl_gen). Without this, every
     # such project hits a false-FAIL "L9 declares pins missing from
     # RTL".
-    l9_names = {n for n in l9_names if n not in _IMPLICIT_PINS}
-    rtl_names = {n for n in rtl_names if n not in _IMPLICIT_PINS}
+    # ORGANIC-20260606 #491 (b) — the strip now matches a NAME-PATTERN
+    # (clk/i_clk/clock/clk_i + rst/rst_n/reset/reset_n/por…) so an
+    # asymmetric spelling pair (L9=`i_clk`, RTL=`clk`) no longer survives
+    # the strip and false-FAILs.
+    l9_names = {n for n in l9_names if not _is_implicit_pin(n)}
+    rtl_names = {n for n in rtl_names if not _is_implicit_pin(n)}
 
     only_l9 = sorted(l9_names - rtl_names)
     only_rtl_all = sorted(rtl_names - l9_names)

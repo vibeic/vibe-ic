@@ -40271,9 +40271,21 @@ def gen_l9_integration_spec(project: Path,
         #                                 fixtures know this name).
         "top_module_extraction_strategy": top_module_extraction_strategy,
         "no_top_module_in_input": no_top_module_in_input,
-        "ports": top_module_pins,           # canonical alias for the gate
-        "top_ports": top_module_pins,       # v1.6.86 — alias used by RTL emitter + tests
-        "top_module_pins": top_module_pins, # legacy name kept for compat
+        # ORGANIC-20260606 #490 — L9 port-key fragmentation. CANONICAL
+        # key = `top_ports` (the key full_stack_tb_gen, the RTL/SDC/QSF/
+        # clock emitters, and the post-emit hooks all read + write).
+        # `ports` and `top_module_pins` are mirrored LEGACY aliases kept
+        # for older consumers / tests; all three share the SAME Python
+        # list object so a later in-place mutation (the desc cascade, the
+        # implicit-1bit default, the half-duplex coalesce) updates every
+        # alias at once and the three keys can never diverge. The
+        # l9_rtl_pin_consistency_check gate reads the UNION of these keys
+        # (plus the schema-v1 `top_level_ports` / `dtop_top_level.ports`)
+        # so it sees the promoted set regardless of which key a consumer
+        # happens to inspect — no dual-write needed.
+        "ports": top_module_pins,           # mirrored legacy alias
+        "top_ports": top_module_pins,       # CANONICAL (#490)
+        "top_module_pins": top_module_pins, # mirrored legacy alias
         "no_integration_in_input": no_integration_in_input,
         "submodules": submodules,
         "no_submodules_in_input": no_submodules_in_input,
@@ -43877,9 +43889,14 @@ def _v1_6_350_post_emit_spice_metadata(project: Path) -> None:
                                 "evidence": pn.get("evidence", ""),
                             })
                     if promoted_ports:
+                        # ORGANIC-20260606 #490 — always write the
+                        # CANONICAL `top_ports` key (the one the gate +
+                        # downstream emitters read) so a SPICE-promoted
+                        # analog top is never orphaned in `ports` alone,
+                        # then mirror into every legacy alias that is
+                        # already present on the on-disk doc.
                         l9["ports"] = promoted_ports
-                        if "top_ports" in l9:
-                            l9["top_ports"] = promoted_ports
+                        l9["top_ports"] = promoted_ports
                         if "top_module_pins" in l9:
                             l9["top_module_pins"] = promoted_ports
                         es = l9.setdefault("extraction_strategy", {})
