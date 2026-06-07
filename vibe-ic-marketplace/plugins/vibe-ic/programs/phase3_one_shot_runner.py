@@ -4136,8 +4136,15 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
     # fill/tap/decap/fakediode ignore) and use it instead of the bare PDK
     # setup, so the cell-level compare is not flooded by physical-only
     # device-count deltas and does not need MAGIC_EXT_USE_GDS (#508/#509).
+    # v0.3.14 #509 r3 — also ignore the per-design ECO spare-ONLY classes
+    # (every instance is a spare → safe), derived from the gate netlist.
+    try:
+        _spare_classes = _v0_3_14_detect_spare_only_classes(
+            netlist.read_text(errors="replace"))
+    except OSError:
+        _spare_classes = []
     _local_setup_host, local_setup_c = _emit_local_netgen_setup(
-        project, pdk, container)
+        project, pdk, container, spare_only_classes=_spare_classes)
     return _run_extraction_lvs(project, top, pdk, container, def_file,
                                netlist, magicrc, local_setup_c, t0)
 
@@ -4257,8 +4264,134 @@ quit -noprompt
 """
 
 
+def _v0_3_14_detect_spare_only_classes(netlist_text: str) -> List[str]:
+    """v0.3.14 — ORGANIC #509 round-3. Return the std-cell classes in a
+    gate netlist whose EVERY instance is an ECO spare (instance name
+    contains 'spare'). These classes are safe to `ignore class` in the
+    cell-level LVS compare because they carry NO functional connectivity
+    in THIS design — the schematic declares spares floating `()` while the
+    layout extract wires their power pins to a neighbour's pseudo-net, so
+    they can never pin-match, and excluding a spare-ONLY class cannot hide
+    a real defect. A class used by even ONE functional (non-spare)
+    instance is NOT returned (ignoring it could mask a functional
+    mismatch). This is the SAFE generalisation of the field's manual
+    dfrtp_1/inv_1 ignore — derived per-design from the netlist, never
+    hardcoded. chip-AGNOSTIC: only the generic 'spare' instance-name
+    convention + cell-class grouping participate."""
+    inst_re = re.compile(r'(sky130_\w+?__[a-z0-9_]+)\s+(\\?\S+)\s*\(', re.M)
+    by_class: Dict[str, List[str]] = {}
+    for cls, inst in inst_re.findall(netlist_text or ""):
+        by_class.setdefault(cls, []).append(inst)
+    spare_re = re.compile(r'spare', re.I)
+    return sorted(cls for cls, insts in by_class.items()
+                  if insts and all(spare_re.search(i) for i in insts))
+
+
+def _v0_3_14_detect_top_port_aliases(def_text: str) -> List[Tuple[str, str]]:
+    """v0.3.14 — ORGANIC #509 round-3. Return (alias_pin, canonical_net)
+    pairs where TWO top pins share ONE physical net — the buffer-less
+    `assign o_a = o_b` design-intent node-merge. In the DEF PINS section a
+    pin reads `- <pin> + NET <net>`; when <net> is ITSELF another top-pin
+    name, the two ports are physically one net. ext2spice (default `short
+    none`) keeps only the net-named port and DROPS the alias, leaving the
+    extracted `.subckt` short of ports → netgen 'failed pin matching'. The
+    fix (see _v0_3_14_apply_top_port_aliases) re-adds each dropped alias +
+    a 0-ohm resistor join (netgen auto-removes the zero device, 0 added).
+    Only pairs whose net is ALSO a declared top pin are returned — a pin
+    aliased to an INTERNAL net (e.g. a hierarchical buffer output) is its
+    own port and needs no patch. chip-AGNOSTIC: pure DEF structure."""
+    pins: set = set()
+    rows: List[Tuple[str, str]] = []
+    in_pins = False
+    for line in (def_text or "").splitlines():
+        if line.startswith("PINS"):
+            in_pins = True
+            continue
+        if line.startswith("END PINS"):
+            break
+        if in_pins:
+            m = re.match(r'\s*-\s+(\S+)\s+\+\s+NET\s+(\S+)', line)
+            if m:
+                pins.add(m.group(1))
+                rows.append((m.group(1), m.group(2)))
+    return [(p, n) for p, n in rows if p != n and n in pins]
+
+
+def _v0_3_14_apply_top_port_aliases(sp_text: str,
+                                    aliases: List[Tuple[str, str]],
+                                    top: str = "") -> str:
+    """v0.3.14 — ORGANIC #509 round-3. Patch an extracted `.subckt` netlist:
+    for each (alias_pin, canonical_net) whose alias_pin is MISSING from the
+    top `.subckt` port list (dropped by ext2spice same-net merge), append
+    the alias to the port list AND add a 0-ohm resistor joining the net to
+    the alias just before `.ends`. netgen recognises zero-valued resistors
+    as pure shorts and AUTO-REMOVES them (0 added devices), faithfully
+    mirroring the schematic's buffer-less `assign` node-merge. Idempotent +
+    safe: an alias already present, or whose canonical_net is not in the
+    port list, is skipped. chip-AGNOSTIC: pure netlist edit."""
+    if not aliases:
+        return sp_text
+    lines = sp_text.splitlines()
+    # locate the TOP cell's .subckt header — the extracted netlist lists
+    # leaf-cell .subckt blocks (fill/std cells) FIRST, so match by the top
+    # name, not the first .subckt. Fall back to the first .subckt only when
+    # `top` is unknown.
+    hdr_start = None
+    if top:
+        pat = re.compile(rf'^\s*\.subckt\s+{re.escape(top)}\b', re.IGNORECASE)
+        for i, ln in enumerate(lines):
+            if pat.match(ln):
+                hdr_start = i
+                break
+    if hdr_start is None:
+        for i, ln in enumerate(lines):
+            if re.match(r'^\s*\.subckt\s+\S+', ln, re.IGNORECASE):
+                hdr_start = i
+                break
+    if hdr_start is None:
+        return sp_text
+    # SPICE line continuation = the NEXT line begins with '+' (leading),
+    # which is how Magic ext2spice wraps a long .subckt port list.
+    hdr_end = hdr_start
+    while (hdr_end + 1 < len(lines)
+           and lines[hdr_end + 1].lstrip().startswith("+")):
+        hdr_end += 1
+    header_blob = " ".join(
+        lines[i].strip().lstrip("+").strip()
+        for i in range(hdr_start, hdr_end + 1))
+    toks = header_blob.split()
+    port_set = set(toks[2:])  # toks[0]=.subckt toks[1]=name
+    add_ports: List[str] = []
+    add_res: List[str] = []
+    for idx, (alias_pin, canon_net) in enumerate(aliases):
+        if alias_pin in port_set:
+            continue
+        if canon_net not in port_set and canon_net not in add_ports:
+            # canonical net must be a real port to short against
+            continue
+        add_ports.append(alias_pin)
+        add_res.append(f"RWALIAS{idx} {canon_net} {alias_pin} 0")
+    if not add_ports:
+        return sp_text
+    # rewrite header as a single line with the appended alias ports, then
+    # insert the 0-ohm joins before the TOP subckt's own `.ends` (the first
+    # `.ends` AFTER the header — not a leaf cell's earlier .ends).
+    new_header = header_blob + " " + " ".join(add_ports)
+    body_lines = lines[hdr_end + 1:]
+    ends_rel = next((j for j, ln in enumerate(body_lines)
+                     if re.match(r'^\s*\.ends\b', ln, re.IGNORECASE)), None)
+    if ends_rel is None:
+        body_lines = body_lines + add_res
+    else:
+        body_lines = (body_lines[:ends_rel] + add_res + body_lines[ends_rel:])
+    out = lines[:hdr_start] + [new_header] + body_lines
+    return "\n".join(out) + ("\n" if sp_text.endswith("\n") else "")
+
+
 def _emit_local_netgen_setup(project: Path, pdk: PdkConfig,
-                             container: str) -> Tuple[Path, str]:
+                             container: str,
+                             spare_only_classes: Optional[List[str]] = None
+                             ) -> Tuple[Path, str]:
     """v0.3.13 — ORGANIC #508/#509 round-2 FINAL. Emit a PROJECT-LOCAL
     netgen setup that `source`s the PDK's own setup then UNCONDITIONALLY
     ignores the physical-only filler / tap / decap / fakediode cells on
@@ -4299,6 +4432,15 @@ def _emit_local_netgen_setup(project: Path, pdk: PdkConfig,
         "    if {[regexp {sky130_ef_sc_[^_]+__fakediode_[[:digit:]]+} $_c]}   { ignore class \"-circuit2 $_c\" }\n"
         "}\n"
     )
+    # v0.3.14 — ORGANIC #509 round-3: per-design ECO spare-ONLY classes
+    # (every instance is a spare → no functional connectivity → safe to
+    # ignore; derived from the gate netlist, never hardcoded). Emitted as
+    # explicit per-class ignores on both circuits.
+    for cls in (spare_only_classes or []):
+        body += (
+            f"# ECO spare-only class (all instances are spares) — #509 r3\n"
+            f"catch {{ignore class \"-circuit1 {cls}\"}}\n"
+            f"catch {{ignore class \"-circuit2 {cls}\"}}\n")
     ext_dir = _pl.extracted_dir(project)
     ext_dir.mkdir(parents=True, exist_ok=True)
     host = ext_dir / "local_netgen_setup.tcl"
@@ -4363,6 +4505,20 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
             extras={"finding": "LVS_EXTRACTION_NO_NETLIST",
                     "lvs_verdict": verdict,
                     "transcript_tail": (out + err)[-600:]})
+    # v0.3.14 — ORGANIC #509 round-3: re-add buffer-merged same-net top
+    # ports that ext2spice dropped, joined by 0-ohm resistors (netgen
+    # auto-removes them → 0 added devices). Faithfully mirrors the
+    # schematic's buffer-less `assign o_a = o_b` node-merge so all top
+    # ports pair (else netgen 'failed pin matching'). Derived from the DEF.
+    try:
+        _aliases = _v0_3_14_detect_top_port_aliases(
+            def_file.read_text(errors="replace"))
+        if _aliases:
+            _patched = _v0_3_14_apply_top_port_aliases(
+                spice_out.read_text(errors="replace"), _aliases, top=top)
+            spice_out.write_text(_patched)
+    except OSError:
+        pass
     # ORGANIC-20260606 #477 — run-completion honesty check (c):
     # parse the `N errors` summary line from ext2spice.log. A count
     # above the sane ceiling means the extraction collapsed and any
