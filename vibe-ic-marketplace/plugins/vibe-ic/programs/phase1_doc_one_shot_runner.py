@@ -3999,6 +3999,235 @@ def _v1_6_572_extract_port_rows_in_seed_mode(text: str):
         }
 
 
+# v0.3.2 — ORGANIC-20260606 #491 R2. Universal multi-table header-role
+# pin walker. The per-row regex family above (_RE_L1_L9_RST_IFACE_4COL /
+# _DIR2 / _2COL / _3COL / _NCOL_SUFFIX) hard-codes the COLUMN ORDER and
+# requires both a leading `^|` AND a closing `|` per row. Two
+# real-document pipe-table shapes slip through ALL of them:
+#
+#   (a) BORDERLESS GFM pipe tables — the canonical Markdown form that
+#       omits the outer `|` borders entirely:
+#           Signal | Direction | Width | Description
+#           ------ | --------- | ----- | -----------
+#           clk    | input     | 1     | system clock
+#       Every per-row regex anchors on `^[ \t]*\|`, so a borderless row
+#       (`clk | input | 1 | ...`) matches NONE of them → 0 pins.
+#
+#   (b) An interface doc that carries TWO pipe tables (a main Port-group
+#       table with clk/reset/GPIO rows + a memory-block sub-port table).
+#       When the two tables use DIFFERENT column orders, the order-locked
+#       regexes each only catch the table whose order they happen to
+#       match — so a document can surface with the SECOND table's rows
+#       only and the whole first table dropped, or vice-versa.
+#
+# This walker fixes both classes the GENERAL way: it scans EVERY pipe-
+# table block in the document (bordered or borderless), reads the column
+# ROLES from each table's OWN header row, and emits one record per data
+# row with the direction resolved from that table's direction column.
+# Because the role mapping is recomputed PER TABLE, the second table's
+# direction is never `None` just because the first table had a different
+# layout, and NO table is dropped in favour of another (no latch).
+# Because each block is bounded by its own separator + the first non-pipe
+# line, SDC / stdcell-library lines elsewhere in the doc can never leak
+# into a table's rows.
+#
+# Chip-AGNOSTIC: pure GFM/RST pipe-table grammar + universal port-table
+# header vocabulary + RTL direction keywords; no chip-class literal.
+_V0_3_2_HEADER_NAME_TOKENS = frozenset({
+    "signal", "signals", "port", "ports", "pin", "pins", "name",
+    "port name", "signal name", "pin name",
+})
+_V0_3_2_HEADER_DIR_TOKENS = frozenset({
+    "direction", "dir", "mode", "i/o", "io", "in/out", "type",
+})
+_V0_3_2_HEADER_WIDTH_TOKENS = frozenset({
+    "width", "bits", "size", "[bits]", "msb:lsb",
+})
+_V0_3_2_HEADER_DESC_TOKENS = frozenset({
+    "description", "desc", "function", "purpose", "notes", "note",
+    "meaning", "comment", "comments",
+})
+# A pipe-table separator row: every cell is `:?---:?` (GFM) or `:?===:?`
+# (RST/AsciiDoc), with or without outer `|` borders.
+_V0_3_2_RE_SEP_CELL = re.compile(r"^:?[-=]{1,}:?$")
+
+
+def _v0_3_2_split_pipe_cells(line: str) -> List[str]:
+    """Split one pipe-table row into trimmed cell strings, tolerating
+    BORDERLESS rows (no leading / trailing `|`). The leading/trailing
+    empty cells produced by outer borders are dropped so a bordered
+    `| a | b |` and a borderless `a | b` yield the SAME `['a', 'b']`.
+    Chip-AGNOSTIC."""
+    parts = [c.strip() for c in line.split("|")]
+    if parts and parts[0] == "":
+        parts = parts[1:]
+    if parts and parts and parts[-1] == "":
+        parts = parts[:-1]
+    return parts
+
+
+def _v0_3_2_is_pipe_row(line: str) -> bool:
+    """True iff `line` is a pipe-table data/header row — bordered OR
+    borderless. Requires ≥1 internal `|` separating ≥2 non-empty
+    cells. Chip-AGNOSTIC structural shape."""
+    if "|" not in line:
+        return False
+    cells = _v0_3_2_split_pipe_cells(line)
+    return len(cells) >= 2
+
+
+def _v0_3_2_is_sep_row(line: str) -> bool:
+    """True iff `line` is a pipe-table alignment / separator row,
+    bordered or borderless (`---|---`, `:--|--:`, `===|===`)."""
+    if "|" not in line:
+        return False
+    cells = _v0_3_2_split_pipe_cells(line)
+    if len(cells) < 2:
+        return False
+    return all(bool(c) and _V0_3_2_RE_SEP_CELL.match(c) for c in cells)
+
+
+def _v0_3_2_classify_pin_header(cells: List[str]) -> Optional[Dict[str, int]]:
+    """Map a header row's cells to column roles. Returns a dict with at
+    least `name` + `direction` indices (the two roles required for a
+    port table), plus optional `width` / `description`, or None when
+    the row does not look like a port table. Chip-AGNOSTIC."""
+    if not cells:
+        return None
+    roles: Dict[str, int] = {}
+    for i, raw in enumerate(cells):
+        cell = (raw or "").strip(" *`").strip().lower()
+        if not cell:
+            continue
+        if cell in _V0_3_2_HEADER_NAME_TOKENS and "name" not in roles:
+            roles["name"] = i
+        elif cell in _V0_3_2_HEADER_DIR_TOKENS and "direction" not in roles:
+            roles["direction"] = i
+        elif cell in _V0_3_2_HEADER_WIDTH_TOKENS and "width" not in roles:
+            roles["width"] = i
+        elif cell in _V0_3_2_HEADER_DESC_TOKENS and "description" not in roles:
+            roles["description"] = i
+    if "name" not in roles or "direction" not in roles:
+        return None
+    return roles
+
+
+def _v0_3_2_iter_gfm_pin_tables(text: str):
+    """v0.3.2 — for #491 R2. Yield `(roles, rows)` for EVERY pipe-table
+    block in `text` whose header row carries both a name column and a
+    direction column. `rows` is a list of cell-lists (one per data
+    row), bounded to that table's block. Bordered AND borderless tables
+    are recognised. Multiple tables in the SAME document are ALL yielded
+    — no table is latched / dropped in favour of another.
+
+    Block detection: a header row (pipe row) immediately followed by a
+    separator row opens a block; the block's data rows run until the
+    first blank line, the first non-pipe line, or the start of the next
+    header+separator pair. Each table's column roles are computed from
+    its OWN header, so per-table direction parsing is independent.
+
+    Chip-AGNOSTIC: pure pipe-table grammar + universal port vocabulary.
+    """
+    if not isinstance(text, str) or not text:
+        return
+    lines = text.split("\n")
+    n = len(lines)
+    i = 0
+    while i < n:
+        line = lines[i]
+        # A table opens with: pipe header row, then a separator row.
+        if (_v0_3_2_is_pipe_row(line)
+                and not _v0_3_2_is_sep_row(line)
+                and i + 1 < n
+                and _v0_3_2_is_sep_row(lines[i + 1])):
+            header_cells = _v0_3_2_split_pipe_cells(line)
+            roles = _v0_3_2_classify_pin_header(header_cells)
+            ncols = len(header_cells)
+            # Walk the data rows after the separator.
+            rows: List[List[str]] = []
+            j = i + 2
+            while j < n:
+                rl = lines[j]
+                if not rl.strip():
+                    break
+                if not _v0_3_2_is_pipe_row(rl):
+                    break
+                # A new header+separator pair ends this block (and the
+                # outer while re-enters it as a fresh table).
+                if (j + 1 < n and _v0_3_2_is_sep_row(lines[j + 1])
+                        and not _v0_3_2_is_sep_row(rl)):
+                    break
+                if _v0_3_2_is_sep_row(rl):
+                    j += 1
+                    continue
+                cells = _v0_3_2_split_pipe_cells(rl)
+                rows.append(cells)
+                j += 1
+                if len(rows) >= 256:
+                    break
+            if roles is not None and rows:
+                yield (roles, rows, ncols)
+            # Advance past the consumed block (at least past header +
+            # separator so we never loop on the same header).
+            i = max(j, i + 2)
+            continue
+        i += 1
+
+
+def _v0_3_2_emit_pins_from_gfm_tables(text: str):
+    """v0.3.2 — for #491 R2. Resolve `_v0_3_2_iter_gfm_pin_tables` blocks
+    into canonical port records `{name, direction, width, description,
+    source_row}` (direction normalised to input/output/inout). Header /
+    separator-leak rows are rejected; rows whose direction cell is not a
+    recognised direction keyword are skipped (NOT emitted with a null
+    direction). Chip-AGNOSTIC."""
+    for roles, rows, ncols in _v0_3_2_iter_gfm_pin_tables(text):
+        name_i = roles["name"]
+        dir_i = roles["direction"]
+        width_i = roles.get("width")
+        desc_i = roles.get("description")
+        for cells in rows:
+            if name_i >= len(cells) or dir_i >= len(cells):
+                continue
+            name = (cells[name_i] or "").strip(" *`").strip()
+            raw_dir = (cells[dir_i] or "").strip(" *`").strip().lower()
+            raw_dir = raw_dir.replace("/", "")  # `i/o` → `io`
+            if not name:
+                continue
+            # Reject any leaked header row.
+            if name.lower() in (
+                _V0_3_2_HEADER_NAME_TOKENS | _V0_3_2_HEADER_DIR_TOKENS
+                | _V0_3_2_HEADER_WIDTH_TOKENS | _V0_3_2_HEADER_DESC_TOKENS
+            ):
+                continue
+            dir_full = _DIR_ABBR_TO_FULL.get(raw_dir)
+            if dir_full not in {"input", "output", "inout"}:
+                # The direction cell is not a real direction keyword
+                # (e.g. the "Type"-column header matched but its body
+                # holds `Clock` / `Data`). Skip — never emit a row with
+                # a null / fabricated direction.
+                continue
+            width_arg = None
+            if width_i is not None and width_i < len(cells):
+                wraw = (cells[width_i] or "").strip(" *`").strip()
+                try:
+                    w_int, _w_sym = _v1_6_420_parse_width_cell(wraw)
+                except NameError:
+                    w_int = int(wraw) if wraw.isdigit() else None
+                if w_int is not None:
+                    width_arg = str(w_int)
+            desc_arg = None
+            if desc_i is not None and desc_i < len(cells):
+                desc_arg = (cells[desc_i] or "").strip() or None
+            yield {
+                "name": name,
+                "direction": dir_full,
+                "width": width_arg,
+                "description": desc_arg,
+                "source_row": " | ".join(cells)[:120],
+            }
+
+
 # v1.6.463 — for #328 R2 ORGANIC. Cascade L1.pin_table[].description
 # into L9.top_ports[].description by exact name match. The v1.6.456
 # enricher fills L1.pin_table descriptions correctly (81 / 100 / 50 %
@@ -10427,6 +10656,7 @@ _PORT_TABLE_STRATEGIES = frozenset({
     "rst_grid_interface_table", "rst_grid_interface_table_2col",
     "rst_grid_interface_table_ncol",
     "rst_grid_interface_table_dir2col_v0262",
+    "gfm_multitable_header_role_v0_3_2",
     "rst_list_table_signals", "rst_iface_3col_v1_6_565",
     "interfaces_section_v1_6_524",
     "markdown_bullet_under_heading",
@@ -17296,6 +17526,31 @@ def gen_l1_datasheet(project: Path,
             if len(ev) < 24:
                 ev.append({"literal": m.group(0).strip()[:120],
                            "label": "pin (RST grid N-col, suffix-inferred dir)"})
+        # v0.3.2 — ORGANIC-20260606 #491 R2. Universal multi-table
+        # header-role pin walker. Catches the two shapes the order-locked
+        # per-row regexes above all miss: (a) BORDERLESS GFM pipe tables
+        # (no outer `|`), and (b) a document with MULTIPLE pin tables in
+        # differing column orders — every name+direction table in the
+        # doc is walked, each with its OWN per-table column-role mapping,
+        # so neither table is dropped/latched and the second table's
+        # direction is never null just because the first table differs.
+        # Bounded to each table block → SDC / stdcell-library lines
+        # elsewhere in the doc cannot leak in. `_add_pin`'s score-merge
+        # dedups against the per-row-regex emitters above. Chip-AGNOSTIC.
+        for _row_v032 in _v0_3_2_emit_pins_from_gfm_tables(text or ""):
+            _add_pin(
+                name=_row_v032.get("name") or "",
+                mode=_row_v032.get("direction") or "input",
+                fname=fname,
+                width=_row_v032.get("width"),
+                description=_row_v032.get("description"),
+                extraction_strategy="gfm_multitable_header_role_v0_3_2",
+                source_row=_row_v032.get("source_row") or "",
+            )
+            if len(ev) < 24:
+                ev.append({
+                    "literal": (_row_v032.get("source_row") or "")[:120],
+                    "label": "pin (GFM multi-table header-role)"})
         # v1.6.262 — for #120 ORGANIC. RST `.. list-table:: Signals`
         # POSITIVE parse. Sibling of v1.6.258 #118 reject path; this
         # turns the body rows into real ports when the table carries
