@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 653
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 653)
+- **Total programs (excluding helpers / shims):** 654
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 654)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 644 |
+| `any` | 645 |
 
 ## Alphabetical listing
 
@@ -414,6 +414,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `oracle_dump_required_check` | any | — | Category-B workflow gate. |
 | `oracle_tb_gen` | any | — | deterministic per-IC oracle testbench generator |
 | `oracle_vector_gen` | any | v0.114 | v0.114 (BACKLOG-v6 C1 closure). |
+| `organic_issue_body_lint` | any | — | deterministic FILING-TIME lint for |
 | `otp_field_map_check` | any | — | gate that catches L11_OTP_CONTENT.json missing a |
 | `otp_image_check` | any | Wave 73 | Validate an OTP/NVM .ver image against an L4 register map. |
 | `otp_image_layer_consistency_check` | any | — | P1.3 deterministic gate |
@@ -725,7 +726,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (644 programs)
+### `any` (645 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1110,6 +1111,7 @@ _(no programs in this group)_
 - `oracle_dump_required_check` — Category-B workflow gate.
 - `oracle_tb_gen` — deterministic per-IC oracle testbench generator
 - `oracle_vector_gen` — v0.114 (BACKLOG-v6 C1 closure).  _[v0.114]_
+- `organic_issue_body_lint` — deterministic FILING-TIME lint for
 - `otp_field_map_check` — gate that catches L11_OTP_CONTENT.json missing a
 - `otp_image_check` — Validate an OTP/NVM .ver image against an L4 register map.  _[Wave 73]_
 - `otp_image_layer_consistency_check` — P1.3 deterministic gate

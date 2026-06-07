@@ -331,6 +331,14 @@ verification round) — all are now standing rules for EVERY fix audit:
    (`regression_issue_intake_check`) warns at filing time on
    zero-command acceptance sections.
 
+   **Filing-time lint (flow #489):** ORGANIC-form issues never pass
+   through the (network-only, template-gated) intake check — so the
+   filing step is draft → lint → create:
+   `python3 programs/organic_issue_body_lint.py <draft.md>` (or stdin
+   `-`). Fix any `MISSING_ACCEPTANCE` / `ACCEPTANCE_NARRATIVE_ONLY` /
+   `NO_DEFECT_ARTIFACT` warning (the last one points at the flow #487
+   snapshot helper) BEFORE `gh issue create`.
+
 ## Reference
 
 - Helper script: `programs/check_closed_for_field_audit.sh`

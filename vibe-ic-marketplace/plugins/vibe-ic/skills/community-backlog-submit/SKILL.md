@@ -180,6 +180,19 @@ source path, sha256, the filesystem mtime, and the issue ref).
 Skip this step only when your evidence is inline text / a synthetic
 fixture (no live run-dir file is being cited).
 
+4. **Lint the draft body BEFORE `gh issue create`** (flow #489 — the
+   deterministic filing-time hook for ORGANIC-form issues):
+   ```bash
+   python3 <plugin_root>/programs/organic_issue_body_lint.py <draft.md>
+   ```
+   Named findings: `MISSING_ACCEPTANCE` (no `## 驗收` section),
+   `ACCEPTANCE_NARRATIVE_ONLY` (no fenced executable command — the
+   acceptance-evidence gate cannot bite, flow #485),
+   `NO_DEFECT_ARTIFACT` (no path-like artifact named — see the snapshot
+   step above). Exit 0 with warnings is advisory; fix the draft until
+   PASS (or use `--strict` in automation). Reuses the same extractors as
+   the gate-side check, so the grammar cannot drift.
+
 ### Step 5 — Submit (optional, with user consent)
 
 Ask the user if they want to contribute this backlog to the community:
