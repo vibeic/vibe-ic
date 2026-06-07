@@ -3128,6 +3128,20 @@ def read $env(DEF)
 load $env(TOP)
 select top cell
 cellname rename $env(TOP) $env(TOP)
+# v0.3.9 — ORGANIC #509: promote the DEF PINS to Magic PORTS so the top
+# I/O pin labels are streamed to the GDS on the label-purpose layer.
+# Pre-#509 the streamout wrote only the met PORT GEOMETRY (DEF `- clk +
+# NET clk + LAYER met3`) with no port TEXT — so when signoff LVS later
+# `gds read`s + extracts, the top I/O (clk/rst/x[..]/y) came back as
+# internal nets (uppercase), `port makeall` had nothing to promote, and
+# every top port extracted as a DISCONNECTED node → a spurious top-level
+# 'Netlists do not match.' even when every leaf cell matched. Promoting
+# the DEF pins to ports here writes the labels so re-extraction recovers
+# named, connected top ports. chip-AGNOSTIC: operates on whatever DEF
+# pins exist, no chip-specific port names.
+if {[catch {port makeall} _porterr]} {
+    puts "PORT_MAKEALL_NONFATAL $_porterr"
+}
 gds write $env(GDS_OUT)
 puts "MAGIC_GDS_WRITTEN $env(GDS_OUT)"
 quit -noprompt
@@ -4137,6 +4151,21 @@ def _write_lvs_verdict(project: Path, status: str, finding: str,
         return str(path)
 
 
+# v0.3.9 — ORGANIC #508: HIERARCHICAL extraction. The pre-#508 recipe ran
+# a FLAT `extract all` on the top cell, which on a real design (spm 201k
+# instances / subservient 2470 top instances) explodes — Magic reported
+# chip_top: 69,385,933 errors (spm) / 1,988,354 (subservient) → over the
+# #477 ceiling → abort → empty lvs.json, so Step-31 LVS never got a real
+# verdict. The field-verified fix keeps std cells as transistor-level
+# `.subckt` black boxes and children as X-subckt calls (NOT flattened):
+#   extract no all   — disable re-extraction of every cell (black-box)
+#   extract do local — extract only the current cell's own interconnect
+#   extract all      — hierarchical extract (children stay as subckts)
+# This drops spm errors 69.39M → 6.59M (10.5x) and lets subservient run
+# to netgen's real terminal verdict. MAGIC_EXT_USE_GDS=1 (set in the env
+# prefix) is also REQUIRED: the netgen setup's fill/tap/decap ignore-class
+# block is gated behind it; without it netgen sees fill/tap device-count
+# mismatches or SIGSEGVs (139). chip-AGNOSTIC: pure Magic recipe.
 _MAGIC_EXT2SPICE_TCL = """\
 crashbackups stop
 gds readonly true
@@ -4144,6 +4173,8 @@ gds rescale false
 gds read $env(GDS)
 load $env(TOP)
 select top cell
+extract no all
+extract do local
 extract all
 ext2spice lvs
 ext2spice -o $env(SPICE_OUT)
@@ -4171,6 +4202,11 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     env_prefix = (
         f"export GDS={_to_container_path(str(gds_file), container)} "
         f"TOP={top} "
+        # v0.3.9 — ORGANIC #508: REQUIRED so the netgen setup's
+        # fill/tap/decap ignore-class block (gated behind this env var)
+        # activates — without it netgen mismatches fill/tap device counts
+        # or SIGSEGVs (139).
+        f"MAGIC_EXT_USE_GDS=1 "
         f"SPICE_OUT={_to_container_path(str(spice_out), container)} && "
         f"cd {_to_container_path(str(ext_dir), container)} && ")
     cmd = (env_prefix +
@@ -6565,6 +6601,21 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
     return True
 
 
+def _v0_3_9_parse_row_utilization(log: str):
+    """v0.3.9 — ORGANIC #510. Parse the odb `ROW_UTILIZATION_PCT <val>`
+    line emitted by the metal-fill TCL. Returns a float (0..100) or None
+    when the measurement was unavailable (`NA` / not emitted). The TRUE
+    row-area utilization (occupied CORE-master area / placement-row area)
+    — distinct from report_design_area's CORE-area utilization. Last
+    occurrence wins (post-fill). chip-AGNOSTIC."""
+    val = None
+    for m in re.finditer(r"ROW_UTILIZATION_PCT\s+([0-9]+(?:\.[0-9]+)?|NA)",
+                         log):
+        tok = m.group(1)
+        val = None if tok == "NA" else float(tok)
+    return val
+
+
 def _emit_metal_fill(project: Path, top: str, pdk: PdkConfig,
                      container: str, filled_def: Path,
                      notes: List[str]) -> bool:
@@ -6614,6 +6665,35 @@ if {{[catch {{filler_placement {{{fill_list}}}}} _fp_err]}} {{
 }}
 puts "=== DESIGN AREA (post-fill) ==="
 report_design_area
+# v0.3.9 — ORGANIC #510: TRUE row-area utilization (occupied CORE-class
+# master area / placement-row area), measured from odb. report_design_area
+# above is CORE-area utilization (logic area / core area) — a different
+# axis: a design whose rows are fully tiled with fillers/decap/tap can sit
+# at low core-util yet ~100% row-util. The fill gate's rows-already-full
+# path needs ROW-util; emit it explicitly so the writer never mislabels
+# core-util as row-util. chip-AGNOSTIC: pure odb geometry, no chip names.
+if {{[catch {{
+  set _blk [ord::get_db_block]
+  set _rowA 0.0
+  foreach _r [$_blk getRows] {{
+    set _bb [$_r getBBox]
+    set _rowA [expr {{$_rowA + double([$_bb getDX]) * double([$_bb getDY])}}]
+  }}
+  set _occ 0.0
+  foreach _i [$_blk getInsts] {{
+    set _m [$_i getMaster]
+    if {{[string match "CORE*" [$_m getType]]}} {{
+      set _occ [expr {{$_occ + double([$_m getWidth]) * double([$_m getHeight])}}]
+    }}
+  }}
+  if {{$_rowA > 0}} {{
+    puts "ROW_UTILIZATION_PCT [expr {{100.0 * $_occ / $_rowA}}]"
+  }} else {{
+    puts "ROW_UTILIZATION_PCT NA"
+  }}
+}} _rowerr]}} {{
+  puts "ROW_UTILIZATION_PCT NA ($_rowerr)"
+}}
 write_def {filled_c}
 exit
 """)
@@ -6633,21 +6713,34 @@ exit
     placed_n = int(placed_m.group(1)) if placed_m else 0
     util_m = re.findall(r"Design area\s+\d+\s+um\^2\s+([0-9.]+)%\s+utilization",
                         log, re.I)
-    util_pct = float(util_m[-1]) if util_m else None
+    # v0.3.9 — ORGANIC #510: this is CORE-area utilization (logic area /
+    # core area), NOT row occupancy. Keep it under its honest name.
+    core_util_pct = float(util_m[-1]) if util_m else None
     # v0.2.69 — report_design_area prints INTEGER-rounded utilization, so
     # a parsed 0 means "true value < 0.5%, below report precision" — a
     # placed design cannot be at exactly 0. Recording a fabricated-
     # precision "0.0%" made utilization_band_check classify the report as
     # corrupt. Record the quantization honestly instead of the 0.
-    util_below_precision = (util_pct == 0)
+    util_below_precision = (core_util_pct == 0)
     if util_below_precision:
-        util_pct = None
+        core_util_pct = None
+    # v0.3.9 — ORGANIC #510: TRUE row-area utilization from the odb
+    # measurement block in the TCL (occupied CORE-master area / row area).
+    # This is what the fill gate's rows-already-full path needs; pre-#510
+    # the writer stored CORE-util under `row_utilization_pct`, so a
+    # legitimately full design (rows tiled with fillers, low core-util)
+    # was mis-flagged under-filled. None when odb measurement unavailable
+    # (honest — the gate then cannot claim rows-full from this artifact).
+    row_util_pct = _v0_3_9_parse_row_utilization(log)
     # metal_fill.done flag — ORGANIC-20260606 #445: the DONE claim needs
     # substance: fillers actually placed, OR rows already (near-)full so
     # 0 fillers is the legitimate outcome. A no-op run (0 placed, rows
     # not full) writes metal_fill_noop.txt instead — the gate FAILs it.
+    # #510: substance uses the TRUE row-util (falls back to core-util only
+    # if row-util is unavailable, preserving prior behaviour on old runs).
+    _util_for_substance = row_util_pct if row_util_pct is not None else core_util_pct
     fill_substantiated = placed_n > 0 or (
-        util_pct is not None and util_pct >= 95.0)
+        _util_for_substance is not None and _util_for_substance >= 95.0)
     if fill_substantiated:
         (pnr_out / "metal_fill.done").write_text(
             "metal_fill_done\n"
@@ -6678,27 +6771,41 @@ exit
         "# Metal-fill / density report — OpenROAD filler_placement\n"
         "# (ORGANIC-20260531 Step 34). Tool: openroad.\n"
         f"# filler instances placed: {placed_n}\n"
-        # v0.2.69 label fix: report_design_area reports design-area /
-        # core-area utilization (integer-rounded), not row occupancy.
+        # v0.3.9 — ORGANIC #510: report BOTH utilization axes and document
+        # the distinction explicitly. ROW-area utilization (the fill-gate
+        # metric) = occupied CORE-master area / placement-row area, from
+        # odb. CORE-area utilization (report_design_area) = logic area /
+        # core area — a different, lower number for a row-full design.
+        f"# row-area utilization (odb, occupied CORE-master / row area, "
+        f"post-fill): {row_util_pct if row_util_pct is not None else 'unresolved'}"
+        f"{'%' if row_util_pct is not None else ''}\n"
         f"# core-area utilization (report_design_area, post-fill): "
-        f"{util_pct if util_pct is not None else 'unresolved'}"
-        f"{'%' if util_pct is not None else ''}\n"
+        f"{core_util_pct if core_util_pct is not None else 'unresolved'}"
+        f"{'%' if core_util_pct is not None else ''}\n"
         + ("# (report_design_area printed 0% — integer-rounded floor; "
            "true value < 0.5%, below report precision)\n"
            if util_below_precision else "")
-        + "# Note: per-metal-layer CMP density (20-80% rule) is screened by\n"
-        "# the KLayout met_min_ca_density deck at sign-off DRC; this report\n"
-        "# records the std-cell row fill achieved by filler_placement.\n")
+        + "# Note: row-area >> core-area is normal when rows are tiled with\n"
+        "# fillers/decap/tap but logic cells are sparse. The fill gate's\n"
+        "# rows-already-full path reads ROW-area utilization, not core.\n"
+        "# Per-metal-layer CMP density (20-80% rule) is screened by the\n"
+        "# KLayout met_min_ca_density deck at sign-off DRC.\n")
     density_json.write_text(json.dumps({
         "tool": "openroad-filler_placement",
         "filler_instances": placed_n,
-        "row_utilization_pct": util_pct,
+        # v0.3.9 #510: row_utilization_pct is now the TRUE odb row-area
+        # measure; core_utilization_pct carries the report_design_area
+        # number separately so neither axis is mislabeled.
+        "row_utilization_pct": row_util_pct,
+        "core_utilization_pct": core_util_pct,
         "utilization_below_report_precision": util_below_precision,
         # No per-layer metal density extracted in the open flow — omit the
         # "layers" key so metal_fill_density_check does not flag OOB. The
         # gate passes on filled.def presence + no OOB layer.
-        "note": ("row fill via filler_placement; per-layer metal CMP density "
-                 "screened by KLayout met_min_ca_density at sign-off DRC"),
+        "note": ("row_utilization_pct = odb occupied-CORE-master / row area; "
+                 "core_utilization_pct = report_design_area (logic/core); "
+                 "per-layer metal CMP density screened by KLayout "
+                 "met_min_ca_density at sign-off DRC"),
     }, indent=2) + "\n")
     notes.append(
         f"metal fill: {placed_n} fillers placed → filled.def "
