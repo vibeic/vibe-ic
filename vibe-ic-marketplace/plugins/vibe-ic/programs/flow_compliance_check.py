@@ -1272,10 +1272,14 @@ class StepResult:
     id: Any  # int for main-track steps (1-40), str for analog ("A1"-"A9") / mixed-signal ("M1"-"M4") / preflight ("P0")
     name: str
     stage: str
-    status: str  # PASS, FAIL, MISSING, WAIVED, SKIPPED-CONDITION
+    status: str  # PASS, FAIL, MISSING, WAIVED, DEFERRED-BY-UPSTREAM, SKIPPED-CONDITION
     reasons: List[str] = field(default_factory=list)
     evidence: List[str] = field(default_factory=list)
     gate_output: str = ""
+    # v0.3.5 — #502/#503 cascade attribution marker, printed inline on
+    # the step line (e.g. "blocked-by-upstream(5)" /
+    # "deferred-by-upstream(A5, ticket=...)"). Empty = no cascade.
+    cascade_note: str = ""
 
 
 # reports/ subdirs to also probe when a yaml-pattern starts with `reports/`.
@@ -3330,6 +3334,138 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     return _apply_capability_gap(result, sid)
 
 
+def _track_of(sid: Any) -> Optional[str]:
+    """v0.3.5 — #502/#503: classify a step id into its declared chain.
+    Integer ids = the main digital track; "A*" = analog; "M*" =
+    mixed-signal; "P0" (preflight umbrella) belongs to no chain."""
+    if isinstance(sid, int):
+        return "main"
+    s = str(sid)
+    if s == "P0":
+        return None
+    if s.startswith("A"):
+        return "analog"
+    if s.startswith("M"):
+        return "mixed"
+    return None
+
+
+def _attribute_cascade_verdicts(
+        results: List["StepResult"],
+        steps: List[Dict[str, Any]],
+        waivers: Dict[Any, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """v0.3.5 — ORGANIC #502 + #503: deterministic cascade attribution
+    so the summary separates ROOT CAUSES from their inevitable
+    downstream consequences. Chip-AGNOSTIC: pure graph/order walk over
+    the flow definition's declared `blocks_on` edges and step order —
+    no step-id or chip-class literal participates in the logic.
+
+    #502 (waiver chain must propagate): a MISSING step whose
+    `blocks_on` ancestry (transitive) reaches a WAIVED-DEFERRED step is
+    the inevitable consequence of that SAME waiver — its inputs are
+    exactly what the parent's waiver deferred. Verdict becomes
+    DEFERRED-BY-UPSTREAM(parent, ticket): counted separately, excluded
+    from strict MISSING (one waiver = one deduction, not two).
+    A FAIL never converts — real counter-evidence always survives.
+
+    #503 (mid-chain FAIL cascade): within each declared chain (main /
+    analog / mixed, in YAML declaration order) every MISSING step AFTER
+    the first FAIL is annotated blocked-by-upstream(<first-fail id>).
+    Status stays MISSING — the work IS still missing and strict mode
+    still fails — only the ATTRIBUTION changes, and the summary splits
+    the cascade count so triage sees the real root-cause surface.
+
+    Returns {"deferred_by_upstream": [(id, parent, ticket), ...],
+             "blocked_by_upstream": {first_fail_id: count}}.
+    """
+    by_id: Dict[Any, StepResult] = {r.id: r for r in results}
+    parents_of: Dict[Any, List[Any]] = {}
+    order: List[Any] = []
+    for st in steps:
+        sid = st.get("id")
+        if sid is None or str(sid) == "P0":
+            continue
+        order.append(sid)
+        edges = st.get("blocks_on") or []
+        if isinstance(edges, (list, tuple)):
+            parents_of[sid] = list(edges)
+
+    info: Dict[str, Any] = {"deferred_by_upstream": [],
+                            "blocked_by_upstream": {}}
+
+    # ── #502: waiver-chain propagation over blocks_on ancestry ──────
+    deferred_ids = {r.id for r in results if r.status == "WAIVED"}
+    _ticket_re = re.compile(r"ticket=([^\s,\]]+)")
+
+    def _ticket_for(pid: Any) -> str:
+        w = waivers.get(pid) or {}
+        if w.get("ticket"):
+            return str(w["ticket"])
+        parent = by_id.get(pid)
+        if parent is not None:
+            for reason in parent.reasons:
+                m = _ticket_re.search(reason)
+                if m:
+                    return m.group(1)
+        return "?"
+
+    for r in results:
+        if r.status != "MISSING":
+            continue
+        # BFS over blocks_on ancestry → nearest deferred ancestor wins.
+        queue = list(parents_of.get(r.id, []))
+        seen: set = set()
+        hit = None
+        while queue:
+            pid = queue.pop(0)
+            if pid in seen:
+                continue
+            seen.add(pid)
+            if pid in deferred_ids:
+                hit = pid
+                break
+            queue.extend(parents_of.get(pid, []))
+        if hit is None:
+            continue
+        ticket = _ticket_for(hit)
+        r.status = "DEFERRED-BY-UPSTREAM"
+        r.cascade_note = f"deferred-by-upstream({hit}, ticket={ticket})"
+        r.reasons.insert(0, (
+            f"deferred-by-upstream({hit}, ticket={ticket}): this step "
+            f"consumes outputs that step {hit}'s waiver deferred — same "
+            f"waiver, not an independent gap"
+        ))
+        info["deferred_by_upstream"].append((r.id, hit, ticket))
+
+    # ── #503: first-FAIL cut point per declared chain ────────────────
+    tracks: Dict[str, List[Any]] = {}
+    for sid in order:
+        track = _track_of(sid)
+        if track:
+            tracks.setdefault(track, []).append(sid)
+    for track_ids in tracks.values():
+        first_fail: Any = None
+        for sid in track_ids:
+            r = by_id.get(sid)
+            if r is None:
+                continue
+            if first_fail is None:
+                if r.status == "FAIL":
+                    first_fail = sid
+                continue
+            if r.status == "MISSING":
+                r.cascade_note = f"blocked-by-upstream({first_fail})"
+                r.reasons.append(
+                    f"blocked-by-upstream(step {first_fail}): cascade of "
+                    f"the first mid-chain FAIL — the chain stops at step "
+                    f"{first_fail}; fix that root cause first"
+                )
+                info["blocked_by_upstream"][first_fail] = (
+                    info["blocked_by_upstream"].get(first_fail, 0) + 1)
+    return info
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     p.add_argument("project_dir", nargs="?",
@@ -3669,6 +3805,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                        skip_hardware=skip_hardware)
         results.append(r)
 
+    # v0.3.5 — ORGANIC #502/#503: cascade attribution AFTER all step
+    # verdicts are final (waiver conversions included): waiver chains
+    # propagate over blocks_on edges; post-FAIL MISSING runs are
+    # attributed to their first-FAIL root cause.
+    cascade_info = _attribute_cascade_verdicts(results, steps, waivers)
+
     # v0.100 H2: advisory — warn if post-route STA passed single-corner only
     advisories: List[str] = []
     step20_pass = any(r.id == 20 and r.status == "PASS" for r in results)
@@ -3689,6 +3831,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # see how many steps were structurally executed vs. vacuously
     # satisfied (input not applicable to this project).
     counts = {"PASS": 0, "FAIL": 0, "MISSING": 0, "WAIVED": 0,
+              "DEFERRED-BY-UPSTREAM": 0,
               "SKIPPED-CONDITION": 0, "SKIPPED-SETUP-REQUIRED": 0,
               "VACUOUS_PASS": 0}
     for r in results:
@@ -3762,7 +3905,12 @@ def main(argv: Optional[List[str]] = None) -> int:
               and len(setup_required_skipped) == 0)
 
     # Output
-    total_required = len(steps) - counts["WAIVED"] - counts.get("SKIPPED-CONDITION", 0)
+    # v0.3.5 — #502: DEFERRED-BY-UPSTREAM is deferred work tied to the
+    # parent's waiver ticket, so it leaves the required denominator the
+    # same way the parent's WAIVED does.
+    total_required = (len(steps) - counts["WAIVED"]
+                      - counts["DEFERRED-BY-UPSTREAM"]
+                      - counts.get("SKIPPED-CONDITION", 0))
     # Wave 93 — VACUOUS_PASS rolls into `pass_count` for the X/Y metric
     # since it represents a step that *did* run cleanly (just on input
     # that didn't apply); the discrete count is still surfaced below.
@@ -3777,16 +3925,29 @@ def main(argv: Optional[List[str]] = None) -> int:
     skipped_str = f"  SKIPPED={counts.get('SKIPPED-CONDITION', 0)}" if counts.get("SKIPPED-CONDITION") else ""
     vacuous_str = (f"  VACUOUS-PASS={counts['VACUOUS_PASS']}"
                    if counts.get("VACUOUS_PASS") else "")
+    # v0.3.5 — #503: split cascade MISSING from independent gaps in the
+    # summary so the actionable root-cause surface is visible at a
+    # glance; #502: surface the waiver-chain bucket separately.
+    missing_str = f"MISSING={counts['MISSING']}"
+    _blocked = cascade_info.get("blocked_by_upstream") or {}
+    if _blocked:
+        missing_str += " (" + ", ".join(
+            f"{n} blocked-by-upstream of step {sid}"
+            for sid, n in _blocked.items()) + ")"
+    dbu_str = (f"  DEFERRED-BY-UPSTREAM={counts['DEFERRED-BY-UPSTREAM']}"
+               if counts.get("DEFERRED-BY-UPSTREAM") else "")
     print(
         f"  PASS={counts['PASS']}  FAIL={counts['FAIL']}  "
-        f"MISSING={counts['MISSING']}  WAIVED-DEFERRED={counts['WAIVED']}"
-        f"{skipped_str}{vacuous_str}\n"
+        f"{missing_str}  WAIVED-DEFERRED={counts['WAIVED']}"
+        f"{dbu_str}{skipped_str}{vacuous_str}\n"
     )
 
     _icon = {"PASS": "✓", "FAIL": "✗", "MISSING": "·", "WAIVED": "~",
+             "DEFERRED-BY-UPSTREAM": "~",
              "SKIPPED-CONDITION": "-", "SKIPPED-SETUP-REQUIRED": "!",
              "VACUOUS_PASS": "○"}
     _label = {"PASS": "PASS", "FAIL": "FAIL", "MISSING": "MISSING", "WAIVED": "WAIVED-DEFERRED",
+              "DEFERRED-BY-UPSTREAM": "DEFERRED-BY-UPSTREAM",
               "SKIPPED-CONDITION": "SKIPPED-CONDITION",
               "SKIPPED-SETUP-REQUIRED": "SKIPPED-SETUP-REQUIRED",
               "VACUOUS_PASS": "VACUOUS-PASS"}
@@ -3794,7 +3955,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         icon = _icon.get(r.status, "?")
         label = _label.get(r.status, r.status)
         sid_str = f"{r.id:>2}" if isinstance(r.id, int) else f"{r.id:>2}"
-        print(f"  {icon} [{label:<17}] Step {sid_str}: {r.name}  ({r.stage})")
+        note = f"  [{r.cascade_note}]" if r.cascade_note else ""
+        print(f"  {icon} [{label:<17}] Step {sid_str}: {r.name}  ({r.stage}){note}")
         for reason in r.reasons:
             print(f"       └─ {reason}")
 
