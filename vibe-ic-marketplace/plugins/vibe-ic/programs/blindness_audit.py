@@ -159,6 +159,14 @@ def _iter_transcripts(paths: list[str]) -> list[Path]:
     return out
 
 
+# Shell punctuation that glues onto a path token's right edge inside a
+# command fragment (closing quotes, statement separators, pipes, subshell
+# closers). Stripped from disk-truth probes before the existence test —
+# v0.3.6 #504: `…/design_description.txt";` never EXISTS as written, so
+# the ladder shrank past the space inside the directory name instead.
+_SHELL_TRAILER_CHARS = "\"';)|&,>"
+
+
 def _extract_rel(line: str, end: int, ds: str) -> str:
     """Path tail after a dataset-root match, SPACE-safe
     (ORGANIC-20260606-blindness-audit-space-path-truncation): the legacy
@@ -166,20 +174,36 @@ def _extract_rel(line: str, end: int, ds: str) -> str:
     spaces ("…/Misc category/Frequency divider/…") truncated at the first
     space — the ALLOWED spec read then mis-matched the glob and hard-blocked
     scoring. Resolution ladder:
+      0. shell-token quote context (v0.3.6 — ORGANIC #504): when the
+         dataset-root match sits directly after an opening `"` / `'`, the
+         path token is the WHOLE quoted span — `cat "…/dir with space/f"`
+         resolves to the closing quote, host-independently (no existence
+         probe needed; #480 fixed quote-TERMINATION, this fixes
+         quote-PROTECTION);
       1. disk-truth longest prefix: extend to EOL and shrink right-to-left at
-         whitespace until the path EXISTS (also strips trailers like
-         "(123 bytes)" and CMD flags after the path);
+         whitespace until the path EXISTS (each probe first stripped of
+         glued shell trailers like `";` — #504 — and of trailers like
+         "(123 bytes)" / CMD flags after the path);
       2. READ-line convention: a transcript `READ <path>` line carries ONE
          path — take everything to EOL;
       3. legacy conservative charclass tail (space-free) as the fallback for
          prose mentions / paths not present on this host."""
+    start = end - len(ds)
+    # 0 — quoted shell token: the span between the opening quote that
+    # immediately precedes the dataset root and its closing twin IS the
+    # path, spaces included. Dataset-AGNOSTIC and host-independent.
+    if start > 0 and line[start - 1] in ('"', "'"):
+        closing = line.find(line[start - 1], end)
+        if closing != -1:
+            return line[end:closing].lstrip("/")
     tail = line[end:]
     full = (ds + tail).rstrip()
     probe = full
     while len(probe) > len(ds):
+        cand = probe.rstrip(_SHELL_TRAILER_CHARS)
         try:
-            if Path(probe).exists():
-                return probe[len(ds):].lstrip("/")
+            if len(cand) > len(ds) and Path(cand).exists():
+                return cand[len(ds):].lstrip("/")
         except OSError:
             # an over-long / malformed candidate (e.g. a JSON line whose tail
             # was glued onto the path) can't name a real file — treat as
