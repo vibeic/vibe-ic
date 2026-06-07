@@ -204,5 +204,19 @@ by contributing you pledge that:
 
 This mirrors the practice of patent-sensitive open-hardware communities
 (RISC-V International's non-assertion covenants; the Linux Foundation's
-DCO). If your employer holds patents in EDA/IC-design methodology,
-please clear your contribution with them before signing off.
+DCO).
+
+### Employer patent reminder (advisory, in the DCO spirit)
+
+If you are employed, please confirm BEFORE signing off:
+
+1. your employer agrees to you contributing code on your own time;
+2. your employer agrees not to assert, against the Vibe-IC community,
+   patents that read on your contribution;
+3. if your contribution used employer resources (equipment, work time,
+   confidential information), you have obtained written authorization.
+
+These are **advisory**, not enforced — the DCO stays lightweight.
+Corporate contributors may optionally use the one-page employer
+consent template at
+[docs/employer_consent_template.md](docs/employer_consent_template.md).
