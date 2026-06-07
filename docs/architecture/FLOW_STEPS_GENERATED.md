@@ -48,7 +48,7 @@
 | 34 | [14e3/15] | L10↔L3 packet-protocol opcode consistency sweep |
 | 35 | [15/15] | coverage report |
 
-## Phase 2 — `phase2_one_shot_runner.py` (global steps 36-51)
+## Phase 2 — `phase2_one_shot_runner.py` (global steps 36-52)
 
 | # | Step function |
 |---|---|
@@ -56,29 +56,30 @@
 | 37 | `step_phase1` |
 | 38 | `step_rtl_gen` |
 | 39 | `step_full_stack_tb_gen` |
-| 40 | `step_reference_tb` |
-| 41 | `step_yosys_synth` |
-| 42 | `step_qsf_gen` |
-| 43 | `step_sdc_gen` |
-| 44 | `step_otp_image_check` |
-| 45 | `step_fpga_compile` |
-| 46 | `step_fpga_burn` |
-| 47 | `step_usb_hid_tester_verify` |
-| 48 | `step_phase3` |
-| 49 | `step_complexity_advisory` |
-| 50 | `step_emit_phase2_manifests` |
-| 51 | `step_final_audit` |
+| 40 | `step_stamp_gate_reports` |
+| 41 | `step_reference_tb` |
+| 42 | `step_yosys_synth` |
+| 43 | `step_qsf_gen` |
+| 44 | `step_sdc_gen` |
+| 45 | `step_otp_image_check` |
+| 46 | `step_fpga_compile` |
+| 47 | `step_fpga_burn` |
+| 48 | `step_usb_hid_tester_verify` |
+| 49 | `step_phase3` |
+| 50 | `step_complexity_advisory` |
+| 51 | `step_emit_phase2_manifests` |
+| 52 | `step_final_audit` |
 
-## Phase 3 — `phase3_one_shot_runner.py` (global steps 52-57)
+## Phase 3 — `phase3_one_shot_runner.py` (global steps 53-58)
 
 | # | Step function |
 |---|---|
-| 52 | `step_synth` |
-| 53 | `step_pnr` |
-| 54 | `step_gds` |
-| 55 | `step_drc` |
-| 56 | `step_lvs` |
-| 57 | `step_canonicalize_artefacts` |
+| 53 | `step_synth` |
+| 54 | `step_pnr` |
+| 55 | `step_gds` |
+| 56 | `step_drc` |
+| 57 | `step_lvs` |
+| 58 | `step_canonicalize_artefacts` |
 
 ## Analog — `analog_one_shot_runner.py` (9 steps, PARALLEL to Phase 2)
 
@@ -96,5 +97,5 @@
 
 ## Totals
 
-Sequential global steps: 57 (Phase 1: 1-35 · Phase 2: 36-51 · Phase 3: 52-57) · Analog (parallel): 9
+Sequential global steps: 58 (Phase 1: 1-35 · Phase 2: 36-52 · Phase 3: 53-58) · Analog (parallel): 9
 
