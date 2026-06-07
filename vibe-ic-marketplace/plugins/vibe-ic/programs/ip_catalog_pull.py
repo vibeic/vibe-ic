@@ -223,6 +223,109 @@ def pull_catalog_ip(match: CatalogMatch,
     return audit
 
 
+def _read_provenance_entries(project: Path) -> List[Dict[str, Any]]:
+    """Read all provenance.jsonl entries (best-effort, skip bad lines)."""
+    prov = project / "provenance.jsonl"
+    out: List[Dict[str, Any]] = []
+    if not prov.is_file():
+        return out
+    for raw in prov.read_text(encoding="utf-8").splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            out.append(json.loads(raw))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def prune_catalog_ip(project: Path, ip_name: str,
+                     reason: str = "superseded",
+                     superseded_by: str = "") -> Dict[str, Any]:
+    """Cleanly prune / supersede a previously-pulled catalog IP.
+
+    Removes every output file the IP's most-recent `ip_catalog_pull`
+    provenance entry recorded, then APPENDS a removal-shaped provenance
+    entry (event=ip_catalog_prune, op=remove) referencing the original
+    entry's outputs in a `removed` list — instead of leaving a dangling
+    pull entry whose files no longer exist on disk (the OLD failure mode
+    that made provenance_output_hash_completeness_check FAIL with
+    PROVENANCE_OUTPUT_FILE_MISSING).
+
+    The prune entry carries empty `outputs` (it produces no artefact) but
+    a non-empty `removed` list, so the provenance gate's removal-event
+    shape accepts it.
+
+    Returns an audit dict.
+    """
+    entries = _read_provenance_entries(project)
+    # Find the most-recent pull entry for this IP that still references
+    # outputs we can prune.
+    target: Optional[Dict[str, Any]] = None
+    for e in entries:
+        if e.get("event") == "ip_catalog_pull" and e.get("ip") == ip_name:
+            target = e  # keep iterating → last one wins
+    if target is None:
+        return {
+            "ip_name": ip_name,
+            "status": "FAIL",
+            "reason": f"no ip_catalog_pull provenance entry found for "
+                      f"{ip_name!r}; nothing to prune",
+        }
+
+    outputs = target.get("outputs")
+    if not isinstance(outputs, dict) or not outputs:
+        return {
+            "ip_name": ip_name,
+            "status": "FAIL",
+            "reason": f"pull entry for {ip_name!r} declares no outputs to prune",
+        }
+
+    removed: List[Dict[str, Any]] = []
+    not_found: List[str] = []
+    for rel_path, sha in outputs.items():
+        on_disk = project / rel_path
+        if on_disk.is_file():
+            try:
+                on_disk.unlink()
+            except OSError as exc:
+                not_found.append(f"{rel_path} (unlink failed: {exc})")
+                continue
+        else:
+            not_found.append(rel_path)
+        removed.append({"path": rel_path, "sha256": sha})
+
+    # Append the removal-shaped provenance entry.
+    prov_path = project / "provenance.jsonl"
+    prune_entry = {
+        "event": "ip_catalog_prune",
+        "op": "remove",
+        "ip": ip_name,
+        "reason": reason,
+        "superseded_by": superseded_by,
+        # Empty outputs (this event produces nothing) but a non-empty
+        # `removed` list referencing the original entry's artefacts.
+        "outputs": {},
+        "removed": [r["path"] for r in removed],
+        "removed_outputs": removed,
+        "supersedes_event": "ip_catalog_pull",
+        "ran_at_epoch": time.time(),
+    }
+    with prov_path.open("a") as f:
+        f.write(json.dumps(prune_entry) + "\n")
+
+    return {
+        "ip_name": ip_name,
+        "status": "PASS" if removed else "FAIL",
+        "n_removed": len(removed),
+        "removed": [r["path"] for r in removed],
+        "not_found_on_disk": not_found,
+        "reason": reason,
+        "superseded_by": superseded_by,
+    }
+
+
 def _git_clone_to_cache(match: CatalogMatch) -> Optional[Path]:
     """Best-effort clone canonical_url at canonical_commit to a session cache.
 
@@ -306,9 +409,43 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="Query + show what would be pulled, don't actually copy")
     ap.add_argument("--min-confidence", type=float, default=0.4)
+    ap.add_argument("--prune", metavar="IP_NAME", default=None,
+                    help="Cleanly prune/supersede a previously-pulled IP: "
+                         "remove its pulled files and record a removal "
+                         "(ip_catalog_prune) provenance entry referencing "
+                         "the original outputs (no dangling pull entry).")
+    ap.add_argument("--reason", default="superseded",
+                    help="Reason recorded in the prune provenance entry "
+                         "(default: 'superseded').")
+    ap.add_argument("--superseded-by", default="",
+                    help="Name of the IP/entry that supersedes the pruned "
+                         "one (recorded in the prune provenance entry).")
     args = ap.parse_args(argv)
 
     project = Path(args.project)
+
+    # Prune / supersede path — record the removal instead of leaving a
+    # dangling pull entry.
+    if args.prune:
+        if not project.is_dir():
+            print(f"ERROR: project dir not found: {project}", file=sys.stderr)
+            return 2
+        audit = prune_catalog_ip(
+            project, args.prune,
+            reason=args.reason, superseded_by=args.superseded_by)
+        if audit["status"] != "PASS":
+            print(f"=== prune FAILED for {args.prune}: {audit['reason']} ===",
+                  file=sys.stderr)
+            return 1
+        print(f"=== pruned {args.prune}: removed {audit['n_removed']} file(s) ===")
+        for r in audit["removed"]:
+            print(f"  - {r}")
+        print(f"  reason: {audit['reason']}"
+              + (f"  superseded_by: {audit['superseded_by']}"
+                 if audit["superseded_by"] else ""))
+        print(f"  recorded ip_catalog_prune event in {project}/provenance.jsonl")
+        return 0
+
     matches = query_catalog(
         project,
         Path(args.catalog_dir) if args.catalog_dir else None,

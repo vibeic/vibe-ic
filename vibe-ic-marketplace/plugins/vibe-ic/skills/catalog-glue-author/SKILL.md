@@ -116,6 +116,23 @@ When AI authors the chip-top wrapper, it MUST:
 
 5. AI MUST run `iverilog -g2012 -t null <project>/phase2/stage1/rtl/*.v` as final sanity check before declaring success.
 
+## Synthesis-safe parameters (`synth_safe_params`)
+
+When the catalog manifest for a pulled IP declares a `synth_safe_params`
+list, AI MUST apply each `param → synth_safe_value` **by default** on
+every SYNTHESIS instantiation of that IP, overriding the manifest's
+`interface.parameters[].default`. The canonical case is a simulation-only
+`generate` block gated by a `sim` / `debug` parameter that uses PLI or
+system tasks (`$value$plusargs`, `$fopen`, `$display`, `$readmemh`):
+yosys cannot elaborate those tasks, so instantiating with the sim value
+(e.g. `sim = 1`) aborts synthesis, while the synth-safe value (e.g.
+`sim = 0`) synthesises cleanly and the functional oracle still passes.
+Read each pulled IP's `manifest.yaml.synth_safe_params`; for SERV this
+pins `.sim(1'b0)`. The reference TB / functional oracle may still drive
+the sim value during simulation — only the synthesis instantiation is
+pinned to the synth-safe value. Document the applied pins in
+`declaration.json` (e.g. `synth_safe_params_applied`).
+
 ## License compliance gate
 
 `ip_catalog_pull.py` enforces:

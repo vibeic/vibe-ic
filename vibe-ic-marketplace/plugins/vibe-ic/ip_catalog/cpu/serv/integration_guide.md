@@ -19,6 +19,22 @@ servile/servile.v   ← convenience wrapper (CPU + RF + arbiter + mux)
 servile/servile_*.v ← servile sub-modules (4 files)
 ```
 
+## ⚠️ Synthesis-safety: pin `sim = 0`
+
+SERV's debug/introspection wrapper contains a **simulation-only**
+`generate` block (gated by the `sim` parameter) that uses
+`$value$plusargs` / `$fopen` / `$display` system tasks to dump CPU/RF
+state during simulation. These PLI / system tasks are **unsynthesizable
+by yosys** — instantiating SERV with `sim = 1` will abort synthesis.
+
+**Rule:** every synthesis instantiation of SERV in this catalog MUST
+pin `sim = 0` (`.sim(1'b0)`). This is recorded in the manifest's
+`synth_safe_params` hint and `catalog-glue-author` applies it by
+default. The functional oracle / reference TB may still drive `sim = 1`
+in simulation only — the construct is legal under iverilog. Synthesis
+with `sim = 0` is functionally identical (oracle still passes); only
+the sim-only debug dump is dropped.
+
 ## Typical wiring patterns
 
 ### Pattern A: Use `serv_top` with external custom RF
@@ -26,7 +42,8 @@ servile/servile_*.v ← servile sub-modules (4 files)
 ```verilog
 serv_top #(
     .RESET_PC(32'h00000000),
-    .WITH_CSR(1)
+    .WITH_CSR(1),
+    .sim(1'b0)              // synth-safe: drop sim-only PLI generate block
 ) cpu_inst (
     .clk(clk),
     .i_rst(rst),
@@ -57,7 +74,8 @@ serv_top #(
 servile #(
     .reset_pc(32'h00000000),
     .with_csr(1),
-    .rf_width(2)
+    .rf_width(2),
+    .sim(1'b0)             // synth-safe: drop sim-only PLI generate block
 ) soc_cpu (
     .i_clk(clk),
     .i_rst(rst),

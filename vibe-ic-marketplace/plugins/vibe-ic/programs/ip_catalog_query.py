@@ -72,9 +72,30 @@ class CatalogMatch:
     rtl_files: List[str] = field(default_factory=list)
     integration_notes: str = ""
     depends_on: List[str] = field(default_factory=list)
+    # v0.2.102 — for #492. Synthesis-safety hints (param name ->
+    # synth-safe value + reason) carried verbatim from the manifest's
+    # `synth_safe_params`. catalog-glue-author applies these by default
+    # when instantiating the IP for synthesis (sim-only generate blocks
+    # with PLI/system tasks are the canonical case).
+    synth_safe_params: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_audit_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+    def synth_param_overrides(self) -> Dict[str, Any]:
+        """Return {param_name: synth_safe_value} the glue-author must pin
+        by default at synthesis instantiation time. chip-AGNOSTIC: reads
+        only the manifest-supplied list."""
+        out: Dict[str, Any] = {}
+        for entry in self.synth_safe_params:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("param")
+            if not isinstance(name, str) or not name:
+                continue
+            if "synth_safe_value" in entry:
+                out[name] = entry["synth_safe_value"]
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +490,113 @@ def _extension_excluded(ext: str, field_str: str, scoped_text: str,
     return False
 
 
+# v0.2.102 — for #493 part 1. MANDATORY-vs-OPTIONAL extension guard.
+# A "cpu_extensions / cpu_isa contains '<ext>'" rule must only fire when
+# the extension is a REQUIRED part of the design's ISA — i.e. it appears
+# in the base ISA string (the contiguous rvXX... token's extension
+# letters) or in a required/mandatory extensions field. It must NOT fire
+# when the extension is only an OPTIONAL mention (e.g. "F (optional)",
+# "optionally supports the F extension", or listed under an
+# optional-extensions field). This is how L2.cpu_extensions is honestly
+# populated: the catalog manifest itself splits isa_extensions_mandatory
+# vs isa_extensions_optional, so the matcher mirrors that split.
+#
+# Base-ISA detection mirrors phase1's canonical RISC-V base token:
+#   rv(32|64|128)[base + extension letters], e.g. rv32imf, rv64gc.
+_RE_RV_BASE_TOKEN = re.compile(
+    r"\brv(?:32|64|128)([a-z]+)\b", re.IGNORECASE)
+
+# Required-extension field markers (chip-AGNOSTIC field-name vocabulary).
+_REQUIRED_EXT_FIELD_MARKERS = (
+    "isa_extensions_mandatory", "extensions_mandatory",
+    "mandatory_extensions", "required_extensions",
+    "extensions_required", "required extensions",
+    "mandatory extensions",
+)
+
+
+def _ext_in_base_isa(ext: str, blob: str) -> bool:
+    """True when `ext` is a letter inside a base rvXX... ISA token
+    (a mandatory part of the base ISA), e.g. 'f' inside 'rv32imf'."""
+    ext_l = ext.strip().lower()
+    if len(ext_l) != 1:
+        # Multi-letter (Z*/X*) extensions are never packed into the
+        # single-letter base block; treat as not-in-base here.
+        return False
+    for m in _RE_RV_BASE_TOKEN.finditer(blob):
+        if ext_l in m.group(1).lower():
+            return True
+    return False
+
+
+def _ext_in_required_field(ext: str, blob: str) -> bool:
+    """True when `ext` appears on the same line as a required/mandatory
+    extensions field marker."""
+    ext_l = ext.strip().lower()
+    if not ext_l:
+        return False
+    for line in blob.splitlines():
+        ll = line.lower()
+        if any(mk in ll for mk in _REQUIRED_EXT_FIELD_MARKERS):
+            # ext present as a word / list token on this required line.
+            if re.search(rf"(?<![a-z0-9]){re.escape(ext_l)}(?![a-z0-9])",
+                         ll):
+                return True
+    return False
+
+
+def _extension_optional_only(ext: str, field_str: str, scoped_text: str,
+                             full_text: str) -> bool:
+    """v0.2.102 — for #493 part 1. Return True when the spec mentions the
+    extension ONLY as an OPTIONAL extension (so a "contains '<ext>'" rule
+    must be suppressed). Honest distinction:
+
+      * NOT optional-only (→ rule may fire) when the extension is in the
+        base ISA string (rvXX...<ext>...) OR in a required/mandatory
+        extensions field. These are MANDATORY mentions.
+      * optional-only (→ suppress) when an explicit optional qualifier
+        ("optional", "optionally", "(opt)", listed under an
+        optional-extensions field) sits next to the extension AND there
+        is no mandatory mention to override it.
+
+    chip-AGNOSTIC: pure phrase / field-name grammar; no chip literal.
+    """
+    ext_l = ext.strip().lower()
+    if not ext_l:
+        return False
+    haystacks = [s.lower() for s in (field_str, scoped_text, full_text) if s]
+    blob = "\n".join(haystacks)
+    if not blob:
+        return False
+    # Mandatory wins: base-ISA membership or required-field membership
+    # means the extension is NOT optional-only.
+    if _ext_in_base_isa(ext_l, blob) or _ext_in_required_field(ext_l, blob):
+        return False
+    # Optional-extensions field marker carrying this extension.
+    opt_field_markers = (
+        "isa_extensions_optional", "extensions_optional",
+        "optional_extensions", "extensions_optional",
+        "optional extensions",
+    )
+    for line in blob.splitlines():
+        ll = line.lower()
+        if any(mk in ll for mk in opt_field_markers):
+            if re.search(rf"(?<![a-z0-9]){re.escape(ext_l)}(?![a-z0-9])",
+                         ll):
+                return True
+    # Optional qualifier within a small window around the extension token.
+    # e.g. "F (optional)", "optional F extension", "optionally adds F".
+    for m in re.finditer(
+            rf"(?<![a-z0-9]){re.escape(ext_l)}(?![a-z0-9])", blob):
+        lo = max(0, m.start() - 40)
+        hi = min(len(blob), m.end() + 40)
+        window = blob[lo:hi]
+        if re.search(r"\boption(?:al|ally)?\b", window) or \
+                re.search(r"\(opt(?:ional)?\)", window):
+            return True
+    return False
+
+
 def _evaluate_match_rule(pattern: str, facts: Dict[str, Any]) -> Tuple[bool, float]:
     """Evaluate a single matches_when prose pattern against facts.
 
@@ -547,6 +675,12 @@ def _evaluate_match_rule(pattern: str, facts: Dict[str, Any]) -> Tuple[bool, flo
         ext_field = structured in ("cpu_extensions", "cpu_isa")
         for v in values:
             if ext_field and _extension_excluded(
+                    v, field_str, scoped, full_text):
+                continue
+            # v0.2.102 — for #493 part 1. MANDATORY-vs-OPTIONAL guard:
+            # suppress when the extension is only an OPTIONAL mention
+            # (base ISA / required-field membership overrides this).
+            if ext_field and _extension_optional_only(
                     v, field_str, scoped, full_text):
                 continue
             # Discrete structured key present → high-confidence hit.
@@ -708,6 +842,10 @@ def _manifest_to_match(m: Dict[str, Any], pattern: str,
         rtl_files=m.get("rtl_files", []) if isinstance(m.get("rtl_files"), list) else [],
         integration_notes=str(m.get("integration_notes", "")),
         depends_on=m.get("depends_on", []) if isinstance(m.get("depends_on"), list) else [],
+        synth_safe_params=(
+            m.get("synth_safe_params", [])
+            if isinstance(m.get("synth_safe_params"), list) else []
+        ),
     )
 
 

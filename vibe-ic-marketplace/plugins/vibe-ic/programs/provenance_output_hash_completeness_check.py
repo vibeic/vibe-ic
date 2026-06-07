@@ -28,6 +28,13 @@ Failure modes
 6. PROVENANCE_HASH_INCONSISTENT (v1.6.32) — same output path appears
    in two entries with different declared hashes. The audit chain
    contradicts itself; one of the two is wrong.
+8. PROVENANCE_REMOVAL_EMPTY (v0.2.102) — an entry marked as a removal /
+   supersede event but with an empty `removed` / `superseded` list. A
+   removal must reference what it removed.
+9. PROVENANCE_REMOVAL_FILE_STILL_PRESENT (v0.2.102) — a removal event
+   claims to have removed a path that still exists on disk. The removal
+   did not actually happen.
+
 7. ATTEST_TIMING_SUSPICIOUS (WARNING, not FAIL) — entry timestamps
    exhibit synthetic patterns. v1.6.32 widened the heuristic beyond
    "all on :00 seconds" to also catch:
@@ -36,6 +43,22 @@ Failure modes
      * monotonic gaps that are exact multiples of 60 / 300 / 600s
        and ≥3 such regular gaps in a row.
    `--strict-timing` upgrades to ERROR.
+
+Removal / supersede events (v0.2.102, for #493 part 3)
+------------------------------------------------------
+A prune/supersede entry records the REMOVAL of a previous entry's
+outputs rather than the production of new artefacts. Such an entry is
+recognised by a removal marker (`event` ending in `prune`/`remove`/
+`supersede`, or `op`/`type` in {remove, removal, prune, supersede,
+delete}) AND it MUST carry empty `outputs` together with a NON-EMPTY
+`removed` / `superseded` list referencing the original entry's paths.
+For a well-formed removal event, empty `outputs` is ACCEPTED (it
+produces nothing) and the removed paths are verified to be ABSENT on
+disk (a removal that left the file behind is a contradiction →
+PROVENANCE_REMOVAL_FILE_STILL_PRESENT). A removal marker with empty
+`removed` list is malformed → PROVENANCE_REMOVAL_EMPTY. This does NOT
+weaken the gate for NORMAL entries: an entry without a removal marker
+that has empty `outputs` still FAILs with PROVENANCE_OUTPUTS_MISSING.
 
 VACUOUS_PASS
 ------------
@@ -197,6 +220,49 @@ def _detect_synthetic_timing(entries: List[dict]) -> Optional[str]:
     return None
 
 
+# v0.2.102 — for #493 part 3. Removal / supersede event recognition.
+# A prune/supersede entry records the REMOVAL of a prior entry's outputs
+# rather than producing artefacts. Recognised by a removal marker in
+# `op` / `type` (exact, case-insensitive) OR `event` (suffix), and it
+# carries a non-empty removed/superseded list.
+_REMOVAL_OP_MARKERS = {
+    "remove", "removal", "removed", "prune", "pruned",
+    "supersede", "superseded", "delete", "deleted",
+}
+_REMOVAL_EVENT_SUFFIXES = ("prune", "remove", "supersede", "delete")
+_REMOVED_LIST_KEYS = ("removed", "superseded", "removed_outputs",
+                      "pruned", "supersedes")
+
+
+def _removal_list(entry: dict) -> Optional[list]:
+    """Return the non-empty removed/superseded list of a removal entry,
+    [] if the entry is a removal but the list is empty/malformed, or
+    None if the entry is NOT a removal event at all."""
+    is_removal = False
+    for key in ("op", "type", "operation"):
+        v = entry.get(key)
+        if isinstance(v, str) and v.strip().lower() in _REMOVAL_OP_MARKERS:
+            is_removal = True
+            break
+    if not is_removal:
+        ev = entry.get("event")
+        if isinstance(ev, str):
+            evl = ev.strip().lower()
+            if any(evl.endswith(suf) or evl.endswith(suf + "d") or
+                   f"_{suf}" in evl or evl == suf
+                   for suf in _REMOVAL_EVENT_SUFFIXES):
+                is_removal = True
+    if not is_removal:
+        return None
+    # Gather the removed/superseded references.
+    refs: List = []
+    for key in _REMOVED_LIST_KEYS:
+        v = entry.get(key)
+        if isinstance(v, list):
+            refs.extend(v)
+    return refs
+
+
 def _is_inside_project(project: Path, candidate: Path) -> bool:
     """v1.6.32 path-traversal guard. Resolve both paths (no strict, so
     non-existent paths are still resolvable) and verify candidate is
@@ -249,9 +315,68 @@ def audit(project: Path, strict_timing: bool = False,
     # Track hashes per relative output path to flag cross-entry
     # contradictions (PROVENANCE_HASH_INCONSISTENT, v1.6.32).
     seen_hashes: Dict[str, Tuple[int, str]] = {}
+    # v0.2.102 — for #493 part 3. Pre-scan removal/supersede events so a
+    # NORMAL pull entry's output that was legitimately removed by a later
+    # prune event is not flagged PROVENANCE_OUTPUT_FILE_MISSING. The
+    # prune event references the original outputs in its removed list.
+    removed_paths: set = set()
+    for e in to_check:
+        refs = _removal_list(e)
+        if not refs:
+            continue
+        for ref in refs:
+            rel = ref.get("path") if isinstance(ref, dict) else ref
+            if isinstance(rel, str) and rel:
+                removed_paths.add(rel)
     for i, e in enumerate(to_check):
         tool = e.get("tool", "?")
         outputs = e.get("outputs")
+        # v0.2.102 — for #493 part 3. Removal / supersede event shape.
+        # Recognise BEFORE the empty-outputs check so a well-formed
+        # removal (empty outputs + non-empty removed list) is accepted,
+        # while a NORMAL entry with empty outputs still FAILs below.
+        removal_refs = _removal_list(e)
+        if removal_refs is not None:
+            tool = e.get("tool", e.get("event", "prune"))
+            # A removal must reference what it removed.
+            if not removal_refs:
+                findings.append(ProvenanceFinding(
+                    entry_index=i, tool=tool,
+                    rule="PROVENANCE_REMOVAL_EMPTY",
+                    detail="entry is marked as a removal/supersede event "
+                           "but its removed/superseded list is empty"))
+                continue
+            # Outputs, if present, must be empty for a removal event
+            # (it produces nothing). A non-empty outputs map on a
+            # removal entry is verified normally below to avoid a hole.
+            if isinstance(outputs, dict) and outputs:
+                # Fall through to normal output verification AND still
+                # validate the removed paths are gone.
+                pass
+            # Each removed path must actually be ABSENT on disk.
+            for ref in removal_refs:
+                rel = ref.get("path") if isinstance(ref, dict) else ref
+                if not isinstance(rel, str) or not rel:
+                    continue
+                on_disk = project / rel
+                if not _is_inside_project(project, on_disk):
+                    findings.append(ProvenanceFinding(
+                        entry_index=i, tool=tool,
+                        rule="PROVENANCE_PATH_OUTSIDE_PROJECT",
+                        detail=f"removed path '{rel}' resolves outside the "
+                               f"project root"))
+                    continue
+                if on_disk.exists():
+                    findings.append(ProvenanceFinding(
+                        entry_index=i, tool=tool,
+                        rule="PROVENANCE_REMOVAL_FILE_STILL_PRESENT",
+                        detail=f"removal event claims to have removed "
+                               f"'{rel}' but it still exists on disk"))
+            # If the removal also (unexpectedly) declared outputs, verify
+            # them; otherwise this entry is complete — skip the
+            # empty-outputs FAIL below.
+            if not (isinstance(outputs, dict) and outputs):
+                continue
         if not outputs or not isinstance(outputs, dict):
             findings.append(ProvenanceFinding(
                 entry_index=i, tool=tool,
@@ -292,6 +417,11 @@ def audit(project: Path, strict_timing: bool = False,
                            f"project-owned artefacts"))
                 continue
             if not on_disk.exists():
+                # v0.2.102 — for #493 part 3. A path legitimately removed
+                # by a later prune/supersede event is expected to be
+                # absent; do not flag it as a missing-output fault.
+                if rel_path in removed_paths:
+                    continue
                 findings.append(ProvenanceFinding(
                     entry_index=i, tool=tool,
                     rule="PROVENANCE_OUTPUT_FILE_MISSING",

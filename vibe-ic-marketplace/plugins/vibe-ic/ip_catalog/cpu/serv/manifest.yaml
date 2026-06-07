@@ -52,6 +52,31 @@ interface:
     - {name: WITH_CSR,       default: 1}
     - {name: MDU,            default: 0}
     - {name: PRE_REGISTER,   default: 1}
+    # `sim` gates a simulation-only `generate` block in the SERV
+    # introspection/debug wrapper (serv_debug.v) that uses
+    # $value$plusargs / $fopen / $display system tasks to dump CPU/RF
+    # state during simulation. Default 0 (synth-safe). Set 1 only for
+    # simulation; yosys cannot elaborate the PLI/system-task generate
+    # block, so sim=1 ABORTS synthesis. See synth_safe_params below.
+    - {name: sim,            default: 0,
+       description: "sim-only debug/introspection generate block enable (PLI/system tasks). 0 = synth-safe, 1 = simulation only."}
+
+# v0.2.102 — for #492. synth_safe_params instructs catalog-glue-author
+# to PIN `sim=0` whenever it instantiates SERV for synthesis, so the
+# sim-only $value$plusargs/$fopen generate block is never elaborated by
+# yosys. The functional oracle / reference TB may still drive sim=1 in
+# simulation (the construct is legal under iverilog); only the SYNTHESIS
+# instantiation is forced to the synth-safe value.
+synth_safe_params:
+  - param: sim
+    synth_safe_value: 0
+    sim_value: 1
+    reason: >
+      Gates a simulation-only generate block in the SERV debug/
+      introspection wrapper that uses $value$plusargs / $fopen /
+      $display system tasks. yosys cannot elaborate these PLI/system
+      tasks — instantiating with sim=1 aborts synthesis while sim=0
+      synthesises cleanly and the functional oracle still passes.
 
 rtl_files:
   - rtl/serv_aligner.v
