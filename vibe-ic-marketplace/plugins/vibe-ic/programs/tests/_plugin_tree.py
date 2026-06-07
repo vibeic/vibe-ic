@@ -142,16 +142,31 @@ def repo_path_or_missing(*parts: str) -> Path:
     return rr.joinpath(*parts)
 
 
-def repo_resource_or_skip(*parts: str) -> Path:
+def repo_resource_or_skip(*parts: str, required_on_source: bool = False) -> Path:
     """Resolve a path relative to the REPO ROOT (monorepo-only resources
     such as ``tools/ci/...``, ``docs/...``, ``benchmark_phase1/...``) and
     ``pytest.skip`` with :data:`NOT_SHIPPED_REASON` when either the repo
     root is unavailable (cache tree) or the resource is absent.
+
+    flow #488 — skip-reason SPLIT: a resource that the SOURCE tree is
+    expected to carry must not silently dormant-skip with the misleading
+    not-shipped wording when its path is simply MISPLACED. Callers that
+    know the resource always exists on the source tree pass
+    ``required_on_source=True``: on the source tree (repo root resolved)
+    a missing path then FAILs with a path-misplaced diagnosis instead of
+    skipping; the flattened cache tree keeps the legitimate named skip.
+    Default stays ``False`` (plain skip) for resources that may honestly
+    be absent on some source checkouts (e.g. benchmark dirs).
     """
     rr = repo_root()
     if rr is None:
         pytest.skip(f"{'/'.join(parts)} (repo-root resource): {NOT_SHIPPED_REASON}")
     p = rr.joinpath(*parts)
     if not p.exists():
+        if required_on_source:
+            pytest.fail(
+                f"{'/'.join(parts)}: expected on the SOURCE tree but absent "
+                f"— resource path misplaced? (flow #488; this is NOT the "
+                f"two-tree not-shipped case)")
         pytest.skip(f"{'/'.join(parts)} (repo-root resource): {NOT_SHIPPED_REASON}")
     return p
