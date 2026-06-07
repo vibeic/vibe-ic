@@ -210,4 +210,6 @@ Numbers come from REAL local sky130 open-source-flow runs (the `duration_s` fiel
 | Step 31 LVS (Magic + netgen) | this batch's samples took the light/skip path, so no representative figure; with real macro compares (e.g. Caravel-class harnesses) it runs **minutes to hours**, scaling with macro count (a field run motivated the 4-hour timeout) | — |
 | Steps 40–43 manufacturing (fab/sort/pkg/final test) | external, weeks-scale | no local measurement |
 
+Licensing & IP: the whole flow relies on open-source tools only (Apache-2.0 project; commercial-tool firewall and output ownership: repo-root `README.md` §IP ownership, plus the DCO/patent pledge in `CONTRIBUTING.md`).
+
 繁體中文版：`ALL_STEPS.zh-TW.md`.

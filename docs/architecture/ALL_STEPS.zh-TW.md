@@ -198,4 +198,6 @@ MBIST/LBIST/EDT 壓縮（開源無引擎）、BSR/BSDL、自動 clock-gating
 | Step 31 LVS（Magic＋netgen） | 本批樣本走輕量/跳過路徑，故無代表性數字；含 macro 真比對（如 Caravel 類 harness）為**分鐘級到小時級**，依 macro 數量而異（現場曾因此將 timeout 設為 4 小時） | — |
 | Step 40–43 製造端（fab/sort/pkg/final test） | 外部週期，數週級 | 無本地實測 |
 
+授權與 IP：全流程僅依賴開源工具（Apache-2.0 專案；商用工具防火牆與產出物歸屬見 repo 根目錄 `README.md` §IP ownership 與 `CONTRIBUTING.md` 的 DCO/專利承諾）。
+
 英文正本：`ALL_STEPS.md`。
