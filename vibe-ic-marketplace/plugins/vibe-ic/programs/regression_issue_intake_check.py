@@ -262,6 +262,28 @@ def main() -> int:
         )
         return 1
 
+    # flow #485 — filing-side acceptance convention check (non-fatal):
+    # an issue whose '## 驗收' section carries NO fenced executable
+    # command leaves the deterministic acceptance-evidence gate unable
+    # to bite (named ACCEPTANCE_NARRATIVE_ONLY there). Warn at filing
+    # time so the author adds >=1 concrete command.
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import acceptance_evidence_in_fix_comment_check as _acc
+        _sec = _acc.extract_acceptance_section(body)
+        if _sec is not None:
+            _cmds, _ = _acc.extract_commands(_sec)
+            if not _cmds:
+                print(
+                    "WARNING: ACCEPTANCE_NARRATIVE_ONLY — the issue's "
+                    "'## 驗收' section carries no fenced executable "
+                    "command; filing convention requires >=1 so the "
+                    "acceptance-evidence gate can bite (flow #485).",
+                    file=sys.stderr,
+                )
+    except Exception:  # noqa: BLE001 — advisory only, never blocks intake
+        pass
+
     print(f"PASS: issue #{args.issue_number} meets intake template.")
     print(f"  project          = {parsed['project']}")
     print(f"  layer            = {parsed['layer']}")

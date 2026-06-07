@@ -322,6 +322,15 @@ verification round) — all are now standing rules for EVERY fix audit:
    genuinely has no `## 驗收` section, fall back to reproducing the
    `現象` to an end-state; do not substitute unit-test trust.)
 
+   **Filing convention (flow #485):** every `## 驗收` section you FILE
+   must contain **at least one concrete executable command in fenced
+   code** — narrative-only bullets leave the deterministic
+   `acceptance_evidence_in_fix_comment_check` gate unable to bite (it
+   then emits a named `ACCEPTANCE_NARRATIVE_ONLY` warning instead of
+   biting, and the trace has to be audited manually). The intake check
+   (`regression_issue_intake_check`) warns at filing time on
+   zero-command acceptance sections.
+
 ## Reference
 
 - Helper script: `programs/check_closed_for_field_audit.sh`

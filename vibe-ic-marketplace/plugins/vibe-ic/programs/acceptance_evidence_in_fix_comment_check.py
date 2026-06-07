@@ -74,7 +74,10 @@ DETECTION RULES (documented so they are auditable)
 EXIT CODES
 ----------
   0  PASS  — no acceptance section (SKIP), or all acceptance commands are
-            quoted AND end-state evidence is present.
+            quoted AND end-state evidence is present, or the acceptance
+            section is NARRATIVE-ONLY (named ACCEPTANCE_NARRATIVE_ONLY
+            warning, flow #485 — never a silent SKIP; the trace must be
+            supplied and audited manually).
   1  FAIL  — acceptance section present but the comment does not quote every
             command, or has no end-state evidence near them.
   2  usage / I/O error (bad args, missing file, no token, empty body).
@@ -402,16 +405,22 @@ def evaluate(issue_body: str, comment_body: str) -> Verdict:
 
     commands, criteria = extract_commands(section)
     if not commands:
-        # Acceptance section exists but carries no concrete command —
-        # treat as SKIP (cannot deterministically demand a quote) but
-        # record the criteria for transparency.
+        # flow #485: an acceptance section that carries NO concrete
+        # command is no longer a silent vacuous SKIP — it gets a NAMED
+        # ACCEPTANCE_NARRATIVE_ONLY warning (exit 0: it does not block
+        # closing, but it leaves a trace so the core agent knows the
+        # acceptance trace must be supplied manually, and the filing
+        # side knows the convention was missed).
         return Verdict(
-            verdict="SKIP",
+            verdict="ACCEPTANCE_NARRATIVE_ONLY",
             has_acceptance=True,
             criteria=criteria,
             notes=["acceptance section present but no concrete command "
-                   "lines extractable — only narrative criteria; "
-                   "deterministic command-quote check is vacuous"],
+                   "lines extractable — only narrative criteria; the "
+                   "deterministic command-quote check cannot bite. "
+                   "Filing convention: '## 驗收' should carry >=1 fenced "
+                   "executable command. The 本機驗證 acceptance trace "
+                   "must be supplied and audited manually."],
         )
 
     local = extract_local_verification(comment_body)
@@ -530,6 +539,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if v.verdict == "SKIP":
         print("SKIP (PASS): " + "; ".join(v.notes))
+        return 0
+
+    if v.verdict == "ACCEPTANCE_NARRATIVE_ONLY":
+        # flow #485: named warning, never a silent SKIP. Exit 0 (does
+        # not block closing) but the name leaves an auditable trace.
+        print("WARNING: ACCEPTANCE_NARRATIVE_ONLY — "
+              + "; ".join(v.notes))
         return 0
 
     if v.verdict == "PASS":
