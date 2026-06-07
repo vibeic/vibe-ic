@@ -69,9 +69,12 @@ def test_strict_zero_still_rc0(tmp_path):
 # ── emitter: source pins ───────────────────────────────────────────────────
 
 def test_emitter_nulls_quantized_zero():
-    i = _P3_SRC.index("util_below_precision = (util_pct == 0)")
+    # #510 renamed the report_design_area variable util_pct → core_util_pct
+    # (it is CORE-area utilization, not row fill); the quantized-zero
+    # nulling logic is unchanged, only the name.
+    i = _P3_SRC.index("util_below_precision = (core_util_pct == 0)")
     window = _P3_SRC[i - 800:i + 800]
-    assert "util_pct = None" in window
+    assert "core_util_pct = None" in window
     assert "below report precision" in window
 
 

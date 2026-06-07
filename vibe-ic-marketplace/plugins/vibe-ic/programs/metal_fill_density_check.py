@@ -81,7 +81,12 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
             # legacy dict-of-layers fallback — #445: exclude the runner's
             # metadata/count fields so filler_instances etc. are never
             # misread as a "layer density".
+            # v0.3.9 — #510: core_utilization_pct is metadata (the
+            # report_design_area axis), NOT a per-layer metal density —
+            # exclude it so the legacy dict-of-layers fallback never
+            # misreads it as an in-window "layer".
             _META_KEYS = {"filler_instances", "row_utilization_pct",
+                          "core_utilization_pct",
                           "utilization_below_report_precision"}
             layers = [{"name": k, "density_pct": v}
                       for k, v in layers.items()
