@@ -561,6 +561,12 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
         "is_pure_digital": False,
         "is_mixed_signal": False,
         "ic_class": "unknown",
+        # ORGANIC-20260607 #495 — the rule/feature(s) that DECIDED the
+        # class. Recorded for drift diagnosis: when two plugin versions
+        # disagree on the class for IDENTICAL input docs, this field names
+        # the branch each version took so the regression is traceable
+        # rather than silent. Set at every classification return point.
+        "decisive_evidence": "no_project_dir",
     }
 
     if not project.is_dir():
@@ -619,12 +625,17 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
         # If facts.yaml exists assume bare_fpga / unknown.
         if (project / "facts.yaml").is_file():
             profile["ic_class"] = "bare_fpga"
+            profile["decisive_evidence"] = (
+                "no_l1_l2_l3_docs + facts.yaml present → bare_fpga")
         else:
             profile["ic_class"] = "unknown"
+            profile["decisive_evidence"] = (
+                "no_l1_l2_l3_docs (pre-phase2a) → unknown (fail-closed)")
         return profile
 
     if profile["protocol_class"] == "aid_class":
         profile["ic_class"] = "aid_class_half_duplex"
+        profile["decisive_evidence"] = "protocol_class==aid_class"
         return profile
 
     if profile["is_pure_analog"]:
@@ -640,12 +651,18 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
                 "pure_analog — class downgrade triggered "
                 "(Wave 42 / SF5)"
             )
+            profile["decisive_evidence"] = (
+                "is_pure_analog but cmd-driven RTL evidence → "
+                "downgrade to unknown (Wave 42 / SF5)")
             return profile
         profile["ic_class"] = "pure_analog"
+        profile["decisive_evidence"] = (
+            "is_pure_analog (has_analog, no cmd, no fsm)")
         return profile
 
     if profile["is_mixed_signal"] and profile["has_otp"]:
         profile["ic_class"] = "mixed_signal_otp"
+        profile["decisive_evidence"] = "is_mixed_signal + has_otp"
         return profile
 
     if profile["is_mixed_signal"]:
@@ -653,10 +670,14 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
         # commands; else mixed_signal_otp without otp is rare — fall back.
         if profile["has_command_protocol"]:
             profile["ic_class"] = "digital_cmd_driven"
+            profile["decisive_evidence"] = (
+                "is_mixed_signal (no otp) + has_command_protocol")
             return profile
 
     if profile["is_pure_digital"] and profile["has_command_protocol"]:
         profile["ic_class"] = "digital_cmd_driven"
+        profile["decisive_evidence"] = (
+            "is_pure_digital + has_command_protocol")
         return profile
 
     # v0.1.62 — bus_interconnect_protocol detector. AMBA AXI/AHB/APB/ACE,
@@ -673,6 +694,9 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
                 and not profile["has_command_protocol"]
                 and _looks_like_bus_interconnect_protocol(l1, l2)):
             profile["ic_class"] = "bus_interconnect_protocol"
+            profile["decisive_evidence"] = (
+                "no analog/cmd + bus-interconnect structural signature "
+                "(>=4 features + >=2 named channels)")
             return profile
 
     # v0.1.77 — serial_peripheral_protocol detector. SPI/I2C/UART/I2S-style
@@ -690,6 +714,9 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
                 and not _looks_like_bus_interconnect_protocol(l1, l2)
                 and _looks_like_serial_peripheral_protocol(l1, l2)):
             profile["ic_class"] = "serial_peripheral_protocol"
+            profile["decisive_evidence"] = (
+                "no analog + serial-peripheral structural signature "
+                "(>=3 features, not bus-interconnect)")
             return profile
 
     # ORGANIC-20260606 #450 — processor_cpu BEFORE the arithmetic
@@ -701,6 +728,9 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
         if (not profile["has_analog"]
                 and _looks_like_processor_cpu(l1, l2)):
             profile["ic_class"] = "processor_cpu"
+            profile["decisive_evidence"] = (
+                "no analog + processor-cpu structural signature "
+                "(>=3 features incl. ISA-bearing deny-guard)")
             return profile
 
     # v1.6.523 — for #358 P2 root fix. Pure digital + no protocol + no analog +
@@ -713,9 +743,14 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
     if l1 is not None or l2 is not None:
         if not profile["has_analog"] and not profile["has_command_protocol"]:
             profile["ic_class"] = "digital_arithmetic_primitive"
+            profile["decisive_evidence"] = (
+                "L1/L2 present + no analog + no cmd protocol + no "
+                "protocol/cpu signature → arithmetic-primitive catch-all")
             return profile
 
     profile["ic_class"] = "unknown"
+    profile["decisive_evidence"] = (
+        "no classification branch matched → unknown (fail-closed)")
     return profile
 
 
