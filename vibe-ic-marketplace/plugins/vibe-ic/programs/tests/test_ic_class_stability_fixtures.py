@@ -34,36 +34,52 @@ canonical campaign-IC SHAPE so that a future detector change which flips
 a shape becomes a VISIBLE, deliberate test update rather than a silent
 re-classification.
 
-WHAT THIS TEST DOES
-===================
-For each of the four canonical campaign-IC SHAPES it:
-  1. DISCOVERS a real on-disk project STRUCTURALLY (never by chip name):
-     globs ``benchmark_clean/*/`` and ``benchmark_phase1/*/`` for a
-     ``phase1/generated_docs/`` set, runs the REAL detector on each, and
-     selects the first project whose detector profile matches the shape's
-     structural signature (e.g. ``has_analog`` for pure_analog,
-     ISA-bearing for processor_cpu, real opcodes for digital_cmd_driven,
-     no-protocol datapath for digital_arithmetic_primitive).
-  2. COPIES the discovered generated_docs into a fresh tmp project (so we
-     never mutate the on-disk benchmark and never read a stale persisted
-     ``reports/ic_class.json``).
-  3. Runs the REAL ``detect_ic_class`` end-to-end and asserts the
-     EXPECTED class. A detector change that flips a fixture fails here —
-     making the re-classification a deliberate, reviewed test edit.
-  4. Asserts the persisted ``reports/ic_class.json`` carries the new
-     ``decisive_evidence`` field (the #495 drift-diagnosis surface).
+ROUND-2 FIX (ORGANIC-20260607 #495 REOPENED)
+============================================
+The round-1 test discovered the four canonical shapes by globbing the
+on-disk ``benchmark_clean/`` and ``benchmark_phase1/`` directories. The
+field agent's counter-evidence: those directories exist on NEITHER the
+review-cache tree NOR the marketplace source tree — they live only in
+the core agent's own monorepo. So everywhere else the four shape
+fixtures SKIPPED (``1 passed, 6 skipped``), and the anti-drift power of
+the test was ≈ 0 (only the source-order pin actually ran).
 
-``pytest.skip`` is used HONESTLY when a shape is absent on disk
-(dormant-test discipline), mirroring
-``test_v0_2_97_issue466_real_input_fixture.py``.
+This round replaces the external-directory dependence with EMBEDDED
+minimal L-doc shapes: for each of the four campaign IC classes we
+extracted the DECISIVE fields that the live detector consumes (read off
+the real ``generated_docs`` on the monorepo) and inlined them as fixture
+dicts INSIDE this test under synthetic, deny-list-safe names. Each
+embedded fixture writes its shape into ``tmp_path`` as ``L*.json`` and
+runs the REAL ``detect_ic_class`` → asserts the expected class. These
+fixtures RUN (do not skip) on ANY tree — the always-on primary pin.
+
+The four DECISIVE SHAPES (derived from real generated_docs, minimal):
+  * pure_analog                  — L5 with an ``analog_blocks`` list
+    carrying a positive analog marker (high-confidence block, or a
+    low-confidence block with an instance count); no commands, no FSM,
+    no protocol. → is_pure_analog branch.
+  * processor_cpu                — L1/L2 prose with ≥3 processor-cpu
+    structural features INCLUDING an ISA-bearing one (RISC-V / ISA /
+    instruction set). No analog. → processor_cpu branch.
+  * digital_cmd_driven           — L3 with a real (non-scrubbed) opcode
+    table. No analog. → is_pure_digital + has_command_protocol branch.
+  * digital_arithmetic_primitive — L1/L2 present, no analog, no command
+    protocol, and no bus / serial / cpu signature. → arithmetic-
+    primitive catch-all.
+
+The real-docs discovery fixtures are KEPT as a clearly-labelled
+SECONDARY parametrize that skips honestly off-monorepo, so when the run
+IS on the monorepo we still pin the verdict against the genuine L-doc
+state (not just the embedded distillation). The embedded set is the
+primary always-on pin; the discovery set is the on-monorepo bonus.
 
 DENY-LIST DISCIPLINE
 ====================
 ``programs/tests/chip_deny_list.txt`` denies project-name tokens (e.g.
-``u_hawaii``). This test therefore NEVER writes a project name: every
-fixture is discovered by STRUCTURAL signature on the live detector, not
-by a hard-coded chip literal. ``source_chip_agnostic_check.py`` stays
-PASS.
+``u_hawaii``). The embedded fixtures use synthetic generic names
+(``generic_part_a`` …) and the discovery set NEVER writes a project
+name (every fixture is discovered by STRUCTURAL signature on the live
+detector). ``source_chip_agnostic_check.py`` stays PASS.
 """
 import json
 import sys
@@ -77,11 +93,202 @@ sys.path.insert(0, str(_PLUGIN_ROOT / "programs"))
 import ic_class_profile as ICP  # noqa: E402
 
 
-# ── structural shape signatures (NOT chip names) ──────────────────────
-# Each signature is a predicate over the REAL detector profile (plus the
-# raw L1/L2 docs for the processor-cpu ISA-bearing test). General, not a
-# benchmark keyword — these are the same structural facts the detector
-# itself consumes.
+# ════════════════════════════════════════════════════════════════════
+# PRIMARY (ALWAYS-ON): embedded minimal decisive L-doc shapes.
+#
+# Each shape is the MINIMAL set of decisive fields the live detector
+# consumes for that class, distilled from the real campaign-IC
+# generated_docs. Synthetic, deny-list-safe names only. These run on
+# ANY tree (no benchmark_clean / benchmark_phase1 dependence) — closing
+# the field agent's "≈ 0 anti-drift power off-monorepo" gap.
+# ════════════════════════════════════════════════════════════════════
+
+# pure_analog: L5 carries a positive analog marker (high-confidence
+# block ⇒ marker regardless of count); no commands, no FSM, no protocol.
+_EMBEDDED_PURE_ANALOG = {
+    "L1_DATASHEET.json": {
+        "schema_version": "1.0",
+        "doc_class": "L1_DATASHEET",
+        "ic_name": "generic_part_a",
+    },
+    "L5_ADI_SPEC.json": {
+        "schema_version": "1.0",
+        "doc_class": "L5_ADI_SPEC",
+        "no_analog": False,
+        "analog_blocks": [
+            {
+                "name": "front_end",
+                "type": "adc",
+                "spec": {"resolution_bits": 12},
+                "low_confidence": False,
+            }
+        ],
+    },
+}
+
+# processor_cpu: ≥3 processor features incl. an ISA-bearing one. The
+# detector harvests ALL string leaves of L1+L2, so the decisive prose
+# can live in any text field.
+_EMBEDDED_PROCESSOR_CPU = {
+    "L1_DATASHEET.json": {
+        "schema_version": "1.0",
+        "doc_class": "L1_DATASHEET",
+        "ic_name": "generic_part_b",
+        "description": (
+            "A small RISC-V soft-core processor (RV32I base ISA) with a "
+            "program counter and register file."
+        ),
+    },
+    "L2_FRS.json": {
+        "schema_version": "1.0",
+        "doc_class": "L2_FRS",
+        "functional_requirements": (
+            "The CPU executes the RV32I instruction set; an instruction "
+            "fetch unit drives the memory bus; the ALU performs "
+            "load/store and branch instruction handling."
+        ),
+    },
+}
+
+# digital_cmd_driven: L3 with a real (non-scrubbed) opcode table.
+_EMBEDDED_DIGITAL_CMD_DRIVEN = {
+    "L1_DATASHEET.json": {
+        "schema_version": "1.0",
+        "doc_class": "L1_DATASHEET",
+        "ic_name": "generic_part_c",
+    },
+    "L2_FRS.json": {
+        "schema_version": "1.0",
+        "doc_class": "L2_FRS",
+    },
+    "L3_CMD_PROTOCOL.json": {
+        "schema_version": "1.0",
+        "doc_class": "L3_CMD_PROTOCOL",
+        "opcodes": [
+            {"hex": "0x00", "name": "READ_STATUS",
+             "payload_bytes": 1, "direction": "read"},
+            {"hex": "0x01", "name": "WRITE_CTRL",
+             "payload_bytes": 2, "direction": "write"},
+        ],
+    },
+}
+
+# digital_arithmetic_primitive: L1/L2 present, no analog, no command
+# protocol, and no bus / serial / cpu signature → the catch-all.
+_EMBEDDED_DIGITAL_ARITH = {
+    "L1_DATASHEET.json": {
+        "schema_version": "1.0",
+        "doc_class": "L1_DATASHEET",
+        "ic_name": "generic_part_d",
+        "description": (
+            "A fixed-function combinational datapath block computing a "
+            "digest over a fixed-width input word."
+        ),
+    },
+    "L2_FRS.json": {
+        "schema_version": "1.0",
+        "doc_class": "L2_FRS",
+        "functional_requirements": (
+            "Pure datapath primitive: pipelined message-schedule and "
+            "compression rounds. No external command interface, no "
+            "analog content."
+        ),
+    },
+}
+
+_EMBEDDED_SHAPES = {
+    "pure_analog": _EMBEDDED_PURE_ANALOG,
+    "processor_cpu": _EMBEDDED_PROCESSOR_CPU,
+    "digital_cmd_driven": _EMBEDDED_DIGITAL_CMD_DRIVEN,
+    "digital_arithmetic_primitive": _EMBEDDED_DIGITAL_ARITH,
+}
+
+
+def _write_embedded_project(docs: dict, tmp_path: Path) -> Path:
+    """Write an embedded shape's L*.json into a FRESH tmp project's
+    generated_docs and return the project root. The project carries no
+    persisted reports/ic_class.json, so the REAL detector infers fresh."""
+    proj = tmp_path / "chip"
+    gd = ICP._pl.generated_docs_dir(proj)
+    gd.mkdir(parents=True)
+    for fname, body in docs.items():
+        (gd / fname).write_text(json.dumps(body), encoding="utf-8")
+    return proj
+
+
+@pytest.mark.parametrize("expected_class", sorted(_EMBEDDED_SHAPES))
+def test_embedded_campaign_ic_shape_classifies_stably(expected_class,
+                                                      tmp_path):
+    """PRIMARY always-on pin: the REAL detector must return the EXPECTED
+    class for each embedded minimal decisive shape. Unlike the discovery
+    fixtures this NEVER skips — it does not depend on benchmark_clean /
+    benchmark_phase1 existing, so it has full anti-drift power on the
+    review-cache tree, the marketplace source tree, and any other tree
+    (the gap ORGANIC-20260607 #495 was REOPENED on). A detector change
+    that flips a shape fails HERE, forcing the re-classification to be a
+    visible, deliberate test update."""
+    proj = _write_embedded_project(_EMBEDDED_SHAPES[expected_class],
+                                   tmp_path)
+    profile = ICP.detect_ic_class(proj)
+    assert profile["ic_class"] == expected_class, (
+        f"embedded campaign-IC shape {expected_class!r} drifted to "
+        f"{profile['ic_class']!r} — if this is a deliberate detector "
+        f"change, update the embedded shape; otherwise it is a silent "
+        f"#495 flip"
+    )
+
+
+def test_embedded_shapes_emit_decisive_evidence(tmp_path):
+    """Every embedded shape produces a non-empty ``decisive_evidence``
+    naming the deciding branch, both in the in-memory profile and the
+    persisted ``reports/ic_class.json`` (#435 single source of truth +
+    #495 drift-diagnosis surface). Always-on — no monorepo dependence."""
+    for expected_class, docs in sorted(_EMBEDDED_SHAPES.items()):
+        sub = tmp_path / expected_class
+        proj = _write_embedded_project(docs, sub)
+        profile = ICP.detect_ic_class(proj)
+
+        assert profile["ic_class"] == expected_class
+        ev = profile.get("decisive_evidence", "")
+        assert isinstance(ev, str) and ev.strip(), (
+            f"{expected_class!r} produced empty decisive_evidence")
+        # The default sentinel must never survive a real classification.
+        assert ev != "no_project_dir"
+
+        persisted = json.loads(
+            (proj / "reports" / "ic_class.json").read_text(
+                encoding="utf-8"))
+        assert persisted.get("ic_class") == expected_class
+        assert "decisive_evidence" in persisted, (
+            "persisted reports/ic_class.json must carry decisive_evidence")
+        assert persisted["decisive_evidence"] == ev
+
+
+def test_embedded_shapes_are_deny_list_safe():
+    """The embedded fixtures must never carry a denied chip/vendor token.
+    Pins the chip-AGNOSTIC discipline at the data level so a future edit
+    that pastes a real chip name into a fixture is caught here as well as
+    by source_chip_agnostic_check.py."""
+    deny_file = _THIS.parent / "chip_deny_list.txt"
+    denied = []
+    for line in deny_file.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip().lower()
+        if line:
+            denied.append(line)
+    blob = json.dumps(_EMBEDDED_SHAPES).lower()
+    for tok in denied:
+        assert tok not in blob, (
+            f"embedded fixture leaks denied token {tok!r}")
+
+
+# ════════════════════════════════════════════════════════════════════
+# SECONDARY (ON-MONOREPO BONUS): real-docs discovery fixtures.
+#
+# When the run IS on the core agent's monorepo, also pin the verdict
+# against the GENUINE on-disk L-doc state (not just the embedded
+# distillation). These skip HONESTLY off-monorepo (dormant-test
+# discipline) — they are a bonus, NOT the primary anti-drift net.
+# ════════════════════════════════════════════════════════════════════
 
 def _profile_and_docs(project: Path):
     """Return (profile, l1, l2) for a project, inferred fresh (no cache)."""
@@ -122,8 +329,8 @@ def _is_digital_arith_primitive_shape(project: Path) -> bool:
 
 
 # The four canonical campaign-IC SHAPES, each named by its expected
-# class and selected by a STRUCTURAL predicate.
-_SHAPES = {
+# class and selected by a STRUCTURAL predicate (no chip names).
+_DISCOVERY_SHAPES = {
     "pure_analog": _is_pure_analog_shape,
     "processor_cpu": _is_processor_cpu_shape,
     "digital_cmd_driven": _is_digital_cmd_driven_shape,
@@ -131,14 +338,14 @@ _SHAPES = {
 }
 
 
-# ── structural discovery (no chip names) ──────────────────────────────
-
 def _repo_roots() -> list:
     """Every ``benchmark_clean`` / ``benchmark_phase1`` dir on the
     ancestor chain from the plugin root up to the filesystem root.
     Resolved by STRUCTURE, not a hard-coded parent count, so the
     marketplace nesting (a possibly-empty copy at the plugin root and the
-    real one ~3 parents up) is handled robustly."""
+    real one ~3 parents up) is handled robustly. Returns [] off-monorepo
+    — then the discovery fixtures skip honestly and the embedded set
+    above carries the anti-drift load."""
     seen = set()
     out = []
     for cand in [_PLUGIN_ROOT, *_PLUGIN_ROOT.parents]:
@@ -193,42 +400,44 @@ def _copy_generated_docs(src_project: Path, tmp_path: Path) -> Path:
     return proj
 
 
-# ── the four stability fixtures ───────────────────────────────────────
-
-@pytest.mark.parametrize("expected_class", sorted(_SHAPES))
-def test_campaign_ic_shape_classifies_stably(expected_class, tmp_path):
-    """For each canonical campaign-IC shape discovered on disk, the REAL
-    detector must return the EXPECTED class. A detector change that flips
-    a shape fails HERE — forcing the re-classification to be a visible,
-    deliberate test update rather than a silent version-to-version drift
-    (the exact silent flip ORGANIC-20260607 #495 was filed on)."""
-    src = _discover_shape(_SHAPES[expected_class])
+@pytest.mark.parametrize("expected_class", sorted(_DISCOVERY_SHAPES))
+def test_real_docs_campaign_ic_shape_classifies_stably(expected_class,
+                                                       tmp_path):
+    """SECONDARY on-monorepo bonus: for each canonical campaign-IC shape
+    discovered on disk, the REAL detector must return the EXPECTED class
+    against the GENUINE L-doc state. SKIPS HONESTLY off-monorepo — the
+    embedded set above is the primary always-on pin. A detector change
+    that flips a real shape fails HERE when run on the monorepo."""
+    src = _discover_shape(_DISCOVERY_SHAPES[expected_class])
     if src is None:
         pytest.skip(
             f"no on-disk project with the {expected_class!r} structural "
-            "shape (dormant-test discipline)")
+            "shape (dormant-test discipline; embedded set carries the "
+            "anti-drift load off-monorepo)")
 
     proj = _copy_generated_docs(src, tmp_path)
     profile = ICP.detect_ic_class(proj)
     assert profile["ic_class"] == expected_class, (
-        f"campaign-IC shape {expected_class!r} drifted to "
+        f"real-docs campaign-IC shape {expected_class!r} drifted to "
         f"{profile['ic_class']!r} — if this is a deliberate detector "
         f"change, update this fixture; otherwise it is a silent #495 flip"
     )
 
 
-def test_fixture_run_emits_decisive_evidence(tmp_path):
-    """A fixture run's persisted ``reports/ic_class.json`` must carry the
-    #495 ``decisive_evidence`` field — the feature(s)/rule that decided
-    the class, for drift diagnosis. Verified on whatever shape is present;
-    skips honestly if none of the four shapes is on disk."""
+def test_real_docs_run_emits_decisive_evidence(tmp_path):
+    """SECONDARY: a real-docs fixture run's persisted
+    ``reports/ic_class.json`` must carry the #495 ``decisive_evidence``
+    field. Verified on whatever shape is present; skips honestly if none
+    of the four shapes is on disk (the embedded set already pins this
+    off-monorepo)."""
     src = None
-    for shape_predicate in _SHAPES.values():
+    for shape_predicate in _DISCOVERY_SHAPES.values():
         src = _discover_shape(shape_predicate)
         if src is not None:
             break
     if src is None:
-        pytest.skip("no campaign-IC shape on disk (dormant-test discipline)")
+        pytest.skip("no campaign-IC shape on disk (dormant-test "
+                    "discipline; embedded set pins this off-monorepo)")
 
     proj = _copy_generated_docs(src, tmp_path)
     profile = ICP.detect_ic_class(proj)
@@ -248,30 +457,9 @@ def test_fixture_run_emits_decisive_evidence(tmp_path):
     assert persisted["decisive_evidence"] == profile["decisive_evidence"]
 
 
-def test_decisive_evidence_present_for_every_classified_shape(tmp_path):
-    """Stronger pin: EVERY discoverable campaign-IC shape produces a
-    non-empty decisive_evidence naming the deciding branch, and that
-    evidence is consistent with the assigned class (a pure_analog verdict
-    cites the analog branch, a catch-all verdict cites the catch-all,
-    etc.). Guards against a future return path forgetting to set it."""
-    found_any = False
-    for expected_class, shape_predicate in sorted(_SHAPES.items()):
-        src = _discover_shape(shape_predicate)
-        if src is None:
-            continue
-        found_any = True
-        sub = tmp_path / expected_class
-        proj = _copy_generated_docs(src, sub)
-        profile = ICP.detect_ic_class(proj)
-        assert profile["ic_class"] == expected_class
-        ev = profile.get("decisive_evidence", "")
-        assert isinstance(ev, str) and ev.strip(), (
-            f"{expected_class!r} produced empty decisive_evidence")
-        # The default sentinel must never survive a real classification.
-        assert ev != "no_project_dir"
-    if not found_any:
-        pytest.skip("no campaign-IC shape on disk (dormant-test discipline)")
-
+# ════════════════════════════════════════════════════════════════════
+# SOURCE-ORDER PIN (always-on, KEPT from round-1).
+# ════════════════════════════════════════════════════════════════════
 
 def test_detector_ordering_unchanged_processor_cpu_after_protocols():
     """Pin the #450/#495 ordering FINDING: the processor_cpu branch sits
