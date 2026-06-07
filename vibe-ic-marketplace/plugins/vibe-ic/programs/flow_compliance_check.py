@@ -2623,21 +2623,44 @@ _PDK_SUBSTITUTION_TICKET = "pdk-substitution-v0.2.103"
 _PDK_SUBSTITUTION_MARKER_RE = re.compile(
     r"pdk[_\s\-]?substitution", re.IGNORECASE)
 
+# v0.3.2 (#496 round-2) — PROSE disclosure recognition. Real runner decks
+# emitted before the structured emitter existed carry a free-text header like:
+#   * PDK NOTE (disclosed): tapeout target is IHP SG13G2 (L9/L19) ...
+#   * SG13G2 has NO public ngspice corner lib, so the open-source sim deck
+#   * uses sky130A typical device models — modeled, NOT silicon sign-off.
+# The gate must honour these previously-generated honest artifacts WITHOUT
+# regeneration. Recognition predicate for the prose form (ALL must hold):
+#   (1) a `PDK NOTE` line is present in the deck head;
+#   (2) disclosure / substitute wording is present ("disclosed" or
+#       "substitut*"); AND
+#   (3) BOTH PDK names are named in the head — the detected substitute family
+#       token AND the declared target token — exactly the honesty bar the
+#       structured marker enforces. chip-AGNOSTIC: token containment only.
+_PDK_NOTE_RE = re.compile(r"pdk\s*note", re.IGNORECASE)
+_PDK_NOTE_DISCLOSE_RE = re.compile(r"disclos|substitut", re.IGNORECASE)
+
 
 def _pdk_substitution_disclosed(project: Path) -> Optional[Dict[str, str]]:
     """Return a disclosure dict {substitute, target, deck} when the project
     HONESTLY discloses that its analog decks substitute the open-source
     default PDK for a non-default L19 target — else None.
 
-    Both halves of the #496 predicate are enforced here:
-      (a) at least one analog deck (.sp under the canonical analog dir)
-          carries a `pdk_substitution` disclosure marker in its head AND
-          its detected PDK family is named on that marker line; AND
+    Both halves of the #496 predicate are enforced here. Disclosure is honest
+    in EITHER form:
+      • STRUCTURED — a `pdk_substitution` marker line whose text names the
+        substituted family (the form the emitter now writes); OR
+      • PROSE — a `PDK NOTE` header with disclose/substitute wording that
+        names BOTH the substitute family and the declared target (the form
+        real runner decks already carry — recognised so honest pre-existing
+        artifacts pass without regeneration).
+    And in both forms:
+      (a) at least one analog deck (.sp under the canonical analog dir) carries
+          the disclosure in its head AND its detected PDK family is named; AND
       (b) L19.fields.pdk_target is concrete AND the deck's detected family
           token does NOT appear in it (a real mismatch).
-    An undisclosed deck (no marker) → None → no waiver → the #438b gate
-    hard-FAILs. chip-AGNOSTIC: structural marker scan + family-token
-    containment, no chip-class literals.
+    An undisclosed deck (no marker, no prose disclosure) → None → no waiver →
+    the #438b gate hard-FAILs. chip-AGNOSTIC: structural marker scan + prose
+    family-token containment, no chip-class literals.
     """
     try:
         import analog_netlist_pdk_check as _npc
@@ -2657,23 +2680,35 @@ def _pdk_substitution_disclosed(project: Path) -> Optional[Dict[str, str]]:
         except OSError:
             continue
         head = "\n".join(text.splitlines()[:24])
-        # (a) honest disclosure marker present in the deck head.
-        m = _PDK_SUBSTITUTION_MARKER_RE.search(head)
-        if not m:
-            continue
-        marker_line = _line_containing(head, m.start())
         pdk = _npc._detect_pdk(text)
         if not pdk:
-            continue
-        # The disclosure must NAME the substituted family it actually uses
-        # (so a stray "pdk_substitution: none" cannot game it).
-        if pdk.lower() not in marker_line.lower():
             continue
         # (b) the deck family must genuinely differ from the declared target.
         if pdk.lower() in declared.lower():
             continue
-        return {"substitute": pdk, "target": declared, "deck": str(
-            sp.relative_to(project))}
+
+        # ── STRUCTURED form: a `pdk_substitution` marker naming the family ──
+        m = _PDK_SUBSTITUTION_MARKER_RE.search(head)
+        if m:
+            marker_line = _line_containing(head, m.start())
+            # The disclosure must NAME the substituted family it actually uses
+            # (so a stray "pdk_substitution: none" cannot game it).
+            if pdk.lower() in marker_line.lower():
+                return {"substitute": pdk, "target": declared,
+                        "deck": str(sp.relative_to(project))}
+            # marker present but family not named → fall through to prose check
+            # (do not accept on the structured branch alone).
+
+        # ── PROSE form: a `PDK NOTE` header naming BOTH PDKs ──────────────
+        # (1) PDK NOTE present; (2) disclose/substitute wording; (3) both the
+        # substitute family token AND the declared target token in the head.
+        head_lc = head.lower()
+        if (_PDK_NOTE_RE.search(head)
+                and _PDK_NOTE_DISCLOSE_RE.search(head)
+                and pdk.lower() in head_lc
+                and declared.lower() in head_lc):
+            return {"substitute": pdk, "target": declared,
+                    "deck": str(sp.relative_to(project))}
     return None
 
 

@@ -154,6 +154,64 @@ PDK_LIB = {
     "gf180" :"/foss/pdks/gf180mcuD/libs.tech/ngspice/design.ngspice",
 }
 
+
+# ── ORGANIC-20260606 #496 (round-2): structured PDK-substitution disclosure ──
+# The (correct) #438b PDK-mismatch gate intercepts even our OWN sim decks when
+# L19 declares a tapeout target with NO public ngspice models (so the deck
+# substitutes the open-source default PDK). flow_compliance_check synthesises a
+# WAIVED-DEFERRED only when the deck HONESTLY discloses the substitution via a
+# STRUCTURED marker line in its head. Round-1 wired the gate but NOTHING emitted
+# the marker, so real runner decks (carrying only a prose 'PDK NOTE') dead-ended
+# at A3 FAIL. This emitter writes the structured line automatically whenever the
+# simulation PDK family differs from the L19-declared tapeout target.
+# chip-AGNOSTIC: reuses analog_netlist_pdk_check's L19 reader + family-token
+# containment; no chip / vendor / SKU literal.
+
+def _declared_pdk_target_for_emit(project: Path):
+    """L19 tapeout target string, or None when absent / N-A. Delegates to
+    analog_netlist_pdk_check so the emitter and the gate agree on the source
+    of truth; falls back to an inline read if that module is unavailable."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import analog_netlist_pdk_check as _npc  # noqa: E402
+        return _npc._declared_pdk_target(project)
+    except Exception:
+        l19 = project / "phase1" / "generated_docs" / "L19_CONSTRAINTS_PDK.json"
+        try:
+            declared = json.loads(l19.read_text(errors="replace")) \
+                .get("fields", {}).get("pdk_target")
+        except (OSError, ValueError):
+            return None
+        if not isinstance(declared, str) or not declared.strip():
+            return None
+        if declared.strip().lower().startswith(("n/a", "na ", "none", "tbd")):
+            return None
+        return declared.strip()
+
+
+def pdk_substitution_header(project: Path, sim_pdk: str):
+    """Return the structured `pdk_substitution` disclosure line (with trailing
+    newline) when the L19 tapeout target genuinely differs from the simulation
+    PDK family `sim_pdk` (e.g. "sky130"); else "".
+
+    The emitted line is exactly the shape flow_compliance_check's
+    `_pdk_substitution_disclosed` recognises:
+        * pdk_substitution: target=<L19 pdk_target> substitute=<sim pdk> \
+reason=no public ngspice models for target; open-source substitute
+    The `substitute` token is the simulation family token (the same token
+    `_detect_pdk` returns from the deck body), so the gate's
+    family-containment predicate holds. chip-AGNOSTIC."""
+    declared = _declared_pdk_target_for_emit(project)
+    if not declared:
+        return ""  # nothing concrete to substitute against → no disclosure
+    if sim_pdk.lower() in declared.lower():
+        return ""  # the deck IS the declared target → no substitution at all
+    return (
+        f"* pdk_substitution: target={declared} substitute={sim_pdk} "
+        f"reason=no public ngspice models for target; open-source substitute\n"
+    )
+
+
 # ─────────────────── Per-block testbench templates ───────────────────
 
 T = {}
@@ -768,6 +826,13 @@ def run_block(project, block, container, pdk, topology_override):
     sl_dir = bdir / "sizing_loop"
     sl_dir.mkdir(parents=True, exist_ok=True)
 
+    # ORGANIC-20260606 #496 (round-2) — when the L19 tapeout target differs
+    # from the simulation PDK family, prepend the STRUCTURED pdk_substitution
+    # disclosure marker so flow_compliance_check downgrades the (correct)
+    # #438b PDK-mismatch FAIL to WAIVED-DEFERRED. Empty string when there is
+    # no substitution (deck == declared target / no concrete target).
+    subst_header = pdk_substitution_header(project, pdk)
+
     runs = []
     # #464 — accumulate per-block partial-measurement evidence across runs.
     block_sim_warnings: list[str] = []
@@ -781,6 +846,9 @@ def run_block(project, block, container, pdk, topology_override):
         # and faithful to how every existing template already behaves.
         tb = T[btype].format(block=block, pdk=pdk, pdk_lib=pdk_lib, corner="tt",
                               **{(knob if knob != "__noop__" else "_unused"): val})
+        # #496 (round-2): structured PDK-substitution disclosure goes FIRST so
+        # it lands in the deck head (the gate scans the first 24 lines).
+        tb = subst_header + tb
         sp_host = sl_dir / f"run_{knob}_{val}.sp"
         sp_host.write_text(tb)
         ok, meas, raw, sim_status = _run_ngspice(
