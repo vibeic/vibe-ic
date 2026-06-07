@@ -272,11 +272,87 @@ def _harvest_tool_strings(obj) -> list[str]:
     return uniq
 
 
+# v0.3.8 — ORGANIC #504 ROUND-2: shell-token semantics for two
+# false-positive shapes that blocked the canonical scoring front door on a
+# real 9-transcript run.
+#
+# (A) ASSIGNMENT RHS — `VAR=<dataset-path>` (incl. `export`/`local`/
+#     `readonly` prefixes and array-subscript `arr[k]=` forms) STORES a
+#     path; it is not an access. The consumption side (`"$VAR/..."`) is
+#     scanned separately wherever the dataset root is visible. Round-1
+#     doctrine already named the `SRC=` shape; this is its `declare -A`
+#     sibling generalised to all assignment forms.
+_ASSIGN_PREFIX_RE = re.compile(
+    r"(?:^|[\s;&|({])"
+    r"(?:export\s+|local\s+|readonly\s+)?"
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?="
+    r"[\"']?$"
+)
+
+# Statement separators that bound an `A || B` fallback pair (a `;`,
+# newline or `&&` between the `||` and the candidate breaks the pair).
+_STMT_SEP_RE = re.compile(r";|&&|\n")
+
+
+def _is_assignment_rhs(frag: str, start: int) -> bool:
+    """True when the dataset-root match at `start` is the right-hand side
+    of a shell variable assignment (storage, not access). #504 R2."""
+    return bool(_ASSIGN_PREFIX_RE.search(frag[:start]))
+
+
+def _is_or_fallback_family_twin(frag: str, start: int, base: str,
+                                ds: str, allowed: list[str]) -> bool:
+    """#504 R2 — (B) OR-FALLBACK FAMILY TWIN. True when the candidate at
+    `start` (basename `base`) is the RIGHT branch of an `A || B` shell
+    fallback whose LEFT branch (same statement) references an ALLOWED
+    dataset file, and `base` shares its name-STEM with an allowed glob
+    (extension twin, e.g. the documented `.md` fallback of an allowed
+    `.txt` prompt). The twin branch is the blind-instructions fallback
+    idiom — when the allowed file exists the twin branch never executes,
+    and when it executes it reads the same prompt content under the
+    family name. A right branch naming a NON-family file (oracle/build)
+    still flags; a twin with no allowed LEFT reference still flags."""
+    from fnmatch import fnmatch
+    # (1) family-stem membership against the allowed globs.
+    stem_b = base.rsplit(".", 1)[0]
+    fam = False
+    for g in allowed:
+        g_base = g.rsplit("/", 1)[-1]
+        stem_g = g_base.rsplit(".", 1)[0] if "." in g_base else g_base
+        if fnmatch(stem_b, stem_g):
+            fam = True
+            break
+    if not fam:
+        return False
+    # (2) nearest `||` before the candidate, unbroken by a statement
+    # separator → the candidate is the fallback's right branch.
+    q = frag.rfind("||", 0, start)
+    if q == -1:
+        return False
+    if _STMT_SEP_RE.search(frag, q + 2, start):
+        return False
+    # (3) the LEFT branch (statement start … `||`) must reference an
+    # allowed dataset file.
+    left_lo = 0
+    for msep in _STMT_SEP_RE.finditer(frag, 0, q):
+        left_lo = msep.end()
+    left = frag[left_lo:q]
+    for m2 in re.finditer(re.escape(ds), left):
+        rel2 = _extract_rel(left, m2.end(), ds)
+        if rel2:
+            b2 = Path(rel2.rstrip("/")).name
+            if b2 and any(fnmatch(b2, g) for g in allowed):
+                return True
+    return False
+
+
 def _scan_fragment(frag: str, ds: str, allowed: list[str], source: str,
                    ln_no: int) -> list[dict]:
     """Run V1/V2/V3 over one already-isolated fragment (a JSON field value, or
     a whole legacy text line). `frag` is self-terminated, so V1 path
-    extraction never bleeds into adjacent JSON (#480)."""
+    extraction never bleeds into adjacent JSON (#480). v0.3.8 (#504 R2):
+    assignment-RHS and OR-fallback family-twin candidates are shell-token
+    exemptions, not violations."""
     from fnmatch import fnmatch
     findings: list[dict] = []
     path_re = re.compile(re.escape(ds))
@@ -289,6 +365,11 @@ def _scan_fragment(frag: str, ds: str, allowed: list[str], source: str,
         if not base:
             continue
         if any(fnmatch(base, g) for g in allowed):
+            continue
+        # v0.3.8 — #504 R2 shell-token exemptions (see helpers above).
+        if _is_assignment_rhs(frag, m.start()):
+            continue
+        if _is_or_fallback_family_twin(frag, m.start(), base, ds, allowed):
             continue
         findings.append({
             "kind": "dataset-file-access",
