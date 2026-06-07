@@ -27,9 +27,11 @@ from pathlib import Path
 import pytest
 
 from spacewire_protocol_synth import is_spacewire
+from _plugin_tree import repo_path_or_missing
 
-REPO_ROOT = Path(__file__).resolve().parents[5]
-BP = REPO_ROOT / "benchmark_phase1"
+# flow #486: benchmark_phase1/ is a repo-root-only private corpus absent on
+# the flattened cache; resolve defensively so the existing skipif guards fire.
+BP = repo_path_or_missing("benchmark_phase1")
 
 
 # --------------------------------------------------------------------------- unit

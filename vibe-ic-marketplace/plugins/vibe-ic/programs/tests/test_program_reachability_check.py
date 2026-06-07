@@ -14,11 +14,13 @@ from pathlib import Path
 
 import pytest
 
-TOOL = (
-    Path(__file__).resolve().parents[4]
-    / "tools"
-    / "program_reachability_check.py"
-)
+from _plugin_tree import repo_resource_or_skip
+
+# flow #486: program_reachability_check.py is a repo-root-only audit tool
+# (one dir above vibe-ic-marketplace) that is NOT shipped in the flattened
+# install cache. Resolve it lazily via repo_resource_or_skip so the fixture
+# builder yields a NAMED skip there instead of a FileNotFoundError ERROR.
+TOOL_REL = ("tools", "program_reachability_check.py")
 
 
 def _build_fixture(root: Path, *,
@@ -64,9 +66,10 @@ def _build_fixture(root: Path, *,
 
     # Copy the tool into the fixture root so its parents[3] lands on
     # `root` and PROGRAMS resolves to the fixture programs/.
+    tool = repo_resource_or_skip(*TOOL_REL)  # NAMED skip on the cache tree
     tool_dir = root / "vibe-ic-marketplace" / "tools"
     tool_dir.mkdir(parents=True)
-    shutil.copyfile(TOOL, tool_dir / "program_reachability_check.py")
+    shutil.copyfile(tool, tool_dir / "program_reachability_check.py")
 
 
 def _run(root: Path, *extra: str) -> dict:

@@ -23,9 +23,13 @@ from pathlib import Path
 import pytest
 
 from ddr4_protocol_synth import is_ddr4
+from _plugin_tree import repo_path_or_missing
 
-REPO_ROOT = Path(__file__).resolve().parents[5]
-BP = REPO_ROOT / "benchmark_phase1"
+# flow #486: benchmark_phase1/ is a repo-root-only private corpus; on the
+# flattened install cache it is absent, so this resolves to a non-existent
+# path and the existing `skipif(not (BP/...).is_dir())` guards fire (named
+# skip), instead of an IndexError from a hard-coded parents[5].
+BP = repo_path_or_missing("benchmark_phase1")
 
 
 # --------------------------------------------------------------------------- unit

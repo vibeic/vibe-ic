@@ -27,6 +27,12 @@ for _p in (str(_PROGRAMS), str(_PLUGIN_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+# flow #486: also put the tests dir on sys.path so the shared plugin-root
+# resolver (`import _plugin_tree`) and sibling-test imports resolve by bare
+# name in BOTH the source monorepo and the flattened install cache.
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
+
 
 # Preserved from the former tests/conftest.py (#401): read a hand-extracted,
 # chip-AGNOSTIC real-benchmark fixture slice. Fixtures now live under

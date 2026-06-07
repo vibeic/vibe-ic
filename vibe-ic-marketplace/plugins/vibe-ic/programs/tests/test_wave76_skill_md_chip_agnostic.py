@@ -10,8 +10,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[5]
-SKILLS = ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "skills"
+import pytest
+
+from _plugin_tree import plugin_path
+
+# flow #486: skills/ is a SHIPPED in-plugin dir (plugin-root resolver); the
+# audit tool tools/wave76_*.py is a repo-root-only tool NOT shipped in the
+# flattened cache and is resolved lazily inside the test that needs it.
+SKILLS = plugin_path("skills")
 
 PATTERNS = re.compile(
     r"\b(EXAMPLE_CHIP|BigTen|A1101|A1103|A1105|MDV-?A1101|"
@@ -100,11 +106,11 @@ def test_audit_tool_runs_clean():
     doesn't ship it would always fail.
     """
     import subprocess
-    import pytest
-    tool = ROOT / "tools" / "wave76_skill_md_chip_agnostic_audit.py"
+    from _plugin_tree import repo_path_or_missing
+    tool = repo_path_or_missing("tools", "wave76_skill_md_chip_agnostic_audit.py")
     if not tool.exists():
         pytest.skip(
-            f"audit tool not present at {tool} (mirror tree); "
+            f"audit tool not present at {tool} (mirror/cache tree); "
             f"BANNER + INSTRUCTION_FIXED invariants are checked above"
         )
     r = subprocess.run(

@@ -26,7 +26,16 @@ from typing import List, Tuple
 
 PROGRAMS = Path(__file__).resolve().parent
 # programs/ = <repo>/vibe-ic-marketplace/plugins/vibe-ic/programs → repo root = parents[3].
-REPO = PROGRAMS.parents[3]
+# flow #486: on the flattened install cache there is no repo root (programs/
+# sits directly under the plugin root with no monorepo ancestors), so
+# parents[3] would IndexError at import. Fall back to the plugin root then;
+# the docs/ output is a repo-root-only artefact not shipped in the cache, so
+# OUT simply points under the plugin root there (the --check/emit gate is
+# enforced on the source tree).
+try:
+    REPO = PROGRAMS.parents[3]
+except IndexError:
+    REPO = PROGRAMS.parent  # plugin root (cache tree)
 OUT = REPO / "docs" / "architecture" / "FLOW_STEPS_GENERATED.md"
 
 P1 = PROGRAMS / "phase1_doc_one_shot_runner.py"

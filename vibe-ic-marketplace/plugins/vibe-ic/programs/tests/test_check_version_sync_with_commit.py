@@ -26,13 +26,20 @@ from pathlib import Path
 
 import pytest
 
-REAL_REPO = Path(__file__).resolve().parents[5]
+from _plugin_tree import repo_resource_or_skip
+
 SCRIPT_REL = "tools/ci/check_version_sync_with_commit.sh"
 
 
 def _stage_repo(tmp_path: Path, plugin_ver: str, market_ver: str) -> Path:
     """Build a synthetic repo with .git/, the script, plugin.json,
-    marketplace.json, set to the requested versions."""
+    marketplace.json, set to the requested versions.
+
+    flow #486: tools/ci/ is a repo-root-only CI script that is NOT shipped
+    in the flattened install cache. ``repo_resource_or_skip`` yields a
+    NAMED pytest.skip there instead of a FileNotFoundError ERROR.
+    """
+    src_script = repo_resource_or_skip(SCRIPT_REL)
     root = tmp_path / "repo"
     # Layout
     (root / ".git").mkdir(parents=True)
@@ -42,7 +49,6 @@ def _stage_repo(tmp_path: Path, plugin_ver: str, market_ver: str) -> Path:
 
     # Copy the script under test (so it resolves PROJECT_ROOT correctly
     # via $(...).../tools/ci → ../..)
-    src_script = REAL_REPO / SCRIPT_REL
     dst_script = root / SCRIPT_REL
     shutil.copy2(src_script, dst_script)
     dst_script.chmod(0o755)

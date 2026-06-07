@@ -145,8 +145,11 @@ def test_garbage_blob_is_false():
 # absent so the suite still runs in the shipped tree.
 # --------------------------------------------------------------------------- #
 
-_REPO_ROOT = Path(__file__).resolve().parents[5]
-_BP = _REPO_ROOT / "benchmark_phase1"
+from _plugin_tree import repo_path_or_missing  # noqa: E402
+
+# flow #486: benchmark_phase1/ is a repo-root-only private corpus absent on
+# the flattened cache; resolve defensively so the existing skipif guards fire.
+_BP = repo_path_or_missing("benchmark_phase1")
 
 
 def _l1l2_blob(bench: str) -> str:

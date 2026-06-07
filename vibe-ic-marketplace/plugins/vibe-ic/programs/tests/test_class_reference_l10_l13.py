@@ -8,15 +8,15 @@ schema drift.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 import yaml
 
+from _plugin_tree import plugin_path
 
-CLASS_REF_PATH = (Path(__file__).resolve().parents[5]
-                  / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
-                  / "agents" / "defaults" / "class_reference.yaml")
+
+# flow #486: resolve via the shared plugin-root resolver so this works on
+# both the source monorepo and the flattened install cache.
+CLASS_REF_PATH = plugin_path("agents", "defaults", "class_reference.yaml")
 
 A2_CLASSES = [
     "hash-function-csr",

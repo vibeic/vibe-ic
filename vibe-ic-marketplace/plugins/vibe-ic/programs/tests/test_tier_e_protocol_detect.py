@@ -42,9 +42,11 @@ DETS = {
 from protocol_detector_lib import (  # noqa: E402
     DERIVED_SIBLING_CROSS_FIRES as _DERIVED_SIBLING_ALLOW,
 )
+from _plugin_tree import repo_path_or_missing  # noqa: E402
 
-REPO_ROOT = Path(__file__).resolve().parents[5]
-BP = REPO_ROOT / "benchmark_phase1"
+# flow #486: benchmark_phase1/ is a repo-root-only private corpus absent on
+# the flattened cache; resolve defensively so the existing skipif guards fire.
+BP = repo_path_or_missing("benchmark_phase1")
 
 
 # --------------------------------------------------------------------------- unit

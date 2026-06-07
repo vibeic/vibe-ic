@@ -174,8 +174,15 @@ def test_skip_dirs_are_pruned(tmp_path):
 # This enforces v0.69 Item 4's residual: the repo's TCL is deprecation-free.
 # ---------------------------------------------------------------------------
 def test_plugin_tree_itself_is_clean():
-    # Default --search-dir (no flag) scans this plugin's own plugins/ root.
-    code, out, err = _run([])
+    # flow #486: scan THIS plugin's own tree explicitly via the manifest-
+    # anchored plugin root. The program's bare default (--search-dir absent)
+    # resolves to parents[2], which on the source monorepo is the
+    # single-plugin `plugins/` dir but on the flattened install cache is the
+    # version-collection dir (all shipped versions) — a different, wrong
+    # target. Pinning --search-dir to the plugin root makes this assertion
+    # mean the same thing in both trees.
+    from _plugin_tree import plugin_root
+    code, out, err = _run(["--search-dir", str(plugin_root())])
     assert code == 0, (
         f"plugin self-check failed: stdout={out!r}\nstderr={err!r}\n"
         "If this fails, one of the plugin's own files still uses a "

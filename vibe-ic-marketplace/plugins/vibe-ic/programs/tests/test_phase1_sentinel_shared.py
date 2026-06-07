@@ -188,13 +188,14 @@ def test_consistency_without_sentinel_still_fails_clock_freq_when_l8r_missing(tm
 # ---------------------------------------------------------------------------
 def test_apb_peripheral_chain_excludes_protocol_ic():
     """v0.62: apb-peripheral re-parented from protocol-ic to digital-ic."""
-    sys.path.insert(0, str(Path(__file__).parents[5] / "tools" / ".." ))
-    repo_root = Path(__file__).resolve().parents[5]
-    sys.path.insert(0, str(repo_root))
+    # flow #486: tools.phase1_engine + agents/class_kb are SHIPPED in-plugin
+    # resources; resolve them via the plugin-root resolver (works on both
+    # the source monorepo and the flattened install cache).
+    from _plugin_tree import plugin_root, plugin_path
+    sys.path.insert(0, str(plugin_root()))
     from tools.phase1_engine.gap_detect import _parent_chain, _load_yaml
 
-    KB = (repo_root / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
-          / "agents" / "class_kb")
+    KB = plugin_path("agents", "class_kb")
     tree = _load_yaml(KB / "class-tree.yaml")
     chain = _parent_chain("apb-peripheral", tree)
     assert "protocol-ic" not in chain, (
@@ -209,14 +210,13 @@ def test_apb_peripheral_chain_excludes_protocol_ic():
 def test_apb_peripheral_no_longer_requires_serial_protocol_facts():
     """Most concrete consequence of Bug #3 fix: apb-peripheral requires
     no L3/L8 serial-protocol fields."""
-    repo_root = Path(__file__).resolve().parents[5]
-    sys.path.insert(0, str(repo_root))
+    from _plugin_tree import plugin_root, plugin_path
+    sys.path.insert(0, str(plugin_root()))
     from tools.phase1_engine.gap_detect import (
         _parent_chain, _aggregate_required_facts, _load_yaml,
     )
 
-    KB = (repo_root / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
-          / "agents" / "class_kb")
+    KB = plugin_path("agents", "class_kb")
     tree = _load_yaml(KB / "class-tree.yaml")
     chain = _parent_chain("apb-peripheral", tree)
     required = _aggregate_required_facts(chain, KB / "templates")
@@ -248,12 +248,11 @@ def test_apb_peripheral_no_longer_requires_serial_protocol_facts():
 def test_uart_peripheral_still_inherits_protocol_ic():
     """Defensive: Bug #3 fix only detached APB; uart-peripheral is a
     genuine serial framed protocol and MUST keep inheriting protocol-ic."""
-    repo_root = Path(__file__).resolve().parents[5]
-    sys.path.insert(0, str(repo_root))
+    from _plugin_tree import plugin_root, plugin_path
+    sys.path.insert(0, str(plugin_root()))
     from tools.phase1_engine.gap_detect import _parent_chain, _load_yaml
 
-    KB = (repo_root / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
-          / "agents" / "class_kb")
+    KB = plugin_path("agents", "class_kb")
     tree = _load_yaml(KB / "class-tree.yaml")
     chain = _parent_chain("uart-peripheral", tree)
     assert "protocol-ic" in chain, (

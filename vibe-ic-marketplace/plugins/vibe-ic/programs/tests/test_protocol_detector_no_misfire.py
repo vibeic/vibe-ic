@@ -36,9 +36,12 @@ from pathlib import Path
 import pytest
 
 PROGRAMS_DIR = Path(__file__).resolve().parent.parent
-REPO_ROOT = Path(__file__).resolve().parents[5]
+from _plugin_tree import repo_path_or_missing  # noqa: E402
+# flow #486: benchmark_phase1/ is a repo-root-only private corpus absent on
+# the flattened cache; resolve defensively (non-existent path there) so the
+# synthetic-fixture fallback / skipif guards take over instead of IndexError.
 # The real private corpus, when present.
-_REAL_BP = REPO_ROOT / "benchmark_phase1"
+_REAL_BP = repo_path_or_missing("benchmark_phase1")
 # A small, self-contained synthetic corpus committed under tests/fixtures/ so this
 # guard ACTUALLY RUNS (fires-on-own + no-misfire-on-foreign) without the private
 # benchmark_phase1/. The real dir wins when it exists; otherwise we fall back to the

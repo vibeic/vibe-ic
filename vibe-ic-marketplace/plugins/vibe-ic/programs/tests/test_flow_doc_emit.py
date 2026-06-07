@@ -8,7 +8,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import flow_doc_emit as fde
+
+from _plugin_tree import NOT_SHIPPED_REASON
 
 
 # ---------------------------------------------------------------- phase1_markers
@@ -70,7 +74,16 @@ def test_render_contains_all_sections_and_marker():
 
 # --------------------------------------------------------------- freshness gate
 def test_committed_flow_doc_is_fresh():
-    """The committed FLOW_STEPS_GENERATED.md must match the generator (run --check)."""
+    """The committed FLOW_STEPS_GENERATED.md must match the generator (run --check).
+
+    flow #486: FLOW_STEPS_GENERATED.md is a repo-root ``docs/architecture/``
+    artefact that is NOT shipped in the flattened install cache. When the
+    output doc is absent (cache tree), the freshness gate is meaningless —
+    NAMED-skip instead of FAILing. The gate is enforced on the source tree
+    where the doc exists.
+    """
+    if not fde.OUT.exists():
+        pytest.skip(f"{fde.OUT.name} (docs/architecture): {NOT_SHIPPED_REASON}")
     r = subprocess.run([sys.executable, str(Path(fde.__file__)), "--check"],
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, (

@@ -116,8 +116,11 @@ def _find_benchmark_root() -> Path:
         cand = parent / "benchmark_phase1"
         if cand.is_dir():
             return cand
-    # fall back to the conventional repo-root location
-    return here.parents[5] / "benchmark_phase1"
+    # flow #486: fall back to the repo-root location when on the source
+    # monorepo; on the flattened cache this resolves to a non-existent path
+    # so the existing `(_BENCH/...).is_dir()` skip guards fire (no IndexError).
+    from _plugin_tree import repo_path_or_missing
+    return repo_path_or_missing("benchmark_phase1")
 
 
 _BENCH = _find_benchmark_root()

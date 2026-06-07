@@ -28,7 +28,14 @@ import re
 from pathlib import Path
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
-REPO_ROOT = PROGRAMS_DIR.parents[3]
+# flow #486: parents[3] = repo root on the source monorepo. On the flattened
+# install cache programs/ sits directly under the plugin root with no
+# monorepo ancestors, so guard against IndexError at import (REPO_ROOT is
+# only used to derive default paths, never as detection logic).
+try:
+    REPO_ROOT = PROGRAMS_DIR.parents[3]
+except IndexError:
+    REPO_ROOT = PROGRAMS_DIR.parent  # plugin root (cache tree)
 
 _HEX_RE = re.compile(r"^0x[0-9a-fA-F]+$")
 _BITRANGE_RE = re.compile(r"\[(\d+)\s*:\s*0\]")

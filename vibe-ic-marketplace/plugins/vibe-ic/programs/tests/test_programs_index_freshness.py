@@ -19,17 +19,15 @@ import sys
 from pathlib import Path
 import pytest
 
-# parents[5] = AI_IC_design/ (real tree) or opensource_repo/ (mirror).
-ROOT = Path(__file__).resolve().parents[5]
-GEN = ROOT / "tools" / "gen_programs_index.py"
-INDEX = (
-    ROOT
-    / "vibe-ic-marketplace"
-    / "plugins"
-    / "vibe-ic"
-    / "programs"
-    / "INDEX.md"
-)
+from _plugin_tree import plugin_path, repo_path_or_missing
+
+# flow #486: INDEX.md is a SHIPPED in-plugin artefact (resolve via the
+# plugin-root resolver); the generator tools/gen_programs_index.py is a
+# repo-root-only tool NOT shipped in the flattened cache (resolve to a
+# non-existent path there so the existing `if not GEN.exists(): skip`
+# branch fires — no IndexError from a hard-coded parents[5]).
+GEN = repo_path_or_missing("tools", "gen_programs_index.py")
+INDEX = plugin_path("programs", "INDEX.md")
 
 
 def test_index_md_exists():
@@ -66,13 +64,7 @@ def test_index_lists_every_non_helper_program():
     """Sanity: every *.py under programs/ that isn't a helper / shim
     must appear in the alphabetical listing. Catches a future
     generator regression that forgets a row."""
-    progs = (
-        ROOT
-        / "vibe-ic-marketplace"
-        / "plugins"
-        / "vibe-ic"
-        / "programs"
-    )
+    progs = plugin_path("programs")
     text = INDEX.read_text()
     missing = []
     for p in sorted(progs.glob("*.py")):

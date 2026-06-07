@@ -184,9 +184,12 @@ def test_bad_project_dir_exit_2(tmp_path):
 # ─────────────────── real-corpus CLEAN guard ───────────────────
 
 def _corpus_projects():
-    # benchmark_ic lives at the worktree root, 5 levels up from
-    # programs/tests/.
-    root = Path(__file__).resolve().parents[5] / "benchmark_ic"
+    # flow #486: benchmark_ic/ lives at the repo root (source monorepo). On
+    # the flattened install cache there is no repo root, so this resolves to
+    # a non-existent path → empty parametrize → the test simply does not run
+    # (no IndexError from a hard-coded parents[5]).
+    from _plugin_tree import repo_path_or_missing
+    root = repo_path_or_missing("benchmark_ic")
     if not root.is_dir():
         return []
     return sorted(p.parent.parent for p in

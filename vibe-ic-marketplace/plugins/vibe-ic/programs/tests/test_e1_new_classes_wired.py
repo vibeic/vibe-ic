@@ -12,17 +12,16 @@ have something to anchor against from day 1.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 import yaml
 
+from _plugin_tree import plugin_path
 
-REPO_ROOT = Path(__file__).resolve().parents[5]
-K1_PATH = (REPO_ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
-           / "agents" / "class_kb" / "class-tree.yaml")
-K3_PATH = (REPO_ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
-           / "agents" / "defaults" / "class_reference.yaml")
+
+# flow #486: resolve in-plugin resources via the shared resolver so this
+# works on both the source monorepo and the flattened install cache.
+K1_PATH = plugin_path("agents", "class_kb", "class-tree.yaml")
+K3_PATH = plugin_path("agents", "defaults", "class_reference.yaml")
 
 # (class_name, expected_K1_parent_path)
 E1_CLASSES = [

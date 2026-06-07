@@ -40,7 +40,14 @@ from pathlib import Path
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
 # repo root: .../vibe-ic-marketplace/plugins/vibe-ic/programs -> up 4
-REPO_ROOT = PROGRAMS_DIR.parents[3]
+# flow #486: on the flattened install cache there are no monorepo ancestors,
+# so guard against IndexError at import; DEFAULT_BP then points under the
+# plugin root (non-existent benchmark_phase1/), and callers fall back to the
+# synthetic fixture / skip when the real corpus is absent.
+try:
+    REPO_ROOT = PROGRAMS_DIR.parents[3]
+except IndexError:
+    REPO_ROOT = PROGRAMS_DIR.parent  # plugin root (cache tree)
 DEFAULT_BP = REPO_ROOT / "benchmark_phase1"
 
 try:
