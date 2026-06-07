@@ -60,15 +60,22 @@ def test_drc_no_report_fail(tmp_path):
 # ---------------------------------------------------------------------------
 def test_lvs_report_pass(tmp_path):
     rpt = tmp_path / "chip_lvs.rpt"
+    # #507: a CLEAN netgen report — carries the instance/net/device
+    # category keywords (for categories_found) via NON-mismatch phrasing
+    # and netgen's REAL terminal PASS token 'Circuits match uniquely.'
+    # (the prior fixture's 'net mismatch: VDD' / 'unmatched instance' +
+    # bare 'Circuits match.' were not a clean report — the gate now
+    # correctly reads those as a mismatch).
     rpt.write_text(
         "Netgen LVS comparison\n"
+        "Subcircuit instance summary: 567 instances compared\n"
         "NET count: 1234\ndevice count: 567\n"
-        "unmatched instance: U1\nnet mismatch: VDD\n"
         "Number of topologically valid matches: 567\n"
-        "Circuits match.\n" + _PAD
+        "Circuits match uniquely.\n" + _PAD
     )
     result = era._check_lvs(tmp_path)
     assert result.passed is True
+    assert result.summary["terminal_verdict"] == "MATCH"
     cats = result.summary["categories_found"]
     assert "instance" in cats
     assert "net" in cats

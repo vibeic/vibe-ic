@@ -363,12 +363,14 @@ def _check_lvs(project_dir: Path) -> AuditResult:
     }
     cats_found: List[str] = []
     best_file = ""
+    blob = ""
 
     for fp in files:
         try:
             text = fp.read_text(errors="replace")
         except OSError:
             continue
+        blob += "\n" + text
         for cat, regex in categories_re.items():
             if regex.search(text) and cat not in cats_found:
                 cats_found.append(cat)
@@ -382,9 +384,53 @@ def _check_lvs(project_dir: Path) -> AuditResult:
             file=best_file))
 
     authentic = _check_tool_authenticity(files, "lvs", result)
-    result.passed = len(cats_found) > 0 and authentic
+
+    # ORGANIC-20260608 #507 (CRITICAL) — terminal-verdict gate. Pre-#507
+    # `passed` was decided SOLELY by (category-keyword present + tool
+    # signature), so a report whose netgen verdict is "Netlists do not
+    # match." (41×, real spm_e2e) FALSE-PASSed Step-31 LVS sign-off. A
+    # real netgen compare ALWAYS prints one of two terminal verdict
+    # tokens; the gate must parse them, mirroring the runner's #477
+    # step_lvs logic so gate and runner never disagree:
+    #   * matched  = "Circuits/Netlists match uniquely" → eligible PASS
+    #   * mismatch = "do not match" / "failed pin matching" / "NET
+    #                MISMATCH" / "失配" → hard FAIL (named finding)
+    #   * neither  = INCOMPLETE (compare killed mid-run) → FAIL (#477)
+    # A mismatch token is AUTHORITATIVE: it FAILs even if sub-cells also
+    # printed "match uniquely" and even if categories+signature are
+    # present. chip-AGNOSTIC: pure netgen verdict-token parse.
+    matched = bool(re.search(
+        r"Circuits match uniquely|Netlists match uniquely", blob, re.I))
+    mismatched = bool(re.search(
+        r"do not match|netlists do not match|NET MISMATCH|"
+        r"failed pin matching|失配", blob, re.I))
+    if mismatched:
+        result.findings.append(Finding(
+            rule="LVS_NETLISTS_DO_NOT_MATCH", severity="ERROR",
+            message=("netgen terminal verdict is a MISMATCH ('Netlists do "
+                     "not match.' / 'failed pin matching') — the layout is "
+                     "NOT LVS-clean; Step-31 LVS sign-off must FAIL (#507)."),
+            file=best_file))
+        verdict = "MISMATCH"
+    elif matched:
+        verdict = "MATCH"
+    else:
+        result.findings.append(Finding(
+            rule="LVS_NO_TERMINAL_VERDICT", severity="ERROR",
+            message=("netgen report carries NEITHER 'Circuits match "
+                     "uniquely' NOR a mismatch token — the compare did not "
+                     "run to completion (INCOMPLETE, not a conclusive "
+                     "result); sign-off must FAIL (#507/#477)."),
+            file=best_file))
+        verdict = "INCOMPLETE"
+
+    # PASS requires: a conclusive MATCH verdict AND a mismatch category
+    # keyword found (report structure) AND an authentic tool signature.
+    result.passed = (verdict == "MATCH"
+                     and len(cats_found) > 0 and authentic)
     result.summary = {"files_found": len(files), "categories_found": cats_found,
-                      "tool_authentic": authentic}
+                      "tool_authentic": authentic,
+                      "terminal_verdict": verdict}
     return result
 
 
