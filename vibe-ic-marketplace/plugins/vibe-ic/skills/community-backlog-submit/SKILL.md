@@ -146,6 +146,40 @@ python3 plugins/vibe-ic-d/programs/backlog_sanitize_check.py \
 Fix any ERROR findings before proceeding.  WARN findings should be
 reviewed — they may be false positives for genuinely general content.
 
+### Step 4.5 — Snapshot the defect artifacts (when you cite run-dir files)
+
+If your backlog item cites **live run-dir files** as the defect evidence
+(a truncated report, a failing log, a malformed JSON the runner produced),
+**freeze them at filing time**. Run dirs evolve between filing and
+verification — a healthy rerun can replace the very file you cited, so a
+verifier dereferencing the live path later sees a *different* file and the
+defect "disappears". The snapshot helper copies each cited artifact, byte
+for byte, into an immutable capture archive
+(`<repo-root>/community/captures/<slug>/` + a `manifest.json` recording the
+source path, sha256, the filesystem mtime, and the issue ref).
+
+1. **Name the artifacts** — list the exact run-dir paths your 現象 /
+   證據區 cites.
+2. **Run the snapshot helper**:
+   ```bash
+   python3 <plugin_root>/programs/defect_artifact_snapshot.py \
+       --issue <issue-number> --slug <short-slug> \
+       --artifact <run-dir/path/to/cited/file> \
+       [--artifact <another/cited/file> ...]
+   ```
+   Exit 0 = every artifact frozen; exit 1 = a source was missing /
+   unreadable (fix the path and re-run); exit 2 = usage. It prints, per
+   artifact, **both** the `snapshot:` path and the `live:` path.
+3. **Paste BOTH paths into the issue 證據區** — the immutable
+   `snapshot:` path (the verifier's source of truth) AND the original
+   `live:` path (for context). When the body names both, the downstream
+   `defect_artifact_fixture_check` resolves the **snapshot** (re-verifying
+   its sha256 against the manifest), so the fix verdict no longer depends
+   on the mutated live file.
+
+Skip this step only when your evidence is inline text / a synthetic
+fixture (no live run-dir file is being cited).
+
 ### Step 5 — Submit (optional, with user consent)
 
 Ask the user if they want to contribute this backlog to the community:

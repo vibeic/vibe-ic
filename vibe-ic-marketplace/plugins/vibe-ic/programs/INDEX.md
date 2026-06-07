@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 652
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 652)
+- **Total programs (excluding helpers / shims):** 653
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 653)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 643 |
+| `any` | 644 |
 
 ## Alphabetical listing
 
@@ -180,7 +180,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dead_timing_constant_warn` | any | — | R4 cheap WARN gate |
 | `debug_first_pass` | any | — | single dispatcher for debug-skill deterministic first-pass. |
 | `def_stage_progression_check` | any | v0.47 | Catch fabricated PnR stage DEF files. |
-| `defect_artifact_fixture_check` | any | v0.2.97 | v0.2.97 |
+| `defect_artifact_fixture_check` | any | v0.2.98 | v0.2.98 |
+| `defect_artifact_snapshot` | any | v0.2.98 | v0.2.98 |
 | `derived_clock_sdc_required_check` | any | — | Verify any register-divided clock |
 | `design_complexity_estimator` | any | — | design_complexity_estimator.py -- Heuristic design-complexity score and |
 | `deterministic_rtl_dispatcher` | any | v0.1.9 | Phase-2 program-first RTL router. |
@@ -724,7 +725,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (643 programs)
+### `any` (644 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -877,7 +878,8 @@ _(no programs in this group)_
 - `dead_timing_constant_warn` — R4 cheap WARN gate
 - `debug_first_pass` — single dispatcher for debug-skill deterministic first-pass.
 - `def_stage_progression_check` — Catch fabricated PnR stage DEF files.  _[v0.47]_
-- `defect_artifact_fixture_check` — v0.2.97  _[v0.2.97]_
+- `defect_artifact_fixture_check` — v0.2.98  _[v0.2.98]_
+- `defect_artifact_snapshot` — v0.2.98  _[v0.2.98]_
 - `derived_clock_sdc_required_check` — Verify any register-divided clock
 - `design_complexity_estimator` — design_complexity_estimator.py -- Heuristic design-complexity score and
 - `deterministic_rtl_dispatcher` — Phase-2 program-first RTL router.  _[v0.1.9]_

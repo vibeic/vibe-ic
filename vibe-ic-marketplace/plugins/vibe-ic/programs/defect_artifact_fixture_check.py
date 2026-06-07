@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""programs/defect_artifact_fixture_check.py — v0.2.97
+"""programs/defect_artifact_fixture_check.py — v0.2.98
 
 Deterministic pre-close gate for the core-agent loop (issue #478, Bucket A
-half 2).
+half 2; snapshot-preference added for issue #487, LOW).
 
 WHY THIS EXISTS
 ---------------
@@ -64,6 +64,34 @@ file does not parse.
     `os.path.exists(...)` (no program invocation + verdict assert) FAILS (b):
     file-existence-only is the exact #460/#466 anti-pattern.
 
+SNAPSHOT PREFERENCE (issue #487, LOW)
+-------------------------------------
+Run dirs evolve between filing and verification: a cited LIVE artifact can
+be replaced by a healthy rerun before the verifier dereferences it, so a
+fixture bound to a mutable live path silently rots. When the FILER has
+frozen the defect artifact with `defect_artifact_snapshot.py` (writing an
+immutable copy + manifest.json under the archive convention
+`<repo-root>/community/captures/<slug>/`), the issue body should name BOTH
+the live path AND the snapshot path in its 證據區.
+
+DETECTION RULE (snapshot wins over the mutable live file):
+    S1  the issue body names a SNAPSHOT path — a path under
+        `community/captures/<slug>/` (the archive convention), recognised
+        structurally (the `community/captures/` path segment), OR
+    S2  a snapshot ARCHIVE exists on disk for this issue per the
+        convention — `<repo-root>/community/captures/<slug>/manifest.json`
+        whose `issue_ref`/`issue_number`/`slug` matches an issue-named
+        token — even if the body only names the live path.
+
+When a snapshot is detected, `resolve_defect_artifact_source()` returns the
+SNAPSHOT path as the accepted defect-artifact source (and, when the
+archive's manifest is present, re-verifies the captured file's sha256
+against the manifest so the resolution is to FROZEN content, not whatever
+the live path currently holds). For (a) DEFECT-ARTIFACT FIXTURE, a test
+that references the SNAPSHOT path (F3) satisfies the rule, and the verdict
+no longer depends on the mutated live file. When NO snapshot exists, the
+current behaviour is unchanged: the live-path / tmp-fixture rules apply.
+
 EXIT CODES
 ----------
   0  PASS  — no acceptance section (vacuous SKIP), or the test satisfies
@@ -83,6 +111,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import re
 import sys
@@ -128,6 +157,233 @@ def issue_artifact_names(body: str) -> Set[str]:
         if base:
             names.add(base)
     return names
+
+
+# --------------------------------------------------------------------------
+# Snapshot preference (issue #487) — resolve the FROZEN defect artifact
+# in preference to the mutable live run-dir path.
+# --------------------------------------------------------------------------
+# Archive convention from defect_artifact_snapshot.py:
+#   <repo-root>/community/captures/<slug>/<basename>  (+ manifest.json)
+_CAPTURES_SEGMENT = "community/captures/"
+# A snapshot path token in the issue body: any path that traverses the
+# capture archive segment. chip-AGNOSTIC: matches the path SHAPE only.
+_SNAPSHOT_PATH_RE = re.compile(
+    r"`?([\w./\-]*community/captures/[\w./\-]+)`?",
+)
+# Live-path heuristic: a path-like token that is NOT under the capture
+# archive (so we can tell "names BOTH a live and a snapshot path").
+_PATHLIKE_RE = re.compile(r"`?((?:/|\./|\.\./)?[\w./\-]+/[\w./\-]+)`?")
+
+# Issue-ref tokens, used to match an on-disk archive to this issue when the
+# body only names the live path (S2).
+_ISSUE_NUM_RE = re.compile(r"#(\d{1,7})\b")
+
+
+def _find_repo_root(start: Optional[Path] = None) -> Optional[Path]:
+    """Canonical repo root: prefer the git-toplevel ancestor that also has a
+    `community/` dir (the marketplace mirror lacks `.git`), then the first
+    ancestor with `community/`."""
+    here = (start or Path(__file__)).resolve()
+    first_community: Optional[Path] = None
+    for anc in here.parents:
+        has_community = (anc / "community").is_dir()
+        if has_community and first_community is None:
+            first_community = anc
+        if has_community and (anc / ".git").exists():
+            return anc
+    return first_community
+
+
+def snapshot_paths_in_body(body: str) -> List[str]:
+    """All capture-archive paths named in the issue body (S1)."""
+    out: List[str] = []
+    for m in _SNAPSHOT_PATH_RE.finditer(body):
+        tok = (m.group(1) or "").strip()
+        if tok and tok not in out:
+            out.append(tok)
+    return out
+
+
+def live_paths_in_body(body: str, snapshot_paths: List[str]) -> List[str]:
+    """Path-like tokens that are NOT under the capture archive — the LIVE
+    run-dir paths the issue cites as defect evidence."""
+    snaps = set(snapshot_paths)
+    out: List[str] = []
+    for m in _PATHLIKE_RE.finditer(body):
+        tok = (m.group(1) or "").strip()
+        if not tok or _CAPTURES_SEGMENT in tok:
+            continue
+        if tok in snaps or tok in out:
+            continue
+        out.append(tok)
+    return out
+
+
+def _archive_for_issue(body: str, repo_root: Optional[Path]
+                       ) -> Optional[Path]:
+    """S2 — find an on-disk capture archive whose manifest matches an
+    issue-named token (issue number/slug), even if the body only cites the
+    live path."""
+    root = repo_root or _find_repo_root()
+    if root is None:
+        return None
+    captures = root / "community" / "captures"
+    if not captures.is_dir():
+        return None
+
+    # Tokens to match: every `#<n>` issue number and the basenames of any
+    # snapshot paths named in the body.
+    nums = {m.group(1) for m in _ISSUE_NUM_RE.finditer(body)}
+    snap_dirs = set()
+    for sp in snapshot_paths_in_body(body):
+        # the directory just under community/captures/
+        parts = sp.split(_CAPTURES_SEGMENT, 1)
+        if len(parts) == 2 and parts[1]:
+            snap_dirs.add(parts[1].split("/", 1)[0])
+
+    for child in sorted(captures.iterdir()):
+        if not child.is_dir():
+            continue
+        if child.name in snap_dirs:
+            return child
+        man = child / "manifest.json"
+        if not man.is_file():
+            # match by directory-name convention issue-<n>-...
+            for n in nums:
+                if child.name == f"issue-{n}" or \
+                        child.name.startswith(f"issue-{n}-"):
+                    return child
+            continue
+        try:
+            data = json.loads(man.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        in_ = str(data.get("issue_number") or "")
+        ref = str(data.get("issue_ref") or "")
+        if in_ and in_ in nums:
+            return child
+        for n in nums:
+            if ref in (f"#{n}", n):
+                return child
+    return None
+
+
+@dataclass
+class SnapshotResolution:
+    has_snapshot: bool = False
+    has_live: bool = False
+    snapshot_path: str = ""          # accepted defect-artifact source
+    live_paths: List[str] = field(default_factory=list)
+    archive_dir: str = ""
+    sha256_verified: Optional[bool] = None   # None=not checked on disk
+    notes: List[str] = field(default_factory=list)
+
+    @property
+    def prefer_snapshot(self) -> bool:
+        return self.has_snapshot
+
+
+def resolve_defect_artifact_source(
+        body: str, repo_root: Optional[Path] = None) -> SnapshotResolution:
+    """Return which defect-artifact SOURCE the fixture should bind to.
+
+    When a snapshot is detected (S1: a `community/captures/...` path in the
+    body, OR S2: an archive on disk matching this issue), the SNAPSHOT path
+    is the accepted source — preferred over the mutable live path — and,
+    when the archive's manifest.json is present, the captured file's sha256
+    is re-verified against the manifest so resolution is to FROZEN content.
+    """
+    res = SnapshotResolution()
+    snaps = snapshot_paths_in_body(body)
+    lives = live_paths_in_body(body, snaps)
+    res.live_paths = lives
+    res.has_live = bool(lives)
+
+    chosen: str = ""
+    archive: Optional[Path] = None
+
+    if snaps:
+        res.has_snapshot = True
+        chosen = snaps[0]
+        res.notes.append("S1: snapshot path named in issue body")
+    else:
+        archive = _archive_for_issue(body, repo_root)
+        if archive is not None:
+            res.has_snapshot = True
+            res.notes.append(
+                "S2: capture archive on disk matches this issue "
+                "(body cites only the live path)")
+
+    # Resolve the on-disk archive (for both S1 and S2) to verify sha256.
+    root = repo_root or _find_repo_root()
+    if archive is None and chosen and root is not None:
+        # chosen is a repo-relative or absolute snapshot path → archive dir
+        seg = chosen.split(_CAPTURES_SEGMENT, 1)
+        if len(seg) == 2 and seg[1]:
+            slug = seg[1].split("/", 1)[0]
+            cand = root / "community" / "captures" / slug
+            if cand.is_dir():
+                archive = cand
+
+    if archive is not None:
+        res.archive_dir = str(archive)
+        if not chosen:
+            # S2: pick the first captured member from the manifest as the
+            # accepted snapshot path.
+            man = archive / "manifest.json"
+            if man.is_file():
+                try:
+                    data = json.loads(man.read_text(encoding="utf-8"))
+                    arts = data.get("artifacts") or []
+                    if arts:
+                        chosen = arts[0].get("snapshot_rel") or \
+                            arts[0].get("snapshot_path") or ""
+                except (OSError, ValueError):
+                    pass
+        res.sha256_verified = _verify_archive_sha256(archive)
+        if res.sha256_verified is False:
+            res.notes.append(
+                "WARNING: a captured file's sha256 no longer matches the "
+                "manifest — the snapshot archive itself was mutated")
+
+    res.snapshot_path = chosen
+    return res
+
+
+def _verify_archive_sha256(archive: Path) -> Optional[bool]:
+    """Re-hash each captured member and compare to the manifest. Returns
+    True (all match), False (a mismatch), or None (no manifest / no
+    captured members to verify)."""
+    man = archive / "manifest.json"
+    if not man.is_file():
+        return None
+    try:
+        data = json.loads(man.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    arts = data.get("artifacts") or []
+    checked = False
+    for a in arts:
+        sp = a.get("snapshot_path") or ""
+        expect = a.get("sha256") or ""
+        if not sp or not expect:
+            # fall back to basename within the archive
+            base = a.get("basename") or ""
+            if base:
+                sp = str(archive / base)
+        p = Path(sp)
+        if not p.is_file():
+            continue
+        checked = True
+        h = hashlib.sha256()
+        with p.open("rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        got = "sha256:" + h.hexdigest()
+        if got != expect:
+            return False
+    return True if checked else None
 
 
 # --------------------------------------------------------------------------
@@ -383,10 +639,12 @@ class Verdict:
     end_state_signals: dict = field(default_factory=dict)
     gaps: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    snapshot_resolution: dict = field(default_factory=dict)
 
 
 def evaluate(issue_body: str, test_source: str,
-             test_path: str = "") -> Verdict:
+             test_path: str = "",
+             repo_root: Optional[Path] = None) -> Verdict:
     if not has_acceptance_section(issue_body):
         return Verdict(
             verdict="SKIP",
@@ -396,13 +654,26 @@ def evaluate(issue_body: str, test_source: str,
                    "defect-artifact + end-state requirement is vacuous"],
         )
 
+    # Snapshot preference (#487): if the issue froze its defect artifact,
+    # the snapshot path is the accepted defect-artifact SOURCE — preferred
+    # over the mutable live run-dir path. We add the resolved snapshot path
+    # to the artifact-name set so a test referencing the snapshot satisfies
+    # (a), and the verdict no longer depends on the mutated live file.
+    snap = resolve_defect_artifact_source(issue_body, repo_root=repo_root)
     artifact_names = issue_artifact_names(issue_body)
+    if snap.prefer_snapshot and snap.snapshot_path:
+        artifact_names.add(snap.snapshot_path)
+        base = snap.snapshot_path.rstrip("/").split("/")[-1]
+        if base:
+            artifact_names.add(base)
+
     try:
         tree = ast.parse(test_source)
         fx, es = _analyze_ast(tree, artifact_names, test_source)
     except SyntaxError:
         fx, es = _analyze_regex(test_source, artifact_names)
 
+    notes: List[str] = list(snap.notes)
     gaps: List[str] = []
     if not fx.ok:
         gaps.append(
@@ -433,6 +704,8 @@ def evaluate(issue_body: str, test_source: str,
         fixture_signals=asdict(fx),
         end_state_signals=asdict(es),
         gaps=gaps,
+        notes=notes,
+        snapshot_resolution=asdict(snap),
     )
 
 
@@ -450,6 +723,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="path to the new regression test source")
     ap.add_argument("--json", default=None,
                     help="write a JSON verdict report to this path")
+    ap.add_argument("--repo-root", default=None,
+                    help="repo root for locating the "
+                         "community/captures/<slug>/ snapshot archive "
+                         "(default: auto-discover)")
     args = ap.parse_args(argv)
 
     ipath = Path(args.issue_body_file)
@@ -468,7 +745,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     test_source = tpath.read_text(encoding="utf-8")
 
-    v = evaluate(issue_body, test_source, test_path=str(tpath))
+    repo_root = Path(args.repo_root) if args.repo_root else None
+    v = evaluate(issue_body, test_source, test_path=str(tpath),
+                 repo_root=repo_root)
 
     if args.json:
         out = Path(args.json)
@@ -484,6 +763,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if v.verdict == "PASS":
         print("PASS: regression test builds a defect-artifact fixture "
               "AND asserts an end state via the real program/gate.")
+        for n in v.notes:
+            print(f"  note: {n}")
         return 0
 
     print("FAIL: regression test does not satisfy the defect-artifact "
