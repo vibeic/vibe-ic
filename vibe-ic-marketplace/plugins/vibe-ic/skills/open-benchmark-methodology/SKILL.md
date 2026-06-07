@@ -264,6 +264,43 @@ Honesty check: if you're tempted to label something Category A-D to avoid a hard
 re-read the description top-to-bottom** for clues (Category F/G). The 2026-05-28 RTLLM triage
 under-estimated the recoverable fails (radix2_div, adder_pipe_64bit, LFSR) by failing this check.
 
+### § 4.05 — Verifying a guard-RELAXING fix: the NEGATIVE no-leak proof is the load-bearing half (ORGANIC #511)
+
+When the fix you are verifying **relaxes a guard** — a new exemption, an allow-list entry, a
+waiver path, a lint severity carve-out, a coverage advisory demotion, an audit/blindness
+false-positive suppression — **the positive case alone is NOT sufficient to call it ADEQUATE.**
+The positive case ("the thing that was wrongly flagged now PASSes") only proves the relaxation
+*fires*; it says nothing about whether the relaxation is **too wide**.
+
+> **Acceptance for any relaxation = (positive real case PASSes) AND (every NEGATIVE still caught).**
+
+A too-wide exemption **leaks**: it silently waves through real violations it was never meant to
+cover. This asymmetry is the whole point — a false-positive costs one wasted re-run, but a
+**leaking exemption ships a real defect as PASS**. So the negative proof is the load-bearing
+half of verifying a relaxation.
+
+**How to build the negative no-leak proof**: author fixtures that sit JUST OUTSIDE the
+exemption's intended boundary — structurally near-identical to what it legitimately passes, but
+differing in exactly the property that should still trip the guard — and assert the guard STILL
+catches them (FAIL/flag).
+
+Worked example (the #504 round-2 blindness exemptions: assignment-RHS storage; OR-fallback
+right-branch family-stem twin):
+- **Positive**: the real 9-transcript run now PASSes (exit 0).
+- **Negative no-leak (boundary-outside, 4/4 still caught, exit 1)**: ① a direct oracle read
+  `cat testbench.v` → flagged; ② a directory listing `ls dir/` → flagged; ③ an OR-fallback
+  whose RIGHT branch reads the ORACLE (not a name-stem twin) → flagged; ④ a fake pair broken by
+  a `;` whose second statement independently reads the oracle → flagged.
+  4/4 still caught → the exemption is tight enough → ADEQUATE.
+
+This binds **every** guard-relaxing fix across the whole flow — DRC/LVS/ERC waiver paths, lint
+severity carve-outs, coverage advisories, audit allow-lists, blindness exemptions. The
+asymmetry is universal, so the **negative no-leak proof is the load-bearing half of verifying
+any relaxation**. (This is an LLM-judgment step: deriving a *meaningful* boundary-outside
+negative requires understanding what the exemption *intends* to wave through — the leaking and
+the legitimate case are structurally identical except for the semantic property the reviewer
+must reason about; no regex derives it from the exemption code itself.)
+
 ### § 4.1 — Default action on a benchmark run: CLEAN-ROOM FULL re-run (user directive 2026-06-04)
 
 > **Enforced by `programs/benchmark_dispatch.py` (clean-room default) +
