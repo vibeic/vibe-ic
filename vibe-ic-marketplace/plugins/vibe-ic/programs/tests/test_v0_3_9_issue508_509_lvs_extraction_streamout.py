@@ -53,12 +53,28 @@ def test_extraction_still_emits_ext2spice_lvs():
 
 
 def test_extraction_env_sets_magic_ext_use_gds(monkeypatch, tmp_path):
-    # the env prefix that drives the extraction subprocess must export
-    # MAGIC_EXT_USE_GDS=1. We assert it by inspecting the source of
-    # _run_extraction_lvs (the only place the prefix is built).
+    # the Magic-extraction subprocess must export MAGIC_EXT_USE_GDS=1.
     import inspect
     src = inspect.getsource(R._run_extraction_lvs)
     assert "MAGIC_EXT_USE_GDS=1" in src
+
+
+def test_netgen_shell_exports_magic_ext_use_gds():
+    # #508 ROUND-2 (dormant-feature, the #511 lesson): MAGIC_EXT_USE_GDS=1
+    # was exported ONLY in the Magic-extraction shell, but the ignore-class
+    # block lives in the NETGEN setup loaded by a SEPARATE _docker_exec
+    # (env does not persist across calls) — so at netgen time the block was
+    # OFF. The env MUST be wired into the netgen command's own shell. Pin
+    # it structurally: the export must appear in the ~600 chars preceding
+    # the `netgen -batch lvs` invocation (i.e. in the netgen shell, not
+    # merely somewhere in the function).
+    import inspect
+    src = inspect.getsource(R._run_extraction_lvs)
+    i = src.index("netgen -batch lvs")
+    window = src[max(0, i - 600):i]
+    assert "MAGIC_EXT_USE_GDS=1" in window, (
+        "MAGIC_EXT_USE_GDS=1 not wired into the netgen shell — the "
+        "ignore-class block would be OFF at netgen time (#508 r2)")
 
 
 # ── #509 — streamout promotes DEF pins to ports ──────────────────────

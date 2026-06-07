@@ -4282,6 +4282,15 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     nl_c = _to_container_path(str(netlist), container)
     rpt_c = _to_container_path(str(lvs_rpt), container)
     cmd = (
+        # v0.3.9 #508 → v0.3.11 #508 round-2: MAGIC_EXT_USE_GDS=1 MUST be
+        # exported in THIS (netgen) shell — the fill/tap/decap ignore-class
+        # block lives in the netgen setup TCL, loaded by netgen here, NOT
+        # in the Magic-extraction shell. `_docker_exec` runs a fresh
+        # `bash -lc` per call so env never persists across the two calls;
+        # exporting it only in the extraction shell left the block OFF at
+        # netgen time (dormant) → fill/tap device-count mismatch / SIGSEGV
+        # (139). Setting it here is what actually activates the block.
+        f"export MAGIC_EXT_USE_GDS=1 && "
         f"export PATH={TOOLS_IN_CONTAINER}/netgen/bin:"
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"netgen -batch lvs \"{sp_c} {lay_top}\" \"{nl_c} {top}\" "
