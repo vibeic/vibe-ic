@@ -19,14 +19,43 @@ This skill records that **enhancement opportunity** — not the bug
 itself — as a structured, IC-agnostic backlog item that can be
 contributed back to the Vibe-IC community.
 
+## The fix-all-into-the-plugin principle
+
+> When you report a backlog / find an issue, the expectation is **NOT** to triage it into a
+> category and then decide whether it is "worth" fixing. **Every issue gets fixed, and the fix
+> lands in the next version of the vibe-ic plugin** — it does not matter whether the fix lives in
+> a deterministic program, an MCP tool, or a skill. The category is an implementation detail of
+> *where* the fix goes, never a reason to *skip* the fix.
+>
+> - Do **not** discard an issue as "not a plugin gap", "design-side", "clean-room variance",
+>   "spec ambiguity", or "the author should have known". If a fresh user could hit it, the plugin
+>   must handle it next time.
+> - A recovery that currently relies on a **skill-prose lesson** a fresh author might forget is
+>   itself an enhancement: **promote it to a deterministic program** (program-first) so it fires
+>   every time, automatically.
+> - The honest discard bucket is reserved **only** for a fix that is genuinely non-generalizable
+>   (it would over-fit one design's quirk or peek at a hidden oracle) — and even then you record
+>   *why*, you do not silently drop it.
+>
+> **Convergence test (loop-until-dry):** a benchmark / flow close-loop has converged only when a
+> **fresh clean-room re-run on the newest plugin produces 0 residual that needs a plugin fix**.
+> As long as a clean-room run still surfaces any recoverable residual, the loop is not done:
+> capture it → fix it into the plugin → re-run. One round with zero new backlog is a candidate;
+> two consecutive zero-backlog clean-room rounds is convergence.
+
+This is why both halves below matter: the **bug** still gets fixed on the design side, AND the
+**enhancement** is what makes the plugin catch the whole class next time — neither half is skipped.
+
 ### The key distinction
 
-| Record this (enhancement) | Do NOT record this (bug) |
+| Record this (enhancement) | Do NOT record this (bug — but STILL fix it design-side) |
 |---------------------------|--------------------------|
 | "Plugin lacks a gate for protocols where CRC init/update happen on the same cycle" | "Our IC's CRC output is wrong because crc_init and crc_update overlap" |
 | "No program checks that wake signals have ≥2 clear paths" | "Wake register only clears on rst_n, missing soft-reset" |
 | "The flow doesn't enforce WARN resolution before shipping" | "Agent ignored a WARN and shipped broken RTL" |
 
+The right column is **not** a discard column — that bug is still fixed in the design. The left
+column is the general plugin capability that makes the plugin catch the entire class next time.
 The backlog answers: **"What general plugin capability, if added, would
 prevent this entire class of bugs from reaching hardware?"**
 

@@ -568,7 +568,17 @@ The alias wrapper duplicates the module identity, never invents port names.
 emit is strictly safer than a one-spelling bet — the extra wrapper costs nothing when the TB
 happens to use the leaf spelling, and saves the run when it uses the canonical one.
 
-_Captured by benchmark-enhancement-capture 2026-06-08 (ORGANIC #506)._
+**NOW DETERMINISTIC (ORGANIC #517)** — the high-confidence half of this lesson is no longer
+prose-only: `programs/leaf_typo_alias_emit.py` decides it without judgment. A leaf token that is
+edit-distance 1..2 from EXACTLY ONE curated canonical hardware-term root (both ≥6 chars,
+unambiguous closest) is a typo; the program emits the canonical-spelled passthrough alias wrapper
+automatically. It will NOT fire on a correct canonical leaf, a leaf far from every term, an
+ambiguous tie, or a short abbreviation (addr/alu/mux/ram). Run it in the emit path so the rescue
+no longer depends on the author remembering this section; the residual judgment (a typo of a term
+NOT in the curated root set, or a non-arithmetic novel-name typo) stays here.
+
+_Captured by benchmark-enhancement-capture 2026-06-08 (ORGANIC #506); promoted to a deterministic
+program 2026-06-08 (ORGANIC #517)._
 
 ### Skill: positional instantiation — output-first ordering convention
 
@@ -582,7 +592,36 @@ _Captured by benchmark-enhancement-capture 2026-06-08 (ORGANIC #506)._
 
 **Why this is GENERAL**: Output-first positional ordering is a common testbench convention. When in doubt for benchmarks using positional instantiation, declare ports output-first.
 
+**CONVENTION CORPUS (ORGANIC #520)** — this ordering and the optional-handshake-port case below are
+codified in `programs/port_convention_corpus.py`: `genre_order_policy(ic_class)` + `order_ports(...)`
+give the per-class positional order (outputs-first for combinational/arithmetic primitives; outputs →
+clk → reset → inputs for clocked designs) as a PURE reorder (never adds/drops/renames). Use it instead
+of re-deriving the order by hand.
+
 _Captured by benchmark-enhancement-capture 2026-05-28._
+
+### Skill: optional handshake port — infer + graceful-degrade (ORGANIC #520)
+
+**Pattern**: A hidden TB instantiates a downstream-ready / result-consumed INPUT (`res_ready`,
+`out_ready`, `ready`) that the prose never lists → "Unknown port" compile-FAIL. When the prose hints at
+a downstream-consume / back-pressure flow (e.g. "whether the result has been consumed", "stall when
+downstream is not ready"), emit a CONVENTIONAL optional handshake input that GRACEFULLY DEGRADES — an
+unconnected port defaults to always-ready — so the design elaborates AND behaves correctly whether or
+not the TB drives it.
+
+**What to do**: `programs/port_convention_corpus.py::infer_optional_handshake(prose, ports)` returns the
+conventional ready input (name + graceful default) ONLY when a strong downstream-flow hint is present
+AND no equivalent ready port already exists; `graceful_handshake_idiom(hs)` emits the
+`<name>_eff = (unconnected) ? 1'b1 : <name>` degrade wire. Use `<name>_eff` in the body.
+
+**why_not_bucket_a**: WHICH handshake port to add and its graceful default depend on reading the prose's
+downstream-flow implication, and the genre-conventional order depends on the design class — judgement +
+a convention corpus, not a single regex. The corpus makes the convention explicit + testable; the
+strong-hint gate keeps it from regressing a clean design (no hint → no port). Honest limit: the emitted
+name is the single most-conventional spelling (`ready`); a TB using a rarer spelling for the SAME flow
+is not rescued.
+
+_Captured by benchmark-enhancement-capture 2026-06-08 (ORGANIC #520)._
 
 ### Skill: restoring division — remainder register needs `dividend_width` + 1 bits
 

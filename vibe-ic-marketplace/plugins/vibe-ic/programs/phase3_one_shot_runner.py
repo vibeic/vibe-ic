@@ -2519,6 +2519,84 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
         "puts \"ANTENNA_POSTROUTE_DONE\"\n")
 
 
+def _parse_cts_metrics(log_text: str) -> dict:
+    """#519 — best-effort extraction of the canonical CTS sign-off numbers
+    from an OpenROAD / TritonCTS log: clock roots, inserted buffers, clock
+    subnets, sinks, max path depth, sink wire length. Missing fields are
+    simply OMITTED (never fabricated). chip-AGNOSTIC: numeric-token parsing
+    only, no chip literal."""
+    patterns = {
+        "clock_roots": r"(?i)number of clock roots\s*:?\s*(\d+)",
+        "inserted_buffers":
+            r"(?i)number of (?:buffers? inserted|inserted buffers?)\s*:?\s*(\d+)",
+        "clock_subnets": r"(?i)number of clock subnets\s*:?\s*(\d+)",
+        "sinks": r"(?i)number of sinks\s*:?\s*(\d+)",
+        "max_path_depth":
+            r"(?i)(?:max(?:imum)?\s+)?(?:clock\s+)?path depth\s*:?\s*(\d+)",
+        "sink_wire_length_um": r"(?i)sink wire ?length\s*:?\s*([\d.]+)",
+    }
+    out: dict = {}
+    for key, pat in patterns.items():
+        m = re.search(pat, log_text)
+        if m:
+            out[key] = m.group(1)
+    return out
+
+
+def _emit_cts_report_if_complete(project: Path, top: str):
+    """#519 — emit the CTS sign-off report (cts/clock_tree.rpt) the MOMENT
+    CTS has geometrically completed — i.e. post_cts.def exists AND openroad.log
+    carries CTS evidence — INDEPENDENT of whether downstream routing later
+    succeeds or aborts.
+
+    CTS sign-off (Step 19) is a distinct sign-off point from routing
+    (Step 21); the prior code only emitted clock_tree.rpt in the post-routing
+    canonicalize pass (step_canonicalize_artefacts), so a routing FAIL that
+    returned early from step_pnr left a real, completed CTS with no report and
+    Step 19 FAILed on a missing artefact. This helper makes the CTS evidence
+    durable at CTS completion. Idempotent: returns the report path if
+    (re)written, else None. chip-AGNOSTIC: pure OpenROAD-log parsing."""
+    pnr_out = _pl.pnr_dir(project)
+    cts_out = _pl.cts_dir(project)
+    log_path = pnr_out / "openroad.log"
+    post_cts = pnr_out / "post_cts.def"
+    rpt = cts_out / "clock_tree.rpt"
+    # Already durable → nothing to do.
+    if rpt.is_file() and rpt.stat().st_size > 0:
+        return None
+    # CTS must have ACTUALLY completed: post_cts.def is the geometric proof.
+    # No post_cts.def (or no log) → CTS did not finish → do NOT fabricate a
+    # report.
+    if not post_cts.is_file() or not log_path.is_file():
+        return None
+    log = log_path.read_text(errors="ignore")
+    cts_lines = [ln for ln in log.splitlines()
+                 if "cts" in ln.lower() or "clock_tree" in ln.lower()
+                 or "CTS_" in ln]
+    if not cts_lines:
+        # post_cts.def exists but the log carries no CTS signature — the CTS
+        # command ran as a NONFATAL no-op (e.g. the PDK lacked a usable
+        # clkbuf). Record that honestly rather than claim a tree was built.
+        cts_lines = ["(CTS pass completed as a NONFATAL no-op — post_cts.def "
+                     "written, no explicit clock tree built)"]
+    metrics = _parse_cts_metrics(log)
+    cts_out.mkdir(parents=True, exist_ok=True)
+    body = [
+        "# CTS sign-off report (OpenROAD TritonCTS-derived) — #519",
+        "# Emitted AT CTS COMPLETION (post_cts.def present), independent of",
+        "# the downstream routing outcome.",
+        "# Source: phase3/stage3/pnr/openroad.log",
+        "",
+    ]
+    for k, v in metrics.items():
+        body.append(f"{k}: {v}")
+    if metrics:
+        body.append("")
+    body.extend(cts_lines)
+    rpt.write_text("\n".join(body) + "\n")
+    return str(rpt)
+
+
 def step_pnr(project: Path, top: str, pdk: PdkConfig,
              container: str, die_um: str, util: float,
              spare_density=None) -> StepResult:
@@ -2961,6 +3039,15 @@ exit
         pnr_tcl.write_text(tcl_text)
     def_file = out_dir / f"{top}.def"
     sta_file = out_dir / "sta.rpt"
+    # #519: make the CTS sign-off evidence durable the MOMENT CTS completed,
+    # BEFORE the routing-outcome gate below. If detailed_route aborts (rc != 0
+    # or routed.def missing) but CTS already ran (post_cts.def written), the
+    # CTS report must survive — Step 19 is independent of Step 21. Idempotent
+    # + best-effort: never let a report-emit error mask the real PnR verdict.
+    try:
+        _emit_cts_report_if_complete(project, top)
+    except Exception:  # nosec — CTS report is best-effort, never fatal
+        pass
     if rc != 0 or not def_file.is_file():
         return StepResult("pnr", "FAIL", time.time() - t0,
                           f"rc={rc} log_tail={(out+err)[-2000:]}",
@@ -5277,21 +5364,16 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                             "should refine via cts-plan)",
         }, indent=2) + "\n")
         written.append(str(clock_plan))
+    # #519: CTS report is now emitted AT CTS COMPLETION inside step_pnr (so a
+    # later routing FAIL cannot lose it). This canonicalize pass keeps an
+    # idempotent fallback call for runs where step_pnr predates the fix or the
+    # report was cleaned — `_emit_cts_report_if_complete` is a no-op when the
+    # report is already durable, and refuses to fabricate one when CTS did not
+    # actually complete (no post_cts.def).
     clock_rpt = cts_out / "clock_tree.rpt"
-    if not clock_rpt.is_file() and (pnr_out / "openroad.log").is_file():
-        log = (pnr_out / "openroad.log").read_text(errors="ignore")
-        # Extract any CTS-related lines as a coarse summary.
-        cts_lines = [ln for ln in log.splitlines()
-                     if "cts" in ln.lower() or "clock_tree" in ln.lower()
-                     or "CTS_" in ln]
-        clock_rpt.write_text(
-            "# Auto-extracted CTS report (OpenROAD-derived) — v1.6.36\n"
-            "# Source: phase3/stage3/pnr/openroad.log\n\n"
-            + "\n".join(cts_lines or [
-                "(OpenROAD CTS not invoked or zero output captured)"
-            ]) + "\n"
-        )
-        written.append(str(clock_rpt))
+    _cts_emitted = _emit_cts_report_if_complete(project, top)
+    if _cts_emitted:
+        written.append(_cts_emitted)
 
     # --- Step 29: SDF emit + honest SDF-sim self-report (#437d) --------
     # OpenROAD's `write_sdf` produces the SDF the gate's check looks for.

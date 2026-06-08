@@ -10,6 +10,34 @@ every AI-judgment recovery — at ANY step in the flow — is a one-off that
 evaporates with the session. With it, every recovery has a path to permanently
 improve the plugin so the same fix is automatic next time.
 
+## The fix-all-into-the-plugin principle
+
+> When you report a backlog / find an issue, the expectation is **NOT** to triage it into a
+> category and then decide whether it is "worth" fixing. **Every issue gets fixed, and the fix
+> lands in the next version of the vibe-ic plugin** — it does not matter whether the fix lives in
+> a deterministic program, an MCP tool, or a skill. The category is an implementation detail of
+> *where* the fix goes, never a reason to *skip* the fix.
+>
+> - Do **not** discard an issue as "not a plugin gap", "design-side", "clean-room variance",
+>   "spec ambiguity", or "the author should have known". If a fresh user could hit it, the plugin
+>   must handle it next time.
+> - A recovery that currently relies on a **skill-prose lesson** a fresh author might forget is
+>   itself an enhancement: **promote it to a deterministic program** (program-first) so it fires
+>   every time, automatically.
+> - The honest discard bucket (Bucket D) is reserved **only** for a fix that is genuinely
+>   non-generalizable (it would over-fit one design's quirk or peek at a hidden oracle) — and even
+>   then you record *why*, you do not silently drop it.
+>
+> **Convergence test (loop-until-dry):** a benchmark / flow close-loop has converged only when a
+> **fresh clean-room re-run on the newest plugin produces 0 residual that needs a plugin fix**.
+> As long as a clean-room run still surfaces any recoverable residual, the loop is not done:
+> capture it → fix it into the plugin → re-run. One round with zero new backlog is a candidate;
+> two consecutive zero-backlog clean-room rounds is convergence.
+
+The bucket ladder (A>B>C>D) below decides *where* a fix goes; it NEVER decides *whether* to fix.
+"not a plugin gap", "clean-room variance", and "design-side" are explicitly **NOT** valid Bucket-D
+discard reasons — only genuine non-generalizable over-fit is.
+
 ## Applies to EVERY step, not just RTL authoring
 
 The first time this skill landed (v0.1.34) it captured 9 RTLLM spec-to-RTL
@@ -161,9 +189,15 @@ properly (corpus sweep, new program, new test fixtures). Examples:
 schema (type / severity / component / pattern / suggested_fix / id /
 submitted_at / session_context).
 
-### Bucket D — DISCARD (overfit / one-off)
+### Bucket D — DISCARD (overfit / one-off) — the NARROWEST bucket
 The fix only works for that specific design's quirks or peeks at hidden TB
-conventions. Examples:
+conventions. This is the ONLY honest discard reason: a **genuinely
+non-generalizable over-fit**. The following are **NOT** valid Bucket-D reasons —
+each of these still gets fixed into the plugin (per the fix-all-into-the-plugin
+principle above): "not a plugin gap", "design-side", "clean-room variance",
+"spec ambiguity", "the author should have known", or "a skill already documents
+it" (that last one is a Bucket-A *promote-prose-to-program* signal, not a
+discard). Examples that ARE legitimately Bucket D:
 - "Rename module name from spec-stated `freq_diveven` to dir-name
   `freq_divbyeven`" — works for THIS benchmark's typo but encoding it as a
   general rule would over-fit. Document the *judgment* (description vs dir
@@ -172,6 +206,10 @@ conventions. Examples:
   hidden-TB peek.
 
 **Emit**: nothing to plugin; record in the session's RESULT for honesty.
+**Real anti-example (ORGANIC #521):** a round-1 close-loop wrongly discarded
+two real residuals as Bucket-D "clean-room variance" / "incomplete-closeloop"
+and declared a FALSE convergence. They were in fact real plugin enhancements
+(#517–#520). "variance" is never a discard reason — capture and fix it.
 
 ## Procedure
 
@@ -212,6 +250,13 @@ conventions. Examples:
 - **NEVER discard (Bucket D) without a written reason** in the session
   RESULT. "Why this fix wasn't generalizable" is itself useful signal for
   future benchmark designers.
+- **NEVER use "not a plugin gap" / "clean-room variance" / "design-side" /
+  "spec ambiguity" / "the author should have known" as a discard reason** —
+  per the fix-all-into-the-plugin principle, those all still get fixed into the
+  plugin. Bucket D is ONLY genuine non-generalizable over-fit.
+- **NEVER declare convergence on a single zero-backlog round.** Convergence is
+  a fresh clean-room re-run on the newest plugin producing 0 residual that needs
+  a plugin fix, confirmed across TWO consecutive rounds.
 
 ## This skill is the difference between "we tried RTLLM" and "Vibe-IC ships better"
 

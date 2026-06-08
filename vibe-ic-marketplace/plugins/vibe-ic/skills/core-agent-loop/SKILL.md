@@ -278,6 +278,14 @@ self-terminate — it stays available to react to any future
 field-agent filing. A tick that produces `(no actionable issues)`
 is a healthy idle state, not a stop signal.
 
+**Convergence (not termination)** — per the fix-all-into-the-plugin
+principle (see `benchmark-enhancement-capture` / `community-backlog-submit`),
+the loop's real convergence test is that a **fresh clean-room re-run on the
+newest plugin produces 0 residual that needs a plugin fix**, confirmed across
+two consecutive rounds — NOT merely "no open issue right now". Every issue is
+fixed into the next plugin version (program > skill, but never skipped); "clean-
+room variance" / "design-side" / "not a plugin gap" are never discard reasons.
+
 ## Hard prohibitions (non-negotiable)
 
 These are no longer prose-only — each is a DETERMINISTIC gate. Rules

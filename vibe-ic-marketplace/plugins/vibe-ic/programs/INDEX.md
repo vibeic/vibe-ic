@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 656
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 656)
+- **Total programs (excluding helpers / shims):** 659
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 659)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 647 |
+| `any` | 650 |
 
 ## Alphabetical listing
 
@@ -358,6 +358,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `latchup_esd_spacing_check` | any | v0.2.30 | the OPEN-SOURCE GEOMETRY-LAYER half of PERC |
 | `layer_extension_presence_check` | any | v0.50 | v0.50 plugin gate |
+| `leaf_typo_alias_emit` | any | v0.3.18 | v0.3.18 (ORGANIC #517). |
 | `lec_equivalence_check` | any | — | Step 13 deterministic LEC substance gate. |
 | `level_shifter_required_check` | any | — | M2 gate (substance-verifying). |
 | `lin_protocol_synth` | any | v0.1.84 | LIN-class protocol synth helper. |
@@ -480,6 +481,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pnr_doctor` | any | v0.1.96 | OpenROAD P&R-log error classifier (synth-doctor Pattern-B → program). |
 | `pnr_timing_repair_completeness_check` | any | v0.1.26 | chip-AGNOSTIC static audit of an |
 | `pnr_via_stack_completeness_check` | any | — | chip-AGNOSTIC audit of how |
+| `port_convention_corpus` | any | v0.3.18 | v0.3.18 (ORGANIC #520, Bucket C). |
 | `post_layout_sim_check` | any | — | Verify post-layout gate-level simulation with SDF back-annotation. |
 | `power_domain_crossing_check` | any | — | M2 gate (substance-verifying). |
 | `power_report_check` | any | — | wrapper for eda_report_audit --mode power. |
@@ -526,6 +528,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `regression_report_aggregate` | any | — | Pattern-B extraction from |
 | `regression_severity_classify` | any | — | Pattern-B extraction from |
 | `reports_subfolder_taxonomy_check` | any | — | enforce that `<project>/reports/` |
+| `reset_clock_variant_alias` | any | v0.3.18 | v0.3.18 (ORGANIC #518). |
 | `reset_dependency_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
 | `reset_discipline_check` | any | — | deterministic reset-discipline lint. |
 | `response_latency_observability_check` | any | — | LL-5. |
@@ -728,7 +731,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (647 programs)
+### `any` (650 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1057,6 +1060,7 @@ _(no programs in this group)_
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `latchup_esd_spacing_check` — the OPEN-SOURCE GEOMETRY-LAYER half of PERC  _[v0.2.30]_
 - `layer_extension_presence_check` — v0.50 plugin gate  _[v0.50]_
+- `leaf_typo_alias_emit` — v0.3.18 (ORGANIC #517).  _[v0.3.18]_
 - `lec_equivalence_check` — Step 13 deterministic LEC substance gate.
 - `level_shifter_required_check` — M2 gate (substance-verifying).
 - `lin_protocol_synth` — LIN-class protocol synth helper.  _[v0.1.84]_
@@ -1179,6 +1183,7 @@ _(no programs in this group)_
 - `pnr_doctor` — OpenROAD P&R-log error classifier (synth-doctor Pattern-B → program).  _[v0.1.96]_
 - `pnr_timing_repair_completeness_check` — chip-AGNOSTIC static audit of an  _[v0.1.26]_
 - `pnr_via_stack_completeness_check` — chip-AGNOSTIC audit of how
+- `port_convention_corpus` — v0.3.18 (ORGANIC #520, Bucket C).  _[v0.3.18]_
 - `post_layout_sim_check` — Verify post-layout gate-level simulation with SDF back-annotation.
 - `power_domain_crossing_check` — M2 gate (substance-verifying).
 - `power_report_check` — wrapper for eda_report_audit --mode power.
@@ -1225,6 +1230,7 @@ _(no programs in this group)_
 - `regression_report_aggregate` — Pattern-B extraction from
 - `regression_severity_classify` — Pattern-B extraction from
 - `reports_subfolder_taxonomy_check` — enforce that `<project>/reports/`
+- `reset_clock_variant_alias` — v0.3.18 (ORGANIC #518).  _[v0.3.18]_
 - `reset_dependency_check` — deterministic compliance check derived from <chip-class> v040 debug.
 - `reset_discipline_check` — deterministic reset-discipline lint.
 - `response_latency_observability_check` — LL-5.

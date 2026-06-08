@@ -182,6 +182,13 @@ Field agent 複查未通過，已 reopen：
 
 ### STOP CONDITION
 
+The real convergence test (per the fix-all-into-the-plugin principle in
+`benchmark-enhancement-capture` / `community-backlog-submit`) is that a **fresh
+clean-room re-run on the newest plugin produces 0 residual that needs a plugin
+fix**, confirmed across two consecutive rounds — every recoverable residual is
+captured and fixed into the plugin (program > skill, never discarded as
+"variance" / "design-side" / "not a plugin gap"). In loop terms:
+
 At Step 1: if the fresh review agent reports **STOP_RECOMMENDATION: YES**
 (no new gaps AND no open primary/secondary issue AND the closed-audit
 rule below returns an empty list — i.e. no un-audited `core-closed`
