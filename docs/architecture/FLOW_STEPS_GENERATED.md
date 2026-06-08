@@ -48,38 +48,39 @@
 | 34 | [14e3/15] | L10↔L3 packet-protocol opcode consistency sweep |
 | 35 | [15/15] | coverage report |
 
-## Phase 2 — `phase2_one_shot_runner.py` (global steps 36-52)
+## Phase 2 — `phase2_one_shot_runner.py` (global steps 36-53)
 
 | # | Step function |
 |---|---|
 | 36 | `step_rig_topology_skeleton` |
 | 37 | `step_phase1` |
-| 38 | `step_rtl_gen` |
-| 39 | `step_full_stack_tb_gen` |
-| 40 | `step_stamp_gate_reports` |
-| 41 | `step_reference_tb` |
-| 42 | `step_yosys_synth` |
-| 43 | `step_qsf_gen` |
-| 44 | `step_sdc_gen` |
-| 45 | `step_otp_image_check` |
-| 46 | `step_fpga_compile` |
-| 47 | `step_fpga_burn` |
-| 48 | `step_usb_hid_tester_verify` |
-| 49 | `step_phase3` |
-| 50 | `step_complexity_advisory` |
-| 51 | `step_emit_phase2_manifests` |
-| 52 | `step_final_audit` |
+| 38 | `step_leaf_typo_aliases` |
+| 39 | `step_rtl_gen` |
+| 40 | `step_full_stack_tb_gen` |
+| 41 | `step_stamp_gate_reports` |
+| 42 | `step_reference_tb` |
+| 43 | `step_yosys_synth` |
+| 44 | `step_qsf_gen` |
+| 45 | `step_sdc_gen` |
+| 46 | `step_otp_image_check` |
+| 47 | `step_fpga_compile` |
+| 48 | `step_fpga_burn` |
+| 49 | `step_usb_hid_tester_verify` |
+| 50 | `step_phase3` |
+| 51 | `step_complexity_advisory` |
+| 52 | `step_emit_phase2_manifests` |
+| 53 | `step_final_audit` |
 
-## Phase 3 — `phase3_one_shot_runner.py` (global steps 53-58)
+## Phase 3 — `phase3_one_shot_runner.py` (global steps 54-59)
 
 | # | Step function |
 |---|---|
-| 53 | `step_synth` |
-| 54 | `step_pnr` |
-| 55 | `step_gds` |
-| 56 | `step_drc` |
-| 57 | `step_lvs` |
-| 58 | `step_canonicalize_artefacts` |
+| 54 | `step_synth` |
+| 55 | `step_pnr` |
+| 56 | `step_gds` |
+| 57 | `step_drc` |
+| 58 | `step_lvs` |
+| 59 | `step_canonicalize_artefacts` |
 
 ## Analog — `analog_one_shot_runner.py` (9 steps, PARALLEL to Phase 2)
 
@@ -97,5 +98,5 @@
 
 ## Totals
 
-Sequential global steps: 58 (Phase 1: 1-35 · Phase 2: 36-52 · Phase 3: 53-58) · Analog (parallel): 9
+Sequential global steps: 59 (Phase 1: 1-35 · Phase 2: 36-53 · Phase 3: 54-59) · Analog (parallel): 9
 

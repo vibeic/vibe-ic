@@ -201,8 +201,14 @@ def detect_leaf_typo(leaf_name: str) -> Optional[str]:
     return corrected if corrected != leaf else None
 
 
+# Word-boundary anchored so it matches BOTH spaced (`input wire [7:0] a`) and
+# COMPACT (`input[N-1:0]a`) Verilog (no mandatory space after the direction) —
+# #517 reopen round-3. `\b` after the optional net-type keeps `input wirefoo`
+# parsing the port name as `wirefoo`, not dropping the `wire` prefix.
 _PORT_DECL_RE = re.compile(
-    r"(input|output|inout)\s+(?:wire|reg|logic)?\s*(\[[^\]]+\])?\s*(\w+)")
+    r"\b(input|output|inout)\b\s*"
+    r"(?:(?:wire|reg|logic|signed|unsigned)\b\s*)*"
+    r"(\[[^\]]+\])?\s*(\w+)")
 
 
 def _strip_comments(text: str) -> str:
@@ -211,22 +217,111 @@ def _strip_comments(text: str) -> str:
     return text
 
 
+def _module_header(text: str, module: str) -> Optional[Tuple[Optional[str], str]]:
+    """Return (param_block, port_block) for `module <module> [#(param_block)]
+    (port_block)`, correctly SKIPPING / capturing an optional `#(...)` block via
+    balanced-paren scanning. None when the module is not found.
+
+    ORGANIC #517 reopen: the prior regex `module\\s+<name>\\s*\\(` did not skip
+    the `#(...)` block, so a PARAMETERIZED ANSI module (e.g. the fixed_point
+    target `module foo #(parameter N=16) (...)`) parsed as having no ports and
+    the alias emit silently failed."""
+    text = _strip_comments(text)
+    m = re.search(rf"\bmodule\s+{re.escape(module)}\b", text)
+    if not m:
+        return None
+    i, n = m.end(), len(text)
+
+    def _skip_ws(j: int) -> int:
+        while j < n and text[j].isspace():
+            j += 1
+        return j
+
+    def _balanced(j: int) -> Optional[int]:
+        """Given text[j] == '(', return index just past the matching ')'. Skips
+        string literals so a `(`/`)` inside a string parameter default (e.g.
+        `parameter string TAG = "error(code"`) does not unbalance the scan
+        (#517 reopen round-3)."""
+        depth = 0
+        while j < n:
+            c = text[j]
+            if c == '"':
+                j += 1
+                while j < n and text[j] != '"':
+                    if text[j] == "\\":
+                        j += 1
+                    j += 1
+                j += 1
+                continue
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return j + 1
+            j += 1
+        return None
+
+    i = _skip_ws(i)
+    param_block: Optional[str] = None
+    if i < n and text[i] == "#":
+        i = _skip_ws(i + 1)
+        if i < n and text[i] == "(":
+            j = _balanced(i)
+            if j is None:
+                return None
+            param_block = text[i + 1:j - 1].strip()
+            i = _skip_ws(j)
+    if i < n and text[i] == "(":
+        j = _balanced(i)
+        if j is None:
+            return None
+        return (param_block, text[i + 1:j - 1])
+    return None
+
+
 def parse_module_ports(rtl_text: str, module: str) -> List[Tuple[str, str, str]]:
     """Return [(direction, width, name)] for the ANSI port list of
-    `module <module>(...)`. Empty list when the module has no ANSI ports."""
-    text = _strip_comments(rtl_text)
-    m = re.search(rf"module\s+{re.escape(module)}\s*\(\s*(.*?)\s*\)\s*;",
-                  text, re.DOTALL)
-    if not m:
+    `module <module> [#(...)] (...)`. Empty list when the module has no ANSI
+    ports. Tolerates an optional parameter block (#517 reopen)."""
+    hdr = _module_header(rtl_text, module)
+    if hdr is None:
         return []
     return [(pm.group(1), (pm.group(2) or "").strip(), pm.group(3))
-            for pm in _PORT_DECL_RE.finditer(m.group(1))]
+            for pm in _PORT_DECL_RE.finditer(hdr[1])]
+
+
+def parse_module_params(rtl_text: str, module: str
+                        ) -> Tuple[Optional[str], List[str]]:
+    """Return (raw_param_block, [param_names]) for `module <module> #(...)`.
+    (None, []) when the module is not parameterized. Param names are the LHS
+    identifiers of each `<NAME> =` in the block."""
+    hdr = _module_header(rtl_text, module)
+    if hdr is None or hdr[0] is None:
+        return (None, [])
+    block = hdr[0]
+    names = re.findall(r"(\w+)\s*=", block)
+    return (block, names)
 
 
 def emit_alias_wrapper(leaf_name: str, canonical_name: str,
-                       ports: List[Tuple[str, str, str]]) -> str:
+                       ports: List[Tuple[str, str, str]],
+                       param_block: Optional[str] = None,
+                       param_names: Optional[List[str]] = None) -> str:
     """Render a thin alias wrapper module named `canonical_name` that
-    instantiates `leaf_name` and passes every port straight through (1:1)."""
+    instantiates `leaf_name` and passes every port straight through (1:1).
+
+    When the leaf is PARAMETERIZED (#517 reopen — the fixed_point target), the
+    wrapper inherits the same `#(param_block)` and forwards every parameter to
+    the instance, so the wrapper elaborates standalone (its port widths that
+    reference a parameter — e.g. `[N-1:0]` — resolve)."""
+    param_hdr = ""
+    inst_params = ""
+    if param_block:
+        param_hdr = f" #(\n    {param_block}\n)"
+        if param_names:
+            joined = ", ".join(f".{p}({p})" for p in param_names)
+            inst_params = f" #({joined})"
     decls = []
     for direction, width, name in ports:
         w = f" {width}" if width else ""
@@ -237,10 +332,10 @@ def emit_alias_wrapper(leaf_name: str, canonical_name: str,
         f"// leaf module `{leaf_name}` (probable misspelling of a canonical",
         "// hardware term). Lets a hidden testbench elaborate EITHER spelling.",
         f"// Generated by leaf_typo_alias_emit.py (ORGANIC #517).",
-        f"module {canonical_name} (",
+        f"module {canonical_name}{param_hdr} (",
         ",\n".join(decls),
         ");",
-        f"    {leaf_name} u_{leaf_name} (",
+        f"    {leaf_name}{inst_params} u_{leaf_name} (",
         ",\n".join(conns),
         "    );",
         "endmodule",
@@ -288,13 +383,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         except OSError:
             continue
 
-    ports = parse_module_ports(rtl.read_text(errors="replace"), args.leaf)
+    _rtl_text = rtl.read_text(errors="replace")
+    ports = parse_module_ports(_rtl_text, args.leaf)
     if not ports:
         print(f"error: leaf module {args.leaf!r} not found / no ANSI ports in "
               f"{rtl} — cannot emit a passthrough alias.", file=sys.stderr)
         return 1
 
-    wrapper = emit_alias_wrapper(args.leaf, canonical, ports)
+    param_block, param_names = parse_module_params(_rtl_text, args.leaf)
+    wrapper = emit_alias_wrapper(args.leaf, canonical, ports,
+                                 param_block=param_block,
+                                 param_names=param_names)
     out = Path(args.out) if args.out else rtl.with_name(f"{canonical}.v")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(wrapper)

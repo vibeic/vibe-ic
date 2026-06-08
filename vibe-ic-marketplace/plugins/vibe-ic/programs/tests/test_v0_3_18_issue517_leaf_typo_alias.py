@@ -183,3 +183,119 @@ def test_main_typo_writes_wrapper(tmp_path):
     rc = L.main(["--rtl", str(rtl), "--leaf", "substractor"])
     assert rc == 0
     assert (tmp_path / "subtractor.v").is_file()
+
+
+# ── REOPEN REGRESSION (#517): parameterized ANSI module (fixed_point target) ──
+
+def _param_leaf_rtl(leaf: str) -> str:
+    return (f"module {leaf} #(parameter N = 16) (\n"
+            f"    input wire [N-1:0] a,\n"
+            f"    input wire [N-1:0] b,\n"
+            f"    output wire [N-1:0] c\n"
+            f");\n"
+            f"    assign c = a - b;\n"
+            f"endmodule\n")
+
+
+def test_parameterized_module_parses_and_emits(tmp_path):
+    # the prior regex `module <name> (` missed `module <name> #(...) (` →
+    # parsed 0 ports → emit silently failed. Now ports parse + wrapper emits.
+    rtl = tmp_path / "design.v"
+    rtl.write_text(_param_leaf_rtl("substractor"))
+    ports = L.parse_module_ports(rtl.read_text(), "substractor")
+    assert [p[2] for p in ports] == ["a", "b", "c"]
+    pblock, pnames = L.parse_module_params(rtl.read_text(), "substractor")
+    assert pblock is not None and "parameter N" in pblock
+    assert pnames == ["N"]
+    rc = L.main(["--rtl", str(rtl), "--leaf", "substractor"])
+    assert rc == 0
+    assert (tmp_path / "subtractor.v").is_file()
+
+
+def test_parameterized_wrapper_elaborates_both_spellings(tmp_path):
+    # the wrapper of a parameterized leaf must INHERIT the #(...) block and
+    # forward the parameter, else its `[N-1:0]` ports reference an undefined N.
+    rtl = tmp_path / "design.v"
+    rtl.write_text(_param_leaf_rtl("substractor"))
+    L.main(["--rtl", str(rtl), "--leaf", "substractor"])
+    wrap = (tmp_path / "subtractor.v")
+    assert wrap.is_file()
+    wtxt = wrap.read_text()
+    assert "module subtractor #(" in wtxt and "parameter N" in wtxt
+    assert "substractor #(.N(N)) u_substractor" in wtxt
+    iv = shutil.which("iverilog")
+    if not iv:
+        import pytest
+        pytest.skip("iverilog not on this host")
+    for top in ("substractor", "subtractor"):
+        r = subprocess.run(
+            [iv, "-g2012", "-s", top, "-o", str(tmp_path / f"{top}.out"),
+             str(rtl), str(wrap)], capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0, f"{top}: {r.stderr}"
+
+
+def test_wired_into_phase2_runner(tmp_path):
+    # REOPEN REGRESSION (#517): the program must be ACTUALLY CALLED by the
+    # runner (it was dormant — referenced only by skill prose). The phase2
+    # step sweeps rtl/ and auto-emits the alias.
+    import sys as _sys
+    _sys.path.insert(0, str(PROGRAMS))
+    import phase2_one_shot_runner as P
+    import _path_layout as _pl
+    rtl_dir = _pl.rtl_dir(tmp_path)
+    rtl_dir.mkdir(parents=True)
+    (rtl_dir / "substractor.v").write_text(_param_leaf_rtl("substractor"))
+    r = P.step_leaf_typo_aliases(tmp_path)
+    assert r.status == "PASS", (r.status, r.detail)
+    assert (rtl_dir / "subtractor.v").is_file()
+    # idempotent + collision-safe: re-run emits nothing new.
+    r2 = P.step_leaf_typo_aliases(tmp_path)
+    assert r2.status == "SKIP"
+
+
+def test_step_skips_when_no_typo(tmp_path):
+    import sys as _sys
+    _sys.path.insert(0, str(PROGRAMS))
+    import phase2_one_shot_runner as P
+    import _path_layout as _pl
+    rtl_dir = _pl.rtl_dir(tmp_path)
+    rtl_dir.mkdir(parents=True)
+    (rtl_dir / "counter.v").write_text(_leaf_rtl("counter"))
+    r = P.step_leaf_typo_aliases(tmp_path)
+    assert r.status == "SKIP"
+    assert not (rtl_dir / "subtractor.v").exists()
+
+
+# ── REOPEN ROUND-3 REGRESSIONS (#517) ───────────────────────────────────
+
+def test_compact_verilog_syntax_parses():
+    # no spaces after direction / around widths — valid Verilog.
+    rtl = ("module substractor#(parameter N=16)"
+           "(input[N-1:0]a,output[N-1:0]y);assign y=~a;endmodule")
+    ports = L.parse_module_ports(rtl, "substractor")
+    assert [p[2] for p in ports] == ["a", "y"]
+    assert L.detect_leaf_typo("substractor") == "subtractor"
+
+
+def test_net_type_prefix_not_swallowed_into_port_name():
+    # `input wirefoo` is a port named `wirefoo`, NOT type `wire` + port `foo`.
+    ports = L.parse_module_ports(
+        "module m (input wirefoo, output regbar);endmodule", "m")
+    assert [p[2] for p in ports] == ["wirefoo", "regbar"]
+
+
+def test_string_param_with_paren_does_not_unbalance():
+    # a '(' inside a string parameter default must not break the paren scan.
+    rtl = ('module substractor #(parameter TAG = "err(code") '
+           '(input a, output b);endmodule')
+    ports = L.parse_module_ports(rtl, "substractor")
+    assert [p[2] for p in ports] == ["a", "b"]
+
+
+def test_signed_and_multiple_qualifiers():
+    # `input signed [7:0] a` and `input wire signed [7:0] a` — the sign/net-type
+    # qualifiers must not be swallowed as the port name.
+    ports = L.parse_module_ports(
+        "module m(input signed [7:0] a, input wire signed [3:0] b,"
+        " output reg [7:0] y);endmodule", "m")
+    assert [p[2] for p in ports] == ["a", "b", "y"]

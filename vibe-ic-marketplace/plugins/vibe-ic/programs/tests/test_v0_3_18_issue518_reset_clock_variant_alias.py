@@ -171,3 +171,14 @@ def test_main_no_alias_when_canonical(tmp_path):
     rc = V.main(["--rtl", str(core_rtl), "--module", "mycore"])
     assert rc == 0
     assert not (tmp_path / "mycore_aliased.v").exists()
+
+
+def test_parameterized_module_ports_parse(tmp_path):
+    # REOPEN REGRESSION (#517 fix applied here too): a clocked chip-top is often
+    # parameterized; the parser must skip the #(...) block and find the ports.
+    rtl = ("module mycore #(parameter W = 8) (\n"
+           "  input clk, input reset_n, input [W-1:0] d, output [W-1:0] q\n"
+           ");\nendmodule\n")
+    ports = V.parse_module_ports(rtl, "mycore")
+    assert [p[2] for p in ports] == ["clk", "reset_n", "d", "q"]
+    assert V.plan_aliases([p[2] for p in ports]) == {"reset_n": "rst_n"}

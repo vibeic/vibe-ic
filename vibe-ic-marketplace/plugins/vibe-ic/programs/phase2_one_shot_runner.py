@@ -882,6 +882,75 @@ def _enforce_power_up_determinism(rtl_dir: Path) -> int:
     return 0
 
 
+def step_leaf_typo_aliases(project: Path) -> StepResult:
+    """ORGANIC #517 — auto-emit canonical-spelling alias wrappers for any
+    emitted RTL leaf module whose name is a probable typo of a canonical
+    hardware term, so a hidden testbench instantiating EITHER spelling
+    elaborates.
+
+    This is the REAL wiring of `leaf_typo_alias_emit.py` into the flow (the
+    #517 reopen flagged that the program was dormant — referenced only by skill
+    prose). It runs over rtl/ on every phase2 invocation, so it covers BOTH the
+    deterministic generator AND AI-authored RTL (which lands before this step on
+    the post-authoring re-invoke). Best-effort + idempotent: never fails the
+    flow, and skips when the canonical module already exists (collision-safe)."""
+    t0 = time.time()
+    rtl_dir = _pl.rtl_dir(project)
+    if not rtl_dir.is_dir():
+        return StepResult("leaf_typo_aliases", "SKIP", time.time() - t0,
+                          "no rtl/ directory yet")
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import leaf_typo_alias_emit as _lta
+    except Exception as e:  # pragma: no cover — defensive import guard
+        return StepResult("leaf_typo_aliases", "SKIP", time.time() - t0,
+                          f"emitter unavailable: {e}")
+    mod_re = re.compile(r"\bmodule\s+([A-Za-z_]\w*)\b")
+    texts: Dict[Path, str] = {}
+    existing_modules: set = set()
+    for f in sorted(rtl_dir.rglob("*")):
+        if f.suffix not in (".v", ".sv") or not f.is_file():
+            continue
+        try:
+            txt = f.read_text(errors="replace")
+        except OSError:
+            continue
+        texts[f] = txt
+        for m in mod_re.finditer(_lta._strip_comments(txt)):
+            existing_modules.add(m.group(1))
+    emitted: List[str] = []
+    out_files: List[str] = []
+    for f, txt in texts.items():
+        for m in mod_re.finditer(_lta._strip_comments(txt)):
+            leaf = m.group(1)
+            canonical = _lta.detect_leaf_typo(leaf)
+            if not canonical or canonical in existing_modules:
+                continue  # not a typo, or canonical already defined (collision-safe)
+            ports = _lta.parse_module_ports(txt, leaf)
+            if not ports:
+                continue
+            pblock, pnames = _lta.parse_module_params(txt, leaf)
+            wrapper = _lta.emit_alias_wrapper(leaf, canonical, ports,
+                                              param_block=pblock,
+                                              param_names=pnames)
+            out = rtl_dir / f"{canonical}.v"
+            try:
+                out.write_text(wrapper)
+            except OSError:
+                continue
+            existing_modules.add(canonical)
+            emitted.append(f"{leaf}->{canonical}")
+            out_files.append(str(out))
+    if emitted:
+        return StepResult("leaf_typo_aliases", "PASS", time.time() - t0,
+                          f"emitted {len(emitted)} canonical-spelling alias "
+                          f"wrapper(s): {', '.join(emitted)}", out_files)
+    return StepResult("leaf_typo_aliases", "SKIP", time.time() - t0,
+                      "no leaf-name typo detected (no alias wrapper needed)")
+
+
 def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
     t0 = time.time()
     # v0.1.10: program-FIRST. If a structured RTL spec is present and is
@@ -5246,6 +5315,14 @@ def main() -> int:
 
     # Step 2 — RTL gen
     plan.append(step_rtl_gen(project, ic_class))
+
+    # ORGANIC #517 — auto-emit canonical-spelling alias wrappers for any leaf
+    # module whose name is a probable typo of a canonical hardware term. Runs
+    # over rtl/ right after RTL is available (deterministic generator OR, on the
+    # post-authoring re-invoke, AI-authored RTL) so a hidden TB instantiating
+    # either spelling elaborates — without the author having to remember to run
+    # the program. Best-effort + collision-safe; never gates.
+    plan.append(step_leaf_typo_aliases(project))
 
     # Step 2a — design-complexity advisory (ADVISORY-ONLY, NON-GATING).
     # Runs right after RTL is available so the estimator can scan it.

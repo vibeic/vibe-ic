@@ -53,17 +53,48 @@ _DOWNSTREAM_READY_NAMES = frozenset({
 })
 
 # Prose hints that a downstream-consume / back-pressure handshake is implied.
-# STRONG hints only — a stray "ready" is too weak to fire on.
+# UNAMBIGUOUS handshake / back-pressure terminology ONLY (ORGANIC #520 reopen
+# rounds 2-3 / #511 no-leak). This inference is a Bucket-C judgement, so the
+# precision/recall trade is deliberately biased HARD toward conservatism: an
+# OVER-fire grafts a spurious port that breaks a clean POSITIONAL testbench
+# (real harm), whereas an UNDER-fire merely declines to rescue one case (safe).
+# Therefore NO bare verb (`consumes`, `accepts`), NO bare architectural noun
+# (`flow control`, `downstream block`) — every pattern below names an explicit
+# ready/consumed HANDSHAKE event, not mere data movement.
 _DOWNSTREAM_FLOW_HINTS = (
-    r"\bdownstream\b",
+    # "back-pressure" is the one word that is essentially always a flow-control
+    # handshake mechanism (even "the design uses back-pressure" implies one).
     r"\bback[\s-]?pressure\b",
-    r"\bconsum(?:e|ed|es|ption)\b",
-    r"\baccept(?:ed|s|ance)?\b",
-    r"\bstall(?:ed|s|ing)?\b",
-    r"\bresult (?:has been|is) (?:read|consumed|taken|accepted)\b",
-    r"\bwhen (?:the )?(?:downstream|consumer|sink) is ready\b",
-    r"\bflow[\s-]?control\b",
+    # "ready to accept" ONLY in a downstream/consumer context, or about the
+    # produced result — NOT the capability sense ("ready to accept commands /
+    # input after power-up", which is module state, not a handshake).
+    r"\b(?:downstream|consumer|sink|receiver)\b[^.\n]{0,25}\bready to accept\b",
+    r"\bready to accept\b[^.\n]{0,12}\b(?:the\s+)?"
+    r"(?:result|output|data|word|sample|token)\b",
+    # COMPLETION handshake on the produced result — past-perfect "has been
+    # consumed/taken/accepted" AND a downstream/consumer agent (so a benign
+    # pipeline "result has been accepted into the pipeline" does NOT fire).
+    r"\bresults?\s+(?:has|have)\s+been\s+(?:consumed|taken|accepted)\b"
+    r"[^.\n]{0,25}\b(?:by\s+(?:the\s+)?)?(?:downstream|consumer|sink|receiver)\b",
+    r"\bresults?\s+(?:has|have)\s+been\s+(?:consumed|taken|accepted)\s+downstream\b",
+    # "awaits downstream readiness" — a BLOCKING wait on the downstream =
+    # back-pressure ("awaits", not the ambiguous bare "is ready").
+    r"\bawait(?:s|ing)?\s+(?:the\s+)?(?:downstream|consumer|sink)\s+"
+    r"(?:to\s+be\s+)?read(?:y|iness)\b",
+    # "stall until/when ... ready/back-pressure" — an explicit pipeline stall.
+    r"\bstall(?:s|ed|ing)?\s+(?:until|when)\b[^.\n]{0,30}"
+    r"\b(?:ready|not ready|back[\s-]?pressure)\b",
 )
+# DELIBERATELY EXCLUDED (ORGANIC #520 reopen rounds 4-5) — these read like a
+# handshake but over-fire on common benign IC prose, and an OVER-fire grafts a
+# spurious port that breaks a clean POSITIONAL testbench (an UNDER-fire is safe):
+#   * bare "flow control"   — ambiguous timing/architectural vs back-pressure.
+#   * "X is ready"          — capability/state ("the receiver is ready to
+#                             capture on the rising edge"), not signal assertion.
+#   * "result is read"      — passive data movement ("the result is read from
+#                             the output port"), not a completion handshake.
+# The conservative set above fires only on terms that essentially never appear
+# in non-handshake prose.
 
 # The single most conventional optional-ready spelling + its graceful default.
 _CANONICAL_READY_NAME = "ready"
@@ -93,11 +124,24 @@ def prose_has_downstream_flow(prose: str) -> bool:
 def infer_optional_handshake(prose: str,
                              existing_ports: List[str]
                              ) -> Optional[HandshakePort]:
-    """Return a conventional optional handshake input to add, or None.
+    """Return a CANDIDATE conventional optional handshake input, or None.
+
+    ADVISORY ONLY (ORGANIC #520 reopen — the binding "positional regress"
+    guard). Detecting a handshake from PROSE is a Bucket-C judgement: no regex
+    cleanly separates a real back-pressure handshake from capability/
+    architectural prose ("the module is ready to accept commands after
+    power-up"). Because an OVER-fire that AUTO-GRAFTS a port would break a clean
+    POSITIONAL testbench (a clean N-port design suddenly has N+1 ports), the
+    contract is: this function only SURFACES a candidate for the spec-to-rtl
+    author's judgement — the runner must NOT auto-graft the returned port onto a
+    design whose port set is already fully prose-specified. (It is deliberately
+    NOT wired into any runner emit path, unlike the deterministic, collision-
+    safe leaf-typo emitter.) The hint set is kept maximally conservative so the
+    candidate is rarely spurious, but the final include/exclude decision is the
+    author's, reading the actual design intent — not a keyword.
 
     Fires ONLY when the prose carries a strong downstream-consume / back-
-    pressure hint AND no equivalent ready input already exists — so a design
-    without that flow is never given a spurious port."""
+    pressure hint AND no equivalent ready input already exists."""
     if _has_ready_port(existing_ports):
         return None
     if not prose_has_downstream_flow(prose):

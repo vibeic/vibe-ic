@@ -570,12 +570,16 @@ happens to use the leaf spelling, and saves the run when it uses the canonical o
 
 **NOW DETERMINISTIC (ORGANIC #517)** — the high-confidence half of this lesson is no longer
 prose-only: `programs/leaf_typo_alias_emit.py` decides it without judgment. A leaf token that is
-edit-distance 1..2 from EXACTLY ONE curated canonical hardware-term root (both ≥6 chars,
-unambiguous closest) is a typo; the program emits the canonical-spelled passthrough alias wrapper
-automatically. It will NOT fire on a correct canonical leaf, a leaf far from every term, an
-ambiguous tie, or a short abbreviation (addr/alu/mux/ram). Run it in the emit path so the rescue
-no longer depends on the author remembering this section; the residual judgment (a typo of a term
-NOT in the curated root set, or a non-arithmetic novel-name typo) stays here.
+edit-distance EXACTLY 1 from EXACTLY ONE curated canonical hardware-term root (both ≥6 chars,
+unambiguous closest, not an inflected/British/real-word form) is a typo; the program emits the
+canonical-spelled passthrough alias wrapper automatically (inheriting the leaf's `#(...)` parameter
+block when it is parameterized, so the wrapper elaborates). It will NOT fire on a correct canonical
+leaf, a leaf far from every term, an ambiguous tie, or a short abbreviation (addr/alu/mux/ram).
+**Wired into the runner**: `phase2_one_shot_runner` calls it automatically over the emitted RTL
+after authoring, so the rescue no longer depends on the author remembering this section; the
+residual judgment (a typo of a term NOT in the curated root set, or a non-arithmetic novel-name
+typo) stays here. (distance was tightened from the original 1..2 to exactly 1 in the #517 reopen,
+because distance-2 collides with legitimate words like `recorder`→`decoder`.)
 
 _Captured by benchmark-enhancement-capture 2026-06-08 (ORGANIC #506); promoted to a deterministic
 program 2026-06-08 (ORGANIC #517)._

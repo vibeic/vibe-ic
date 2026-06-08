@@ -134,8 +134,11 @@ def plan_aliases(port_names: List[str]) -> Dict[str, str]:
     return plan
 
 
+# Word-boundary anchored: matches both spaced and COMPACT Verilog (#517 r3).
 _PORT_DECL_RE = re.compile(
-    r"(input|output|inout)\s+(?:wire|reg|logic)?\s*(\[[^\]]+\])?\s*(\w+)")
+    r"\b(input|output|inout)\b\s*"
+    r"(?:(?:wire|reg|logic|signed|unsigned)\b\s*)*"
+    r"(\[[^\]]+\])?\s*(\w+)")
 
 
 def _strip_comments(text: str) -> str:
@@ -144,15 +147,67 @@ def _strip_comments(text: str) -> str:
     return text
 
 
+def _module_portlist_block(text: str, module: str) -> Optional[str]:
+    """Port-list text inside `module <module> [#(...)] (...)`, SKIPPING an
+    optional `#(parameter ...)` block (balanced-paren aware). None if not found.
+    Same parameterized-module fix as #517 reopen — a clocked chip-top is often
+    parameterized (`module foo #(parameter W=8) (...)`)."""
+    text = _strip_comments(text)
+    m = re.search(rf"\bmodule\s+{re.escape(module)}\b", text)
+    if not m:
+        return None
+    i, n = m.end(), len(text)
+
+    def _skip_ws(j: int) -> int:
+        while j < n and text[j].isspace():
+            j += 1
+        return j
+
+    def _skip_balanced(j: int) -> Optional[int]:
+        # string-literal aware (#517 r3): a '(' inside "..." must not unbalance.
+        depth = 0
+        while j < n:
+            c = text[j]
+            if c == '"':
+                j += 1
+                while j < n and text[j] != '"':
+                    if text[j] == "\\":
+                        j += 1
+                    j += 1
+                j += 1
+                continue
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return j + 1
+            j += 1
+        return None
+
+    i = _skip_ws(i)
+    if i < n and text[i] == "#":
+        i = _skip_ws(i + 1)
+        if i < n and text[i] == "(":
+            j = _skip_balanced(i)
+            if j is None:
+                return None
+            i = _skip_ws(j)
+    if i < n and text[i] == "(":
+        j = _skip_balanced(i)
+        if j is None:
+            return None
+        return text[i + 1:j - 1]
+    return None
+
+
 def parse_module_ports(rtl_text: str, module: str
                        ) -> List[Tuple[str, str, str]]:
-    text = _strip_comments(rtl_text)
-    m = re.search(rf"module\s+{re.escape(module)}\s*\(\s*(.*?)\s*\)\s*;",
-                  text, re.DOTALL)
-    if not m:
+    block = _module_portlist_block(rtl_text, module)
+    if block is None:
         return []
     return [(pm.group(1), (pm.group(2) or "").strip(), pm.group(3))
-            for pm in _PORT_DECL_RE.finditer(m.group(1))]
+            for pm in _PORT_DECL_RE.finditer(block)]
 
 
 def emit_variant_alias_wrapper(core_module: str,
