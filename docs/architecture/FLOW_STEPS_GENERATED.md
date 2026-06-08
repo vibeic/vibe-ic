@@ -48,39 +48,40 @@
 | 34 | [14e3/15] | L10↔L3 packet-protocol opcode consistency sweep |
 | 35 | [15/15] | coverage report |
 
-## Phase 2 — `phase2_one_shot_runner.py` (global steps 36-53)
+## Phase 2 — `phase2_one_shot_runner.py` (global steps 36-54)
 
 | # | Step function |
 |---|---|
 | 36 | `step_rig_topology_skeleton` |
 | 37 | `step_phase1` |
 | 38 | `step_leaf_typo_aliases` |
-| 39 | `step_rtl_gen` |
-| 40 | `step_full_stack_tb_gen` |
-| 41 | `step_stamp_gate_reports` |
-| 42 | `step_reference_tb` |
-| 43 | `step_yosys_synth` |
-| 44 | `step_qsf_gen` |
-| 45 | `step_sdc_gen` |
-| 46 | `step_otp_image_check` |
-| 47 | `step_fpga_compile` |
-| 48 | `step_fpga_burn` |
-| 49 | `step_usb_hid_tester_verify` |
-| 50 | `step_phase3` |
-| 51 | `step_complexity_advisory` |
-| 52 | `step_emit_phase2_manifests` |
-| 53 | `step_final_audit` |
+| 39 | `step_reset_clock_variant_aliases` |
+| 40 | `step_rtl_gen` |
+| 41 | `step_full_stack_tb_gen` |
+| 42 | `step_stamp_gate_reports` |
+| 43 | `step_reference_tb` |
+| 44 | `step_yosys_synth` |
+| 45 | `step_qsf_gen` |
+| 46 | `step_sdc_gen` |
+| 47 | `step_otp_image_check` |
+| 48 | `step_fpga_compile` |
+| 49 | `step_fpga_burn` |
+| 50 | `step_usb_hid_tester_verify` |
+| 51 | `step_phase3` |
+| 52 | `step_complexity_advisory` |
+| 53 | `step_emit_phase2_manifests` |
+| 54 | `step_final_audit` |
 
-## Phase 3 — `phase3_one_shot_runner.py` (global steps 54-59)
+## Phase 3 — `phase3_one_shot_runner.py` (global steps 55-60)
 
 | # | Step function |
 |---|---|
-| 54 | `step_synth` |
-| 55 | `step_pnr` |
-| 56 | `step_gds` |
-| 57 | `step_drc` |
-| 58 | `step_lvs` |
-| 59 | `step_canonicalize_artefacts` |
+| 55 | `step_synth` |
+| 56 | `step_pnr` |
+| 57 | `step_gds` |
+| 58 | `step_drc` |
+| 59 | `step_lvs` |
+| 60 | `step_canonicalize_artefacts` |
 
 ## Analog — `analog_one_shot_runner.py` (9 steps, PARALLEL to Phase 2)
 
@@ -98,5 +99,5 @@
 
 ## Totals
 
-Sequential global steps: 59 (Phase 1: 1-35 · Phase 2: 36-53 · Phase 3: 54-59) · Analog (parallel): 9
+Sequential global steps: 60 (Phase 1: 1-35 · Phase 2: 36-54 · Phase 3: 55-60) · Analog (parallel): 9
 

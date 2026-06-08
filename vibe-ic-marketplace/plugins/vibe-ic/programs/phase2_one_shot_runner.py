@@ -951,6 +951,117 @@ def step_leaf_typo_aliases(project: Path) -> StepResult:
                       "no leaf-name typo detected (no alias wrapper needed)")
 
 
+def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
+    """ORGANIC #518 — auto-emit a reset/clock NAME-VARIANT alias wrapper for the
+    TOP module so a hidden testbench instantiating an equivalent STANDARD
+    spelling (e.g. a `reset_n` design vs a TB using `.rst_n`) elaborates.
+
+    This is the REAL wiring of `reset_clock_variant_alias.py` into the flow (the
+    #518 reopen flagged that the program was dormant — same disease as #517
+    round-1). UNLIKE the leaf-typo case (a different MODULE name → a sibling
+    wrapper), the reset/clock case is a different PORT name on the SAME module
+    name the TB instantiates — so the wrapper must TAKE OVER the top name: the
+    top module is renamed to `<top>__rcvar_inner` in place and a wrapper named
+    `<top>` exposing the canonical reset/clock port names instantiates it.
+
+    Applies ONLY to the designated TOP module (not internal sub-modules, whose
+    callers use the original port names). Best-effort + idempotent + polarity-
+    safe (the emitter RAISES on any cross-polarity rename); never fails the flow.
+    """
+    t0 = time.time()
+    rtl_dir = _pl.rtl_dir(project)
+    if not rtl_dir.is_dir():
+        return StepResult("reset_clock_variant_aliases", "SKIP",
+                          time.time() - t0, "no rtl/ directory yet")
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import reset_clock_variant_alias as _rcv
+    except Exception as e:  # pragma: no cover — defensive import guard
+        return StepResult("reset_clock_variant_aliases", "SKIP",
+                          time.time() - t0, f"emitter unavailable: {e}")
+    inner = f"{top}__rcvar_inner"
+    # Locate the file declaring the TOP module + collect every other place the
+    # top NAME appears across rtl/ (to detect internal instantiations).
+    top_re = re.compile(rf"\bmodule\s+{re.escape(top)}\b")
+    name_re = re.compile(rf"\b{re.escape(top)}\b")
+    target: Optional[Path] = None
+    target_txt = ""
+    all_modules: set = set()
+    top_refs = 0          # occurrences of the top NAME that are NOT its own
+    top_decls = 0         # `module <top>` / `endmodule : <top>` declarations
+    for f in sorted(rtl_dir.rglob("*")):
+        if f.suffix not in (".v", ".sv") or not f.is_file():
+            continue
+        try:
+            txt = f.read_text(errors="replace")
+        except OSError:
+            continue
+        stripped = _rcv._strip_comments(txt)
+        for m in re.finditer(r"\bmodule\s+([A-Za-z_]\w*)\b", stripped):
+            all_modules.add(m.group(1))
+        # count top-name uses, classifying decl vs reference.
+        top_decls += len(re.findall(rf"\bmodule\s+{re.escape(top)}\b", stripped))
+        top_decls += len(re.findall(
+            rf"\bendmodule\s*:\s*{re.escape(top)}\b", stripped))
+        top_refs += len(name_re.findall(stripped))
+        if target is None and top_re.search(stripped):
+            target, target_txt = f, txt
+    if target is None:
+        return StepResult("reset_clock_variant_aliases", "SKIP",
+                          time.time() - t0, f"top module {top!r} not in rtl/")
+    # Safety guard (#518 round-2 adversarial review): the transform renames the
+    # top and gives a canonical-port wrapper its name. If ANOTHER module
+    # instantiates the top (so the top name appears beyond its own module /
+    # endmodule-label declarations), that caller still wires the ORIGINAL port
+    # names → the wrapper would silently break it. In that case the chosen
+    # "top" is not a true external-TB top; SKIP rather than emit broken RTL.
+    if top_refs > top_decls:
+        return StepResult(
+            "reset_clock_variant_aliases", "SKIP", time.time() - t0,
+            f"top {top!r} is instantiated/referenced internally "
+            f"({top_refs - top_decls} extra use(s)); refusing to rename it to "
+            f"avoid breaking the internal caller")
+    if inner in all_modules:
+        return StepResult("reset_clock_variant_aliases", "SKIP",
+                          time.time() - t0, "alias wrapper already present")
+    ports = _rcv.parse_module_ports(target_txt, top)
+    if not ports:
+        return StepResult("reset_clock_variant_aliases", "SKIP",
+                          time.time() - t0,
+                          f"top {top!r} has no parseable ANSI ports")
+    plan = _rcv.plan_aliases([p[2] for p in ports])
+    if not plan:
+        return StepResult("reset_clock_variant_aliases", "SKIP",
+                          time.time() - t0,
+                          "top reset/clock ports already canonical")
+    try:
+        pblock, pnames = _rcv.parse_module_params(target_txt, top)
+        wrapper = _rcv.emit_variant_alias_wrapper(
+            inner, ports, plan, wrapper_name=top,
+            param_block=pblock, param_names=pnames)
+    except ValueError as e:  # cross-polarity guard — never alias unsafely
+        return StepResult("reset_clock_variant_aliases", "SKIP",
+                          time.time() - t0, f"polarity-guard declined: {e}")
+    # Rename the TOP module → inner (the `module <top>` decl + any labelled
+    # `endmodule : <top>`). Only the top file is touched.
+    new_txt = re.sub(rf"\bmodule(\s+){re.escape(top)}\b",
+                     rf"module\g<1>{inner}", target_txt, count=1)
+    new_txt = re.sub(rf"\bendmodule(\s*:\s*){re.escape(top)}\b",
+                     rf"endmodule\g<1>{inner}", new_txt)
+    new_txt = new_txt.rstrip("\n") + "\n\n" + wrapper
+    try:
+        target.write_text(new_txt)
+    except OSError as e:
+        return StepResult("reset_clock_variant_aliases", "SKIP",
+                          time.time() - t0, f"write failed: {e}")
+    return StepResult(
+        "reset_clock_variant_aliases", "PASS", time.time() - t0,
+        f"top {top!r} reset/clock ports {plan} aliased to canonical; wrapper "
+        f"takes the top name, inner renamed {inner!r}", [str(target)])
+
+
 def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
     t0 = time.time()
     # v0.1.10: program-FIRST. If a structured RTL spec is present and is
@@ -5323,6 +5434,13 @@ def main() -> int:
     # either spelling elaborates — without the author having to remember to run
     # the program. Best-effort + collision-safe; never gates.
     plan.append(step_leaf_typo_aliases(project))
+
+    # ORGANIC #518 — auto-emit a reset/clock NAME-VARIANT alias wrapper for the
+    # TOP module so a hidden TB using an equivalent STANDARD spelling (reset_n
+    # design vs .rst_n TB) elaborates. Same wiring intent as #517 but the
+    # wrapper TAKES OVER the top name (port-rename, not module-rename). Best-
+    # effort + polarity-safe; never gates.
+    plan.append(step_reset_clock_variant_aliases(project, args.top_name))
 
     # Step 2a — design-complexity advisory (ADVISORY-ONLY, NON-GATING).
     # Runs right after RTL is available so the estimator can scan it.

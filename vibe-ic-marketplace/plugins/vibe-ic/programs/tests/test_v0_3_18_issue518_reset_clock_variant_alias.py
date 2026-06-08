@@ -182,3 +182,168 @@ def test_parameterized_module_ports_parse(tmp_path):
     ports = V.parse_module_ports(rtl, "mycore")
     assert [p[2] for p in ports] == ["clk", "reset_n", "d", "q"]
     assert V.plan_aliases([p[2] for p in ports]) == {"reset_n": "rst_n"}
+
+
+# ── REOPEN ROUND-2 REGRESSIONS (#518): wired into the runner (was DORMANT) ──
+
+def _runner():
+    import phase2_one_shot_runner as P
+    import _path_layout as _pl
+    return P, _pl
+
+
+def _seq_core(reset_name: str) -> str:
+    return (f"module sequence_detector(\n"
+            f"    input wire clk,\n"
+            f"    input wire {reset_name},\n"
+            f"    input wire data_in,\n"
+            f"    output reg detected\n"
+            f");\n"
+            f"    always @(posedge clk or negedge {reset_name})\n"
+            f"        if (!{reset_name}) detected <= 1'b0; "
+            f"else detected <= data_in;\n"
+            f"endmodule\n")
+
+
+def test_step_wired_binding_repro_elaborates(tmp_path):
+    # the #518 reopen binding case: core declares active-low `reset_n`; a hidden
+    # TB instantiates `.rst_n`. The runner step must auto-emit a wrapper that
+    # TAKES the top name and exposes `rst_n`, so the TB elaborates.
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "sequence_detector.v").write_text(_seq_core("reset_n"))
+    r = P.step_reset_clock_variant_aliases(tmp_path, "sequence_detector")
+    assert r.status == "PASS", (r.status, r.detail)
+    body = (rtl / "sequence_detector.v").read_text()
+    # the wrapper keeps the TOP name and exposes the canonical rst_n.
+    assert "module sequence_detector (" in body
+    assert "input rst_n" in body
+    assert "module sequence_detector__rcvar_inner(" in body
+    assert ".reset_n(rst_n)" in body
+    iv = shutil.which("iverilog")
+    if not iv:
+        pytest.skip("iverilog not on this host")
+    tb = tmp_path / "tb.v"
+    tb.write_text(
+        "module tb; reg clk=0,rst_n=0,data_in=0; wire detected;"
+        " sequence_detector dut(.clk(clk),.rst_n(rst_n),"
+        ".data_in(data_in),.detected(detected)); endmodule\n")
+    res = subprocess.run(
+        [iv, "-g2012", "-o", str(tmp_path / "sd"), str(tb),
+         str(rtl / "sequence_detector.v")],
+        capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+
+
+def test_step_idempotent(tmp_path):
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "sequence_detector.v").write_text(_seq_core("reset_n"))
+    assert P.step_reset_clock_variant_aliases(
+        tmp_path, "sequence_detector").status == "PASS"
+    assert P.step_reset_clock_variant_aliases(
+        tmp_path, "sequence_detector").status == "SKIP"
+
+
+def test_step_parameterized_top_forwards_params(tmp_path):
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "core.v").write_text(
+        "module core #(parameter W=8)(input clk, input reset_n,"
+        " input [W-1:0] d, output reg [W-1:0] q);\n"
+        " always @(posedge clk or negedge reset_n)"
+        " if(!reset_n) q<=0; else q<=d;\nendmodule\n")
+    r = P.step_reset_clock_variant_aliases(tmp_path, "core")
+    assert r.status == "PASS"
+    body = (rtl / "core.v").read_text()
+    assert "module core #(" in body and "parameter W" in body
+    assert "core__rcvar_inner #(.W(W))" in body
+    iv = shutil.which("iverilog")
+    if not iv:
+        pytest.skip("iverilog not on this host")
+    tb = tmp_path / "tb.v"
+    tb.write_text(
+        "module tb; reg clk=0,rst_n=0; reg [7:0] d=0; wire [7:0] q;"
+        " core #(.W(8)) dut(.clk(clk),.rst_n(rst_n),.d(d),.q(q)); endmodule\n")
+    res = subprocess.run(
+        [iv, "-g2012", "-o", str(tmp_path / "c"), str(tb),
+         str(rtl / "core.v")], capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+
+
+def test_step_active_high_reset_never_leaks_to_active_low(tmp_path):
+    # #511 no-leak: an active-HIGH `reset` must canonicalise to active-HIGH
+    # `rst`, NEVER to an active-low `_n` name. The wrapper exposes `.rst`, so a
+    # TB using `.rst_n` correctly FAILs to elaborate (no silent inversion).
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "c2.v").write_text(
+        "module c2(input clk, input reset, input d, output reg q);\n"
+        " always @(posedge clk) if(reset) q<=0; else q<=d;\nendmodule\n")
+    r = P.step_reset_clock_variant_aliases(tmp_path, "c2")
+    assert r.status == "PASS"
+    body = (rtl / "c2.v").read_text()
+    assert "input rst" in body and "input rst_n" not in body
+    assert ".reset(rst)" in body
+
+
+def test_step_top_only_does_not_touch_submodule(tmp_path):
+    # only the TOP module may be renamed; an internal sub-module that declares
+    # reset_n and is instantiated by name MUST be left intact (its caller wires
+    # the original port name).
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "sub.v").write_text(
+        "module sub(input clk, input reset_n, output q);"
+        " assign q=reset_n; endmodule\n")
+    (rtl / "top.v").write_text(
+        "module top(input clk, input rst_n, output q);"
+        " sub u(.clk(clk),.reset_n(rst_n),.q(q)); endmodule\n")
+    # top is already canonical (rst_n) → SKIP; sub must be untouched.
+    r = P.step_reset_clock_variant_aliases(tmp_path, "top")
+    assert r.status == "SKIP"
+    assert "module sub(" in (rtl / "sub.v").read_text()
+    assert "reset_n" in (rtl / "sub.v").read_text()
+
+
+def test_step_skip_when_no_rtl(tmp_path):
+    P, _pl = _runner()
+    r = P.step_reset_clock_variant_aliases(tmp_path, "whatever")
+    assert r.status == "SKIP"
+
+
+def test_step_skips_when_top_instantiated_internally(tmp_path):
+    # ROUND-2 ADVERSARIAL-REVIEW REGRESSION (#518): if the designated top is
+    # instantiated by ANOTHER module (so it is not really an external-TB top),
+    # renaming it + giving its name to a canonical-port wrapper would silently
+    # break the internal caller (which still wires the ORIGINAL port names). The
+    # step MUST detect the internal reference and SKIP (leave the RTL intact),
+    # never emit broken code.
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "design.v").write_text(
+        "module parent(input clk, input reset_n, output q);\n"
+        "  top dut(.clk(clk), .reset_n(reset_n), .q(q));\n"
+        "endmodule\n"
+        "module top(input clk, input reset_n, output q);"
+        " assign q=clk&reset_n; endmodule\n")
+    r = P.step_reset_clock_variant_aliases(tmp_path, "top")
+    assert r.status == "SKIP", (r.status, r.detail)
+    body = (rtl / "design.v").read_text()
+    # RTL left untouched — no rename, no wrapper.
+    assert "module top(" in body
+    assert "__rcvar_inner" not in body
+    iv = shutil.which("iverilog")
+    if not iv:
+        pytest.skip("iverilog not on this host")
+    # the un-transformed design still elaborates (parent + top consistent).
+    res = subprocess.run(
+        [iv, "-g2012", "-o", str(tmp_path / "d"), str(rtl / "design.v")],
+        capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
