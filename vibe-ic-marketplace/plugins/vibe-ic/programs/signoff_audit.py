@@ -192,6 +192,11 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
     result = AuditResult(program="signoff_audit:tapeout", passed=False)
     evidence: dict = {}
     evidence_count = 0
+    # #515 (continues #513): set when the DRC slot is credited because the
+    # signoff DRC report is 100% stdcell-library-internal (design-level == 0)
+    # — a routing-DRC-clean design whose only DRC items are foundry-cell
+    # internal rules. Demotes the final verdict to PASS_WITH_WAIVERS.
+    drc_library_internal_waived = False
 
     # (a) GDS file exists
     gds_files = _has_files(project_dir, ["*.gds", "*.gds2", "*.gdsii",
@@ -281,18 +286,74 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
              or re.search(r"(?i)\bviolations?\s*[:=]\s*(\d+)", txt))
         return int(m.group(1)) if m else None
 
+    def _drc_classify_summary(p):
+        """Rule-layer classification (#513 `classify_xml`) of a KLayout
+        report-database DRC report. Returns the classify summary dict, or
+        None when the report is NOT a report-database XML (a plain-text DRC
+        log can't be rule-layer classified, so library-internal can't be
+        PROVEN → the caller keeps the strict raw-count FAIL)."""
+        try:
+            txt = p.read_text(errors="replace")
+        except OSError:
+            return None
+        if "<report-database>" not in txt[:2000]:
+            return None
+        try:
+            from drc_rule_layer_classify import classify_xml
+            _per, classify_summary = classify_xml(txt)
+        except Exception:
+            return None
+        return classify_summary
+
     if drc_files:
         chosen = drc_files[0]
         vcount = _drc_violation_count(chosen)
-        if vcount is not None and vcount > 0:
+        classify = (_drc_classify_summary(chosen)
+                    if vcount is not None and vcount > 0 else None)
+        # The classifier is only trustworthy here when it actually ACCOUNTED
+        # for every violation the raw count saw: classified_total == vcount.
+        # A report-database whose <item>s carry no <category> (malformed /
+        # partial) yields classified_total 0 while vcount > 0 — that is NOT
+        # a proven-library-internal design, so design_level must stay unknown
+        # and the slot keeps the strict FAIL.
+        classified_total = (classify.get("total_violations")
+                            if classify else None)
+        design_level = (classify.get("design_level_count")
+                        if classify and classified_total == vcount
+                        else None)
+        if (vcount is not None and vcount > 0
+                and classified_total == vcount and design_level == 0):
+            # #515: nonzero raw count but design-level == 0 → 100%
+            # stdcell-library-internal (foundry-cell li/ct/m1 internal
+            # rules below the router metal stack, #513). The design is
+            # routing-DRC-clean: consume the DESIGN-LEVEL count, not the
+            # raw total, and credit the tapeout DRC slot AS A WAIVER so a
+            # routing-DRC-clean design reaches 4/4 without a hand-written
+            # cascaded tapeout waiver. Real design-level defects
+            # (design_level > 0) still hard-FAIL below.
+            evidence["drc"] = "library_internal_waived"
+            evidence_count += 1
+            drc_library_internal_waived = True
+            result.findings.append(Finding(
+                rule="TAPEOUT_DRC_LIBRARY_INTERNAL_WAIVED", severity="WARNING",
+                message=(f"signoff DRC report '{chosen.name}' carries "
+                         f"{vcount} violation(s) but design-level count is "
+                         f"0 (100% stdcell-library-internal per rule-layer "
+                         f"classify #513) — DRC slot credited as a "
+                         f"library-internal waiver; tapeout verdict demoted "
+                         f"to PASS_WITH_WAIVERS (no cascaded waiver needed)."),
+                file=str(chosen)))
+        elif vcount is not None and vcount > 0:
             evidence["drc"] = False
+            _dl_note = ("" if design_level is None
+                        else f" ({design_level} at design level — met2+/via+)")
             result.findings.append(Finding(
                 rule="TAPEOUT_DRC_VIOLATIONS", severity="ERROR",
                 message=(f"signoff DRC report '{chosen.name}' carries "
-                         f"{vcount} violation(s) — the tapeout checklist "
-                         f"gates on the COUNT, not on file existence "
-                         f"(#437a). Waivable only via the documented "
-                         f"step-waiver path."),
+                         f"{vcount} violation(s){_dl_note} — the tapeout "
+                         f"checklist gates on the design-level COUNT, not "
+                         f"on file existence (#437a/#515). Waivable only "
+                         f"via the documented step-waiver path."),
                 file=str(chosen)))
         elif vcount is None:
             evidence["drc"] = False
@@ -367,11 +428,20 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
                     f"PASS_WITH_WAIVERS — explicit human waiver entry "
                     f"required before mask order.")))
 
+    # #515: a library-internal DRC waiver (design-level == 0) also demotes a
+    # passing tapeout checklist to PASS_WITH_WAIVERS — the raw count is
+    # nonzero (open-deck-vs-foundry-cell divergence), so it is not an
+    # absolute PASS, but it auto-cascades the #513 waiver into Step-36 so no
+    # hand-written cascaded tapeout waiver is required.
+    if result.passed and drc_library_internal_waived and verdict_tier == "PASS":
+        verdict_tier = "PASS_WITH_WAIVERS"
+
     result.summary = {
         "evidence": evidence,
         "evidence_count": evidence_count,
         "threshold": threshold,
         "env_unavailable_steps": env_unavailable_steps,
+        "drc_library_internal_waived": drc_library_internal_waived,
         "verdict_tier": verdict_tier,
     }
     return result

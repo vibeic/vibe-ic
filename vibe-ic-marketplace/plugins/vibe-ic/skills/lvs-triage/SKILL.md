@@ -150,6 +150,51 @@ field-input-vs-runner-input diff — short-circuiting N rounds of surface fixes.
 recipe — the runner's automation has likely picked a different input than the
 field did; diff the inputs first.
 
+## Switching a design-side artifact to runner-auto regeneration leaves a stale provenance entry — verify provenance completeness before declaring the upgrade done (captured #516)
+
+When you promote a step output from a **design-side** manually-installed
+artifact to **runner-auto** regeneration — i.e. you move the design-side
+artifact aside so the runner freshly selects its own input (the right move to
+avoid the #512 input-masking blind spot) — the design-side `provenance.jsonl`
+entry it leaves behind goes **stale** in two distinct ways, and you must
+reconcile BOTH before you can honestly call the design-side→runner-auto switch
+"done":
+
+- **(a) generated_by is stale even when the bytes are identical.** If the
+  runner reproduces the same recipe, the runner output is byte-identical and
+  the entry's content hash still matches — but the entry's `generated_by` field
+  is now wrong (it claims design-side; the file on disk is the runner's). A
+  byte-identical hash is actually the *proof* that runner-auto == the
+  design-side recipe, but it does NOT make the provenance attribution correct.
+  (繁中：`generated_by` 過時 — 雜湊雖對，歸屬已錯。)
+- **(b) other declared outputs of the entry can go missing.** A provenance
+  entry frequently declares MORE than one output (e.g. the report *and* the
+  tool's stdout log). If you move those aside and the runner only regenerates
+  SOME of them under the same names, the entry's other declared outputs are now
+  absent → a `PROVENANCE_OUTPUT_FILE_MISSING` / completeness failure.
+
+**Doctrine:** before declaring the switch complete, run the provenance
+output-hash **completeness check**, and then either **restore the moved-aside
+declared outputs** (regenerate them under their declared names) or **supersede
+the stale entry** (write a fresh runner-authored entry so the runner entry is
+authoritative). Pick restore-vs-supersede by intent, not by reflex.
+
+**Worked evidence (spm LVS upgrade):** moved aside `lvs.rpt` +
+`lvs_netgen_stdout.log`; the runner regenerated `lvs.rpt` (byte-identical hash —
+runner-auto result == design-side recipe) but did NOT regenerate the stdout log
+under that name → the stale entry's declared log was missing → P0 provenance
+FAIL; restoring the log fixed it.
+
+**why_not_bucket_a:** deciding whether a given stale entry should be
+*superseded* (runner now owns it) or have its outputs *restored* depends on
+whether the runner wrote its own replacement entry AND whether a byte-identical
+output is semantically the runner's — a provenance-intent judgement, not a fixed
+rule. The deterministic residual (the completeness check that catches a missing
+declared output) already exists and fires correctly; this section is the
+judgement layer over it. So when you switch a design-side artifact to
+runner-auto, treat the provenance reconciliation as a required closing step, not
+an afterthought.
+
 ## Handoff
 
 - Re-run DRC after LVS fix → `/drc-fix`

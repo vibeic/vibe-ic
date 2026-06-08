@@ -100,9 +100,26 @@ def test_e2e_real_spm_artifact_fails_with_json(tmp_path):
     # #507 acceptance, verbatim CLI shape, against the REAL do-not-match
     # artifact when present on this host (skips cleanly off-host).
     real = Path("/home/reyerchu/AI_IC_design/spm_e2e_v034")
-    if not (real / "reports" / "phase3" / "lvs.rpt").is_file():
+    rpt = real / "reports" / "phase3" / "lvs.rpt"
+    if not rpt.is_file():
         import pytest
         pytest.skip("real spm_e2e_v034 artifact not on this host")
+    # The real artifact is MUTABLE: the GDSII-LVS feature (#508/#509) was
+    # completed and the field runner-auto LVS upgrade (#515/#516) regenerated
+    # this report to a UNIQUE MATCH. When the on-disk report is no longer a
+    # do-not-match, this case's PRECONDITION ("REAL do-not-match artifact") is
+    # gone — assert nothing here; the do-not-match → FAIL path stays fully
+    # covered by the synthetic fixtures above (test_do_not_match_report_fails,
+    # test_failed_pin_matching_fails, test_subcells_match_but_top_mismatch_fails,
+    # test_no_terminal_verdict_is_incomplete_fail). chip-AGNOSTIC: pure verdict
+    # tokens, no chip literal in the gate.
+    _txt = rpt.read_text(errors="replace").lower()
+    _is_mismatch = ("do not match" in _txt or "failed pin matching" in _txt
+                    or "net mismatch" in _txt)
+    if not _is_mismatch:
+        import pytest
+        pytest.skip("real spm_e2e_v034 artifact upgraded to a unique LVS "
+                    "match — do-not-match e2e covered by synthetic fixtures")
     out = tmp_path / "x.json"
     r = subprocess.run(
         [sys.executable, str(PROGRAMS / "lvs_report_check.py"),
