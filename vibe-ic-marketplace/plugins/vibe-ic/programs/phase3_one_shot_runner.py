@@ -7203,7 +7203,10 @@ read_lef {cell_lef_c}
 read_liberty {liberty_c}
 read_def {def_c}
 puts "=== ERC: floating nets ==="
-if {{[catch {{report_floating_nets}} _fn]}} {{ puts "ERC_FN_NONFATAL: $_fn" }}
+# v0.3.16 — ORGANIC #514: -verbose lists the floating net/pin NAMES so the
+# by-owner classifier (erc_float_owner_classify.py) can tell benign
+# design-for-ECO spare-cell I/O from a real functional float.
+if {{[catch {{report_floating_nets -verbose}} _fn]}} {{ puts "ERC_FN_NONFATAL: $_fn" }}
 puts "=== ERC metrics ==="
 if {{[catch {{report_erc_metrics}} _erc]}} {{ puts "ERC_METRICS_NONFATAL: $_erc" }}
 exit
@@ -7216,10 +7219,25 @@ exit
     )
     rc, out, err = _docker_exec(container, cmd, timeout=600)
     log = (out or "") + "\n" + (err or "")
+    # v0.3.16 #514: also capture the -verbose floating net/pin NAME lines
+    # (e.g. " spare_aoi_0/A1") so erc.rpt carries them for the by-owner
+    # classifier, not just the summary counts.
+    _name_re = re.compile(r'^\s+[A-Za-z0-9_\\\[\]/.$:]+\s*$')
     erc_lines = [ln for ln in log.splitlines()
-                 if re.search(r"floating|erc|unconnect|ERC-", ln, re.I)]
+                 if re.search(r"floating|erc|unconnect|ERC-", ln, re.I)
+                 or _name_re.match(ln)]
     floating_m = re.search(r"(\d+)\s+floating net", log, re.I)
     floating = int(floating_m.group(1)) if floating_m else 0
+    # v0.3.16 #514: classify the verbose floats by owner so the runner can
+    # tell benign design-for-ECO spare-cell I/O from a real functional
+    # float. Best-effort (the classifier lives in its own program).
+    erc_classification = None
+    try:
+        import erc_float_owner_classify as _efc
+        _floats = _efc.parse_floats(log)
+        erc_classification = _efc.classify(_floats)
+    except Exception:
+        erc_classification = None
     body = (
         "# Electrical Rule Check (ERC) — OpenROAD open-source path\n"
         "# (ORGANIC-20260531 Step 31 sub-item). Tool: openroad.\n"
@@ -7234,13 +7252,21 @@ exit
         "\n# === full ERC log (last 2 KB) ===\n" + log[-2000:] + "\n"
         "# end of erc.rpt\n")
     erc_rpt.write_text(body)
+    # v0.3.16 #514: a float set that is 100% benign-by-construction
+    # (design-for-ECO spare-cell I/O) is waiver-eligible, not a raw REVIEW.
+    _benign = bool(erc_classification
+                   and erc_classification.get("classification") == "benign-ERC")
+    _erc_verdict = ("PASS" if floating == 0
+                    else "BENIGN-ERC" if _benign else "REVIEW")
     (erc_rpt.parent / "erc.json").write_text(json.dumps({
         "tool": "openroad",
         "mode": "erc_floating_nets_and_metrics",
         "floating_nets": floating,
         "clean": floating == 0,
         "source": str(erc_rpt.relative_to(project)),
-        "verdict": "PASS" if floating == 0 else "REVIEW",
+        "verdict": _erc_verdict,
+        # v0.3.16 #514 — by-owner classification of the floats.
+        "float_classification": erc_classification,
         "note": ("open-source ERC screen; full Calibre PERC "
                  "(latch-up/ESD) deferred"),
     }, indent=2) + "\n")
