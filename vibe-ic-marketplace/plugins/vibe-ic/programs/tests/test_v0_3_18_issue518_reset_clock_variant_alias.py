@@ -393,6 +393,279 @@ def test_step_round3_multimodule_top_aliases_and_tb_elaborates(tmp_path):
     assert res.returncode == 0, res.stderr
 
 
+def test_step_round4_runner_chip_top_name_resolves_author_leaf(tmp_path):
+    # ROUND-4 binding repro (#518): the orchestrator invokes the step with
+    # args.top_name (default 'chip_top') and at this plan position chip_top.v
+    # DOES NOT EXIST YET (it is emitted later inside step_yosys_synth). The
+    # old code SKIPped with "top module 'chip_top' not in rtl/" and the
+    # reset_n leaf was never aliased. The step must now resolve the single
+    # author leaf and alias IT.
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "sequence_detector.v").write_text(_seq_core("reset_n"))
+    r = P.step_reset_clock_variant_aliases(tmp_path, "chip_top")
+    assert r.status == "PASS", (r.status, r.detail)
+    assert "resolved TB-facing leaf" in r.detail
+    body = (rtl / "sequence_detector.v").read_text()
+    assert "module sequence_detector (" in body and "input rst_n" in body
+    iv = shutil.which("iverilog")
+    if not iv:
+        pytest.skip("iverilog not on this host")
+    tb = tmp_path / "tb.v"
+    tb.write_text(
+        "module tb; reg clk=0,rst_n=0,data_in=0; wire detected;"
+        " sequence_detector dut(.clk(clk),.rst_n(rst_n),"
+        ".data_in(data_in),.detected(detected)); endmodule\n")
+    res = subprocess.run(
+        [iv, "-g2012", "-o", str(tmp_path / "sd"), str(tb),
+         str(rtl / "sequence_detector.v")],
+        capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+
+
+def test_step_round4_real_workdir_shape_with_chip_top_present(tmp_path):
+    # the REAL round-4 work-dir shape: author leaf (reset_n) + the #517
+    # leaf-typo synonym wrapper + an auto-emitted chip_top.v WITH the leading
+    # `default_nettype directive (empirically the loader handles it — the
+    # field's directive hypothesis was disproven; the true cause was the wrong
+    # top name + step ordering). step(top='chip_top') must alias the leaf and
+    # rewire BOTH thin wrappers to the inner.
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "sequence_detector.v").write_text(_seq_core("reset_n"))
+    (rtl / "sequencer_detector.v").write_text(
+        "module sequencer_detector(input clk, input reset_n, input data_in,"
+        " output detected);\n"
+        "  sequence_detector u(.clk(clk), .reset_n(reset_n),"
+        " .data_in(data_in), .detected(detected));\nendmodule\n")
+    (rtl / "chip_top.v").write_text(
+        "// auto-emitted chip_top wrapper\n"
+        "`default_nettype none\n"
+        "module chip_top(input wire clk, input wire reset_n,"
+        " input wire data_in, output detected);\n"
+        "  sequence_detector u_dut(.clk(clk), .reset_n(reset_n),"
+        " .data_in(data_in), .detected(detected));\nendmodule\n"
+        "`default_nettype wire\n")
+    r = P.step_reset_clock_variant_aliases(tmp_path, "chip_top")
+    assert r.status == "PASS", (r.status, r.detail)
+    assert "sequence_detector__rcvar_inner u_dut(" in \
+        (rtl / "chip_top.v").read_text()
+    assert "sequence_detector__rcvar_inner u(" in \
+        (rtl / "sequencer_detector.v").read_text()
+    iv = shutil.which("iverilog")
+    if not iv:
+        pytest.skip("iverilog not on this host")
+    tb = tmp_path / "tb.v"
+    tb.write_text(
+        "module tb; reg clk=0,rst_n=0,data_in=0; wire detected;"
+        " sequence_detector dut(.clk(clk),.rst_n(rst_n),"
+        ".data_in(data_in),.detected(detected)); endmodule\n")
+    vfiles = [str(p) for p in sorted(rtl.glob("*.v"))]
+    res = subprocess.run(
+        [iv, "-g2012", "-o", str(tmp_path / "sd"), str(tb), *vfiles],
+        capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+
+
+def test_step_round4_multimodule_project_skips_no_guess(tmp_path):
+    # #511 NEGATIVE no-leak for the new resolution: a multi-module project
+    # (several 0-children leaves under a real parent) has NO unambiguous
+    # TB-facing author module — with top='chip_top' the step must SKIP and
+    # leave every file untouched, never guess.
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "alu.v").write_text(
+        "module alu(input clk, input reset_n, output q);"
+        " assign q=clk&reset_n; endmodule\n")
+    (rtl / "regs.v").write_text(
+        "module regs(input clk, input reset_n, output q);"
+        " assign q=clk|reset_n; endmodule\n")
+    (rtl / "soc.v").write_text(
+        "module soc(input clk, input reset_n, output q1, output q2);\n"
+        "  alu u1(.clk(clk), .reset_n(reset_n), .q(q1));\n"
+        "  regs u2(.clk(clk), .reset_n(reset_n), .q(q2));\nendmodule\n")
+    before = {f.name: f.read_text() for f in rtl.glob("*.v")}
+    r = P.step_reset_clock_variant_aliases(tmp_path, "chip_top")
+    assert r.status == "SKIP", (r.status, r.detail)
+    assert "not single-leaf-shaped" in r.detail
+    after = {f.name: f.read_text() for f in rtl.glob("*.v")}
+    assert before == after
+
+
+def test_step_round4_rerun_after_alias_skips_globally(tmp_path):
+    # idempotency across DIFFERENT top names: after a leaf alias emitted via
+    # top='chip_top', a re-run (any top name) must SKIP on the global
+    # __rcvar_inner marker — never wrap the inner a second time.
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "sequence_detector.v").write_text(_seq_core("reset_n"))
+    assert P.step_reset_clock_variant_aliases(
+        tmp_path, "chip_top").status == "PASS"
+    r2 = P.step_reset_clock_variant_aliases(tmp_path, "chip_top")
+    assert r2.status == "SKIP"
+    assert "already present" in r2.detail
+    r3 = P.step_reset_clock_variant_aliases(tmp_path, "sequence_detector")
+    assert r3.status == "SKIP"
+    assert "already present" in r3.detail
+
+
+def test_step_round4_authored_chip_top_still_aliases_directly(tmp_path):
+    # ADVERSARIAL-REVIEW REGRESSION (round-4): an AUTHORED top literally named
+    # chip_top (spec-to-rtl writes chip_top directly; possibly multi-module)
+    # must keep the round-3 capability — alias chip_top itself when single-leaf
+    # resolution has no answer.
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "core_a.v").write_text(
+        "module core_a(input clk, output q); assign q=clk; endmodule\n")
+    (rtl / "core_b.v").write_text(
+        "module core_b(input clk, output q); assign q=~clk; endmodule\n")
+    (rtl / "chip_top.v").write_text(
+        "module chip_top(input clk, input reset_n, output q1, output q2);\n"
+        "  core_a u1(.clk(clk), .q(q1));\n"
+        "  core_b u2(.clk(clk), .q(q2));\nendmodule\n")
+    r = P.step_reset_clock_variant_aliases(tmp_path, "chip_top")
+    assert r.status == "PASS", (r.status, r.detail)
+    body = (rtl / "chip_top.v").read_text()
+    assert "module chip_top (" in body and "input rst_n" in body
+    assert "module chip_top__rcvar_inner(" in body
+    iv = shutil.which("iverilog")
+    if not iv:
+        pytest.skip("iverilog not on this host")
+    tb = tmp_path / "tb.v"
+    tb.write_text("module tb; reg clk=0,rst_n=0; wire q1,q2;"
+                  " chip_top dut(.clk(clk),.rst_n(rst_n),.q1(q1),.q2(q2));"
+                  " endmodule\n")
+    res = subprocess.run(
+        [iv, "-g2012", "-o", str(tmp_path / "d"), str(tb),
+         *[str(p) for p in sorted(rtl.glob("*.v"))]],
+        capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+
+
+def test_step_round4_l9_native_spelling_guards_skip(tmp_path):
+    # ADVERSARIAL-REVIEW HIGH (round-4): when L9 explicitly declares the
+    # NATIVE port spelling for the module being aliased, the runner's own
+    # L9-driven TBs bind that spelling — the alias must SKIP, leaving the
+    # design untouched (renaming would hard-FAIL reference_tb on a healthy
+    # design).
+    import json as _json
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "sequence_detector.v").write_text(_seq_core("reset_n"))
+    gd = tmp_path / "phase1" / "generated_docs"
+    gd.mkdir(parents=True)
+    (gd / "L9_INTEGRATION_SPEC.json").write_text(_json.dumps({
+        "top_module": "sequence_detector",
+        "top_ports": [{"name": "clk"}, {"name": "reset_n"},
+                      {"name": "data_in"}, {"name": "detected"}]}))
+    before = (rtl / "sequence_detector.v").read_text()
+    r = P.step_reset_clock_variant_aliases(tmp_path, "chip_top")
+    assert r.status == "SKIP", (r.status, r.detail)
+    assert "L9 declares native port spelling" in r.detail
+    assert (rtl / "sequence_detector.v").read_text() == before
+
+
+def test_step_round4_l9_empty_ports_does_not_block(tmp_path):
+    # the REAL round-4 work dir has L9 with top_ports: [] — no spelling
+    # evidence → the canonical alias fires (the field-verified doctrine).
+    import json as _json
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "sequence_detector.v").write_text(_seq_core("reset_n"))
+    gd = tmp_path / "phase1" / "generated_docs"
+    gd.mkdir(parents=True)
+    (gd / "L9_INTEGRATION_SPEC.json").write_text(_json.dumps({
+        "top_module": "sequence_detector", "top_ports": []}))
+    r = P.step_reset_clock_variant_aliases(tmp_path, "chip_top")
+    assert r.status == "PASS", (r.status, r.detail)
+    assert "input rst_n" in (rtl / "sequence_detector.v").read_text()
+
+
+def test_step_comment_module_header_does_not_eat_rename(tmp_path):
+    # ADVERSARIAL-REVIEW MED (round-4): a doc-header comment `// module core …`
+    # above the real declaration must NOT consume the count=1 rename (that
+    # produced a duplicate `module core` + broken RTL while reporting PASS).
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "core.v").write_text(
+        "// module core : toggling datapath, auto-generated header\n"
+        "module core(input clk, input reset_n, output reg q);\n"
+        "  always @(posedge clk or negedge reset_n)"
+        " if(!reset_n) q<=0; else q<=~q;\nendmodule\n")
+    r = P.step_reset_clock_variant_aliases(tmp_path, "core")
+    assert r.status == "PASS", (r.status, r.detail)
+    body = (rtl / "core.v").read_text()
+    # real decl renamed; comment untouched; exactly one wrapper named core.
+    assert "module core__rcvar_inner(" in body
+    assert "// module core :" in body
+    iv = shutil.which("iverilog")
+    if not iv:
+        pytest.skip("iverilog not on this host")
+    tb = tmp_path / "tb.v"
+    tb.write_text("module tb; reg clk=0,rst_n=0; wire q;"
+                  " core dut(.clk(clk),.rst_n(rst_n),.q(q)); endmodule\n")
+    res = subprocess.run(
+        [iv, "-g2012", "-o", str(tmp_path / "d"), str(tb),
+         str(rtl / "core.v")], capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+
+
+def test_step_display_string_is_not_an_instantiation(tmp_path):
+    # ADVERSARIAL-REVIEW MED (round-4): `$display("core init (ok)")` inside a
+    # SIBLING module must not be mistaken for an instantiation of `core` —
+    # that flipped a genuine 2-leaf project into "single-leaf" and corrupted
+    # the string during rewiring. The correct behavior: 2 leaves → SKIP, all
+    # files byte-identical.
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "core.v").write_text(
+        "module core(input clk, input reset_n, output q);"
+        " assign q=clk&reset_n; endmodule\n")
+    (rtl / "helper.v").write_text(
+        "module helper(input clk, output q);\n"
+        "  initial $display(\"core init (ok)\");\n"
+        "  assign q=clk;\nendmodule\n")
+    before = {f.name: f.read_text() for f in rtl.glob("*.v")}
+    r = P.step_reset_clock_variant_aliases(tmp_path, "chip_top")
+    assert r.status == "SKIP", (r.status, r.detail)
+    after = {f.name: f.read_text() for f in rtl.glob("*.v")}
+    assert before == after
+
+
+def test_step_multi_instance_parent_is_genuine_not_thin(tmp_path):
+    # ADVERSARIAL-REVIEW LOW (round-4): a parent that instantiates the leaf
+    # TWICE and has its own logic (XOR) is a REAL design parent, not a thin
+    # wrapper — the #511 genuine-parent guard must fire (explicit-top path)
+    # and the chip_top path must not see a single-leaf shape.
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "core.v").write_text(
+        "module core(input clk, input reset_n, output q);"
+        " assign q=clk&reset_n; endmodule\n")
+    (rtl / "dual.v").write_text(
+        "module dual(input clk, input reset_n, output q);\n"
+        "  wire q0, q1;\n"
+        "  core u0(.clk(clk), .reset_n(reset_n), .q(q0));\n"
+        "  core u1(.clk(clk), .reset_n(reset_n), .q(q1));\n"
+        "  assign q = q0 ^ q1;\nendmodule\n")
+    r = P.step_reset_clock_variant_aliases(tmp_path, "core")
+    assert r.status == "SKIP", (r.status, r.detail)
+    assert "real internal submodule" in r.detail
+    r2 = P.step_reset_clock_variant_aliases(tmp_path, "chip_top")
+    assert r2.status == "SKIP", (r2.status, r2.detail)
+
+
 def test_step_skips_when_top_is_genuine_leaf_submodule(tmp_path):
     # #511 NEGATIVE no-leak (the field's explicit ask): a GENUINE internal leaf
     # submodule — instantiated by a real design parent that also instantiates
