@@ -187,3 +187,22 @@ def test_truly_absent_artefact_still_no_data(tmp_path):
     assert pct is None and src is None
     verdict, _ = u.classify(pct, src)
     assert verdict == "NO_DATA"
+
+
+def test_keyvalue_pct_form_from_own_odb_fill_report(tmp_path):
+    # v0.3.24 emitter↔checker drift guard: the runner's own #445 rows-
+    # already-full odb fill report writes the KEY-VALUE form
+    # `row_utilization_pct 99.75` (unit declared by the `_pct` suffix, no
+    # `%` sign). The checker must parse its own emitter's format — a real
+    # corpus artefact in this shape classified NO_DATA before the fix.
+    rpt = tmp_path / "reports"; rpt.mkdir()
+    (rpt / "density.rpt").write_text(
+        "# Cell/metal fill density report (openroad odb)\n"
+        "filler_instances 2594\n"
+        "row_utilization_pct 99.75\n"
+        "core_inst_count 2932\n"
+        "# rows already full (>=95%): fill complete, 0 new fillers needed\n")
+    pct, src = u.read_utilization(tmp_path)
+    assert pct == 99.75 and src == "reports/density.rpt"
+    verdict, _ = u.classify(pct, src)
+    assert verdict != "NO_DATA"

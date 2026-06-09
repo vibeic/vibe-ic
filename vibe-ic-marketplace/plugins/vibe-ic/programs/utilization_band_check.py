@@ -102,6 +102,15 @@ _UTIL_TEXT = re.compile(
     r"([0-9]*\.?[0-9]+)\s*%",
     re.IGNORECASE)
 
+# Key-value form emitted by the runner's own odb fill report (#445 rows-
+# already-full path): `row_utilization_pct 99.75` — the percent unit is
+# declared by the `_pct` key suffix, no `%` sign follows the number. The
+# checker must parse its own emitter's format (emitter↔checker drift guard).
+_UTIL_TEXT_PCT_KEY = re.compile(
+    r"\b\w*(?:utili[sz]ation|density)\w*_pct\b\s*[:=]?\s*"
+    r"([0-9]*\.?[0-9]+)",
+    re.IGNORECASE)
+
 # An HONEST unresolved disclosure (e.g. "core-area utilization
 # (report_design_area, post-fill): unresolved" with the quantized-floor
 # explanation) is DATA-QUALITY information, not absence of an artefact —
@@ -139,7 +148,7 @@ def _read_from_text(project: Path) -> Tuple[Optional[float], Optional[str]]:
             text = p.read_text(errors="replace")
         except OSError:
             continue
-        m = _UTIL_TEXT.search(text)
+        m = _UTIL_TEXT.search(text) or _UTIL_TEXT_PCT_KEY.search(text)
         if m:
             pct = _coerce_pct(m.group(1))
             if pct is not None:
