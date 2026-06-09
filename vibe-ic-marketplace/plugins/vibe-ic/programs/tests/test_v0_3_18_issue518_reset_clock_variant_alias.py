@@ -317,13 +317,13 @@ def test_step_skip_when_no_rtl(tmp_path):
     assert r.status == "SKIP"
 
 
-def test_step_skips_when_top_instantiated_internally(tmp_path):
-    # ROUND-2 ADVERSARIAL-REVIEW REGRESSION (#518): if the designated top is
-    # instantiated by ANOTHER module (so it is not really an external-TB top),
-    # renaming it + giving its name to a canonical-port wrapper would silently
-    # break the internal caller (which still wires the ORIGINAL port names). The
-    # step MUST detect the internal reference and SKIP (leave the RTL intact),
-    # never emit broken code.
+def test_step_thin_wrapper_parent_still_aliases_and_rewires(tmp_path):
+    # ROUND-3 FIX (#518): the round-2 guard SKIPped whenever the top was
+    # instantiated internally — but a THIN pass-through wrapper (the runner's
+    # auto chip_top or an author synonym wrapper that instantiates ONLY the top)
+    # is NOT a real design parent; the TB still targets the top name, so the
+    # alias MUST still be emitted. The step now aliases AND rewires the wrapper's
+    # instantiation to the inner so nothing breaks.
     P, _pl = _runner()
     rtl = _pl.rtl_dir(tmp_path)
     rtl.mkdir(parents=True)
@@ -334,16 +334,92 @@ def test_step_skips_when_top_instantiated_internally(tmp_path):
         "module top(input clk, input reset_n, output q);"
         " assign q=clk&reset_n; endmodule\n")
     r = P.step_reset_clock_variant_aliases(tmp_path, "top")
-    assert r.status == "SKIP", (r.status, r.detail)
+    assert r.status == "PASS", (r.status, r.detail)
     body = (rtl / "design.v").read_text()
-    # RTL left untouched — no rename, no wrapper.
-    assert "module top(" in body
-    assert "__rcvar_inner" not in body
+    # top renamed to inner; canonical wrapper takes the top name; the thin
+    # parent now instantiates the inner (preserving its .reset_n wiring).
+    assert "module top (" in body and "input rst_n" in body
+    assert "module top__rcvar_inner(" in body
+    assert "top__rcvar_inner dut(" in body
     iv = shutil.which("iverilog")
     if not iv:
         pytest.skip("iverilog not on this host")
-    # the un-transformed design still elaborates (parent + top consistent).
     res = subprocess.run(
         [iv, "-g2012", "-o", str(tmp_path / "d"), str(rtl / "design.v")],
+        capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+
+
+def test_step_round3_multimodule_top_aliases_and_tb_elaborates(tmp_path):
+    # ROUND-3 binding repro (#518): the real clean-room work dir — a reset_n core
+    # plus the runner's auto chip_top AND an author-emitted synonym wrapper, all
+    # instantiating the core. The round-2 guard over-fired (top_refs > top_decls)
+    # and SKIPped → sequence_detector stayed compile_error against a TB using
+    # rst_n. The step must now EMIT and the TB must elaborate.
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "sequence_detector.v").write_text(_seq_core("reset_n"))
+    (rtl / "chip_top.v").write_text(
+        "module chip_top(input clk, input reset_n, input data_in,"
+        " output detected);\n"
+        "  sequence_detector u(.clk(clk), .reset_n(reset_n),"
+        " .data_in(data_in), .detected(detected));\nendmodule\n")
+    (rtl / "sequencer_detector.v").write_text(
+        "module sequencer_detector(input clk, input reset_n, input data_in,"
+        " output detected);\n"
+        "  sequence_detector u(.clk(clk), .reset_n(reset_n),"
+        " .data_in(data_in), .detected(detected));\nendmodule\n")
+    r = P.step_reset_clock_variant_aliases(tmp_path, "sequence_detector")
+    assert r.status == "PASS", (r.status, r.detail)
+    # both thin wrappers were rewired to the inner.
+    assert "sequence_detector__rcvar_inner u(" in \
+        (rtl / "chip_top.v").read_text()
+    assert "sequence_detector__rcvar_inner u(" in \
+        (rtl / "sequencer_detector.v").read_text()
+    iv = shutil.which("iverilog")
+    if not iv:
+        pytest.skip("iverilog not on this host")
+    tb = tmp_path / "tb.v"
+    tb.write_text(
+        "module tb; reg clk=0,rst_n=0,data_in=0; wire detected;"
+        " sequence_detector dut(.clk(clk),.rst_n(rst_n),"
+        ".data_in(data_in),.detected(detected)); endmodule\n")
+    # compile the WHOLE work dir + TB (the TB targets the canonical wrapper).
+    vfiles = [str(p) for p in sorted(rtl.glob("*.v"))]
+    res = subprocess.run(
+        [iv, "-g2012", "-o", str(tmp_path / "sd"), str(tb), *vfiles],
+        capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+
+
+def test_step_skips_when_top_is_genuine_leaf_submodule(tmp_path):
+    # #511 NEGATIVE no-leak (the field's explicit ask): a GENUINE internal leaf
+    # submodule — instantiated by a real design parent that also instantiates
+    # OTHER submodules (not a thin pass-through) — must still be left intact
+    # (its parent wires the original port names). The step must SKIP.
+    P, _pl = _runner()
+    rtl = _pl.rtl_dir(tmp_path)
+    rtl.mkdir(parents=True)
+    (rtl / "leaf.v").write_text(
+        "module leaf(input clk, input reset_n, output q);"
+        " assign q=clk&reset_n; endmodule\n")
+    (rtl / "other.v").write_text(
+        "module other(input clk, output q); assign q=clk; endmodule\n")
+    # datapath is a REAL parent: it instantiates leaf AND other (>1 child).
+    (rtl / "datapath.v").write_text(
+        "module datapath(input clk, input reset_n, output q1, output q2);\n"
+        "  leaf u1(.clk(clk), .reset_n(reset_n), .q(q1));\n"
+        "  other u2(.clk(clk), .q(q2));\nendmodule\n")
+    r = P.step_reset_clock_variant_aliases(tmp_path, "leaf")
+    assert r.status == "SKIP", (r.status, r.detail)
+    assert "module leaf(" in (rtl / "leaf.v").read_text()
+    assert "__rcvar_inner" not in (rtl / "leaf.v").read_text()
+    iv = shutil.which("iverilog")
+    if not iv:
+        pytest.skip("iverilog not on this host")
+    res = subprocess.run(
+        [iv, "-g2012", "-o", str(tmp_path / "d"),
+         *[str(p) for p in sorted(rtl.glob("*.v"))]],
         capture_output=True, text=True, timeout=60)
     assert res.returncode == 0, res.stderr

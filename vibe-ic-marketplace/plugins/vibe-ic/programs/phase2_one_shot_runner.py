@@ -951,6 +951,39 @@ def step_leaf_typo_aliases(project: Path) -> StepResult:
                       "no leaf-name typo detected (no alias wrapper needed)")
 
 
+def _rcvar_instantiates(body: str, child: str) -> bool:
+    """True iff module `body` instantiates module `child` (`child [#(...)] inst (`).
+    Tolerates one level of nested parens in a `#(...)` parameter block."""
+    pat = re.compile(
+        rf"\b{re.escape(child)}\b\s*"
+        r"(?:#\s*\((?:[^()]|\([^()]*\))*\)\s*)?"
+        r"[A-Za-z_]\w*\s*\(")
+    return pat.search(body) is not None
+
+
+def _rcvar_module_bodies(rtl_dir: Path, rcv) -> Dict[str, Tuple[Path, str, str]]:
+    """Map module-name -> (file, full_file_text, module_body) across rtl/.
+    module_body is the comment-stripped text between `module N` and its
+    matching `endmodule` (best-effort, used only for instantiation detection)."""
+    out: Dict[str, Tuple[Path, str, str]] = {}
+    for f in sorted(rtl_dir.rglob("*")):
+        if f.suffix not in (".v", ".sv") or not f.is_file():
+            continue
+        try:
+            txt = f.read_text(errors="replace")
+        except OSError:
+            continue
+        stripped = rcv._strip_comments(txt)
+        for m in re.finditer(r"\bmodule\s+([A-Za-z_]\w*)\b", stripped):
+            name = m.group(1)
+            me = re.search(r"\bendmodule\b", stripped[m.end():])
+            body = stripped[m.end():m.end() + me.start()] if me else \
+                stripped[m.end():]
+            if name not in out:
+                out[name] = (f, txt, body)
+    return out
+
+
 def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
     """ORGANIC #518 — auto-emit a reset/clock NAME-VARIANT alias wrapper for the
     TOP module so a hidden testbench instantiating an equivalent STANDARD
@@ -982,47 +1015,48 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0, f"emitter unavailable: {e}")
     inner = f"{top}__rcvar_inner"
-    # Locate the file declaring the TOP module + collect every other place the
-    # top NAME appears across rtl/ (to detect internal instantiations).
-    top_re = re.compile(rf"\bmodule\s+{re.escape(top)}\b")
-    name_re = re.compile(rf"\b{re.escape(top)}\b")
-    target: Optional[Path] = None
-    target_txt = ""
-    all_modules: set = set()
-    top_refs = 0          # occurrences of the top NAME that are NOT its own
-    top_decls = 0         # `module <top>` / `endmodule : <top>` declarations
-    for f in sorted(rtl_dir.rglob("*")):
-        if f.suffix not in (".v", ".sv") or not f.is_file():
-            continue
-        try:
-            txt = f.read_text(errors="replace")
-        except OSError:
-            continue
-        stripped = _rcv._strip_comments(txt)
-        for m in re.finditer(r"\bmodule\s+([A-Za-z_]\w*)\b", stripped):
-            all_modules.add(m.group(1))
-        # count top-name uses, classifying decl vs reference.
-        top_decls += len(re.findall(rf"\bmodule\s+{re.escape(top)}\b", stripped))
-        top_decls += len(re.findall(
-            rf"\bendmodule\s*:\s*{re.escape(top)}\b", stripped))
-        top_refs += len(name_re.findall(stripped))
-        if target is None and top_re.search(stripped):
-            target, target_txt = f, txt
-    if target is None:
+    # Build a lightweight instantiation graph over rtl/ so we can tell a genuine
+    # internal LEAF submodule (whose real parent wires it by its original port
+    # names — must NOT rename) from the TB-facing top that merely happens to be
+    # wrapped by the runner's auto chip_top and/or a redundant synonym wrapper
+    # (still needs the alias). The latter is exactly the #518 round-3 over-fire:
+    # the old `top_refs > top_decls` guard could not distinguish them and SKIPped
+    # the very multi-module case that needed the alias.
+    bodies = _rcvar_module_bodies(rtl_dir, _rcv)
+    all_modules = set(bodies)
+    if top not in bodies:
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0, f"top module {top!r} not in rtl/")
-    # Safety guard (#518 round-2 adversarial review): the transform renames the
-    # top and gives a canonical-port wrapper its name. If ANOTHER module
-    # instantiates the top (so the top name appears beyond its own module /
-    # endmodule-label declarations), that caller still wires the ORIGINAL port
-    # names → the wrapper would silently break it. In that case the chosen
-    # "top" is not a true external-TB top; SKIP rather than emit broken RTL.
-    if top_refs > top_decls:
+    target, target_txt, _ = bodies[top]
+
+    def _children(mod: str) -> set:
+        body = bodies[mod][2]
+        return {c for c in all_modules
+                if c != mod and _rcvar_instantiates(body, c)}
+
+    def _is_chip_top(name: str) -> bool:
+        return name == "chip_top" or "chip_top" in name
+
+    def _is_passthrough_wrapper(parent: str) -> bool:
+        # A thin wrapper whose ONLY instantiated submodule is the top (a runner
+        # chip_top or an author-emitted synonym wrapper around the same core).
+        return _children(parent) == {top}
+
+    parents = sorted(p for p in all_modules
+                     if p != top and _rcvar_instantiates(bodies[p][2], top))
+    # Genuine design parents = parents that are NOT chip_top and NOT thin
+    # pass-through wrappers (i.e. real modules with the top buried inside a
+    # multi-submodule hierarchy). Their presence means `top` is an internal leaf
+    # whose callers wire the original port names → renaming would break the real
+    # design; SKIP (the #511 negative no-leak case the field flagged).
+    genuine_parents = [p for p in parents
+                       if not _is_chip_top(p) and not _is_passthrough_wrapper(p)]
+    if genuine_parents:
         return StepResult(
             "reset_clock_variant_aliases", "SKIP", time.time() - t0,
-            f"top {top!r} is instantiated/referenced internally "
-            f"({top_refs - top_decls} extra use(s)); refusing to rename it to "
-            f"avoid breaking the internal caller")
+            f"top {top!r} is a real internal submodule of {genuine_parents} "
+            f"(not a TB-facing top); refusing to rename it to avoid breaking "
+            f"the design hierarchy")
     if inner in all_modules:
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0, "alias wrapper already present")
@@ -1044,22 +1078,53 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
     except ValueError as e:  # cross-polarity guard — never alias unsafely
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0, f"polarity-guard declined: {e}")
+    # Instantiation rewrite: `<top> [#(...)] inst (` → `<inner> [#(...)] inst (`.
+    inst_re = re.compile(
+        rf"\b{re.escape(top)}\b(\s*(?:#\s*\((?:[^()]|\([^()]*\))*\)\s*)?"
+        r"[A-Za-z_]\w*\s*\()")
     # Rename the TOP module → inner (the `module <top>` decl + any labelled
-    # `endmodule : <top>`). Only the top file is touched.
+    # `endmodule : <top>`) and append the canonical-port wrapper (which takes
+    # the top name and instantiates the inner).
     new_txt = re.sub(rf"\bmodule(\s+){re.escape(top)}\b",
                      rf"module\g<1>{inner}", target_txt, count=1)
     new_txt = re.sub(rf"\bendmodule(\s*:\s*){re.escape(top)}\b",
                      rf"endmodule\g<1>{inner}", new_txt)
     new_txt = new_txt.rstrip("\n") + "\n\n" + wrapper
+    # Rewire EVERY internal instantiation of the top (the runner's chip_top and
+    # any synonym pass-through wrapper — possibly co-located in this same file)
+    # to point at the inner, preserving the callers' ORIGINAL port connections so
+    # the wrapper taking over the top name never silently breaks them (#518
+    # round-3 fix). The wrapper instantiates the inner and the external TB still
+    # targets the top name = the new canonical wrapper, so neither is rewritten.
+    new_txt = inst_re.sub(rf"{inner}\1", new_txt)
+    written: List[str] = []
     try:
         target.write_text(new_txt)
+        written.append(str(target))
     except OSError as e:
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0, f"write failed: {e}")
+    seen = {target.resolve()}
+    for p in parents:
+        pf, ptxt, _ = bodies[p]
+        rp = pf.resolve()
+        if rp in seen:
+            continue
+        seen.add(rp)
+        ptxt2 = inst_re.sub(rf"{inner}\1", ptxt)
+        if ptxt2 != ptxt:
+            try:
+                pf.write_text(ptxt2)
+                written.append(str(pf))
+            except OSError:
+                pass
+    rewired = len(written) - 1
     return StepResult(
         "reset_clock_variant_aliases", "PASS", time.time() - t0,
         f"top {top!r} reset/clock ports {plan} aliased to canonical; wrapper "
-        f"takes the top name, inner renamed {inner!r}", [str(target)])
+        f"takes the top name, inner renamed {inner!r}"
+        + (f"; rewired {rewired} internal caller file(s) to the inner"
+           if rewired else ""), written)
 
 
 def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
