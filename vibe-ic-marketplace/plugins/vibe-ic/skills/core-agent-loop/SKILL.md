@@ -181,6 +181,64 @@ the fixture must quote it verbatim.
 > it. This Step-2.6 prose covers only the reading-judgment half:
 > picking the right axis and quoting the real line verbatim.
 
+#### Step 2.7 — pre-push hardening doctrine (guard-class diffs, live corpus, single-source tokens)
+
+Three rules learned from real reopen loops; apply them BEFORE Step 3,
+not after the field agent reopens.
+
+1. **Adversarial-review a guard/transform-class fix BEFORE pushing.**
+   When the fix ADDS a guard / SKIP condition / RTL-rewriting transform
+   / verdict re-classification (anything that changes WHEN the plugin
+   acts, not just HOW), spawn independent adversarial reviewers against
+   the uncommitted diff with concrete attack lenses (false-fire on a
+   legitimate shape, false-skip on the motivating shape, blast radius
+   on downstream flow steps, raw-text edits hitting comments/strings).
+   Only findings the reviewer can REPRODUCE count. History: a count
+   guard that shipped review-less was reopened twice (an over-fire on
+   wrapped tops, then an under-fire); the first reviewed round caught
+   two reproduced HIGHs — a destructive rename that broke the runner's
+   own L9-driven TBs, and a comment-line rename that emitted duplicate
+   module declarations — before any field exposure.
+
+   > **why_not_bucket_a:** whether a diff is "guard-class" and whether
+   > a review finding is genuine both require reading the change's
+   > intent; no regex separates a guard from a feature. The
+   > programmable residue is already enforced elsewhere (full-suite
+   > gate, chip-agnostic scan, post-transform sanity checks inside the
+   > transforms themselves).
+
+2. **The host benchmark corpus is LIVE — on-host evidence must be
+   content-gated.** The field agent re-runs benchmarks continuously;
+   any report/RTL under the benchmark work dirs can be OVERWRITTEN
+   between your reproduction and your test run (a FAIL-shaped lvs.rpt
+   became a PASS report mid-fix, mid-session). Therefore: a test that
+   pins a SPECIFIC defect shape found in a real on-host artifact must
+   (a) copy the shape into a synthetic fixture (the durable assertion),
+   and (b) gate any optional on-host check on the CONTENT still being
+   in that shape (`skip` unless the token/shape is present) — never on
+   mere file existence. Deliberate exception: a *canary* test whose
+   purpose IS to track the live corpus (e.g. "checker has no false
+   fail on whatever the corpus holds today") legitimately binds to
+   live state — but then a failure means EITHER a plugin gap OR
+   corpus drift, and the fix must root-cause which.
+
+   > **why_not_bucket_a:** whether a live-corpus test is an
+   > intentional canary (must follow drift) or a pinned-shape repro
+   > (must content-gate) is design intent not derivable from the code;
+   > a blanket lint would mis-flag every canary.
+
+3. **Never hand-copy a verdict/token list — extract it to one shared
+   module and import it everywhere.** A token list duplicated across
+   sites WILL drift (a terminal-verdict token added to one of four
+   copies left the gate and the runner disagreeing on the same
+   report). The same disease wears a second face: an EMITTER whose
+   output format evolves while its CHECKER's parser does not
+   (emitter↔checker drift) — when you change what a step writes, run
+   the program that reads it against the new artifact in the same
+   commit. Both are Bucket-A by construction: prefer
+   `from <shared_tokens> import …` over re-typing a regex, and pin
+   the emitter's current format in the checker's tests.
+
 ### Step 3 — push
 
 ```bash
