@@ -92,14 +92,26 @@ def has_top_level_ports(spice_text: str, top: Optional[str] = None) -> bool:
 
 
 # Phrases netgen emits for a genuine clean match (vs a vacuous/failed one).
+# #524: the canonical "match uniquely" recognition is delegated to the SHARED
+# classifier (lvs_verdict_tokens.MATCHED_RE) so the token can never drift;
+# "the circuits match" stays a local extension (netgen summary-line variant).
 _MATCH_PHRASES = (
-    "circuits match uniquely",
-    "netlists match uniquely",
     "the circuits match",
 )
 
 
 def verdict_claims_match(verdict_text: str) -> bool:
+    try:
+        import sys as _sys
+        from pathlib import Path as _P
+        _here = str(_P(__file__).resolve().parent)
+        if _here not in _sys.path:
+            _sys.path.insert(0, _here)
+        import lvs_verdict_tokens as _lvt
+        if _lvt.MATCHED_RE.search(verdict_text):
+            return True
+    except Exception:  # nosec — best-effort; local phrases below still apply
+        pass
     low = verdict_text.lower()
     return any(p in low for p in _MATCH_PHRASES)
 

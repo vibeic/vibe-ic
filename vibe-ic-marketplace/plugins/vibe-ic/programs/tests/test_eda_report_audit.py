@@ -71,7 +71,7 @@ def test_lvs_report_pass(tmp_path):
         "Subcircuit instance summary: 567 instances compared\n"
         "NET count: 1234\ndevice count: 567\n"
         "Number of topologically valid matches: 567\n"
-        "Circuits match uniquely.\n" + _PAD
+        "Final result: Circuits match uniquely.\n" + _PAD
     )
     result = era._check_lvs(tmp_path)
     assert result.passed is True

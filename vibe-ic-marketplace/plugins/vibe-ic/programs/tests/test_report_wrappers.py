@@ -61,7 +61,8 @@ class TestLvsReportCheck:
             # #507: netgen's REAL terminal PASS token is 'Circuits match
             # uniquely.' (the token the runner's #477 step_lvs keys on);
             # the bare 'Circuits match.' is not netgen's verdict line.
-            "Circuits match uniquely.\nparameter mismatches: 0\n" + _PADDING
+            "Final result: Circuits match uniquely.\n"
+            "parameter mismatches: 0\n" + _PADDING
         )
         assert _run_wrapper("lvs_report_check.py", str(tmp_path)) == 0
 

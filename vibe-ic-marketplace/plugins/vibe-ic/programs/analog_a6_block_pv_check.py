@@ -182,11 +182,26 @@ _LVS_MISMATCH_PHRASES = (
     "circuits do not match", "netlists do not match", "lvs mismatch",
     "lvs: mismatch", "lvs failed", "match: false", "match=false",
     "result: mismatch", "property errors", "incorrect", "unmatched",
+    "failed pin matching",  # #524 — netgen top-level pin-fail terminal verdict
 )
 
 
 def _parse_lvs_match(text: str) -> Optional[bool]:
     """Return True (match), False (mismatch), or None (no verdict)."""
+    # #524 — netgen-specific terminal verdicts defer to the SHARED classifier
+    # first (single source of truth); the tool-generic phrase lists below stay
+    # for calibre/other-tool evidence shapes.
+    try:
+        import sys as _sys
+        from pathlib import Path as _P
+        _here = str(_P(__file__).resolve().parent)
+        if _here not in _sys.path:
+            _sys.path.insert(0, _here)
+        import lvs_verdict_tokens as _lvt
+        if _lvt.MISMATCHED_RE.search(text):
+            return False
+    except Exception:  # nosec — best-effort; phrase lists below still apply
+        pass
     low = text.lower()
     # Mismatch phrases win over match phrases (a report that mentions
     # both 'match' and 'do not match' is a mismatch).

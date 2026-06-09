@@ -166,7 +166,7 @@ def _fake_ms_docker(lvs_text):
 def test_top_lvs_pass_emits_substantiated_merge(tmp_path, monkeypatch):
     p = _ms_project(tmp_path)
     monkeypatch.setattr(TL, "_docker_exec",
-                        _fake_ms_docker("Circuits match uniquely.\n"))
+                        _fake_ms_docker("Final result: Circuits match uniquely.\n"))
     rep = TL.run(p, "chip_top", "x", "sky130A")
     assert rep["rc"] == 0 and rep["verdict"] == "PASS"
     merge = json.loads(

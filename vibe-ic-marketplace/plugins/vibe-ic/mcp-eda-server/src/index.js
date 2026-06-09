@@ -5604,8 +5604,17 @@ puts "DONE: analog layout complete for ${block_name}"
       const lvsRes = dockerExec(lvsCmd, 120000);
       if (lvsRes.success) {
         const lvsOut = lvsRes.output || "";
-        const match = lvsOut.match(/Circuits match uniquely|Final result.*Correct/i);
-        result.lvs = { ran: true, match: !!match, output_tail: lvsOut.slice(-500) };
+        // #524: use the shared empirically-validated classifier — the old
+        // inline match-only regex scored netgen property-error / failed-pin-
+        // matching FAILs as match:true (no mismatch tokens at all), and
+        // "Final result.*Correct" is not a netgen phrase.
+        const v = classifyNetgenVerdict(lvsOut, { reportWritten: true });
+        result.lvs = {
+          ran: true, match: v.matched === true, verdict: v.verdict,
+          property_errors: v.property_errors === true,
+          did_not_run: v.did_not_run === true,
+          output_tail: lvsOut.slice(-500),
+        };
       } else {
         result.lvs = { ran: true, match: false, error: (lvsRes.error || "").toString().slice(-500) };
       }

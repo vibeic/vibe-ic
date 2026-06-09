@@ -71,7 +71,7 @@ def _fake_docker(transcripts, spice_body=".subckt chip_top a b\n.ends\n"):
 def test_lvs_runs_and_passes_on_match(tmp_path, monkeypatch):
     p = _proj(tmp_path)
     monkeypatch.setattr(runner, "_docker_exec",
-                        _fake_docker("Circuits match uniquely.\n"))
+                        _fake_docker("Final result: Circuits match uniquely.\n"))
     monkeypatch.setattr(runner, "_to_container_path", lambda s, c: s)
     r = runner.step_lvs(p, "chip_top", _pdk(), "x")
     assert r.status == "PASS", (r.status, r.detail)

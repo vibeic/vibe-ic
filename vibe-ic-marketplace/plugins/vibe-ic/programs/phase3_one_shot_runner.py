@@ -47,6 +47,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
+import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -4737,10 +4738,16 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     transcript = (out or "") + "\n" + (err or "")
     rpt_txt = lvs_rpt.read_text(errors="replace") if lvs_rpt.is_file() else ""
     blob = transcript + "\n" + rpt_txt
-    matched = bool(re.search(
-        r"Circuits match uniquely|Netlists match uniquely", blob, re.I))
-    mismatched = bool(re.search(
-        r"do not match|NET MISMATCH|netlists do not match|失配", blob, re.I))
+    # #524 — the verdict comes from the SHARED classifier so the runner can
+    # never again drift from the Step-31 gate (#507 put 'failed pin matching'
+    # only into eda_report_audit; this inline copy missed it, so a conclusive
+    # 'Final result: Top level cell failed pin matching.' was mis-reported as
+    # INCOMPLETE instead of a clean LVS-FAIL). classify() also carries the
+    # Final-result guard: a per-subcell 'match uniquely' line in a run killed
+    # before the top-level compare is INCOMPLETE, never a PASS.
+    _verdict_cls = _lvt.classify(blob)
+    matched = _verdict_cls == "MATCH"
+    mismatched = _verdict_cls == "MISMATCH"
     # ORGANIC-20260606 #477 — run-completion honesty check (a): a real
     # netgen compare ALWAYS prints one of the two terminal verdict
     # tokens ("Circuits match uniquely" / "...do NOT match"). When the
@@ -4796,6 +4803,12 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
                     "ext2spice_warning": ext_warning,
                     "extracted_netlist": str(
                         spice_out.relative_to(project))})
+    # #524 — surface netgen's pin-correspondence mismatch lines (e.g.
+    # `(no pin, node is X) | Y`) as readable evidence so a 'failed pin
+    # matching' verdict points the close-loop straight at the port-name gap.
+    pin_ev = _lvt.pin_mismatch_evidence(blob)
+    ev_note = (f"; pin mismatches: {'; '.join(pin_ev[:3])}"
+               + (" …" if len(pin_ev) > 3 else "")) if pin_ev else ""
     verdict = _write_lvs_verdict(
         project, "FAIL", "LVS_MISMATCH",
         f"netgen LVS did not match (rc={rc}) — a real compare ran and "
@@ -4803,15 +4816,17 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         f"gap (#443).",
         extras={"lvs_report": "reports/phase3/lvs.rpt",
                 "ext2spice_warning": ext_warning,
+                "pin_mismatch_evidence": pin_ev,
                 "transcript_tail": transcript[-600:]})
     return StepResult(
         "lvs", "FAIL", time.time() - t0,
         f"netgen LVS did not match (rc={rc}); see "
         f"reports/phase3/lvs.rpt (#443 — a real compare ran; this is a "
-        f"design/extraction defect, not an env gap)",
+        f"design/extraction defect, not an env gap){ev_note}",
         extras={"finding": "LVS_MISMATCH",
                 "lvs_report": "reports/phase3/lvs.rpt",
                 "lvs_verdict": verdict,
+                "pin_mismatch_evidence": pin_ev,
                 "ext2spice_warning": ext_warning,
                 "transcript_tail": transcript[-600:]})
 

@@ -157,7 +157,7 @@ def test_ext2spice_error_flood_is_named_fail(tmp_path, monkeypatch):
                  "ext2spice: 106,250,195 errors were encountered\n")
     monkeypatch.setattr(
         runner, "_docker_exec",
-        _fake_docker("Circuits match uniquely.\n",
+        _fake_docker("Final result: Circuits match uniquely.\n",
                      ext2spice_log=flood_log))
     monkeypatch.setattr(runner, "_to_container_path", lambda s, c: s)
     r = runner.step_lvs(p, "chip_top", _pdk(), "x")
@@ -181,7 +181,7 @@ def test_small_ext2spice_error_count_is_warning_not_fail(tmp_path,
     small_log = "Magic 8.3\nextract all\next2spice: 3 errors\n"
     monkeypatch.setattr(
         runner, "_docker_exec",
-        _fake_docker("Circuits match uniquely.\n",
+        _fake_docker("Final result: Circuits match uniquely.\n",
                      ext2spice_log=small_log))
     monkeypatch.setattr(runner, "_to_container_path", lambda s, c: s)
     r = runner.step_lvs(p, "chip_top", _pdk(), "x")
@@ -201,7 +201,7 @@ def test_clean_complete_lvs_still_passes(tmp_path, monkeypatch):
     p = _proj(tmp_path)
     monkeypatch.setattr(
         runner, "_docker_exec",
-        _fake_docker("Circuits match uniquely.\n"))
+        _fake_docker("Final result: Circuits match uniquely.\n"))
     monkeypatch.setattr(runner, "_to_container_path", lambda s, c: s)
     r = runner.step_lvs(p, "chip_top", _pdk(), "x")
     assert r.status == "PASS", (r.status, r.detail)

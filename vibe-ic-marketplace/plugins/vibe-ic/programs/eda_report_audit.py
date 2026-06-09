@@ -35,6 +35,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List
 
+import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -399,11 +401,16 @@ def _check_lvs(project_dir: Path) -> AuditResult:
     # A mismatch token is AUTHORITATIVE: it FAILs even if sub-cells also
     # printed "match uniquely" and even if categories+signature are
     # present. chip-AGNOSTIC: pure netgen verdict-token parse.
-    matched = bool(re.search(
-        r"Circuits match uniquely|Netlists match uniquely", blob, re.I))
-    mismatched = bool(re.search(
-        r"do not match|netlists do not match|NET MISMATCH|"
-        r"failed pin matching|失配", blob, re.I))
+    # #524 — the verdict now comes from the SHARED classifier
+    # (lvs_verdict_tokens) so this gate and the phase3 runner can never drift
+    # again; it also adds the netgen property-error terminal FAIL ('Property
+    # errors were found' / 'match uniquely with property errors' — empirically
+    # a real LVS fail even when the topology line says 'Circuits match
+    # uniquely') and the Final-result guard (a per-subcell 'match uniquely'
+    # line in a truncated hierarchical run is INCOMPLETE, never a PASS).
+    _verdict_cls = _lvt.classify(blob)
+    matched = _verdict_cls == "MATCH"
+    mismatched = _verdict_cls == "MISMATCH"
     if mismatched:
         result.findings.append(Finding(
             rule="LVS_NETLISTS_DO_NOT_MATCH", severity="ERROR",

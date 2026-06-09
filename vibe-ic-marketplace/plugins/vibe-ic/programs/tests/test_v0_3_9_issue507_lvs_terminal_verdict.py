@@ -71,7 +71,7 @@ def test_failed_pin_matching_fails(tmp_path):
 
 def test_match_uniquely_report_passes(tmp_path):
     # clean report → PASS.
-    proj = _write_lvs(tmp_path, "Circuits match uniquely.\n")
+    proj = _write_lvs(tmp_path, "Final result: Circuits match uniquely.\n")
     r = _audit(proj)
     assert r.passed is True
     assert r.summary["terminal_verdict"] == "MATCH"
@@ -132,7 +132,7 @@ def test_e2e_real_spm_artifact_fails_with_json(tmp_path):
 def test_wrapper_forwards_json_flag(tmp_path):
     # the wrapper must forward --json so the acceptance's /tmp/x.json is
     # written (it hard-coded argv pre-#507).
-    proj = _write_lvs(tmp_path, "Circuits match uniquely.\n")
+    proj = _write_lvs(tmp_path, "Final result: Circuits match uniquely.\n")
     out = tmp_path / "v.json"
     r = subprocess.run(
         [sys.executable, str(PROGRAMS / "lvs_report_check.py"),

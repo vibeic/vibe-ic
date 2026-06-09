@@ -37,6 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
+import lvs_verdict_tokens as _lvt  # noqa: E402  — #524 shared verdict tokens
 
 TOOLS_IN_CONTAINER = "/foss/tools"
 PDKS_IN_CONTAINER = "/foss/pdks"
@@ -192,11 +193,11 @@ def run(project: Path, top: str, container: str, pdk: str) -> dict:
     rc, out, err = _docker_exec(container, cmd, timeout=14400)
     blob = (out or "") + "\n" + (err or "") + "\n" + (
         lvs_rpt.read_text(errors="replace") if lvs_rpt.is_file() else "")
-    matched = bool(re.search(
-        r"Circuits match uniquely|Netlists match uniquely", blob, re.I))
-    mismatched = bool(re.search(
-        r"do not match|NET MISMATCH|netlists do not match", blob, re.I))
-    lvs_pass = matched and not mismatched
+    # #524 — shared verdict classifier (adds 'failed pin matching', the netgen
+    # property-error terminal FAIL, 失配 and the Final-result truncation guard,
+    # all missing from the old inline copy) so this site can never drift from
+    # the Step-31 gate again.
+    lvs_pass = _lvt.classify(blob) == "MATCH"
 
     # 4) emit M1/M4 artifacts ----------------------------------------------
     top_lvs = {
