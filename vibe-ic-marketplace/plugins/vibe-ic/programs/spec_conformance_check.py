@@ -706,6 +706,31 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
                                      _ff.detail))
         except Exception:  # nosec — structural check is best-effort
             pass
+
+    # ---- multi-cycle valid/ready handshake structural checks (ERROR; #523) ---
+    # Two recurring author bugs in an N-cycle valid/ready datapath that PASS the
+    # author's own TB but hang / corrupt under an always-ready consumer:
+    # a load-guard LIVELOCK (missing busy-exclusion) and a RESULT register
+    # driven by a free-running working reg. Both are deterministic, zero-false-
+    # positive STRUCTURAL checks gated on a `*valid` output + `*ready` input
+    # handshake port pair (so streaming / register-mapped / bus designs SKIP).
+    # Wired here instead of living in unreliable valid/ready prose (the #517/#518
+    # prose-is-dormant lesson). Best-effort: a parser hiccup never fails the gate.
+    if rtl_body:
+        try:
+            import sys as _sys
+            _here = str(Path(__file__).resolve().parent)
+            if _here not in _sys.path:
+                _sys.path.insert(0, _here)
+            from handshake_livelock_result_stability_check import (
+                check_text as _hs_chk)
+            _hs_findings, _ = _hs_chk(rtl_body)
+            for _hf in _hs_findings:
+                if _hf.severity == 'ERROR':
+                    f.append(Finding(path, 'ERROR', _hf.rule, _hf.symbol,
+                                     _hf.detail))
+        except Exception:  # nosec — structural check is best-effort
+            pass
     return f
 
 

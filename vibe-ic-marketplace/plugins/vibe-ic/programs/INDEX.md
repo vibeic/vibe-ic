@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 660
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 660)
+- **Total programs (excluding helpers / shims):** 661
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 661)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 651 |
+| `any` | 652 |
 
 ## Alphabetical listing
 
@@ -286,6 +286,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `half_duplex_response_window_check` | any | — | LL-4. |
 | `half_duplex_wrapper_open_drain_check` | any | — | structural-RTL gate that |
 | `handshake_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
+| `handshake_livelock_result_stability_check` | any | v0.3.22 | v0.3.22 (ORGANIC #523). |
 | `hardware_pass_attestation_check` | any | v0.50 | v0.50 plugin gate (third layer) |
 | `hbm3_protocol_synth` | any | v0.1.89 | HBM3-class protocol synth helper. |
 | `hdlc_protocol_synth` | any | v0.1.84 | HDLC / SDLC-class protocol synth helper. |
@@ -732,7 +733,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (651 programs)
+### `any` (652 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -990,6 +991,7 @@ _(no programs in this group)_
 - `half_duplex_response_window_check` — LL-4.
 - `half_duplex_wrapper_open_drain_check` — structural-RTL gate that
 - `handshake_check` — deterministic compliance check derived from <chip-class> v040 debug.
+- `handshake_livelock_result_stability_check` — v0.3.22 (ORGANIC #523).  _[v0.3.22]_
 - `hardware_pass_attestation_check` — v0.50 plugin gate (third layer)  _[v0.50]_
 - `hbm3_protocol_synth` — HBM3-class protocol synth helper.  _[v0.1.89]_
 - `hdlc_protocol_synth` — HDLC / SDLC-class protocol synth helper.  _[v0.1.84]_
