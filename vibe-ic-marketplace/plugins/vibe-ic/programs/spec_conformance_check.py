@@ -683,6 +683,29 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
                     f"(held-reset contiguous window comes out N-1, not N). "
                     f"Drive '{sig}' from the FSM state alone; do not gate it "
                     f"with the reset."))
+
+    # ---- FSM next-state transition completeness (ERROR; #522) --------------
+    # Recurring across benchmark clean-room rounds 1-3: a fresh author makes a
+    # next-state logic error on a different FSM each round. The Moore/Mealy check
+    # above only validates OUTPUT STYLE — not that the next-state logic is sound.
+    # This wires the deterministic, zero-false-positive STRUCTURAL check (an
+    # inferred latch in the next-state case) into the gate so it fires on every
+    # FSM design instead of living in unreliable agent prose (the #517/#518
+    # prose-is-dormant lesson). Best-effort: a parser hiccup never fails the gate.
+    if spec.fsm_output_style and rtl_body:
+        try:
+            import sys as _sys
+            _here = str(Path(__file__).resolve().parent)
+            if _here not in _sys.path:
+                _sys.path.insert(0, _here)
+            from fsm_transition_completeness_check import check_text as _fsm_chk
+            _fsm_findings, _ = _fsm_chk(rtl_body)
+            for _ff in _fsm_findings:
+                if _ff.severity == 'ERROR':
+                    f.append(Finding(path, 'ERROR', _ff.rule, _ff.state,
+                                     _ff.detail))
+        except Exception:  # nosec — structural check is best-effort
+            pass
     return f
 
 
