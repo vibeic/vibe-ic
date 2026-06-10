@@ -175,6 +175,11 @@ _SKIP_PATH_PATTERNS = (
     # benchmarks — upstream dataset release tags (e.g. an HF dataset
     # "v1.1.0") are inherent registry content, never plugin self-claims.
     "BENCHMARK_REGISTRY.json",
+    # …and the CVDP env-preflight program + its test: their PURPOSE is the
+    # official external tool-version spec table (iverilog/yosys/cocotb/
+    # verilator pins from the upstream Dockerfile.sim) — external versions
+    # by design, same rationale as the tool-output artefact family.
+    "cvdp_env_preflight",
     # RFC / planning docs legitimately discuss target / proposed
     # versions before plugin.json bumps (same exemption rationale
     # as CHANGELOG / RELEASE_NOTES).
@@ -392,6 +397,9 @@ _DEPENDENCY_TOOL_NAMES = frozenset({
     # PDKs / foundry process names
     "sky130", "sky130a", "sky130b", "gf180", "gf180mcu", "gf180mcuc",
     "gf180mcud", "skywater", "globalfoundries",
+    # external dataset/platform names whose release tags appear in benchmark
+    # docs ("HF v1.1.0" = the HuggingFace dataset release, #537 family)
+    "hf", "huggingface",
 })
 
 # trailing alphanumeric word after stripping the usual separators that sit
