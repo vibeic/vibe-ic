@@ -1191,6 +1191,32 @@ def main():
     args = ap.parse_args()
 
     if args.fix:
+        # ORGANIC #533 — compile-neutrality safety net (guard-the-guard).
+        # #530 fixed two SPECIFIC fixer bugs that broke a compiling design;
+        # this is the STRUCTURAL net for every FUTURE fixer bug: when the
+        # file compiled BEFORE the fix, it must still compile AFTER —
+        # otherwise revert everything and WARN. A pre-broken file is fixed
+        # as usual (no revert — the fixer is not what broke it). Skipped
+        # silently when iverilog is unavailable (the net needs a verifier).
+        import shutil as _sh
+        import subprocess as _sp
+        _iv = _sh.which("iverilog")
+
+        def _compiles(fp: Path) -> bool:
+            # -i ignores missing submodules so the net also protects
+            # hierarchical/multi-file RTL (review round-2: a file
+            # instantiating an elsewhere-defined submodule failed the
+            # standalone pre-compile and silently disarmed the net);
+            # genuine fixer breakage (e.g. an `initial` referencing a
+            # generate-scoped reg) is an elaboration error -i does NOT
+            # suppress, so the net still catches real bugs.
+            try:
+                return _sp.run([_iv, "-g2012", "-i", "-t", "null", str(fp)],
+                               capture_output=True, timeout=120
+                               ).returncode == 0
+            except Exception:
+                return False
+
         total = 0
         guarded_total = 0
         for f in args.files:
@@ -1198,16 +1224,25 @@ def main():
             if not p.exists():
                 print(f"WARNING: file not found: {f}", file=sys.stderr)
                 continue
+            pre_text = p.read_text(errors="replace")
+            pre_ok = _compiles(p) if _iv else False
             n, names = autofix_uninit_registered_output(p)
-            total += n
             if n:
                 print(f"{f}: inserted `initial` power-up 0 for {names}")
             # Run the sim-only-assert fence AFTER the power-up fix (the latter
             # appends an `initial` block before endmodule; order is independent).
             g, glabels = autofix_guard_sim_only_assert(p)
-            guarded_total += g
             if g:
                 print(f"{f}: fenced sim-only assertion(s) in translate_off guard: {glabels}")
+            if _iv and pre_ok and (n or g) and not _compiles(p):
+                p.write_text(pre_text)
+                n = g = 0
+                print(f"WARN fix-reverted-noncompiling: {f} compiled before "
+                      f"--fix but not after; ALL fixes reverted (#533 "
+                      f"compile-neutrality net — file a backlog with this "
+                      f"file as the repro)", file=sys.stderr)
+            total += n
+            guarded_total += g
         print(f"rtl_hygiene_lint --fix: repaired {total} reset-less registered output(s), "
               f"fenced {guarded_total} sim-only assertion construct(s)")
         return 0
