@@ -323,6 +323,50 @@ _YOSYS_CELLS_RE = re.compile(
 
 _MODULE_NAMES_RE = re.compile(r"\bmodule\s+([A-Za-z_]\w*)", re.MULTILINE)
 
+_CTX_MODULE_RE = re.compile(
+    r"referenced in module .* is not part of the design")
+_LATCH_ERROR_RE = re.compile(
+    r"ERROR:.*(?:No latch inferred for signal"
+    r"|Latch inferred for signal)")
+
+
+def _confirming_rerun(code_text: str, top: str, workdir: Path,
+                      tolerable_names=()) -> Tuple[bool, str]:
+    """#531 round-5 (adversarial-review HIGH) — yosys aborts at the FIRST
+    error, and both tolerated classes fire in EARLY passes (HIERARCHY /
+    PROC_DLATCH): a later-pass fatal (e.g. PROC_DFF multiple-edge) never
+    prints, so the tolerated error being the only ERROR line proves
+    nothing about the rest of the module. Before tolerating, re-run yosys
+    on a smoke COPY with the tolerated obstacle neutralized (latch
+    keywords relaxed / missing context modules stubbed) so any
+    INDEPENDENT fatal gets the chance to surface. Only a clearly
+    independent, non-tolerable ERROR blocks; an inconclusive re-run
+    (clean, stub-connection errors, no ERROR lines at all) keeps the
+    field-accepted tolerance — the re-run may only ADD blocking power,
+    never widen the tolerance."""
+    f2 = workdir / "smoke_confirm.sv"
+    f2.write_text(code_text)
+    rc, out, err = _run(
+        ["yosys", "-p",
+         f"read_verilog -sv {f2}; synth -top {top}; stat"], timeout=300)
+    blob = (out or "") + "\n" + (err or "")
+    if rc == 0:
+        return True, "confirming re-run clean"
+    err_lines = [ln for ln in blob.splitlines() if "ERROR:" in ln]
+    pat = (r"ERROR:.*(?:No latch inferred for signal"
+           r"|Latch inferred for signal"
+           r"|referenced in module .* is not part of the design")
+    for n in sorted(tolerable_names):
+        pat += "|" + re.escape(n)
+    pat += ")"
+    tolerable = re.compile(pat)
+    if not err_lines or all(tolerable.search(ln) for ln in err_lines):
+        return True, "confirming re-run inconclusive (no independent fatal)"
+    tail = [s for s in blob.splitlines() if s.strip()][-3:]
+    return False, (f"yosys-smoke failed on module {top!r} (confirming "
+                   f"re-run surfaced a fatal the early-pass abort had "
+                   f"masked): " + "; ".join(tail))
+
 
 def yosys_smoke(code: str, workdir: Path,
                 stubs_text: str = "") -> Tuple[bool, str]:
@@ -372,14 +416,31 @@ def yosys_smoke(code: str, workdir: Path,
                                f"may trail the official 0.40)")
                 continue
             # #531 round-4 (field full-corpus regression) — two synth-stage
-            # error classes must be TOLERATED, not blocked:
+            # error classes must be TOLERATED, not blocked. Both abort
+            # yosys in an EARLY pass, so each tolerance first runs a
+            # confirming re-run (_confirming_rerun) that neutralizes the
+            # tolerated obstacle and blocks only on an INDEPENDENT fatal
+            # the abort had masked (#531 round-5 adversarial review).
             # (a) hierarchy unknown CONTEXT module — the compile path
             #     tolerates unknown context modules (with or without a
             #     derivable stub) but the synth hierarchy pass hard-fails on
             #     them; mirror the compile-path tolerance (the official
             #     harness supplies those context files at scoring time).
-            if re.search(r"referenced in module .* is not part of the "
-                         r"design", blob):
+            if _CTX_MODULE_RE.search(blob):
+                missing = set(re.findall(
+                    r"Module `\\?(\w+)' referenced in module", blob))
+                missing -= set(own_modules) | stub_names
+                if missing:
+                    # prefer a port-aware _stub_for stub (named/positional
+                    # connections elaborate past hierarchy so later-pass
+                    # fatals can print); port-less fallback otherwise.
+                    stubbed = full + "\n" + "\n".join(
+                        _stub_for(code, m) or f"module {m}(); endmodule"
+                        for m in sorted(missing))
+                    ok2, why2 = _confirming_rerun(stubbed, top, workdir,
+                                                  tolerable_names=missing)
+                    if not ok2:
+                        return False, why2
                 details.append(f"{top}: unknown context module(s) at synth "
                                f"hierarchy tolerated (mirrors the compile-"
                                f"path context tolerance)")
@@ -397,13 +458,19 @@ def yosys_smoke(code: str, workdir: Path,
             #     co-occurring REAL fatal ERROR (e.g. PROC_DFF "Multiple
             #     edge sensitive events") as PASS. Tolerate ONLY when every
             #     ERROR: line is latch-class; any non-latch ERROR → block.
+            #     The confirming re-run relaxes always_comb/always_latch to
+            #     plain `always @*` (smoke COPY only — never written back)
+            #     so the inferred latch becomes a benign INFO and synthesis
+            #     proceeds past PROC_DLATCH to surface later-pass fatals.
             error_lines = [ln for ln in blob.splitlines()
                            if "ERROR:" in ln]
-            latch_error = re.compile(
-                r"ERROR:.*(?:No latch inferred for signal"
-                r"|Latch inferred for signal)")
-            if error_lines and all(latch_error.search(ln)
+            if error_lines and all(_LATCH_ERROR_RE.search(ln)
                                    for ln in error_lines):
+                relaxed = re.sub(r"\balways_(?:comb|latch)\b",
+                                 "always @*", full)
+                ok2, why2 = _confirming_rerun(relaxed, top, workdir)
+                if not ok2:
+                    return False, why2
                 details.append(f"{top}: latch-inference strictness "
                                f"tolerated as ADVISORY (yosys always_comb/"
                                f"latch semantic check exceeds the official "

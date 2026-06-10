@@ -797,6 +797,60 @@ def test_round5_latch_error_line_still_advisory_when_sole_error_class():
     assert not all(latch_error.search(ln) for ln in masked)
 
 
+def test_round5_review_latch_error_abort_must_not_mask_later_fatal(tmp_path):
+    # adversarial-review HIGH (round-5): yosys aborts at the FIRST error and
+    # PROC_DLATCH runs before PROC_DFF — an always_comb latch ERROR is then
+    # the ONLY ERROR line, so "all ERROR lines are latch-class" proves
+    # nothing about later passes. The confirming re-run (latch keywords
+    # relaxed on a smoke copy) must surface the masked multiple-edge fatal.
+    if not (_HAS_IVERILOG and _HAS_YOSYS):
+        pytest.skip("iverilog/yosys not on this host")
+    mask = _json.dumps({"code": [{"rtl/d.sv":
+        "module dut(input en, input d, input a, input b, input c,\n"
+        "           output reg q, output reg r);\n"
+        "  always_comb begin\n"
+        "    if (en) q = d;\n"   # latch ERROR aborts PROC_DLATCH first
+        "  end\n"
+        "  always @(posedge a or posedge b) r <= c;\n"  # masked fatal
+        "endmodule"}]})
+    batch = _write_batch(tmp_path, [{"id": "p_lmask", "completion": mask}])
+    out = tmp_path / "responses.jsonl"
+    rc = G.main(["--batch", str(batch), "--out", str(out),
+                 "--report", str(tmp_path / "rep.json")])
+    assert rc == 1
+    assert _read_jsonl(out) == []
+    rep = _json.loads((tmp_path / "rep.json").read_text())
+    assert rep["records"][0]["verdict"] == "BLOCKED"
+    assert "confirming re-run" in rep["records"][0].get("synth", "")
+
+
+def test_round5_review_context_abort_must_not_mask_later_fatal(tmp_path):
+    # adversarial-review MED (round-5): the hierarchy unknown-context abort
+    # is the EARLIEST pass — the context tolerance must stub the missing
+    # module(s) and re-run so an INDEPENDENT fatal in the same module gets
+    # the chance to print; a context-only module stays tolerated.
+    if not (_HAS_IVERILOG and _HAS_YOSYS):
+        pytest.skip("iverilog/yosys not on this host")
+    import tempfile
+    code_bad = ("module dut(input clk, input rst, input a,\n"
+                "           output reg q, output z);\n"
+                "  unknown_ctx u(.x(a), .y(z));\n"
+                "  always @(posedge clk or posedge rst or negedge a)\n"
+                "    q <= a;\n"
+                "endmodule")
+    code_ok = ("module top1(input clk, input a, output z);\n"
+               "  unknown_ctx u(.x(a), .y(z));\n"
+               "  reg q;\n"
+               "  always @(posedge clk) q <= a;\n"
+               "endmodule")
+    with tempfile.TemporaryDirectory() as td:
+        ok, why = G.yosys_smoke(code_bad, Path(td), stubs_text="")
+        assert not ok and "confirming re-run" in why, why
+    with tempfile.TemporaryDirectory() as td:
+        ok, why = G.yosys_smoke(code_ok, Path(td), stubs_text="")
+        assert ok and "context module" in why, why
+
+
 def test_synth_stage_block_stderr_names_the_synth_reason(tmp_path, capsys):
     # ORGANIC #539 — the per-record BLOCKED stderr one-liner used to always
     # print the compile field, so a synth-stage block read "compile clean"
