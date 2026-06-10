@@ -83,13 +83,63 @@ def code_fences(completion: str) -> List["re.Match"]:
     return out
 
 
+_RTL_SUFFIXES = (".sv", ".v", ".svh", ".vh")
+
+
+def json_code_files(completion: str) -> Optional[Dict[str, str]]:
+    """ORGANIC #528 round-2 — the OFFICIAL CVDP completion shape is a JSON
+    code-dict: `{"code": [{"rtl/foo.sv": "module foo..."}, ...]}` (list of
+    single-key dicts, or a flat dict). The official
+    `model_helpers.parse_model_response` parses first-`{` → last-`}` →
+    json.loads → unwrap `code`; this mirrors it. Returns {path: content} or
+    None when the completion is not that shape. Without this, the raw JSON
+    string was fed to iverilog as bare Verilog and LEGAL completions were
+    falsely BLOCKED (field round-2 counter-evidence: 3 harness-PASSing
+    records mis-blocked)."""
+    i = completion.find("{")
+    j = completion.rfind("}")
+    if i == -1 or j <= i:
+        return None
+    try:
+        obj = json.loads(completion[i:j + 1])
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    code = obj.get("code")
+    files: Dict[str, str] = {}
+    if isinstance(code, list):
+        for entry in code:
+            if isinstance(entry, dict):
+                for k, v in entry.items():
+                    if isinstance(k, str) and isinstance(v, str):
+                        files[k] = v
+    elif isinstance(code, dict):
+        for k, v in code.items():
+            if isinstance(k, str) and isinstance(v, str):
+                files[k] = v
+    return files or None
+
+
 def extract_code(completion: str) -> Tuple[Optional[str], str]:
-    """Return (code, kind). kind ∈ {'fenced','bare','doc_only'}.
-    Code fences are concatenated in order; a fence-less completion that
-    itself carries a module declaration is treated as bare code; a
-    completion with neither — or whose code carries no module at all (a
-    prose/snippet answer that cannot meaningfully compile standalone) — is
-    doc/SVA-prose (tolerated, not compiled)."""
+    """Return (code, kind). kind ∈ {'json_dict','fenced','bare','doc_only'}.
+
+    The official JSON code-dict shape is checked FIRST (#528 round-2): its
+    RTL-suffixed file contents are concatenated as the compile payload; a
+    JSON answer whose files carry no Verilog module (JSON-schema / doc
+    problems) is doc_only (tolerated). Then code fences (concatenated in
+    order), then bare module-carrying text; anything else is doc/SVA-prose
+    (tolerated, not compiled)."""
+    jf = json_code_files(completion)
+    if jf is not None:
+        rtl = [v for k, v in jf.items()
+               if k.lower().endswith(_RTL_SUFFIXES)]
+        if not rtl:  # be permissive: any file content carrying a module
+            rtl = [v for v in jf.values() if _MODULE_RE.search(v)]
+        code = "\n\n".join(rtl)
+        if rtl and _MODULE_RE.search(code):
+            return code, "json_dict"
+        return None, "doc_only"
     cf = code_fences(completion)
     if cf:
         code = "\n\n".join(m.group(2) for m in cf)
@@ -321,11 +371,72 @@ def gate_record(rec: Dict, workdir: Path) -> Tuple[bool, Dict, Dict]:
     duplicate-declaration scorer FAIL)."""
     rid = rec.get("id", "")
     completion = rec.get("completion", "") or ""
+    # ORGANIC #535 round-2 — an EMPTY / whitespace-only / trivially-short
+    # completion is the classic transmission-corruption shape (escaping ate
+    # the payload); it used to slip through as PASS_DOC_ONLY. The doc_only
+    # tolerance is for SUBSTANTIVE documentation answers only.
+    if len(completion.strip()) < 20:
+        entry = {"id": rid, "kind": "empty", "notes": [],
+                 "compile": ("empty-or-blank completion "
+                             "(empty-after-roundtrip corruption shape, "
+                             "#535)"),
+                 "verdict": "BLOCKED"}
+        return False, rec, entry
     code, kind = extract_code(completion)
     entry: Dict = {"id": rid, "kind": kind, "notes": []}
     if kind == "doc_only":
         entry["verdict"] = "PASS_DOC_ONLY"
         return True, rec, entry
+    if kind == "json_dict":
+        # #528 round-2 — official JSON code-dict: hygiene each RTL file
+        # body separately, gate the concatenation, and write fixes back by
+        # re-serializing the SAME JSON structure (prefix/suffix prose kept)
+        # so the official harness re-parses it identically.
+        files = json_code_files(completion) or {}
+        rtl_keys = [k for k in files
+                    if k.lower().endswith(_RTL_SUFFIXES)]
+        if not rtl_keys:
+            rtl_keys = [k for k, v in files.items()
+                        if _MODULE_RE.search(v)]
+        fixed_map: Dict[str, str] = {}
+        for idx, k in enumerate(rtl_keys):
+            fwd = workdir / f"j{idx}"
+            fwd.mkdir(parents=True, exist_ok=True)
+            fb, notes = hygiene_fix(files[k], fwd)
+            entry["notes"].extend(notes)
+            fixed_map[k] = fb
+        combined = "\n\n".join(fixed_map[k] for k in rtl_keys)
+        ok, why, stubs = iverilog_gate(combined, workdir)
+        entry["compile"] = why
+        if not ok:
+            entry["verdict"] = "BLOCKED"
+            return False, rec, entry
+        ok2, why2 = yosys_smoke(combined, workdir, stubs)
+        entry["synth"] = why2
+        if not ok2:
+            entry["verdict"] = "BLOCKED"
+            return False, rec, entry
+        entry["verdict"] = "PASS"
+        out_rec = dict(rec)
+        if any(fixed_map[k] != files[k] for k in rtl_keys):
+            i = completion.find("{")
+            j = completion.rfind("}")
+            obj = json.loads(completion[i:j + 1])
+            code_field = obj.get("code")
+            if isinstance(code_field, list):
+                for d in code_field:
+                    if isinstance(d, dict):
+                        for k in list(d):
+                            if k in fixed_map:
+                                d[k] = fixed_map[k]
+            elif isinstance(code_field, dict):
+                for k in list(code_field):
+                    if k in fixed_map:
+                        code_field[k] = fixed_map[k]
+            out_rec["completion"] = (completion[:i]
+                                     + json.dumps(obj, ensure_ascii=False)
+                                     + completion[j + 1:])
+        return True, out_rec, entry
     if kind == "bare":
         fixed, notes = hygiene_fix(code, workdir)
         entry["notes"].extend(notes)

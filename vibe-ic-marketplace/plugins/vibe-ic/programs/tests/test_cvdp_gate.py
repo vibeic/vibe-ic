@@ -476,3 +476,118 @@ def test_review2_batch_dir_stem_collision_refused(tmp_path):
     (bdir / "p1.md").write_text("doc twin")
     rc = G.main(["--batch-dir", str(bdir), "--out", str(tmp_path / "o.jsonl")])
     assert rc == 2
+
+
+# ── field round-2 reopen regressions (#528/#531/#535) ──────────────────────
+
+import json as _json
+
+JSON_DICT_GOOD = _json.dumps({"code": [{"rtl/foo.sv":
+    "module foo(input a, output b);\n  assign b = a;\nendmodule"}]})
+JSON_DICT_BROKEN = _json.dumps({"code": [{"rtl/bad.sv":
+    "module bad(input a, output b)\n  assign b = a\nendmodule"}]})
+JSON_DICT_SCHEMA = _json.dumps({"code": [{"docs/elevator_spec.json":
+    "{\"states\": [\"IDLE\", \"MOVING\"], \"floors\": 8}"}]})
+JSON_DICT_UNSYNTH = _json.dumps({"code": [{"rtl/zs.sv":
+    "module zs(input clk, input rst, input d, output reg q);\n"
+    "  always @(posedge clk or posedge rst)\n    q <= d;\nendmodule"}]})
+
+
+def test_round2_json_dict_extraction():
+    # #528 field repro: the official JSON code-dict shape must extract the
+    # RTL payload, not feed raw JSON to iverilog as bare Verilog.
+    code, kind = G.extract_code(JSON_DICT_GOOD)
+    assert kind == "json_dict" and "module foo" in code
+    # prose around the JSON (official parser is first-{ → last-})
+    code, kind = G.extract_code("Answer:\n" + JSON_DICT_GOOD + "\nDone.")
+    assert kind == "json_dict"
+    # JSON-schema answers (no RTL files) are tolerated docs
+    assert G.extract_code(JSON_DICT_SCHEMA) == (None, "doc_only")
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+def test_round2_json_dict_good_gates_in_broken_blocked(tmp_path):
+    batch = _write_batch(tmp_path, [
+        {"id": "p_jgood", "completion": JSON_DICT_GOOD},
+        {"id": "p_jbad", "completion": JSON_DICT_BROKEN},
+        {"id": "p_jschema", "completion": JSON_DICT_SCHEMA},
+    ])
+    out = tmp_path / "responses.jsonl"
+    rc = G.main(["--batch", str(batch), "--out", str(out),
+                 "--report", str(tmp_path / "rep.json")])
+    assert rc == 1                                  # p_jbad blocked
+    ids = [r["id"] for r in _read_jsonl(out)]
+    assert "p_jgood" in ids and "p_jschema" in ids
+    assert "p_jbad" not in ids
+    rep = _json.loads((tmp_path / "rep.json").read_text())
+    verd = {e["id"]: e["verdict"] for e in rep["records"]}
+    assert verd["p_jgood"] == "PASS"
+    assert verd["p_jschema"] == "PASS_DOC_ONLY"
+    assert verd["p_jbad"] == "BLOCKED"
+
+
+@pytest.mark.skipif(not (_HAS_IVERILOG and _HAS_YOSYS),
+                    reason="iverilog/yosys not on this host")
+def test_round2_531_json_dict_reaches_yosys_smoke(tmp_path):
+    # #531 reopen: the smoke must be REACHABLE for JSON-dict completions —
+    # positive (good json_dict has a synth field) + negative (json_dict
+    # with yosys-unsynthesizable RTL is BLOCKED by the smoke).
+    batch = _write_batch(tmp_path, [
+        {"id": "p_jsmoke", "completion": JSON_DICT_GOOD},
+        {"id": "p_jzs", "completion": JSON_DICT_UNSYNTH},
+    ])
+    out = tmp_path / "responses.jsonl"
+    rc = G.main(["--batch", str(batch), "--out", str(out),
+                 "--report", str(tmp_path / "rep.json")])
+    assert rc == 1
+    rep = _json.loads((tmp_path / "rep.json").read_text())
+    verd = {e["id"]: e for e in rep["records"]}
+    assert "yosys-smoke ok" in verd["p_jsmoke"].get("synth", "")
+    assert verd["p_jzs"]["verdict"] == "BLOCKED"
+    assert [r["id"] for r in _read_jsonl(out)] == ["p_jsmoke"]
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+def test_round2_535_empty_completion_blocked_not_doc_only(tmp_path):
+    # #535 reopen: whitespace-only / trivially-short completions are the
+    # corruption shape and must BLOCK — never PASS_DOC_ONLY.
+    batch = _write_batch(tmp_path, [
+        {"id": "p_blank", "completion": "   \n  "},
+        {"id": "p_short", "completion": "ok."},
+        {"id": "p_doc", "completion": DOC_ONLY},     # substantive doc keeps
+    ])
+    out = tmp_path / "responses.jsonl"
+    rc = G.main(["--batch", str(batch), "--out", str(out),
+                 "--report", str(tmp_path / "rep.json")])
+    assert rc == 1
+    ids = [r["id"] for r in _read_jsonl(out)]
+    assert ids == ["p_doc"]
+    rep = _json.loads((tmp_path / "rep.json").read_text())
+    verd = {e["id"]: e for e in rep["records"]}
+    assert verd["p_blank"]["verdict"] == "BLOCKED"
+    assert "empty" in verd["p_blank"]["compile"]
+    assert verd["p_short"]["verdict"] == "BLOCKED"
+    assert verd["p_doc"]["verdict"] == "PASS_DOC_ONLY"
+
+
+def test_round2_real_corpus_json_dict_records_extract():
+    # content-gated real-corpus pin: the 3 falsely-blocked records (+ the
+    # axis example) must all extract as json_dict / doc_only — never bare.
+    src = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
+               "/final_responses_r3.jsonl")
+    if not src.is_file():
+        src = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
+                   "/final_responses.jsonl")
+    if not src.is_file():
+        pytest.skip("real corpus not on this host")
+    wanted = ("elevator_control_0006", "elevator_control_0026",
+              "huffman_0001", "axis_border_gen_0014")
+    seen = {}
+    for ln in src.read_text(errors="replace").splitlines():
+        r = _json.loads(ln)
+        for w in wanted:
+            if w in r["id"]:
+                seen[r["id"]] = G.extract_code(r["completion"])[1]
+    if not seen:
+        pytest.skip("target records not in the current corpus file")
+    assert all(k in ("json_dict", "doc_only") for k in seen.values()), seen
