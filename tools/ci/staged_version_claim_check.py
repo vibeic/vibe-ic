@@ -170,6 +170,11 @@ _SKIP_PATH_PATTERNS = (
     # self-claims — same rationale as community/backlogs above. Scoped to
     # the RESULT-report naming convention so plugin docs stay gated.
     "/RESULT_", "RESULT_v", "/RESULT.md",
+    # ORGANIC #537 (same disease, second site, caught by the AID mirror's
+    # own pre-commit): BENCHMARK_REGISTRY.json is the registry of EXTERNAL
+    # benchmarks — upstream dataset release tags (e.g. an HF dataset
+    # "v1.1.0") are inherent registry content, never plugin self-claims.
+    "BENCHMARK_REGISTRY.json",
     # RFC / planning docs legitimately discuss target / proposed
     # versions before plugin.json bumps (same exemption rationale
     # as CHANGELOG / RELEASE_NOTES).

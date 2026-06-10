@@ -559,3 +559,12 @@ def test_537_negative_plugin_docs_still_gated():
     assert not svc._path_skipped("docs/architecture/OVERVIEW.md")
     assert not svc._path_skipped(
         "vibe-ic-marketplace/plugins/vibe-ic/skills/foo/SKILL.md")
+
+
+def test_537_benchmark_registry_path_skipped():
+    # second #537 site: the registry of EXTERNAL benchmarks carries upstream
+    # dataset release tags (HF v1.1.0 etc.) — not plugin self-claims.
+    svc = _svc()
+    assert svc._path_skipped(
+        "vibe-ic-marketplace/plugins/vibe-ic/benchmark-harness/"
+        "BENCHMARK_REGISTRY.json")
