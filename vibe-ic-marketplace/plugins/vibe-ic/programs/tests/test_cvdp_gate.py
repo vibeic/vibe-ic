@@ -797,6 +797,28 @@ def test_round5_latch_error_line_still_advisory_when_sole_error_class():
     assert not all(latch_error.search(ln) for ln in masked)
 
 
+def test_synth_stage_block_stderr_names_the_synth_reason(tmp_path, capsys):
+    # ORGANIC #539 — the per-record BLOCKED stderr one-liner used to always
+    # print the compile field, so a synth-stage block read "compile clean"
+    # on console; it must name the stage that actually blocked.
+    if not (_HAS_IVERILOG and _HAS_YOSYS):
+        pytest.skip("iverilog/yosys not on this host")
+    bad = ("```verilog\n"
+           "module zs3(input clk, input rst, input d, output reg q);\n"
+           "  always @(posedge clk or posedge rst)\n"
+           "    q <= d;\n"
+           "endmodule\n```\n")
+    batch = _write_batch(tmp_path, [{"id": "p_stderr", "completion": bad}])
+    out = tmp_path / "responses.jsonl"
+    rc = G.main(["--batch", str(batch), "--out", str(out)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    blocked_line = next(ln for ln in err.splitlines()
+                        if ln.startswith("BLOCKED p_stderr:"))
+    assert "yosys-smoke failed" in blocked_line
+    assert "compile clean" not in blocked_line
+
+
 def test_round4_real_corpus_four_records_gate_pass(tmp_path):
     # content-gated binding pins: the 4 round-4 falsely-blocked official-
     # PASS records gate PASS.

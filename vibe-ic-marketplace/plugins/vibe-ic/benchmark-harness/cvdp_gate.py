@@ -651,8 +651,12 @@ def main(argv=None) -> int:
                 passed.append(out_rec)
             else:
                 blocked += 1
-                print(f"BLOCKED {entry['id']}: {entry.get('compile')}",
-                      file=sys.stderr)
+                # ORGANIC #539 — name the stage that actually blocked:
+                # gate_record returns on the FIRST failing stage, so the
+                # last stage field written carries the real reason (a
+                # synth-stage block used to print "compile clean" here).
+                why = entry.get("synth") or entry.get("compile")
+                print(f"BLOCKED {entry['id']}: {why}", file=sys.stderr)
     out_path.write_text(
         "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in passed))
     # ── ORGANIC #535 — TRANSMISSION-integrity round-trip ────────────────
