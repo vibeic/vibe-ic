@@ -188,7 +188,7 @@ def _stub_for(code: str, name: str) -> Optional[str]:
     return f"module {name}{phdr}({plist});\nendmodule\n"
 
 
-def iverilog_gate(code: str, workdir: Path) -> Tuple[bool, str]:
+def iverilog_gate(code: str, workdir: Path) -> Tuple[bool, str, str]:
     """`iverilog -g2012 -t null` parse/elab gate.
 
     PASS when the only errors are unknown-context-module elaboration errors
@@ -208,27 +208,28 @@ def iverilog_gate(code: str, workdir: Path) -> Tuple[bool, str]:
     f.write_text(code)
     rc, out, err = _run(["iverilog", "-g2012", "-t", "null", str(f)])
     if rc == 0:
-        return True, "compile clean"
+        return True, "compile clean", ""
     offending, missing = _offending_lines((out or "") + "\n" + (err or ""))
     if offending:
-        return False, "; ".join(offending[:4])
+        return False, "; ".join(offending[:4]), ""
     if not missing:
-        return True, "elaboration-only tolerated diagnostics"
+        return True, "elaboration-only tolerated diagnostics", ""
     # unknown-context-modules only → stub + re-run to unmask genuine errors
     stubs = []
     for name in missing:
         s = _stub_for(code, name)
         if s is None:
             return True, ("elaboration-only unknown context modules "
-                          "(tolerated; stub not derivable)")
+                          "(tolerated; stub not derivable)"), ""
         stubs.append(s)
-    f2 = workdir / "gate_stubbed.sv"
-    f2.write_text(code + "\n\n// gate-synthesized context stubs\n"
+    stubs_text = ("\n\n// gate-synthesized context stubs\n"
                   + "\n".join(stubs))
+    f2 = workdir / "gate_stubbed.sv"
+    f2.write_text(code + stubs_text)
     rc2, out2, err2 = _run(["iverilog", "-g2012", "-t", "null", str(f2)])
     if rc2 == 0:
         return True, ("elaboration clean with synthesized context stubs "
-                      f"({', '.join(missing)})")
+                      f"({', '.join(missing)})"), stubs_text
     off2, miss2 = _offending_lines((out2 or "") + "\n" + (err2 or ""))
     if off2:
         # the stub run surfaced a genuine author-code error — but make sure
@@ -238,8 +239,76 @@ def iverilog_gate(code: str, workdir: Path) -> Tuple[bool, str]:
                               n in s for n in missing)]
         genuine = [s for s in off2 if s not in stub_artifacts]
         if genuine:
-            return False, "; ".join(genuine[:4]) + " [unmasked via stubs]"
-    return True, "elaboration-only unknown context modules (tolerated)"
+            return False, "; ".join(genuine[:4]) + " [unmasked via stubs]", ""
+    return True, ("elaboration-only unknown context modules (tolerated)"
+                  ), stubs_text
+
+
+_YOSYS_CELLS_RE = re.compile(
+    r"Number of cells:\s+(\d+)"        # yosys ≤0.4x / 0.33 format
+    r"|^\s*(\d+)\s+cells\b",          # yosys 0.6x columnar format (#536)
+    re.MULTILINE)
+
+
+_MODULE_NAMES_RE = re.compile(r"\bmodule\s+([A-Za-z_]\w*)", re.MULTILINE)
+
+
+def yosys_smoke(code: str, workdir: Path,
+                stubs_text: str = "") -> Tuple[bool, str]:
+    """ORGANIC #531 — synthesizability smoke. 13/92 first-round CVDP fails
+    were harness synth-gate failures the emit gate never caught.
+
+    PER-MODULE (adversarial-review MED): `synth -auto-top` keeps ONE root
+    module and silently REMOVES sibling roots as unused — an unsynthesizable
+    DUT next to a trivial helper evaded the smoke entirely. Every module
+    declared in the completion is synthesized as its own top.
+
+    FRONTEND-GAP TOLERANCE (adversarial-review MED): the host yosys SV
+    frontend may be NARROWER than the official scorer's (host 0.33 rejects
+    `parameter type`; official 0.40 accepts it). A read_verilog FRONTEND
+    parse error on code iverilog already accepted is therefore tolerated
+    with a note — only SYNTH-stage failures (proc/memory/check errors after
+    the frontend) and stat-absence block. Cell-count parsing is version-
+    robust (`Number of cells:` and the 0.6x columnar `N cells` — the #536
+    format-drift lesson). Context stubs from the iverilog gate are appended
+    so unknown context modules don't abort hierarchy elaboration."""
+    full = code + (stubs_text or "")
+    f = workdir / "smoke.sv"
+    f.write_text(full)
+    stub_names = set(_MODULE_NAMES_RE.findall(stubs_text or ""))
+    own_modules = [m for m in _MODULE_NAMES_RE.findall(code)
+                   if m not in stub_names]
+    if not own_modules:
+        return False, ("yosys-smoke: no module declaration found in the "
+                       "code payload")
+    details: List[str] = []
+    for top in own_modules:
+        # NOTE: no -q — quiet mode suppresses the stat table itself.
+        rc, out, err = _run(
+            ["yosys", "-p",
+             f"read_verilog -sv {f}; synth -top {top}; stat"], timeout=300)
+        blob = (out or "") + "\n" + (err or "")
+        if rc != 0:
+            # frontend vs synth-stage: the SYNTH pass header only appears
+            # once the frontend parsed the file.
+            frontend = "Executing SYNTH pass" not in blob \
+                and "Executing HIERARCHY pass" not in blob
+            if frontend:
+                details.append(f"{top}: yosys-frontend-gap tolerated "
+                               f"(iverilog accepted; host yosys SV frontend "
+                               f"may trail the official 0.40)")
+                continue
+            tail = [s for s in blob.splitlines() if s.strip()][-3:]
+            return False, (f"yosys-smoke failed on module {top!r}: "
+                           + "; ".join(tail))
+        matches = list(_YOSYS_CELLS_RE.finditer(blob))
+        if not matches:
+            return False, (f"yosys-smoke: module {top!r} synthesized to "
+                           f"nothing — stat reported no module (the silent "
+                           f"downstream harness KeyError trap)")
+        cells = max(int(m.group(1) or m.group(2)) for m in matches)
+        details.append(f"{top}: {cells} cells")
+    return True, "yosys-smoke ok (" + "; ".join(details) + ")"
 
 
 def gate_record(rec: Dict, workdir: Path) -> Tuple[bool, Dict, Dict]:
@@ -260,9 +329,14 @@ def gate_record(rec: Dict, workdir: Path) -> Tuple[bool, Dict, Dict]:
     if kind == "bare":
         fixed, notes = hygiene_fix(code, workdir)
         entry["notes"].extend(notes)
-        ok, why = iverilog_gate(fixed, workdir)
+        ok, why, stubs = iverilog_gate(fixed, workdir)
         entry["compile"] = why
         if not ok:
+            entry["verdict"] = "BLOCKED"
+            return False, rec, entry
+        ok2, why2 = yosys_smoke(fixed, workdir, stubs)
+        entry["synth"] = why2
+        if not ok2:
             entry["verdict"] = "BLOCKED"
             return False, rec, entry
         entry["verdict"] = "PASS"
@@ -280,9 +354,14 @@ def gate_record(rec: Dict, workdir: Path) -> Tuple[bool, Dict, Dict]:
         entry["notes"].extend(notes)
         fixed_bodies.append(fb)
     combined = "\n\n".join(fixed_bodies)
-    ok, why = iverilog_gate(combined, workdir)
+    ok, why, stubs = iverilog_gate(combined, workdir)
     entry["compile"] = why
     if not ok:
+        entry["verdict"] = "BLOCKED"
+        return False, rec, entry
+    ok2, why2 = yosys_smoke(combined, workdir, stubs)
+    entry["synth"] = why2
+    if not ok2:
         entry["verdict"] = "BLOCKED"
         return False, rec, entry
     entry["verdict"] = "PASS"
@@ -303,13 +382,23 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="CVDP copilot SOLE-EMIT gate (#528): drafts JSONL in, "
                     "gated responses JSONL out.")
-    ap.add_argument("--batch", required=True,
+    ap.add_argument("--batch", default=None,
                     help="author drafts JSONL ({id, completion} per line)")
+    ap.add_argument("--batch-dir", default=None,
+                    help="ORGANIC #535 — directory of raw draft files "
+                         "(<id>.md/.sv/.txt, content = the completion "
+                         "bytes); the gate does its OWN json assembly so "
+                         "hand-built JSON escaping can never corrupt the "
+                         "payload")
     ap.add_argument("--out", required=True,
                     help="gated responses JSONL (written ONLY by this gate)")
     ap.add_argument("--report", default=None,
                     help="optional JSON gate report path")
     args = ap.parse_args(argv)
+    if not args.batch and not args.batch_dir:
+        print("ERROR: one of --batch / --batch-dir is required",
+              file=sys.stderr)
+        return 2
 
     if shutil.which("iverilog") is None:
         print("ERROR: iverilog not available — the gate cannot enforce; "
@@ -325,20 +414,57 @@ def main(argv=None) -> int:
         print(f"WARN: host {iverilog_version!r} differs from the official "
               f"cvdp-sim icarus 13 — accepted-syntax sets may diverge "
               f"(disclosed in the gate report)", file=sys.stderr)
-    batch = Path(args.batch)
-    if not batch.is_file():
-        print(f"ERROR: batch not found: {batch}", file=sys.stderr)
-        return 2
     records: List[Dict] = []
-    for ln in batch.read_text(errors="replace").splitlines():
-        ln = ln.strip()
-        if not ln:
-            continue
-        try:
-            records.append(json.loads(ln))
-        except json.JSONDecodeError as e:
-            print(f"ERROR: bad JSONL line: {e}", file=sys.stderr)
+    if args.batch_dir:
+        bdir = Path(args.batch_dir)
+        if not bdir.is_dir():
+            print(f"ERROR: batch dir not found: {bdir}", file=sys.stderr)
             return 2
+        for f in sorted(bdir.iterdir()):
+            if f.is_file() and f.suffix in (".md", ".sv", ".v", ".txt"):
+                records.append({"id": f.stem,
+                                "completion": f.read_text(errors="replace")})
+        if not records:
+            print(f"ERROR: no draft files in {bdir}", file=sys.stderr)
+            return 2
+    else:
+        batch = Path(args.batch)
+        if not batch.is_file():
+            print(f"ERROR: batch not found: {batch}", file=sys.stderr)
+            return 2
+        for ln in batch.read_text(errors="replace").splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                records.append(json.loads(ln))
+            except json.JSONDecodeError as e:
+                print(f"ERROR: bad JSONL line: {e}", file=sys.stderr)
+                return 2
+    # ORGANIC #535 round-2 (adversarial review) — ids must be PRESENT and
+    # UNIQUE: local_import keys responses by id (a duplicate silently
+    # overwrites its twin downstream) and the round-trip purge needs an
+    # unambiguous identity. Refuse ambiguous batches outright.
+    ids = [r.get("id") for r in records]
+    missing = [i for i, v in enumerate(ids) if not v]
+    if missing:
+        print(f"ERROR: record(s) at line(s) {missing} carry no id — "
+              f"refusing (responses are id-keyed downstream)",
+              file=sys.stderr)
+        return 2
+    dupes = sorted({v for v in ids if ids.count(v) > 1})
+    if dupes:
+        print(f"ERROR: duplicate id(s) {dupes} — refusing an ambiguous "
+              f"batch (local_import would overwrite one twin; for "
+              f"--batch-dir, two files share a stem)", file=sys.stderr)
+        return 2
+    # ORGANIC #535 — CRLF normalization at intake: editor/transport CRLF in a
+    # completion corrupts the harness-side file write; normalize before any
+    # gating so the gated bytes == the delivered bytes.
+    for rec in records:
+        c = rec.get("completion")
+        if isinstance(c, str) and "\r" in c:
+            rec["completion"] = c.replace("\r\n", "\n").replace("\r", "\n")
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     passed: List[Dict] = []
@@ -357,6 +483,58 @@ def main(argv=None) -> int:
                       file=sys.stderr)
     out_path.write_text(
         "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in passed))
+    # ── ORGANIC #535 — TRANSMISSION-integrity round-trip ────────────────
+    # The scoring harness consumes the DELIVERED JSONL, not the author's
+    # draft: re-read the bytes just written, re-parse each line, re-extract
+    # the code, and verify it is byte-identical to what the gate passed
+    # (plus a fast re-parse). Escaping/CRLF corruption lands as an EMPTY or
+    # truncated extraction — caught HERE, not as a downstream KeyError
+    # (yosys exits 0 on a zero-module file, so the corruption is silent).
+    rt_failed_idx: set = set()
+    rt_lines = out_path.read_text(errors="replace").splitlines()
+    rt_records = []
+    for ln in rt_lines:
+        try:
+            rt_records.append(json.loads(ln))
+        except json.JSONDecodeError:
+            rt_records.append(None)
+    with tempfile.TemporaryDirectory(prefix="cvdp_gate_rt_") as td:
+        rwd = Path(td)
+        for i, (orig, rt) in enumerate(zip(passed, rt_records)):
+            rid = orig.get("id", f"line{i}")
+            reason = None
+            if rt is None:
+                reason = "roundtrip-unparseable"
+            elif rt.get("completion") != orig.get("completion"):
+                reason = "roundtrip-mismatch"
+            else:
+                code, kind = extract_code(rt.get("completion") or "")
+                ocode, okind = extract_code(orig.get("completion") or "")
+                if kind != okind or (code or "") != (ocode or ""):
+                    reason = "roundtrip-extraction-drift"
+                elif kind != "doc_only":
+                    if not (code or "").strip():
+                        reason = "empty-after-roundtrip"
+                    else:
+                        rok, _why, _st = iverilog_gate(code, rwd)
+                        if not rok:
+                            reason = "roundtrip-reparse-failed"
+            if reason:
+                # purge by POSITION (adversarial review round-2: an id-keyed
+                # purge collateral-dropped a good same-id twin).
+                rt_failed_idx.add(i)
+                blocked += 1
+                for e in report:
+                    if e.get("id") == rid:
+                        e["verdict"] = "BLOCKED"
+                        e["roundtrip"] = reason
+                print(f"BLOCKED {rid}: {reason} (#535 transmission "
+                      f"integrity)", file=sys.stderr)
+    if rt_failed_idx:
+        passed = [r for i, r in enumerate(passed) if i not in rt_failed_idx]
+        out_path.write_text(
+            "".join(json.dumps(r, ensure_ascii=False) + "\n"
+                    for r in passed))
     if args.report:
         Path(args.report).write_text(
             json.dumps({"total": len(records), "passed": len(passed),
