@@ -85,6 +85,13 @@ def main(argv=None) -> int:
 
     # Discover STA report — try canonical sta_dir first, then pnr.
     sta_candidates = [
+        # #527 — the SPEF-based post-route STA is the sign-off-grade basis;
+        # it must outrank post_route_timing.rpt too: on a RESUMED project
+        # the alias can be a stale estimate-based copy (written before the
+        # SPEF run existed) and would otherwise shadow a VIOLATED SPEF
+        # verdict with a stale MET (adversarial-review reproduction).
+        _pl.sta_dir(project) / "sta_spef_based.rpt",
+        project / "reports/phase3/sta_spef_based.rpt",
         _pl.sta_dir(project) / "post_route_timing.rpt",
         _pl.pnr_dir(project) / "sta.rpt",
         project / "phase3/reports/sta.rpt",

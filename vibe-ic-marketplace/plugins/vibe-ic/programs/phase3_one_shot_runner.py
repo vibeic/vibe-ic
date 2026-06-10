@@ -5086,11 +5086,91 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         except Exception as exc:
             notes.append(f"post-synth power preview failed: {exc}")
 
-    # --- Step 23: post-route STA report (alias) -------------------------
+    # --- Step 22 (moved ahead of the Step-23 alias, #527): SPEF ---------
+    # parasitic extraction must precede the canonical STA artifact so a
+    # SPEF-based report CAN be the canonical one (the old code extracted
+    # SPEF only after the alias was already written from the estimate).
+    spef_out = extracted_out / f"{top}.spef"
+    if primary_def.is_file() and not spef_out.is_file():
+        if _emit_spef(project, top, pdk, container, spef_out, notes):
+            written.append(str(spef_out))
+
+    # --- Step 23: SPEF-based post-route STA (#527) ----------------------
+    spef_sta_rpt = sta_out / "sta_spef_based.rpt"
+    if (spef_out.is_file() and spef_out.stat().st_size > 0
+            and not spef_sta_rpt.is_file()):
+        if _emit_spef_sta(project, top, pdk, container, spef_out,
+                          spef_sta_rpt, notes):
+            written.append(str(spef_sta_rpt))
+            mirror = rpt_phase3 / "sta_spef_based.rpt"
+            if not mirror.is_file():
+                mirror.write_text(spef_sta_rpt.read_text())
+                written.append(str(mirror))
+    spef_sta_ok = spef_sta_rpt.is_file() and spef_sta_rpt.stat().st_size > 0
+
+    # --- Step 23: post-route STA report (canonical) ---------------------
+    # #527 — SPEF-based is CANONICAL when available (closer to sign-off
+    # reality); the estimate-based report_checks is the fallback only.
     post_route_rpt = sta_out / "post_route_timing.rpt"
-    if primary_sta.is_file() and not post_route_rpt.is_file():
-        post_route_rpt.write_text(primary_sta.read_text())
-        written.append(str(post_route_rpt))
+    # RESUME-upgrade (adversarial-review fix): a resumed project may carry a
+    # STALE estimate-based alias written before the SPEF run existed; once
+    # the SPEF-based report exists the alias MUST be upgraded (and a stale
+    # optimistic no-ECO flag cleared) or the old MET copy keeps shadowing a
+    # VIOLATED sign-off basis.
+    if (spef_sta_ok and post_route_rpt.is_file()
+            and "SPEF-BASED" not in post_route_rpt.read_text(
+                errors="replace")[:400]):
+        post_route_rpt.unlink()
+        _stale_flag = eco_out / "no_eco_needed.flag"
+        if _stale_flag.is_file():
+            _stale_flag.unlink()
+            notes.append("stale estimate-based no_eco_needed.flag cleared; "
+                         "re-deriving from the SPEF basis (#527)")
+    if not post_route_rpt.is_file():
+        if spef_sta_ok:
+            post_route_rpt.write_text(
+                "# post_route_timing.rpt — SPEF-BASED post-route STA "
+                "(canonical, #527).\n"
+                "# Basis: extracted parasitics (read_spef "
+                f"{spef_out.relative_to(project)}).\n"
+                "# The estimate-based report_checks is retained at "
+                "phase3/stage3/pnr/sta.rpt for comparison.\n"
+                + spef_sta_rpt.read_text())
+            written.append(str(post_route_rpt))
+        elif primary_sta.is_file():
+            post_route_rpt.write_text(primary_sta.read_text())
+            written.append(str(post_route_rpt))
+
+    # --- #527: estimate-vs-SPEF discrepancy surface ----------------------
+    # When both bases parse and they disagree (sign flip OR >1 ns delta),
+    # NEVER silently keep the optimistic one: write a named discrepancy
+    # artifact so triage + the Step-32 timing-ECO loop see it.
+    if spef_sta_ok and primary_sta.is_file():
+        _est = _worst_slack(primary_sta.read_text(errors="replace"))
+        _spf = _worst_slack(spef_sta_rpt.read_text(errors="replace"))
+        if _est is not None and _spf is not None:
+            _flip = (_est >= 0) != (_spf >= 0)
+            _delta = abs(_est - _spf)
+            if _flip or _delta > 1.0:
+                disc_dir = rpt_phase3 / "sta"
+                disc_dir.mkdir(parents=True, exist_ok=True)
+                disc = disc_dir / "spef_vs_estimate_discrepancy.json"
+                disc.write_text(json.dumps({
+                    "finding": "STA_BASIS_DISCREPANCY",
+                    "estimate_worst_slack_ns": _est,
+                    "spef_worst_slack_ns": _spf,
+                    "delta_ns": round(_delta, 4),
+                    "sign_flip": _flip,
+                    "canonical_basis": "spef",
+                    "action": ("timing ECO required when the SPEF basis "
+                               "is VIOLATED — the estimate-based MET is "
+                               "not a sign-off claim (#527)"),
+                }, indent=2) + "\n")
+                written.append(str(disc))
+                notes.append(
+                    f"STA basis discrepancy: estimate {_est} vs SPEF {_spf} "
+                    f"(delta {_delta:.2f} ns{', SIGN FLIP' if _flip else ''})"
+                    f" — canonical = SPEF (#527)")
 
     # --- Step 23: per-corner STA (if multi-corner libs available) ------
     # #437(c): the per_corner directory IS the multi-corner claim — it is
@@ -5109,13 +5189,6 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             )
             if multi_corner_run:
                 written.append(str(per_corner))
-
-    # --- Step 22: SPEF parasitic extraction (best-effort OpenROAD) ----
-    spef_out = extracted_out / f"{top}.spef"
-    if primary_def.is_file() and not spef_out.is_file():
-        ok = _emit_spef(project, top, pdk, container, spef_out, notes)
-        if ok:
-            written.append(str(spef_out))
 
     # --- ORGANIC-20260531: Steps 24/25 IR-drop + EM (OpenROAD PSM) ------
     # NOT cascade-blocked by SPEF — analyze_power_grid walks the routed
@@ -5406,7 +5479,10 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # sim (results.log with $sdf_annotate) still gates normally.
     refsim_pass = (project / "phase2/stage1/sim/pass.flag").is_file() or \
         (project / "phase2/stage1/sim/results.xml").is_file()
-    tns_zero = _post_route_tns_zero(primary_sta)
+    # #527 — the ECO decision gates on the SPEF-based report when present
+    # (sign-off-grade basis); the estimate-based pnr/sta.rpt is the fallback.
+    _sta_for_eco = spef_sta_rpt if spef_sta_ok else primary_sta
+    tns_zero = _post_route_tns_zero(_sta_for_eco)
     skip_note = sim_pl_out / "sdf_sim_skipped.json"
     if not (sim_pl_out / "results.log").is_file() and not skip_note.is_file():
         sim_pl_out.mkdir(parents=True, exist_ok=True)
@@ -5436,7 +5512,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 "no_eco_needed\n"
                 "# Auto-staged by phase3_one_shot_runner v1.6.36.\n"
                 "# Reason: post-route STA reports TNS=0 (no setup/hold violations).\n"
-                f"# Source: {primary_sta.relative_to(project)}\n"
+                f"# Source: {_sta_for_eco.relative_to(project)}\n"
             )
             written.append(str(flag))
 
@@ -5647,6 +5723,96 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         (f"; notes: {'; '.join(notes)}" if notes else ""),
         written,
     )
+
+
+def _worst_slack(text: str) -> Optional[float]:
+    """#527 — worst (minimum) slack parsed from an OpenSTA/OpenROAD report:
+    `<value> slack (MET|VIOLATED)` path-table lines and/or `worst slack <v>`
+    summary lines. None when no slack value is parseable."""
+    vals = [float(m.group(1)) for m in re.finditer(
+        r"(-?\d+(?:\.\d+)?)\s+slack\s*\((?:MET|VIOLATED)\)", text)]
+    for m in re.finditer(
+            r"worst\s+slack\s+(?:max|min)?\s*(-?\d+(?:\.\d+)?)", text, re.I):
+        vals.append(float(m.group(1)))
+    return min(vals) if vals else None
+
+
+def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
+                   spef_path: Path, rpt_out: Path,
+                   notes: List[str]) -> bool:
+    """#527 — SPEF-annotated post-route STA (the sign-off-grade timing basis).
+
+    The canonical Step-23 artifact was historically the estimate-based
+    `report_checks` from pnr.tcl (global-route RC estimate; no read_spef
+    anywhere in the PnR pass). On parasitic-heavy designs the two bases
+    disagree by >10 ns WITH OPPOSITE SIGNS (field round-4: estimate said
+    slack 0.47 MET, SPEF-based said -12.35 VIOLATED on the same routed
+    design). This emits the SPEF-based report so Step-23 can gate on it.
+
+    Recipe (the in-container-proven OpenSTA sequence, same shape as the SI
+    side-channel's read_spef run): read_liberty (+macro libs) →
+    read_verilog <top>_pnr.v → link_design → read_sdc → read_spef →
+    report_checks + report_tns + report_wns. Best-effort: any missing
+    prerequisite or tool failure returns False and the caller falls back
+    to the estimate-based report (the pre-#527 behavior)."""
+    pnr_out = _pl.pnr_dir(project)
+    netlist = pnr_out / f"{top}_pnr.v"
+    if not netlist.is_file():
+        netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    sdc = pnr_out / "constraint.sdc"
+    if not (netlist.is_file() and sdc.is_file() and spef_path.is_file()
+            and spef_path.stat().st_size > 0):
+        missing = [n for n, ok in (
+            ("pnr netlist", netlist.is_file()),
+            ("constraint.sdc", sdc.is_file()),
+            ("non-empty SPEF", spef_path.is_file()
+             and spef_path.stat().st_size > 0),
+        ) if not ok]
+        notes.append(
+            f"SPEF-based STA prerequisites missing ({', '.join(missing)}); "
+            f"Step-23 falls back to the estimate-based sta.rpt (#527)")
+        return False
+    lib_c = _to_container_path(pdk.liberty, container)
+    macro_libs_tcl = "\n".join(
+        f"read_liberty {_to_container_path(str(f), container)}"
+        for f in (pdk.macro_libs or []))
+    netlist_c = _to_container_path(str(netlist), container)
+    sdc_c = _to_container_path(str(sdc), container)
+    spef_c = _to_container_path(str(spef_path), container)
+    rpt_out.parent.mkdir(parents=True, exist_ok=True)
+    rpt_c = _to_container_path(str(rpt_out), container)
+    tcl = (
+        f"read_liberty {lib_c}\n"
+        f"{macro_libs_tcl}\n"
+        f"read_verilog {netlist_c}\n"
+        f"link_design {top}\n"
+        f"read_sdc {sdc_c}\n"
+        f"read_spef {spef_c}\n"
+        f"report_checks > {rpt_c}\n"
+        f"report_tns >> {rpt_c}\n"
+        f"report_wns >> {rpt_c}\n"
+        f"report_worst_slack -max >> {rpt_c}\n"
+        f"exit\n"
+    )
+    tcl_path = rpt_out.parent / "sta_spef_based.tcl"
+    tcl_path.write_text(tcl)
+    tcl_c = _to_container_path(str(tcl_path), container)
+    cmd = (
+        f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+        f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+        f"sta -no_init -exit {tcl_c} 2>&1"
+    )
+    rc, out, err = _docker_exec(container, cmd, timeout=1800)
+    if not rpt_out.is_file() or rpt_out.stat().st_size == 0:
+        notes.append(f"SPEF-based STA did not produce a report (rc={rc}); "
+                     f"Step-23 falls back to the estimate-based sta.rpt")
+        return False
+    body = rpt_out.read_text(errors="replace")
+    if "slack" not in body and "tns" not in body.lower():
+        notes.append("SPEF-based STA report carries no slack/tns token; "
+                     "Step-23 falls back to the estimate-based sta.rpt")
+        return False
+    return True
 
 
 def _post_route_tns_zero(sta_rpt: Path) -> bool:
@@ -7129,12 +7295,25 @@ report_design_area
 # at low core-util yet ~100% row-util. The fill gate's rows-already-full
 # path needs ROW-util; emit it explicitly so the writer never mislabels
 # core-util as row-util. chip-AGNOSTIC: pure odb geometry, no chip names.
+# v0.3.26 — ORGANIC #526: OpenROAD 26Q1 renamed the odb Rect accessors
+# getDX/getDY -> dx/dy; the old names made the whole catch fire and the
+# measurement silently degraded to NA on a fully-filled DEF. Probe the
+# current names first and fall back to the legacy ones so BOTH container
+# generations measure row-util.
+proc _rcw {{bb}} {{
+  if {{[catch {{$bb dx}} _w]}} {{ set _w [$bb getDX] }}
+  return $_w
+}}
+proc _rch {{bb}} {{
+  if {{[catch {{$bb dy}} _h]}} {{ set _h [$bb getDY] }}
+  return $_h
+}}
 if {{[catch {{
   set _blk [ord::get_db_block]
   set _rowA 0.0
   foreach _r [$_blk getRows] {{
     set _bb [$_r getBBox]
-    set _rowA [expr {{$_rowA + double([$_bb getDX]) * double([$_bb getDY])}}]
+    set _rowA [expr {{$_rowA + double([_rcw $_bb]) * double([_rch $_bb])}}]
   }}
   set _occ 0.0
   foreach _i [$_blk getInsts] {{
