@@ -150,6 +150,27 @@ This shape is documented in `benchmark_external/verilogeval_v2/run_fresh_v0125/g
 These bind EVERY batch fan-out shape — Shape C here AND Shape B (same
 BATCHFILE/batches architecture; Shape D is a single project with no fan-out
 and is exempt):
+0. **GATE-AS-SOLE-EMIT-PATH（binding，先於其他 orchestration rules，跨
+   shape — ORGANIC #529）**: every benchmark authoring / close-loop prompt
+   MUST make the designated plugin gate/runner command the **ONLY emit
+   path** — an agent that does not execute the program CANNOT produce a
+   scoring artifact (the sample/response/report is WRITTEN BY THE GATE,
+   never directly by the agent). Writing the program invocation as an
+   expectation in prose（「請自驗」「建議跑 lint」）counts as NOT WRITTEN:
+   v0.1.25 (17 fresh agents — the in-gate fix held, the same content as
+   free-text guidance regressed) and the 2026-06-10 CVDP open-run (31
+   fresh batch agents, ZERO spontaneous plugin-program calls; a remedial
+   host gate sweep over 200 authored completions caught 20 hygiene fixes
+   + 4 real compile breaks the agents' self-verification all missed)
+   both prove free-text ALWAYS regresses. For a NEWLY-onboarded benchmark
+   flow: if no existing gate program consumes that benchmark's IO format
+   (e.g. CVDP's id/completion JSONL), **build the bridge first（gate
+   program / format adapter — see `benchmark-harness/cvdp_gate.py`）, then
+   dispatch** — "no ready gate" is a harness backlog item, never a reason
+   to go agent-first. Before dispatch the orchestrator must self-check:
+   is this prompt's emit action program-enforced? If not, the run's number
+   measures "LLM with tools", not Vibe-IC, and the RESULT.md must disclose
+   that.
 1. **Batch granularity** for ≥100-problem datasets: spawn ONE authoring agent per
    pre-split `batches/batchNN.list` — NEVER one agent per problem. A 312-problem
    per-problem fan-out lost ~93% of its agents' structured returns; the same
@@ -419,7 +440,10 @@ If a future benchmark doesn't cleanly fit A/B/C/D/E:
    verification step. Document the shape choice in the RESULT.
 3. **Never go agent-first** without writing a one-paragraph justification in the RESULT explaining
    why no plugin program could drive it. (The 2026-05-28 RTLLM run skipped this justification and
-   the methodology was caught later — don't repeat it.)
+   the methodology was caught later — don't repeat it.) This self-check is a
+   **pre-dispatch checklist item** (§ 2 rule 0): before spawning any authoring
+   agent ask "is this prompt's emit written by a program (GATE-AS-SOLE-EMIT-PATH)?"
+   — if the answer is no, fix the harness first, don't dispatch.
 4. **Never publish a number from Shape E**. Blocked is blocked; out-of-scope is out-of-scope.
 
 ## § 8 — Re-run obligations
