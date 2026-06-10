@@ -6,16 +6,30 @@ official scorer's `raw_result.json` + per-problem report logs and classifies
 every failing problem into one MODE so close-loop dispatch can hand each
 repair agent a BLIND-SAFE convention-level hint.
 
-Modes (signatures distilled from the real 302-problem run's 92 fails; this
-program's per-record classification is MORE precise than the original
-run-local script — pytest bottom-line aggregation separates partial from
-all-fail, and ELAB evidence is compile-step-anchored — so its distribution
-on the reference run intentionally differs from the field script's):
-    SYNTH_GATE    — harness yosys gate: `KeyError: 'Number of cells'`
-    ELAB_ERROR    — iverilog compile/elaboration error lines
-    FUNC_PARTIAL  — cocotb ran; SOME tests failed, some passed
-    FUNC_ALL      — cocotb ran; ALL tests failed
-    UNKNOWN       — none of the signatures matched
+Modes (field round-2 revision — evidence aggregated across the cocotb
+`TESTS=n PASS=p FAIL=f` summary, `Failed X of Y`, the pytest bottom line,
+AND the problem-level passing siblings recorded in raw_result itself;
+FUNC_ALL requires ZERO pass evidence everywhere):
+    SYNTH_GATE      — harness yosys gate: `KeyError: 'Number of cells'`
+    SYNTH_THRESHOLD — RTL synthesizes but misses the harness quality
+                      threshold (`No upgrades in synthesis` /
+                      `Optimization failed`)
+    ELAB_ERROR      — genuine iverilog compile kill (anchored evidence,
+                      no test-level verdict ran)
+    FUNC_PARTIAL    — some hidden tests pass, some fail (any family)
+    FUNC_ALL        — every verdict is a fail, zero pass evidence
+    TRUNCATED       — log cut off before any verdict (infra flakiness)
+    UNKNOWN         — verdict evidence present but unclassifiable
+
+HONESTY NOTE: per-record verification on the reference final run showed the
+host's run-local triage script over-counted FUNC_PARTIAL (e.g. a 10×
+`TESTS=1 PASS=0 FAIL=1` log and a log whose only "passed" tokens are
+in-flight diagnostic prose were both labelled partial there); this program
+classifies those FUNC_ALL with the log lines as evidence, and its ELAB
+records are verified real `CalledProcessError: ['iverilog' …` kills. The
+distributions therefore intentionally differ; the flagship partial case
+(`TESTS=10 PASS=9 FAIL=1`) and the 4 TRUNCATED records match the host
+exactly.
 
 BLINDNESS BOUNDARY: the hint templates are FIXED in this program and carry
 convention-level guidance only — never an oracle expectation value, never
@@ -48,9 +62,19 @@ HINTS = {
                  "回到 prompt 重新推導行為，再以自寫 TB 窮舉驗證"),
     "UNKNOWN": ("失敗模式無法從 log 機械判定——人工檢視該題 reports 後再"
                 "dispatch"),
+    "TRUNCATED": ("harness log 在 verdict 前被截斷（infra flakiness，非設計"
+                  "判決）——單獨重跑該題確認；headline 仍計 FAIL（不挑櫻桃）"),
+    "SYNTH_THRESHOLD": ("題目 harness 要求合成品質門檻（cell/wire 縮減比例）"
+                        "——RTL 可合成但未達門檻，屬真實優化缺口；重讀 prompt "
+                        "的優化目標再重構"),
 }
 
 _SYNTH_RE = re.compile(r"KeyError: 'Number of (cells|wires)'")
+# Synthesis QUALITY-threshold failure (field round-2): the harness demands a
+# cell/wire reduction the RTL synthesizes but does not meet — a real
+# optimization gap, distinct from "did not synthesize".
+_SYNTH_THRESHOLD_RE = re.compile(
+    r"No upgrades in synthesis|Optimization failed", re.I)
 # ELAB evidence must be ANCHORED on compile-step shapes — a bare `error: `
 # alternative coincidentally matched Python exception names
 # (AssertionError: …) in functional logs (adversarial-review LOW).
@@ -61,46 +85,71 @@ _ELAB_RE = re.compile(
     r"|\d+ error\(s\) during elaboration)",
     re.IGNORECASE | re.MULTILINE)
 _FAILED_OF_RE = re.compile(r"\bFailed\s+(\d+)\s+of\s+(\d+)\s+tests?", re.I)
-# pytest bottom-line summary — problem-level truth in the dominant CVDP
-# harness shape (pytest-parametrized, ONE cocotb test per invocation, every
-# failing invocation prints "Failed 1 of 1 tests" — so a single Failed-of
-# match can NEVER distinguish partial from all; adversarial-review HIGH).
+# cocotb regression-summary row (field round-2 FLAGSHIP counter-evidence):
+# `** TESTS=10 PASS=9 FAIL=1 SKIP=0 …` carries the per-test granularity the
+# pytest bottom line hides (pytest wraps the whole cocotb run as ONE test, so
+# its summary says "1 failed" even when 9/10 cocotb tests passed).
+_COCOTB_SUMMARY_RE = re.compile(
+    r"TESTS=(\d+)\s+PASS=(\d+)\s+FAIL=(\d+)", re.I)
 _PYTEST_SUMMARY_RE = re.compile(
     r"=+\s*(\d+)\s+failed(?:,\s*(\d+)\s+passed)?[^=\n]*=+")
 
 
 def classify_log(text: str) -> str:
-    """Classify ONE report log's failure mode."""
+    """Classify ONE report log's failure mode.
+
+    FUNC_ALL is only ever returned on ZERO pass evidence across EVERY
+    summary family (cocotb TESTS=, `Failed X of Y`, pytest bottom line) —
+    the field round-2 flagship (`TESTS=10 PASS=9 FAIL=1` judged FUNC_ALL)
+    pinned this requirement. A log with NO terminal verdict evidence at all
+    is TRUNCATED (infra flakiness), not UNKNOWN."""
     if _SYNTH_RE.search(text):
         return "SYNTH_GATE"
-    # 1) pytest bottom-line(s): aggregate failed/passed across invocations.
-    p_failed = p_passed = 0
-    for m in _PYTEST_SUMMARY_RE.finditer(text):
-        p_failed += int(m.group(1))
-        p_passed += int(m.group(2) or 0)
-    if p_failed and p_passed:
-        return "FUNC_PARTIAL"
-    # 2) compile-step kill (anchored evidence)
-    if _ELAB_RE.search(text):
-        return "ELAB_ERROR"
-    # 3) aggregate ALL Failed-of matches (never trust the first alone)
-    a_failed = a_total = 0
+    if _SYNTH_THRESHOLD_RE.search(text):
+        return "SYNTH_THRESHOLD"
+    # aggregate pass/fail evidence across ALL three summary families
+    fail_ev = pass_ev = 0
+    verdict_seen = False
+    for m in _COCOTB_SUMMARY_RE.finditer(text):
+        verdict_seen = True
+        pass_ev += int(m.group(2))
+        fail_ev += int(m.group(3))
     for m in _FAILED_OF_RE.finditer(text):
-        a_failed += int(m.group(1))
-        a_total += int(m.group(2))
-    if p_failed and not p_passed:
+        verdict_seen = True
+        failed, total = int(m.group(1)), int(m.group(2))
+        fail_ev += failed
+        pass_ev += max(0, total - failed)
+    for m in _PYTEST_SUMMARY_RE.finditer(text):
+        verdict_seen = True
+        fail_ev += int(m.group(1))
+        pass_ev += int(m.group(2) or 0)
+    if fail_ev and pass_ev:
+        return "FUNC_PARTIAL"
+    # compile-step kill: anchored evidence AND no test-level verdict ran
+    if _ELAB_RE.search(text) and not (_COCOTB_SUMMARY_RE.search(text)
+                                      or _FAILED_OF_RE.search(text)):
+        return "ELAB_ERROR"
+    if fail_ev:
         return "FUNC_ALL"
-    if a_failed:
-        return "FUNC_ALL" if a_failed >= a_total else "FUNC_PARTIAL"
+    if not verdict_seen:
+        return "TRUNCATED"
     return "UNKNOWN"
 
 
 def triage(raw: Dict, reports_root: Optional[Path]) -> List[Dict]:
-    """Walk raw_result.json; classify every problem with ≥1 failing test."""
+    """Walk raw_result.json; classify every problem with ≥1 failing test.
+
+    PROBLEM-LEVEL pass evidence (field round-2): the failing tests' logs
+    alone CANNOT prove partiality — the passing invocations' evidence lives
+    in raw_result itself (tests[].result == 0). A problem with passing
+    sibling tests is FUNC_PARTIAL by definition ("some hidden tests pass,
+    some fail"), regardless of what the failing log says — except the
+    synth-gate classes (the harness quality gate is its own axis)."""
     out: List[Dict] = []
     for pid, info in sorted(raw.items()):
         tests = info.get("tests") or []
         failing = [t for t in tests if t.get("result") not in (0, "0", None)]
+        passing = [t for t in tests if t.get("result") in (0, "0")]
         if not failing and not info.get("errors"):
             continue
         # read every failing test's log (fall back to reports_root rebase
@@ -119,7 +168,11 @@ def triage(raw: Dict, reports_root: Optional[Path]) -> List[Dict]:
                     p = reports_root / Path(*parts[i - 1:])
             if p.is_file():
                 blob += p.read_text(errors="replace") + "\n"
-        mode = classify_log(blob) if blob.strip() else "UNKNOWN"
+        # a missing/empty log for a recorded FAIL is itself the truncated
+        # shape (no verdict ever landed), not "unclassifiable".
+        mode = classify_log(blob) if blob.strip() else "TRUNCATED"
+        if passing and mode in ("FUNC_ALL", "ELAB_ERROR", "UNKNOWN"):
+            mode = "FUNC_PARTIAL"
         out.append({"id": pid, "mode": mode, "blind_safe_hint": HINTS[mode]})
     return out
 

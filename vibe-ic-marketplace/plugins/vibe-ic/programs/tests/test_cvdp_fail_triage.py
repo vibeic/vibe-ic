@@ -35,7 +35,9 @@ def test_mode_signatures():
     assert T.classify_log(ELAB_LOG) == "ELAB_ERROR"
     assert T.classify_log(FUNC_PARTIAL_LOG) == "FUNC_PARTIAL"
     assert T.classify_log(FUNC_ALL_LOG) == "FUNC_ALL"
-    assert T.classify_log("Cleaning up Docker resources...") == "UNKNOWN"
+    # a log with NO verdict evidence at all is the TRUNCATED infra shape
+    # (field round-2), not "unclassifiable".
+    assert T.classify_log("Cleaning up Docker resources...") == "TRUNCATED"
 
 
 def test_hints_are_blind_safe():
@@ -100,8 +102,9 @@ def test_real_run_classifies_when_present(tmp_path):
     assert rc == 0
     d = json.loads(out.read_text())
     assert d["total_fails"] == len(fails)
-    assert set(d["mode_summary"]) <= {"SYNTH_GATE", "ELAB_ERROR",
-                                      "FUNC_PARTIAL", "FUNC_ALL", "UNKNOWN"}
+    assert set(d["mode_summary"]) <= {"SYNTH_GATE", "SYNTH_THRESHOLD",
+                                      "ELAB_ERROR", "FUNC_PARTIAL",
+                                      "FUNC_ALL", "TRUNCATED", "UNKNOWN"}
 
 
 # ── adversarial-review round-2 regressions ─────────────────────────────────
@@ -127,3 +130,79 @@ def test_review2_elab_anchored_not_coincidental_error_token():
     compile_kill = ("subprocess.CalledProcessError: Command '['iverilog', "
                     "'-o', 'sim.vvp', 'rtl/dut.sv']' returned non-zero\n")
     assert T.classify_log(compile_kill) == "ELAB_ERROR"
+
+
+# ── field round-2 reopen regressions (#534) ────────────────────────────────
+
+FLAGSHIP_LOG = """\
+** TESTS=10 PASS=9 FAIL=1 SKIP=0                       1639.00  0.02 **
+ERROR    Icarus:runner.py:572 ERROR: Failed 1 of 10 tests.
+============================== 1 failed in 0.42s ===============================
+"""
+
+
+def test_round2_flagship_cocotb_summary_is_partial():
+    # the field's flagship counter-evidence: TESTS=10 PASS=9 FAIL=1 must be
+    # FUNC_PARTIAL — the pytest bottom line ("1 failed") wraps the whole
+    # cocotb run as ONE test and must not override per-test granularity.
+    assert T.classify_log(FLAGSHIP_LOG) == "FUNC_PARTIAL"
+
+
+def test_round2_func_all_requires_zero_pass_evidence():
+    # 10 invocations all TESTS=1 PASS=0 FAIL=1 (the real MSHR shape) → ALL;
+    # in-flight prose like "Diagnostic bus checks passed." is NOT a verdict.
+    allfail = ("** TESTS=1 PASS=0 FAIL=1 SKIP=0 **\n" * 10
+               + "  255.00ns INFO  cocotb.x  Mode 0: Diagnostic bus checks "
+                 "passed.\n"
+               + "=========== 10 failed in 9s ===========\n")
+    assert T.classify_log(allfail) == "FUNC_ALL"
+
+
+def test_round2_synth_threshold_mode():
+    log = ('            print("No upgrades in synthesis: Errors detected '
+           'in the after log. Synthesis failed.")\n'
+           "FAILED ../../src/synth.py::test_yosys - AssertionError: "
+           "Optimization failed: ...\n")
+    assert T.classify_log(log) == "SYNTH_THRESHOLD"
+
+
+def test_round2_truncated_midrun_log():
+    # the real truncated shape: in-flight cocotb lines, no summary of any
+    # family, cut before verdict.
+    log = ("   410.00ns INFO  cocotb.regression  test_a passed\n"
+           "   410.00ns INFO  cocotb.regression  running test_b (2/10)\n")
+    assert T.classify_log(log) == "TRUNCATED"
+
+
+def test_round2_problem_level_passing_tests_force_partial(tmp_path):
+    # the failing invocation's log says all-fail, but the problem has
+    # PASSING sibling tests in raw_result → FUNC_PARTIAL by definition.
+    rp = _mk_run(tmp_path, {"p_mix_0001": (1, FUNC_ALL_LOG)})
+    raw = json.loads(rp.read_text())
+    # add a passing sibling test to the same problem
+    raw["p_mix_0001"]["tests"].append(
+        {"result": 0, "log": None, "error_msg": None})
+    rp.write_text(json.dumps(raw))
+    out = tmp_path / "t.json"
+    assert T.main(["--raw", str(rp), "--out", str(out)]) == 0
+    d = json.loads(out.read_text())
+    assert d["records"][0]["mode"] == "FUNC_PARTIAL"
+
+
+def test_round2_real_final_run_flagship_and_truncated(tmp_path):
+    # content-gated real-run pins: the flagship record classifies PARTIAL
+    # and the 4 host-confirmed TRUNCATED records classify TRUNCATED.
+    real = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
+                "/work_score_final/raw_result.json")
+    if not real.is_file():
+        pytest.skip("real final run not on this host")
+    out = tmp_path / "t.json"
+    rc = T.main(["--raw", str(real), "--reports",
+                 str(real.parent), "--out", str(out)])
+    assert rc == 0
+    d = json.loads(out.read_text())
+    m = {r["id"]: r["mode"] for r in d["records"]}
+    flag = m.get("cvdp_copilot_64b66b_decoder_0011")
+    if flag is not None:
+        assert flag == "FUNC_PARTIAL"
+    assert d["mode_summary"].get("TRUNCATED", 0) >= 1
