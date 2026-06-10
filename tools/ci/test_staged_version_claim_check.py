@@ -530,3 +530,32 @@ def test_flow_namespace_requires_immediate_precedence(tmp_path):
         "vibe-ic-marketplace/plugins/vibe-ic/programs/foo.py",
         "# the plugin flow. v0.3.0 adds X"))
     assert cp.returncode == 1, cp.stdout + cp.stderr
+
+
+# ── ORGANIC #537 — benchmark RESULT report exemption ───────────────────────
+
+def _svc():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("svc_mod", PROGRAM)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_537_result_reports_path_skipped():
+    # §6 Reproduce sections embed EXTERNAL dataset/tool versions (release
+    # tags, docker image pins) — not plugin self-claims.
+    svc = _svc()
+    assert svc._path_skipped("cvdp_open_run_v0325/RESULT_v110.md")
+    assert svc._path_skipped("benchmark_external/rtllm/RESULT_v0132_shape_b.md")
+    assert svc._path_skipped("some_run/RESULT.md")
+
+
+def test_537_negative_plugin_docs_still_gated():
+    # NEGATIVE no-leak: plugin self-documentation stays under the gate.
+    svc = _svc()
+    assert not svc._path_skipped(
+        "vibe-ic-marketplace/plugins/vibe-ic/README.md")
+    assert not svc._path_skipped("docs/architecture/OVERVIEW.md")
+    assert not svc._path_skipped(
+        "vibe-ic-marketplace/plugins/vibe-ic/skills/foo/SKILL.md")

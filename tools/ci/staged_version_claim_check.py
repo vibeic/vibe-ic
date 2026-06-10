@@ -163,6 +163,13 @@ _SKIP_PATH_PATTERNS = (
     # tree is exempt for the same reason as the benchmark-snapshot dirs and
     # CHANGELOG/RFC docs below.
     "community/backlogs/", "community/backlogs",
+    # ORGANIC #537 — benchmark RESULT reports (§6 of the methodology REQUIRES
+    # a Reproduce section = real curl/docker commands embedding EXTERNAL
+    # dataset/tool/image versions: upstream release tags, sim-tool versions,
+    # cocotb pins). These are external-product versions, never plugin
+    # self-claims — same rationale as community/backlogs above. Scoped to
+    # the RESULT-report naming convention so plugin docs stay gated.
+    "/RESULT_", "RESULT_v", "/RESULT.md",
     # RFC / planning docs legitimately discuss target / proposed
     # versions before plugin.json bumps (same exemption rationale
     # as CHANGELOG / RELEASE_NOTES).

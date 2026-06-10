@@ -180,12 +180,37 @@ def cmd_show(bench: str):
         print(f"  3. Drive: vibe_ic_one_shot_runner.py <project> --pdk sky130A")
         print(f"  4. Score: python3 {scorer} --project <project> --top <dut> --rtl work/rtl/<dut>.sv --mount-root <ROOT>")
         print(f"  Blind instructions: {bi}")
+    elif isinstance(e.get("flow"), dict):
+        # #532 round-2 (adversarial review): composite shapes ("C/D") carry
+        # their own documented flow — surface it instead of an empty section.
+        for k, v in e["flow"].items():
+            print(f"  {k}: {v}")
+        if e.get("scorer"):
+            print(f"  scorer: {e['scorer']}")
+        if e.get("triage"):
+            print(f"  triage: {e['triage']}")
+    else:
+        raise SystemExit(
+            f"unhandled shape {shape!r} for {bench!r} and no flow dict in "
+            f"the registry entry — refusing to print an empty plan")
 
 
 def cmd_setup(bench: str, dataset: str, run: str, floor_only: bool = False):
     e = _entry(bench)
     if e["shape"] == "E":
         raise SystemExit(f"Shape E (blocked/out-of-scope). Cannot setup; see blocker:\n  {e.get('blocker')}")
+    if e["shape"] not in ("B", "C", "D"):
+        # #532 round-2 (adversarial review): a composite shape ("C/D") fell
+        # through every problem-discovery branch and produced a SILENT
+        # 0-problem scaffold that exits 0. Refuse loudly and point at the
+        # entry's documented flow instead.
+        flow = e.get("flow")
+        hint = ("\n  documented flow: " + json.dumps(flow, ensure_ascii=False)
+                ) if flow else ""
+        raise SystemExit(
+            f"shape {e['shape']!r} has no generic --setup scaffold — drive "
+            f"this benchmark via its documented flow (see --show {bench})."
+            + hint)
     run_p = Path(run).resolve()
     ds_p = Path(dataset).resolve()
     if not ds_p.is_dir():
@@ -474,6 +499,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("bench", nargs="?", help="benchmark name (see --list)")
     ap.add_argument("--list", action="store_true", help="list known benchmarks")
+    ap.add_argument("--show", action="store_true",
+                    help="print the full registry entry for <bench> (#532)")
     ap.add_argument("--setup", action="store_true", help="create run dir scaffold")
     ap.add_argument("--score", action="store_true", help="invoke the scorer on an existing run dir")
     ap.add_argument("--reattempt-floor", action="store_true",
@@ -495,6 +522,13 @@ def main():
     if not a.bench:
         ap.print_help()
         sys.exit(2)
+    if a.show:
+        reg = json.loads(REGISTRY.read_text())["benchmarks"]
+        if a.bench not in reg:
+            raise SystemExit(f"unknown benchmark: {a.bench} (see --list)")
+        print(json.dumps({a.bench: reg[a.bench]}, ensure_ascii=False,
+                         indent=2))
+        return
     if a.setup:
         if not (a.dataset and a.run):
             raise SystemExit("--setup requires --dataset and --run")
