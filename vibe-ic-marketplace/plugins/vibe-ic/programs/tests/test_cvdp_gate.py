@@ -748,6 +748,55 @@ def test_round4_negative_async_edge_still_blocked(tmp_path):
     assert _read_jsonl(out) == []
 
 
+def test_round5_latch_info_line_must_not_mask_fatal_error(tmp_path):
+    # field round-5 leak repro: "Latch inferred for signal" ALSO prints as a
+    # PROC_DLATCH INFO line (plain `always @*` missing-else, no ERROR:
+    # prefix). The round-4 blob-wide tolerance let that info line mask a
+    # co-occurring REAL fatal ERROR (PROC_DFF multiple-edge) as PASS — the
+    # tolerance must anchor on the ERROR lines themselves.
+    if not (_HAS_IVERILOG and _HAS_YOSYS):
+        pytest.skip("iverilog/yosys not on this host")
+    mask = _json.dumps({"code": [{"rtl/mask_one.sv":
+        "module mask_one(input en, input d, input a, input b, input c,\n"
+        "                output reg q, output reg r);\n"
+        "  // missing else -> PROC_DLATCH info line (no ERROR: prefix)\n"
+        "  always @* begin\n"
+        "    if (en) q = d;\n"
+        "  end\n"
+        "  // REAL fatal: multiple edge sensitive events (PROC_DFF)\n"
+        "  always @(posedge a or posedge b) r <= c;\n"
+        "endmodule"}]})
+    batch = _write_batch(tmp_path, [{"id": "p_mask1", "completion": mask}])
+    out = tmp_path / "responses.jsonl"
+    rc = G.main(["--batch", str(batch), "--out", str(out),
+                 "--report", str(tmp_path / "rep.json")])
+    assert rc == 1
+    assert _read_jsonl(out) == []
+    rep = _json.loads((tmp_path / "rep.json").read_text())
+    e = rep["records"][0]
+    assert e["verdict"] == "BLOCKED"
+    assert "yosys-smoke failed" in e.get("synth", "")
+
+
+def test_round5_latch_error_line_still_advisory_when_sole_error_class():
+    # boundary negative-of-the-negative: when the latch message IS the
+    # ERROR line (always_comb shape) and no other ERROR class co-occurs,
+    # the advisory tolerance must still fire (round-4 positives hold).
+    # Covered end-to-end by test_round4_latch_strictness_is_advisory_not_
+    # block; this pins the LINE-anchored predicate itself, no tools needed.
+    import re as _re
+    latch_error = _re.compile(
+        r"ERROR:.*(?:No latch inferred for signal"
+        r"|Latch inferred for signal)")
+    pure_latch = [
+        "ERROR: Latch inferred for signal `\\bcd.\\out' from always_comb "
+        "process `\\bcd.$proc$bcd.sv:0$1'."]
+    masked = [
+        "ERROR: Multiple edge sensitive events found for this signal!"]
+    assert all(latch_error.search(ln) for ln in pure_latch)
+    assert not all(latch_error.search(ln) for ln in masked)
+
+
 def test_round4_real_corpus_four_records_gate_pass(tmp_path):
     # content-gated binding pins: the 4 round-4 falsely-blocked official-
     # PASS records gate PASS.

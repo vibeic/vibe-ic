@@ -384,13 +384,26 @@ def yosys_smoke(code: str, workdir: Path,
                                f"hierarchy tolerated (mirrors the compile-"
                                f"path context tolerance)")
                 continue
-            # (b) yosys latch-semantics strictness (`Latch inferred for
-            #     signal … from always_comb` / mem2reg latch checks) —
+            # (b) yosys latch-semantics strictness (`ERROR: Latch inferred
+            #     for signal … from always_comb` / mem2reg latch checks) —
             #     stricter than the official harness for sim-only problems
             #     (no synth gate there); downgrade to an ADVISORY note so
             #     the author still sees it, never a block.
-            if re.search(r"Latch inferred for signal"
-                         r"|No latch inferred for signal", blob):
+            #     #531 round-5 (field leak repro): the tolerance anchors on
+            #     the ERROR LINES themselves, never the whole blob —
+            #     "Latch inferred for signal" ALSO prints as a PROC_DLATCH
+            #     info line (plain `always @*` missing-else, no ERROR:
+            #     prefix), and a blob-wide search let that info line mask a
+            #     co-occurring REAL fatal ERROR (e.g. PROC_DFF "Multiple
+            #     edge sensitive events") as PASS. Tolerate ONLY when every
+            #     ERROR: line is latch-class; any non-latch ERROR → block.
+            error_lines = [ln for ln in blob.splitlines()
+                           if "ERROR:" in ln]
+            latch_error = re.compile(
+                r"ERROR:.*(?:No latch inferred for signal"
+                r"|Latch inferred for signal)")
+            if error_lines and all(latch_error.search(ln)
+                                   for ln in error_lines):
                 details.append(f"{top}: latch-inference strictness "
                                f"tolerated as ADVISORY (yosys always_comb/"
                                f"latch semantic check exceeds the official "
