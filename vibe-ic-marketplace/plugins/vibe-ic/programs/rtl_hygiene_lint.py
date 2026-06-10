@@ -377,7 +377,13 @@ def rule_pulse_swallow(src: str, path: str) -> List[Finding]:
 # ---------------------------------------------------------------------------
 # Rule 5: Reset-less registered output with no power-up initializer
 # ---------------------------------------------------------------------------
-_RESET_NAME_RE = re.compile(r'\b(a?reset[a-z_]*|a?rst[a-z_]*|resetn|nreset|por|sclr|aclr)\b', re.I)
+# #530 — also accept PREFIXED reset spellings (w_rst / r_rst / io_rst /
+# sys_reset …, common in cross-domain designs): the old anchor required the
+# token to START with rst/reset, so a dual-clock module with w_rst+r_rst was
+# falsely classified reset-less and fed to the power-up autofix.
+_RESET_NAME_RE = re.compile(
+    r'\b(?:\w+_)?(a?reset[a-z_]*|a?rst[a-z_]*|resetn|nreset|por|sclr|aclr)\b',
+    re.I)
 
 
 def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
@@ -1032,6 +1038,16 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
                 if rhs_id in registered and rhs_id not in seen \
                         and rhs_id not in VERILOG_KEYWORDS \
                         and rhs_id not in top_wires:
+                    # #530 — memory-array guard (case (c) already has it):
+                    # an unpacked array RHS (reg [W-1:0] mem [0:D-1]) must
+                    # never receive the scalar `initial mem = 0;` autofix —
+                    # icarus cannot elaborate a whole-array assignment, so
+                    # the enforced --fix would BREAK a correct design.
+                    is_mem_array = re.search(
+                        r'\b(?:reg|logic)\b[^;\n]*\b' + re.escape(rhs_id)
+                        + r'\s*\[[^\]]+\]\s*[;,]', src_scope)
+                    if is_mem_array:
+                        continue
                     decl_init = re.search(
                         r'\b(?:reg|logic)\b[^;\n]*\b' + re.escape(rhs_id) + r'\s*=', src_scope)
                     in_initial = has_initial and re.search(
