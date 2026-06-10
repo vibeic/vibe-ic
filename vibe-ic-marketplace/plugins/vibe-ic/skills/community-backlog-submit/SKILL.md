@@ -129,6 +129,19 @@ Name the **component** using the format:
 
 ### Step 3 — Write the YAML
 
+> **Scope of the YAML-mirror convention (ORGANIC #540).** The
+> `community/backlogs/` YAML mirror is REQUIRED only for backlogs that
+> originate **locally** and cross the trust boundary on their way to
+> GitHub — i.e. records emitted by the capture skill
+> (`benchmark-enhancement-capture` Bucket C) or authored by this skill's
+> Step 3-4 path, where the YAML file IS the sanitize-gate artifact.
+> Issues the field agent files **directly on GitHub as structured
+> Markdown forms** are themselves the canonical, auditable record — they
+> need NO retroactive YAML mirror, and backfilling one would create a
+> second source of truth that can drift. One rule: *the record is
+> canonical where it was born; a mirror is only required when a local
+> file is what gets published.*
+
 Create a file in `community/backlogs/` named `ORGANIC-<YYYYMMDD>-<short_desc>.yaml`:
 
 ```yaml
@@ -164,7 +177,7 @@ session_context: "Fresh-agent Phase 2+3 run; agent ignored WARN and shipped"
 Run the sanitization gate:
 
 ```bash
-python3 plugins/vibe-ic-d/programs/backlog_sanitize_check.py \
+python3 plugins/vibe-ic/programs/backlog_sanitize_check.py \
     --file community/backlogs/ORGANIC-<your_file>.yaml
 ```
 
