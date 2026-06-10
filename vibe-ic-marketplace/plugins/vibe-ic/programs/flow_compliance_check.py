@@ -1417,13 +1417,19 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
     argv = _resolve_program_cmd(cmd_str, cwd=project)
     if not argv:
         return False, f"program not found: {cmd_str.split()[0]}"
+    # #525 — per-gate budget from the SHARED resolver (default 900s, env
+    # VIBE_IC_GATE_TIMEOUT_S, cap 3600s). The old fixed 300s killed honest
+    # slow gates on large SoCs (reset_dependency_check ~6 min on a 7.5MB
+    # post-PnR netlist; provenance sha256 over multi-GB GDS) and reported
+    # the kill as a plain gate FAIL.
+    gate_budget = _pl.gate_timeout_s()
     try:
         r = subprocess.run(
             argv,
             cwd=project,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=gate_budget,
         )
         snippet = (r.stdout[-300:] + "\n" + r.stderr[-300:]).strip()
         if r.returncode == 0:
@@ -1434,7 +1440,13 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
             return True, f"{_VACUOUS_HINT_PREFIX}{cmd_str}"
         return False, snippet
     except subprocess.TimeoutExpired:
-        return False, f"program timed out: {cmd_str}"
+        # #525 — a timeout is NOT a verdict: the gate program was killed
+        # mid-run, so the step is INCONCLUSIVE (still FAILs the audit —
+        # an unevaluated gate cannot pass — but the message must never
+        # read as a substantive gate failure).
+        return False, (f"program TIMED OUT after {gate_budget}s — timeout "
+                       f"is NOT a verdict (INCONCLUSIVE; raise "
+                       f"{_pl.GATE_TIMEOUT_ENV} to extend): {cmd_str}")
     except Exception as exc:
         return False, f"program invocation error: {exc}"
 
@@ -2680,7 +2692,11 @@ def _pdk_substitution_disclosed(project: Path) -> Optional[Dict[str, str]]:
         return None
     for sp in sorted(analog_dir.rglob("*.sp")):
         try:
-            text = sp.read_text(errors="replace")
+            # #525 perf — only the deck HEAD matters here (PDK include /
+            # model lines sit at the top); post-layout extracted decks can
+            # be huge. 64 KiB covers any realistic header.
+            with open(sp, "rb") as fh:
+                text = fh.read(65536).decode(errors="replace")
         except OSError:
             continue
         head = "\n".join(text.splitlines()[:24])
@@ -3050,7 +3066,12 @@ def _evidence_integrity_scan(project: Path,
             if p.stat().st_size == 0:
                 broken.append(f"{rel} (0 bytes)")
                 continue
-            txt = p.read_text(errors="replace")[:8000]
+            # #525 perf — the old `read_text()[:8000]` read the ENTIRE
+            # file (evidence lists routinely include multi-hundred-MB
+            # DEF/GDS/SPEF) before slicing; on a large SoC this single
+            # loop dominated the audit wall-time. Read only the head.
+            with open(p, "rb") as fh:
+                txt = fh.read(8192).decode(errors="replace")
         except OSError:
             continue  # non-text / vanished: out of scope for this scan
         if _STUB_TAG_RE.search(txt):

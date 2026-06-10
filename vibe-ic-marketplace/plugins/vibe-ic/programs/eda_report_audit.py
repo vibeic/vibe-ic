@@ -93,8 +93,35 @@ def _waived_for_pdk(project_dir, mode: str) -> str:
 # ---------------------------------------------------------------------------
 # File discovery helpers
 # ---------------------------------------------------------------------------
+# #525 (field round-4 adjacent finding) — recursive report discovery used to
+# ingest STALE copies under backup/aside directories (a `_stale_bak/` antenna
+# report with 56 violations was parsed alongside the clean live one and
+# flipped the verdict). Exclude path components that are hidden (dot-dirs)
+# or carry an explicit backup token. Token matching is boundary-aware so
+# legitimate names ("golden", "bakery") never match.
+_BACKUP_TOKEN_RE = re.compile(
+    r"(?:^|[._\-])(bak|backup|backups|stale|old|trash|movedaside|aside)"
+    r"(?:$|[._\-])", re.IGNORECASE)
+
+
+def _is_backup_path(p: Path, root: Path) -> bool:
+    """True when any path component between root and the file is hidden or
+    backup-flavored (the canonical report tree never uses such names)."""
+    try:
+        parts = p.relative_to(root).parts
+    except ValueError:
+        parts = p.parts
+    for part in parts:
+        if part.startswith("."):
+            return True
+        if _BACKUP_TOKEN_RE.search(part):
+            return True
+    return False
+
+
 def _discover(project_dir: Path, patterns: List[str]) -> List[Path]:
-    """Glob for files matching any of the given patterns recursively."""
+    """Glob for files matching any of the given patterns recursively,
+    skipping hidden / backup-flavored directories (#525)."""
     found: List[Path] = []
     for pat in patterns:
         found.extend(project_dir.rglob(pat))
@@ -102,9 +129,12 @@ def _discover(project_dir: Path, patterns: List[str]) -> List[Path]:
     seen = set()
     unique = []
     for p in found:
-        if p not in seen:
-            seen.add(p)
-            unique.append(p)
+        if p in seen:
+            continue
+        seen.add(p)
+        if _is_backup_path(p, project_dir):
+            continue
+        unique.append(p)
     return unique
 
 

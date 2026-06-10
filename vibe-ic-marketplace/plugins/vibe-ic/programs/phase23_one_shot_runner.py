@@ -191,15 +191,15 @@ def main() -> int:
     # count, generic 4 mandatory outputs, waivers, self-attestation cmd,
     # link to chip-specific addendum if present). Best-effort: failure here
     # must not flip the runner's verdict.
-    final_gen = PROGRAMS_DIR / "final_report_generate.py"
-    if final_gen.is_file():
-        try:
-            subprocess.run(
-                [sys.executable, str(final_gen), str(project)],
-                timeout=240, check=False,
-            )
-        except Exception as exc:
-            print(f"  [WARN] final_report_generate failed: {exc}")
+    # #525 — go through the SHARED emit_final_summary helper, whose outer
+    # cap is the child's own size-adaptive audit budget + margin; the old
+    # raw fixed 240s cap here silently defeated the 900-3600s inner budget on
+    # every large-SoC phase23 run.
+    try:
+        if not _pl.emit_final_summary(project, PROGRAMS_DIR):
+            print("  [WARN] final_report_generate did not complete")
+    except Exception as exc:
+        print(f"  [WARN] final_report_generate failed: {exc}")
 
     # v1.6.52 — update the stability streak. Same verdict as last run
     # increments the streak; a different verdict resets it to 1. The

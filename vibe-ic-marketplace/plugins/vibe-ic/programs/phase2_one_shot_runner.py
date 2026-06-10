@@ -272,7 +272,12 @@ def _run(cmd: List[str], cwd: Optional[Path] = None,
         )
         return cp.returncode, cp.stdout, cp.stderr
     except subprocess.TimeoutExpired as e:
-        return 124, e.stdout or "", f"TIMEOUT after {timeout}s: {e}"
+        # TimeoutExpired.stdout is BYTES even under text=True (CPython);
+        # decoding here keeps every rc=124 consumer str-safe (#525 review).
+        partial = e.stdout
+        if isinstance(partial, bytes):
+            partial = partial.decode(errors="replace")
+        return 124, partial or "", f"TIMEOUT after {timeout}s: {e}"
     except FileNotFoundError as e:
         return 127, "", f"COMMAND_NOT_FOUND: {e}"
 
@@ -352,7 +357,12 @@ def _docker_exec(container: str, cmd: str, timeout: int = 600
                             timeout=timeout)
         return cp.returncode, cp.stdout, cp.stderr
     except subprocess.TimeoutExpired as e:
-        return 124, e.stdout or "", f"TIMEOUT after {timeout}s: {e}"
+        # TimeoutExpired.stdout is BYTES even under text=True (CPython);
+        # decoding here keeps every rc=124 consumer str-safe (#525 review).
+        partial = e.stdout
+        if isinstance(partial, bytes):
+            partial = partial.decode(errors="replace")
+        return 124, partial or "", f"TIMEOUT after {timeout}s: {e}"
     except FileNotFoundError as e:
         return 127, "", f"COMMAND_NOT_FOUND: {e}"
 
@@ -5642,12 +5652,32 @@ def step_final_audit(project: Path, phase: int = 3,
     audit_env: Optional[Dict[str, str]] = None
     if phase == 2:
         audit_env = {"PHASE23_ANALOG_FPGA_STUB": "1"}
+    # #525 — size-adaptive timeout from the SHARED resolver (900s base,
+    # +4s/MiB over 128MiB, cap 3600s, env VIBE_IC_AUDIT_TIMEOUT_S). The old
+    # fixed 300s killed flow_compliance mid-run on large SoCs (155k+ filler
+    # projects legitimately need 8-9 min) and the TIMEOUT surfaced as a
+    # plain FAIL with empty detail.
+    budget = _pl.audit_timeout_s(project)
     rc, out, err = _run(_build_final_audit_cmd(project, audit, phase, skip_analog),
-                        timeout=300, env=audit_env)
+                        timeout=budget, env=audit_env)
     transcript = _pl.report_path(project, "flow_compliance_check.log")
     transcript.parent.mkdir(parents=True, exist_ok=True)
     transcript.write_text(out + "\n" + err)
     head = "\n".join(out.splitlines()[-25:])
+    # #525 — TIMEOUT is NOT a verdict. Name it explicitly (mirrors the
+    # #477/#524 incomplete-vs-FAIL doctrine): the step still FAILs (an audit
+    # that did not finish cannot pass) but the detail says the project was
+    # NOT actually judged, and points at the transcript + the env knob.
+    if rc == 124:
+        return StepResult(
+            "final_audit", "FAIL", time.time() - t0,
+            f"AUDIT TIMEOUT after {budget}s — the compliance audit did not "
+            f"run to completion, so this is NOT a verdict on the project "
+            f"(INCONCLUSIVE, #525). Re-run with a larger budget (env "
+            f"{_pl.AUDIT_TIMEOUT_ENV}) or run flow_compliance_check.py "
+            f"standalone; transcript: {transcript}",
+            [str(transcript)],
+            extras={"finding": "AUDIT_TIMEOUT", "timeout_s": budget})
     # v1.6.100: check PASS_WITH_WAIVERS FIRST — "Overall: PASS" is a
     # substring of "Overall: PASS_WITH_WAIVERS" so the previous order
     # never reached the WAIVED branch (latent bug surfaced by the #33

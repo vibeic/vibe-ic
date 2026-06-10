@@ -75,15 +75,14 @@ COMPLIANCE_TOOL = PLUGIN_ROOT / "programs" / "flow_compliance_check.py"
 #       'AUDIT_TIMEOUT' (never 'UNKNOWN'), preserving the previous
 #       snapshot marker so a reader can tell 審不完 (timed out) from
 #       沒審 (never audited).
-AUDIT_TIMEOUT_ENV = "VIBE_IC_AUDIT_TIMEOUT_S"
-# Raised default vs the old hard-coded 180 s (#469).
-AUDIT_TIMEOUT_DEFAULT_S = 900
-# Above this run-dir size we add headroom proportional to size, because
-# the flow_compliance hot spots scale with the number/size of artefacts
-# under the run dir (general; not chip- or path-specific).
-AUDIT_SIZE_ADAPT_THRESHOLD_BYTES = 128 * 1024 * 1024   # 128 MiB
-AUDIT_SIZE_ADAPT_S_PER_MIB = 4                          # +4 s per MiB over
-AUDIT_TIMEOUT_CAP_S = 3600                              # never exceed 1 h
+# #525 — the timeout constants are ALIASES of the single defining site in
+# _path_layout (audit_timeout_s + friends); keeping independent literals
+# here let them silently diverge from the values actually used.
+AUDIT_TIMEOUT_ENV = _pl.AUDIT_TIMEOUT_ENV
+AUDIT_TIMEOUT_DEFAULT_S = _pl.AUDIT_TIMEOUT_DEFAULT_S
+AUDIT_SIZE_ADAPT_THRESHOLD_BYTES = _pl.AUDIT_SIZE_ADAPT_THRESHOLD_BYTES
+AUDIT_SIZE_ADAPT_S_PER_MIB = _pl.AUDIT_SIZE_ADAPT_S_PER_MIB
+AUDIT_TIMEOUT_CAP_S = _pl.AUDIT_TIMEOUT_CAP_S
 # The named verdict a reader sees when the audit could not finish in time.
 AUDIT_TIMEOUT_VERDICT = "AUDIT_TIMEOUT"
 # The verdict used only when the audit was never run at all (--no-audit
@@ -356,22 +355,11 @@ def _resolve_audit_timeout(project: Path,
     An explicit/env value is honored verbatim (no size adaptation) so a
     test can deliberately shrink it; only the computed default scales.
     Values ≤ 0 are rejected and fall through to the next source."""
-    if explicit is not None and explicit > 0:
-        return min(explicit, AUDIT_TIMEOUT_CAP_S)
-    env_raw = os.environ.get(AUDIT_TIMEOUT_ENV)
-    if env_raw is not None:
-        try:
-            env_val = int(env_raw)
-        except (TypeError, ValueError):
-            env_val = 0
-        if env_val > 0:
-            return min(env_val, AUDIT_TIMEOUT_CAP_S)
-    base = AUDIT_TIMEOUT_DEFAULT_S
-    size = _dir_size_bytes(project)
-    if size > AUDIT_SIZE_ADAPT_THRESHOLD_BYTES:
-        over_mib = (size - AUDIT_SIZE_ADAPT_THRESHOLD_BYTES) // (1024 * 1024)
-        base += int(over_mib) * AUDIT_SIZE_ADAPT_S_PER_MIB
-    return min(base, AUDIT_TIMEOUT_CAP_S)
+    # #525 — delegate to the SHARED resolver in _path_layout (single source
+    # of truth; the same budget now also governs phase2 step_final_audit,
+    # phase23_completion_self_audit_check and emit_final_summary's outer cap).
+    return _pl.audit_timeout_s(project, explicit=explicit,
+                               size_fn=_dir_size_bytes)
 
 
 def _previous_snapshot_marker(project: Path) -> Optional[str]:

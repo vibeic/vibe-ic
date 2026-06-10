@@ -481,17 +481,119 @@ TOP_LEVEL_VALID_FILES: tuple = (
 )
 
 
+# ---------------------------------------------------------------------------
+# ORGANIC #525 — SINGLE SOURCE OF TRUTH for audit / gate subprocess timeouts.
+#
+# The #469 size-adaptive audit timeout lived only inside
+# final_report_generate.py while four other call sites kept hand-typed
+# 300s/240s caps — so a large SoC (155k+ fillers, multi-GB artifact tree)
+# whose flow_compliance legitimately needs 8-9 minutes was killed at 300s
+# and the TIMEOUT mis-reported as a plain FAIL with empty detail. Per the
+# Step-2.7 single-source doctrine the resolver now lives HERE and every
+# consumer (final_report_generate, phase2 step_final_audit,
+# phase23_completion_self_audit_check, emit_final_summary, the per-gate
+# cap in flow_compliance_check) imports it.
+# ---------------------------------------------------------------------------
+AUDIT_TIMEOUT_ENV = "VIBE_IC_AUDIT_TIMEOUT_S"
+AUDIT_TIMEOUT_DEFAULT_S = 900
+AUDIT_SIZE_ADAPT_THRESHOLD_BYTES = 128 * 1024 * 1024   # 128 MiB
+AUDIT_SIZE_ADAPT_S_PER_MIB = 4                          # +4 s per MiB over
+AUDIT_TIMEOUT_CAP_S = 3600                              # never exceed 1 h
+GATE_TIMEOUT_ENV = "VIBE_IC_GATE_TIMEOUT_S"
+GATE_TIMEOUT_DEFAULT_S = 900
+# Margin the OUTER wrapper adds on top of the child's own adaptive budget
+# so the outer cap can never fire first (the #525 emit_final_summary bug:
+# a 240s outer cap silently defeated #469's 900-3600s inner budget).
+OUTER_TIMEOUT_MARGIN_S = 120
+
+
+def dir_size_bytes(project, cap: int = 1 << 40) -> int:
+    """Best-effort total size (bytes) of the run dir, used to make the
+    audit timeout size-adaptive. Walks lazily and stops once `cap` is
+    exceeded so this never becomes its own hot spot on huge trees.
+    chip-AGNOSTIC: pure filesystem arithmetic, no name inspection."""
+    import os
+    total = 0
+    try:
+        for root, _dirs, files in os.walk(project):
+            for fn in files:
+                fp = Path(root) / fn
+                try:
+                    total += fp.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+                if total >= cap:
+                    return total
+    except OSError:
+        pass
+    return total
+
+
+def audit_timeout_s(project, explicit=None, size_fn=None) -> int:
+    """Resolve the flow_compliance subprocess timeout (seconds) — #469/#525.
+
+    Precedence:
+      1. an explicit value (CLI --audit-timeout);
+      2. the VIBE_IC_AUDIT_TIMEOUT_S env var (if a positive int);
+      3. a size-adaptive default: AUDIT_TIMEOUT_DEFAULT_S, plus
+         AUDIT_SIZE_ADAPT_S_PER_MIB for every MiB the run dir exceeds
+         AUDIT_SIZE_ADAPT_THRESHOLD_BYTES, capped at AUDIT_TIMEOUT_CAP_S.
+
+    An explicit/env value is honored verbatim (no size adaptation) so a
+    test can deliberately shrink it; only the computed default scales.
+    Values ≤ 0 are rejected and fall through to the next source."""
+    import os
+    if explicit is not None and explicit > 0:
+        return min(explicit, AUDIT_TIMEOUT_CAP_S)
+    env_raw = os.environ.get(AUDIT_TIMEOUT_ENV)
+    if env_raw is not None:
+        try:
+            env_val = int(env_raw)
+        except (TypeError, ValueError):
+            env_val = 0
+        if env_val > 0:
+            return min(env_val, AUDIT_TIMEOUT_CAP_S)
+    base = AUDIT_TIMEOUT_DEFAULT_S
+    size = (size_fn or dir_size_bytes)(project)
+    if size > AUDIT_SIZE_ADAPT_THRESHOLD_BYTES:
+        over_mib = (size - AUDIT_SIZE_ADAPT_THRESHOLD_BYTES) // (1024 * 1024)
+        base += int(over_mib) * AUDIT_SIZE_ADAPT_S_PER_MIB
+    return min(base, AUDIT_TIMEOUT_CAP_S)
+
+
+def gate_timeout_s() -> int:
+    """Per-gate subprocess cap for flow_compliance program_exit_zero gates
+    (#525). The field measured reset_dependency_check at ~6 min on a 7.5MB
+    post-PnR netlist and provenance sha256 over multi-GB GDS in the same
+    range — the old 300s killed them mid-run. Default 900s, env-overridable
+    (VIBE_IC_GATE_TIMEOUT_S), capped at AUDIT_TIMEOUT_CAP_S."""
+    import os
+    raw = os.environ.get(GATE_TIMEOUT_ENV)
+    if raw is not None:
+        try:
+            val = int(raw)
+        except (TypeError, ValueError):
+            val = 0
+        if val > 0:
+            return min(val, AUDIT_TIMEOUT_CAP_S)
+    return GATE_TIMEOUT_DEFAULT_S
+
+
 # Single shared helper that every one-shot runner calls right before
 # its DONE banner. Generates the canonical `reports/final_summary.md`
 # (chip-AGNOSTIC) by invoking `final_report_generate.py` as a
 # subprocess. Best-effort: failure is logged but does NOT change the
 # runner's verdict (the runner's own step audit is the source of truth;
 # the summary is a derived view).
-def emit_final_summary(project, programs_dir=None, timeout: int = 240) -> bool:
+def emit_final_summary(project, programs_dir=None, timeout=None) -> bool:
     """Run `final_report_generate.py` against `project` and return True
     on success, False on any failure (exception, missing tool, non-zero
     exit, timeout). Caller logs the True/False; do NOT use the return
-    to gate the verdict — final report is a downstream artefact."""
+    to gate the verdict — final report is a downstream artefact.
+
+    #525: the default timeout is the child's OWN size-adaptive audit
+    budget plus a margin — a fixed 240s outer cap used to kill the child
+    before #469's 900-3600s inner budget could even apply."""
     import subprocess  # local import: helper is rarely called
     import sys
     from pathlib import Path
@@ -500,6 +602,8 @@ def emit_final_summary(project, programs_dir=None, timeout: int = 240) -> bool:
     final_gen = Path(programs_dir) / "final_report_generate.py"
     if not final_gen.is_file():
         return False
+    if timeout is None:
+        timeout = audit_timeout_s(project) + OUTER_TIMEOUT_MARGIN_S
     try:
         r = subprocess.run(
             [sys.executable, str(final_gen), str(project)],
