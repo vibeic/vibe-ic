@@ -371,6 +371,31 @@ def yosys_smoke(code: str, workdir: Path,
                                f"(iverilog accepted; host yosys SV frontend "
                                f"may trail the official 0.40)")
                 continue
+            # #531 round-4 (field full-corpus regression) — two synth-stage
+            # error classes must be TOLERATED, not blocked:
+            # (a) hierarchy unknown CONTEXT module — the compile path
+            #     tolerates unknown context modules (with or without a
+            #     derivable stub) but the synth hierarchy pass hard-fails on
+            #     them; mirror the compile-path tolerance (the official
+            #     harness supplies those context files at scoring time).
+            if re.search(r"referenced in module .* is not part of the "
+                         r"design", blob):
+                details.append(f"{top}: unknown context module(s) at synth "
+                               f"hierarchy tolerated (mirrors the compile-"
+                               f"path context tolerance)")
+                continue
+            # (b) yosys latch-semantics strictness (`Latch inferred for
+            #     signal … from always_comb` / mem2reg latch checks) —
+            #     stricter than the official harness for sim-only problems
+            #     (no synth gate there); downgrade to an ADVISORY note so
+            #     the author still sees it, never a block.
+            if re.search(r"Latch inferred for signal"
+                         r"|No latch inferred for signal", blob):
+                details.append(f"{top}: latch-inference strictness "
+                               f"tolerated as ADVISORY (yosys always_comb/"
+                               f"latch semantic check exceeds the official "
+                               f"sim-only harness; review for intent)")
+                continue
             tail = [s for s in blob.splitlines() if s.strip()][-3:]
             return False, (f"yosys-smoke failed on module {top!r}: "
                            + "; ".join(tail))

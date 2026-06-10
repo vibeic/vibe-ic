@@ -667,3 +667,109 @@ def test_round3_real_corpus_elevator_huffman_gate_pass(tmp_path):
             ok, _out, entry = G.gate_record(r, Path(td))
             assert ok, (r["id"], entry)
             assert entry["verdict"] in ("PASS", "PASS_DOC_ONLY"), entry
+
+
+# ── field round-4 reopen regressions (#531) ────────────────────────────────
+
+# `.*` implicit connection defeats _stub_for (stub not derivable) — the
+# exact elevator_0033/_0036 shape: compile tolerates WITHOUT stubs, so the
+# synth hierarchy pass needs its own symmetric tolerance.
+CTX_AT_SYNTH_JSON = _json.dumps({"code": [{"rtl/elev2.sv":
+    "module elev2(input clk, input rst, input [2:0] floor,\n"
+    "             output [6:0] seg);\n"
+    "  // display converter lives in the problem's CONTEXT files\n"
+    "  wire [2:0] floor_w = floor;\n"
+    "  floor_to_seven_segment u_disp(.*);\n"
+    "  reg [2:0] cur;\n"
+    "  always @(posedge clk) begin\n"
+    "    if (rst) cur <= 3'd0;\n"
+    "    else cur <= floor;\n"
+    "  end\nendmodule"}]})
+
+LATCH_COMB_JSON = _json.dumps({"code": [{"rtl/bcd.sv":
+    "module bcd(input [3:0] bin, output reg [3:0] out);\n"
+    "  // always_comb that infers a latch on a path — yosys ERRORs, the\n"
+    "  // official sim-only harness does not care\n"
+    "  always_comb begin\n"
+    "    if (bin < 4'd10) out = bin;\n"
+    "  end\nendmodule"}]})
+
+
+@pytest.mark.skipif(not (_HAS_IVERILOG and _HAS_YOSYS),
+                    reason="iverilog/yosys not on this host")
+def test_round4_context_module_at_synth_hierarchy_tolerated(tmp_path):
+    # field round-4 (elevator_0033/_0036 shape): the compile path tolerates
+    # unknown context modules but the synth HIERARCHY pass used to hard-fail
+    # on them — the tolerance must be SYMMETRIC.
+    batch = _write_batch(tmp_path, [
+        {"id": "p_ctxsynth", "completion": CTX_AT_SYNTH_JSON}])
+    out = tmp_path / "responses.jsonl"
+    rc = G.main(["--batch", str(batch), "--out", str(out),
+                 "--report", str(tmp_path / "rep.json")])
+    assert rc == 0
+    rep = _json.loads((tmp_path / "rep.json").read_text())
+    e = rep["records"][0]
+    assert e["verdict"] == "PASS"
+    assert "context module" in e.get("synth", "")
+
+
+@pytest.mark.skipif(not (_HAS_IVERILOG and _HAS_YOSYS),
+                    reason="iverilog/yosys not on this host")
+def test_round4_latch_strictness_is_advisory_not_block(tmp_path):
+    # field round-4 (binary_to_BCD_0010 / line_buffer_0003 shape): yosys's
+    # always_comb latch-inference ERROR is stricter than the official
+    # sim-only harness — advisory note, never a block.
+    batch = _write_batch(tmp_path, [
+        {"id": "p_latch", "completion": LATCH_COMB_JSON}])
+    out = tmp_path / "responses.jsonl"
+    rc = G.main(["--batch", str(batch), "--out", str(out),
+                 "--report", str(tmp_path / "rep.json")])
+    assert rc == 0
+    rep = _json.loads((tmp_path / "rep.json").read_text())
+    e = rep["records"][0]
+    assert e["verdict"] == "PASS"
+    assert "ADVISORY" in e.get("synth", "")
+
+
+@pytest.mark.skipif(not (_HAS_IVERILOG and _HAS_YOSYS),
+                    reason="iverilog/yosys not on this host")
+def test_round4_negative_async_edge_still_blocked(tmp_path):
+    # NEGATIVE no-leak: the round-4 tolerances must not swallow a genuine
+    # synth-stage failure (PROC_DFF multiple-edge) — still BLOCKED.
+    bad = ("```verilog\n"
+           "module zs(input clk, input rst, input d, output reg q);\n"
+           "  always @(posedge clk or posedge rst)\n"
+           "    q <= d;\n"
+           "endmodule\n```\n")
+    batch = _write_batch(tmp_path, [{"id": "p_neg4", "completion": bad}])
+    out = tmp_path / "responses.jsonl"
+    rc = G.main(["--batch", str(batch), "--out", str(out)])
+    assert rc == 1
+    assert _read_jsonl(out) == []
+
+
+def test_round4_real_corpus_four_records_gate_pass(tmp_path):
+    # content-gated binding pins: the 4 round-4 falsely-blocked official-
+    # PASS records gate PASS.
+    src = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
+               "/final_responses_r3.jsonl")
+    if not src.is_file():
+        src = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
+                   "/final_responses.jsonl")
+    if not src.is_file():
+        pytest.skip("real corpus not on this host")
+    if not (_HAS_IVERILOG and _HAS_YOSYS):
+        pytest.skip("iverilog/yosys not on this host")
+    import tempfile
+    wanted = ("elevator_control_0033", "elevator_control_0036",
+              "binary_to_BCD_0010", "line_buffer_0003")
+    recs = [r for r in
+            (_json.loads(ln) for ln in
+             src.read_text(errors="replace").splitlines())
+            if any(w in r["id"] for w in wanted)]
+    if not recs:
+        pytest.skip("target records not in the current corpus file")
+    with tempfile.TemporaryDirectory() as td:
+        for r in recs:
+            ok, _o, entry = G.gate_record(r, Path(td))
+            assert ok, (r["id"], entry)
