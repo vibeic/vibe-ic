@@ -591,3 +591,79 @@ def test_round2_real_corpus_json_dict_records_extract():
     if not seen:
         pytest.skip("target records not in the current corpus file")
     assert all(k in ("json_dict", "doc_only") for k in seen.values()), seen
+
+
+# ── field round-3 reopen regression (#531) ─────────────────────────────────
+
+COMMENT_PHANTOM_JSON = _json.dumps({"code": [{"rtl/elev.sv":
+    "/* This module implements an FSM-based elevator control system\n"
+    "   with request arbitration. */\n"
+    "module elev_ctrl(input clk, input rst, input req, output reg busy);\n"
+    "  always @(posedge clk) begin\n"
+    "    if (rst) busy <= 1'b0;\n"
+    "    else busy <= req;\n"
+    "  end\nendmodule"}]})
+
+
+@pytest.mark.skipif(not (_HAS_IVERILOG and _HAS_YOSYS),
+                    reason="iverilog/yosys not on this host")
+def test_round3_comment_prose_is_not_a_phantom_module(tmp_path):
+    # the field round-3 counter-evidence: a leading block comment saying
+    # "This module implements ..." used to yield phantom module name
+    # 'implements' → synth -top implements → false BLOCK. The smoke must
+    # synth only the REAL module.
+    batch = _write_batch(tmp_path, [
+        {"id": "p_phantom", "completion": COMMENT_PHANTOM_JSON}])
+    out = tmp_path / "responses.jsonl"
+    rc = G.main(["--batch", str(batch), "--out", str(out),
+                 "--report", str(tmp_path / "rep.json")])
+    assert rc == 0
+    rep = _json.loads((tmp_path / "rep.json").read_text())
+    e = rep["records"][0]
+    assert e["verdict"] == "PASS"
+    assert "elev_ctrl" in e.get("synth", "")
+    assert "implements" not in e.get("synth", "")
+
+
+def test_round3_detection_text_strips_comments_and_strings():
+    assert "module implements" not in G._detection_text(
+        "/* This module implements an FSM */ module real_one(input a);")
+    assert "real_one" in G._detection_text(
+        "/* This module implements an FSM */ module real_one(input a);")
+    # a $display string mentioning a module must not be a declaration
+    assert G._MODULE_RE.search(
+        G._detection_text('initial $display("module fake_decl here");')) is None
+    # prose-only completion mentioning "module implements" stays doc_only
+    code, kind = G.extract_code(
+        "The module implements a simple two-stage handshake protocol "
+        "as described in the spec.")
+    assert kind == "doc_only" and code is None
+
+
+def test_round3_real_corpus_elevator_huffman_gate_pass(tmp_path):
+    # content-gated binding pins: the 2 falsely-blocked official-PASS
+    # records gate PASS; huffman_0001 does not regress.
+    src = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
+               "/final_responses_r3.jsonl")
+    if not src.is_file():
+        src = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
+                   "/final_responses.jsonl")
+    if not src.is_file():
+        pytest.skip("real corpus not on this host")
+    if not (_HAS_IVERILOG and _HAS_YOSYS):
+        pytest.skip("iverilog/yosys not on this host")
+    import tempfile
+    wanted = ("elevator_control_0006", "elevator_control_0026",
+              "huffman_0001")
+    recs = []
+    for ln in src.read_text(errors="replace").splitlines():
+        r = _json.loads(ln)
+        if any(w in r["id"] for w in wanted):
+            recs.append(r)
+    if not recs:
+        pytest.skip("target records not in the current corpus file")
+    with tempfile.TemporaryDirectory() as td:
+        for r in recs:
+            ok, _out, entry = G.gate_record(r, Path(td))
+            assert ok, (r["id"], entry)
+            assert entry["verdict"] in ("PASS", "PASS_DOC_ONLY"), entry

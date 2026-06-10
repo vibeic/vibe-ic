@@ -62,6 +62,20 @@ _ANY_FENCE_RE = re.compile(r"```([^\n`]*)\n(.*?)```", re.DOTALL)
 _CODE_TAG_RE = re.compile(r"^\s*(?:system)?verilog\s*$|^\s*sv\s*$|^\s*v\s*$",
                           re.IGNORECASE)
 _MODULE_RE = re.compile(r"\bmodule\s+[A-Za-z_]\w*", re.MULTILINE)
+_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+_STRING_LIT_RE = re.compile(r'"(?:[^"\\\n]|\\.)*"')
+
+
+def _detection_text(code: str) -> str:
+    """Comment- and string-stripped VIEW for module-name detection only (the
+    payload itself is never modified). ORGANIC #531 round-3: a leading block
+    comment `/* This module implements an FSM ... */` yielded the phantom
+    module name 'implements' → `synth -top implements` → false BLOCK of
+    officially-PASSing completions."""
+    t = _BLOCK_COMMENT_RE.sub(" ", code)
+    t = _LINE_COMMENT_RE.sub(" ", t)
+    return _STRING_LIT_RE.sub('""', t)
 # icarus stderr classification
 _UNKNOWN_MOD_RE = re.compile(r"Unknown module type", re.IGNORECASE)
 _ELAB_COUNT_RE = re.compile(r"^\s*\d+ error\(s\) during elaboration",
@@ -78,7 +92,8 @@ def code_fences(completion: str) -> List["re.Match"]:
         tag, body = m.group(1), m.group(2)
         if _CODE_TAG_RE.match(tag or ""):
             out.append(m)
-        elif not (tag or "").strip() and _MODULE_RE.search(body):
+        elif not (tag or "").strip() \
+                and _MODULE_RE.search(_detection_text(body)):
             out.append(m)
     return out
 
@@ -135,19 +150,25 @@ def extract_code(completion: str) -> Tuple[Optional[str], str]:
         rtl = [v for k, v in jf.items()
                if k.lower().endswith(_RTL_SUFFIXES)]
         if not rtl:  # be permissive: any file content carrying a module
-            rtl = [v for v in jf.values() if _MODULE_RE.search(v)]
+            rtl = [v for v in jf.values()
+                   if _MODULE_RE.search(_detection_text(v))]
         code = "\n\n".join(rtl)
-        if rtl and _MODULE_RE.search(code):
+        if rtl and _MODULE_RE.search(_detection_text(code)):
             return code, "json_dict"
         return None, "doc_only"
     cf = code_fences(completion)
     if cf:
         code = "\n\n".join(m.group(2) for m in cf)
-        if _MODULE_RE.search(code):
+        if _MODULE_RE.search(_detection_text(code)):
             return code, "fenced"
         return None, "doc_only"
-    if not _ANY_FENCE_RE.search(completion) and _MODULE_RE.search(completion):
-        return completion, "bare"
+    # bare = fence-less COMPILABLE code: require both a module declaration
+    # AND `endmodule` in the stripped view — plain prose saying "the module
+    # implements ..." must stay doc_only (#531 round-3 family).
+    if not _ANY_FENCE_RE.search(completion):
+        det = _detection_text(completion)
+        if _MODULE_RE.search(det) and re.search(r"\bendmodule\b", det):
+            return completion, "bare"
     return None, "doc_only"
 
 
@@ -326,7 +347,9 @@ def yosys_smoke(code: str, workdir: Path,
     f = workdir / "smoke.sv"
     f.write_text(full)
     stub_names = set(_MODULE_NAMES_RE.findall(stubs_text or ""))
-    own_modules = [m for m in _MODULE_NAMES_RE.findall(code)
+    # #531 round-3: detect module names on the comment/string-stripped VIEW —
+    # prose inside comments must never become a phantom synth -top target.
+    own_modules = [m for m in _MODULE_NAMES_RE.findall(_detection_text(code))
                    if m not in stub_names]
     if not own_modules:
         return False, ("yosys-smoke: no module declaration found in the "
