@@ -187,8 +187,11 @@ def find_declarations(src: str) -> List[Tuple[str, str, int]]:
 def collect_lhs_set(src: str) -> Set[str]:
     """Collect every identifier that appears on the LHS of assign or always <=/=."""
     lhs = set()
-    # assign X = ...
-    for m in re.finditer(r'\bassign\s+(\w+)(?:\[[^\]]+\])?\s*=', src):
+    # assign X = ...  (ORGANIC #544 — allow MULTIPLE bracket subscripts so a
+    # 2-D / unpacked-array slice assign `assign arr[i][j] = ...` registers
+    # `arr` as driven; the old single-`[...]?` form failed on a second
+    # subscript and false-flagged the array as undriven-wire.)
+    for m in re.finditer(r'\bassign\s+(\w+)(?:\[[^\]]+\])*\s*=', src):
         lhs.add(m.group(1))
     # LHS concatenation / bit-grouping targets, e.g.
     #   assign {carry, sum} = a + b;
@@ -201,8 +204,8 @@ def collect_lhs_set(src: str) -> Set[str]:
         for tok in re.findall(r'[a-zA-Z_]\w*', m.group(1)):
             if tok not in VERILOG_KEYWORDS and not tok.startswith("'"):
                 lhs.add(tok)
-    # X <= ... or X = ... inside procedural blocks
-    for m in re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*(<=|=)(?!=)', src):
+    # X <= ... or X = ... inside procedural blocks (#544 — multiple subscripts)
+    for m in re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])*\s*(<=|=)(?!=)', src):
         # Skip the tokens around 'begin', 'end', keywords
         name = m.group(1)
         if name not in VERILOG_KEYWORDS and not name.startswith("'"):
@@ -238,6 +241,15 @@ def collect_instance_connections(src: str) -> Dict[str, str]:
     connected = {}
     for m in re.finditer(r'\.(\w+)\s*\(\s*([^)]+)\s*\)', src):
         port, sig = m.group(1), m.group(2).strip()
+        # ORGANIC #544 — a concat connection `.o({w_hi, w_lo})` drives EVERY
+        # identifier inside the braces (the instance output fans out to all
+        # of them). The old `^(\w+)` match failed on the leading `{` and
+        # left w_hi/w_lo looking undriven. Register each concat member.
+        if sig.startswith("{"):
+            for tok in re.findall(r'[a-zA-Z_]\w*', sig):
+                if tok not in VERILOG_KEYWORDS and not tok.startswith("'"):
+                    connected[tok] = port
+            continue
         # Take simple identifier from the signal side
         sm = re.match(r'^(\w+)', sig)
         if sm:
