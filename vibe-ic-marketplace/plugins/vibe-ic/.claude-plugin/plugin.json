@@ -1,6 +1,6 @@
 {
   "name": "vibe-ic",
-  "version": "0.3.31",
+  "version": "0.3.32",
   "description": "AI-Native IC Design plugin for Claude Code. Two-entry-point flow: (A) prompt/dialogue → Phase 1 fact-graph → L1-L13 JSON; (B) existing design docs → Phase 2a (17 skills) → L1-L13 JSON. Phase 2b (22 skills): RTL → lint → sim → formal → FPGA SOF + on-board test. Analog A1-A9: per-block sizing → layout → hardmacro. Mixed-signal M1-M4: top-level merge + AMS co-sim + final PV. Phase 3 (23 skills): synth → STA → DFT → PnR → DRC/LVS → tapeout. Strict canonical-flow compliance gate (40 main + A1-A9 + M1-M4 + P0 = 54 entities). Anti-fabrication: 6 self-audit gates (emitter failure mode, literal verdict keyword, chip-AGNOSTIC source, doc metric/command reproducibility on docs/architecture, benchmark-path consistency).",
   "author": {
     "name": "Reyer"
