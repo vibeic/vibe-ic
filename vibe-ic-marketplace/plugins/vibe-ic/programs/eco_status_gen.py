@@ -127,7 +127,7 @@ def main(argv=None) -> int:
             json.dumps(summary, indent=2) + "\n")
     else:
         log_path = eco_dir / "eco_log.json"
-        log_path.write_text(json.dumps({
+        minimal = {
             "program": "eco_status_gen",
             "verdict": "ECO_REQUIRED",
             "sta_source": str(sta_rpt.relative_to(project)),
@@ -138,8 +138,42 @@ def main(argv=None) -> int:
                             "vibe-ic:hold-fix / vibe-ic:eco-plan skill. "
                             "After ECO, re-run phase3_one_shot_runner "
                             "to refresh STA and overwrite this log."),
-        }, indent=2) + "\n")
-        summary["verdict"] = "ECO_REQUIRED"
+        }
+        # ORGANIC #564 — do NOT clobber a schema-complete ECO record an
+        # agent/ECO-loop already wrote. A real eco_log.json carries the
+        # remediation provenance (changes / re_verified / affected_steps)
+        # that eco_loop_audit checks for NOT_REVERIFIED; blindly rewriting
+        # the minimal "ECO_REQUIRED" shape erased it and failed the audit
+        # even though re-verification WAS done. Merge the fresh measured
+        # values into the existing record instead, preserving those fields.
+        _PRESERVE = ("changes", "re_verified", "reverified",
+                     "affected_steps", "eco_changes", "verification")
+        existing = None
+        if log_path.is_file():
+            try:
+                _e = json.loads(log_path.read_text(errors="ignore"))
+                if isinstance(_e, dict) and any(
+                        _e.get(k) for k in _PRESERVE):
+                    existing = _e
+            except Exception:
+                existing = None
+        if existing is not None:
+            merged = dict(existing)
+            # refresh only the freshly-measured / provenance fields; keep the
+            # agent's richer remediation record intact.
+            merged["sta_source"] = minimal["sta_source"]
+            merged["wns_negative"] = info["wns_negative"]
+            merged["tns_zero"] = info["tns_zero"]
+            merged["raw_lines_inspected"] = info["raw_lines_inspected"]
+            merged.setdefault("verdict", "ECO_REQUIRED")
+            merged["status_refreshed_by"] = "eco_status_gen (merge; "
+            merged["status_refreshed_by"] += "preserved existing ECO record)"
+            log_path.write_text(json.dumps(merged, indent=2) + "\n")
+            summary["verdict"] = merged.get("verdict", "ECO_REQUIRED")
+            summary["preserved_existing_eco_log"] = True
+        else:
+            log_path.write_text(json.dumps(minimal, indent=2) + "\n")
+            summary["verdict"] = "ECO_REQUIRED"
         summary["artefact"] = str(log_path.relative_to(project))
 
     if args.json:

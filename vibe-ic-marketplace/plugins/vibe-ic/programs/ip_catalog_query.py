@@ -522,6 +522,30 @@ _REQUIRED_EXT_FIELD_MARKERS = (
 )
 
 
+# Canonical RISC-V single-letter extension ordering (spec §"ISA Extension
+# Naming"). A genuine ISA-string extension run is ALWAYS in this order, each
+# letter at most once. A token like 'mfast' (from a product name 'RV32MFast')
+# is m→f→a — F precedes A, violating canonical order — so it is NOT an ISA
+# extension run and must yield zero single-letter extensions (ORGANIC #552).
+_CANON_EXT_ORDER = "iemafdgqlcbkjtpvnh"
+_CANON_EXT_RANK = {ch: i for i, ch in enumerate(_CANON_EXT_ORDER)}
+
+
+def _is_canonical_ext_run(run: str) -> bool:
+    """True when `run` is a strictly canonical-ordered RISC-V single-letter
+    extension run (every char a valid single-letter extension, in increasing
+    canonical rank, no repeats). Empty run is canonical (no extensions)."""
+    if not run:
+        return True
+    last = -1
+    for ch in run:
+        r = _CANON_EXT_RANK.get(ch)
+        if r is None or r <= last:
+            return False
+        last = r
+    return True
+
+
 def _parse_canonical_single_letters(block: str) -> str:
     """Parse the post-base letter block of a RISC-V ISA string and return
     ONLY the canonical single-letter extensions (i/e/m/a/f/d/g/q/c/...).
@@ -551,12 +575,22 @@ def _parse_canonical_single_letters(block: str) -> str:
             # first char of an underscore-delimited segment is canonical
             # multi-letter; stop scanning this segment.)
             continue
+        run = []
         for ch in seg:
             if ch in ("z", "x"):
                 # Start of a multi-letter token inside an implicit run —
                 # the single-letter run ends here.
                 break
-            out.append(ch)
+            run.append(ch)
+        run_s = "".join(run)
+        # ORGANIC #552 — only accept a run that is a strictly canonical
+        # RISC-V single-letter extension sequence. A non-canonical run
+        # (e.g. 'mfast' from the product name 'RV32MFast') is NOT an ISA
+        # extension block and contributes nothing — this stops a stray
+        # single-letter query ('F') from matching a buried product-name
+        # letter.
+        if _is_canonical_ext_run(run_s):
+            out.append(run_s)
     return "".join(out)
 
 

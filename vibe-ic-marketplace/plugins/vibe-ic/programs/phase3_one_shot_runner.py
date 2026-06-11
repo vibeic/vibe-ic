@@ -2544,6 +2544,86 @@ def _parse_cts_metrics(log_text: str) -> dict:
     return out
 
 
+_CC_NAME_RE = re.compile(r"-name\s+(?P<n>[\w$]+)", re.IGNORECASE)
+_CC_PER_RE = re.compile(r"-period\s+(?P<p>[\d.]+)", re.IGNORECASE)
+_CC_SRC_RE = re.compile(r"get_ports\s+\{?\s*(?P<s>[\w$]+)", re.IGNORECASE)
+# ORGANIC #566 — a generated clock's master source is named via
+# -source [get_ports|get_pins X]; its period derives from that master's
+# period × divide_by (÷ multiply_by).
+_GC_SRC_RE = re.compile(r"-source\s+\[?\s*get_(?:ports|pins)\s+\{?\s*"
+                        r"(?P<s>[\w$/.]+)", re.IGNORECASE)
+_GC_DIV_RE = re.compile(r"-divide_by\s+(?P<d>\d+)", re.IGNORECASE)
+_GC_MUL_RE = re.compile(r"-multiply_by\s+(?P<m>\d+)", re.IGNORECASE)
+
+
+def _build_clock_records_from_sdcs(sdc_texts):
+    """ORGANIC #566 — parse a list of SDC text blobs into an ordered dict of
+    clock records {name: {name, period_ns, source, ...}}.
+
+    Handles BOTH `create_clock` (primary) and `create_generated_clock`
+    (derived divide-/multiply-by). A `create_generated_clock` line does NOT
+    contain the substring 'create_clock', so the old single-branch parser
+    silently dropped FPGA divide-by-N derived clocks (clk25) and
+    clock_plan_check then FAILed SDC_CLOCK_DROPPED. Pure function (no I/O) so
+    it is unit-testable. chip-AGNOSTIC: pure SDC grammar."""
+    clocks = {}
+    generated = []
+    for txt in sdc_texts:
+        for line in txt.splitlines():
+            if "create_generated_clock" in line:
+                mn = _CC_NAME_RE.search(line)
+                ms = _GC_SRC_RE.search(line)
+                md = _GC_DIV_RE.search(line)
+                mm = _GC_MUL_RE.search(line)
+                nm = mn.group("n") if mn else None
+                if nm:
+                    generated.append({
+                        "name": nm,
+                        "master": ms.group("s") if ms else None,
+                        "divide_by": int(md.group("d")) if md else None,
+                        "multiply_by": int(mm.group("m")) if mm else None,
+                    })
+                continue
+            if "create_clock" not in line:
+                continue
+            mp = _CC_PER_RE.search(line)
+            ms = _CC_SRC_RE.search(line)
+            mn = _CC_NAME_RE.search(line)
+            src = ms.group("s") if ms else None
+            nm = mn.group("n") if mn else (src or "clk")
+            per = float(mp.group("p")) if mp else None
+            if nm not in clocks or (clocks[nm].get("period_ns") in (None, 0)):
+                if per and per > 0:
+                    clocks[nm] = {"name": nm, "period_ns": per,
+                                  "source": src or nm}
+    for g in generated:
+        if g["name"] in clocks:
+            continue
+        master_per = None
+        for c in clocks.values():
+            if g["master"] and (c["name"] == g["master"]
+                                or c.get("source") == g["master"]):
+                master_per = c["period_ns"]
+                break
+        if master_per is None and len(clocks) == 1:
+            master_per = next(iter(clocks.values()))["period_ns"]
+        per = None
+        if master_per:
+            per = master_per
+            if g["divide_by"]:
+                per *= g["divide_by"]
+            if g["multiply_by"]:
+                per /= g["multiply_by"]
+        clocks[g["name"]] = {
+            "name": g["name"],
+            "period_ns": per if (per and per > 0) else master_per,
+            "source": g["master"] or g["name"],
+            "generated_from": g["master"],
+            "divide_by": g["divide_by"],
+        }
+    return clocks
+
+
 def _emit_cts_report_if_complete(project: Path, top: str):
     """#519 — emit the CTS sign-off report (cts/clock_tree.rpt) the MOMENT
     CTS has geometrically completed — i.e. post_cts.def exists AND openroad.log
@@ -2574,14 +2654,24 @@ def _emit_cts_report_if_complete(project: Path, top: str):
     cts_lines = [ln for ln in log.splitlines()
                  if "cts" in ln.lower() or "clock_tree" in ln.lower()
                  or "CTS_" in ln]
-    if not cts_lines:
-        # post_cts.def exists but the log carries no CTS signature — the CTS
-        # command ran as a NONFATAL no-op (e.g. the PDK lacked a usable
-        # clkbuf). Record that honestly rather than claim a tree was built.
-        cts_lines = ["(CTS pass completed as a NONFATAL no-op — post_cts.def "
-                     "written, no explicit clock tree built)"]
-    metrics = _parse_cts_metrics(log)
     cts_out.mkdir(parents=True, exist_ok=True)
+    if not cts_lines:
+        # ORGANIC #568 — post_cts.def exists but the openroad.log carries NO
+        # CTS signature. This is the post-ECO log-replacement shape: the
+        # completion-time emit (this same helper, called inside step_pnr the
+        # moment CTS finished) should already have made the rpt durable; if
+        # we are HERE with no durable rpt, the original CTS evidence has been
+        # LOST (the log was overwritten by a later route/ECO run). Do NOT
+        # fabricate a "no-op tree" report that masks the loss — write an
+        # explicit evidence-lost marker that cts_quality_check FAILs on.
+        rpt.write_text(
+            "# CTS sign-off report — EVIDENCE LOST (#568)\n"
+            "# post_cts.def is present but the openroad.log no longer carries\n"
+            "# the CTS section (overwritten by a later route/ECO run) and no\n"
+            "# durable clock_tree report was emitted at CTS completion.\n"
+            "# CTS not invoked or zero output captured in the current log.\n")
+        return str(rpt)
+    metrics = _parse_cts_metrics(log)
     body = [
         "# CTS sign-off report (OpenROAD TritonCTS-derived) — #519",
         "# Emitted AT CTS COMPLETION (post_cts.def present), independent of",
@@ -2595,6 +2685,19 @@ def _emit_cts_report_if_complete(project: Path, top: str):
         body.append("")
     body.extend(cts_lines)
     rpt.write_text("\n".join(body) + "\n")
+    # ORGANIC #568 — durable DOUBLE: a JSON sidecar so the structured CTS
+    # evidence survives even if the human-readable rpt is later touched. The
+    # canonicalize fallback prefers whichever durable artefact is present.
+    try:
+        (cts_out / "clock_tree.json").write_text(
+            json.dumps({
+                "source": "phase3/stage3/pnr/openroad.log",
+                "emitted_at": "cts_completion",
+                "metrics": metrics,
+                "cts_log_lines": cts_lines[:200],
+            }, indent=2) + "\n")
+    except OSError:
+        pass
     return str(rpt)
 
 
@@ -4929,16 +5032,33 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         written.append(str(canon_sdc))
     pvt_path = constraints_out / "pvt_matrix.json"
     if not pvt_path.is_file():
-        # Discover Liberty corners
+        # Discover Liberty corners. Project-staged libs take priority; when
+        # absent (ORGANIC #565 — most benchmark projects use the container's
+        # built-in PDK and never stage libs under input/pdk/liberty), fall
+        # back to globbing the corner libs in the same directory as the
+        # resolved PdkConfig.liberty (e.g. the container's
+        # libs.ref/<lib>/lib/*.lib holding all 13 sky130A corners).
         lib_dir = project / "input" / "pdk" / "liberty"
         corners = []
-        if lib_dir.is_dir():
+        if lib_dir.is_dir() and any(lib_dir.glob("*.lib")):
             for lib in sorted(lib_dir.glob("*.lib")):
                 corners.append({
                     "name": lib.stem,
                     "label": _classify_corner_from_name(lib.name),
                     "liberty": str(lib.relative_to(project)),
                 })
+        else:
+            pdk_lib = Path(getattr(pdk, "liberty", "") or "")
+            pdk_lib_dir = pdk_lib.parent
+            if pdk_lib_dir and pdk_lib_dir.is_dir():
+                for lib in sorted(pdk_lib_dir.glob("*.lib")):
+                    corners.append({
+                        "name": lib.stem,
+                        "label": _classify_corner_from_name(lib.name),
+                        # absolute container/host path — outside the project
+                        # tree, so kept as-is (not project-relative).
+                        "liberty": str(lib),
+                    })
         pvt = dict(_PVT_MATRIX_TEMPLATE)
         pvt["corners"] = corners
         pvt["primary_corner"] = "TT"
@@ -5415,30 +5535,13 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         except Exception:
             _needs_refresh = True
     if _needs_refresh and primary_def.is_file():
-        _cc_name = re.compile(r"-name\s+(?P<n>[\w$]+)", re.IGNORECASE)
-        _cc_per = re.compile(r"-period\s+(?P<p>[\d.]+)", re.IGNORECASE)
-        _cc_src = re.compile(r"get_ports\s+\{?\s*(?P<s>[\w$]+)", re.IGNORECASE)
-        _clocks = {}
+        _sdc_texts = []
         for _sdc in sorted(project.rglob("*.sdc")):
             try:
-                _txt = _sdc.read_text(errors="ignore")
+                _sdc_texts.append(_sdc.read_text(errors="ignore"))
             except OSError:
                 continue
-            for _line in _txt.splitlines():
-                if "create_clock" not in _line:
-                    continue
-                _mp = _cc_per.search(_line)
-                _ms = _cc_src.search(_line)
-                _mn = _cc_name.search(_line)
-                # -name optional; default clock name = its source port.
-                _src = _ms.group("s") if _ms else None
-                _nm = _mn.group("n") if _mn else (_src or "clk")
-                _per = float(_mp.group("p")) if _mp else None
-                # keep the first sane definition per clock name
-                if _nm not in _clocks or (_clocks[_nm].get("period_ns") in (None, 0)):
-                    if _per and _per > 0:
-                        _clocks[_nm] = {"name": _nm, "period_ns": _per,
-                                        "source": _src or _nm}
+        _clocks = _build_clock_records_from_sdcs(_sdc_texts)
         if not _clocks:
             # No SDC parsed — fall back to a single nominal core clock so the
             # plan still carries a positive period + source object.

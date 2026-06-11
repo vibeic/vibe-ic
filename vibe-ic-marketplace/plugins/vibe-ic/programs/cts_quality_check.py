@@ -192,11 +192,20 @@ def _parse_report(text: str):
         m = re.search(pat, text)
         return int(m.group(1)) if m else None
 
-    # Created N clock buffers (CTS-0018). Prefer the explicit CTS code but
-    # fall back to a generic phrasing.
-    out["created_buffers"] = _int(
+    def _sum(pat):
+        """ORGANIC #567 — a multi-clock-tree design emits one CTS-0018
+        'Created N clock buffers' line PER tree; the per-tree counts must
+        be SUMMED, not first-match-only (a 3-tree 2+145+137 design read as
+        2 then tripped BUFFER_COUNT_INCONSISTENT against the 614-instance
+        DEF). Returns None when there is no match at all (preserves the
+        ZERO_CLOCK_BUFFERS path)."""
+        nums = [int(m.group(1)) for m in re.finditer(pat, text)]
+        return sum(nums) if nums else None
+
+    # Created N clock buffers (CTS-0018), summed across every clock tree.
+    out["created_buffers"] = _sum(
         r"Created\s+(\d+)\s+clock\s+buffers")
-    out["created_nets"] = _int(r"Created\s+(\d+)\s+clock\s+nets")
+    out["created_nets"] = _sum(r"Created\s+(\d+)\s+clock\s+nets")
 
     # sinks — take the largest "N sinks" / "Sinks N" we see.
     sink_nums = []

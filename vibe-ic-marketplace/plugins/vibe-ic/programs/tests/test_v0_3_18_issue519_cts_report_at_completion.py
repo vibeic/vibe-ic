@@ -91,15 +91,20 @@ def test_idempotent_does_not_overwrite_existing(tmp_path):
 
 
 def test_nonfatal_noop_cts_recorded_honestly(tmp_path):
-    # post_cts.def exists but the log carries no CTS signature (clkbuf-less
-    # PDK NONFATAL no-op) → report still written, but it says so honestly.
+    # post_cts.def exists but the log carries no CTS signature. The two
+    # indistinguishable causes (clkbuf-less PDK no-op OR a post-ECO
+    # log-replacement that lost the original CTS section, ORGANIC #568) are
+    # both recorded honestly as a VACUOUS report — never a fabricated tree —
+    # so cts_quality_check FAILs on it explicitly rather than passing.
     pnr = _pnr(tmp_path)
     (pnr / "openroad.log").write_text("[INFO ODB-0227] LEF file: merged.lef\n")
     (pnr / "post_cts.def").write_text("DESIGN top ;\n")
     out = R._emit_cts_report_if_complete(tmp_path, "top")
     assert out
     txt = Path(out).read_text()
-    assert "NONFATAL no-op" in txt
+    # no fabricated tree: marker is one the cts_quality gate treats as vacuous
+    assert "not invoked or zero output captured" in txt
+    assert "EVIDENCE LOST" in txt
 
 
 def test_parse_cts_metrics_omits_missing_fields():
