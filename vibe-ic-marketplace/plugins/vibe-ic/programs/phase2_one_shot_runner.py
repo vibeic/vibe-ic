@@ -2108,6 +2108,17 @@ def _iverilog_compile_with_sv_fallback(
         # sv2v could not convert — honest iverilog failure stands.
         return rc, out, err, "iverilog_g2012"
 
+    # ORGANIC #546 — sv2v hw2reg / packed-struct patterns can produce
+    # mixed-driver nets (same net: continuous assign + procedural always).
+    # iverilog -g2012 rejects these.  Apply the deterministic fixup pass
+    # before the compile attempt — the pass is byte-identical when there
+    # are no mixed drivers, so it never masks real defects.
+    try:
+        import sv2v_mixed_driver_fixup as _mdf
+        _mdf.fixup_file(converted_host)
+    except Exception:
+        pass  # fixup failure is non-fatal; proceed with compile attempt
+
     # Rebuild the iverilog argv: keep all non-file flags + the TB, drop the
     # original .sv RTL, add the converted .v + the original plain .v RTL.
     sv_str_set = {str(p) for p in sv_files}
@@ -2770,7 +2781,16 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
             return oracle_result
 
     # Find the generic full-stack TB emitted by step_full_stack_tb_gen.
-    tb_candidates = sorted(sim_dir.glob("tb_*_full.v")) if sim_dir.is_dir() else []
+    # ORGANIC #543 — filter to only the TB that matches the CURRENT top_name.
+    # A stale tb_<old_top>_full.v from a prior round (different ic_name/top)
+    # would compile against the old DUT and always fail.  The canonical name
+    # is tb_<top_name>_full.v; only fall back to any tb_*_full.v when no
+    # name-matched file exists (e.g. the runner used a non-standard top).
+    _named_tb = sim_dir / f"tb_{top_name}_full.v" if sim_dir.is_dir() else None
+    if _named_tb and _named_tb.is_file():
+        tb_candidates = [_named_tb]
+    else:
+        tb_candidates = sorted(sim_dir.glob("tb_*_full.v")) if sim_dir.is_dir() else []
     results_path = sim_dir / "results.json"
 
     if not tb_candidates:
@@ -5994,7 +6014,13 @@ def main() -> int:
         sr = step_reference_tb(project, args.top_name, ic_class,
                                args.container)
         plan.append(sr)
-        if sr.status in ("PASS", "SKIP") or eco >= args.max_eco:
+        # ORGANIC #543 — WAIVED means the reference-TB oracle path is
+        # legitimately unavailable (e.g. no L9.top_ports, analog class).
+        # Entering the ECO loop in that state is inert: each iteration
+        # calls step_rtl_gen which WAIVEs again, RTL never changes, and
+        # the loop terminates only via FAIL_ECO_INERT after args.max_eco
+        # rounds.  Treat WAIVED the same as SKIP — exit immediately.
+        if sr.status in ("PASS", "SKIP", "WAIVED") or eco >= args.max_eco:
             break
         eco += 1
         plan.append(StepResult("eco_loop_iter", "ECO_LOOP",
