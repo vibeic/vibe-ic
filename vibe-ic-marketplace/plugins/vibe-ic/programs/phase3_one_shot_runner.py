@@ -202,6 +202,53 @@ def _to_container_path(host_path: str, container: str) -> str:
     return p
 
 
+def _container_path_covered(host_path: str, container: str) -> bool:
+    """ORGANIC #551 — True when `host_path` is covered by a bind mount of
+    `container` (i.e. it actually resolves inside the container). Used by the
+    fail-fast preflight: a project path the container cannot see makes EVERY
+    in-container step fail, but the failure only surfaced 35 min in at the
+    first synth — detect it up front. Deterministic over _container_mounts so
+    it is unit-testable. chip-AGNOSTIC."""
+    if not host_path:
+        return False
+    p = str(host_path)
+    for src, _dst in _container_mounts(container):
+        if p == src or p.startswith(src + "/"):
+            return True
+    return False
+
+
+# Fatal-error signatures whose presence anywhere in a tool log marks the
+# ROOT-CAUSE line — surfaced ahead of a plain tail so a `cd: No such file`
+# buried under a flood of cascade errors is not lost (ORGANIC #551).
+_LOG_ERROR_SIGNATURES = re.compile(
+    r"(?im)^.*(?:No such file or directory|command not found|"
+    r"cannot find|Permission denied|ERROR:|FATAL|Segmentation fault|"
+    r"core dumped|cannot open|not part of the design|syntax error).*$")
+
+
+def _extract_error_signature(log_text: str, max_lines: int = 4) -> str:
+    """ORGANIC #551 — return the most relevant error line(s) from a tool log.
+
+    A step-FAIL detail that takes only the head shows PATH/INFO banner lines;
+    a plain tail can miss a root cause that printed early then triggered a
+    cascade. Pull the LAST few lines matching a fatal-error signature (the
+    closest cause to the failure), de-duplicated, so the FAIL detail names
+    the real reason. Returns "" when nothing matches."""
+    hits = _LOG_ERROR_SIGNATURES.findall(log_text or "")
+    if not hits:
+        return ""
+    out, seen = [], set()
+    for ln in reversed(hits):
+        s = ln.strip()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+        if len(out) >= max_lines:
+            break
+    return " | ".join(reversed(out))
+
+
 @dataclass
 class StepResult:
     name: str
@@ -1609,8 +1656,15 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                 synth_frontend = "sv2v_verilog2005"
             # else: keep the (failed) slang rc/out/err for the FAIL path.
     if rc != 0 or not netlist.is_file():
-        return StepResult("synth", "FAIL", time.time() - t0,
-                          f"rc={rc} log_tail={(out+err)[-1500:]}",
+        # ORGANIC #551 — surface the ROOT-CAUSE error line ahead of the tail
+        # (a `cd: No such file or directory` from a missing container mount
+        # was buried; a plain tail/head could miss it).
+        sig = _extract_error_signature(out + "\n" + err)
+        detail = f"rc={rc}"
+        if sig:
+            detail += f" error={sig}"
+        detail += f" log_tail={(out+err)[-1200:]}"
+        return StepResult("synth", "FAIL", time.time() - t0, detail,
                           [str(log)],
                           extras={"synth_frontend": "none",
                                   "synth_frontend_reason": fe_reason})
@@ -8606,6 +8660,23 @@ def main() -> int:
     # spurious FAIL. chip-AGNOSTIC: decided from class registry + empty
     # rtl/, never a chip name. The analog track's own runner/gates own
     # the analog GDS/DRC/LVS evidence.
+    # ORGANIC #551 — container mount-coverage preflight (fail-fast). When a
+    # container is requested but the project path is NOT covered by any of its
+    # bind mounts, every in-container step (synth/PnR/GDS) will fail with
+    # `cd: No such file or directory` — but that only surfaced ~35 min in at
+    # the first synth. Detect it up front and FAIL the whole run immediately
+    # with an actionable message, instead of burning the full phase2+3.
+    if getattr(args, "container", None):
+        if (_container_mounts(args.container)
+                and not _container_path_covered(str(project), args.container)):
+            print(f"[phase3] FAIL preflight: project path {project} is not "
+                  f"covered by any bind mount of container "
+                  f"{args.container!r}. Every in-container step would fail "
+                  f"with 'cd: No such file or directory'. Mount the project "
+                  f"tree (-v {project}:{project}) or run without --container.",
+                  file=sys.stderr)
+            return 1
+
     is_pure_analog, pa_reason = _is_pure_analog_no_rtl_track(project)
     if is_pure_analog:
         print(f"[phase3] pure-analog design detected — {pa_reason}. "
