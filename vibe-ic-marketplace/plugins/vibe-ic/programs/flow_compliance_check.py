@@ -3134,6 +3134,42 @@ def _apply_capability_gap(result: "StepResult", sid) -> "StepResult":
     return result
 
 
+_STOPWORDS = {"the", "and", "a", "of", "to", "for", "step", "sign", "off",
+              "signoff", "final", "check", "gate", "stage"}
+
+
+def _name_tokens(name: str) -> set:
+    """Significant lowercase alnum tokens of a step name (stopwords removed)."""
+    toks = re.findall(r"[a-z0-9]+", (name or "").lower())
+    return {t for t in toks if t not in _STOPWORDS and len(t) > 1}
+
+
+def _waiver_step_name_mismatch(waiver: Dict[str, Any],
+                               step_name: str):
+    """ORGANIC #572 — when a waiver carries an explicit `step_name` (the
+    human label of the step it claims to waive), cross-check it against the
+    canonical name of the step at that id. A mis-filed waiver
+    (e.g. id=37=GDSII but step_name='FPGA final') would otherwise silently
+    waive the WRONG step while the intended one stays FAIL. Returns a
+    message string on mismatch, else None. The check fires ONLY when the
+    waiver opts in by declaring step_name — existing waivers are unaffected.
+    chip-AGNOSTIC: pure token comparison, no step literal hard-coded."""
+    declared = waiver.get("step_name") or waiver.get("step")
+    if not declared or not isinstance(declared, str):
+        return None
+    dt = _name_tokens(declared)
+    st = _name_tokens(step_name)
+    if not dt or not st:
+        return None
+    # accept when the names share any significant token (tolerant to
+    # phrasing differences like "FPGA final" vs "FPGA on-board sign-off").
+    if dt & st:
+        return None
+    return (f"waiver step_name {declared!r} does not match the canonical "
+            f"name of this step ({step_name!r}) — waiver appears mis-filed "
+            f"to the wrong step id; refusing to apply it")
+
+
 def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                skip_analog: bool = False, skip_hardware: bool = False) -> StepResult:
     raw_id = step["id"]
@@ -3218,17 +3254,27 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # without `_env_unavailable` keep the historical short-circuit
     # behaviour (always WAIVED).
     if sid in waivers:
-        is_env_unavailable = bool(waivers[sid].get("_env_unavailable"))
-        if not is_env_unavailable:
-            result.status = "WAIVED"
-            result.reasons.append(
-                f"waived: {waivers[sid].get('reason', '(no reason)')}"
-                f" (approver: {waivers[sid].get('approver', '?')})"
-            )
-            return result
-        # ENV_UNAVAILABLE: fall through; only convert to WAIVED-DEFERRED
-        # at the very end if the natural verdict would be FAIL or
-        # MISSING. Continue into the normal evidence + gate path.
+        # ORGANIC #572 — reject a waiver mis-filed to the wrong step id
+        # (id+name disagree). The intended step then stays un-waived and
+        # gates normally; the mis-filed step surfaces the mismatch.
+        _name_mismatch = _waiver_step_name_mismatch(
+            waivers[sid], step.get("name", ""))
+        if _name_mismatch:
+            result.reasons.append(f"WAIVER REJECTED: {_name_mismatch}")
+            # fall through WITHOUT applying the waiver — the step is judged
+            # on its real evidence below.
+        else:
+            is_env_unavailable = bool(waivers[sid].get("_env_unavailable"))
+            if not is_env_unavailable:
+                result.status = "WAIVED"
+                result.reasons.append(
+                    f"waived: {waivers[sid].get('reason', '(no reason)')}"
+                    f" (approver: {waivers[sid].get('approver', '?')})"
+                )
+                return result
+            # ENV_UNAVAILABLE: fall through; only convert to WAIVED-DEFERRED
+            # at the very end if the natural verdict would be FAIL or
+            # MISSING. Continue into the normal evidence + gate path.
 
     # First check required_outputs presence (cheap)
     outputs = step.get("required_outputs", [])

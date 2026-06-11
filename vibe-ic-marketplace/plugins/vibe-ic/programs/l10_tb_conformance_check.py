@@ -187,6 +187,54 @@ def evaluate(
     return results, ok_count, fail_count
 
 
+def _tb_files_under(d: Path) -> bool:
+    """True when directory `d` directly or recursively holds a testbench
+    .v/.sv (a tb_*.v or anything with a `module tb` / `_tb`)."""
+    if not d.is_dir():
+        return False
+    for p in d.rglob("*"):
+        if p.is_file() and p.suffix in (".v", ".sv"):
+            return True
+    return False
+
+
+def _resolve_tb_dir(given: str) -> Optional[str]:
+    """ORGANIC #572 — the default --tb-dir (phase2/stage1/sim/tb) is rigid;
+    a project that keeps testbenches at the sim/ ROOT (phase2/stage1/sim/)
+    reported 4/4 false 'lack evidence'. Try the given path first, then its
+    parent when the leaf is 'tb', then the canonical sim roots. Returns the
+    first directory that actually holds a .v/.sv, else None."""
+    cands: List[str] = [given]
+    gp = Path(given)
+    if gp.name == "tb":
+        cands.append(str(gp.parent))
+    cands += ["phase2/stage1/sim/tb", "phase2/stage1/sim",
+              "sim/tb", "sim"]
+    seen = set()
+    for c in cands:
+        if c in seen:
+            continue
+        seen.add(c)
+        if _tb_files_under(Path(c)):
+            return c
+    # last resort: return the given path if it at least exists as a dir, so
+    # the caller's missing-dir error message is accurate.
+    return given if Path(given).is_dir() else None
+
+
+def _resolve_summary(given: str) -> str:
+    """ORGANIC #572 — fall back across the common summary locations when the
+    default path is absent (mirrors read_summary's own two candidates but
+    extends to the sim/ root and reports/)."""
+    cands = [given, "phase2/stage1/sim/work/summary.txt",
+             "phase2/stage1/sim/summary.txt", "reports/sim/summary.txt",
+             "sim/work/summary.txt", "sim/summary.txt"]
+    for c in cands:
+        if Path(c).is_file():
+            return c
+    return given
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--l10", required=True, help="phase1/generated_docs/L10_TEST_CASES.json")
@@ -203,12 +251,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[l10-tb-conformance] cannot load L10: {e}", file=sys.stderr)
         return 2
 
-    if not Path(args.tb_dir).is_dir():
-        print(f"[l10-tb-conformance] tb dir missing: {args.tb_dir}", file=sys.stderr)
+    tb_dir = _resolve_tb_dir(args.tb_dir)
+    if tb_dir is None:
+        print(f"[l10-tb-conformance] tb dir missing: {args.tb_dir} "
+              f"(and no fallback under sim/)", file=sys.stderr)
         return 2
 
-    _, tb_blob = read_all_tb_text(args.tb_dir)
-    summary = read_summary(args.summary)
+    _, tb_blob = read_all_tb_text(tb_dir)
+    summary = read_summary(_resolve_summary(args.summary))
 
     results, ok_count, fail_count = evaluate(cases, tb_blob, summary)
 

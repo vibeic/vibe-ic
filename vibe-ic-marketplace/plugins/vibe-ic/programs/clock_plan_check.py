@@ -280,6 +280,14 @@ def _sdc_clock_names(sdc_files):
             text = f.read_text(errors="ignore")
         except Exception:
             continue
+        # ORGANIC #569 — strip `#` SDC comments BEFORE harvesting
+        # create_clock names, so a commented-out
+        # `# REMOVED: create_generated_clock -name phase_q ...` line is not
+        # parsed as an active clock. This makes clock_plan_check's SDC view
+        # CONSISTENT with derived_clock_sdc_required_check (which already
+        # comment-strips) — the two gates previously diverged (one stripped,
+        # one did not) and formed a catch-22 on the same false-positive.
+        text = re.sub(r"#[^\n]*", "", text)
         had = False
         for idx, m in enumerate(_CREATE_CLOCK_RE.finditer(text)):
             body = m.group("body") or ""

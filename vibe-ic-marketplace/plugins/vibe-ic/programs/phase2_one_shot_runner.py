@@ -4569,6 +4569,23 @@ def step_fpga_compile(project: Path, top_name: str,
 # -------------------------------------------------------------------------
 # 6 + 7. device burn + <half-duplex-tester> verify (host-side device drivers)
 # -------------------------------------------------------------------------
+def _jtag_hardware_absent(blob: str) -> bool:
+    """ORGANIC #558 — True when the driver output carries the host-side
+    'no JTAG hardware attached' signature (a board-offline environment
+    state). Specific enough not to match a real programming/verify failure
+    on an attached board. chip-AGNOSTIC."""
+    low = (blob or "").lower()
+    sigs = (
+        "no jtag hardware available",
+        "no jtag hardware",
+        "unable to lock chain",
+        "no usb-blaster",
+        "jtag hardware not found",
+        "no hardware available",
+    )
+    return any(s in low for s in sigs)
+
+
 def step_fpga_burn(project: Path, top_name: str) -> StepResult:
     t0 = time.time()
     sof = next((_pl.fpga_early_dir(project) / "output_files").glob("*.sof"), None)
@@ -4603,6 +4620,26 @@ def step_fpga_burn(project: Path, top_name: str) -> StepResult:
                           time.time() - t0,
                           f"sof_burnt sha256={detail_obj.get('sof_sha256','?')}",
                           extras=detail_obj)
+    # ORGANIC #558 — an OFFLINE board (no JTAG hardware attached to the host)
+    # is an ENVIRONMENT state, not a design defect. jtagconfig reports
+    # "No JTAG hardware available" and the driver exits non-zero; that used
+    # to FAIL and pull down the whole phase2 verdict, forcing a 30-min
+    # --skip-hardware re-run. Probe the driver output for the no-hardware
+    # signature and SKIP (with evidence + waiver guidance) instead. A burn
+    # that fails WITH hardware present (programming/verify error) still
+    # FAILs — the signature is specific to the absent-cable case.
+    blob = f"{out}\n{err}\n{detail_obj.get('message', '')}"
+    if _jtag_hardware_absent(blob) or \
+            (isinstance(detail_obj, dict)
+             and detail_obj.get("error_code") in ("no_jtag_hardware",
+                                                  "jtag_absent")):
+        return StepResult(
+            "fpga_burn", "SKIP", time.time() - t0,
+            "no JTAG hardware available on host (board offline) — burn "
+            "skipped; this is an environment state, not a design defect. "
+            "Waive the on-board burn/verify step or re-run with the board "
+            "attached. Probe evidence: 'No JTAG hardware available'.",
+            extras=detail_obj)
     # Surface structured driver error when present (avoids the cryptic
     # "rc=1 stderr= stdout= …": the driver returns JSON with error_code
     # + failed_gates when it blocks burn on pre-burn structural-gate audit).

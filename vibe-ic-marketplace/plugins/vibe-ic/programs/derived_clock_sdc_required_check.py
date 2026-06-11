@@ -77,6 +77,30 @@ def _strip_comments_sdc(text: str) -> str:
     return re.sub(r"#[^\n]*", "", text)
 
 
+def _read_sdc_arg(sdc_path: Path) -> str:
+    """ORGANIC #572 — accept either a single SDC FILE or a DIRECTORY of
+    *.sdc for --sdc (the flow yaml passes `--sdc phase2/stage2/constraints`,
+    a directory; the old `read_text()` raised IsADirectoryError and the
+    step could only be waived). Mirrors the rtl argument's file-or-dir
+    semantics. Returns the comment-stripped concatenation; "" when nothing
+    is found."""
+    if sdc_path is None or not sdc_path.exists():
+        return ""
+    if sdc_path.is_dir():
+        parts: List[str] = []
+        for sdc in sorted(sdc_path.rglob("*.sdc")):
+            try:
+                parts.append(_strip_comments_sdc(
+                    sdc.read_text(errors="replace")))
+            except OSError:
+                continue
+        return "\n".join(parts)
+    try:
+        return _strip_comments_sdc(sdc_path.read_text(errors="replace"))
+    except OSError:
+        return ""
+
+
 def _autodiscover_sdc_text(target: Path) -> str:
     """When the check is invoked on a project directory with no explicit
     --sdc (as flow_compliance_check.py does — it passes only the project
@@ -142,6 +166,44 @@ def sdc_has_generated_clock(sdc_text: str, div_name: str) -> bool:
     return False
 
 
+def find_clock_consumers(rtl_text: str) -> Set[str]:
+    """ORGANIC #569 — return the set of identifiers that are actually USED
+    as a clock: a sequential sensitivity-list edge (`@(posedge X)` /
+    `@(negedge X)`) OR a clock-pin connection on an instance
+    (`.clk(X)`, `.clock(X)`, `.CLK(X)`, `.clk_i(X)`...). A register that
+    merely toggles (`phase_q <= ~phase_q`) but whose net clocks NOTHING is
+    a shadow/phase bit, NOT a derived clock, and must not be forced to
+    carry a create_generated_clock. chip-AGNOSTIC: pure Verilog grammar."""
+    consumers: Set[str] = set()
+    for m in re.finditer(r"@\s*\(\s*(?:posedge|negedge)\s+(\w+)", rtl_text):
+        consumers.add(m.group(1))
+    # clock-pin connections: .<clkpin>(<ident>) where the pin name looks
+    # like a clock (clk / clock, with optional _i/_in/_p suffix or prefix).
+    for m in re.finditer(
+            r"\.\s*(\w*cl(?:k|ock)\w*)\s*\(\s*(\w+)\s*\)", rtl_text,
+            re.IGNORECASE):
+        consumers.add(m.group(2))
+    return consumers
+
+
+def find_output_ports(rtl_text: str) -> Set[str]:
+    """ORGANIC #569 — identifiers declared as output / inout ports. A
+    divided net that LEAVES the module as an output may be consumed as a
+    clock externally, so it is NOT exempted from the create_generated_clock
+    requirement even when no in-design consumer is visible (conservative —
+    avoids a no-leak hole for exported derived clocks)."""
+    ports: Set[str] = set()
+    # output [3:0] a, b;  /  output reg core_clk;  /  inout wire x;
+    for m in re.finditer(
+            r"\b(?:output|inout)\b\s*(?:reg|wire|logic)?\s*"
+            r"(?:signed\s*)?(?:\[[^\]]*\]\s*)?([\w\s,]+?)\s*[;,)]",
+            rtl_text):
+        for ident in re.split(r"[,\s]+", m.group(1).strip()):
+            if ident and re.fullmatch(r"[A-Za-z_]\w*", ident):
+                ports.add(ident)
+    return ports
+
+
 def _is_pdk_shim_file(path: Path, text: str) -> bool:
     """v1.6.228 — skip PDK std-cell shim files. These are auto-
     transformed PDK libraries (`udp_*` primitives turned into modules
@@ -177,6 +239,8 @@ def audit(rtl_target: Path, sdc_path: Optional[Path]) -> List[Finding]:
         return findings
 
     pairs: List[Tuple[str, str, str, int]] = []  # (src, div, file, line)
+    clock_consumers: Set[str] = set()
+    output_ports: Set[str] = set()
     for f in files:
         try:
             text = _strip_comments_v(f.read_text(errors="replace"))
@@ -187,6 +251,10 @@ def audit(rtl_target: Path, sdc_path: Optional[Path]) -> List[Finding]:
             continue
         for src, div, ln in find_derived_clocks(text):
             pairs.append((src, div, str(f), ln))
+        # ORGANIC #569 — accumulate the corpus-wide clock-consumer set so a
+        # toggle whose net clocks nothing is not forced to carry an SDC.
+        clock_consumers |= find_clock_consumers(text)
+        output_ports |= find_output_ports(text)
 
     if not pairs:
         findings.append(Finding(
@@ -195,16 +263,24 @@ def audit(rtl_target: Path, sdc_path: Optional[Path]) -> List[Finding]:
         ))
         return findings
 
-    sdc_text = ""
-    if sdc_path and sdc_path.exists():
-        sdc_text = _strip_comments_sdc(sdc_path.read_text(errors="replace"))
-    elif sdc_path is None:
-        # No explicit --sdc: auto-discover under the project directory so
-        # the gate works when invoked as `<check>.py <project>` (the
-        # flow_compliance_check.py call shape).
-        sdc_text = _autodiscover_sdc_text(rtl_target)
+    sdc_text = _read_sdc_arg(sdc_path) if sdc_path is not None else \
+        _autodiscover_sdc_text(rtl_target)
 
     for src, div, fpath, ln in pairs:
+        # ORGANIC #569 — clock-usage confirmation: a divided net is a
+        # shadow/phase bit (not a derived clock) ONLY when it has NO
+        # downstream clock consumer AND it does not leave the module as an
+        # output/inout (an exported net may be clocked externally — keep
+        # requiring SDC there, no-leak). Internal toggle that clocks nothing
+        # → INFO, never FAIL.
+        if div not in clock_consumers and div not in output_ports:
+            findings.append(Finding(
+                "INFO", "derived_clock_no_consumer", fpath, ln,
+                f"toggle net {div!r} (from {src!r}, line {ln}) is not used "
+                f"as a clock by any sequential block or clock pin — treated "
+                f"as a shadow/phase register, no create_generated_clock "
+                f"required."))
+            continue
         if sdc_has_generated_clock(sdc_text, div):
             continue
         findings.append(Finding(
