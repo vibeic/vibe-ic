@@ -140,6 +140,53 @@ another, so no deterministic rule over the RTL can decide it. This is the residu
 authoring judgment, cross-referenced with `/rtl-review`'s matching classification
 section.
 
+## Output timing — same-cycle (Moore-combinational) vs registered pulse (#560)
+
+A recurring functional miss (CVDP FUNC_ALL family): a status / event / strobe
+output is implemented as a **registered** pulse (`out <= <event>;` under a
+clock), which makes it appear **one cycle late**, but the spec / testbench
+expects the output to be visible **in the same cycle as the event**. cocotb
+checks that sample the output **on the same edge the event occurs** then read 0
+and FAIL, even though the logic is otherwise correct.
+
+**Decide the output's timing from the prose, then encode it:**
+
+- **same-cycle (Moore-combinational decode)** — when the spec describes the
+  output and its triggering event in the **same breath** ("asserts `done` *when*
+  the count reaches N", "drives `error` *on* an invalid command", "`valid` is
+  high *while* in state S"), OR the testbench style is a same-edge check, derive
+  the output **combinationally from state / inputs** and do NOT register it:
+
+  ```verilog
+  // Moore decode — same-cycle, no register delay
+  assign done = (state == DONE);
+  always @(*) error = (cmd_valid && !cmd_legal);
+  ```
+
+  This is the right default for FSM status outputs, single-cycle strobes whose
+  event is a combinational condition, and "output follows state" descriptions.
+
+- **registered / next-cycle** — ONLY when the prose explicitly says the output
+  is **registered**, appears **one cycle after** the event, is **pipelined**, or
+  must be **glitch-free** for an external interface. Then use the NBA form:
+
+  ```verilog
+  always @(posedge clk) out <= <event>;   // intentional 1-cycle latency
+  ```
+
+**Worked examples (round-5 CVDP recoveries):** a vending-machine `error`+`return`
+asserted the same cycle as the bad coin; an FSM output that follows the state
+transition in the same cycle; a simple-SPI output that tracks the transition
+when it happens. All three FAILed as registered pulses and PASSed once decoded
+combinationally from state.
+
+**why_not_bucket_a:** same-cycle vs registered is a reading of the spec prose
+("when"/"on"/"while" vs "registered"/"one cycle later"/"pipelined") and of the
+testbench's sampling convention. The identical event→output mapping is correct
+as combinational in one problem and as registered in another; no regex over the
+RTL or the prompt reliably separates the two, so this stays an LLM authoring
+judgment.
+
 
 ## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
 

@@ -617,6 +617,58 @@ def gate_record(rec: Dict, workdir: Path) -> Tuple[bool, Dict, Dict]:
     return True, out_rec, entry
 
 
+_REQ_FILENAME_RE = re.compile(
+    r"(?:rtl|src|hdl|verilog)/([A-Za-z_]\w*)\.s?v\b"
+    r"|(?:file|named|save\s+(?:it\s+)?(?:to|as)|create)\b[^\n]{0,40}?"
+    r"\b([A-Za-z_]\w*)\.s?v\b",
+    re.IGNORECASE)
+
+
+def required_module_names_from_prompt(prompt_text):
+    """ORGANIC #559 — extract the set of filename STEMS the prompt asks the
+    author to save (rtl/<name>.sv, 'save it to foo.sv', 'a file named
+    bar.v'). The CVDP harness derives TOPLEVEL from the file layout, so the
+    completion must declare a module of the same name. Pure structural
+    parse — chip-AGNOSTIC. Returns a set of stems (possibly empty)."""
+    stems = set()
+    for m in _REQ_FILENAME_RE.finditer(prompt_text or ""):
+        nm = m.group(1) or m.group(2)
+        if nm:
+            stems.add(nm)
+    return stems
+
+
+def completion_module_names(completion):
+    """Module names declared in a completion (comment/string-stripped view,
+    reusing the same detection path the synth smoke uses)."""
+    code, kind = extract_code(completion or "")
+    if kind == "doc_only" or not code:
+        return set()
+    return set(_MODULE_NAMES_RE.findall(_detection_text(code)))
+
+
+def _load_prompts(path):
+    """Return {id: prompt_text} from a prompts JSONL ({id, prompt|input|...})."""
+    out = {}
+    p = Path(path)
+    if not p.is_file():
+        return out
+    for ln in p.read_text(errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        rid = d.get("id")
+        txt = (d.get("prompt") or d.get("input") or d.get("question")
+               or d.get("text") or "")
+        if rid is not None:
+            out[str(rid)] = txt
+    return out
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="CVDP copilot SOLE-EMIT gate (#528): drafts JSONL in, "
@@ -633,6 +685,16 @@ def main(argv=None) -> int:
                     help="gated responses JSONL (written ONLY by this gate)")
     ap.add_argument("--report", default=None,
                     help="optional JSON gate report path")
+    ap.add_argument("--prompts", default=None,
+                    help="ORGANIC #559 — optional prompts JSONL ({id, "
+                         "prompt}); when given, a completion whose modules "
+                         "do not include the filename the prompt asks the "
+                         "author to save (rtl/<name>.sv) is BLOCKED — the "
+                         "CVDP harness derives TOPLEVEL from the file layout "
+                         "so a module-name/filename mismatch ELAB_ERRORs")
+    ap.add_argument("--prompts-advisory", action="store_true",
+                    help="with --prompts, WARN instead of BLOCK on a "
+                         "filename/module-name mismatch (strict-advisory)")
     args = ap.parse_args(argv)
     if not args.batch and not args.batch_dir:
         print("ERROR: one of --batch / --batch-dir is required",
@@ -704,6 +766,8 @@ def main(argv=None) -> int:
         c = rec.get("completion")
         if isinstance(c, str) and "\r" in c:
             rec["completion"] = c.replace("\r\n", "\n").replace("\r", "\n")
+    # ORGANIC #559 — optional prompt-aware filename↔module-name conformance.
+    prompts = _load_prompts(args.prompts) if args.prompts else {}
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     passed: List[Dict] = []
@@ -713,6 +777,28 @@ def main(argv=None) -> int:
         wd = Path(td)
         for rec in records:
             ok, out_rec, entry = gate_record(rec, wd)
+            # ORGANIC #559 — filename/module-name conformance (only when a
+            # prompt for this id states a required rtl/<name>.sv). The
+            # harness builds TOPLEVEL from the file layout, so a completion
+            # that declares no module matching the requested filename
+            # ELAB_ERRORs. Advisory mode WARNs instead of blocking.
+            if ok and prompts:
+                req = required_module_names_from_prompt(
+                    prompts.get(str(rec.get("id")), ""))
+                if req:
+                    mods = completion_module_names(out_rec.get("completion"))
+                    if mods and not (req & mods):
+                        msg = (f"prompt requires a module named {sorted(req)} "
+                               f"(per the requested rtl/<name>.sv); completion "
+                               f"declares {sorted(mods)} — the harness derives "
+                               f"TOPLEVEL from the filename so this ELAB_ERRORs")
+                        if args.prompts_advisory:
+                            entry.setdefault("notes", []).append(
+                                "WARN filename-module-mismatch: " + msg)
+                        else:
+                            entry["verdict"] = "BLOCKED"
+                            entry["filename_conformance"] = msg
+                            ok = False
             report.append(entry)
             if ok:
                 passed.append(out_rec)
@@ -722,7 +808,8 @@ def main(argv=None) -> int:
                 # gate_record returns on the FIRST failing stage, so the
                 # last stage field written carries the real reason (a
                 # synth-stage block used to print "compile clean" here).
-                why = entry.get("synth") or entry.get("compile")
+                why = (entry.get("filename_conformance")
+                       or entry.get("synth") or entry.get("compile"))
                 print(f"BLOCKED {entry['id']}: {why}", file=sys.stderr)
     out_path.write_text(
         "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in passed))

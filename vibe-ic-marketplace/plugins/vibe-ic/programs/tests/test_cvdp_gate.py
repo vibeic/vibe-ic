@@ -77,6 +77,58 @@ def _read_jsonl(p):
     return [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
 
 
+def test_559_required_module_names_from_prompt():
+    assert G.required_module_names_from_prompt(
+        "Implement the design and save it to rtl/foo_bar.sv.") == {"foo_bar"}
+    assert G.required_module_names_from_prompt(
+        "Write your answer in a file named adder.v") == {"adder"}
+    # no filename request → empty (check never fires)
+    assert G.required_module_names_from_prompt(
+        "Design a 4-bit counter.") == set()
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+def test_559_filename_module_mismatch_blocked_with_prompts(tmp_path):
+    # prompt requires rtl/foo.sv but completion declares module 'bar'
+    batch = _write_batch(tmp_path, [
+        {"id": "p1", "completion": "```verilog\nmodule bar(input a, "
+                                   "output b);\nassign b=a;\nendmodule\n```\n"}])
+    prompts = tmp_path / "prompts.jsonl"
+    prompts.write_text(json.dumps(
+        {"id": "p1", "prompt": "Save your module to rtl/foo.sv"}) + "\n")
+    out = tmp_path / "out.jsonl"
+    rep = tmp_path / "rep.json"
+    rc = G.main(["--batch", str(batch), "--out", str(out),
+                 "--report", str(rep), "--prompts", str(prompts)])
+    assert rc == 1
+    assert _read_jsonl(out) == []
+    e = _json.loads(rep.read_text())["records"][0]
+    assert e["verdict"] == "BLOCKED"
+    assert "filename_conformance" in e
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+def test_559_matching_module_passes_and_no_prompts_unchanged(tmp_path):
+    good = ("```verilog\nmodule foo(input a, output b);\n"
+            "assign b=a;\nendmodule\n```\n")
+    batch = _write_batch(tmp_path, [{"id": "p1", "completion": good}])
+    prompts = tmp_path / "prompts.jsonl"
+    prompts.write_text(json.dumps(
+        {"id": "p1", "prompt": "Save your module to rtl/foo.sv"}) + "\n")
+    out = tmp_path / "out.jsonl"
+    # module foo matches required foo → PASS
+    assert G.main(["--batch", str(batch), "--out", str(out),
+                   "--prompts", str(prompts)]) == 0
+    assert len(_read_jsonl(out)) == 1
+    # WITHOUT --prompts: behaviour identical (no conformance check)
+    out2 = tmp_path / "out2.jsonl"
+    batch2 = _write_batch(tmp_path, [
+        {"id": "p2", "completion": "```verilog\nmodule bar(input a, "
+                                   "output b);\nassign b=a;\nendmodule\n```\n"}])
+    assert G.main(["--batch", str(batch2), "--out", str(out2)]) == 0
+    assert len(_read_jsonl(out2)) == 1
+
+
 def test_extract_code_kinds():
     code, kind = G.extract_code(GOOD)
     assert kind == "fenced" and "module ok" in code
