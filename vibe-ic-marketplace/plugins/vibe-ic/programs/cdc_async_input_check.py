@@ -24,6 +24,9 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Set, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import rtl_scan_scope as _scan_scope  # noqa: E402
+
 
 @dataclass
 class Finding:
@@ -66,26 +69,16 @@ def strip_comments(src: str) -> str:
 
 
 def find_rtl_files(project_dir: Path) -> List[Path]:
-    """Find authoritative RTL. Excludes derived copies commonly placed under
-    formal/, sim/, synth/, build/, dft/, db/, .git/, etc."""
-    excluded_dir_parts = {
-        'formal', 'sim', 'synth', 'build', 'db', 'output_files',
-        'incremental_db', 'dft', 'pnr', 'gds', 'reports',
-        '.git', '__pycache__', 'node_modules',
-    }
-    files = []
-    for ext in ('*.v', '*.sv'):
-        files.extend(project_dir.rglob(ext))
-    result = []
-    for f in files:
-        if not f.is_file():
-            continue
-        # Skip if any path part matches an excluded directory
-        parts = set(f.relative_to(project_dir).parts[:-1])
-        if parts & excluded_dir_parts:
-            continue
-        result.append(f)
-    return result
+    """Find authoritative RTL via the shared scan-scope policy (ORGANIC #545).
+
+    The old local exclusion set matched a path component by EXACT equality
+    (so `sim_full_stack` slipped past the `sim` entry) and did not exclude
+    `input/` vendor staging or dot-dirs (`.fpga_stash`) — runner-generated
+    sv2v-flattened intermediates and staged vendor RTL were then scanned as
+    authoritative and produced ASYNC_INPUT_NO_SYNC false positives. The
+    shared helper excludes by component PREFIX (sim*) + dot-dir + input/
+    + oracle_run + build dirs."""
+    return _scan_scope.authoritative_rtl_files(project_dir)
 
 
 def find_input_ports(src: str) -> List[Tuple[str, int]]:
