@@ -3127,6 +3127,15 @@ if {{[catch {{detailed_placement}} _gr_dp_err]}} {{
 if {{[catch {{detailed_route}} dr_err]}} {{
   puts "DETAILED_ROUTE_NONFATAL: $dr_err"
 }}
+# ORGANIC #571 (b) — CHECKPOINT the routed DEF the MOMENT detailed_route
+# finishes, BEFORE antenna repair. The repair_antennas + incremental-reroute
+# pass can run pathologically long (>75 min, single-threaded, no log) and any
+# kill/timeout during it would otherwise discard hours of completed routing
+# (routed.def was only written at the very end of the tcl). With this
+# checkpoint a timeout leaves a usable routed_preantenna.def to resume from.
+if {{[catch {{write_def {out_dir_c}/routed_preantenna.def}} _cp_err]}} {{
+  puts "ROUTED_CHECKPOINT_NONFATAL: $_cp_err"
+}}
 # === v0.2.14 — antenna repair (diode insertion) after detailed_route ===
 {antenna_repair_block}# === v0.1.48 — decap + filler insertion ===
 # spm pilot Tier 2 EM/decap finding: prior runs (v0.1.25 → v0.1.47) emitted
@@ -4271,6 +4280,30 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
 # ---------------------------------------------------------------------------
 # Step 5: LVS (Netgen) — defer when no extracted SPICE netlist available
 # ---------------------------------------------------------------------------
+def _def_has_routing(def_path: Path) -> bool:
+    """ORGANIC #571 — True when a DEF carries actual routing geometry: a
+    NETS section with `+ ROUTED`/`+ FIXED` wiring, or a non-empty
+    SPECIALNETS section (PG straps). A floorplan / placement-stage DEF has
+    COMPONENTS + PINS but no routed wiring — feeding it to Magic ext2spice
+    wastes hours on an interconnect-less extraction. Reads a bounded prefix
+    so a huge routed DEF is cheap to classify. chip-AGNOSTIC."""
+    try:
+        # routing markers can appear deep; scan the whole file but stop early
+        # on the first positive.
+        with def_path.open("r", errors="ignore") as fh:
+            for line in fh:
+                if "+ ROUTED" in line or "+ FIXED" in line:
+                    return True
+                if line.lstrip().startswith("SPECIALNETS"):
+                    # SPECIALNETS <n> ; — a positive count means PG routing
+                    m = re.match(r"SPECIALNETS\s+(\d+)", line.strip())
+                    if m and int(m.group(1)) > 0:
+                        return True
+    except OSError:
+        return False
+    return False
+
+
 def step_lvs(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
@@ -4343,10 +4376,21 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
     # or a 70-byte abstract-view shell → portless extraction → all-top
     # disconnected. Prefer the routed DEF; fall back to any pnr DEF.
     def_file = _pl.pnr_dir(project) / f"{top}.def"
+    _def_fell_back = False
     if not def_file.is_file():
-        d_cands = (sorted(_pl.pnr_dir(project).glob("*.routed.def"))
-                   + sorted(_pl.pnr_dir(project).glob("*.def")))
-        def_file = d_cands[0] if d_cands else def_file
+        # ORGANIC #571 (a) — when the named routed DEF is absent and we must
+        # fall back to a glob, PREFER a routed DEF and de-prioritise a
+        # floorplan/placement-stage DEF, then sanity-check below. A bare
+        # `*.def` glob used to pick `floorplan.def` (pre-route, no NETS
+        # geometry) and feed it to Magic for a ~2h interconnect-less extract.
+        routed_cands = (sorted(_pl.pnr_dir(project).glob("*.routed.def"))
+                        + sorted(_pl.pnr_dir(project).glob("routed*.def")))
+        other_cands = [d for d in sorted(_pl.pnr_dir(project).glob("*.def"))
+                       if d not in routed_cands]
+        d_cands = routed_cands + other_cands
+        if d_cands:
+            def_file = d_cands[0]
+            _def_fell_back = True
     # v0.3.15 — ORGANIC #509 round-4: pick the POST-PnR schematic netlist
     # whose cell population matches the routed layout (the pre-PnR synth
     # netlist has 0 spares → netgen mismatch). #512 lesson: the netlist
@@ -4380,6 +4424,22 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
             extras={"finding": "LVS_INPUT_DEF_EMPTY",
                     "def": str(def_file),
                     "lvs_verdict": verdict})
+    # ORGANIC #571 (a) — DEF stage sanity, scoped to the FALLBACK case. When
+    # the named routed DEF (`{top}.def`) is present the runner produced it as
+    # the routed output — trust it. Only when we FELL BACK to a glob (named
+    # DEF absent) and the only candidate is a floorplan/placement-stage DEF
+    # (no `+ ROUTED` wiring / SPECIALNETS) do we named-SKIP instead of burning
+    # ~2h in Magic ext2spice on an interconnect-less layout.
+    if _def_fell_back and not _def_has_routing(def_file):
+        return StepResult(
+            "lvs", "SKIP", time.time() - t0,
+            f"LVS skipped: DEF {def_file.name} carries no routing geometry "
+            f"(no '+ ROUTED' wiring / SPECIALNETS) — it is a floorplan/"
+            f"placement-stage DEF, not a routed layout. Extracting it would "
+            f"burn ~2h producing an interconnect-less netlist. Run "
+            f"detailed_route first (#571).",
+            extras={"finding": "LVS_INPUT_DEF_NOT_ROUTED",
+                    "def": str(def_file)})
     # v0.3.13 — emit the project-local netgen setup (unconditional
     # fill/tap/decap/fakediode ignore) and use it instead of the bare PDK
     # setup, so the cell-level compare is not flooded by physical-only
@@ -8664,21 +8724,29 @@ def main() -> int:
     # container is requested but the project path is NOT covered by any of its
     # bind mounts, every in-container step (synth/PnR/GDS) will fail with
     # `cd: No such file or directory` — but that only surfaced ~35 min in at
-    # the first synth. Detect it up front and FAIL the whole run immediately
-    # with an actionable message, instead of burning the full phase2+3.
-    if getattr(args, "container", None):
-        if (_container_mounts(args.container)
-                and not _container_path_covered(str(project), args.container)):
-            print(f"[phase3] FAIL preflight: project path {project} is not "
-                  f"covered by any bind mount of container "
-                  f"{args.container!r}. Every in-container step would fail "
-                  f"with 'cd: No such file or directory'. Mount the project "
-                  f"tree (-v {project}:{project}) or run without --container.",
-                  file=sys.stderr)
-            return 1
+    # the first synth. Detect it up front and FAIL the backend steps with an
+    # actionable message, instead of burning the full phase2+3. The report is
+    # STILL written (mirrors the pure-analog skip path) so the failure is
+    # auditable.
+    _mount_preflight_failed = bool(
+        getattr(args, "container", None)
+        and _container_mounts(args.container)
+        and not _container_path_covered(str(project), args.container))
 
     is_pure_analog, pa_reason = _is_pure_analog_no_rtl_track(project)
-    if is_pure_analog:
+    if _mount_preflight_failed:
+        msg = (f"container mount-coverage preflight FAILED: project path "
+               f"{project} is not covered by any bind mount of container "
+               f"{args.container!r}. Every in-container step would fail with "
+               f"'cd: No such file or directory'. Mount the project tree "
+               f"(-v {project}:{project}) or run without --container (#551).")
+        print(f"[phase3] {msg}", file=sys.stderr)
+        for stepname in ("synth", "pnr", "gds", "drc", "lvs"):
+            plan.append(StepResult(
+                stepname, "FAIL", 0.0,
+                f"skipped — {msg}",
+                extras={"finding": "CONTAINER_MOUNT_PREFLIGHT_FAILED"}))
+    elif is_pure_analog:
         print(f"[phase3] pure-analog design detected — {pa_reason}. "
               f"Digital backend (synth/PnR/GDS/DRC/LVS) deferred to the "
               f"analog A5..A6 layout track.")
