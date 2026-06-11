@@ -57,6 +57,21 @@ WAIVER_KEY = "fpga_sdc_explicitly_unconstrained"
 
 # ----------------------------- helpers ----------------------------- #
 
+def _has_generated_clock(sdc_text: str) -> bool:
+    """ORGANIC #555 — True if the SDC defines an actual generated/derived
+    clock (`create_generated_clock`) for a PLL/clock-divider output.
+
+    When present, FPGA SDC period ≠ RTL period is intentional (board osc →
+    PLL → application clock), so Rule 3 period-mismatch is downgraded to WARN
+    instead of FAIL. Note: `derive_pll_clocks` / `derive_clocks` are Quartus
+    boilerplate TimeQuest commands emitted in EVERY .sdc regardless of
+    whether a PLL is present (no-op without one) — they are NOT used as the
+    signal here, only an explicit `create_generated_clock` definition is.
+    Chip-AGNOSTIC: standard SDC/Quartus grammar."""
+    text = _strip_comments(sdc_text) if callable(_strip_comments) else sdc_text
+    return bool(re.search(r"\bcreate_generated_clock\b", text, re.IGNORECASE))
+
+
 def _strip_comments(text: str) -> str:
     text = re.sub(r"#[^\n]*", "", text)          # SDC '#' line comments
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
@@ -303,6 +318,13 @@ def audit(project: Path) -> Tuple[str, List[str]]:
         return ("FAIL", msgs)
 
     # Rule 3: period mismatch >5 % vs L8/RTL clock period
+    # ORGANIC #555 — if the SDC has a PLL/generated-clock construct,
+    # board-clock period ≠ ASIC period is intentional; downgrade to WARN.
+    sdc_has_pll = any(
+        _has_generated_clock(p.read_text(errors="replace"))
+        for p in sdc_files
+        if p.is_file()
+    )
     rtl_period = find_rtl_clock_period_ns(project)
     if rtl_period is not None and rtl_period > 0:
         for c in create_clocks:
@@ -310,17 +332,29 @@ def audit(project: Path) -> Tuple[str, List[str]]:
                 continue
             ratio = abs(c["period_ns"] - rtl_period) / rtl_period
             if ratio > 0.05:
-                msgs.append(
-                    "FAIL — FPGA_SDC_PERIOD_MISMATCH\n"
-                    f"  sdc file: {c.get('sdc_file')}\n"
-                    f"  create_clock -name {c.get('name')} "
-                    f"-period {c['period_ns']} ns\n"
-                    f"  RTL declares clock period {rtl_period} ns "
-                    f"(mismatch {ratio*100:.1f} %, threshold 5 %).\n"
-                    "  Quartus will time-budget against the SDC value not "
-                    "the actual silicon clock — silent timing violation."
-                )
-                return ("FAIL", msgs)
+                if sdc_has_pll:
+                    msgs.append(
+                        "WARN — FPGA_SDC_PERIOD_BOARD_MISMATCH (PLL/generated-"
+                        "clock present)\n"
+                        f"  sdc file: {c.get('sdc_file')}\n"
+                        f"  create_clock -period {c['period_ns']} ns; "
+                        f"RTL {rtl_period} ns (mismatch {ratio*100:.1f}%)\n"
+                        "  Board-clock path (derive_pll_clocks or "
+                        "create_generated_clock) detected — period mismatch "
+                        "may be intentional (advisory only, #555)."
+                    )
+                else:
+                    msgs.append(
+                        "FAIL — FPGA_SDC_PERIOD_MISMATCH\n"
+                        f"  sdc file: {c.get('sdc_file')}\n"
+                        f"  create_clock -name {c.get('name')} "
+                        f"-period {c['period_ns']} ns\n"
+                        f"  RTL declares clock period {rtl_period} ns "
+                        f"(mismatch {ratio*100:.1f} %, threshold 5 %).\n"
+                        "  Quartus will time-budget against the SDC value not "
+                        "the actual silicon clock — silent timing violation."
+                    )
+                    return ("FAIL", msgs)
 
     # Rule 4: WARN when only one clock constrained but multiple posedge clocks
     rtl_clk_sigs = find_rtl_clock_ports(rtl_files)

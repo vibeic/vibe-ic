@@ -1408,6 +1408,31 @@ def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
 
     gen_name = config.get("rtl_gen")
     if not gen_name:
+        # ORGANIC #542 — staged vendor RTL check. If input/vendor_rtl/ is
+        # non-empty the project already has the IP files pre-staged. WAIVE
+        # immediately with REUSED-IP/catalog-glue guidance — no point querying
+        # the catalog when the RTL is literally in the project tree.
+        _vendor_dir = project / "input" / "vendor_rtl"
+        if _vendor_dir.is_dir():
+            _staged_v = sorted(_vendor_dir.rglob("*.v"))
+            _staged_sv = sorted(_vendor_dir.rglob("*.sv"))
+            _staged = _staged_v + _staged_sv
+            if _staged:
+                _sample = [str(f.relative_to(project))
+                           for f in _staged[:5]]
+                _more = (f" (+ {len(_staged)-5} more)"
+                         if len(_staged) > 5 else "")
+                return StepResult(
+                    "rtl_gen", "WAIVED",
+                    time.time() - t0,
+                    f"IC class {ic_class!r}: staged vendor RTL found in "
+                    f"input/vendor_rtl/ ({len(_staged)} file(s){_more}) — "
+                    f"REUSED-IP path: use skill `catalog-glue-author` to "
+                    f"author the chip_top wrapper around the staged files.",
+                    extras={"fallback_skill": "catalog-glue-author",
+                            "class_config": config,
+                            "staged_vendor_rtl_count": len(_staged),
+                            "staged_vendor_rtl_sample": _sample})
         # Class registered but has no deterministic generator yet.
         # v1.6.570 — for IP catalog integration: query ip_catalog for
         # matches against this project's L1-L9 facts before falling
@@ -5214,24 +5239,55 @@ def step_emit_phase2_manifests(project: Path,
     # pre-fix trio was a CANNED verdict citing one specific chip's signals
     # (a 3-FF `id_rx_syn` synchroniser on `id_bus`) — byte-identical across
     # four different ICs, including a pure-analog project with NO RTL at
-    # all. A CDC verdict must come from the PROJECT'S OWN RTL: scan the
-    # clock edges actually used; a single-clock design honestly has no
-    # crossings (PASS with the scan as evidence); a multi-clock design
+    # all. A CDC verdict must come from the PROJECT'S OWN RTL via a
+    # clock-edge scan; a single-clock design honestly has no
+    # crossings (PASS with the clock-edge scan as evidence); a multi-clock design
     # needs a real CDC tool (SKIPPED-CONDITION, named reason); no RTL →
     # SKIPPED-CONDITION.
     _rtl_files = sorted(rtl_dir.glob("*.sv")) + sorted(rtl_dir.glob("*.v")) \
         if rtl_dir.is_dir() else []
-    _clocks: set = set()
+    # ORGANIC #547 — upgrade from raw posedge-token counting to root-port
+    # based domain detection. Every external clock MUST arrive via an `input`
+    # port: gated/buffered derived clocks (prim_clock_gating outputs, BUFCEs,
+    # etc.) are INTERNAL nets whose posedge tokens share the root domain.
+    # Algorithm: (a) extract `input` ports whose name matches _is_clock;
+    # those are root clocks. (b) collect all posedge/negedge tokens as
+    # evidence. (c) domain count = |root_clock_ports|, NOT |posedge_tokens|.
+    # Fallback when no root ports found: use posedge token set (conservative).
+    _INPUT_PORT_RE = re.compile(
+        r'\binput\s+(?:wire\s+|reg\s+|logic\s+)?'
+        r'(?:\[[^\]]+\]\s+)?([A-Za-z_]\w*)',
+        re.MULTILINE,
+    )
+    _CDC_RST_RE = re.compile(
+        r'(?:^|_)(?:rst|reset|areset)(?:_|$)|^a?rst',
+        re.IGNORECASE,
+    )
+    _clocks: set = set()           # all posedge/negedge tokens (not reset)
+    _root_clk_ports: set = set()   # input ports matching clock heuristic
     for _rf in _rtl_files:
         try:
             _txt = _rf.read_text(errors="replace")
         except OSError:
             continue
+        for _m in _INPUT_PORT_RE.finditer(_txt):
+            _nm = _m.group(1)
+            if ("clk" in _nm.lower() or "clock" in _nm.lower()) \
+                    and not _CDC_RST_RE.search(_nm):
+                _root_clk_ports.add(_nm)
         for _m in re.finditer(r"\b(?:pos|neg)edge\s+([A-Za-z_]\w*)", _txt):
-            nm = _m.group(1)
-            if not re.search(r"(?:^|_)(?:rst|reset|areset)(?:_|$)|^a?rst",
-                             nm, re.IGNORECASE):
-                _clocks.add(nm)
+            _nm = _m.group(1)
+            if not _CDC_RST_RE.search(_nm):
+                _clocks.add(_nm)
+    # Domain count: prefer root clock input ports; fall back to posedge set
+    # when the input scan found nothing (e.g. files truncated or clock port
+    # named unconventionally).
+    _domain_clocks = _root_clk_ports if _root_clk_ports else _clocks
+    _derived_note = (
+        f"; derived/gated clock tokens attributed to root: "
+        f"{sorted(_clocks - _domain_clocks)}"
+        if (_clocks - _domain_clocks) else ""
+    )
     if not _rtl_files:
         _cdc_payload = {
             "verdict": "SKIPPED-CONDITION",
@@ -5242,26 +5298,30 @@ def step_emit_phase2_manifests(project: Path,
         w("reports/phase2/cdc/crossing.json", _cdc_payload)
         w("reports/phase2/cdc/async_input.json", _cdc_payload)
         w("reports/phase2/cdc/reset_dep.json", _cdc_payload)
-    elif len(_clocks) <= 1:
-        _ev = (f"clock-edge scan of {len(_rtl_files)} RTL file(s): "
-               f"single clock domain {sorted(_clocks) or ['(none)']} — "
-               f"no clock-domain crossings exist")
+    elif len(_domain_clocks) <= 1:
+        _ev = (f"clock-domain scan of {len(_rtl_files)} RTL file(s): "
+               f"single clock domain "
+               f"{sorted(_domain_clocks) or ['(none)']} — "
+               f"no clock-domain crossings exist{_derived_note}")
         w("reports/phase2/cdc/crossing.json", {
             "verdict": "PASS", "evidence": _ev, "crossings": [],
-            "clocks_found": sorted(_clocks),
+            "clocks_found": sorted(_domain_clocks),
+            "posedge_tokens_all": sorted(_clocks),
             "rtl_files_scanned": [f.name for f in _rtl_files]})
         w("reports/phase2/cdc/async_input.json", {
             "verdict": "PASS", "evidence": _ev, "async_inputs": []})
         w("reports/phase2/cdc/reset_dep.json", {
             "verdict": "PASS", "evidence": _ev,
-            "clocks_found": sorted(_clocks)})
+            "clocks_found": sorted(_domain_clocks)})
     else:
         _cdc_payload = {
             "verdict": "SKIPPED-CONDITION",
-            "reason": (f"multi-clock design (clocks={sorted(_clocks)}): a "
+            "reason": (f"multi-clock design "
+                       f"(root_clocks={sorted(_domain_clocks)}): a "
                        f"real CDC tool run is required — this runner does "
                        f"not synthesize crossing verdicts (#436)"),
-            "clocks_found": sorted(_clocks),
+            "clocks_found": sorted(_domain_clocks),
+            "posedge_tokens_all": sorted(_clocks),
         }
         w("reports/phase2/cdc/crossing.json", _cdc_payload)
         w("reports/phase2/cdc/async_input.json", _cdc_payload)

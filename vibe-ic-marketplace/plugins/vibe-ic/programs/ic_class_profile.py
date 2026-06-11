@@ -719,6 +719,39 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
                 "(>=3 features, not bus-interconnect)")
             return profile
 
+    # ORGANIC #542 — crypto_accelerator BEFORE bus_peripheral and
+    # processor_cpu. Crypto IPs often also have a register interface, but
+    # the cipher-algorithm evidence is the primary discriminator. CPUs never
+    # identify their core function with cipher algorithm names. Deny-guarded:
+    # must name a real algorithm family (AES/SHA/HMAC/etc.) + >=1 other
+    # crypto feature.
+    if l1 is not None or l2 is not None:
+        if (not profile["has_analog"]
+                and _looks_like_crypto_accelerator(l1, l2)):
+            profile["ic_class"] = "crypto_accelerator"
+            profile["decisive_evidence"] = (
+                "no analog + crypto-accelerator structural signature "
+                "(algorithm_family deny-guard + >=2 features, #542)")
+            return profile
+
+    # ORGANIC #542 — bus_peripheral BEFORE processor_cpu and arithmetic
+    # catch-all. SW-visible register map + bus subordinate interface WITHOUT
+    # ISA/instruction evidence. Deny-guarded: must have explicit register_map
+    # evidence (hjson/regmap/SW-accessible-register vocabulary). Guarded
+    # against bus_interconnect_protocol (wire-level protocol spec) and
+    # processor_cpu (instruction-execution) misfire.
+    if l1 is not None or l2 is not None:
+        if (not profile["has_analog"]
+                and not _looks_like_bus_interconnect_protocol(l1, l2)
+                and not _looks_like_processor_cpu(l1, l2)
+                and _looks_like_bus_peripheral(l1, l2)):
+            profile["ic_class"] = "bus_peripheral"
+            profile["decisive_evidence"] = (
+                "no analog + no bus-protocol + no cpu + bus-peripheral "
+                "structural signature (register_map deny-guard + >=3 "
+                "features, #542)")
+            return profile
+
     # ORGANIC-20260606 #450 — processor_cpu BEFORE the arithmetic
     # catch-all: a CPU verifies by executing instructions + checking
     # architectural state, not by arithmetic-primitive semantics. The
@@ -898,6 +931,111 @@ _SERIAL_PROTO_FEATURES: List[tuple[str, re.Pattern]] = [
                 r"start\s+of\s+frame|end\s+of\s+frame|frame\s+delimiter)\b",
                 re.IGNORECASE)),
 ]
+
+
+# ---------------------------------------------------------------------
+# ORGANIC #542 — crypto_accelerator detector. Hardware AES/SHA/HMAC/ECC
+# and similar cipher engines pair an algorithm data-path with a register
+# interface. Two mandatory features: (a) algorithm_family names a real
+# cipher algorithm — deny-guard prevents prose like "encrypted data path"
+# from false-firing; (b) at least one other crypto feature. No brand names.
+_CRYPTO_FEATURES: List[tuple] = [
+    ("algorithm_family", re.compile(
+        r"\bAES\b|\bSHA[-_]?(?:[0-9]+)?\b|\bHMAC\b|"
+        r"\bChaCha(?:20)?\b|\bPoly1305\b|\bECC\b|\bRSA\b|"
+        r"\b3DES\b|\bblowfish\b|\bcamellia\b",
+        re.IGNORECASE)),
+    ("crypto_operation", re.compile(
+        r"\b(?:encrypt|decrypt|crypt)(?:ion|ing|or)?\b|"
+        r"\b(?:sign|verif)(?:ature|ication|ying|y|ies)?\b|"
+        r"\bhash\s+(?:digest|function|core|computation|output)\b|"
+        r"\bmessage\s+digest\b",
+        re.IGNORECASE)),
+    ("key_material", re.compile(
+        r"\bkey\s+(?:schedule|expansion|loading|management|material|"
+        r"length|size|register|stream)\b|"
+        r"\b(?:initialization\s+vector|IV)\b|\bnonce\b|\bsalt\b",
+        re.IGNORECASE)),
+    ("cipher_mechanics", re.compile(
+        r"\bkey\s+(?:schedule|expansion|round)\b|"
+        r"\b[Ss][- ]?[Bb]ox\b|\bsubstitution[- ]permutation\b|"
+        r"\bGalois\s+field\b|\bGF\s*\(\s*2\b|"
+        r"\bblock\s+cipher\b|\bstream\s+cipher\b|"
+        r"\b(?:ECB|CBC|CTR|GCM|OFB|CFB)\b",
+        re.IGNORECASE)),
+    ("width_marker", re.compile(
+        r"\b(?:128|192|256)[- ]?(?:bit|b)\b|"
+        r"\b(?:KEYLEN|KEY_LEN|KEY_SIZE|KEY_WIDTH)\b",
+        re.IGNORECASE)),
+]
+
+
+def _looks_like_crypto_accelerator(l1, l2) -> bool:
+    """ORGANIC #542 — True iff L1+L2 exhibit the mandatory algorithm_family
+    feature PLUS at least one additional crypto feature (>=2 total).
+    Walks all string leaves. No benchmark-specific names."""
+    parts: List[str] = []
+    for layer in (l1, l2):
+        if isinstance(layer, dict):
+            _harvest_strings(layer, parts)
+    text = "\n".join(parts)
+    if not text:
+        return False
+    hit_names = {name for name, pat in _CRYPTO_FEATURES if pat.search(text)}
+    if "algorithm_family" not in hit_names:
+        return False  # deny-guard: must name a real cipher algorithm
+    return len(hit_names) >= 2
+
+
+# ORGANIC #542 — bus_peripheral detector. Register-mapped peripheral IP:
+# SW-visible register map + bus subordinate interface. Mandatory feature:
+# register_map (requires explicit register-map/regmap/hjson/SW-accessible-
+# register evidence — prevents generic bus specs from false-firing).
+_BUS_PERIPHERAL_FEATURES: List[tuple] = [
+    ("register_map", re.compile(
+        r"\bregister\s+map\b|\bregmap\b|\bhjson\b|"
+        r"\baddress\s+map\b|"
+        r"\bmemory[- ]mapped\s+(?:register|interface)\b|"
+        r"\bSW[- ]?(?:accessible|visible)\s+register\b",
+        re.IGNORECASE)),
+    ("bus_subordinate", re.compile(
+        r"\bsubordinat(?:e|ing)\b|\bslave\s+(?:interface|port|connection)\b|"
+        r"\btarget\s+(?:interface|port|connection)\b|"
+        r"\bregister[- ]?(?:bank|block|file)\b",
+        re.IGNORECASE)),
+    ("bus_interface", re.compile(
+        r"\bTL[-_ ]?UL\b|\bTILELINK[- ]UL\b|\bAPB\b|\bAXI[- ]?Lite\b|"
+        r"\bAHB\b|\bWishbone\b|\bAvalonMM\b|\bbusif\b",
+        re.IGNORECASE)),
+    ("register_fields", re.compile(
+        r"\bbit\s+field\b|\bRW\b|\bRO\b|\bWO\b|\bW1C\b|"
+        r"\bread[- ]?only\s+register\b|\bwrite[- ]?only\s+register\b|"
+        r"\bstatus\s+register\b|\bcontrol\s+register\b",
+        re.IGNORECASE)),
+    ("address_decode", re.compile(
+        r"\baddress\s+(?:decode|offset|space)\b|"
+        r"\bbase\s+address\b|"
+        r"\boffset\b.{0,40}\b0x[0-9A-Fa-f]+\b",
+        re.IGNORECASE | re.DOTALL)),
+]
+
+
+def _looks_like_bus_peripheral(l1, l2) -> bool:
+    """ORGANIC #542 — True iff L1+L2 exhibit the mandatory register_map
+    feature PLUS >=3 bus_peripheral features total. Walks all string leaves.
+    No benchmark-specific names."""
+    parts: List[str] = []
+    for layer in (l1, l2):
+        if isinstance(layer, dict):
+            _harvest_strings(layer, parts)
+    text = "\n".join(parts)
+    if not text:
+        return False
+    hit_names = {name for name, pat in _BUS_PERIPHERAL_FEATURES
+                 if pat.search(text)}
+    if "register_map" not in hit_names:
+        return False  # deny-guard: must have explicit register-map evidence
+    return len(hit_names) >= 3
 
 
 # ---------------------------------------------------------------------
@@ -1168,7 +1306,9 @@ ALL_IC_CLASSES: frozenset = frozenset({
     "unknown",
     "bare_fpga",
     "aid_class_half_duplex",
-    "processor_cpu",          # ORGANIC-20260606 #450
+    "processor_cpu",           # ORGANIC-20260606 #450
+    "crypto_accelerator",      # ORGANIC #542
+    "bus_peripheral",          # ORGANIC #542
     "pure_analog",
     "mixed_signal_otp",
     "digital_cmd_driven",

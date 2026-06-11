@@ -270,9 +270,10 @@ def _is_reset(name: str) -> bool:
 
 def _is_async_io(name: str) -> bool:
     n = name.lower()
-    # KEY / SW / GPIO / id_bus / generic data
-    return any(tok in n for tok in
-               ("key", "sw", "switch", "gpio", "id_bus", "data", "io"))
+    # Only hard-async tokens: physical switches/keys, GPIO, id_bus.
+    # "data" and "io" removed (#555): they match sync bus signals such as
+    # instr_rdata_i / data_addr_o and produce false_path instead of timed I/O.
+    return any(tok in n for tok in ("key", "sw", "switch", "gpio", "id_bus"))
 
 
 def _is_output(name: str, direction: str) -> bool:

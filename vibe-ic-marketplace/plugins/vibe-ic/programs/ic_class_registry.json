@@ -218,6 +218,52 @@
       "tb_fallback_skill": "testbench-author"
     },
     {
+      "name": "bus_peripheral",
+      "description": "ORGANIC #542 — Register-mapped peripheral IP: SW-visible register map (hjson/regmap or equivalent) exposed via a bus subordinate interface (TL-UL, APB, AXI-Lite, Wishbone, AHB). No ISA / instruction-fetch semantics. L4 register map is the primary specification layer. Distinguished from bus_interconnect_protocol (wire-level protocol spec) and processor_cpu (instruction-executing). crypto_accelerator takes priority when crypto algorithm features are present.",
+      "synonyms": [
+        "register_peripheral",
+        "mmio_peripheral",
+        "regmap_ip",
+        "apb_peripheral",
+        "axi_lite_peripheral",
+        "tlul_peripheral"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
+    },
+    {
+      "name": "crypto_accelerator",
+      "description": "ORGANIC #542 — Cryptographic accelerator IP: hardware implementation of AES, SHA, HMAC, ECC, ChaCha or similar. Typically pairs an algorithm data-path with a SW-accessible register interface for key loading, control, and status. Distinguishable by algorithm-domain vocabulary (encrypt/decrypt, key schedule, S-box, digest, IV/nonce) plus register-map features. Takes priority over bus_peripheral when crypto algorithm evidence is present.",
+      "synonyms": [
+        "aes_core",
+        "sha_core",
+        "hmac_core",
+        "crypto_core",
+        "cipher_engine",
+        "hash_engine"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
+    },
+    {
       "name": "unknown_protocol_class",
       "description": "Detection failed or class not yet registered. Runner fall-throughs to fallback_skill — AI takes over via /spec-to-rtl skill.",
       "synonyms": [
