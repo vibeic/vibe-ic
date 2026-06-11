@@ -8182,6 +8182,37 @@ def _v455_sanitize_and_merge_pins(pins: List[dict],
     return kept
 
 
+# ORGANIC #541 — docs-mode CLI --ic-name override. The docs runner used to
+# IGNORE an explicit `--ic-name` and let the doc heuristic pick the name,
+# which latched onto a block-diagram SVG's label/stem (e.g. 'GHASH', a
+# sub-block of an AES peripheral). When the operator states the chip name on
+# the command line it is AUTHORITATIVE — set once in main()/the run entry and
+# consulted first here. Single-run process global (no threading through the
+# ~17 per-class call sites of _ic_name_from_docs).
+_CLI_IC_NAME_OVERRIDE: Optional[str] = None
+
+# ORGANIC #541 — image / non-text asset extensions. A block-diagram or
+# screenshot dump carries one-entity-per-line LABEL text (sub-block names,
+# pin labels), NEVER prose; its text must not feed the ic_name heuristic
+# (the 'GHASH.svg' → ic_name 'GHASH' bug). The extracted-docs key keeps the
+# source suffix (extract_text_pipeline writes `<stem><suffix>`), so an
+# extension match on the key reliably identifies these.
+_IC_NAME_ASSET_EXT = (".svg", ".png", ".pdf", ".dia", ".jpg", ".jpeg",
+                      ".gif", ".bmp", ".tif", ".tiff", ".webp")
+
+
+def _is_ic_name_asset_key(fname) -> bool:
+    """True when an extracted-docs key is an image / diagram / asset dump
+    whose label text must NOT seed the ic_name heuristic (#541). Covers both
+    the `__svg`/`__png` picture-key convention and a bare image extension on
+    the key."""
+    if not isinstance(fname, str) or not fname:
+        return False
+    if _v1_6_558_is_image_derived_source(fname):
+        return True
+    return fname.lower().endswith(_IC_NAME_ASSET_EXT)
+
+
 def _ic_name_from_docs(extracted: Dict[str, str],
                        project: Optional[Path] = None) -> str:
     """Public wrapper around `_ic_name_from_docs_impl` that rejects
@@ -8190,6 +8221,14 @@ def _ic_name_from_docs(extracted: Dict[str, str],
     consumers (L9.top_module fallback, foundry handoff filename
     derivation, etc.) never inherit a nonsense chip name like
     "SKY130"."""
+    # ORGANIC #541 (a) — an explicit CLI --ic-name is authoritative.
+    if isinstance(_CLI_IC_NAME_OVERRIDE, str) and _CLI_IC_NAME_OVERRIDE.strip():
+        return _CLI_IC_NAME_OVERRIDE.strip()
+    # ORGANIC #541 (b) — drop image / diagram / asset entries so their
+    # block-label text can never become the chip name.
+    if extracted:
+        extracted = {k: v for k, v in extracted.items()
+                     if not _is_ic_name_asset_key(k)}
     raw = _ic_name_from_docs_impl(extracted, project)
     if isinstance(raw, str) and raw.lower() in _L1_IC_NAME_PDK_DENY:
         return "UNKNOWN_IC"
@@ -50037,7 +50076,17 @@ def main() -> int:
                    help="Reuse existing input_doc/.")
     p.add_argument("--strict", action="store_true",
                    help="Exit 1 on TODO stubs OR coverage < 80%.")
+    p.add_argument("--ic-name", default=None,
+                   help="ORGANIC #541 — authoritative chip name. When given, "
+                        "it OVERRIDES the doc heuristic (CLI > docs) so a "
+                        "block-diagram SVG label/stem can never become the "
+                        "ic_name.")
     args = p.parse_args()
+
+    # ORGANIC #541 — CLI --ic-name is authoritative for docs-mode.
+    global _CLI_IC_NAME_OVERRIDE
+    if args.ic_name and args.ic_name.strip():
+        _CLI_IC_NAME_OVERRIDE = args.ic_name.strip()
 
     project = args.project.resolve()
     if not project.is_dir():
