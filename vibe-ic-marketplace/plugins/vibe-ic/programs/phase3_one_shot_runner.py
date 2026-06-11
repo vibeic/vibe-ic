@@ -271,8 +271,23 @@ _VERDICT_TIERS = ("PASS", "FAIL", "SKIP", "WAIVED", "ENV_UNAVAILABLE")
 
 def _docker_exec(container: str, cmd: str, timeout: int = 1800
                  ) -> Tuple[int, str, str]:
-    """Run shell cmd inside a Docker container."""
-    full = ["docker", "exec", container, "bash", "-lc", cmd]
+    """Run shell cmd inside a Docker container.
+
+    ORGANIC #570 — wraps cmd with a container-side `timeout` so long-running
+    processes (OpenROAD, Yosys) self-terminate when the step budget expires.
+    The container-side kill fires (timeout-5)s before the host
+    subprocess.TimeoutExpired, so orphan processes stop writing to partial
+    DEF/GDS files before the caller returns rc=124. Falls back gracefully if
+    the container has no `timeout` binary (exec path unchanged). Chip-AGNOSTIC.
+    """
+    # ORGANIC #570: container-side timeout kills orphan long-running tools.
+    _inner = max(1, timeout - 5)
+    _wrapped = (
+        f"if command -v timeout >/dev/null 2>&1; then "
+        f"exec timeout --kill-after=5 {_inner} bash -lc {shlex.quote(cmd)}; "
+        f"else exec bash -lc {shlex.quote(cmd)}; fi"
+    )
+    full = ["docker", "exec", container, "bash", "-lc", _wrapped]
 
     # v0.2.36 — on TimeoutExpired, subprocess may hand back partial
     # `stdout`/`stderr` as BYTES even though `text=True` was requested
@@ -298,6 +313,20 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800
                 f"TIMEOUT after {timeout}s: {e}")
     except FileNotFoundError as e:
         return 127, "", f"COMMAND_NOT_FOUND: {e}"
+
+
+def _docker_timeout_isolate(outputs: List[Path]) -> None:
+    """ORGANIC #570 — on step timeout (rc=124), rename partial output files
+    away from canonical paths so downstream steps do not read half-written
+    artifacts (DEF, GDS, netlist). Silently skips files that don't exist.
+    Chip-AGNOSTIC: pure filesystem rename, no tool or class specifics."""
+    for p in outputs:
+        if p.is_file():
+            partial = p.with_suffix(p.suffix + ".timeout.partial")
+            try:
+                p.rename(partial)
+            except OSError:
+                pass
 
 
 def _tool_in_path(container: str, tool: str) -> bool:
@@ -1461,6 +1490,39 @@ import synth_frontend as _sf
 _SLANG_ERROR_SIGNATURES = _sf.SLANG_ERROR_SIGNATURES
 _decide_synth_frontend = _sf.decide_synth_frontend
 
+# ORGANIC #556 — timing-critical IC classes where timing-driven ABC mapping
+# is auto-enabled when a clock period is available from the project SDC.
+# Chip-AGNOSTIC: the set is declared here once; step_synth reads it.
+_TIMING_CRITICAL_CLASSES = frozenset({"processor_cpu"})
+
+
+def _sdc_period_ps(project: Path) -> Optional[int]:
+    """ORGANIC #556 — extract the smallest create_clock period from all SDC
+    files in the project (input/constraints/*.sdc and
+    phase2/stage2/constraints/*.sdc). Returns period in picoseconds (int),
+    or None if no SDC / no period found. Chip-AGNOSTIC: standard SDC
+    `create_clock -period <ns>` syntax only."""
+    candidates = (
+        list((project / "input" / "constraints").glob("*.sdc")) +
+        list((project / "phase2" / "stage2" / "constraints").glob("*.sdc"))
+    )
+    best_ps: Optional[int] = None
+    _period_re = re.compile(r"create_clock[^;]*?-period\s+([0-9]+(?:\.[0-9]+)?)")
+    for sdc in candidates:
+        try:
+            text = sdc.read_text(errors="replace")
+        except OSError:
+            continue
+        for m in _period_re.finditer(text):
+            try:
+                period_ns = float(m.group(1))
+                period_ps = int(period_ns * 1000)
+                if best_ps is None or period_ps < best_ps:
+                    best_ps = period_ps
+            except ValueError:
+                continue
+    return best_ps
+
 
 def step_synth(project: Path, top: str, pdk: PdkConfig,
                container: str) -> StepResult:
@@ -1563,6 +1625,25 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # the latch is realised as a real std-cell instead of behavioral reg.
     dlatch_clause = _build_dlatch_map_clause(
         pdk.liberty, out_dir, out_dir_c, container)
+    # ORGANIC #556 — timing-driven ABC mapping: read the project SDC to
+    # extract the smallest create_clock period; for timing-critical classes
+    # (processor_cpu) pass -D <period_ps> to abc so the delay-aware mapper
+    # is engaged. Area-mode is the default (backward-compatible). The ic_class
+    # is read from the project's L1 doc if present; falls back to "unknown".
+    _proj_ic_class = "unknown"
+    try:
+        _l1_candidates = list((project / "phase1").rglob("L1*.json"))
+        if _l1_candidates:
+            _l1 = json.loads(_l1_candidates[0].read_text(errors="replace"))
+            _proj_ic_class = str(_l1.get("ic_class") or "unknown")
+    except Exception:
+        pass
+    _period_ps = _sdc_period_ps(project)
+    _abc_timing = (
+        f" -D {_period_ps}"
+        if _period_ps and _proj_ic_class in _TIMING_CRITICAL_CLASSES
+        else ""
+    )
     yosys_cmd = (
         f"{setup}cd {out_dir_c} && "
         f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
@@ -1572,7 +1653,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         f"synth -top {top} -flatten; "
         f"dfflibmap -liberty {liberty_c}; "
         f"{dlatch_clause}"
-        f"abc -liberty {liberty_c}; "
+        f"abc -liberty {liberty_c}{_abc_timing}; "
         f"{hilomap_clause}"
         f"clean; stat -liberty {liberty_c}; "
         f"write_verilog -noattr {netlist_c}'"
@@ -1611,7 +1692,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
             f"synth -top {top} -flatten; "
             f"dfflibmap -liberty {liberty_c}; "
             f"{dlatch_clause}"
-            f"abc -liberty {liberty_c}; "
+            f"abc -liberty {liberty_c}{_abc_timing}; "
             f"{hilomap_clause}"
             f"clean; stat -liberty {liberty_c}; "
             f"write_verilog -noattr {netlist_c}'"
@@ -1641,7 +1722,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                 f"synth -top {top} -flatten; "
                 f"dfflibmap -liberty {liberty_c}; "
                 f"{dlatch_clause}"
-                f"abc -liberty {liberty_c}; "
+                f"abc -liberty {liberty_c}{_abc_timing}; "
                 f"{hilomap_clause}"
                 f"clean; stat -liberty {liberty_c}; "
                 f"write_verilog -noattr {netlist_c}'"
@@ -2320,93 +2401,89 @@ _SPARE_YOSYS_KEEP_ALLOWLIST_DOC = (
 
 def _build_spare_protection_tcl(plan: Dict[str, Any], out_dir_c: str
                                 ) -> str:
-    """Emit the OpenROAD TCL fragment that (a) inserts each spare as a
-    physical instance tied off via the PDK tie cells, (b) marks every
-    spare with `set_dont_touch` so remove_buffers / repair_design /
-    repair_timing / detailed_placement legalization / opt cannot remove
-    or restructure it, and (c) writes spare_cells.json alongside the
-    DEF. All commands are wrapped in `catch` so an OpenROAD build that
-    lacks a given command degrades to a NONFATAL note rather than
-    aborting the whole PnR. Chip-AGNOSTIC."""
+    """Emit the OpenROAD TCL fragment that inserts each spare as a PLACED
+    physical instance and marks it dont_touch. Inserts as PLACED (not FIXED)
+    so the subsequent `detailed_placement` call can snap each spare to the
+    legal site/row grid — fixing off-grid placements that would otherwise
+    produce DPL-0006 DRC violations. FIRM (FIXED) status is applied AFTER
+    `detailed_placement` by `_build_spare_postfix_tcl` (see below).
+    ORGANIC #562 (site-snap) + #563 (floating inputs). Chip-AGNOSTIC."""
     instances = plan.get("instances", [])
     if not instances:
         return ("# Design-for-ECO: spare density resolved to 0 cells; "
                 "no spare insertion.\n")
     lines = [
-        "# === Design-for-ECO: spare-cell insertion + PROTECTION ===",
-        "# Spares are placed PHYSICAL instances, tied off, and marked",
-        "# dont_touch so NO downstream optimization pass strips/overlaps",
-        "# them (remove_buffers / repair_design / repair_timing /",
-        "# detailed_placement / opt / metal-fill all honour dont_touch).",
+        "# === Design-for-ECO: spare-cell insertion (PLACED) ===",
+        "# Spares inserted as PLACED so detailed_placement snaps them to",
+        "# the legal site/row grid (ORGANIC #562). FIRM lock + check_placement",
+        "# run in _build_spare_postfix_tcl AFTER detailed_placement.",
     ]
     for inst in instances:
         cell = inst.get("cell")
         name = inst.get("name")
         if not cell:
-            # No concrete cell discovered for this class — emit a
-            # dont_touch placeholder note (the agent / a later pass can
-            # bind a real master). Skip make_inst to avoid an error.
             lines.append(
                 f"# spare {name}: no PDK cell for class "
                 f"'{inst.get('type')}' — skipped physical insert")
             continue
         x = inst.get("llx", 0)
         y = inst.get("lly", 0)
-        # place_inst inserts a new instance; -status FIXED writes a
-        # `+ FIXED` placement record into the DEF — the canonical
-        # physical protection for a spare (the legalizer / detailed
-        # placement / router cannot move or delete a FIXED instance), so
-        # the keep/dont_touch intent is durable in the final artefacts,
-        # not only in the TCL. Falls back to PLACED on builds whose
-        # place_inst rejects -status FIXED.
+        # Insert as PLACED so detailed_placement can legalize coordinates.
+        # #562: previously FIXED → detailed_placement skipped them → off-site
+        # DPL-0006 DRC violations (271 violations for ibex).
         lines.append(
             f"if {{[catch {{place_inst -name {name} -cell {cell} "
-            f"-location {{{x} {y}}} -status FIXED}} _se_{name}]}} {{ "
-            f"if {{[catch {{place_inst -name {name} -cell {cell} "
-            f"-location {{{x} {y}}} -status PLACED}} _se2_{name}]}} {{ "
-            f"puts \"SPARE_INSERT_NONFATAL {name}: $_se_{name} / "
-            f"$_se2_{name}\" }} }}")
-        # dont_touch protects from every opt / resize / legalization pass.
+            f"-location {{{x} {y}}} -status PLACED}} _se_{name}]}} {{ "
+            f"puts \"SPARE_INSERT_NONFATAL {name}: $_se_{name}\" }}")
+        # dont_touch protects from every opt / resize pass (but NOT from
+        # detailed_placement legalization — that is intentional here).
         lines.append(
             f"if {{[catch {{set_dont_touch {name}}} _dt_{name}]}} {{ "
             f"puts \"SPARE_DONTTOUCH_NONFATAL {name}: $_dt_{name}\" }}")
-    # Force every spare instance to FIXED placement status via the odb API.
-    # `place_inst -status FIXED` is rejected by some OpenROAD builds (they
-    # silently fall back to PLACED above), and a PLACED spare carries no
-    # durable keep-marker in the DEF — so spare_cell_preservation_check, which
-    # mines the final DEF for `+ FIXED` / dont_touch, reports the survived
-    # spares as "untagged" and FAILs even though the cells were never removed.
-    # The odb setPlacementStatus path works on ALL builds and writes `+ FIXED`
-    # into every DEF emitted afterward (post_cts / post_hold / routed /
-    # filled), making the keep intent durable. chip-AGNOSTIC: iterates the
-    # spare_* instances by name, touches nothing else.
-    _spare_names = [i.get("name") for i in instances if i.get("cell")]
-    if _spare_names:
-        _names_tcl = " ".join(_spare_names)
-        lines.append(
-            "# Durable FIXED-status enforcement for spares (odb; build-portable)")
-        lines.append("if {[catch {")
-        lines.append("  set _blk [ord::get_db_block]")
-        lines.append(f"  foreach _sn [list {_names_tcl}] {{")
-        lines.append("    set _si [$_blk findInst $_sn]")
-        lines.append("    if {$_si ne \"NULL\" && $_si ne \"\"} {")
-        # odb's setPlacementStatus rejects the bare token "FIXED" (ValueError
-        # Unknown placement status). The odb enum value that serializes to a
-        # DEF `+ FIXED` placement record is FIRM (LOCKED also works). Verified
-        # against iic-osic-tools OpenROAD: setPlacementStatus FIRM → DEF
-        # writes `+ FIXED`.
-        lines.append("      $_si setPlacementStatus FIRM")
-        lines.append("    }")
-        lines.append("  }")
-        lines.append("} _spfix_err]} { puts \"SPARE_FIXED_NONFATAL: $_spfix_err\" }")
-    # Tie off spare inputs to a known state (best-effort; the dedicated
-    # tie cells are inserted by global tie insertion, here we just mark
-    # the intent + protect any tie nets too).
-    lines.append(
-        "# tie-off: spares inputs driven by PDK tie-hi/tie-lo; the global")
-    lines.append(
-        "# tie-insertion pass + dont_touch keep them at a known state.")
     lines.append(f"# spare_cells.json written by the runner at {out_dir_c}")
+    return "\n".join(lines) + "\n"
+
+
+def _build_spare_postfix_tcl(plan: Dict[str, Any]) -> str:
+    """ORGANIC #562/#563 — emit the OpenROAD TCL that runs AFTER the
+    post-spare-insertion `detailed_placement` call, which has already
+    snapped each spare to the legal site/row grid. This fragment:
+      (a) sets every spare to FIRM (= DEF `+ FIXED`) via odb so they are
+          write-protected in all subsequent DEF emissions,
+      (b) runs check_placement (DPL-0033 catch) to verify alignment —
+          a NONFATAL note is printed but the flow continues so a residual
+          off-site issue is surfaced without aborting PnR.
+    Chip-AGNOSTIC: uses generic spare_ name prefix + odb API."""
+    instances = plan.get("instances", [])
+    _spare_names = [i.get("name") for i in instances if i.get("cell")]
+    if not _spare_names:
+        return "# spare postfix: no physical spare instances to lock.\n"
+    _names_tcl = " ".join(_spare_names)
+    lines = [
+        "# === ORGANIC #562: spare FIRM-lock post-legalization ===",
+        "# After detailed_placement snapped spares to legal grid positions,",
+        "# set them FIRM (= DEF `+ FIXED`) so router/filler cannot move them.",
+        "if {[catch {",
+        "  set _blk [ord::get_db_block]",
+        f"  foreach _sn [list {_names_tcl}] {{",
+        "    set _si [$_blk findInst $_sn]",
+        "    if {$_si ne \"NULL\" && $_si ne \"\"} {",
+        # odb enum FIRM → DEF `+ FIXED` (LOCKED also works). Verified against
+        # iic-osic-tools OpenROAD. Chip-AGNOSTIC.
+        "      $_si setPlacementStatus FIRM",
+        "    }",
+        "  }",
+        "  puts \"SPARE_FIRM_LOCKED: [llength [list " + _names_tcl + "]] instances\"",
+        "} _spfix_err]} { puts \"SPARE_FIXED_NONFATAL: $_spfix_err\" }",
+        "# ORGANIC #562 — check_placement gate: verify no off-site spares",
+        "# remain after legalization. DPL-0033 is caught so a misaligned",
+        "# inherited instance does not abort PnR (print WARN, flow continues).",
+        "if {[catch {check_placement} _cp_err]} {",
+        "  puts \"SPARE_CHECK_PLACEMENT_WARN: $_cp_err\"",
+        "} else {",
+        "  puts \"SPARE_CHECK_PLACEMENT_PASS\"",
+        "}",
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -2493,6 +2570,116 @@ def _pg_net_cleanup_tcl() -> str:
         "  }\n"
         "  puts \"PG_CLEANUP_DONE: deleted=$_pgdel reclassified=$_pgsig\"\n"
         "} _pgc]} { puts \"PG_CLEANUP_NONFATAL: $_pgc\" }\n")
+
+
+def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
+                          liberty_c: str, pnr_dir_c: str, eco_dir_c: str,
+                          metal_prefix: str) -> str:
+    """ORGANIC #561 — generate a self-contained OpenROAD ECO timing-repair TCL
+    that embeds the 4 proven workarounds discovered during the ibex pilot:
+
+      (a) RSZ-0074: read post_hold.def (pre-route, no stale GR guides), NOT
+          routed.def. Reading routed.def carries global-route guides that
+          conflict with the new buffers repair inserts, triggering RSZ-0074
+          abort before any repair can happen.
+      (b) Signal-11 segfault: pass-2 is setup-only repair_timing — NOT
+          repair_design. The repairDriver code path in repair_design segfaults
+          on some gate configs when pass-1 buffers are already present; this
+          single-scope repair still closes hold/setup without the crash.
+      (c) DRT-0305: PG net cleanup before global_route — a dangling zero_/one_
+          POWER/GROUND net in regular NETS makes TritonRoute abort ALL detailed
+          routing. Inline the _pg_net_cleanup_tcl() pass first.
+      (d) DPL-0033: catch around check_placement — the call throws on inherited
+          mis-aligned instances rather than reporting them; catch keeps flow moving.
+
+    Returns a ready-to-run TCL string (not an f-string template — real {/}).
+    Chip-AGNOSTIC: no design-specific magic; only standard OpenROAD APIs."""
+    pg_cleanup = _pg_net_cleanup_tcl()
+    return (
+        "# === ORGANIC #561: ECO timing repair TCL ===\n"
+        "# 4 OpenROAD workarounds for safe stand-alone ECO iteration:\n"
+        "#   (a) RSZ-0074: read post_hold.def, not routed.def\n"
+        "#   (b) Signal-11: pass-2 repair is setup-only (no repair_design)\n"
+        "#   (c) DRT-0305: PG net cleanup (zero_/one_ stubs) before global_route\n"
+        "#   (d) DPL-0033: catch around check_placement\n"
+        "# Generated by phase3_one_shot_runner._build_eco_repair_tcl\n"
+        "# Chip-AGNOSTIC: standard OpenROAD APIs only.\n"
+        "\n"
+        f"read_lef {tech_lef_c}\n"
+        f"read_lef {cell_lef_c}\n"
+        f"read_liberty {liberty_c}\n"
+        f"read_verilog {pnr_dir_c}/{top}_pnr.v\n"
+        f"link_design {top}\n"
+        f"read_sdc {pnr_dir_c}/constraint.sdc\n"
+        "\n"
+        f"if {{[catch {{set_wire_rc -signal -layer {metal_prefix}1}} _swr_sig]}} {{\n"
+        f"  if {{[catch {{set_wire_rc -layer {metal_prefix}1}} _swr_sig2]}} {{\n"
+        "    puts \"ECO_SET_WIRE_RC_SIGNAL_NONFATAL: $_swr_sig2\"\n"
+        "  }\n"
+        "}\n"
+        f"if {{[catch {{set_wire_rc -clock -layer {metal_prefix}5}} _swr_clk]}} {{\n"
+        "  puts \"ECO_SET_WIRE_RC_CLOCK_NONFATAL: $_swr_clk\"\n"
+        "}\n"
+        "\n"
+        "# ORGANIC #561 (a): RSZ-0074 — read post_hold.def as ECO start-point.\n"
+        "# post_hold.def is the last pre-route, hold-fixed DEF; reading\n"
+        "# routed.def carries stale GR guides that trigger RSZ-0074 abort.\n"
+        f"read_def {pnr_dir_c}/post_hold.def\n"
+        "\n"
+        "# === ECO pass 1: placement-based repair ===\n"
+        "if {[catch {estimate_parasitics -placement} _pe_pl]} {\n"
+        "  puts \"ECO_EST_PARASITICS_PL_NONFATAL: $_pe_pl\"\n"
+        "}\n"
+        "if {[catch {repair_design} _rd_err]} {\n"
+        "  puts \"ECO_REPAIR_DESIGN_NONFATAL: $_rd_err\"\n"
+        "}\n"
+        "if {[catch {repair_timing -setup} _rts_err]} {\n"
+        "  puts \"ECO_REPAIR_TIMING_SETUP_NONFATAL: $_rts_err\"\n"
+        "}\n"
+        "if {[catch {detailed_placement} _dp_err]} {\n"
+        "  puts \"ECO_DETAILED_PLACEMENT_NONFATAL: $_dp_err\"\n"
+        "}\n"
+        "# ORGANIC #561 (d): DPL-0033 — catch around check_placement.\n"
+        "# check_placement throws on inherited mis-aligned instances; catch\n"
+        "# keeps the flow moving while still surfacing the WARN message.\n"
+        "if {[catch {check_placement} _cp_err]} {\n"
+        "  puts \"ECO_CHECK_PLACEMENT_WARN: $_cp_err\"\n"
+        "} else {\n"
+        "  puts \"ECO_CHECK_PLACEMENT_PASS\"\n"
+        "}\n"
+        "\n"
+        "# ORGANIC #561 (c): DRT-0305 — PG net cleanup before global_route.\n"
+        "# A dangling zero_/one_ constant-tie net with POWER/GROUND SigType in\n"
+        "# regular NETS makes TritonRoute abort ALL detailed routing.\n"
+        + pg_cleanup
+        + "\n"
+        "global_route\n"
+        "\n"
+        "# === ECO pass 2: post-GR setup-only repair ===\n"
+        "# ORGANIC #561 (b): Signal-11 (segfault) — pass-2 is setup-only.\n"
+        "# repair_design's repairDriver segfaults on some gate configs when\n"
+        "# pass-1 buffers are already present; setup-only skips the crash path.\n"
+        "if {[catch {estimate_parasitics -global_routing} _pe_gr]} {\n"
+        "  puts \"ECO_EST_PARASITICS_GR_NONFATAL: $_pe_gr\"\n"
+        "}\n"
+        "if {[catch {repair_timing -setup} _rts2_err]} {\n"
+        "  puts \"ECO_REPAIR_TIMING_SETUP_GR_NONFATAL: $_rts2_err\"\n"
+        "}\n"
+        "if {[catch {repair_timing -hold} _rth2_err]} {\n"
+        "  puts \"ECO_REPAIR_TIMING_HOLD_GR_NONFATAL: $_rth2_err\"\n"
+        "}\n"
+        "if {[catch {detailed_placement} _gr_dp_err]} {\n"
+        "  puts \"ECO_GR_REPAIR_LEGALIZE_NONFATAL: $_gr_dp_err\"\n"
+        "}\n"
+        "if {[catch {detailed_route} _dr_err]} {\n"
+        "  puts \"ECO_DETAILED_ROUTE_NONFATAL: $_dr_err\"\n"
+        "}\n"
+        f"write_def {eco_dir_c}/eco_routed.def\n"
+        f"write_verilog {eco_dir_c}/{top}_eco.v\n"
+        f"if {{[catch {{write_sdf {eco_dir_c}/{top}_eco.sdf}} _sdf_err]}} {{\n"
+        "  puts \"ECO_WRITE_SDF_NONFATAL: $_sdf_err\"\n"
+        "}\n"
+    )
 
 
 def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
@@ -2940,6 +3127,9 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         has_pad_ring=has_pad_ring)
     spare_protection_tcl = _build_spare_protection_tcl(
         spare_plan, out_dir_c)
+    # ORGANIC #562/#563: postfix TCL runs AFTER detailed_placement snaps
+    # spares to the legal site/row grid, then locks them FIXED.
+    spare_postfix_tcl = _build_spare_postfix_tcl(spare_plan)
 
     # v0.1.46/47/48 — silicon-critical PnR blocks (extracted to pure
     # helpers; see TestSiliconCriticalPnrBlocks in
@@ -3022,15 +3212,13 @@ write_def {out_dir_c}/floorplan.def
 detailed_placement
 write_def {out_dir_c}/placed.def
 # === Design-for-ECO Step 18: spare-cell insertion + PROTECTION ===
-# Runs AFTER detailed placement, BEFORE CTS. Every spare is set
-# dont_touch so the CTS / hold-fix / route / opt passes below — and the
-# Step 34 metal fill — cannot remove or overlap it. A re-legalizing
-# detailed_placement after insertion fixes any minor overlap from the
-# inserted physical instances while honouring their dont_touch status.
+# ORGANIC #562: spares inserted as PLACED; detailed_placement below snaps
+# them to the legal site/row grid (eliminates DPL-0006 DRC violations).
+# ORGANIC #563: spare_postfix_tcl sets them FIRM + runs check_placement.
 {spare_protection_tcl}if {{[catch {{detailed_placement}} _sp_dp_err]}} {{
   puts "SPARE_LEGALIZE_NONFATAL: $_sp_dp_err"
 }}
-# === v0.1.26 SETUP / DRV repair (pre-CTS) ===
+{spare_postfix_tcl}# === v0.1.26 SETUP / DRV repair (pre-CTS) ===
 # The prior template only ran `repair_timing -hold` post-CTS — it NEVER
 # buffered high-fanout nets nor fixed setup. That left control/enable nets
 # (e.g. FSM init/next/state decode driving hundreds of next-state flops, and
@@ -5732,6 +5920,29 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 f"# Source: {_sta_for_eco.relative_to(project)}\n"
             )
             written.append(str(flag))
+
+    # --- Step 32b: ECO timing repair TCL (ORGANIC #561) ----------------
+    # Emit a standalone OpenROAD ECO timing-repair script with the 4
+    # workarounds (RSZ-0074 / Signal-11 / DRT-0305 / DPL-0033) so any
+    # subsequent ECO iteration uses the correct safe sequence.
+    eco_tcl_path = eco_out / "eco_timing_repair.tcl"
+    if not eco_tcl_path.is_file():
+        try:
+            _pnr_dir_c = _to_container_path(str(pnr_out), container)
+            _eco_dir_c = _to_container_path(str(eco_out), container)
+            eco_tcl_content = _build_eco_repair_tcl(
+                top,
+                _to_container_path(str(pdk.tech_lef), container),
+                _to_container_path(str(pdk.cell_lef), container),
+                _to_container_path(str(pdk.liberty), container),
+                _pnr_dir_c, _eco_dir_c,
+                pdk.metal_prefix,
+            )
+            eco_tcl_path.write_text(eco_tcl_content)
+            written.append(str(eco_tcl_path))
+            notes.append("emitted eco_timing_repair.tcl (#561)")
+        except Exception as _eco_tcl_exc:
+            notes.append(f"eco_timing_repair.tcl emit failed: {_eco_tcl_exc}")
 
     # --- Step 33: power.rpt (OpenSTA report_power best-effort) ---------
     power_rpt = rpt_phase3 / "power.rpt"

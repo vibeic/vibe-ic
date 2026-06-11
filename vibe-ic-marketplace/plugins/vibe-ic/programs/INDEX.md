@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 664
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 664)
+- **Total programs (excluding helpers / shims):** 665
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 665)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 655 |
+| `any` | 656 |
 
 ## Alphabetical listing
 
@@ -618,6 +618,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `stage4_compliance` | any | — | Stage 4 (Output + Validation) interim gate. |
 | `step_internal_fail_bubble_up_check` | any | — | anti-fabrication gate (v1.6.44). |
 | `sustained_vs_edge_check` | any | — | Flag RTL using edge-detect when spec calls for sustained. |
+| `sv2v_mixed_driver_fixup` | any | — | deterministic post-pass to repair Verilog |
 | `sv_compat_check` | any | — | Check if Verilog files require the -sv flag for Yosys synthesis. |
 | `sv_package_closure_check` | any | — | SystemVerilog package-dependency closure gate |
 | `swd_protocol_synth` | any | — | ARM Serial Wire Debug (SWD) / ADIv5 deterministic |
@@ -736,7 +737,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (655 programs)
+### `any` (656 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1323,6 +1324,7 @@ _(no programs in this group)_
 - `stage4_compliance` — Stage 4 (Output + Validation) interim gate.
 - `step_internal_fail_bubble_up_check` — anti-fabrication gate (v1.6.44).
 - `sustained_vs_edge_check` — Flag RTL using edge-detect when spec calls for sustained.
+- `sv2v_mixed_driver_fixup` — deterministic post-pass to repair Verilog
 - `sv_compat_check` — Check if Verilog files require the -sv flag for Yosys synthesis.
 - `sv_package_closure_check` — SystemVerilog package-dependency closure gate
 - `swd_protocol_synth` — ARM Serial Wire Debug (SWD) / ADIv5 deterministic
