@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 665
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 665)
+- **Total programs (excluding helpers / shims):** 666
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 666)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 656 |
+| `any` | 657 |
 
 ## Alphabetical listing
 
@@ -570,6 +570,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `scope_response_byte_decode_check` | any | — | P0.3 deterministic gate |
 | `scope_waveform_metrics` | any | — | deterministic scope-CSV metric extractor. |
 | `sd_cmd_extractor` | any | — | for #36 Bug 8: SD-spec CMD table picker. |
+| `sdc_constraints` | any | v0.1.49 | shared staged-SDC ground-truth helpers. |
 | `sdc_exception_correlation_check` | any | — | Step 8 SDC EXCEPTION |
 | `sdc_gen` | any | Wave 72 | auto-generate Synopsys Design Constraints (SDC). |
 | `sdc_syntax_check` | any | — | Deterministic compliance check for constraint-gen. |
@@ -737,7 +738,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (656 programs)
+### `any` (657 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1276,6 +1277,7 @@ _(no programs in this group)_
 - `scope_response_byte_decode_check` — P0.3 deterministic gate
 - `scope_waveform_metrics` — deterministic scope-CSV metric extractor.
 - `sd_cmd_extractor` — for #36 Bug 8: SD-spec CMD table picker.
+- `sdc_constraints` — shared staged-SDC ground-truth helpers.  _[v0.1.49]_
 - `sdc_exception_correlation_check` — Step 8 SDC EXCEPTION
 - `sdc_gen` — auto-generate Synopsys Design Constraints (SDC).  _[Wave 72]_
 - `sdc_syntax_check` — Deterministic compliance check for constraint-gen.

@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
+import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -420,43 +421,67 @@ def _v1_6_595_load_phase1_doc(project: Path, layer: str):
     by layer prefix (e.g. `L8`). Returns a dict or None on any
     missing-file / parse-error / non-dict shape. Tries canonical
     plugin layout first (`<project>/phase1/generated_docs/<L>*.json`),
-    then legacy `<project>/generated_docs/<L>*.json`. Chip-AGNOSTIC."""
+    then legacy `<project>/generated_docs/<L>*.json`. Chip-AGNOSTIC.
+
+    ORGANIC #554 (c) — multiple `<layer>_*.json` files can exist for
+    the same layer (e.g. `L8_RTL_CONSTANTS.json` and
+    `L8_TIMING_WAVEFORM.json`). Pre-#554 this returned the FIRST
+    parseable file in alphabetical order regardless of content
+    (`L8_RTL_CONSTANTS` < `L8_TIMING_WAVEFORM`); when that file had no
+    `clocks`/`clock_domains` evidence the caller fell straight through
+    to L9/RTL escalation even though a sibling `L8_*` file carried the
+    clock data. Now: prefer the first candidate carrying a non-empty
+    `clocks` or `clock_domains` list; fall back to the first parseable
+    dict if none do."""
     candidates = []
     for sub in ("phase1/generated_docs", "generated_docs"):
         d = project / sub
         if d.is_dir():
             candidates.extend(sorted(d.glob(f"{layer}_*.json")))
+    parsed = []
     for cp in candidates:
         try:
             data = json.loads(cp.read_text(encoding="utf-8"))
         except Exception:
             continue
         if isinstance(data, dict):
-            return data
+            parsed.append(data)
+    for data in parsed:
+        for key in ("clocks", "clock_domains"):
+            v = data.get(key)
+            if isinstance(v, list) and v:
+                return data
+    if parsed:
+        return parsed[0]
     return None
 
 
 def _v1_6_595_extract_clock_port_from_l8(l8: dict):
-    """v1.6.595 — for #403. Return clock port name from L8.clocks[]
-    in priority order: explicit `port_name` field, then `name` field,
-    then `port` field. Skips entries whose value doesn't match the
-    clock-port name regex (so generic textual labels like 'core
-    clock' don't get promoted as ports). Returns None when nothing
-    matches. Chip-AGNOSTIC."""
+    """v1.6.595 — for #403. Return clock port name from L8.clocks[] /
+    L8.clock_domains[] in priority order: explicit `port_name` field,
+    then `source_pin`, `name`, then `port`/`signal`. Skips entries
+    whose value doesn't match the clock-port name regex (so generic
+    textual labels like 'core clock' don't get promoted as ports).
+    Returns None when nothing matches. Chip-AGNOSTIC.
+
+    ORGANIC #554 (c) — `clock_domains` (the L8_RTL_CONSTANTS /
+    L8_TIMING_WAVEFORM schema field) is now also consulted, not just
+    the legacy `clocks` field."""
     if not isinstance(l8, dict):
         return None
-    clocks = l8.get("clocks")
-    if not isinstance(clocks, list):
-        return None
-    for entry in clocks:
-        if not isinstance(entry, dict):
+    for list_key in ("clocks", "clock_domains"):
+        entries = l8.get(list_key)
+        if not isinstance(entries, list):
             continue
-        for key in ("port_name", "port", "name", "signal"):
-            v = entry.get(key)
-            if isinstance(v, str) and v:
-                v_strip = v.strip()
-                if _V1_6_595_CLOCK_PORT_RE.match(v_strip):
-                    return v_strip
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            for key in ("port_name", "source_pin", "name", "port", "signal"):
+                v = entry.get(key)
+                if isinstance(v, str) and v:
+                    v_strip = v.strip()
+                    if _V1_6_595_CLOCK_PORT_RE.match(v_strip):
+                        return v_strip
     return None
 
 
@@ -588,6 +613,15 @@ def _v1_6_595_resolve_clock_port_name(project: Path, top: str = "",
     v = _v1_6_595_extract_clock_port_from_rtl(project, top=top)
     if v:
         return (v, "rtl_module_header_scan")
+    # c2. ORGANIC #554 (a) — staged input/constraints/*.sdc /
+    # input/reference_flow/**/*.sdc `create_clock ... [get_ports <port>]`
+    # is upstream-verified ground truth, ranked just above the
+    # config/literal fallbacks.
+    primary = _sdc.primary_clock(project)
+    if primary:
+        v = primary.get("port_name")
+        if isinstance(v, str) and v and _V1_6_595_CLOCK_PORT_RE.match(v):
+            return (v, "input_constraints_sdc")
     # d. config-supplied name (already non-default) takes priority
     #    over the literal fallback so legacy projects that set
     #    `CLOCK_PORT` keep working.
@@ -632,6 +666,12 @@ def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
         *sorted(project.glob("plugin_output/openlane_workdir_*/config.json")),
     ]
     port_name = "clk"
+    # ORGANIC #554 (b) — track whether CLOCK_PORT was EXPLICITLY set in
+    # config.json, independent of its value. Pre-#554 a config that
+    # pinned `CLOCK_PORT: "clk"` (the same string as the runner's
+    # default) was indistinguishable from "not set", so the L8/L9/RTL
+    # escalation below silently overrode the project's explicit choice.
+    config_port_explicit = False
     config_period = None
     for cp in config_paths:
         if not cp.is_file():
@@ -642,6 +682,7 @@ def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
             continue
         if isinstance(cfg, dict) and cfg.get("CLOCK_PORT"):
             port_name = cfg["CLOCK_PORT"]
+            config_port_explicit = True
         if config_period is None:
             def find_period(d):
                 if isinstance(d, dict):
@@ -660,18 +701,29 @@ def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
                             return r
                 return None
             config_period = find_period(cfg)
-        if port_name != "clk":
+        if config_port_explicit:
             break  # found explicit port name, stop searching
 
     # v1.6.595 — for #403. After config.json walk, escalate port name
-    # via L8 → L9 → RTL top scan. The escalation strictly wins over
-    # `clk` default but does NOT override a config-supplied name (so
-    # an explicit `CLOCK_PORT` in baseline config still rules).
+    # via L8 → L9 → RTL → SDC scan. The escalation strictly wins over
+    # the `clk` default but does NOT override a config-supplied name
+    # (#554 (b): "supplied" means the CLOCK_PORT key was PRESENT in
+    # config.json, even when its value equals the literal default
+    # `clk` — an explicit board-fact pin must not be silently
+    # overridden by doc-derived escalation).
     resolved_port, _resolution = (
         _v1_6_595_resolve_clock_port_name(
             project, top=top, config_port=port_name))
-    if port_name == "clk" and resolved_port and resolved_port != "clk":
+    if not config_port_explicit and resolved_port and resolved_port != "clk":
         port_name = resolved_port
+
+    # --- Period: ORGANIC #554 (a). Staged input/constraints/*.sdc and
+    # input/reference_flow/**/*.sdc are upstream-verified ground truth
+    # ("上游實證"); their `create_clock -period` wins over L9/L1 doc-text
+    # prose and the config/20ns fallbacks. ---
+    _sdc_primary = _sdc.primary_clock(project)
+    if _sdc_primary is not None:
+        return (_sdc_primary["period_ns"], port_name)
 
     # --- Period from L9 / L1 docs (highest priority) ---
     docs_dir = project / "input" / "docs"

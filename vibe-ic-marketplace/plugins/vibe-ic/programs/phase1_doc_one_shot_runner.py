@@ -109,6 +109,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
+import sdc_constraints as _sdc
 # v1.6.95 — Capability 1 of GitHub issue #27. Deeper README parser
 # extracts key sizes / block width / S-box parallelism / supported
 # cipher modes / cited public-standard URLs from README prose and
@@ -48100,6 +48101,82 @@ def _post_emit_typed_clock_domains(project: Path) -> None:
                 + "\n")
 
 
+def _post_emit_sdc_constraints(project: Path) -> None:
+    """ORGANIC #554 (a) — ingest staged ``input/constraints/*.sdc`` and
+    ``input/reference_flow/**/*.sdc`` into L8 (clock_domains[].freq_mhz
+    / freq_hz / period_ns) and L19 (fields.constraints_present /
+    fields.sdc_constraints_path).
+
+    Pre-#554 phase1 never read these staged files: when the prose docs
+    didn't state a clock frequency, L8.clock_domains[].freq_mhz stayed
+    `null` and L19.fields.constraints_present stayed `false` even though
+    the project staged a real `create_clock -period <ns>` constraint —
+    so phase3's SDC-period resolution fell back to the 20ns default.
+
+    The staged SDC is upstream-verified ground truth, so its
+    `create_clock -period` WINS over any prose-derived freq/period
+    already present on the primary clock_domains entry.
+
+    Chip-AGNOSTIC: standard SDC `create_clock` syntax only; runs
+    regardless of `ic_class`.
+    """
+    sdc_files = _sdc.collect_sdc_files(project)
+    if not sdc_files:
+        return
+
+    # --- L19_CONSTRAINTS_PDK: constraints_present + path ---
+    l19 = _try_load_l_doc(project, "L19_CONSTRAINTS_PDK")
+    if isinstance(l19, dict):
+        fields = l19.get("fields")
+        if not isinstance(fields, dict):
+            fields = {}
+            l19["fields"] = fields
+        fields["constraints_present"] = True
+        if not fields.get("sdc_constraints_path"):
+            try:
+                fields["sdc_constraints_path"] = str(
+                    sdc_files[0].relative_to(project))
+            except ValueError:
+                fields["sdc_constraints_path"] = str(sdc_files[0])
+        out = _pl.generated_docs_dir(project) / "L19_CONSTRAINTS_PDK.json"
+        out.write_text(json.dumps(l19, indent=2, ensure_ascii=False) + "\n")
+
+    primary = _sdc.primary_clock(project)
+    if primary is None:
+        return
+    period_ns = primary["period_ns"]
+    freq_hz = int(round(1.0e9 / period_ns)) if period_ns > 0 else None
+    port_name = primary.get("port_name")
+
+    # --- L8: stamp the primary clock_domains entry from staged SDC ---
+    for doc_name in ("L8_RTL_CONSTANTS", "L8_TIMING_WAVEFORM"):
+        l8 = _try_load_l_doc(project, doc_name)
+        if not isinstance(l8, dict):
+            continue
+        clock_domains = l8.get("clock_domains")
+        if not isinstance(clock_domains, list) or not clock_domains:
+            continue
+        target = next((d for d in clock_domains
+                        if isinstance(d, dict)
+                        and d.get("domain_kind") == "primary"), None)
+        if target is None:
+            target = next((d for d in clock_domains
+                            if isinstance(d, dict)), None)
+        if target is None:
+            continue
+        target["freq_hz"] = freq_hz
+        target["freq_mhz"] = (freq_hz / 1_000_000.0) if freq_hz else None
+        target["period_ns"] = period_ns
+        target["source"] = "input/constraints/*.sdc"
+        target["evidence"] = primary["source"]
+        if port_name and not target.get("source_pin"):
+            target["source_pin"] = port_name
+        if port_name and not target.get("name"):
+            target["name"] = port_name
+        out = _pl.generated_docs_dir(project) / f"{doc_name}.json"
+        out.write_text(json.dumps(l8, indent=2, ensure_ascii=False) + "\n")
+
+
 # v1.6.369 — for #264 P2 ORGANIC. Structural emitter for
 # L9.reset_domains. Pre-v1.6.369 there was no writer for this slot
 # anywhere in `gen_l9_integration_spec`; all 8 benchmark chips
@@ -52202,6 +52279,17 @@ def main() -> int:
     except Exception as _l19_l23_err:
         print(f"      L19-L23 skeleton emit FAILED (fail-open): "
               f"{_l19_l23_err}", file=sys.stderr)
+
+    # ORGANIC #554 (a) — ingest staged input/constraints/*.sdc and
+    # input/reference_flow/**/*.sdc into L8.clock_domains[] (freq_mhz/
+    # freq_hz/period_ns) and L19.fields (constraints_present /
+    # sdc_constraints_path). Runs after L19-L23 skeleton emit so
+    # L19_CONSTRAINTS_PDK.json exists on disk. Chip-AGNOSTIC.
+    try:
+        _post_emit_sdc_constraints(project)
+    except Exception as _sdc_err:
+        print(f"      SDC constraints ingest FAILED (fail-open): "
+              f"{_sdc_err}", file=sys.stderr)
 
     # v0.1.77 (R53/R54/R55): serial_peripheral_protocol class-gated synth.
     # Runs AFTER 14d L19-L23 skeleton so the L19-L23 + L4 + L11 + L13
