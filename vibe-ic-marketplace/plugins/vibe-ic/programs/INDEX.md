@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 662
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 662)
+- **Total programs (excluding helpers / shims):** 663
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 663)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 653 |
+| `any` | 654 |
 
 ## Alphabetical listing
 
@@ -618,6 +618,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `step_internal_fail_bubble_up_check` | any | — | anti-fabrication gate (v1.6.44). |
 | `sustained_vs_edge_check` | any | — | Flag RTL using edge-detect when spec calls for sustained. |
 | `sv_compat_check` | any | — | Check if Verilog files require the -sv flag for Yosys synthesis. |
+| `sv_package_closure_check` | any | — | SystemVerilog package-dependency closure gate |
 | `swd_protocol_synth` | any | — | ARM Serial Wire Debug (SWD) / ADIv5 deterministic |
 | `synth_doctor` | any | v0.1.96 | Yosys synthesis-log error classifier (synth-doctor Pattern-B → program). |
 | `synth_frontend` | any | — | Shared SystemVerilog-frontend selection logic. |
@@ -734,7 +735,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (653 programs)
+### `any` (654 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1321,6 +1322,7 @@ _(no programs in this group)_
 - `step_internal_fail_bubble_up_check` — anti-fabrication gate (v1.6.44).
 - `sustained_vs_edge_check` — Flag RTL using edge-detect when spec calls for sustained.
 - `sv_compat_check` — Check if Verilog files require the -sv flag for Yosys synthesis.
+- `sv_package_closure_check` — SystemVerilog package-dependency closure gate
 - `swd_protocol_synth` — ARM Serial Wire Debug (SWD) / ADIv5 deterministic
 - `synth_doctor` — Yosys synthesis-log error classifier (synth-doctor Pattern-B → program).  _[v0.1.96]_
 - `synth_frontend` — Shared SystemVerilog-frontend selection logic.
