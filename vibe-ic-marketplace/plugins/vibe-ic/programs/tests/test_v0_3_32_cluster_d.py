@@ -62,6 +62,51 @@ def test_569_clock_plan_comment_strip(tmp_path):
     assert "clk" in names
 
 
+# ── #569 adversarial-review no-leak regressions ───────────────────────────
+def test_569_leak_nonclk_pin_consumer_still_fails(tmp_path):
+    # HIGH leak: a divided clock consumed via a non-'clk'-named instance pin
+    # (.ck / .phi) must still require SDC.
+    (tmp_path / "a.v").write_text(
+        "module top(input ext_clk);\n"
+        "  reg core_clk;\n"
+        "  always @(posedge ext_clk) core_clk <= ~core_clk;\n"
+        "  ff u(.ck(core_clk), .d(1'b0));\n"
+        "endmodule\n")
+    assert DC.main([str(tmp_path)]) == 1
+
+
+def test_569_leak_assign_alias_consumer_still_fails(tmp_path):
+    # HIGH leak: assign gated = core_clk; @(posedge gated) — the divided
+    # clock is consumed through an alias and must still require SDC.
+    (tmp_path / "b.v").write_text(
+        "module top(input ext_clk, output reg outp);\n"
+        "  reg core_clk;\n"
+        "  always @(posedge ext_clk) core_clk <= ~core_clk;\n"
+        "  wire gated;\n"
+        "  assign gated = core_clk;\n"
+        "  always @(posedge gated) outp <= ~outp;\n"
+        "endmodule\n")
+    rc = DC.main([str(tmp_path)])
+    assert rc == 1
+
+
+def test_569_leak_output_list_and_init_forms_detected():
+    # HIGH leak: find_output_ports must capture every ident in a comma list
+    # and tolerate an initializer.
+    assert DC.find_output_ports("output logic [1:0] x, y;") == {"x", "y"}
+    assert "core_clk" in DC.find_output_ports("output wire core_clk = 0;")
+
+
+def test_569_exported_divided_clock_in_list_still_fails(tmp_path):
+    # the exported (output) divided clock 'y' (2nd in a comma list) must
+    # require SDC — the regex fix closes the leak.
+    (tmp_path / "c.v").write_text(
+        "module m(input ext_clk, output x, output y);\n"
+        "  always @(posedge ext_clk) y <= ~y;\n"
+        "endmodule\n")
+    assert DC.main([str(tmp_path)]) == 1
+
+
 # ── #572b — derived_clock accepts a DIRECTORY --sdc ────────────────────────
 def test_572b_dir_sdc_does_not_crash(tmp_path):
     rtl = tmp_path / "rtl"

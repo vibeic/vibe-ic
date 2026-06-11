@@ -191,17 +191,62 @@ def find_output_ports(rtl_text: str) -> Set[str]:
     divided net that LEAVES the module as an output may be consumed as a
     clock externally, so it is NOT exempted from the create_generated_clock
     requirement even when no in-design consumer is visible (conservative —
-    avoids a no-leak hole for exported derived clocks)."""
+    avoids a no-leak hole for exported derived clocks).
+
+    Adversarial-review hardening: capture ALL identifiers in a
+    comma-separated output list (`output logic [1:0] x, y;` → x AND y) and
+    tolerate an initializer (`output wire core_clk = 0;`)."""
     ports: Set[str] = set()
-    # output [3:0] a, b;  /  output reg core_clk;  /  inout wire x;
+    # match the whole declaration body up to the terminating ; , or )
     for m in re.finditer(
-            r"\b(?:output|inout)\b\s*(?:reg|wire|logic)?\s*"
-            r"(?:signed\s*)?(?:\[[^\]]*\]\s*)?([\w\s,]+?)\s*[;,)]",
+            r"\b(?:output|inout)\b\s*(?:reg|wire|logic|var)?\s*"
+            r"(?:signed\s*)?(?:\[[^\]]*\]\s*)?(?P<body>[^;)]*?)\s*[;)]",
             rtl_text):
-        for ident in re.split(r"[,\s]+", m.group(1).strip()):
-            if ident and re.fullmatch(r"[A-Za-z_]\w*", ident):
-                ports.add(ident)
+        body = m.group("body")
+        # split a comma-separated list; each part may carry a leading
+        # direction/type keyword (ANSI lists repeat `output reg ...`),
+        # a width bracket, and a trailing `= <init>`.
+        for part in body.split(","):
+            ident = part.strip().split("=")[0].strip()
+            # strip leading direction/type/sign keywords and width brackets
+            prev = None
+            while ident != prev:
+                prev = ident
+                ident = re.sub(
+                    r"^(?:output|inout|input|reg|wire|logic|var|signed|"
+                    r"unsigned)\b\s*", "", ident).strip()
+                ident = re.sub(r"^\[[^\]]*\]\s*", "", ident).strip()
+            # take the first bare identifier token
+            mm = re.match(r"([A-Za-z_]\w*)", ident)
+            if mm:
+                ports.add(mm.group(1))
     return ports
+
+
+def find_instance_pin_nets(rtl_text: str) -> Set[str]:
+    """ORGANIC #569 (adversarial-review hardening) — nets connected to ANY
+    instance pin `.<pin>(<net>)`. A toggle net fed into an instance pin may
+    be clocking that instance through a non-`clk`-named pin (`.ck`, `.phi`,
+    `.c`...), so a divided net connected to any pin is treated as POTENTIALLY
+    consumed and is NOT exempted (conservative — closes the non-clk-pin
+    leak). chip-AGNOSTIC."""
+    nets: Set[str] = set()
+    for m in re.finditer(r"\.\s*\w+\s*\(\s*([A-Za-z_]\w*)\s*\)", rtl_text):
+        nets.add(m.group(1))
+    return nets
+
+
+def find_assign_aliases(rtl_text: str):
+    """ORGANIC #569 (adversarial-review hardening) — map net → set of nets it
+    is aliased TO via `assign alias = net;`. Used so a consumer of an ALIAS
+    of a divided clock counts as a consumer of the divided clock itself
+    (`assign gated = div; always @(posedge gated)` no longer leaks)."""
+    aliases: dict = {}
+    for m in re.finditer(
+            r"\bassign\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*;", rtl_text):
+        alias, src = m.group(1), m.group(2)
+        aliases.setdefault(src, set()).add(alias)
+    return aliases
 
 
 def _is_pdk_shim_file(path: Path, text: str) -> bool:
@@ -241,6 +286,8 @@ def audit(rtl_target: Path, sdc_path: Optional[Path]) -> List[Finding]:
     pairs: List[Tuple[str, str, str, int]] = []  # (src, div, file, line)
     clock_consumers: Set[str] = set()
     output_ports: Set[str] = set()
+    instance_pin_nets: Set[str] = set()
+    assign_aliases: Dict[str, Set[str]] = {}
     for f in files:
         try:
             text = _strip_comments_v(f.read_text(errors="replace"))
@@ -255,6 +302,29 @@ def audit(rtl_target: Path, sdc_path: Optional[Path]) -> List[Finding]:
         # toggle whose net clocks nothing is not forced to carry an SDC.
         clock_consumers |= find_clock_consumers(text)
         output_ports |= find_output_ports(text)
+        instance_pin_nets |= find_instance_pin_nets(text)
+        for k, v in find_assign_aliases(text).items():
+            assign_aliases.setdefault(k, set()).update(v)
+
+    def _is_consumed(div: str) -> bool:
+        # direct clock use, exported as a port, fed to ANY instance pin, or a
+        # downstream alias of div is itself consumed/exported (transitive,
+        # depth-bounded). Conservative: any of these → NOT a shadow bit.
+        if (div in clock_consumers or div in output_ports
+                or div in instance_pin_nets):
+            return True
+        seen = set()
+        frontier = list(assign_aliases.get(div, ()))
+        while frontier:
+            a = frontier.pop()
+            if a in seen:
+                continue
+            seen.add(a)
+            if (a in clock_consumers or a in output_ports
+                    or a in instance_pin_nets):
+                return True
+            frontier.extend(assign_aliases.get(a, ()))
+        return False
 
     if not pairs:
         findings.append(Finding(
@@ -268,12 +338,12 @@ def audit(rtl_target: Path, sdc_path: Optional[Path]) -> List[Finding]:
 
     for src, div, fpath, ln in pairs:
         # ORGANIC #569 — clock-usage confirmation: a divided net is a
-        # shadow/phase bit (not a derived clock) ONLY when it has NO
-        # downstream clock consumer AND it does not leave the module as an
-        # output/inout (an exported net may be clocked externally — keep
-        # requiring SDC there, no-leak). Internal toggle that clocks nothing
-        # → INFO, never FAIL.
-        if div not in clock_consumers and div not in output_ports:
+        # shadow/phase bit (not a derived clock) ONLY when it is genuinely
+        # NOT consumed (_is_consumed covers direct posedge/clk-pin use, any
+        # instance-pin connection, an output/inout export, or a downstream
+        # assign-alias of any of those). Internal toggle that clocks nothing
+        # → INFO, never FAIL. Anything consumed → still gated (no-leak).
+        if not _is_consumed(div):
             findings.append(Finding(
                 "INFO", "derived_clock_no_consumer", fpath, ln,
                 f"toggle net {div!r} (from {src!r}, line {ln}) is not used "
