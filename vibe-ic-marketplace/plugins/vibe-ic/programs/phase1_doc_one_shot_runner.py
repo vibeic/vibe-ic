@@ -11038,6 +11038,83 @@ def _is_pipe_table_row(line: str) -> bool:
 _RE_RST_GRID_SEP_LINE = re.compile(r"^\s*\+[-+=]+\+\s*$")
 
 
+# ORGANIC #553 — column-2 ID/position semantic guard.
+# RST grid tables whose second column header names a position/ID field
+# (e.g. "MIP bit", "interrupt ID", "index") must NOT have their second
+# column parsed as the signal WIDTH.  Canonical case: CPU/SoC interrupt
+# tables list (signal | MIP-bit-position | direction | description); the
+# position column contains small integers (3, 7, 11, 31) that are NOT wire
+# widths.  Chip-AGNOSTIC: matched by keyword content of the header cell
+# (no IC brand names), not by position value.
+_ID_COL_HDR_RE = re.compile(
+    r"\b(?:id|position|pos|index|idx|number|num|mip)\b",
+    re.IGNORECASE,
+)
+# Recognise the RST grid table header-separator row (uses = signs,
+# distinct from the dashed row-separator).
+_RST_EQ_SEP_LINE_RE = re.compile(r"^[ \t]*\+={2,}(?:\+={2,})*\+\s*$")
+
+
+def _rst_col2_id_char_ranges(text: str) -> List[Tuple[int, int]]:
+    """Return character [start, end) ranges where the enclosing RST grid
+    table's SECOND column header is a position/ID column (not width).
+    Rows inside these ranges should not use column 2 as a signal width.
+
+    Algorithm: find RST header-separator rows (+=======+ lines). The
+    row immediately above is the column-header row.  If cell[1] (the
+    second pipe-delimited cell, index 1 after stripping the empty leading
+    cell) matches _ID_COL_HDR_RE → record the range from the separator
+    line to the end of that table block (next blank / non-table line).
+    Chip-AGNOSTIC: keyword match only, no IC-specific literals.
+    """
+    if not text:
+        return []
+    lines = text.split("\n")
+    # Build map: line index → character offset
+    offsets: List[int] = []
+    off = 0
+    for ln in lines:
+        offsets.append(off)
+        off += len(ln) + 1
+    ranges: List[Tuple[int, int]] = []
+    for i, line in enumerate(lines):
+        if not _RST_EQ_SEP_LINE_RE.match(line):
+            continue
+        # Header row is the line just above
+        if i == 0:
+            continue
+        header_line = lines[i - 1]
+        stripped_hdr = header_line.strip()
+        if not (stripped_hdr.startswith("|") and stripped_hdr.endswith("|")):
+            continue
+        cells = header_line.split("|")
+        # cells: ["", " col1 ", " col2 ", ..., ""]
+        # col2 = cells[2] (0=pre-pipe empty, 1=first col, 2=second col)
+        if len(cells) < 3:
+            continue
+        col2_header = cells[2].strip()
+        if not _ID_COL_HDR_RE.search(col2_header):
+            continue
+        # Scan forward from the separator row to the end of the table block
+        start_off = offsets[i]
+        end_idx = i + 1
+        while end_idx < len(lines):
+            nl = lines[end_idx].strip()
+            if nl.startswith("+") or (nl.startswith("|") and nl.endswith("|")):
+                end_idx += 1
+            else:
+                break
+        end_off = offsets[min(end_idx, len(lines) - 1)]
+        ranges.append((start_off, end_off))
+    return ranges
+
+
+def _in_id_col2_zone(pos: int,
+                     zones: List[Tuple[int, int]]) -> bool:
+    """True when character offset `pos` falls inside an ID-column-2 zone."""
+    return any(start <= pos < end for start, end in zones)
+
+
 def _rst_grid_table_line_ranges(text: str) -> List[Tuple[int, int]]:
     """Return byte-offset ranges covered by RST grid-table blocks.
 
@@ -17411,6 +17488,10 @@ def gen_l1_datasheet(project: Path,
         # debug_observability via the v1.6.241 path; this is the
         # second sink (L9 inherits from L1.pin_table).
         ev = evidence.setdefault(f"input/docs/{fname}", [])
+        # ORGANIC #553 — pre-compute ID-column-2 zones once per file so
+        # the 4COL / NCOL_SUFFIX loops can suppress width extraction from
+        # tables whose second column is a position/ID field.
+        _id_col2_zones = _rst_col2_id_char_ranges(text or "")
         for m in _RE_L1_L9_RST_IFACE_4COL.finditer(text or ""):
             signal = m.group("signal").strip()
             # Reject column-header rows.
@@ -17430,7 +17511,12 @@ def gen_l1_datasheet(project: Path,
             # `(variable)`, `-`) preserve the row instead of being
             # dropped. Numeric → str(int); parametric → None with
             # strategy suffix `+width_parametric_v1_6_423`.
-            width_raw_str = (m.group("width") or "").strip()
+            # ORGANIC #553 — suppress width if this row is inside a table
+            # whose second column is an ID/position column, not a width.
+            if _in_id_col2_zone(m.start(), _id_col2_zones):
+                width_raw_str = ""
+            else:
+                width_raw_str = (m.group("width") or "").strip()
             try:
                 _w_int, _w_sym = _v1_6_420_parse_width_cell(width_raw_str)
             except NameError:
@@ -17642,7 +17728,11 @@ def gen_l1_datasheet(project: Path,
                 if c.strip()
             ]
             parsed_width_v1_6_396 = None
-            if _bracket is None:
+            # ORGANIC #553 — don't extract width from middle cells when
+            # this row lives in a table whose second column is an ID/position
+            # column (detected from the table header above the === separator).
+            if _bracket is None and not _in_id_col2_zone(m.start(),
+                                                          _id_col2_zones):
                 for cell in middle_cells:
                     w_int, _msb, _lsb, _wsym = _parse_port_width(cell)
                     if w_int is not None:
