@@ -44,8 +44,13 @@ _SBY_FAIL_RE = re.compile(
     re.IGNORECASE)
 # files a .sby references: `read -formal <f>` / `read_verilog <f>` in
 # [script], plus the [files] / [file <dst>] section entries.
+# ORGANIC #550 (b) — skip ANY number of leading `-flag` tokens before the
+# filename. The old single-flag form `(?:-formal\s+|-sv\s+)?` captured a flag
+# as the "referenced file" on a multi-flag read line
+# (`read_verilog -sv -DPROP1 -DPROP2 dut.sv` → captured `-DPROP1`), which then
+# resolved to nothing and false-FAILed SBY_CHAIN_BROKEN.
 _SBY_READ_RE = re.compile(
-    r"^\s*read(?:_verilog|_sv)?\s+(?:-formal\s+|-sv\s+)?(\S+)",
+    r"^\s*read(?:_verilog|_sv)?\s+(?:-\S+\s+)*([^\s-]\S*)",
     re.IGNORECASE | re.MULTILINE)
 _SBY_SECTION_RE = re.compile(r"^\[(\w+)(?:\s+(\S+))?\]\s*$")
 
@@ -81,7 +86,11 @@ def _sby_file_refs(txt: str):
 
 
 def _resolve(formal_dir: Path, project: Path, token: str):
-    """A referenced file may be relative to the .sby dir or the project."""
+    """A referenced file may be relative to the .sby dir or the project, OR
+    (ORGANIC #550 (a)) it may only exist where SymbiYosys STAGED it: a
+    `[files]` entry is copied into the task workdir as `<task>/src/<basename>`,
+    so after a real run the original source path can be gone while the proof
+    evidence lives under src/. Resolve in that order."""
     if any(ch in token for ch in "*?["):
         hits = list(formal_dir.glob(token)) + list(project.glob(token))
         return hits[0] if hits else None
@@ -89,6 +98,17 @@ def _resolve(formal_dir: Path, project: Path, token: str):
         p = base / token
         if p.is_file():
             return p
+    # sby staging fallback: the file copied to <task>/src/<basename>.
+    basename = Path(token).name
+    if basename:
+        staged = sorted(formal_dir.rglob(f"src/{basename}"))
+        if staged:
+            return staged[0]
+        # last resort: any file with that basename under formal/ (the
+        # staged copy under a task workdir).
+        anywhere = sorted(formal_dir.rglob(basename))
+        if anywhere:
+            return anywhere[0]
     return None
 
 
