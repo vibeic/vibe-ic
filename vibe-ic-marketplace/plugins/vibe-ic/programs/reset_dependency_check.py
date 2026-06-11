@@ -195,28 +195,51 @@ def audit_file(path: Path, project_root: Path) -> List[Finding]:
 
     # Pattern B: direct 2-node cycle via instance reset graph.
     # A.rstn = sig_from_B; B.rstn = sig_from_A.
-    # Approximate: if inst_reset[A] is produced by B and inst_reset[B] is produced by A.
+    # ORGANIC #548 (b) — pre-indexed for O(N·M) instead of O(N²·M):
+    #   reset_from[sig]  = {instances that use `sig` as their reset}
+    #   inst_portmap[nm] = the port-map dict (avoids a linear search per pair)
+    #   inst_outs_cache  = memoised output_signals per instance
+    # The old triple-loop (O(N²·M), ~10^8 iters for a 10k-cell flat
+    # netlist) caused >300s on 10MB post-synth Verilog; this version is
+    # typically O(N·avg_fanin_of_reset_sinks) ≈ O(N).
+    reset_from: Dict[str, List[str]] = {}
+    for iname, rsig in inst_reset.items():
+        if rsig:
+            reset_from.setdefault(rsig, []).append(iname)
+
+    inst_portmap: Dict[str, Dict[str, str]] = {
+        iname: pmap for _, iname, pmap, _ in instances
+    }
+    inst_outs_cache: Dict[str, Set[str]] = {}
+
+    def _outs(nm: str) -> Set[str]:
+        if nm not in inst_outs_cache:
+            inst_outs_cache[nm] = output_signals(inst_portmap.get(nm, {}))
+        return inst_outs_cache[nm]
+
+    seen_b_pairs: Set[tuple] = set()
     for _, ia, pa, _ in instances:
-        for outa in output_signals(pa):
-            if outa not in inst_reset.values():
-                continue
-            # Find B whose reset == outa
-            for _, ib, pb, _ in instances:
+        rstn_a = inst_reset.get(ia, '')
+        if not rstn_a:
+            continue
+        for outa in _outs(ia):
+            for ib in reset_from.get(outa, []):
                 if ib == ia:
                     continue
-                if inst_reset.get(ib) != outa:
+                pair = (min(ia, ib), max(ia, ib))
+                if pair in seen_b_pairs:
                     continue
-                for outb in output_signals(pb):
-                    if inst_reset.get(ia) == outb:
-                        findings.append(Finding(
-                            rule='CIRCULAR_RESET_DEPENDENCY',
-                            severity='ERROR',
-                            message=(f"2-node reset cycle: '{ia}' reset '{inst_reset[ia]}' "
-                                     f"sourced from '{ib}', which is reset by "
-                                     f"'{inst_reset[ib]}' sourced from '{ia}'."),
-                            file=rel,
-                            line=inst_line.get(ia, 0),
-                        ))
+                if rstn_a in _outs(ib):
+                    seen_b_pairs.add(pair)
+                    findings.append(Finding(
+                        rule='CIRCULAR_RESET_DEPENDENCY',
+                        severity='ERROR',
+                        message=(f"2-node reset cycle: '{ia}' reset '{rstn_a}' "
+                                 f"sourced from '{ib}', which is reset by "
+                                 f"'{inst_reset[ib]}' sourced from '{ia}'."),
+                        file=rel,
+                        line=inst_line.get(ia, 0),
+                    ))
     return findings
 
 

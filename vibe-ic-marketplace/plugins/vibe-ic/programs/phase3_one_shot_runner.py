@@ -1888,6 +1888,59 @@ _RE_GPL_UTILIZATION = re.compile(
 )
 _DEFAULT_TARGET_UTIL_PCT = 70.0
 _DEFAULT_DIE_MAX_UM = 2000
+# ORGANIC #548 (a) — size-adaptive PnR timeout.
+# Small designs (< _PNR_TIMEOUT_CELLS_THRESHOLD) stay at the default 3600s.
+# Above the threshold, add _PNR_TIMEOUT_S_PER_KCELLS seconds per thousand
+# additional cells, capped at _PNR_TIMEOUT_CAP_S (8h).  For reference,
+# a ~29k-cell RV32IMC core + 1500×1500µm die was timing out at the old
+# fixed 3600s; this formula gives 29k cells → ~7500s (2h).
+_PNR_TIMEOUT_DEFAULT_S = 3600
+_PNR_TIMEOUT_CELLS_THRESHOLD = 10_000
+_PNR_TIMEOUT_S_PER_KCELLS = 200   # +200 s per 1 k cells above threshold
+_PNR_TIMEOUT_CAP_S = 28_800       # never exceed 8 h
+
+# ORGANIC #548 (a) — ordered list of per-stage checkpoint DEF basenames.
+# Each entry: (filename, stage_label).  The list is ordered from first stage
+# (floorplan) to last completed stage before the final route; the last entry
+# whose file exists in the pnr output dir is the resume point.
+_PNR_CHECKPOINT_STAGES = [
+    ("floorplan.def",        "post_floorplan"),
+    ("placed.def",           "post_place"),
+    ("post_cts.def",         "post_cts"),
+    ("post_hold.def",        "post_hold"),
+    ("routed_preantenna.def","post_route"),
+]
+
+
+def _pnr_timeout_s(cells: int) -> int:
+    """ORGANIC #548 (a) — resolve the per-run PnR timeout from cell count.
+
+    Returns _PNR_TIMEOUT_DEFAULT_S for small designs; scales linearly for
+    larger ones, capped at _PNR_TIMEOUT_CAP_S.  Chip-AGNOSTIC: pure
+    arithmetic, no chip-class literals."""
+    if cells <= _PNR_TIMEOUT_CELLS_THRESHOLD:
+        return _PNR_TIMEOUT_DEFAULT_S
+    over_k = (cells - _PNR_TIMEOUT_CELLS_THRESHOLD) // 1000
+    return min(_PNR_TIMEOUT_DEFAULT_S + int(over_k) * _PNR_TIMEOUT_S_PER_KCELLS,
+               _PNR_TIMEOUT_CAP_S)
+
+
+def _pnr_last_checkpoint(out_dir: Path) -> Optional[str]:
+    """ORGANIC #548 (a) — return the stage label of the last completed
+    checkpoint DEF found in `out_dir`, or None if no stage has completed.
+
+    Stages are checked in order (floorplan → place → cts → hold → route).
+    The scan stops at the first missing stage so that a partial run where
+    later stages were not reached does not skip earlier unfinished work.
+    Chip-AGNOSTIC: file-existence check only."""
+    last: Optional[str] = None
+    for fname, label in _PNR_CHECKPOINT_STAGES:
+        p = out_dir / fname
+        if p.is_file() and p.stat().st_size > 0:
+            last = label
+        else:
+            break
+    return last
 
 
 def _extract_overutil_pct(log_text: str) -> Optional[float]:
@@ -2813,6 +2866,73 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
         "puts \"ANTENNA_POSTROUTE_DONE\"\n")
 
 
+def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str) -> str:
+    """ORGANIC #557 — emit the OpenROAD Tcl for the post-detailed-route
+    SPEF-domain repair loop.
+
+    Sequence (all NONFATAL-guarded):
+      1. Discover the OpenRCX captable for the loaded PDK (same logic as
+         _emit_spef; chip-AGNOSTIC: globs rules.openrcx.*.nom.magic under
+         the PDK root derived from the tech-LEF path).
+      2. If captable found:
+         a. extract_parasitics → write_spef (sign-off grade; DRV feedback).
+         b. repair_design + repair_timing -setup + repair_timing -hold.
+         c. detailed_placement (legalise any inserted cells; catches DPL-0033).
+         d. Incremental reroute (global_route → detailed_route -droute_end_iter 1)
+            so newly buffered nets get actual routing geometry.
+         e. Emit SPEF_REPAIR_COMPLETE marker (consumed by acceptance tests).
+      3. If no captable: emit SPEF_REPAIR_SKIP marker (advisory; flow continues).
+
+    The pre-existing estimate_parasitics passes in pnr.tcl remain for CTS-domain
+    optimisation; this block is the post-route truth pass.
+
+    Chip-AGNOSTIC: pure standard OpenROAD TCL, captable path discovered by glob.
+    """
+    return (
+        "# --- ORGANIC #557: post-route SPEF-domain repair (captable-discovered) ---\n"
+        f"set _prs_tlef {tech_lef_c}\n"
+        "set _prs_i [string first \"/libs.ref/\" $_prs_tlef]\n"
+        "set _prs_rules \"\"\n"
+        "if {$_prs_i > 0} {\n"
+        "  set _prs_root [string range $_prs_tlef 0 [expr {$_prs_i - 1}]]\n"
+        "  set _prs_c [lsort [glob -nocomplain "
+        "$_prs_root/libs.tech/openlane/rules.openrcx.*.nom.magic]]\n"
+        "  if {[llength $_prs_c] == 0} {\n"
+        "    set _prs_c [lsort [glob -nocomplain "
+        "$_prs_root/libs.tech/openlane/rules.openrcx.*.nom]]\n"
+        "  }\n"
+        "  if {[llength $_prs_c] > 0} { set _prs_rules [lindex $_prs_c 0] }\n"
+        "}\n"
+        "if {$_prs_rules ne \"\"} {\n"
+        "  puts \"SPEF_REPAIR_CAPTABLE: $_prs_rules\"\n"
+        "  if {[catch {\n"
+        "    catch {define_process_corner -ext_model_index 0 X}\n"
+        "    extract_parasitics -ext_model_file $_prs_rules "
+        "-corner_cnt 1 -max_res 50 -coupling_threshold 0.1\n"
+        f"    if {{[catch {{write_spef {out_dir_c}/post_route_repair.spef}} "
+        "_prs_spef_wr]}} { puts \"SPEF_WRITE_NONFATAL: $_prs_spef_wr\" }\n"
+        "    if {[catch {repair_design} _prs_rd]} { "
+        "puts \"SPEF_REPAIR_DESIGN_NONFATAL: $_prs_rd\" }\n"
+        "    if {[catch {repair_timing -setup} _prs_rts]} { "
+        "puts \"SPEF_REPAIR_TIMING_SETUP_NONFATAL: $_prs_rts\" }\n"
+        "    if {[catch {repair_timing -hold} _prs_rth]} { "
+        "puts \"SPEF_REPAIR_TIMING_HOLD_NONFATAL: $_prs_rth\" }\n"
+        "    if {[catch {detailed_placement} _prs_dp]} { "
+        "puts \"SPEF_REPAIR_LEGALIZE_NONFATAL: $_prs_dp\" }\n"
+        "    if {[catch {global_route} _prs_gr]} { "
+        "puts \"SPEF_REPAIR_GROUTE_NONFATAL: $_prs_gr\" }\n"
+        "    if {[catch {detailed_route -droute_end_iter 1} _prs_dr]} { "
+        "puts \"SPEF_REPAIR_DROUTE_NONFATAL: $_prs_dr\" }\n"
+        "    puts \"SPEF_REPAIR_COMPLETE\"\n"
+        "  } _prs_outer_err]} {\n"
+        "    puts \"SPEF_REPAIR_NONFATAL: $_prs_outer_err\"\n"
+        "  }\n"
+        "} else {\n"
+        "  puts \"SPEF_REPAIR_SKIP: no captable found; post-route SPEF repair skipped\"\n"
+        "}\n"
+    )
+
+
 def _parse_cts_metrics(log_text: str) -> dict:
     """#519 — best-effort extraction of the canonical CTS sign-off numbers
     from an OpenROAD / TritonCTS log: clock roots, inserted buffers, clock
@@ -3210,6 +3330,9 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     antenna_repair_block = _antenna_repair_tcl(pdk)
     pg_cleanup_block = _pg_net_cleanup_tcl()
     dont_use_block = _dont_use_tcl(pdk)
+    # ORGANIC #557 — post-route SPEF-domain repair block (pure helper so it
+    # can be unit-tested and the emitter/checker drift gate applies).
+    spef_repair_block = _post_route_spef_repair_tcl(out_dir_c, tech_lef_c)
 
     # v1.6.36 — emit per-stage DEF snapshots so def_stage_progression_check
     # sees byte-distinct, instance-count-growing, monotone-size files. Each
@@ -3376,7 +3499,11 @@ if {{[catch {{detailed_route}} dr_err]}} {{
 if {{[catch {{write_def {out_dir_c}/routed_preantenna.def}} _cp_err]}} {{
   puts "ROUTED_CHECKPOINT_NONFATAL: $_cp_err"
 }}
-# === v0.2.14 — antenna repair (diode insertion) after detailed_route ===
+# === ORGANIC #557 — post-route SPEF-domain repair loop ===
+# Runs OpenRCX extraction (when a captable exists) → read_spef → repair_design /
+# repair_timing → detailed_placement → incremental reroute.  Best-effort:
+# any exception leaves the routing unchanged and issues a NONFATAL marker.
+{spef_repair_block}# === v0.2.14 — antenna repair (diode insertion) after detailed_route ===
 {antenna_repair_block}# === v0.1.48 — decap + filler insertion ===
 # spm pilot Tier 2 EM/decap finding: prior runs (v0.1.25 → v0.1.47) emitted
 # ZERO decap or filler cells. Empty std-cell-row gaps left an MPW-rejecting
@@ -3401,8 +3528,11 @@ exit
     # Limit to 3 retries; cap die at 2000×2000µm.
     resize_history: List[Dict[str, Any]] = []
     target_util_pct = util * 100.0 if util <= 1.0 else util
+    # ORGANIC #548 (a): scale PnR timeout with estimated cell count so
+    # 29k-cell + 1500×1500µm designs don't hit the old fixed 3600s cap.
+    _pnr_to = _pnr_timeout_s(placed_cells_est)
     for _retry_i in range(4):  # initial run + up to 3 resizes
-        rc, out, err = _docker_exec(container, cmd, timeout=3600)
+        rc, out, err = _docker_exec(container, cmd, timeout=_pnr_to)
         actual_util = _extract_overutil_pct(out + err)
         if actual_util is None:
             break  # no over-util error → take rc / def_file path
