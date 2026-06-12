@@ -46,7 +46,9 @@ def _drive_main(monkeypatch, project: Path, argv_extra, need_analog: bool):
     """
     captured = {"phase_args": {}, "analog_ran": False}
 
-    def fake_run_phase(label, runner, args):
+    def fake_run_phase(label, runner, args, env=None):
+        # #588 — _run_phase gained an env= kwarg (re-entrancy token);
+        # the stub accepts and ignores it.
         captured["phase_args"][runner.name] = list(args)
         if runner.name.startswith("analog"):
             captured["analog_ran"] = True

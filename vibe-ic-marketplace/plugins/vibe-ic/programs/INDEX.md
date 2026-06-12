@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 669
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 669)
+- **Total programs (excluding helpers / shims):** 670
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 670)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 660 |
+| `any` | 661 |
 
 ## Alphabetical listing
 
@@ -619,6 +619,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `stage2_compliance` | any | — | Stage 2 (Synthesis + DFT) interim gate. |
 | `stage3_compliance` | any | — | Stage 3 (Physical Design + Sign-off) interim gate. |
 | `stage4_compliance` | any | — | Stage 4 (Output + Validation) interim gate. |
+| `staged_rtl_closure_preflight` | any | — | ORGANIC #586. |
 | `step_internal_fail_bubble_up_check` | any | — | anti-fabrication gate (v1.6.44). |
 | `sustained_vs_edge_check` | any | — | Flag RTL using edge-detect when spec calls for sustained. |
 | `sv2v_mixed_driver_fixup` | any | — | deterministic post-pass to repair Verilog |
@@ -741,7 +742,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (660 programs)
+### `any` (661 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1329,6 +1330,7 @@ _(no programs in this group)_
 - `stage2_compliance` — Stage 2 (Synthesis + DFT) interim gate.
 - `stage3_compliance` — Stage 3 (Physical Design + Sign-off) interim gate.
 - `stage4_compliance` — Stage 4 (Output + Validation) interim gate.
+- `staged_rtl_closure_preflight` — ORGANIC #586.
 - `step_internal_fail_bubble_up_check` — anti-fabrication gate (v1.6.44).
 - `sustained_vs_edge_check` — Flag RTL using edge-detect when spec calls for sustained.
 - `sv2v_mixed_driver_fixup` — deterministic post-pass to repair Verilog

@@ -121,14 +121,14 @@ def test_full_pnr_tcl_parses_and_evaluates_in_tclsh(tmp_path):
 @needs_tclsh
 def test_spef_repair_block_captable_path_reaches_complete(tmp_path):
     """The captable branch (the formerly broken one) must evaluate through
-    to SPEF_REPAIR_COMPLETE."""
+    to SPEF_MEASURE_COMPLETE (#581 r3: measure-only, no repair)."""
     tech_lef_c = _stage_captable(tmp_path)
     block = R._post_route_spef_repair_tcl(str(tmp_path / "out"), tech_lef_c)
     script = tmp_path / "block.tcl"
     script.write_text(_STUB + block)
     result = _run_tclsh(script)
     assert result.returncode == 0, result.stderr
-    assert "SPEF_REPAIR_COMPLETE" in result.stdout
+    assert "SPEF_MEASURE_COMPLETE" in result.stdout
 
 
 @needs_tclsh
@@ -171,40 +171,39 @@ def test_harness_catches_the_v0_3_38_broken_shape(tmp_path):
     assert "close-bracket" in (result.stderr + result.stdout)
 
 
-# ── ORGANIC #581 round-2 — Signal-11: no repair_design after buffers ────────
+# ── ORGANIC #581 round-3 — measure-only: NO repair after detailed route ─────
 
-def test_spef_repair_block_never_calls_repair_design():
-    """The round-2 reopen's 現象: `repair_design` on a routed design with
-    pass-1 buffers present segfaults OpenROAD
-    (rsz::RepairDesign::repairDriver, Signal 11) — catch cannot contain a
-    segfault, so the block must NOT call it at all (#561 (b) doctrine).
-    The repair set is the shared post-buffered builder."""
+def test_spef_repair_block_is_measure_only():
+    """The round-3 reopen's 現象: `repair_timing -setup` (not just
+    repair_design) ALSO segfaults (Signal 11) on a post-detailed-route
+    SPEF-annotated design — the whole RSZ repair-move family crashes
+    there. `catch` cannot contain a segfault (it kills the openroad
+    process → GDS never written), so the post-route block must call NO
+    repair and do NO reroute: extract_parasitics → write_spef only."""
     tcl = R._post_route_spef_repair_tcl("/out", "/p/libs.ref/x/tech.lef")
-    assert "repair_design" not in tcl
-    assert "repair_timing -setup" in tcl
-    assert "repair_timing -hold" in tcl
+    # scan COMMAND lines only (the doctrine comment may name the banned
+    # commands while explaining why they are gone).
+    cmds = [ln for ln in tcl.splitlines() if not ln.lstrip().startswith("#")]
+    cmd_txt = "\n".join(cmds)
+    assert "repair_design" not in cmd_txt
+    assert "repair_timing" not in cmd_txt
+    assert "detailed_route" not in cmd_txt
+    assert "global_route" not in cmd_txt
+    # the sign-off SPEF extraction is still there (feeds #527 STA)
+    assert "extract_parasitics" in cmd_txt
+    assert "write_spef" in cmd_txt
+    assert "SPEF_MEASURE_COMPLETE" in cmd_txt
 
 
-def test_shared_post_buffered_builder_used_by_both_emitters():
-    """Drift pin (#572/#531 family): the SPEF block and the #561 ECO
-    pass-2 must both emit the SHARED builder's command set; the ECO
-    builder's pass-1 repair_design (its validated recipe) is preserved."""
-    spef = R._post_route_spef_repair_tcl("/out", "/p/libs.ref/x/tech.lef")
+def test_eco_builder_keeps_pre_route_repair():
+    """The #561 ECO builder runs from post_hold.def (a PRE-route state),
+    so ITS repair_timing is safe and must be preserved — only the
+    POST-route SPEF block drops repair (#581 r3)."""
     eco = R._build_eco_repair_tcl("top", "/t.lef", "/c.lef", "/l.lib",
                                   "/pnr", "/eco", "met")
-    shared_spef = R._post_buffered_repair_tcl("SPEF", "", "_prs")
-    shared_eco = R._post_buffered_repair_tcl("ECO", "_GR", "2")
-    for ln in shared_spef.splitlines():
-        assert ln.strip() in spef, f"SPEF block missing shared line: {ln}"
-    for ln in shared_eco.splitlines():
-        assert ln in eco, f"ECO builder missing shared line: {ln}"
-    # ECO pass-1 repair_design stays (before the pass-2 block).
+    assert "post_hold.def" in eco           # pre-route start point
+    assert "repair_timing" in eco           # safe pre-route repair kept
     assert eco.index("repair_design") < eco.index("pass 2")
-    # ECO pass-2 (after the marker) carries no repair_design COMMAND
-    # (the doctrine comment may still name it).
-    pass2_cmds = [ln for ln in eco[eco.index("pass 2"):].splitlines()
-                  if not ln.lstrip().startswith("#")]
-    assert not any("repair_design" in ln for ln in pass2_cmds), pass2_cmds
 
 
 def test_spef_repair_block_no_multiline_catch_in_bracket_expr():

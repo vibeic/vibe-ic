@@ -47,7 +47,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
 import _runner_lock
 
@@ -151,9 +151,13 @@ def _need_analog(project: Path, force_skip: bool) -> bool:
     return False
 
 
-def _run_phase(label: str, runner: Path, args: List[str]) -> int:
+def _run_phase(label: str, runner: Path, args: List[str],
+               env: Optional[Dict[str, str]] = None) -> int:
     print(f"\n{'='*72}\n=== {label} → {runner.name}\n{'='*72}")
-    cp = subprocess.run([sys.executable, str(runner), *args])
+    # ORGANIC #588 — pass the re-entrancy env so the spawned standalone
+    # phase runner re-enters THIS orchestrator's project lock instead of
+    # being refused by it.
+    cp = subprocess.run([sys.executable, str(runner), *args], env=env)
     return cp.returncode
 
 
@@ -221,9 +225,12 @@ def main() -> int:
     # driven by a LIVE runner; clean a stale lock left by a dead one.
     # Acquired BEFORE any reports/manifests/provenance are written so two
     # racing orchestrators can never co-write the same reports/ tree.
-    lock = _runner_lock.acquire(project, "vibe_ic_one_shot_runner")
+    lock = _runner_lock.acquire_or_reenter(project, "vibe_ic_one_shot_runner")
     if lock is None:
         return 3
+    # #588 — env passed to every delegated standalone phase runner so it
+    # re-enters this orchestrator's lock instead of being refused by it.
+    _phase_env = _runner_lock.child_env(project, held_lock=lock)
 
     t0 = time.time()
     plan: List[Tuple[str, str, int]] = []   # (phase, verdict, rc)
@@ -242,7 +249,7 @@ def main() -> int:
             p1_args += ["--mode", "docs"]
         label = ("PHASE 1 (vendor docs → L1-L13)" if p1_mode == "docs"
                  else "PHASE 1 (NL → L1-L13)")
-        rc = _run_phase(label, runner, p1_args)
+        rc = _run_phase(label, runner, p1_args, env=_phase_env)
         rep = _read_report(_pl.report_path(project, "phase1_one_shot.json"))
         verdict = rep.get("verdict") or ("PASS" if rc == 0 else "FAIL")
         plan.append(("phase1", verdict, rc))
@@ -307,7 +314,7 @@ def main() -> int:
         # guard makes (1)+(2) idempotent (no duplicate append).
         elif not run_analog:
             p2_args.append("--skip-analog")
-        rc = _run_phase("PHASE 2 (= 2a + 2b)", runner, p2_args)
+        rc = _run_phase("PHASE 2 (= 2a + 2b)", runner, p2_args, env=_phase_env)
         rep = _read_report(_pl.report_path(project, "phase2_one_shot.json"))
         verdict = rep.get("verdict") or ("PASS" if rc == 0 else "FAIL")
         plan.append(("phase2", verdict, rc))
@@ -327,7 +334,8 @@ def main() -> int:
     if not halted_at and run_analog:
         runner = _phase_runner("analog")
         rc = _run_phase("ANALOG A1..A8", runner,
-                         [str(project), "--container", args.container])
+                         [str(project), "--container", args.container],
+                         env=_phase_env)
         rep = _read_report(_pl.report_path(project, "analog_one_shot.json"))
         verdict = rep.get("verdict") or ("PASS" if rc == 0 else "FAIL")
         plan.append(("analog", verdict, rc))
@@ -348,7 +356,7 @@ def main() -> int:
                    "--util", str(args.util),
                    "--pdk", args.pdk]
         rc = _run_phase("PHASE 3 (synth → PnR → GDS → DRC → LVS)",
-                         runner, p3_args)
+                         runner, p3_args, env=_phase_env)
         rep = _read_report(_pl.report_path(project, "phase3_one_shot.json"))
         verdict = rep.get("verdict") or ("PASS" if rc == 0 else "FAIL")
         plan.append(("phase3", verdict, rc))

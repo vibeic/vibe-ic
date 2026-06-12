@@ -24,6 +24,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pytest pyyaml
 
+      # The plugin suite exercises real EDA paths: the shape-C / port-rule
+      # gates compile fixtures with iverilog (gates_atomic.py), and the
+      # pnr.tcl emitter tests parse/eval the generated Tcl in tclsh.
+      # Without these the suite has NEVER been green on CI (the failures
+      # are FileNotFoundError: 'iverilog', not plugin regressions).
+      - name: Install EDA tools (iverilog + tclsh)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends iverilog tcl
+
       - name: chip-AGNOSTIC source guard
         run: |
           python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py \

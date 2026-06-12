@@ -191,7 +191,7 @@ def test_490_gate_no_longer_skips_when_ports_only_in_top_ports(tmp_path):
     assert "PASS" in r.stdout, r.stdout
     assert "SKIP" not in r.stdout, (
         "gate SKIPped — top_ports key was not read (#490 regression)")
-    assert "agree on 3 pins" in r.stdout, r.stdout
+    assert "agree on 3/" in r.stdout, r.stdout  # #591 format: N/TOTAL
 
 
 def test_490_promoter_mirrors_canonical_into_legacy_keys(tmp_path):
@@ -261,7 +261,7 @@ def test_491b_asymmetric_clock_reset_spelling_passes(tmp_path):
     r = _run_gate(project)
     assert r.returncode == 0, r.stdout
     assert "PASS" in r.stdout, r.stdout
-    assert "agree on 1 pins" in r.stdout, r.stdout
+    assert "agree on 1/" in r.stdout, r.stdout  # #591 format: N/TOTAL
 
 
 def test_491b_genuinely_undeclared_port_still_fails(tmp_path):
@@ -424,4 +424,4 @@ def test_full_e2e_l3_table_to_l9_canonical_key_then_gate_pass(tmp_path):
     assert "PASS" in g.stdout, g.stdout
     assert "SKIP" not in g.stdout, g.stdout
     # i_clk / i_rst_n are implicit-stripped; the 6 functional pins remain.
-    assert "agree on 6 pins" in g.stdout, g.stdout
+    assert "agree on 6/" in g.stdout, g.stdout  # #591 format: N/TOTAL

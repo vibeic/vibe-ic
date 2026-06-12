@@ -47,6 +47,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
+import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 
@@ -1941,6 +1942,68 @@ def _pnr_last_checkpoint(out_dir: Path) -> Optional[str]:
     return last
 
 
+# ORGANIC #593 — geometry-aware PnR/GDS cache. The cache-skip used to
+# key on artifact existence ALONE, so a re-run with a DIFFERENT
+# --die-um / --util (the canonical congestion-recovery for #585's
+# ROUTE_NOT_CONVERGED) silently reused the OLD die's DEF/GDS and
+# re-reported the identical downstream DRC/LVS failures. step_pnr now
+# persists the effective geometry in this sidecar; the cache is valid
+# only when the requested geometry matches.
+_PNR_ARGS_SIDECAR = "pnr_args.json"
+
+
+def _write_pnr_args_sidecar(out_dir: Path, die_um: str, util: float) -> None:
+    """Persist the effective floorplan geometry next to the PnR outputs
+    so a later cache-skip can detect a geometry change. Best-effort."""
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / _PNR_ARGS_SIDECAR).write_text(
+            json.dumps({"die_um": str(die_um), "util": float(util)},
+                       indent=2) + "\n")
+    except Exception:  # nosec — sidecar is best-effort
+        pass
+
+
+def _pnr_cache_geometry(out_dir: Path) -> Optional[dict]:
+    """Read the cached PnR geometry sidecar, or None when absent/unreadable
+    (an artifact predating #593 has no sidecar → treated as geometry-unknown
+    so the caller can disclose that)."""
+    p = out_dir / _PNR_ARGS_SIDECAR
+    if not p.is_file():
+        return None
+    try:
+        d = json.loads(p.read_text())
+        return {"die_um": str(d.get("die_um")), "util": d.get("util")}
+    except Exception:
+        return None
+
+
+def _pnr_cache_valid_for(out_dir: Path, die_um: str,
+                         util: float) -> Tuple[bool, str]:
+    """ORGANIC #593 — decide whether a cached DEF/GDS may be reused given
+    the REQUESTED geometry. Returns (valid, disclosure).
+
+    valid is True only when a sidecar exists AND its die/util match the
+    request. When the sidecar is absent (pre-#593 artifact) the cache is
+    treated as STALE-UNKNOWN (invalid) so a deliberate geometry change is
+    never silently ignored; the disclosure explains why. chip-AGNOSTIC."""
+    cached = _pnr_cache_geometry(out_dir)
+    if cached is None:
+        return (False, "cached run geometry unknown (no pnr_args.json — "
+                "pre-#593 artifact); re-running to honor the requested "
+                f"die={die_um} util={util:g}")
+    try:
+        same = (cached["die_um"] == str(die_um)
+                and abs(float(cached["util"]) - float(util)) < 1e-9)
+    except (TypeError, ValueError):
+        same = False
+    if same:
+        return (True, f"geometry unchanged (die={die_um} util={util:g})")
+    return (False, f"cached run used die={cached['die_um']} "
+            f"util={cached['util']}; requested die={die_um} util={util:g} "
+            f"— re-running to apply the new geometry")
+
+
 def _extract_overutil_pct(log_text: str) -> Optional[float]:
     """Return the reported utilization% from an OpenROAD GPL-0301
     error, or None if the log doesn't carry that error."""
@@ -1951,6 +2014,37 @@ def _extract_overutil_pct(log_text: str) -> Optional[float]:
         return None
     try:
         return float(m.group(1))
+    except ValueError:
+        return None
+
+
+# ORGANIC #585 — TritonRoute can run out of iterations and COMPLETE with
+# violations remaining (rc=0, `[INFO DRT-0199] Number of violations = N`).
+_RE_DRT_0199 = re.compile(
+    r"\[INFO DRT-0199\]\s*Number of violations\s*=\s*(\d+)")
+_RE_DRT_COMPLETING = re.compile(
+    r"Completing\s+100%\s+with\s+(\d+)\s+violations?")
+
+
+def _drt_final_violations(log_text: str) -> Optional[int]:
+    """ORGANIC #585 — final detailed-route violation count from an
+    OpenROAD log, or None when no DRT count is present (e.g. a flow
+    that never reached detailed route). Uses the LAST `[INFO DRT-0199]`
+    (falling back to the last `Completing 100% with N violations`) so
+    the post-route SPEF-repair incremental reroute's final state — the
+    geometry that actually ships — is what gets judged. A route that
+    "completes" with N>0 is NOT converged: streaming its GDS downstream
+    recasts one congestion root-cause as hundreds of fake DRC/LVS/STA
+    findings. chip-AGNOSTIC: OpenROAD log grammar only."""
+    if not log_text:
+        return None
+    counts = _RE_DRT_0199.findall(log_text)
+    if not counts:
+        counts = _RE_DRT_COMPLETING.findall(log_text)
+    if not counts:
+        return None
+    try:
+        return int(counts[-1])
     except ValueError:
         return None
 
@@ -3015,45 +3109,44 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
 
 
 def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str) -> str:
-    """ORGANIC #557 — emit the OpenROAD Tcl for the post-detailed-route
-    SPEF-domain repair loop.
+    """ORGANIC #557 / #581 — emit the OpenROAD Tcl for the
+    post-detailed-route SPEF extraction (MEASURE-ONLY).
 
     Sequence (all NONFATAL-guarded):
       1. Discover the OpenRCX captable for the loaded PDK (same logic as
          _emit_spef; chip-AGNOSTIC: globs rules.openrcx.*.nom.magic under
          the PDK root derived from the tech-LEF path).
-      2. If captable found:
-         a. extract_parasitics → write_spef (sign-off grade; DRV feedback).
-         b. the SHARED post-buffered repair set (#561 (b) / #581 round-2):
-            repair_timing -setup + repair_timing -hold + detailed_placement —
-            NEVER repair_design: this block runs after pnr.tcl's two in-flow
-            repair passes, so buffers are present and repair_design's
-            repairDriver path segfaults (Signal 11); catch cannot contain a
-            segfault, so the only safe move is not to call it. Emitted via
-            _post_buffered_repair_tcl so this site and the ECO builder
-            (#561) cannot drift.
-         c. Incremental reroute (global_route → detailed_route -droute_end_iter 1)
-            so newly buffered nets get actual routing geometry.
-         d. Emit SPEF_REPAIR_COMPLETE marker (consumed by acceptance tests).
-      3. If no captable: emit SPEF_REPAIR_SKIP marker (advisory; flow continues).
+      2. If captable found: extract_parasitics → write_spef (sign-off
+         grade; this SPEF feeds #527's SPEF-true Step-23 STA) → emit
+         SPEF_MEASURE_COMPLETE.
+      3. If no captable: emit SPEF_REPAIR_SKIP marker (advisory; continue).
 
-    The pre-existing estimate_parasitics passes in pnr.tcl remain for CTS-domain
-    optimisation; this block is the post-route truth pass.
+    ORGANIC #581 round-3 — this block is MEASURE-ONLY: it calls NO
+    `repair_timing` / `repair_design` and does NO reroute. After detailed
+    route the OpenROAD RSZ repair-move family (UnbufferMove / BufferMove /
+    CloneMove / SplitLoadMove …) segfaults (Signal 11) on a
+    SPEF-annotated routed design — r1 fixed the Tcl bracket, r2 dropped
+    repair_design, and r3's field evidence showed `repair_timing -setup`
+    ALSO segfaults the same way (`catch` cannot contain a segfault, which
+    kills the whole openroad process → GDS never written). Timing repair
+    belongs PRE-route: the in-flow CTS-domain estimate repair passes in
+    pnr.tcl, and the #561 ECO builder (which starts from post_hold.def — a
+    PRE-route state — so its repair_timing is safe). Post-route residual
+    violations are surfaced by the SPEF-true STA and remediated via that
+    ECO path, never by repairing the already-routed design here.
 
-    ORGANIC #581 — the original emission nested a MULTI-LINE `catch {...}`
-    inside the bracketed `if {[catch {` expression AND a plain-string
-    fragment kept an f-string-escaped `}}`, producing unbalanced braces:
-    OpenROAD aborted pnr.tcl with `missing close-bracket in expression
-    "[catch { catch {def..."` AFTER detailed route converged, so GDS/final
-    DEF were never written. The block is now strictly SEQUENTIAL one-line
-    `if {[catch {...} e]} {...}` statements (no multi-line catch inside a
-    bracketed expression) and is pinned by a real tclsh parse/eval test —
-    string-content assertions alone proved insufficient.
+    ORGANIC #581 round-1 — strictly SEQUENTIAL one-line `if {[catch {...}
+    e]} {...}` statements (no multi-line catch inside a bracketed
+    expression); pinned by a real tclsh parse/eval test.
 
     Chip-AGNOSTIC: pure standard OpenROAD TCL, captable path discovered by glob.
     """
     return (
-        "# --- ORGANIC #557: post-route SPEF-domain repair (captable-discovered) ---\n"
+        "# --- ORGANIC #557/#581: post-route SPEF extraction (MEASURE-ONLY) ---\n"
+        "# r3: NO repair_timing/repair_design here — the RSZ repair-move\n"
+        "# family segfaults on a post-detailed-route SPEF-annotated design.\n"
+        "# Timing repair is pre-route (CTS estimate passes + #561 ECO from\n"
+        "# post_hold.def). This block only EXTRACTS the sign-off SPEF.\n"
         f"set _prs_tlef {tech_lef_c}\n"
         "set _prs_i [string first \"/libs.ref/\" $_prs_tlef]\n"
         "set _prs_rules \"\"\n"
@@ -3076,18 +3169,10 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str) -> str:
         "  } else {\n"
         f"    if {{[catch {{write_spef {out_dir_c}/post_route_repair.spef}} "
         f"_prs_spef_wr]}} {{ puts \"SPEF_WRITE_NONFATAL: $_prs_spef_wr\" }}\n"
-        # #581 r2 — post-buffered repair set from the ONE shared builder
-        # (#561 (b) Signal-11 doctrine: NO repair_design after buffers).
-        + "".join("    " + ln + "\n" for ln in
-                  _post_buffered_repair_tcl("SPEF", "", "_prs").splitlines())
-        + "    if {[catch {global_route} _prs_gr]} { "
-        "puts \"SPEF_REPAIR_GROUTE_NONFATAL: $_prs_gr\" }\n"
-        "    if {[catch {detailed_route -droute_end_iter 1} _prs_dr]} { "
-        "puts \"SPEF_REPAIR_DROUTE_NONFATAL: $_prs_dr\" }\n"
-        "    puts \"SPEF_REPAIR_COMPLETE\"\n"
+        "    puts \"SPEF_MEASURE_COMPLETE\"\n"
         "  }\n"
         "} else {\n"
-        "  puts \"SPEF_REPAIR_SKIP: no captable found; post-route SPEF repair skipped\"\n"
+        "  puts \"SPEF_REPAIR_SKIP: no captable found; post-route SPEF extract skipped\"\n"
         "}\n"
     )
 
@@ -3802,6 +3887,37 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                           f"rc={rc} log_tail={(out+err)[-2000:]}",
                           [str(out_dir / "openroad.log")],
                           extras={"resize_history": resize_history})
+    # ORGANIC #585 — route-convergence gate. TritonRoute can run out of
+    # iterations and COMPLETE with violations remaining (rc=0,
+    # `Completing 100% with N violations`). A nonzero final DRT-0199
+    # count means the route did NOT converge: the emitted GDS geometry
+    # carries the violations, and letting it flow downstream recasts one
+    # congestion root-cause (die too small / util too high) as hundreds
+    # of fake DRC/LVS/STA findings. The honest verdict is FAIL naming N
+    # and the congestion knobs; outputs stay on disk for debugging but
+    # are marked non-signoff.
+    _drt_viol = _drt_final_violations(out + err)
+    if _drt_viol is None:
+        _log_p = out_dir / "openroad.log"
+        if _log_p.is_file():
+            _drt_viol = _drt_final_violations(
+                _log_p.read_text(errors="ignore"))
+    if _drt_viol is not None and _drt_viol > 0:
+        return StepResult(
+            "pnr", "FAIL", time.time() - t0,
+            (f"ROUTE_NOT_CONVERGED: detailed route completed with "
+             f"{_drt_viol} violations remaining (final DRT-0199). The "
+             f"design is congestion-limited at die {die_w}x{die_h}µm / "
+             f"util {util:g}: increase --die-um, lower --util, or raise "
+             f"the router's end iteration. Emitted DEF/GDS are kept for "
+             f"debugging but are NOT sign-off artifacts."),
+            [str(out_dir / "openroad.log"), str(def_file)],
+            extras={"finding": "ROUTE_NOT_CONVERGED",
+                    "drt_violations": _drt_viol,
+                    "die_um": f"{die_w}x{die_h}",
+                    "util": util,
+                    "non_signoff_outputs": [str(def_file)],
+                    "resize_history": resize_history})
     # copy STA report up to reports/
     rpt_dir = project / "phase3" / "reports"
     rpt_dir.mkdir(parents=True, exist_ok=True)
@@ -3867,6 +3983,11 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         spare_note = f" | spare_emit_failed: {_sp_exc}"
     if spare_warn:
         spare_note += f" | {spare_warn}"
+
+    # ORGANIC #593 — persist the EFFECTIVE geometry (after any
+    # auto-resize) so a later cache-skip detects a die/util change and a
+    # congestion-recovery re-dispatch is never silently no-op'd.
+    _write_pnr_args_sidecar(out_dir, f"{die_w}x{die_h}", util)
 
     detail = f"def={def_file.name} sta={sta_file.name}" + spare_note
     if routing_audit_note:
@@ -4887,8 +5008,26 @@ def _def_has_routing(def_path: Path) -> bool:
 
 
 def step_lvs(project: Path, top: str, pdk: PdkConfig,
-             container: str) -> StepResult:
+             container: str,
+             upstream_pnr: Optional[StepResult] = None) -> StepResult:
     t0 = time.time()
+    # ORGANIC #590 — upstream-incomplete gate. When pnr died mid-tcl
+    # (parse abort, segfault, timeout, ROUTE_NOT_CONVERGED) the final
+    # DEF/pin-label stages were never written: an LVS against the best
+    # checkpoint NECESSARILY mismatches, and the canonical "a real
+    # compare ran; this is a design/extraction defect" wording sends
+    # triage toward extraction fidelity when the only defect is the
+    # upstream pnr death. SKIP with the pnr failure named instead.
+    if upstream_pnr is not None and upstream_pnr.status != "PASS":
+        return StepResult(
+            "lvs", "SKIP", time.time() - t0,
+            (f"LVS skipped: upstream pnr step is "
+             f"{upstream_pnr.status} — the final DEF / pin-label stages "
+             f"were never completed, so any compare would mismatch by "
+             f"construction (not a design/extraction defect). Fix the "
+             f"pnr failure first: {upstream_pnr.detail[:400]}"),
+            extras={"finding": "LVS_UPSTREAM_PNR_INCOMPLETE",
+                    "upstream_pnr_status": upstream_pnr.status})
     if pdk.calibre_lvs:
         # v1.6.54 — verdict-tier split: ENV_UNAVAILABLE if calibre
         # binary absent, WAIVED if binary present (agent has chosen
@@ -6090,10 +6229,30 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # alias them here — that would falsely pass the anti-fabrication gate.
     # If any stage DEF is missing on a re-run (because we skipped PnR),
     # we surface a note so reviewers re-run PnR with v1.6.36's pnr.tcl.
-    expected_def_stages = ["floorplan.def", "placed.def", "post_cts.def",
-                            "post_hold.def", "routed.def"]
+    # ORGANIC #592 — stage names + the route-stage checkpoint alias come
+    # from the SHARED _PNR_CHECKPOINT_STAGES table (emitter↔checker no
+    # longer drift): pnr.tcl writes routed_preantenna.def right after
+    # detailed route (#548 resume checkpoint) and routed.def only at the
+    # very end, so a mid-tcl death after routing leaves a complete
+    # post-route checkpoint without routed.def. Route-stage evidence is
+    # therefore routed.def OR routed_preantenna.def — and the advice is
+    # "resume from the checkpoint", never "re-run from scratch".
+    expected_def_stages = [fname for fname, _label in
+                           _PNR_CHECKPOINT_STAGES
+                           if fname != "routed_preantenna.def"] \
+        + ["routed.def"]
     missing_stages = [n for n in expected_def_stages
                       if not (pnr_out / n).is_file()]
+    _route_checkpoint = pnr_out / "routed_preantenna.def"
+    _route_from_checkpoint = ("routed.def" in missing_stages
+                              and _route_checkpoint.is_file())
+    if _route_from_checkpoint:
+        missing_stages.remove("routed.def")
+        notes.append(
+            "route stage evidenced by checkpoint "
+            "routed_preantenna.def — final routed.def absent (mid-tcl "
+            "death after detailed route). Resume from the checkpoint "
+            "(#548); a from-scratch re-run is NOT required.")
     if primary_def.is_file():
         # PDN done flag
         pdn_flag = pnr_out / "pdn.done"
@@ -9286,6 +9445,15 @@ def main() -> int:
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
         return 2
 
+    # ORGANIC #588 — single-driver lock honored by the standalone phase3
+    # runner: this is the LONGEST-running, most-re-dispatched step, so it
+    # is exactly where two standalone re-runs could co-write pnr/ +
+    # reports/. Re-enters the orchestrator's lock via the env token, or
+    # refuses a second concurrent standalone phase3 on a live project.
+    _lock = _runner_lock.acquire_or_reenter(project, "phase3_one_shot_runner")
+    if _lock is None:
+        return 3
+
     # Fix #4 — normalize/validate --util (a FRACTION 0..1). Percent
     # values (>1) are divided by 100 with a warning; non-positive
     # values are clamped. Done before any step so PnR receives a sane
@@ -9383,17 +9551,37 @@ def main() -> int:
         else:
             plan.append(step_synth(project, effective_top, pdk, args.container))
         if plan[-1].status == "PASS":
-            if def_existing.is_file():
+            # ORGANIC #593 — geometry-aware cache: a DEF that exists may
+            # only be reused when the requested --die-um/--util match the
+            # cached run's geometry (pnr_args.json). A congestion-recovery
+            # re-dispatch with a bigger die must re-run, not silently
+            # no-op on the stale geometry.
+            _pnr_out = _pl.pnr_dir(project)
+            _cache_ok, _cache_msg = _pnr_cache_valid_for(
+                _pnr_out, args.die_um, args.util)
+            if def_existing.is_file() and _cache_ok:
                 plan.append(StepResult(
                     "pnr", "PASS", 0.0,
-                    f"DEF already present: {def_existing.name} (skipped re-run)",
+                    f"DEF already present: {def_existing.name} (skipped "
+                    f"re-run; {_cache_msg})",
                     [str(def_existing)]))
             else:
+                if def_existing.is_file():
+                    print(f"[pnr] cache invalid — {_cache_msg}",
+                          file=sys.stderr)
                 plan.append(step_pnr(project, effective_top, pdk, args.container,
                                      args.die_um, args.util,
                                      spare_density=args.spare_density))
         if plan[-1].status == "PASS":
-            if gds_existing.is_file():
+            # #593 — the GDS is derived from the DEF, so it shares the
+            # PnR geometry cache verdict: a geometry change that forced a
+            # PnR re-run must also re-derive the GDS.
+            _pnr_out = _pl.pnr_dir(project)
+            _cache_ok, _ = _pnr_cache_valid_for(
+                _pnr_out, args.die_um, args.util)
+            _pnr_reran = (plan[-1].name == "pnr"
+                          and "skipped" not in plan[-1].detail)
+            if gds_existing.is_file() and _cache_ok and not _pnr_reran:
                 plan.append(StepResult(
                     "gds", "PASS", 0.0,
                     f"GDS already present: {gds_existing.name} (skipped re-run)",
@@ -9401,7 +9589,13 @@ def main() -> int:
             else:
                 plan.append(step_gds(project, effective_top, pdk, args.container))
         plan.append(step_drc(project, effective_top, pdk, args.container))
-        plan.append(step_lvs(project, effective_top, pdk, args.container))
+        # ORGANIC #590 — hand step_lvs the pnr outcome so an upstream
+        # mid-tcl death SKIPs the compare instead of mislabelling the
+        # inevitable mismatch a design/extraction defect.
+        _pnr_result = next((s for s in reversed(plan) if s.name == "pnr"),
+                           None)
+        plan.append(step_lvs(project, effective_top, pdk, args.container,
+                             upstream_pnr=_pnr_result))
 
     # v1.6.36 — stage runner outputs at canonical flow-YAML paths.
     # Closes the runner-vs-flow drift waivers from the v10634 benchmark.

@@ -83,6 +83,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
+import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 # v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — shared SV-frontend
 # decision logic (same module Phase-3 step_synth delegates to), so the
 # Phase-2 yosys-synth + reference-TB steps reuse the EXACT same rule
@@ -3701,11 +3702,37 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
         return (default_rc, "", "could not create container workdir for "
                 "SV-frontend fallback", "none")
 
+    # ORGANIC #587 — stage the FULL closure, not just the synth source
+    # set. Canonical assertion-macro SV (`ifdef VERILATOR / `elsif
+    # SYNTHESIS / `else → `include "<macros>.svh") `include's .svh
+    # headers and imports package files; the pre-fix path copied ONLY
+    # files in rtl_file_strs (no .svh), passed NO -I include path, and
+    # hardcoded -DSIMULATION (so the `else` arm took and included a
+    # never-staged header) — sv2v died on every such IP. We now also
+    # stage every .svh/.vh/.h header AND *_pkg.* package file found
+    # under rtl/, pass -I <workdir>, and convert with -DSYNTHESIS (the
+    # synth-bound define-set; the TB path keeps -DSIMULATION).
+    rtl_dir = _pl.rtl_dir(project)
+    closure_extra: List[Path] = []
+    if rtl_dir.is_dir():
+        for pat in ("*.svh", "*.vh", "*.h"):
+            closure_extra.extend(sorted(rtl_dir.rglob(pat)))
+        for pat in ("*_pkg.sv", "*_pkg.v", "*pkg*.sv"):
+            for p in sorted(rtl_dir.rglob(pat)):
+                if str(p) not in rtl_file_strs:
+                    closure_extra.append(p)
+    # de-dup the extra closure by resolved path
+    _seen_extra: set = set()
+    closure_extra = [p for p in closure_extra
+                     if p.is_file()
+                     and not (str(p.resolve()) in _seen_extra
+                              or _seen_extra.add(str(p.resolve())))]
+
     # Map host RTL file → the path the container will read.
     container_rtl: List[str] = []
     if needs_staging:
-        # Copy each RTL file into the staging dir; container reads by base
-        # name (packages first ordering is preserved by list order).
+        # Copy each synth-source RTL file into the staging dir; container
+        # reads by base name (packages-first ordering preserved by list).
         for f in rtl_file_strs:
             hp = Path(f)
             if not hp.is_file():
@@ -3717,9 +3744,22 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
                 return (rc, "", f"docker cp {hp.name} → container failed: "
                         f"{_e[-400:]}", "none")
             container_rtl.append(f"{workdir}/{hp.name}")
+        # #587 — also stage the header / package closure so `include and
+        # package imports resolve under -I <workdir>. These are NOT added
+        # to the read list (headers are included, not read as top sources;
+        # packages staged here are already in rtl_file_strs when they are
+        # real sources — this only backfills ones the source glob missed).
+        for hp in closure_extra:
+            _run(["docker", "cp", str(hp),
+                  f"{container}:{workdir}/{hp.name}"], timeout=60)
     else:
         container_rtl = [_to_container_path(f, container)
                          for f in rtl_file_strs if Path(f).is_file()]
+
+    # #587 — include search path: the staging workdir (where headers were
+    # copied) or, on a mounted tree, the rtl dir itself.
+    inc_dir = (workdir if needs_staging
+               else _to_container_path(str(rtl_dir), container))
 
     netlist_name = out_v.name
     netlist_c = f"{workdir}/{netlist_name}"
@@ -3736,11 +3776,15 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
     rc, out, err = default_rc, "", default_log
 
     # ---- (1) PREFERRED: yosys slang plugin / read_slang -------------------
+    # #587 — -I <inc_dir> for `include resolution, -DSYNTHESIS for the
+    # synth-bound conversion (so the assertion-macro `elsif SYNTHESIS arm
+    # takes the synthesisable dummy-macros header, not the sim `else arm).
     if _tool_in_container(container, "yosys"):
         slang_cmd = (
             f"cd {workdir} && {yosys_path} && "
             f"yosys -p 'plugin -i slang; "
-            f"read_slang {reads_join} --top {synth_top} -DSIMULATION; "
+            f"read_slang {reads_join} --top {synth_top} "
+            f"-DSYNTHESIS -I {inc_dir}; "
             f"hierarchy -top {synth_top}; proc; flatten; {synth_tail}'")
         rc, out, err = _docker_exec(container, slang_cmd, timeout=600)
         _append_log(log, f"SLANG FALLBACK FRONTEND ({fe_reason})", out, err)
@@ -3749,20 +3793,53 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
             synth_frontend = "yosys_slang"
 
     # ---- (2) FALLBACK: sv2v pre-pass → Verilog-2005 → default frontend ----
+    # #587 — full closure: -I <inc_dir>, -DSYNTHESIS, and chain
+    # sv2v_mixed_driver_fixup over the converted Verilog (sv2v hw2reg /
+    # packed-struct patterns can leave mixed continuous+procedural
+    # drivers that yosys then rejects — same #546 fixup the TB path runs).
     if synth_frontend == "none" and _tool_in_container(container, "sv2v"):
         sv2v_out = f"{workdir}/{synth_top}_sv2v.v"
         sv2v_cmd = (
             f"cd {workdir} && export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
-            f"sv2v -DSIMULATION {reads_join} > {sv2v_out} 2>sv2v.err && "
-            f"{yosys_path} && "
-            f"yosys -p 'read_verilog {sv2v_out}; "
-            f"hierarchy -check -top {synth_top}; proc; flatten; {synth_tail}'")
-        rc2, out2, err2 = _docker_exec(container, sv2v_cmd, timeout=600)
-        _append_log(log, "SV2V PRE-PASS FALLBACK FRONTEND", out2, err2)
-        if rc2 == 0 and _phase2_retrieve_netlist(
-                container, netlist_c, out_v, needs_staging):
-            rc, out, err = rc2, out2, err2
-            synth_frontend = "sv2v_verilog2005"
+            f"sv2v -DSYNTHESIS -I {inc_dir} {reads_join} "
+            f"> {sv2v_out} 2>sv2v.err")
+        rc_conv, out_conv, err_conv = _docker_exec(
+            container, sv2v_cmd, timeout=600)
+        _append_log(log, "SV2V PRE-PASS CONVERSION (#587)", out_conv, err_conv)
+        if rc_conv == 0:
+            # #587/#546 — mixed-driver fixup over the converted Verilog
+            # before yosys reads it. Best-effort: pull the file out, fix
+            # in place, push back (staging) or fix the mounted file.
+            try:
+                import sv2v_mixed_driver_fixup as _mdf
+                # When mounted (not staging), sv2v wrote into the mounted
+                # synth_dir → the host path is synth_dir/<name>. When
+                # staging, pull the converted file out, fix, push back.
+                _host_conv = synth_dir / f"{synth_top}_sv2v.v"
+                if needs_staging:
+                    _run(["docker", "cp",
+                          f"{container}:{sv2v_out}", str(_host_conv)],
+                         timeout=60)
+                if _host_conv.is_file():
+                    _mdf.fixup_file(_host_conv)
+                    if needs_staging:
+                        _run(["docker", "cp", str(_host_conv),
+                              f"{container}:{sv2v_out}"], timeout=60)
+            except Exception:  # nosec — fixup is best-effort
+                pass
+            yosys_cmd = (
+                f"cd {workdir} && {yosys_path} && "
+                f"yosys -p 'read_verilog {sv2v_out}; "
+                f"hierarchy -check -top {synth_top}; proc; flatten; "
+                f"{synth_tail}'")
+            rc2, out2, err2 = _docker_exec(container, yosys_cmd, timeout=600)
+            _append_log(log, "SV2V PRE-PASS FALLBACK FRONTEND", out2, err2)
+            if rc2 == 0 and _phase2_retrieve_netlist(
+                    container, netlist_c, out_v, needs_staging):
+                rc, out, err = rc2, out2, err2
+                synth_frontend = "sv2v_verilog2005"
+        else:
+            rc, out, err = rc_conv, out_conv, err_conv
 
     # Best-effort cleanup of the ephemeral staging dir.
     if needs_staging:
@@ -4354,9 +4431,45 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                            f"frontend={synth_frontend}"),
                           [str(out_v), str(log)],
                           extras={"synth_frontend": synth_frontend})
+    # ORGANIC #586 — staged-RTL closure preflight enrichment. A yosys
+    # abort of the form "Module `X' referenced ... is not part of the
+    # design" is the silent symptom of a parameter DEFAULT selecting a
+    # deliberately-excluded implementation variant (yosys elaborates the
+    # uninstantiated generate branch of every module declaring the
+    # default). Run the closure preflight on the staged RTL and, when it
+    # finds a generate-branch default pointing at a missing module,
+    # append the precise diagnosis (module, selecting param default,
+    # in-closure alternative) so the operator isn't left to triage a raw
+    # abort. Best-effort, advisory — never changes the FAIL verdict.
+    closure_note = ""
+    _abort_txt = (out + err)
+    if ("is not part of the design" in _abort_txt
+            or "referenced in module" in _abort_txt):
+        try:
+            import staged_rtl_closure_preflight as _pf
+            _pf_report = _pf.audit([str(rtl_dir)])
+            _gen = [f for f in _pf_report.get("findings", [])
+                    if f.get("rule") == "generate_branch_default"]
+            if _gen:
+                _lines = "; ".join(
+                    f"{f['module_ref']} (branch {f['guard_label']}"
+                    + (f", default {f['selecting_param_defaults']}"
+                       if f.get("selecting_param_defaults") else "")
+                    + (f", in-closure alt {f['in_closure_alternatives'][0]}"
+                       if f.get("in_closure_alternatives") else "")
+                    + ")"
+                    for f in _gen[:8])
+                closure_note = (
+                    f" | CLOSURE_PREFLIGHT (#586): {len(_gen)} dangling "
+                    f"generate-branch reference(s) — a parameter DEFAULT "
+                    f"likely selects an excluded variant: {_lines}. "
+                    f"Rewrite the default(s) to an in-closure variant or "
+                    f"stage the missing module(s).")
+        except Exception:  # nosec — preflight enrichment is best-effort
+            closure_note = ""
     return StepResult("yosys_synth", "FAIL",
                       time.time() - t0,
-                      f"rc={rc} log_tail={(out + err)[-1500:]}",
+                      f"rc={rc} log_tail={(out + err)[-1500:]}{closure_note}",
                       [str(log)],
                       extras={"synth_frontend": synth_frontend,
                               "synth_frontend_reason": fe_reason})
@@ -5981,6 +6094,13 @@ def main() -> int:
     if not project.is_dir():
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
         return 2
+
+    # ORGANIC #588 — single-driver lock honored by the standalone phase2
+    # runner; re-enters the orchestrator's lock via the env token, or
+    # refuses a second concurrent standalone phase2 on a live project.
+    _lock = _runner_lock.acquire_or_reenter(project, "phase2_one_shot_runner")
+    if _lock is None:
+        return 3
 
     plan: List[StepResult] = []
 

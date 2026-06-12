@@ -43,6 +43,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
 import _path_layout as _pl
+import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 
 # v2 — Phase 1 absorbs Phase 2a's doc-extraction track. The ~47k-line
 # doc-extraction implementation lives in `phase1_doc_one_shot_runner.py`
@@ -318,6 +319,14 @@ def main() -> int:
     if not project.is_dir():
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
         return 2
+
+    # ORGANIC #588 — single-driver lock, honored by the standalone phase
+    # runner too (not just the orchestrator). Re-enters cleanly when the
+    # orchestrator delegated this run (env token); refuses a SECOND
+    # standalone phase1 on a project a live runner already drives.
+    _lock = _runner_lock.acquire_or_reenter(project, "phase1_one_shot_runner")
+    if _lock is None:
+        return 3
 
     # Resolve mode. When auto-detect finds no input, fall through to
     # prompt mode so step_ingest_render emits a SKIP status (verdict

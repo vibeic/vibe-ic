@@ -214,16 +214,14 @@ _L9_PORT_KEYS = (
 )
 
 
-def extract_l9_ports(l9: dict) -> list[dict]:
-    """Return [{name, direction, open_drain}] from the UNION of every
-    accepted L9 schema port-key variant (#490).
-
-    The union is deduped by name (first occurrence wins, but a later
-    occurrence that carries a direction backfills a missing one) so a
-    dual-written L9 (the same pins under both `top_ports` and
-    `top_module_pins`) yields the same single port set as a singly-keyed
-    L9. This is what makes the gate read ports that landed in ANY one
-    key without requiring producers to mirror into every key."""
+def extract_l9_ports_with_audit(l9: dict) -> tuple[list[dict], list[dict]]:
+    """ORGANIC #591 — like extract_l9_ports but also returns the SKIP
+    audit: [{entry_repr, reason}] for every raw entry that did not
+    become (or merge into) a port record. Reasons: `duplicate` (same
+    name seen again — merged, counts as skipped raw entry),
+    `unparseable` (no name field / not a dict). The PASS evidence line
+    uses this so its count can never silently disagree with the L9
+    contract it certifies."""
     raw_lists: list[list] = []
     for key in _L9_PORT_KEYS:
         v = l9.get(key)
@@ -233,10 +231,13 @@ def extract_l9_ports(l9: dict) -> list[dict]:
     if isinstance(dtop, dict) and isinstance(dtop.get("ports"), list):
         raw_lists.append(dtop["ports"])
     out: list[dict] = []
+    skipped: list[dict] = []
     by_name: dict[str, dict] = {}
     for lst in raw_lists:
         for entry in lst:
             if not isinstance(entry, dict):
+                skipped.append({"entry": repr(entry)[:80],
+                                "reason": "unparseable (not a dict)"})
                 continue
             name = entry.get("name") or entry.get("port") or entry.get("pin")
             direction = (
@@ -245,8 +246,20 @@ def extract_l9_ports(l9: dict) -> list[dict]:
                 or entry.get("io")
             )
             if not name:
+                skipped.append({"entry": repr(entry)[:80],
+                                "reason": "unparseable (no name field)"})
                 continue
-            name = str(name)
+            # #591 — strip whitespace variants ('data_o ' vs 'data_o'):
+            # they are the SAME pin; un-stripped they mis-compare as a
+            # phantom L9-only + RTL-only pair.
+            name = str(name).strip()
+            if not name:
+                skipped.append({"entry": repr(entry)[:80],
+                                "reason": "unparseable (blank name)"})
+                continue
+            if name in by_name:
+                skipped.append({"entry": name,
+                                "reason": f"duplicate '{name}'"})
             d = _normalise_dir(direction) if direction else None
             prev = by_name.get(name)
             if prev is None:
@@ -273,7 +286,22 @@ def extract_l9_ports(l9: dict) -> list[dict]:
                     prev["open_drain"] = True
                 if entry.get("optional"):
                     prev["optional"] = True
-    return out
+    return out, skipped
+
+
+def extract_l9_ports(l9: dict) -> list[dict]:
+    """Return [{name, direction, open_drain}] from the UNION of every
+    accepted L9 schema port-key variant (#490).
+
+    The union is deduped by name (first occurrence wins, but a later
+    occurrence that carries a direction backfills a missing one) so a
+    dual-written L9 (the same pins under both `top_ports` and
+    `top_module_pins`) yields the same single port set as a singly-keyed
+    L9. This is what makes the gate read ports that landed in ANY one
+    key without requiring producers to mirror into every key.
+    #591: thin wrapper over extract_l9_ports_with_audit (one parser)."""
+    ports, _skipped = extract_l9_ports_with_audit(l9)
+    return ports
 
 
 # ─── RTL top extraction ────────────────────────────────────────────
@@ -468,7 +496,7 @@ def main(argv: list[str]) -> int:
         print(f"FAIL — cannot parse L9 ({l9_path.name}): {e}")
         return 1
 
-    l9_ports = extract_l9_ports(l9)
+    l9_ports, l9_skipped = extract_l9_ports_with_audit(l9)
     if not l9_ports:
         print(
             "SKIP — L9 declares no top_level_ports[] / top_module_pins[]"
@@ -554,10 +582,22 @@ def main(argv: list[str]) -> int:
         )
 
     if not findings:
+        # ORGANIC #591 — honest evidence line: total raw L9 entries,
+        # entries compared, entries skipped WITH reasons. The old line
+        # printed only the deduped count, so on a 47-entry contract it
+        # read "agree on 46 pins" with the dedupe invisible — and a
+        # silent per-entry skip is exactly how a real one-pin mismatch
+        # could hide inside a PASS at larger drift.
+        _total_raw = len(l9_ports) + len(l9_skipped)
         msg = (
             f"PASS — L9 ↔ RTL top ({rtl_top.name}) pin set + "
-            f"direction agree on {len(l9_names)} pins"
+            f"direction agree on {len(l9_names)}/{_total_raw} pins"
         )
+        if l9_skipped:
+            _reasons = "; ".join(s["reason"] for s in l9_skipped[:6])
+            msg += (f" ({len(l9_skipped)} L9 entr"
+                    f"{'y' if len(l9_skipped) == 1 else 'ies'} skipped: "
+                    f"{_reasons})")
         if only_rtl_debug:
             msg += (
                 f" (RTL has {len(only_rtl_all)} extra port(s); "
@@ -565,6 +605,17 @@ def main(argv: list[str]) -> int:
                 f"ignored: {only_rtl_debug})"
             )
         print(msg)
+        # Any skip that is neither a duplicate nor a parse-shape issue
+        # would be an unknown-reason skip — surface as WARN. (The two
+        # known classes are tagged at the parser; anything else is a
+        # parser bug worth seeing.)
+        _unknown = [s for s in l9_skipped
+                    if not (s["reason"].startswith("duplicate")
+                            or s["reason"].startswith("unparseable"))]
+        if _unknown:
+            print(f"  WARN — {len(_unknown)} L9 entr"
+                  f"{'y' if len(_unknown) == 1 else 'ies'} skipped for "
+                  f"unknown reason: {_unknown}")
         if only_l9_optional:
             # v0.3.4 — #491 R4 advisory (non-gating): doc-optional
             # pins the RTL top legitimately omits.

@@ -311,7 +311,9 @@ def test_e2e_dual_table_then_real_gate_pass(tmp_path):
     assert "PASS" in g.stdout, g.stdout
     assert "SKIP" not in g.stdout, g.stdout
     # clk / reset_n are implicit-stripped; the 5 functional pins remain.
-    assert "agree on 5 pins" in g.stdout, g.stdout
+    # #591 — the evidence line now reports compared/total + named skips
+    # (the dual-key-mirror duplicates from the #490 multi-key L9 write).
+    assert "agree on 5/" in g.stdout, g.stdout
 
 
 # ════════════════════════════════════════════════════════════════════

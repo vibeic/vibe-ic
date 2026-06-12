@@ -78,7 +78,7 @@ def test_pass_when_l9_and_rtl_agree(tmp_path):
     # functional port `id_bus_tx` remains → "agree on 1 pins". This is the
     # intended behavioural change (the old comment's "rst_n is NOT in
     # _IMPLICIT_PINS" was exactly the #491 false-mismatch bug).
-    assert "agree on 1 pins" in r.stdout
+    assert "agree on 1/" in r.stdout  # #591 format: N/TOTAL
 
 
 # ─── v1.6.19 regression — schema-v2 top_module field is honoured ──

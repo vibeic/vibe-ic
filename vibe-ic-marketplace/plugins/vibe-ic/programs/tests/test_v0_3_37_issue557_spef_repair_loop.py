@@ -1,17 +1,17 @@
-"""ORGANIC #557 — post-route SPEF-domain repair loop + SPEF-true Step-23.
+"""ORGANIC #557 / #581 — post-route SPEF EXTRACTION (measure-only) +
+SPEF-true Step-23.
 
-Pre-fix: pnr.tcl ran repair_design/repair_timing only on estimate_parasitics
-(HPWL / global-routing-estimate); after detailed_route there was no repair
-and no SPEF STA → WNS -15.87 at sign-off while in-flow estimate said -1.09.
+Pre-fix (#557): after detailed_route there was no SPEF STA → WNS -15.87
+at sign-off while in-flow estimate said -1.09.
 
-Fixes:
-(a) CTS-domain repair refreshes parasitic estimate before hold repair;
-(b) new _post_route_spef_repair_tcl() inserts OpenRCX extraction → read_spef
-    → repair_design/repair_timing → incremental reroute into pnr.tcl;
-(c) Step-23 verdict is SPEF-based when available (#527, confirmed here).
-
-Defect artifact: quick_spef_sta.log / quick_spef_drv.rpt from benchmark_ic/6th__ibex
-showing WNS -15.87 / TNS -22156 / 4958 DRV post-route vs. estimate -1.09.
+#581 round-3 evolution: the post-route block was originally a REPAIR loop
+(extract → repair_timing → reroute), but every RSZ repair-move
+(repair_design r2, then repair_timing -setup r3) SEGFAULTS (Signal 11) on
+a post-detailed-route SPEF-annotated design, killing the whole openroad
+process so GDS was never written. The block is now MEASURE-ONLY: OpenRCX
+extract → write_spef → SPEF_MEASURE_COMPLETE, with NO repair_timing /
+repair_design / reroute. The SPEF feeds #527's SPEF-true Step-23 STA;
+residual post-route timing goes via the pre-route #561 ECO path.
 """
 import subprocess
 import sys
@@ -25,13 +25,14 @@ import sdc_constraints as sdc  # noqa: E402
 
 # ── (b) _post_route_spef_repair_tcl — TCL content checks ────────────────────
 
-def test_spef_repair_tcl_contains_spef_repair_complete_marker(tmp_path):
+def test_spef_repair_tcl_contains_measure_complete_marker(tmp_path):
+    """#581 r3 — the success marker is SPEF_MEASURE_COMPLETE (extract-only)."""
     tcl = R._post_route_spef_repair_tcl("/out", "/tech.lef")
     (tmp_path / "spef_repair.tcl").write_text(tcl)
     result = subprocess.run(
         ["python3", "-c",
          f"txt=open(r'{tmp_path}/spef_repair.tcl').read();"
-         "assert 'SPEF_REPAIR_COMPLETE' in txt,'marker missing'"],
+         "assert 'SPEF_MEASURE_COMPLETE' in txt,'marker missing'"],
         capture_output=True, text=True,
     )
     assert result.returncode == 0
@@ -49,32 +50,22 @@ def test_spef_repair_tcl_contains_extract_parasitics(tmp_path):
     assert result.returncode == 0
 
 
-def test_spef_repair_tcl_contains_repair_timing(tmp_path):
-    """#581 r2 — the repair set is repair_timing setup+hold (the shared
-    post-buffered builder), NOT repair_design (Signal-11 segfault when
-    pass-1 buffers are present; see test_v0_3_39_issue581r2)."""
+def test_spef_repair_tcl_is_measure_only_no_repair(tmp_path):
+    """#581 r3 — the post-route block calls NO repair_timing /
+    repair_design and does NO reroute: the RSZ repair-move family
+    segfaults on a post-detailed-route SPEF-annotated design (catch
+    cannot contain a segfault → openroad dies → GDS never written).
+    Timing repair is pre-route only."""
     tcl = R._post_route_spef_repair_tcl("/out", "/tech.lef")
-    (tmp_path / "spef_repair.tcl").write_text(tcl)
-    result = subprocess.run(
-        ["python3", "-c",
-         f"txt=open(r'{tmp_path}/spef_repair.tcl').read();"
-         "assert 'repair_timing -setup' in txt,'setup repair missing';"
-         "assert 'repair_timing -hold' in txt,'hold repair missing'"],
-        capture_output=True, text=True,
-    )
-    assert result.returncode == 0
-
-
-def test_spef_repair_tcl_contains_incremental_reroute(tmp_path):
-    tcl = R._post_route_spef_repair_tcl("/out", "/tech.lef")
-    (tmp_path / "spef_repair.tcl").write_text(tcl)
-    result = subprocess.run(
-        ["python3", "-c",
-         f"txt=open(r'{tmp_path}/spef_repair.tcl').read();"
-         "assert 'detailed_route' in txt,'reroute missing'"],
-        capture_output=True, text=True,
-    )
-    assert result.returncode == 0
+    # COMMAND lines only — the doctrine comment names the banned commands.
+    cmds = "\n".join(ln for ln in tcl.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    assert "repair_timing" not in cmds
+    assert "repair_design" not in cmds
+    # no reroute either (the segfault is in the repair that PRECEDED it,
+    # but reroute on the already-converged route is also pointless here)
+    assert "detailed_route" not in cmds
+    assert "global_route" not in cmds
 
 
 def test_spef_repair_tcl_contains_skip_path(tmp_path):

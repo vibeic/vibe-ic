@@ -55,6 +55,20 @@ from typing import Optional
 
 LOCK_FILENAME = ".runner.lock"
 
+# ORGANIC #588 — re-entrancy token. The top orchestrator holds the
+# project lock, then spawns the standalone phase runners as child
+# processes. Those children now ALSO acquire the lock (so a standalone
+# phase3 re-run on a live project is refused), which would deadlock the
+# orchestrator against its own lock. The orchestrator therefore exports
+# this env var carrying "<holder_pid>:<project_path>"; a child whose
+# token matches the live lock on the SAME project re-enters (no-op lock)
+# instead of being refused. chip-AGNOSTIC: pid + path only.
+REENTRANCY_ENV = "VIBE_IC_RUNNER_LOCK_TOKEN"
+
+
+def _token_for(project: Path, pid: int) -> str:
+    return f"{pid}:{Path(project).resolve()}"
+
 # Module-level registry of the lock this process currently holds so the
 # atexit / signal handlers can release exactly what we acquired (and only
 # what we acquired — never a lock another process re-took in the gap).
@@ -138,6 +152,46 @@ class RunnerLock:
             pass
         if _HELD is self:
             _HELD = None
+
+
+class ReentrantLock:
+    """ORGANIC #588 — a no-op lock returned when a child runner re-enters
+    a project its parent orchestrator already locked. Releasing it does
+    NOT touch the parent's lock file (the parent owns the lifecycle)."""
+
+    def __init__(self, project: Path, runner_name: str, holder_pid: int):
+        self.project = Path(project)
+        self.runner_name = runner_name
+        self.pid = os.getpid()
+        self.holder_pid = holder_pid
+        self.path = _lock_path(self.project)
+        self.reentrant = True
+        self._released = True  # never deletes the parent's file
+
+    def release(self) -> None:
+        return  # parent owns the lock lifecycle
+
+
+def child_env(project: Path, held_lock=None,
+              base_env: Optional[dict] = None) -> dict:
+    """Return an env dict (copy of ``base_env`` or os.environ) carrying
+    the re-entrancy token a spawned standalone phase runner uses to
+    re-enter the live project lock rather than being refused (#588).
+
+    When ``held_lock`` is a real :class:`RunnerLock` THIS process owns,
+    the token names this pid. When it is a :class:`ReentrantLock` (this
+    process is itself a delegated sub-run under a parent), the EXISTING
+    token is propagated unchanged so the grandchild re-enters the
+    original top holder, not this non-holding pid."""
+    env = dict(os.environ if base_env is None else base_env)
+    if isinstance(held_lock, ReentrantLock):
+        # Propagate the inherited token (set by the real top holder).
+        existing = env.get(REENTRANCY_ENV) or os.environ.get(REENTRANCY_ENV)
+        if existing:
+            env[REENTRANCY_ENV] = existing
+            return env
+    env[REENTRANCY_ENV] = _token_for(project, os.getpid())
+    return env
 
 
 def _install_release_handlers(lock: RunnerLock) -> None:
@@ -240,3 +294,49 @@ def acquire(project: Path, runner_name: str = "vibe_ic_one_shot_runner",
     _HELD = lock
     _install_release_handlers(lock)
     return lock
+
+
+def acquire_or_reenter(project: Path,
+                       runner_name: str,
+                       stream=None) -> Optional[object]:
+    """ORGANIC #588 — the single entry point ALL four runners call
+    (orchestrator + standalone phase1/2/3).
+
+    Re-entrancy: when the ``VIBE_IC_RUNNER_LOCK_TOKEN`` env var names
+    THIS project AND the named holder pid still owns a live lock file on
+    it, return a :class:`ReentrantLock` (the parent orchestrator's lock
+    already covers this child) instead of refusing. Otherwise behave
+    exactly like :func:`acquire`:
+      * live foreign holder → ``CONCURRENT_RUN_REFUSED``, return None;
+      * stale holder        → ``STALE_RUNNER_LOCK``, clean + take;
+      * no holder           → take the lock.
+
+    This closes the hole where a standalone phase runner neither took
+    nor honored the lock: a second standalone phase3 on a live project
+    is now refused by name, while the orchestrator's own delegated
+    sub-runs re-enter cleanly via the token."""
+    if stream is None:
+        stream = sys.stderr
+    project = Path(project)
+    token = os.environ.get(REENTRANCY_ENV, "")
+    if token:
+        try:
+            holder_pid_s, holder_proj = token.split(":", 1)
+            holder_pid = int(holder_pid_s)
+        except (ValueError, AttributeError):
+            holder_pid, holder_proj = -1, ""
+        if (holder_proj == str(project.resolve())
+                and holder_pid > 0 and _pid_alive(holder_pid)):
+            data = _read_lock(_lock_path(project))
+            # Re-enter only when a live lock file genuinely exists for
+            # the named holder — a stale token must not bypass a real
+            # foreign lock.
+            if data is not None and int(data.get("pid", -1)) == holder_pid:
+                print(
+                    f"RUNNER_LOCK_REENTRANT: {runner_name} re-enters the "
+                    f"lock held by parent pid={holder_pid} on {project} "
+                    f"(#588 delegated sub-run).",
+                    file=stream,
+                )
+                return ReentrantLock(project, runner_name, holder_pid)
+    return acquire(project, runner_name, stream=stream)
