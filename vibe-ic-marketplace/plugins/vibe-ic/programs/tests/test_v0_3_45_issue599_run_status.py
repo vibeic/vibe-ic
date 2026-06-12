@@ -75,34 +75,63 @@ def test_died_when_pid_gone_no_verdict(tmp_path):
     assert rep["last_log_line"]          # last log surfaced
 
 
-# ── STUCK ────────────────────────────────────────────────────────────────────
+# ── STUCK = observed silence beyond the window (NOT a duration budget) ───────
 
-def test_stuck_when_alive_overdue_and_stale(tmp_path):
-    """PID alive (this test process) + past budget + stale heartbeat →
-    STUCK. pnr budget is 1800s; make the log 4000s old."""
+def test_stuck_when_alive_and_silent_beyond_window(tmp_path):
+    """PID alive + no verdict + NO output for longer than the silence
+    window → STUCK. The default window is 600s; make the log 4000s old."""
     p = _project(tmp_path, verdict=None,
                  steps=[{"name": "pnr", "status": "RUNNING"}],
                  log_age_s=4000.0, with_pid=os.getpid())
-    rep = RS.status(p, "phase3", stale_window_s=300)
+    rep = RS.status(p, "phase3")
     assert rep["state"] == "STUCK"
-    assert "OVERDUE" in rep["reason"]
-    assert rep["heartbeat_age_s"] > 1800
+    assert rep["silence_s"] > 600
+    assert "not progressing" in rep["reason"]
 
 
-def test_not_stuck_when_fresh_even_if_alive(tmp_path):
-    """A fresh heartbeat (within budget) is RUNNING_ON_TIME, not STUCK,
-    even though the PID is alive and there's no verdict."""
+def test_long_run_not_stuck_while_writing(tmp_path):
+    """THE KEY FIX (user critique): a run that has been going a LONG time
+    but keeps writing (fresh heartbeat) is RUNNING, not STUCK — the
+    verdict does not depend on a guessed per-step DURATION budget, only
+    on observed silence. Here the step has 'run' a notional 3 hours but
+    its last output was 20s ago → RUNNING."""
     p = _project(tmp_path, verdict=None,
                  steps=[{"name": "pnr", "status": "RUNNING"}],
-                 log_age_s=10.0, with_pid=os.getpid())
+                 log_age_s=20.0, with_pid=os.getpid())
     rep = RS.status(p, "phase3")
     assert rep["state"] == "RUNNING_ON_TIME"
-    assert rep["current_step"] == "pnr"
+    assert rep["silence_s"] < 600
+    # no per-step duration budget appears in the verdict
+    assert "budget" not in rep.get("reason", "").lower()
+
+
+def test_not_stuck_within_silence_window(tmp_path):
+    """Silence below the window (even at 9 minutes, under the 600s... wait,
+    540s < 600s default) is RUNNING, not STUCK."""
+    p = _project(tmp_path, verdict=None,
+                 steps=[{"name": "pnr", "status": "RUNNING"}],
+                 log_age_s=540.0, with_pid=os.getpid())
+    rep = RS.status(p, "phase3")
+    assert rep["state"] == "RUNNING_ON_TIME"
+
+
+def test_per_step_silence_override(tmp_path):
+    """A step with a longer legitimate silence (lvs: Magic ext2spice can
+    extract quietly for 1200s) is RUNNING at 900s silence where pnr
+    (600s window) would be STUCK."""
+    p = _project(tmp_path, verdict=None,
+                 steps=[{"name": "lvs", "status": "RUNNING"}],
+                 log_age_s=900.0, with_pid=os.getpid())
+    rep = RS.status(p, "phase3")
+    assert rep["state"] == "RUNNING_ON_TIME"   # 900 < lvs window 1200
+    # but explicit small override flips it to STUCK
+    rep2 = RS.status(p, "phase3", max_silence_s=300)
+    assert rep2["state"] == "STUCK"
 
 
 # ── RUNNING_ON_TIME ──────────────────────────────────────────────────────────
 
-def test_running_on_time_reports_step_and_eta(tmp_path):
+def test_running_on_time_reports_step(tmp_path):
     p = _project(tmp_path, verdict=None,
                  steps=[{"name": "synth", "status": "PASS"},
                         {"name": "pnr", "status": "RUNNING"}],
@@ -111,25 +140,29 @@ def test_running_on_time_reports_step_and_eta(tmp_path):
     assert rep["state"] == "RUNNING_ON_TIME"
     assert rep["current_step"] == "pnr"
     assert rep["steps_completed"] == 1
-    assert rep["eta_s"] is not None
+    assert rep["silence_s"] is not None
 
 
-# ── no-PID heartbeat inference ───────────────────────────────────────────────
+# ── no-PID: silence is still decisive evidence ───────────────────────────────
 
-def test_unknown_when_no_pid_but_fresh(tmp_path):
+def test_running_when_no_pid_but_fresh(tmp_path):
+    """No PID to confirm liveness, but output is fresh → RUNNING (not
+    blocked on liveness — fresh output IS progress)."""
     p = _project(tmp_path, verdict=None,
                  steps=[{"name": "pnr", "status": "RUNNING"}],
                  log_age_s=10.0)  # no pid
     rep = RS.status(p, "phase3")
-    assert rep["state"] == "UNKNOWN"
-    assert "no PID" in rep["reason"]
+    assert rep["state"] == "RUNNING"
+    assert "not confirmed" in rep.get("note", "")
 
 
-def test_stuck_inferred_when_no_pid_but_very_stale(tmp_path):
+def test_stuck_inferred_when_no_pid_but_silent(tmp_path):
+    """No PID, but silent beyond the window → STUCK (the log mtime is the
+    real timestamp of the last heartbeat; we don't need the PID)."""
     p = _project(tmp_path, verdict=None,
                  steps=[{"name": "pnr", "status": "RUNNING"}],
-                 log_age_s=5000.0)  # no pid, very stale
-    rep = RS.status(p, "phase3", stale_window_s=300)
+                 log_age_s=5000.0)  # no pid, very silent
+    rep = RS.status(p, "phase3")
     assert rep["state"] == "STUCK"
 
 
