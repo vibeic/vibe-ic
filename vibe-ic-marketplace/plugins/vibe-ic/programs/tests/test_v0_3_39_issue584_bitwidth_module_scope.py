@@ -101,6 +101,82 @@ def test_module_regions_parser():
     assert regions[0][1] <= regions[1][0]
 
 
+# ── ORGANIC #584 round-2 — function-local decls must not shadow the
+# module port for module-body indexes. Fixture quotes the REAL
+# discriminating lines VERBATIM from the reopen's named artifact
+# (aes_sbox_canright_masked.v: module port `input wire [7:0] a;` +
+# sv2v-inlined package function local `reg [1:0] a;` + module-body
+# `assign a1 = a[7:4];`) — per Step-2.6 doctrine, never a same-shape
+# paraphrase.
+_REAL_FUNC_LOCAL_SHADOW = """\
+module aes_masked_inverse_gf2p8 (
+\ta,
+\tm,
+\tb
+);
+\tinput wire [7:0] a;
+\tinput wire [7:0] m;
+\toutput wire [7:0] b;
+\tfunction automatic [3:0] aes_sbox_canright_pkg_aes_mul_gf2p4;
+\t\tinput reg [3:0] gamma;
+\t\tinput reg [3:0] delta;
+\t\treg [3:0] theta;
+\t\treg [1:0] a;
+\t\treg [1:0] b;
+\t\treg [1:0] c;
+\t\tbegin
+\t\t\ta = aes_sbox_canright_pkg_aes_mul_gf2p2(gamma[3:2], delta[3:2]);
+\t\t\taes_sbox_canright_pkg_aes_mul_gf2p4 = {a, c};
+\t\tend
+\tendfunction
+\twire [3:0] a1;
+\twire [3:0] a0;
+\tassign a1 = a[7:4];
+\tassign a0 = a[3:0];
+\tassign b = {a1, a0};
+endmodule
+"""
+
+
+def test_function_local_does_not_shadow_module_port(tmp_path):
+    """The round-2 reopen's exact 現象: `assign a1 = a[7:4];` in the
+    module body is legal against the module port `input wire [7:0] a;`
+    even though an sv2v-inlined function declares `reg [1:0] a;`."""
+    f = tmp_path / "aes_sbox_canright_masked.v"
+    f.write_text(_REAL_FUNC_LOCAL_SHADOW)
+    findings = BW.analyze_file(f)
+    assert findings == [], [fd.message for fd in findings]
+
+
+def test_function_local_index_checked_against_local_decl(tmp_path):
+    """NEGATIVE no-leak: an out-of-range index INSIDE the function against
+    the function-local `reg [1:0] a;` must still be caught."""
+    bad = _REAL_FUNC_LOCAL_SHADOW.replace(
+        "\t\t\taes_sbox_canright_pkg_aes_mul_gf2p4 = {a, c};",
+        "\t\t\taes_sbox_canright_pkg_aes_mul_gf2p4 = a[3:0];")
+    f = tmp_path / "bad_func_local.v"
+    f.write_text(bad)
+    findings = BW.analyze_file(f)
+    errs = [fd for fd in findings if fd.rule == "bitselect-out-of-range"]
+    assert len(errs) == 1, [fd.message for fd in errs]
+    assert "[1:0]" in errs[0].message
+
+
+def test_real_artifact_clean_when_present():
+    """Content-gated on-host check (live-corpus doctrine): when the
+    reopen's named artifact still carries the discriminating shape, the
+    checker must PASS on it."""
+    import pytest
+    art = Path("/home/reyerchu/vibe-ic/benchmark_ic/5th__opentitan_aes_v0338"
+               "/phase2/stage1/rtl/aes_sbox_canright_masked.v")
+    if not art.is_file() or "input wire [7:0] a;" not in art.read_text(
+            errors="replace"):
+        pytest.skip("named artifact absent or reshaped (live corpus)")
+    findings = BW.analyze_file(art)
+    errs = [fd for fd in findings if fd.rule == "bitselect-out-of-range"]
+    assert errs == [], [fd.message for fd in errs]
+
+
 def test_cli_end_state_on_issue_shape(tmp_path):
     """End-state via the real program CLI: the issue's multi-module file
     must exit 0 / PASS (pre-fix: 6 false bitselect-out-of-range errors,

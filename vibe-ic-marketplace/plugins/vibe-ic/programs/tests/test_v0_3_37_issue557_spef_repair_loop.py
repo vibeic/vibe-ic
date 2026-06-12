@@ -49,13 +49,17 @@ def test_spef_repair_tcl_contains_extract_parasitics(tmp_path):
     assert result.returncode == 0
 
 
-def test_spef_repair_tcl_contains_repair_design(tmp_path):
+def test_spef_repair_tcl_contains_repair_timing(tmp_path):
+    """#581 r2 — the repair set is repair_timing setup+hold (the shared
+    post-buffered builder), NOT repair_design (Signal-11 segfault when
+    pass-1 buffers are present; see test_v0_3_39_issue581r2)."""
     tcl = R._post_route_spef_repair_tcl("/out", "/tech.lef")
     (tmp_path / "spef_repair.tcl").write_text(tcl)
     result = subprocess.run(
         ["python3", "-c",
          f"txt=open(r'{tmp_path}/spef_repair.tcl').read();"
-         "assert 'repair_design' in txt,'repair_design missing'"],
+         "assert 'repair_timing -setup' in txt,'setup repair missing';"
+         "assert 'repair_timing -hold' in txt,'hold repair missing'"],
         capture_output=True, text=True,
     )
     assert result.returncode == 0

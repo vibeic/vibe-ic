@@ -2806,6 +2806,31 @@ def _pg_net_cleanup_tcl() -> str:
         "} _pgc]} { puts \"PG_CLEANUP_NONFATAL: $_pgc\" }\n")
 
 
+def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
+                              var_tag: str = "") -> str:
+    """ORGANIC #561 (b) / #581 round-2 — the ONE post-buffered repair
+    command set, shared by every TCL builder that repairs a design whose
+    earlier repair passes already inserted buffers (ECO pass-2, post-route
+    SPEF repair): `repair_timing -setup` + `repair_timing -hold` +
+    `detailed_placement`, and NEVER `repair_design` — its repairDriver
+    path segfaults (Signal 11) on some gate configs when pass-1 buffers
+    are present, and `catch` cannot contain a segfault (it kills the
+    whole OpenROAD process, so the only safe move is not to call it).
+    Duplicated doctrine drifts (#572/#531 family): both emitters now
+    splice THIS builder. Single-line balanced `if {[catch {...} e]}`
+    statements per the #581 round-1 Tcl-syntax doctrine.
+    Chip-AGNOSTIC: standard OpenROAD commands only."""
+    p, s, v = marker_prefix, marker_suffix, var_tag
+    return (
+        f"if {{[catch {{repair_timing -setup}} _rts{v}]}} {{ "
+        f"puts \"{p}_REPAIR_TIMING_SETUP{s}_NONFATAL: $_rts{v}\" }}\n"
+        f"if {{[catch {{repair_timing -hold}} _rth{v}]}} {{ "
+        f"puts \"{p}_REPAIR_TIMING_HOLD{s}_NONFATAL: $_rth{v}\" }}\n"
+        f"if {{[catch {{detailed_placement}} _dpl{v}]}} {{ "
+        f"puts \"{p}{s}_REPAIR_LEGALIZE_NONFATAL: $_dpl{v}\" }}\n"
+    )
+
+
 def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                           liberty_c: str, pnr_dir_c: str, eco_dir_c: str,
                           metal_prefix: str) -> str:
@@ -2896,15 +2921,9 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "if {[catch {estimate_parasitics -global_routing} _pe_gr]} {\n"
         "  puts \"ECO_EST_PARASITICS_GR_NONFATAL: $_pe_gr\"\n"
         "}\n"
-        "if {[catch {repair_timing -setup} _rts2_err]} {\n"
-        "  puts \"ECO_REPAIR_TIMING_SETUP_GR_NONFATAL: $_rts2_err\"\n"
-        "}\n"
-        "if {[catch {repair_timing -hold} _rth2_err]} {\n"
-        "  puts \"ECO_REPAIR_TIMING_HOLD_GR_NONFATAL: $_rth2_err\"\n"
-        "}\n"
-        "if {[catch {detailed_placement} _gr_dp_err]} {\n"
-        "  puts \"ECO_GR_REPAIR_LEGALIZE_NONFATAL: $_gr_dp_err\"\n"
-        "}\n"
+        # #581 r2 — the post-buffered command set comes from the ONE shared
+        # builder so this site and the SPEF-repair block cannot drift.
+        + _post_buffered_repair_tcl("ECO", "_GR", "2") +
         "if {[catch {detailed_route} _dr_err]} {\n"
         "  puts \"ECO_DETAILED_ROUTE_NONFATAL: $_dr_err\"\n"
         "}\n"
@@ -3005,11 +3024,17 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str) -> str:
          the PDK root derived from the tech-LEF path).
       2. If captable found:
          a. extract_parasitics → write_spef (sign-off grade; DRV feedback).
-         b. repair_design + repair_timing -setup + repair_timing -hold.
-         c. detailed_placement (legalise any inserted cells; catches DPL-0033).
-         d. Incremental reroute (global_route → detailed_route -droute_end_iter 1)
+         b. the SHARED post-buffered repair set (#561 (b) / #581 round-2):
+            repair_timing -setup + repair_timing -hold + detailed_placement —
+            NEVER repair_design: this block runs after pnr.tcl's two in-flow
+            repair passes, so buffers are present and repair_design's
+            repairDriver path segfaults (Signal 11); catch cannot contain a
+            segfault, so the only safe move is not to call it. Emitted via
+            _post_buffered_repair_tcl so this site and the ECO builder
+            (#561) cannot drift.
+         c. Incremental reroute (global_route → detailed_route -droute_end_iter 1)
             so newly buffered nets get actual routing geometry.
-         e. Emit SPEF_REPAIR_COMPLETE marker (consumed by acceptance tests).
+         d. Emit SPEF_REPAIR_COMPLETE marker (consumed by acceptance tests).
       3. If no captable: emit SPEF_REPAIR_SKIP marker (advisory; flow continues).
 
     The pre-existing estimate_parasitics passes in pnr.tcl remain for CTS-domain
@@ -3051,15 +3076,11 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str) -> str:
         "  } else {\n"
         f"    if {{[catch {{write_spef {out_dir_c}/post_route_repair.spef}} "
         f"_prs_spef_wr]}} {{ puts \"SPEF_WRITE_NONFATAL: $_prs_spef_wr\" }}\n"
-        "    if {[catch {repair_design} _prs_rd]} { "
-        "puts \"SPEF_REPAIR_DESIGN_NONFATAL: $_prs_rd\" }\n"
-        "    if {[catch {repair_timing -setup} _prs_rts]} { "
-        "puts \"SPEF_REPAIR_TIMING_SETUP_NONFATAL: $_prs_rts\" }\n"
-        "    if {[catch {repair_timing -hold} _prs_rth]} { "
-        "puts \"SPEF_REPAIR_TIMING_HOLD_NONFATAL: $_prs_rth\" }\n"
-        "    if {[catch {detailed_placement} _prs_dp]} { "
-        "puts \"SPEF_REPAIR_LEGALIZE_NONFATAL: $_prs_dp\" }\n"
-        "    if {[catch {global_route} _prs_gr]} { "
+        # #581 r2 — post-buffered repair set from the ONE shared builder
+        # (#561 (b) Signal-11 doctrine: NO repair_design after buffers).
+        + "".join("    " + ln + "\n" for ln in
+                  _post_buffered_repair_tcl("SPEF", "", "_prs").splitlines())
+        + "    if {[catch {global_route} _prs_gr]} { "
         "puts \"SPEF_REPAIR_GROUTE_NONFATAL: $_prs_gr\" }\n"
         "    if {[catch {detailed_route -droute_end_iter 1} _prs_dr]} { "
         "puts \"SPEF_REPAIR_DROUTE_NONFATAL: $_prs_dr\" }\n"

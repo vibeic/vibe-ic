@@ -171,6 +171,42 @@ def test_harness_catches_the_v0_3_38_broken_shape(tmp_path):
     assert "close-bracket" in (result.stderr + result.stdout)
 
 
+# ── ORGANIC #581 round-2 — Signal-11: no repair_design after buffers ────────
+
+def test_spef_repair_block_never_calls_repair_design():
+    """The round-2 reopen's 現象: `repair_design` on a routed design with
+    pass-1 buffers present segfaults OpenROAD
+    (rsz::RepairDesign::repairDriver, Signal 11) — catch cannot contain a
+    segfault, so the block must NOT call it at all (#561 (b) doctrine).
+    The repair set is the shared post-buffered builder."""
+    tcl = R._post_route_spef_repair_tcl("/out", "/p/libs.ref/x/tech.lef")
+    assert "repair_design" not in tcl
+    assert "repair_timing -setup" in tcl
+    assert "repair_timing -hold" in tcl
+
+
+def test_shared_post_buffered_builder_used_by_both_emitters():
+    """Drift pin (#572/#531 family): the SPEF block and the #561 ECO
+    pass-2 must both emit the SHARED builder's command set; the ECO
+    builder's pass-1 repair_design (its validated recipe) is preserved."""
+    spef = R._post_route_spef_repair_tcl("/out", "/p/libs.ref/x/tech.lef")
+    eco = R._build_eco_repair_tcl("top", "/t.lef", "/c.lef", "/l.lib",
+                                  "/pnr", "/eco", "met")
+    shared_spef = R._post_buffered_repair_tcl("SPEF", "", "_prs")
+    shared_eco = R._post_buffered_repair_tcl("ECO", "_GR", "2")
+    for ln in shared_spef.splitlines():
+        assert ln.strip() in spef, f"SPEF block missing shared line: {ln}"
+    for ln in shared_eco.splitlines():
+        assert ln in eco, f"ECO builder missing shared line: {ln}"
+    # ECO pass-1 repair_design stays (before the pass-2 block).
+    assert eco.index("repair_design") < eco.index("pass 2")
+    # ECO pass-2 (after the marker) carries no repair_design COMMAND
+    # (the doctrine comment may still name it).
+    pass2_cmds = [ln for ln in eco[eco.index("pass 2"):].splitlines()
+                  if not ln.lstrip().startswith("#")]
+    assert not any("repair_design" in ln for ln in pass2_cmds), pass2_cmds
+
+
 def test_spef_repair_block_no_multiline_catch_in_bracket_expr():
     """Structural pin (tclsh-independent): the block must not contain the
     `if {[catch {\\n` multi-line-catch-inside-bracketed-expression shape —

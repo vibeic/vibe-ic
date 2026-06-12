@@ -270,6 +270,17 @@ def _run_docs_mode(project: Path, ic_name: str,
     # one-shot flags. Forward any extra runner-specific args.
     orig_argv = sys.argv[:]
     sys.argv = ["phase1_doc_one_shot_runner", str(project)]
+    # ORGANIC #583 round-2 — the dispatcher's own argparse CONSUMES
+    # --ic-name into args.ic_name (it never lands in `extras`), so the
+    # docs runner's #541 authoritative override never fired on the
+    # orchestrator-forwarded main path: L1.chip_name stayed None and the
+    # L9.top_module fallback picked the project DIRECTORY name. Re-emit
+    # it onto the delegated argv whenever the caller stated a real name
+    # (the dispatcher default "UNNAMED_CHIP" is not a statement).
+    if (ic_name and ic_name.strip()
+            and ic_name.strip().upper() != "UNNAMED_CHIP"
+            and not any(a == "--ic-name" for a in (forwarded_args or []))):
+        sys.argv.extend(["--ic-name", ic_name.strip()])
     if forwarded_args:
         sys.argv.extend(forwarded_args)
     try:
@@ -277,11 +288,12 @@ def _run_docs_mode(project: Path, ic_name: str,
         rc = _phase1_doc.main()  # type: ignore[attr-defined]
     except AttributeError:
         # If phase1_doc_one_shot_runner doesn't expose `main`,
-        # fall back to subprocess invocation.
+        # fall back to subprocess invocation (same argv shape as above,
+        # including the #583 r2 --ic-name re-emit).
         cp = subprocess.run(
             [sys.executable,
              str(PROGRAMS_DIR / "phase1_doc_one_shot_runner.py"),
-             str(project), *(forwarded_args or [])],
+             *sys.argv[1:]],
             capture_output=False, text=True,
         )
         rc = cp.returncode
