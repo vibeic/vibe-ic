@@ -36,9 +36,15 @@ _VAR_REF_RE = re.compile(r"\$\{?(\w+)\}?")
 _MAX_SUBST_PASSES = 6
 
 
-def collect_sdc_files(project: Path) -> List[Path]:
+def collect_sdc_files(project: Path,
+                      extra_dirs: Optional[List[Path]] = None) -> List[Path]:
     """Return every staged SDC file in priority order:
-    ``input/constraints/*.sdc`` then ``input/reference_flow/**/*.sdc``."""
+    ``input/constraints/*.sdc`` then ``input/reference_flow/**/*.sdc``.
+
+    ``extra_dirs`` (ORGANIC #556 round-2) appends additional SDC
+    directories AFTER the staged ground truth — e.g. phase3's synth step
+    also reads the phase2-generated ``phase2/stage2/constraints/`` SDCs.
+    Default behaviour (no extra dirs) is unchanged."""
     files: List[Path] = []
     cdir = project / "input" / "constraints"
     if cdir.is_dir():
@@ -46,6 +52,9 @@ def collect_sdc_files(project: Path) -> List[Path]:
     rdir = project / "input" / "reference_flow"
     if rdir.is_dir():
         files.extend(sorted(rdir.rglob("*.sdc")))
+    for d in (extra_dirs or []):
+        if d.is_dir():
+            files.extend(sorted(d.glob("*.sdc")))
     return files
 
 
@@ -69,7 +78,8 @@ def _substitute_vars(text: str, variables: Dict[str, str]) -> str:
     return text
 
 
-def collect_create_clocks(project: Path) -> List[Dict]:
+def collect_create_clocks(project: Path,
+                          extra_dirs: Optional[List[Path]] = None) -> List[Dict]:
     """Return every ``create_clock`` directive found in the staged SDC
     files as ``{period_ns, port_name, name, source}``.
 
@@ -79,7 +89,7 @@ def collect_create_clocks(project: Path) -> List[Dict]:
     (``-period $clk_period ... [get_ports $clk_port_name]``) resolve
     to their literal values, not just hand-written literal SDCs."""
     out: List[Dict] = []
-    for sdc in collect_sdc_files(project):
+    for sdc in collect_sdc_files(project, extra_dirs=extra_dirs):
         try:
             text = sdc.read_text(errors="replace")
         except OSError:
@@ -107,10 +117,11 @@ def collect_create_clocks(project: Path) -> List[Dict]:
     return out
 
 
-def primary_clock(project: Path) -> Optional[Dict]:
+def primary_clock(project: Path,
+                  extra_dirs: Optional[List[Path]] = None) -> Optional[Dict]:
     """Return the ``create_clock`` entry with the smallest period (the
     fastest / primary clock), or ``None`` if no SDC clocks are staged."""
-    clocks = collect_create_clocks(project)
+    clocks = collect_create_clocks(project, extra_dirs=extra_dirs)
     if not clocks:
         return None
     return min(clocks, key=lambda c: c["period_ns"])

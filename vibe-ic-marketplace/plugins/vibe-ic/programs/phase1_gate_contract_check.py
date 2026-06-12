@@ -2,7 +2,7 @@
 """
 phase1_gate_contract_check.py — Meta-checker for Phase-2a deterministic gates.
 
-Every Phase-2a gate shipped under `vibe-ic-d/programs/` must satisfy a
+Every Phase-2a gate shipped under `vibe-ic/programs/` must satisfy a
 plugin-level contract so that the flow orchestrator can rely on it:
 
   1. The file exists and is importable (valid Python).

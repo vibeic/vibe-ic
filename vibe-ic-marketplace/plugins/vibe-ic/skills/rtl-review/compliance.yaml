@@ -1,7 +1,7 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: full_markdown
 
-# Auto-generated compliance spec for skill 'rtl-review' (vibe-ic-d)
+# Auto-generated compliance spec for skill 'rtl-review'
 # Refines vibe-ic/skills/rtl-review/SKILL.md output requirements.
 skill: rtl-review
 

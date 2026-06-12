@@ -1,7 +1,7 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: structured
 
-# Compliance spec for skill 'synth-doctor' (vibe-ic-d v0.40)
+# Compliance spec for skill 'synth-doctor' (v0.40)
 # Enhanced: must classify error patterns, provide fix suggestions, and parse tool logs
 skill: synth-doctor
 

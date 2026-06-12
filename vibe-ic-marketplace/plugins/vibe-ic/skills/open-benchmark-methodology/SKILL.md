@@ -480,14 +480,13 @@ When the user asks to "run X benchmark" with no qualifier:
 > front-door by `programs/benchmark_clean_room_check.py`.
 
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/SKILL_NAME/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/SKILL_NAME/compliance.yaml \
     <your_output_file>
 ```
 

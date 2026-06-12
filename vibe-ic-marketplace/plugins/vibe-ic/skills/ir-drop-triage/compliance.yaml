@@ -1,7 +1,7 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: structured
 
-# Compliance spec for skill 'ir-drop-triage' (vibe-ic-d v0.35)
+# Compliance spec for skill 'ir-drop-triage' (v0.35)
 # Enhanced: power integrity analysis must be executed, not just documented
 skill: ir-drop-triage
 

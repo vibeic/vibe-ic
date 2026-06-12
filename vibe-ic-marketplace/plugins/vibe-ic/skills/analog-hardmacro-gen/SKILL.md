@@ -116,14 +116,13 @@ hardmacro/<block>/
 - Liberty → `eda_sta` additional liberty path
 - Behavioral Verilog → `eda_simulate` for mixed-signal gate-level sim
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/analog-hardmacro-gen/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/analog-hardmacro-gen/compliance.yaml \
     <your_output_file>
 ```
 

@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 
 # Locate driver and compliance file relative to this test
-# Layout: .../vibe-ic-d/skills/<skill>/tests/test_compliance.py
-# Driver: .../vibe-ic-d/_shared/skill_compliance_check.py
+# Layout: .../vibe-ic/skills/<skill>/tests/test_compliance.py
+# Driver: .../vibe-ic/_shared/skill_compliance_check.py
 THIS        = Path(__file__).resolve()
 SKILL_DIR   = THIS.parent.parent
 COMPLIANCE  = SKILL_DIR / "compliance.yaml"

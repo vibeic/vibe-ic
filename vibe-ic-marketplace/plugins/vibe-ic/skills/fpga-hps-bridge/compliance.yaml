@@ -1,7 +1,7 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: structured
 
-# Auto-generated compliance spec for skill 'fpga-hps-bridge' (vibe-ic-d)
+# Auto-generated compliance spec for skill 'fpga-hps-bridge'
 # Refines vibe-ic/skills/fpga-hps-bridge/SKILL.md output requirements.
 skill: fpga-hps-bridge
 

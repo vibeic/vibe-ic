@@ -1,7 +1,7 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: structured
 
-# Compliance for skill 'phase1' (vibe-ic-d), updated v0.74 G-implement.
+# Compliance for skill 'phase1', updated v0.74 G-implement.
 # The phase1 skill is the single entry point to the Phase-1 fact-graph
 # pipeline (v0.60). It replaces the v0.51 11-skill serial chain.
 # Requirements below assert the SKILL.md documents the contracts the

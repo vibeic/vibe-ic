@@ -133,14 +133,13 @@ These templates are from `analog-sizing/PRACTICAL_NOTES.md` — all verified wor
 - `analog/<block>/topology.md` → `/analog-sizing` (Step A2, continued)
 - Rejected topologies documented for future reference
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/analog-topology-select/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/analog-topology-select/compliance.yaml \
     <your_output_file>
 ```
 

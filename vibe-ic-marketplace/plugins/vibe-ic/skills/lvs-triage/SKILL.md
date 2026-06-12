@@ -201,19 +201,18 @@ an afterthought.
 - Layout edits → documented in `/eco-plan` log
 - Schematic change → back to `/rtl-repair` or `/analog-layout`
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/lvs-triage/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/lvs-triage/compliance.yaml \
     <your_output_file>
 ```
 
 Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding vibe-ic-d skill directory enumerates
+`compliance.yaml` in the corresponding skill directory enumerates
 every required element of your output: section headers, metadata fields,
 handoff lines, tool invocations.
 

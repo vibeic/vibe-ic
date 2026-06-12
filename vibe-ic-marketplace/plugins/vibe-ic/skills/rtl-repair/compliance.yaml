@@ -1,7 +1,7 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: structured
 
-# Auto-generated compliance spec for skill 'rtl-repair' (vibe-ic-d)
+# Auto-generated compliance spec for skill 'rtl-repair'
 # Refines vibe-ic/skills/rtl-repair/SKILL.md output requirements.
 skill: rtl-repair
 

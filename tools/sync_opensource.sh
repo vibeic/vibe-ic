@@ -70,6 +70,8 @@ EXCLUDES=(
     # local pytest / npm install.
     --exclude='*.vcd'               # iverilog / verilator sim dumps
     --exclude='*.fst'               # GTKWave fast-sim dumps
+    --exclude='*.ghw'               # GHDL waveform dumps
+    --exclude='*.shm'               # nc-sim waveform databases
     --exclude='package-lock.json'   # node lock — different per host
 )
 
@@ -87,6 +89,7 @@ drift_count() {
         --exclude='*.pyc' --exclude=node_modules --exclude=.git \
         --exclude=serv_req_info.txt \
         --exclude='*.vcd' --exclude='*.fst' \
+        --exclude='*.ghw' --exclude='*.shm' \
         --exclude=package-lock.json \
         "$src" "$dst" 2>/dev/null | wc -l
 }

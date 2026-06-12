@@ -85,14 +85,13 @@ altera_adc_control u_adc (
 - After programming → `analog-hw-measure` for scope + ADC data collection
 - Wiring guide → user builds/adjusts breadboard circuit
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/analog-hw-testbench-gen/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/analog-hw-testbench-gen/compliance.yaml \
     <your_output_file>
 ```
 

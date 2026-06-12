@@ -1,7 +1,7 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: structured
 
-# Compliance spec for skill 'ams-sim' (vibe-ic-d v0.35)
+# Compliance spec for skill 'ams-sim' (v0.35)
 # Enhanced: mixed-signal ICs require SPICE-level simulation + corner sweep
 skill: ams-sim
 

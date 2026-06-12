@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 666
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 666)
+- **Total programs (excluding helpers / shims):** 669
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 669)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 657 |
+| `any` | 660 |
 
 ## Alphabetical listing
 
@@ -84,6 +84,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `antenna_report_check` | any | — | wrapper for eda_report_audit --mode antenna. |
 | `arbiter_starvation_check` | any | v0.116 | BACKLOG-v11 P0.6. |
 | `arch_dse_pareto` | any | — | arch_dse_pareto.py -- Deterministic micro-architecture design-space exploration. |
+| `argparse_help_format_check` | any | — | pin the bare-% argparse help-string class. |
 | `arinc429_protocol_synth` | any | v0.1.83 | ARINC 429 (Mark 33 DITS) protocol synth helper. |
 | `arith_ss_corner_risk_check` | any | — | slow-corner arithmetic-architecture advisor. |
 | `assertion_covers_l3_constraints_check` | any | Wave 39 | Wave 39 / D3 |
@@ -177,6 +178,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ddr4_protocol_synth` | any | — | protocol class #58. |
 | `ddr5_protocol_synth` | any | — | DDR5 SDRAM protocol synth helper (JEDEC JESD79-5). |
 | `ddr_protocol_synth` | any | v0.1.84 | DDR (DDR3 SDRAM)-class protocol synth helper. |
+| `dead_plugin_path_check` | any | — | no retired-second-plugin path may ship. |
 | `dead_timing_constant_warn` | any | — | R4 cheap WARN gate |
 | `debug_first_pass` | any | — | single dispatcher for debug-skill deterministic first-pass. |
 | `def_stage_progression_check` | any | v0.47 | Catch fabricated PnR stage DEF files. |
@@ -684,6 +686,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `wake_pulse_implementation_check` | any | Wave 9 | LL-11 / Wake-pulse value gate. |
 | `wake_pulse_width_matches_measurement_check` | any | Wave 18 | Wave 18 silent-bug gate. |
 | `warn_acceptance_policy_check` | any | — | O3: Enforce that every WARN finding from |
+| `waveform_artifact_hygiene_check` | any | — | no sim waveform dumps in the bundle. |
 | `wishbone_protocol_synth` | any | v0.1.85 | Wishbone B4 protocol synth helper. |
 | `xlsx_extract` | any | — | Extract tables from .xlsx spec documents into JSON. |
 | `yield_fix_cost_rank` | any | — | D3 program-first extraction of the |
@@ -738,7 +741,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (657 programs)
+### `any` (660 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -798,6 +801,7 @@ _(no programs in this group)_
 - `antenna_report_check` — wrapper for eda_report_audit --mode antenna.
 - `arbiter_starvation_check` — BACKLOG-v11 P0.6.  _[v0.116]_
 - `arch_dse_pareto` — arch_dse_pareto.py -- Deterministic micro-architecture design-space exploration.
+- `argparse_help_format_check` — pin the bare-% argparse help-string class.
 - `arinc429_protocol_synth` — ARINC 429 (Mark 33 DITS) protocol synth helper.  _[v0.1.83]_
 - `arith_ss_corner_risk_check` — slow-corner arithmetic-architecture advisor.
 - `assertion_covers_l3_constraints_check` — Wave 39 / D3  _[Wave 39]_
@@ -888,6 +892,7 @@ _(no programs in this group)_
 - `ddr4_protocol_synth` — protocol class #58.
 - `ddr5_protocol_synth` — DDR5 SDRAM protocol synth helper (JEDEC JESD79-5).
 - `ddr_protocol_synth` — DDR (DDR3 SDRAM)-class protocol synth helper.  _[v0.1.84]_
+- `dead_plugin_path_check` — no retired-second-plugin path may ship.
 - `dead_timing_constant_warn` — R4 cheap WARN gate
 - `debug_first_pass` — single dispatcher for debug-skill deterministic first-pass.
 - `def_stage_progression_check` — Catch fabricated PnR stage DEF files.  _[v0.47]_
@@ -1390,6 +1395,7 @@ _(no programs in this group)_
 - `wake_pulse_implementation_check` — LL-11 / Wake-pulse value gate.  _[Wave 9]_
 - `wake_pulse_width_matches_measurement_check` — Wave 18 silent-bug gate.  _[Wave 18]_
 - `warn_acceptance_policy_check` — O3: Enforce that every WARN finding from
+- `waveform_artifact_hygiene_check` — no sim waveform dumps in the bundle.
 - `wishbone_protocol_synth` — Wishbone B4 protocol synth helper.  _[v0.1.85]_
 - `xlsx_extract` — Extract tables from .xlsx spec documents into JSON.
 - `yield_fix_cost_rank` — D3 program-first extraction of the

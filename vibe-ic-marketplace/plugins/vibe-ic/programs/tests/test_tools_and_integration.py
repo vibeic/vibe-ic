@@ -142,7 +142,7 @@ class TestMaintenanceTools:
 
 
 # ---------------------------------------------------------------------------
-# Merged-plugin schema validation (Wave 82 — vibe-ic/vibe-ic-d
+# Merged-plugin schema validation (Wave 82 — two plugins
 # merged into vibe-ic). Tests originally probed vibe-ic/skills/
 # under the split layout; after the merge the canonical place for
 # SKILL.md is vibe-ic/skills/. Legacy core dir is still consulted as
@@ -205,7 +205,7 @@ class TestCoreSkillSchema:
                    if d.is_dir()}
         # If core points at vibe-ic/skills/ (merged), the sets are
         # identical by construction. If core points at the legacy
-        # vibe-ic/skills/ (split), every vibe-ic-d skill must
+        # vibe-ic/skills/ (split), every merged-in skill must
         # have a peer in vibe-ic/skills/.
         if core == (PLUGIN / "skills"):
             assert d_names == core_names

@@ -58,3 +58,6 @@ docs/reports/
 
 # Simulation artifacts
 *.vcd
+*.fst
+*.ghw
+*.shm

@@ -1,7 +1,7 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: structured
 
-# Auto-generated compliance spec for skill 'fpga-signaltap' (vibe-ic-d)
+# Auto-generated compliance spec for skill 'fpga-signaltap'
 # Refines vibe-ic/skills/fpga-signaltap/SKILL.md output requirements.
 skill: fpga-signaltap
 

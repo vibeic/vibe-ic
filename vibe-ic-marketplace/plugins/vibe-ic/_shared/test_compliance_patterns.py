@@ -1,6 +1,6 @@
 """Layer 2 of the v0.50 testing strategy (_shared/TESTING_STRATEGY.md).
 
-Parametric test across every compliance.yaml in plugins/vibe-ic-d/skills/:
+Parametric test across every compliance.yaml in plugins/vibe-ic/skills/:
 
   For each requirement with a `pattern`:
     (a) assert the regex compiles

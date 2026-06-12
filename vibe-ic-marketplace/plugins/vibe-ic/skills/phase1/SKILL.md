@@ -277,8 +277,8 @@ See `../../agents/pm-agent.md` and `../../agents/ic-expert-agent.md`.
 | Class templates (K1) | `vibe-ic/agents/class_kb/templates/` |
 | Q-bank (K2) | `vibe-ic/agents/qbank/` |
 | Defaults (K3) | `vibe-ic/agents/defaults/` |
-| Consistency rules (K4) | `vibe-ic-d/programs/phase1_consistency_check.py` |
-| Runtime feedback (K5) | `vibe-ic-d/programs/phase1_k5_quality_check.py` + `tools/training/phase1_k5_autopatch.py` |
+| Consistency rules (K4) | `vibe-ic/programs/phase1_consistency_check.py` |
+| Runtime feedback (K5) | `vibe-ic/programs/phase1_k5_quality_check.py` + `tools/training/phase1_k5_autopatch.py` |
 
 ## Legacy
 
@@ -291,19 +291,18 @@ were briefly archived in v0.58 but **restored to active in v0.60** as
 the Phase-2a Entry B path (existing-Design-Documents → L1-L13). They
 were never legacy in spirit — only in v0.58 placement.
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/phase1/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/phase1/compliance.yaml \
     <your_output_file>
 ```
 
 Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding vibe-ic-d skill directory enumerates
+`compliance.yaml` in the corresponding skill directory enumerates
 every required element of your output: section headers, metadata fields,
 handoff lines, tool invocations.
 

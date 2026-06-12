@@ -23,7 +23,7 @@ Pipeline (chip-AGNOSTIC, but skip-on-mismatch when class detection fails):
     2. AID-class branch: call aid_class_rtl_gen.py --spec-compliance
        (Wave 45/46 hardware-verified baseline)
        Other branches: SKIP step 2 with explicit verdict
-    3. iverilog reference TB (vibe-ic-d/tools/protocol_tb/aid_class_reference_tb.v)
+    3. iverilog reference TB (vibe-ic/tools/protocol_tb/aid_class_reference_tb.v)
        FAIL → ECO loop point (max 3 iterations); user must fix RTL
     4. yosys offline synth (no docker) — early sanity check
     4b. qsf_gen.py / sdc_gen.py (Wave 72; Wave 73 rename) — auto-emit
@@ -95,8 +95,8 @@ TOOLS_IN_CONTAINER = "/foss/tools"
 
 
 # Path resolution — robust against both layouts:
-#   source:  <root>/vibe-ic-marketplace/plugins/vibe-ic-d/programs/<this>
-#   cache:   ~/.claude/plugins/cache/vibe-ic-marketplace/vibe-ic-d/<ver>/programs/<this>
+#   source:  <root>/vibe-ic-marketplace/plugins/vibe-ic/programs/<this>
+#   cache:   ~/.claude/plugins/cache/vibe-ic-marketplace/vibe-ic/<ver>/programs/<this>
 # The cache layout drops the `plugins/` segment and inserts a version dir.
 # Resolve PROGRAMS_DIR / PROTOCOL_TB / DEVICES_ROOT by walking up to find each
 # anchor, falling back to source-layout assumptions if any anchor is missing.
@@ -107,7 +107,7 @@ def _find_protocol_tb() -> Path:
     """Walk up from PROGRAMS_DIR looking for tools/protocol_tb/aid_class_reference_tb.v."""
     candidate_anchors = [
         PROGRAMS_DIR.parent,                                    # cache: <ver>/
-        PROGRAMS_DIR.parent.parent,                             # source: vibe-ic-d/
+        PROGRAMS_DIR.parent.parent,                             # source: plugin root
     ]
     for anchor in candidate_anchors:
         p = anchor / "tools" / "protocol_tb" / "aid_class_reference_tb.v"
@@ -5191,8 +5191,80 @@ def step_complexity_advisory(project: Path) -> StepResult:
 # -------------------------------------------------------------------------
 # 9. final flow_compliance audit
 # -------------------------------------------------------------------------
+# ORGANIC #547 round-2 — CDC root clocks must come from the TOP module's
+# input ports ONLY. The round-1 fix unioned clock-named input ports across
+# EVERY module in every RTL file, so a single-board-clock hierarchical
+# design (top `clk_sys` + a sub-module `clk_i` + the runner's own rcvar
+# alias wrapper `clk`) counted 3 "root" domains and mis-reported
+# multi-clock. Sub-module clock ports are INTERNAL wiring of the one board
+# clock; only the design top's ports are external clock roots.
+_CDC_MODULE_RE = re.compile(
+    r"\bmodule\s+([A-Za-z_]\w*)(.*?)\bendmodule\b", re.DOTALL)
+
+
+def _cdc_top_clock_ports(rtl_files: List[Path],
+                         top_name: Optional[str],
+                         project: Path,
+                         input_port_re: "re.Pattern",
+                         rst_re: "re.Pattern") -> Tuple[set, str]:
+    """Return ({top module's clock input ports}, scope_note).
+
+    Top resolution priority: (a) the orchestrator's --top-name when that
+    module exists in the scanned RTL; (b) L9.top_module; (c) the single
+    instantiation-graph root (excluding runner-generated `*__rcvar_inner`
+    inner copies — their ports duplicate the wrapper's); (d) fallback:
+    union over all modules (the conservative round-1 behaviour).
+    """
+    bodies: Dict[str, str] = {}
+    for rf in rtl_files:
+        try:
+            txt = rf.read_text(errors="replace")
+        except OSError:
+            continue
+        for m in _CDC_MODULE_RE.finditer(txt):
+            bodies.setdefault(m.group(1), m.group(2))
+
+    def _clock_inputs(body: str) -> set:
+        out = set()
+        for pm in input_port_re.finditer(body):
+            nm = pm.group(1)
+            if ("clk" in nm.lower() or "clock" in nm.lower()) \
+                    and not rst_re.search(nm):
+                out.add(nm)
+        return out
+
+    top: Optional[str] = None
+    how = ""
+    if top_name and top_name in bodies:
+        top, how = top_name, "--top-name"
+    if top is None:
+        l9 = _rcvar_l9_top_ports(project)
+        if l9 and l9[0] and l9[0] in bodies:
+            top, how = l9[0], "L9.top_module"
+    if top is None and bodies:
+        def _instantiated(child: str) -> bool:
+            pat = re.compile(
+                rf"\b{re.escape(child)}\s+(?:#\s*\([^;]*?\)\s*)?"
+                rf"[A-Za-z_]\w*\s*\(")
+            return any(pat.search(b) for mod, b in bodies.items()
+                       if mod != child)
+        roots = [m for m in bodies
+                 if not m.endswith("__rcvar_inner") and not _instantiated(m)]
+        if len(roots) == 1:
+            top, how = roots[0], "instantiation-graph root"
+    if top is not None:
+        return (_clock_inputs(bodies[top]),
+                f"top module '{top}' (resolved via {how})")
+    # Fallback: no resolvable top — conservative union over all modules.
+    union: set = set()
+    for b in bodies.values():
+        union |= _clock_inputs(b)
+    return union, "all modules (no resolvable top — conservative union)"
+
+
 def step_emit_phase2_manifests(project: Path,
-                                plan: List[StepResult]) -> StepResult:
+                                plan: List[StepResult],
+                                top_name: Optional[str] = None) -> StepResult:
     """Write canonical Phase 2 step-artifact manifests so flow_compliance_check
     --strict (--phase 2) sees the evidence the runner has already produced.
 
@@ -5250,10 +5322,10 @@ def step_emit_phase2_manifests(project: Path,
     # based domain detection. Every external clock MUST arrive via an `input`
     # port: gated/buffered derived clocks (prim_clock_gating outputs, BUFCEs,
     # etc.) are INTERNAL nets whose posedge tokens share the root domain.
-    # Algorithm: (a) extract `input` ports whose name matches _is_clock;
-    # those are root clocks. (b) collect all posedge/negedge tokens as
-    # evidence. (c) domain count = |root_clock_ports|, NOT |posedge_tokens|.
-    # Fallback when no root ports found: use posedge token set (conservative).
+    # Round-2: root ports come from the TOP MODULE ONLY (sub-module clock
+    # inputs are internal wiring of the board clock; the runner's own rcvar
+    # alias wrapper/inner pair must not double-count) — see
+    # _cdc_top_clock_ports above.
     _INPUT_PORT_RE = re.compile(
         r'\binput\s+(?:wire\s+|reg\s+|logic\s+)?'
         r'(?:\[[^\]]+\]\s+)?([A-Za-z_]\w*)',
@@ -5264,24 +5336,20 @@ def step_emit_phase2_manifests(project: Path,
         re.IGNORECASE,
     )
     _clocks: set = set()           # all posedge/negedge tokens (not reset)
-    _root_clk_ports: set = set()   # input ports matching clock heuristic
     for _rf in _rtl_files:
         try:
             _txt = _rf.read_text(errors="replace")
         except OSError:
             continue
-        for _m in _INPUT_PORT_RE.finditer(_txt):
-            _nm = _m.group(1)
-            if ("clk" in _nm.lower() or "clock" in _nm.lower()) \
-                    and not _CDC_RST_RE.search(_nm):
-                _root_clk_ports.add(_nm)
         for _m in re.finditer(r"\b(?:pos|neg)edge\s+([A-Za-z_]\w*)", _txt):
             _nm = _m.group(1)
             if not _CDC_RST_RE.search(_nm):
                 _clocks.add(_nm)
-    # Domain count: prefer root clock input ports; fall back to posedge set
-    # when the input scan found nothing (e.g. files truncated or clock port
-    # named unconventionally).
+    _root_clk_ports, _cdc_scope = _cdc_top_clock_ports(
+        _rtl_files, top_name, project, _INPUT_PORT_RE, _CDC_RST_RE)
+    # Domain count: prefer the top module's clock input ports; fall back to
+    # the posedge token set when the port scan found nothing (e.g. files
+    # truncated or clock port named unconventionally).
     _domain_clocks = _root_clk_ports if _root_clk_ports else _clocks
     _derived_note = (
         f"; derived/gated clock tokens attributed to root: "
@@ -5299,8 +5367,8 @@ def step_emit_phase2_manifests(project: Path,
         w("reports/phase2/cdc/async_input.json", _cdc_payload)
         w("reports/phase2/cdc/reset_dep.json", _cdc_payload)
     elif len(_domain_clocks) <= 1:
-        _ev = (f"clock-domain scan of {len(_rtl_files)} RTL file(s): "
-               f"single clock domain "
+        _ev = (f"clock-domain scan of {len(_rtl_files)} RTL file(s) "
+               f"[{_cdc_scope}]: single clock domain "
                f"{sorted(_domain_clocks) or ['(none)']} — "
                f"no clock-domain crossings exist{_derived_note}")
         w("reports/phase2/cdc/crossing.json", {
@@ -5317,7 +5385,8 @@ def step_emit_phase2_manifests(project: Path,
         _cdc_payload = {
             "verdict": "SKIPPED-CONDITION",
             "reason": (f"multi-clock design "
-                       f"(root_clocks={sorted(_domain_clocks)}): a "
+                       f"(root_clocks={sorted(_domain_clocks)}, "
+                       f"scope: {_cdc_scope}): a "
                        f"real CDC tool run is required — this runner does "
                        f"not synthesize crossing verdicts (#436)"),
             "clocks_found": sorted(_domain_clocks),
@@ -6236,7 +6305,7 @@ def main() -> int:
 
     # Phase 2 only — Phase 3 lives in phase3_one_shot_runner.py and is
     # chained by phase23_one_shot_runner.py.
-    plan.append(step_emit_phase2_manifests(project, plan))
+    plan.append(step_emit_phase2_manifests(project, plan, args.top_name))
     # v0.1.58 capture: regenerate final_summary.md BEFORE the audit so the
     # attestation table reflects the SHA256 of every artefact emitted
     # earlier in this phase2 run (e.g. phase2/stage2/synth/netlist.v from

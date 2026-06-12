@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Bootstrap compliance.yaml for every vibe-ic-d-tracked skill.
+Bootstrap compliance.yaml for every compliance-tracked skill.
 
 Layout (vibe-ic marketplace):
     vibe-ic/skills/<skill>/SKILL.md        - the skill definition
-    vibe-ic-d/skills/<skill>/compliance.yaml    - THIS tool writes these
-    vibe-ic-d/skills/<skill>/tests/test_compliance.py  - (gen_compliance_tests.py writes)
+    vibe-ic/skills/<skill>/compliance.yaml    - THIS tool writes these
+    vibe-ic/skills/<skill>/tests/test_compliance.py  - (gen_compliance_tests.py writes)
 
 For every vibe-ic skill we emit a starter compliance.yaml in the
-parallel vibe-ic-d tree. Each file is a starting point - human review
+plugin tree. Each file is a starting point - human review
 (or /rtl-review compliance-spec pass) is expected to refine patterns.
 """
 from __future__ import annotations
@@ -55,7 +55,7 @@ def gen_yaml(skill_name, detected):
         if r[0] in seen: continue
         seen.add(r[0]); uniq.append(r)
     lines = [
-        f"# Auto-generated compliance spec for skill '{skill_name}' (vibe-ic-d)",
+        f"# Auto-generated compliance spec for skill '{skill_name}'",
         f"# Refines vibe-ic/skills/{skill_name}/SKILL.md output requirements.",
         f"skill: {skill_name}",
         "",
@@ -74,7 +74,7 @@ def gen_yaml(skill_name, detected):
 
 
 def main():
-    # Wave 82: vibe-ic / vibe-ic-d merged into vibe-ic. Try the
+    # Wave 82: the former second plugin merged into vibe-ic. Try the
     # merged-plugin layout first, fall back to legacy split for older
     # checkouts.
     d_plugin = Path(__file__).resolve().parent.parent

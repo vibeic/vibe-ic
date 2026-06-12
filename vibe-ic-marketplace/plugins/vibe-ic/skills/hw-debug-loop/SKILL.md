@@ -10,7 +10,7 @@ description: Closed-loop hardware debug methodology for half-duplex protocol ICs
 > MDV-A1101 <benchmark> reference project as concrete evidence for the
 > rules below. The rules themselves are chip-AGNOSTIC and apply to
 > any IC of the matching `ic_class` (see
-> `vibe-ic-marketplace/plugins/vibe-ic-d/programs/ic_class_profile.py`).
+> `vibe-ic-marketplace/plugins/vibe-ic/programs/ic_class_profile.py`).
 > When you adopt this skill on a different IC, swap `<chip-class>` →
 > `<your IC name>` and `<half-duplex-tester>` → `<your host-tester name>`; the
 > structural gates and rule bodies do not depend on those SKUs.
@@ -196,7 +196,7 @@ verdict, the frame bytes, the SOF sha256.
 After byte[6]=0xF2 PASS:
 
 ```bash
-python3 plugins/vibe-ic-d/programs/hw_acceptance_test_passed_check.py \
+python3 plugins/vibe-ic/programs/hw_acceptance_test_passed_check.py \
     <project_dir>
 ```
 

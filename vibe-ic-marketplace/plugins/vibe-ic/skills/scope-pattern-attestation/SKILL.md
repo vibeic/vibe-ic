@@ -89,11 +89,11 @@ wrong is shipping a defective IC.
 ### CLI
 
 The deterministic implementation is
-`plugins/vibe-ic-d/programs/scope_periodic_pulse_check.py`. Typical
+`plugins/vibe-ic/programs/scope_periodic_pulse_check.py`. Typical
 hardware-side invocation:
 
 ```bash
-python3 plugins/vibe-ic-d/programs/scope_periodic_pulse_check.py \
+python3 plugins/vibe-ic/programs/scope_periodic_pulse_check.py \
     --channel 4 \
     --span-ms 50 \
     --period-ms 5 --period-tol-ms 1 \
@@ -106,7 +106,7 @@ For CI / regression without any USB hardware, feed a previously
 captured waveform CSV:
 
 ```bash
-python3 plugins/vibe-ic-d/programs/scope_periodic_pulse_check.py \
+python3 plugins/vibe-ic/programs/scope_periodic_pulse_check.py \
     --mock-samples-csv capture.csv \
     --period-ms 5 --period-tol-ms 1 \
     --pulse-min-us 10 --pulse-max-us 100
@@ -166,19 +166,18 @@ downstream skills to consume programmatically.
 * **Not a sim replacement.** Sim and static checkers run before silicon
   exists; this is an after-silicon attestation layer.
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/scope-pattern-attestation/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/scope-pattern-attestation/compliance.yaml \
     <your_output_file>
 ```
 
 Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding vibe-ic-d skill directory enumerates
+`compliance.yaml` in the corresponding skill directory enumerates
 every required element of your output: section headers, metadata fields,
 handoff lines, tool invocations.
 

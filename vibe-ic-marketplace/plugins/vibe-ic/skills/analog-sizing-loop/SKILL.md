@@ -207,14 +207,13 @@ session is rejected with `reason="DUPLICATE"` instead of burning another
 multi-corner SPICE sweep. The `sizing_history.json` output should record each
 admitted point's fingerprint so the dedup set is reproducible across resumes.
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/analog-sizing-loop/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/analog-sizing-loop/compliance.yaml \
     <your_output_file>
 ```
 

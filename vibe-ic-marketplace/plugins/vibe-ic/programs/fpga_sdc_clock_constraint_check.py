@@ -168,6 +168,18 @@ _FREQ_SYNONYMS_HZ = (
     r"CLOCK_FREQ_HZ",
     r"master_clock_hz",
 )
+# ORGANIC #577 — `clock_mhz` is the canonical L8 key the sibling SDC
+# generator (sdc_gen.py: period_ns = 1000 / L8.clock_mhz) emits and
+# consumes; the checker must share that vocabulary or Rule 3 silently
+# never fires on canonical projects.
+_FREQ_SYNONYMS_MHZ = (
+    r"CLOCK_MHZ",
+    r"CLK_MHZ",
+    r"CLOCK_FREQ_MHZ",
+    r"CLK_FREQ_MHZ",
+    r"MASTER_CLK_MHZ",
+    r"FREQ_MHZ",
+)
 
 
 def find_rtl_clock_period_ns(project: Path) -> Optional[float]:
@@ -224,6 +236,17 @@ def find_rtl_clock_period_ns(project: Path) -> Optional[float]:
                     hz = int(m.group(1).replace("_", ""))
                     if hz > 0:
                         return 1e9 / hz
+                except ValueError:
+                    pass
+        # MHz → ns (#577: 1000 / MHz, mirroring sdc_gen.py)
+        for syn in _FREQ_SYNONYMS_MHZ:
+            m = re.search(_lb + syn + r"\b\D{0,40}?([0-9]+(?:\.[0-9]+)?)",
+                          txt, re.IGNORECASE)
+            if m:
+                try:
+                    mhz = float(m.group(1))
+                    if mhz > 0:
+                        return 1000.0 / mhz
                 except ValueError:
                     pass
     return None
@@ -326,6 +349,7 @@ def audit(project: Path) -> Tuple[str, List[str]]:
         if p.is_file()
     )
     rtl_period = find_rtl_clock_period_ns(project)
+    pll_mismatch_warned = False
     if rtl_period is not None and rtl_period > 0:
         for c in create_clocks:
             if c["period_ns"] is None:
@@ -333,6 +357,7 @@ def audit(project: Path) -> Tuple[str, List[str]]:
             ratio = abs(c["period_ns"] - rtl_period) / rtl_period
             if ratio > 0.05:
                 if sdc_has_pll:
+                    pll_mismatch_warned = True
                     msgs.append(
                         "WARN — FPGA_SDC_PERIOD_BOARD_MISMATCH (PLL/generated-"
                         "clock present)\n"
@@ -368,11 +393,17 @@ def audit(project: Path) -> Tuple[str, List[str]]:
             f"Verify all are constrained: {top_clks}"
         )
 
+    if rtl_period is None:
+        period_note = ""
+    elif pll_mismatch_warned:
+        # #577 — do not claim a match the WARN above just denied.
+        period_note = (f"; RTL clock period {rtl_period} ns — board-clock "
+                       "mismatch under PLL topology (advisory, see WARN)")
+    else:
+        period_note = f"; RTL clock period {rtl_period} ns matches"
     msgs.append(
         f"PASS — {len(create_clocks)} create_clock entry/entries across "
-        f"{len(sdc_files)} sdc file(s)"
-        + (f"; RTL clock period {rtl_period} ns matches"
-           if rtl_period is not None else "")
+        f"{len(sdc_files)} sdc file(s)" + period_note
     )
     return ("PASS", msgs)
 

@@ -1549,30 +1549,28 @@ _TIMING_CRITICAL_CLASSES = frozenset({"processor_cpu"})
 
 
 def _sdc_period_ps(project: Path) -> Optional[int]:
-    """ORGANIC #556 — extract the smallest create_clock period from all SDC
-    files in the project (input/constraints/*.sdc and
-    phase2/stage2/constraints/*.sdc). Returns period in picoseconds (int),
-    or None if no SDC / no period found. Chip-AGNOSTIC: standard SDC
-    `create_clock -period <ns>` syntax only."""
-    candidates = (
-        list((project / "input" / "constraints").glob("*.sdc")) +
-        list((project / "phase2" / "stage2" / "constraints").glob("*.sdc"))
-    )
+    """ORGANIC #556 — smallest create_clock period across the project's SDC
+    files, in picoseconds (int); None when no SDC / no period found.
+
+    Round-2: delegates to the SHARED ``sdc_constraints`` module (#554) so
+    Tcl-variable-indirect SDCs (``set clk_period 10.0`` +
+    ``create_clock -period $clk_period`` — the real constraint.sdc shape
+    on the timing-critical benchmarks this lever serves) resolve instead
+    of silently returning None, and no parallel literal-only regex can
+    drift from the staged-SDC parser. The phase2-generated
+    ``phase2/stage2/constraints/*.sdc`` tree stays in scope via
+    ``extra_dirs``. Chip-AGNOSTIC: standard SDC/Tcl grammar only."""
+    clocks = _sdc.collect_create_clocks(
+        project,
+        extra_dirs=[project / "phase2" / "stage2" / "constraints"])
     best_ps: Optional[int] = None
-    _period_re = re.compile(r"create_clock[^;]*?-period\s+([0-9]+(?:\.[0-9]+)?)")
-    for sdc in candidates:
+    for c in clocks:
         try:
-            text = sdc.read_text(errors="replace")
-        except OSError:
+            period_ps = int(float(c["period_ns"]) * 1000)
+        except (TypeError, ValueError):
             continue
-        for m in _period_re.finditer(text):
-            try:
-                period_ns = float(m.group(1))
-                period_ps = int(period_ns * 1000)
-                if best_ps is None or period_ps < best_ps:
-                    best_ps = period_ps
-            except ValueError:
-                continue
+        if best_ps is None or period_ps < best_ps:
+            best_ps = period_ps
     return best_ps
 
 
@@ -2306,13 +2304,36 @@ def _spare_grid_positions(count: int, core_llx: int, core_lly: int,
     return out
 
 
+def _netlist_cell_masters(netlist_text: str) -> set:
+    """Set of std-cell master names instantiated by a structural netlist.
+    Pure, chip-AGNOSTIC (same instance grammar as
+    _count_placed_cells_from_netlist)."""
+    masters: set = set()
+    if not isinstance(netlist_text, str) or not netlist_text:
+        return masters
+    for m in _NETLIST_INSTANCE_RE.finditer(netlist_text):
+        master = m.group(1)
+        if master.lower() in _NETLIST_NON_CELL_KEYWORDS:
+            continue
+        masters.add(master)
+    return masters
+
+
 def _discover_spare_cells_from_liberty(
-        liberty_path: str, container: str = "") -> Dict[str, Optional[str]]:
+        liberty_path: str, container: str = "",
+        used_cells: Optional[set] = None) -> Dict[str, Optional[str]]:
     """Map each canonical spare function-class to a concrete cell name
     from the PDK liberty. Heuristic name match (chip-AGNOSTIC — every
     cell library names cells with these function tokens). Returns a
     dict {class: cell_name_or_None}. Conservative: classes with no
-    match map to None and the caller drops them from the mix."""
+    match map to None and the caller drops them from the mix.
+
+    ORGANIC #563 round-2: when ``used_cells`` (the masters the design
+    itself instantiates) is given, prefer the first matching variant NOT
+    in that set — a spare whose cell class is also in functional use
+    defeats the spare-only-class LVS ignore (the field's validated
+    workaround was exactly "switch spare_dff to the unused dfrtp_4").
+    Falls back to the first match when every variant is in use."""
     out: Dict[str, Optional[str]] = {cls: None for cls, _ in _SPARE_CELL_MIX}
     text = _v1_6_604_read_text_or_container_cat(liberty_path, container)
     if not text:
@@ -2336,12 +2357,23 @@ def _discover_spare_cells_from_liberty(
         "oai":      re.compile(r"(?:^|_)(?:o\d+ai|oai)\w*$", re.I),
         "dff":      re.compile(r"(?:^|_)(?:dff|dfxtp|dfrtp|sdff)\w*$", re.I),
     }
+    used = used_cells or set()
     cells_sorted = sorted(set(cells), key=lambda n: (len(n), n))
     for cls, pat in patterns.items():
+        first_match: Optional[str] = None
         for nm in cells_sorted:
-            if pat.search(nm):
+            if not pat.search(nm):
+                continue
+            if first_match is None:
+                first_match = nm
+            if nm not in used:
                 out[cls] = nm
                 break
+        if out[cls] is None and first_match is not None:
+            # Every variant of this class is in functional use — keep the
+            # base pick; the plan records the conflict so downstream LVS
+            # knows the class-level spare-only ignore will not engage.
+            out[cls] = first_match
     return out
 
 
@@ -2349,7 +2381,9 @@ def _build_spare_cells_plan(placed_cells: int, density: float,
                             core_box: Tuple[int, int, int, int],
                             liberty_path: str = "",
                             container: str = "",
-                            has_pad_ring: bool = False) -> Dict[str, Any]:
+                            has_pad_ring: bool = False,
+                            used_cells: Optional[set] = None
+                            ) -> Dict[str, Any]:
     """Assemble the full spare-cell insertion plan (pure data — no IO).
 
     Returns the dict serialised to `spare_cells.json`:
@@ -2358,10 +2392,18 @@ def _build_spare_cells_plan(placed_cells: int, density: float,
 
     Each instance carries name / type(class) / concrete `cell` /
     llx / lly / keep:true. Names are deterministic
-    `spare_<class>_<idx>`. Chip-AGNOSTIC."""
+    `spare_<class>_<idx>`. Chip-AGNOSTIC.
+
+    ORGANIC #563 round-2: ``used_cells`` (masters the design itself
+    instantiates) steers spare-cell selection toward variants NOT in
+    functional use, so the spare-only-class LVS ignore always engages;
+    a class whose every variant is in use is recorded under
+    ``class_conflicts`` so LVS knows the class-level ignore cannot
+    apply there."""
     count = _spare_count_from_density(placed_cells, density)
     dist = _spare_type_distribution(count)
-    cell_map = (_discover_spare_cells_from_liberty(liberty_path, container)
+    cell_map = (_discover_spare_cells_from_liberty(liberty_path, container,
+                                                   used_cells=used_cells)
                 if liberty_path else {})
     llx, lly, urx, ury = core_box
     positions = _spare_grid_positions(count, llx, lly, urx, ury)
@@ -2435,16 +2477,29 @@ def _build_spare_cells_plan(placed_cells: int, density: float,
             "max_llx": max(xs) if xs else None,
             "instances": [m["name"] for m in members],
         })
+    # #563 r2 — record classes whose chosen cell is still in functional
+    # use (no unused variant existed): the class-level spare-only LVS
+    # ignore cannot engage for these; tie-off (postfix TCL) is then the
+    # mechanism that makes them LVS-clean.
+    used = used_cells or set()
+    class_conflicts = sorted({inst["cell"] for inst in instances
+                              if inst.get("cell") and inst["cell"] in used})
     plan = {
         "count": eff_count,
         "density": round(density, 6),
         "types": eff_types,
-        "tied_off": True,
+        # tied_off is a CLAIM about the physical netlist; step_pnr sets it
+        # honestly once it knows whether the PDK has a tie-lo cell for the
+        # postfix tie-off block (#563 r2 — the pre-fix constant True was
+        # never backed by actual tie-off TCL).
+        "tied_off": False,
         "instances": instances,
         "rows": rows,
         "spare_pads": spare_pads,
         "cell_map": cell_map,
     }
+    if class_conflicts:
+        plan["class_conflicts"] = class_conflicts
     if dropped_classes:
         plan["dropped_classes_no_pdk_cell"] = dropped_classes
         plan["requested_count"] = count
@@ -2549,13 +2604,20 @@ def _build_spare_protection_tcl(plan: Dict[str, Any], out_dir_c: str
     return "\n".join(lines) + "\n"
 
 
-def _build_spare_postfix_tcl(plan: Dict[str, Any]) -> str:
+def _build_spare_postfix_tcl(plan: Dict[str, Any],
+                             tie_lo_cell: Optional[str] = None,
+                             tie_lo_pin: str = "LO") -> str:
     """ORGANIC #562/#563 — emit the OpenROAD TCL that runs AFTER the
     post-spare-insertion `detailed_placement` call, which has already
     snapped each spare to the legal site/row grid. This fragment:
-      (a) sets every spare to FIRM (= DEF `+ FIXED`) via odb so they are
+      (a) (#563 r2) ties every unconnected spare INPUT to a `spare_tielo`
+          net driven by the PDK's tie-low cell (placed + re-legalized),
+          so spares LVS-match like functional cells even when their cell
+          class is also in functional use; SPARE_TIEOFF_SKIPPED when the
+          PDK liberty exposes no tie cell,
+      (b) sets every spare to FIRM (= DEF `+ FIXED`) via odb so they are
           write-protected in all subsequent DEF emissions,
-      (b) runs check_placement (DPL-0033 catch) to verify alignment —
+      (c) runs check_placement (DPL-0033 catch) to verify alignment —
           a NONFATAL note is printed but the flow continues so a residual
           off-site issue is surfaced without aborting PnR.
     Chip-AGNOSTIC: uses generic spare_ name prefix + odb API."""
@@ -2564,7 +2626,74 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any]) -> str:
     if not _spare_names:
         return "# spare postfix: no physical spare instances to lock.\n"
     _names_tcl = " ".join(_spare_names)
-    lines = [
+    lines = []
+    # === ORGANIC #563 round-2: spare-input tie-off ===
+    # Floating spare inputs make netgen's extracted side wire their pins
+    # to a neighbour's pseudo-net while the schematic side declares them
+    # `()` → guaranteed pin mismatch whenever the spare's cell class is
+    # also in functional use (class-level ignore cannot engage). Tying
+    # every unconnected spare INPUT to a tie-low net (driven by the PDK's
+    # tie cell, routed by the later global/detailed route) makes spares
+    # LVS-clean like any functional cell — the design-for-eco tie-off
+    # requirement the plan previously only CLAIMED. NONFATAL-guarded.
+    tie_lo_cell = tie_lo_cell or None
+    if tie_lo_cell:
+        _first = instances[0] if instances else {}
+        _tx = _first.get("llx", 0)
+        _ty = _first.get("lly", 0)
+        lines += [
+            "# === ORGANIC #563 r2: tie off floating spare inputs ===",
+            "if {[catch {",
+            "  set _blk [ord::get_db_block]",
+            f"  if {{[catch {{place_inst -name spare_tielo_drv "
+            f"-cell {tie_lo_cell} -location {{{_tx} {_ty}}} "
+            f"-status PLACED}} _tp_err]}} {{ "
+            f"puts \"SPARE_TIELO_PLACE_NONFATAL: $_tp_err\" }}",
+            "  set _tdrv [$_blk findInst spare_tielo_drv]",
+            "  if {$_tdrv eq \"NULL\" || $_tdrv eq \"\"} {",
+            # No placed driver → DO NOT create/connect the net: a
+            # driverless net with sinks is exactly the dangling-net shape
+            # that aborts detailed_route (#571 / DRT-0305 class).
+            "    puts \"SPARE_TIEOFF_SKIPPED: tie driver not placed — "
+            "leaving spare inputs untouched\"",
+            "  } else {",
+            "    set _tlnet [$_blk findNet spare_tielo]",
+            "    if {$_tlnet eq \"NULL\" || $_tlnet eq \"\"} {",
+            "      set _tlnet [odb::dbNet_create $_blk spare_tielo]",
+            "    }",
+            f"    set _tit [$_tdrv findITerm {tie_lo_pin}]",
+            "    if {$_tit eq \"NULL\" || $_tit eq \"\"} {",
+            "      puts \"SPARE_TIEOFF_SKIPPED: tie cell has no "
+            f"{tie_lo_pin} pin — leaving spare inputs untouched\"",
+            "    } else {",
+            "      odb::dbITerm_connect $_tit $_tlnet",
+            f"      foreach _sn [list {_names_tcl}] {{",
+            "        set _si [$_blk findInst $_sn]",
+            "        if {$_si ne \"NULL\" && $_si ne \"\"} {",
+            "          foreach _it [$_si getITerms] {",
+            "            set _mt [$_it getMTerm]",
+            "            if {[$_mt getIoType] eq \"INPUT\"} {",
+            "              set _nn [$_it getNet]",
+            "              if {$_nn eq \"NULL\" || $_nn eq \"\"} {",
+            "                odb::dbITerm_connect $_it $_tlnet",
+            "              }",
+            "            }",
+            "          }",
+            "        }",
+            "      }",
+            "      if {[catch {detailed_placement} _tdp_err]} {",
+            "        puts \"SPARE_TIEOFF_LEGALIZE_NONFATAL: $_tdp_err\"",
+            "      }",
+            "      puts \"SPARE_TIEOFF_DONE: net spare_tielo\"",
+            "    }",
+            "  }",
+            "} _tie_err]} { puts \"SPARE_TIEOFF_NONFATAL: $_tie_err\" }",
+        ]
+    else:
+        lines.append(
+            "puts \"SPARE_TIEOFF_SKIPPED: no tie-low cell discovered in "
+            "this PDK liberty — spare inputs remain floating\"")
+    lines += [
         "# === ORGANIC #562: spare FIRM-lock post-legalization ===",
         "# After detailed_placement snapped spares to legal grid positions,",
         "# set them FIRM (= DEF `+ FIXED`) so router/filler cannot move them.",
@@ -3292,16 +3421,28 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                   Path(pdk.cell_lef).name, re.I)
         or any(re.search(r"(?:^|[_/])(io|pad)", Path(m).name, re.I)
                for m in pdk.macro_lefs))
+    # #563 r2 — masters the design itself uses steer spare selection
+    # toward UNUSED variants (keeps the spare-only-class LVS ignore live).
+    _used_masters = _netlist_cell_masters(nl_text_for_count)
     spare_plan = _build_spare_cells_plan(
         placed_cells_est, spare_dens,
         (core_pad, core_pad, core_w + core_pad, core_h + core_pad),
         liberty_path=pdk.liberty, container=container,
-        has_pad_ring=has_pad_ring)
+        has_pad_ring=has_pad_ring, used_cells=_used_masters)
+    # #563 r2 — discover the PDK tie-low cell for the spare-input tie-off
+    # block; the plan's tied_off flag is set HONESTLY (tie-off TCL emitted
+    # with a real tie cell), replacing the pre-fix unconditional True.
+    _tie_info = _v1_6_596_discover_tie_cells(pdk.liberty, container)
+    _tie_lo_cell = _tie_info.get("lo_cell")
+    _tie_lo_pin = _tie_info.get("lo_pin") or "LO"
+    spare_plan["tied_off"] = bool(_tie_lo_cell
+                                  and spare_plan.get("instances"))
     spare_protection_tcl = _build_spare_protection_tcl(
         spare_plan, out_dir_c)
     # ORGANIC #562/#563: postfix TCL runs AFTER detailed_placement snaps
     # spares to the legal site/row grid, then locks them FIXED.
-    spare_postfix_tcl = _build_spare_postfix_tcl(spare_plan)
+    spare_postfix_tcl = _build_spare_postfix_tcl(
+        spare_plan, tie_lo_cell=_tie_lo_cell, tie_lo_pin=_tie_lo_pin)
 
     # v0.1.46/47/48 — silicon-critical PnR blocks (extracted to pure
     # helpers; see TestSiliconCriticalPnrBlocks in

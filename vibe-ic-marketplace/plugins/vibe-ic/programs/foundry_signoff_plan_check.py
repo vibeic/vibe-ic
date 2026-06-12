@@ -168,7 +168,7 @@ def main():
                 "Schema: foundry_signoff_plan: { foundry, contact, "
                 "expected_review_date, closures: [{waiver_id, tool, input, "
                 "proof_artefact, acceptance_criterion}, ...] }. See "
-                "vibe-ic-d/programs/foundry_signoff_plan_check.py docstring."
+                "vibe-ic/programs/foundry_signoff_plan_check.py docstring."
             ),
         ))
     else:

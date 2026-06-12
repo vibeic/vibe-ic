@@ -317,7 +317,7 @@ def main(argv: List[str] = None) -> int:
     print(report_json)
 
     # IO errors (missing RTL dir / missing L12 json) → exit 2 per the
-    # vibe-ic-d contract (0 PASS / 1 FAIL / 2 input-missing).
+    # gate exit-code contract (0 PASS / 1 FAIL / 2 input-missing).
     if any(getattr(f, "category", "") == "IO" for f in findings):
         return 2
     # INFO-only result (no L12) → PASS

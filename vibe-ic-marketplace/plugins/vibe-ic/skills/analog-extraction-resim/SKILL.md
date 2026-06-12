@@ -96,14 +96,13 @@ Branch on the `overall_status` field emitted by
 - `NEEDS_RELAYOUT` → back to `analog-layout` (Step A5)
 - `post_layout_corner_results.json` → `analog_pre_vs_post_layout_check` gate
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/analog-extraction-resim/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/analog-extraction-resim/compliance.yaml \
     <your_output_file>
 ```
 

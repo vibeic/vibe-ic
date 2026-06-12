@@ -129,12 +129,11 @@ error-flag has an undefined-access path; recoverable-vs-fatal is a universal axi
 error-handling specs. It names no chip and depends only on generic L3/L5 protocol
 prose + the gate's structural flag.
 
-## Compliance gate
+## Compliance gate (mandatory)
 
-If `vibe-ic-d` is installed:
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/rtl-review/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/rtl-review/compliance.yaml \
     rtl_review.md
 ```
 

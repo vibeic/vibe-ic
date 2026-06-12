@@ -10,7 +10,7 @@ description: Closed-loop core-agent that fixes plugin issues filed by the field-
 > BENCH-A` as the canonical example chip — substitute your own IC
 > name and host-tester name. The rules themselves are chip-AGNOSTIC
 > and apply to any IC of the matching `ic_class` (see
-> `vibe-ic-marketplace/plugins/vibe-ic-d/programs/ic_class_profile.py`).
+> `vibe-ic-marketplace/plugins/vibe-ic/programs/ic_class_profile.py`).
 > When you adopt this skill on a different IC, swap `IC-A` →
 > `<your IC name>` and `USB-HID tester` → `<your host-tester name>`;
 > the structural gates and rule bodies do not depend on those SKUs.

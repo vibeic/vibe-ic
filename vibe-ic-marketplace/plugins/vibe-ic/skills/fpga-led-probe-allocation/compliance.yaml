@@ -1,7 +1,7 @@
 # Testability level (v0.50 hybrid strategy)
 testability: full_markdown
 
-# Compliance spec for skill 'fpga-led-probe-allocation' (vibe-ic-d v0.99)
+# Compliance spec for skill 'fpga-led-probe-allocation' (v0.99)
 skill: fpga-led-probe-allocation
 
 requirements:

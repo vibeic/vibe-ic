@@ -421,7 +421,7 @@ def main():
     if args.class_kb:
         class_kb = Path(args.class_kb)
     else:
-        # Wave 82: vibe-ic / vibe-ic-d merged into vibe-ic.
+        # Wave 82: the former second plugin merged into vibe-ic.
         # Probe in order: vibe-ic/agents/class_kb (current),
         # then legacy vibe-ic/agents/class_kb.
         here = Path(__file__).resolve().parent

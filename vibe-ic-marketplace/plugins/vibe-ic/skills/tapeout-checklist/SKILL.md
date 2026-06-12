@@ -19,7 +19,7 @@ tape-out readiness verdict:
 
 ```bash
 # 1. The flow-compliance gate is the SOLE final criterion (see § next):
-python3 plugins/vibe-ic-d/programs/flow_compliance_check.py \
+python3 plugins/vibe-ic/programs/flow_compliance_check.py \
     <project_dir> --strict
 
 # 2. Tapeout checklist generation:
@@ -56,7 +56,7 @@ This skill produces `tapeout_signoff_check.json`. **That gate alone is NOT suffi
 The **ONLY** valid completion signal for the full design flow is:
 
 ```
-python3 vibe-ic-d/programs/flow_compliance_check.py <project_dir> --strict
+python3 vibe-ic/programs/flow_compliance_check.py <project_dir> --strict
 ```
 
 returning ONE of three verdict states:
@@ -72,7 +72,7 @@ returning ONE of three verdict states:
 Before declaring tape-out ready, **always** end with:
 
 ```
-python3 vibe-ic-d/programs/flow_compliance_check.py <project_dir> --strict 2>&1 | tail -10
+python3 vibe-ic/programs/flow_compliance_check.py <project_dir> --strict 2>&1 | tail -10
 ```
 
 and paste the output into `FINAL_REPORT.md`. If `PASS_WITH_WAIVERS`, also enumerate every waiver (id, reason, ticket) inline in the report — do not bury them in the JSON file.
@@ -166,19 +166,18 @@ Standard pre-tapeout flows at commercial foundries (TSMC, Samsung, GF) require t
 - Any red item routes back to its owning skill (`/sta-review`, `/drc-fix`, etc.)
 - After full green → GDS release
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/tapeout-checklist/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/tapeout-checklist/compliance.yaml \
     <your_output_file>
 ```
 
 Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding vibe-ic-d skill directory enumerates
+`compliance.yaml` in the corresponding skill directory enumerates
 every required element of your output: section headers, metadata fields,
 handoff lines, tool invocations.
 

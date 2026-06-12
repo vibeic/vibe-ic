@@ -93,14 +93,13 @@ final_comparison.{spec,spice,hw,discrepancy_pct}, convergence_status ∈
 - If model accuracy issue detected → document in `analog/<block>/model_calibration_notes.md`
 - Final hardware measurements → `analog_hw_spice_correlation_check` gate
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/analog-hw-tuning-loop/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/analog-hw-tuning-loop/compliance.yaml \
     <your_output_file>
 ```
 

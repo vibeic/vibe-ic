@@ -50242,7 +50242,7 @@ def main() -> int:
     p.add_argument("--skip-text-extract", action="store_true",
                    help="Reuse existing input_doc/.")
     p.add_argument("--strict", action="store_true",
-                   help="Exit 1 on TODO stubs OR coverage < 80%.")
+                   help="Exit 1 on TODO stubs OR coverage < 80%%.")
     p.add_argument("--ic-name", default=None,
                    help="ORGANIC #541 — authoritative chip name. When given, "
                         "it OVERRIDES the doc heuristic (CLI > docs) so a "

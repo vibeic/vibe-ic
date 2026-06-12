@@ -82,7 +82,7 @@ def _find_flow_def() -> Path:
        file = <plugin_root>/programs/<this>
        flow = <plugin_root>/flow/phase1_phase2_phase3.yaml
 
-    Pre-v1.0 split layout (deprecated): vibe-ic / vibe-ic-d split.
+    Pre-v1.0 split layout (deprecated): the retired two-plugin split.
     """
     here = Path(__file__).resolve()
     # v1.0.0+ unified: programs/.parent = plugin root, flow/ is sibling.

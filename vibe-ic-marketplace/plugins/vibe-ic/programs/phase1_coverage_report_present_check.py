@@ -209,7 +209,7 @@ def _check(project: Path) -> tuple[int, str]:
         return 1, (
             "FAIL — Phase 1 (doc-extraction) coverage report missing: "
             + ", ".join(missing)
-            + ". Run: python3 plugins/vibe-ic-d/programs/"
+            + ". Run: python3 plugins/vibe-ic/programs/"
               "phase1_coverage_report_gen.py <project>. "
               "Do NOT add a waiver — there is no waiver for this gate."
         )

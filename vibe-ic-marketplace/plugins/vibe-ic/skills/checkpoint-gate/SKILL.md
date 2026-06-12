@@ -10,7 +10,7 @@ description: "Verify that all required artifacts exist and pass quality checks b
 > MDV-A1101 <benchmark> reference project as concrete evidence for the
 > rules below. The rules themselves are chip-AGNOSTIC and apply to
 > any IC of the matching `ic_class` (see
-> `vibe-ic-marketplace/plugins/vibe-ic-d/programs/ic_class_profile.py`).
+> `vibe-ic-marketplace/plugins/vibe-ic/programs/ic_class_profile.py`).
 > When you adopt this skill on a different IC, swap `<chip-class>` →
 > `<your IC name>` and `<half-duplex-tester>` → `<your host-tester name>`; the
 > structural gates and rule bodies do not depend on those SKUs.
@@ -60,7 +60,7 @@ The L1..L9 layer-presence set-membership check is **enforced by
 `programs/phase1_doc_presence_check.py`** (folded into
 `checkpoint_gate_check.py --checkpoint 1`):
 ```
-python3 vibe-ic-d/programs/phase1_doc_presence_check.py generated_docs/
+python3 vibe-ic/programs/phase1_doc_presence_check.py generated_docs/
 ```
 MUST exit 0. **Skipping any L-layer is a known regression class**:
 when intermediate layers (L2/L4/L5/L6/L7/L8R) are skipped, fresh

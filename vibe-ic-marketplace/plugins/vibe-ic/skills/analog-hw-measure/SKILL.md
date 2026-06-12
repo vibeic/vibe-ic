@@ -114,14 +114,13 @@ only freezes the arithmetic on a capture you already judged good.
 - Scope CSV files → `scope_response_byte_decode_check` (if protocol testing)
 - If any measurement FAIL → report to tuning loop for sizing adjustment
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/analog-hw-measure/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/analog-hw-measure/compliance.yaml \
     <your_output_file>
 ```
 

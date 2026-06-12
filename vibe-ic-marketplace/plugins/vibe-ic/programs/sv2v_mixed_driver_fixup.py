@@ -58,6 +58,72 @@ _PROC_LV_RE = re.compile(
     re.MULTILINE,
 )
 
+# ORGANIC #575 — begin-less single-statement always/initial bodies
+# (`always @(posedge clk) if (we) q <= d;`) carry procedural drivers too.
+_PROC_KW_RE = re.compile(
+    r"\b(?:always(?:_ff|_comb|_latch)?|initial)\b",
+    re.IGNORECASE,
+)
+
+
+def _word_at(text: str, i: int, word: str) -> bool:
+    """True when `word` starts at offset i as a whole identifier token."""
+    end = i + len(word)
+    if not text.startswith(word, i):
+        return False
+    return end >= len(text) or not (text[end].isalnum() or text[end] == "_")
+
+
+def _beginless_proc_bodies(text: str) -> List[str]:
+    """Yield the single-statement bodies of begin-less always/initial blocks.
+
+    After the keyword and its optional event control `@(...)` / `@*`, if the
+    next token is NOT `begin`, the body is one statement: capture up to its
+    terminating `;`, extending across `else` continuations so the else-branch
+    lvalue of `if (c) a <= x; else a <= y;` is harvested as well.
+    """
+    bodies: List[str] = []
+    n = len(text)
+    for m in _PROC_KW_RE.finditer(text):
+        i = m.end()
+        while i < n and text[i].isspace():
+            i += 1
+        if i < n and text[i] == "@":
+            i += 1
+            while i < n and text[i].isspace():
+                i += 1
+            if i < n and text[i] == "(":
+                depth = 1
+                i += 1
+                while i < n and depth:
+                    if text[i] == "(":
+                        depth += 1
+                    elif text[i] == ")":
+                        depth -= 1
+                    i += 1
+            elif i < n and text[i] == "*":
+                i += 1
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n or _word_at(text, i, "begin"):
+            continue  # block-shaped: handled by the begin/end regexes
+        start = i
+        while True:
+            semi = text.find(";", i)
+            if semi == -1:
+                i = n
+                break
+            i = semi + 1
+            j = i
+            while j < n and text[j].isspace():
+                j += 1
+            if _word_at(text, j, "else"):
+                i = j + 4
+                continue
+            break
+        bodies.append(text[start:i])
+    return bodies
+
 
 def _collect_continuous_assigns(text: str) -> Set[str]:
     return {m.group(2) for m in _ASSIGN_RE.finditer(text)}
@@ -70,6 +136,8 @@ def _collect_procedural_lvalues(text: str) -> Set[str]:
         lvalues.update(v.group(1) for v in _PROC_LV_RE.finditer(body))
     for m in _INITIAL_BLOCK_RE.finditer(text):
         body = m.group(1)
+        lvalues.update(v.group(1) for v in _PROC_LV_RE.finditer(body))
+    for body in _beginless_proc_bodies(text):
         lvalues.update(v.group(1) for v in _PROC_LV_RE.finditer(body))
     return lvalues
 

@@ -96,14 +96,13 @@ Run via `eda_spice` with a combined deck.
 - Behavioral models → can be reused for FPGA simulation if needed
 - If co-sim reveals integration bugs → fix in RTL or analog interface
 
-## Compliance gate (vibe-ic-d - mandatory when deterministic edition is installed)
+## Compliance gate (mandatory)
 
-If you have the `vibe-ic-d` plugin installed alongside `vibe-ic`,
-after producing your output, save it to a file and run:
+After producing your output, save it to a file and run:
 
 ```bash
-python3 plugins/vibe-ic-d/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic-d/skills/mixed-signal-cosim/compliance.yaml \
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/mixed-signal-cosim/compliance.yaml \
     <your_output_file>
 ```
 

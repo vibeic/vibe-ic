@@ -97,7 +97,10 @@ def test_build_plan_shape():
         core_box=(10, 10, 210, 210),
         liberty_path="", container="", has_pad_ring=True)
     assert plan["count"] == 20
-    assert plan["tied_off"] is True
+    # #563 r2 — tied_off is now an HONEST claim: False at plan level;
+    # step_pnr flips it True only when the PDK exposes a tie-low cell and
+    # the postfix tie-off TCL is actually emitted.
+    assert plan["tied_off"] is False
     assert len(plan["instances"]) == 20
     assert sum(plan["types"].values()) == 20
     # pad ring → 2 spare pads reserved

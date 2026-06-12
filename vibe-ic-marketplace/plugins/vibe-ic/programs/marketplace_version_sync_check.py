@@ -8,9 +8,9 @@ marketplace.json as the source of truth, sees no version change, and
 silently no-ops — leaving end-users stuck on stale cache versions.
 
 Concrete failure mode (commit ed516664):
-    plugin.json (vibe-ic-d):       0.135.0
-    marketplace.json plugins[].version (vibe-ic-d):  0.120.0  (stale 15 minor versions)
-    `/plugin update vibe-ic-d` → "already at latest" message even though
+    plugin.json:       0.135.0
+    marketplace.json plugins[].version:  0.120.0  (stale 15 minor versions)
+    `/plugin update <plugin>` → "already at latest" message even though
     end-user still on 0.134.0 cache. Manual installed_plugins.json edit
     required to recover.
 
