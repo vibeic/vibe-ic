@@ -4976,6 +4976,27 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     extras.update(drc_engine_extras)
     if drc_engine_extras.get("drc_authority") == "magic-restream":
         detail = (detail + " | " + drc_engine_extras.get("note", "")).strip()
+    # ORGANIC #594 — classify the OFFGRID-vertex rules SEPARATELY so a
+    # flow grid-alignment regression (routing/streamout vertices off the
+    # PDK manufacturing grid) is never miscounted as design DRC. The
+    # OFFGRID class is a distinct FLOW_OFFGRID finding; the real
+    # spacing/width count is reported alongside. This does not change the
+    # PASS/FAIL tier (an off-grid GDS is still sign-off-blocking) — it
+    # makes the DOMINANT cause visible + actionable (fix the flow grid,
+    # not the design).
+    try:
+        import offgrid_drc_classify_check as _ogc
+        _og = _ogc.classify_per_rule(per_rule)
+        if _og["offgrid_total"] > 0:
+            extras["flow_offgrid_violations"] = _og["offgrid_total"]
+            extras["flow_offgrid_per_rule"] = _og["offgrid_per_rule"]
+            extras["flow_offgrid_fraction"] = _og["offgrid_fraction"]
+            extras["design_drc_violations"] = _og["other_total"]
+            detail = (f"FLOW_OFFGRID {_og['offgrid_total']}/{_og['total']} "
+                      f"({_og['offgrid_fraction']:.0%}) off-grid vertices "
+                      f"(flow grid defect, not design) | " + detail)
+    except Exception:  # nosec — classification is provenance-only
+        pass
     return StepResult("drc", status, time.time() - t0,
                       detail, [str(rpt)], extras=extras)
 
@@ -5193,6 +5214,26 @@ _LVS_EXT_ERROR_WARN_FLOOR = 1
 # count is the immediately-preceding integer (commas tolerated).
 _LVS_EXT_ERROR_RE = re.compile(
     r"([0-9][0-9,]*)\s+error(?:s)?\b", re.IGNORECASE)
+
+
+def _run_drc_offgrid_population(project: Path) -> Optional[dict]:
+    """ORGANIC #595 — return the OFFGRID-class DRC population for THIS
+    run by classifying the step_drc report (phase3/reports/drc.rpt), or
+    None when the report is absent/unclassifiable. Used to cross-
+    reference an ext2spice extraction-error flood (#477) against the
+    off-grid geometry that is its likely root cause — Magic's extractor
+    chokes on exactly the vertices that produce the OFFGRID DRC wall."""
+    rpt = project / "phase3" / "reports" / "drc.rpt"
+    if not rpt.is_file():
+        return None
+    try:
+        import offgrid_drc_classify_check as _ogc
+        rep = _ogc.classify(rpt)
+        if rep.get("verdict") == "ERROR":
+            return None
+        return rep
+    except Exception:
+        return None
 
 
 def _parse_ext2spice_error_count(log_text: str) -> Optional[int]:
@@ -5621,25 +5662,45 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     ext_err_count = _parse_ext2spice_error_count(ext_log_txt)
     ext_warning: Optional[str] = None
     if ext_err_count is not None and ext_err_count >= _LVS_EXT_ERROR_FAIL_CEILING:
+        # ORGANIC #595 — cross-reference the OFFGRID DRC population. Magic's
+        # extractor chokes on off-grid geometry, so an ext2spice error
+        # flood alongside a large OFFGRID DRC wall is almost certainly the
+        # SAME root cause (#594). Point triage at the flow grid defect
+        # instead of the extractor when the link is present. The #477
+        # abort itself is unchanged (an untrustworthy netlist must not be
+        # compared).
+        _ogc_link = ""
+        _og = _run_drc_offgrid_population(project)
+        if _og and _og.get("offgrid_total", 0) > 0 and (
+                _og.get("offgrid_fraction", 0) >= 0.5
+                or _og.get("offgrid_total", 0) >= 1000):
+            _ogc_link = (
+                f" Likely downstream of {_og['offgrid_total']:,} OFFGRID-"
+                f"vertex DRC violations ({_og['offgrid_fraction']:.0%} of "
+                f"DRC) — Magic's extractor chokes on off-grid geometry; fix "
+                f"the flow manufacturing-grid alignment (see DRC FLOW_OFFGRID, "
+                f"#594) BEFORE re-extracting, not the extractor (#595).")
         verdict = _write_lvs_verdict(
             project, "FAIL", "LVS_EXTRACTION_ERROR_FLOOD",
             f"Magic ext2spice reported {ext_err_count:,} extraction "
             f"errors (>= ceiling {_LVS_EXT_ERROR_FAIL_CEILING:,}) — the "
             f"extracted netlist is not trustworthy; LVS cannot conclude "
-            f"a clean compare from it (#477).",
+            f"a clean compare from it (#477).{_ogc_link}",
             extras={"ext2spice_error_count": ext_err_count,
                     "ceiling": _LVS_EXT_ERROR_FAIL_CEILING,
                     "ext2spice_log":
-                        "phase3/stage3/extracted/ext2spice.log"})
+                        "phase3/stage3/extracted/ext2spice.log",
+                    **({"offgrid_drc_cross_ref": _og} if _ogc_link else {})})
         return StepResult(
             "lvs", "FAIL", time.time() - t0,
             f"LVS aborted: Magic ext2spice reported {ext_err_count:,} "
             f"extraction errors (>= {_LVS_EXT_ERROR_FAIL_CEILING:,}); "
             f"extracted netlist untrustworthy (#477 — named in "
-            f"lvs_verdict.json, NOT a clean compare)",
+            f"lvs_verdict.json, NOT a clean compare){_ogc_link}",
             extras={"finding": "LVS_EXTRACTION_ERROR_FLOOD",
                     "ext2spice_error_count": ext_err_count,
-                    "lvs_verdict": verdict})
+                    "lvs_verdict": verdict,
+                    **({"offgrid_drc_cross_ref": _og} if _ogc_link else {})})
     if ext_err_count is not None and ext_err_count >= _LVS_EXT_ERROR_WARN_FLOOR:
         ext_warning = (
             f"Magic ext2spice reported {ext_err_count:,} extraction "

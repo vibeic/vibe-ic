@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 670
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 670)
+- **Total programs (excluding helpers / shims):** 671
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 671)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 661 |
+| `any` | 662 |
 
 ## Alphabetical listing
 
@@ -413,6 +413,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `nvme_protocol_synth` | any | v0.1.84 | NVM Express (NVMe) Base storage-protocol synth helper. |
 | `ocp_protocol_synth` | any | — | Open Core Protocol (OCP) SoC-bus protocol synth helper (protocol #70). |
 | `oe_pattern_check` | any | — | Analyze output-enable (OE) patterns for tristate bus drivers. |
+| `offgrid_drc_classify_check` | any | — | ORGANIC #594. |
 | `onewire_protocol_synth` | any | v0.1.84 | 1-Wire-class protocol synth helper. |
 | `onfi_protocol_synth` | any | v0.1.84 | ONFI NAND-Flash protocol synth helper. |
 | `opcode_dispatch_completeness_check` | any | Wave 13 | v0.119.45 (Wave 13) gate. |
@@ -742,7 +743,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (661 programs)
+### `any` (662 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1126,6 +1127,7 @@ _(no programs in this group)_
 - `nvme_protocol_synth` — NVM Express (NVMe) Base storage-protocol synth helper.  _[v0.1.84]_
 - `ocp_protocol_synth` — Open Core Protocol (OCP) SoC-bus protocol synth helper (protocol #70).
 - `oe_pattern_check` — Analyze output-enable (OE) patterns for tristate bus drivers.
+- `offgrid_drc_classify_check` — ORGANIC #594.
 - `onewire_protocol_synth` — 1-Wire-class protocol synth helper.  _[v0.1.84]_
 - `onfi_protocol_synth` — ONFI NAND-Flash protocol synth helper.  _[v0.1.84]_
 - `opcode_dispatch_completeness_check` — v0.119.45 (Wave 13) gate.  _[Wave 13]_
