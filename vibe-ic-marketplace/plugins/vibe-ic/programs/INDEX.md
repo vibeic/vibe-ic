@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 671
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 671)
+- **Total programs (excluding helpers / shims):** 672
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 672)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 662 |
+| `any` | 663 |
 
 ## Alphabetical listing
 
@@ -181,6 +181,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dead_plugin_path_check` | any | — | no retired-second-plugin path may ship. |
 | `dead_timing_constant_warn` | any | — | R4 cheap WARN gate |
 | `debug_first_pass` | any | — | single dispatcher for debug-skill deterministic first-pass. |
+| `def_manufacturing_grid_check` | any | — | ORGANIC #597. |
 | `def_stage_progression_check` | any | v0.47 | Catch fabricated PnR stage DEF files. |
 | `defect_artifact_fixture_check` | any | v0.2.98 | v0.2.98 |
 | `defect_artifact_snapshot` | any | v0.2.98 | v0.2.98 |
@@ -743,7 +744,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (662 programs)
+### `any` (663 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -897,6 +898,7 @@ _(no programs in this group)_
 - `dead_plugin_path_check` — no retired-second-plugin path may ship.
 - `dead_timing_constant_warn` — R4 cheap WARN gate
 - `debug_first_pass` — single dispatcher for debug-skill deterministic first-pass.
+- `def_manufacturing_grid_check` — ORGANIC #597.
 - `def_stage_progression_check` — Catch fabricated PnR stage DEF files.  _[v0.47]_
 - `defect_artifact_fixture_check` — v0.2.98  _[v0.2.98]_
 - `defect_artifact_snapshot` — v0.2.98  _[v0.2.98]_

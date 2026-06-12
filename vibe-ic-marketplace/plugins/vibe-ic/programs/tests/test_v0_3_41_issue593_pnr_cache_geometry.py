@@ -69,8 +69,11 @@ def test_util_float_tolerance(tmp_path):
 def test_step_pnr_writes_geometry_sidecar():
     src = inspect.getsource(R.step_pnr)
     assert "_write_pnr_args_sidecar" in src
-    # written with the EFFECTIVE die (post auto-resize), not the request
-    assert 'f"{die_w}x{die_h}"' in src
+    # #596 — the cache KEY is the REQUESTED die_um; the effective
+    # post-resize die is recorded for disclosure only (was wrongly the
+    # key in #593, causing a permanent auto-die cache miss).
+    assert "_write_pnr_args_sidecar(out_dir, die_um, util," in src
+    assert 'effective_die_um=f"{die_w}x{die_h}"' in src
 
 
 def test_orchestrator_cache_skip_is_geometry_aware():

@@ -1952,14 +1952,26 @@ def _pnr_last_checkpoint(out_dir: Path) -> Optional[str]:
 _PNR_ARGS_SIDECAR = "pnr_args.json"
 
 
-def _write_pnr_args_sidecar(out_dir: Path, die_um: str, util: float) -> None:
-    """Persist the effective floorplan geometry next to the PnR outputs
-    so a later cache-skip can detect a geometry change. Best-effort."""
+def _write_pnr_args_sidecar(out_dir: Path, die_um: str, util: float,
+                            effective_die_um: Optional[str] = None) -> None:
+    """Persist the floorplan geometry next to the PnR outputs so a later
+    cache-skip can detect a geometry change. Best-effort.
+
+    ORGANIC #596 — the cache key is the REQUESTED geometry (``die_um``,
+    the arg the user/caller passed, e.g. the default "200x200"), NOT the
+    effective post-auto-resize die. The cache CHECK compares the
+    requested arg, so the sidecar must record the same axis or the
+    auto-die path never matches (writer recorded effective "806x806",
+    reader compared requested "200x200" → permanent miss → route re-runs
+    every invocation: emitter↔checker drift, #531/#572 family). The
+    effective die is recorded too, for DISCLOSURE only, never compared."""
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
+        payload = {"die_um": str(die_um), "util": float(util)}
+        if effective_die_um is not None:
+            payload["effective_die_um"] = str(effective_die_um)
         (out_dir / _PNR_ARGS_SIDECAR).write_text(
-            json.dumps({"die_um": str(die_um), "util": float(util)},
-                       indent=2) + "\n")
+            json.dumps(payload, indent=2) + "\n")
     except Exception:  # nosec — sidecar is best-effort
         pass
 
@@ -1967,26 +1979,35 @@ def _write_pnr_args_sidecar(out_dir: Path, die_um: str, util: float) -> None:
 def _pnr_cache_geometry(out_dir: Path) -> Optional[dict]:
     """Read the cached PnR geometry sidecar, or None when absent/unreadable
     (an artifact predating #593 has no sidecar → treated as geometry-unknown
-    so the caller can disclose that)."""
+    so the caller can disclose that). `die_um` is the REQUESTED key (#596);
+    `effective_die_um` is disclosure-only and may be absent."""
     p = out_dir / _PNR_ARGS_SIDECAR
     if not p.is_file():
         return None
     try:
         d = json.loads(p.read_text())
-        return {"die_um": str(d.get("die_um")), "util": d.get("util")}
+        out = {"die_um": str(d.get("die_um")), "util": d.get("util")}
+        if d.get("effective_die_um") is not None:
+            out["effective_die_um"] = str(d.get("effective_die_um"))
+        return out
     except Exception:
         return None
 
 
 def _pnr_cache_valid_for(out_dir: Path, die_um: str,
                          util: float) -> Tuple[bool, str]:
-    """ORGANIC #593 — decide whether a cached DEF/GDS may be reused given
-    the REQUESTED geometry. Returns (valid, disclosure).
+    """ORGANIC #593/#596 — decide whether a cached DEF/GDS may be reused
+    given the REQUESTED geometry. Returns (valid, disclosure).
 
-    valid is True only when a sidecar exists AND its die/util match the
-    request. When the sidecar is absent (pre-#593 artifact) the cache is
-    treated as STALE-UNKNOWN (invalid) so a deliberate geometry change is
-    never silently ignored; the disclosure explains why. chip-AGNOSTIC."""
+    valid is True only when a sidecar exists AND its REQUESTED die/util
+    match the request. #596: both sides now use the requested-die axis,
+    so the auto-die path (requested "200x200" → effective grown larger)
+    HITS the cache on an unchanged re-run — a same-netlist same-args
+    invocation reproduces the same auto-die, so reusing the DEF is
+    correct — while a deliberate --die-um override (#593's
+    congestion-recovery) still mismatches and re-runs. When the sidecar
+    is absent (pre-#593 artifact) the cache is treated as STALE-UNKNOWN
+    (invalid). chip-AGNOSTIC."""
     cached = _pnr_cache_geometry(out_dir)
     if cached is None:
         return (False, "cached run geometry unknown (no pnr_args.json — "
@@ -1997,11 +2018,14 @@ def _pnr_cache_valid_for(out_dir: Path, die_um: str,
                 and abs(float(cached["util"]) - float(util)) < 1e-9)
     except (TypeError, ValueError):
         same = False
+    _eff = (f" (effective die={cached['effective_die_um']})"
+            if cached.get("effective_die_um") else "")
     if same:
-        return (True, f"geometry unchanged (die={die_um} util={util:g})")
-    return (False, f"cached run used die={cached['die_um']} "
-            f"util={cached['util']}; requested die={die_um} util={util:g} "
-            f"— re-running to apply the new geometry")
+        return (True, f"geometry unchanged (requested die={die_um} "
+                f"util={util:g}{_eff})")
+    return (False, f"cached run requested die={cached['die_um']} "
+            f"util={cached['util']}{_eff}; now requested die={die_um} "
+            f"util={util:g} — re-running to apply the new geometry")
 
 
 def _extract_overutil_pct(log_text: str) -> Optional[float]:
@@ -3984,10 +4008,16 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     if spare_warn:
         spare_note += f" | {spare_warn}"
 
-    # ORGANIC #593 — persist the EFFECTIVE geometry (after any
-    # auto-resize) so a later cache-skip detects a die/util change and a
-    # congestion-recovery re-dispatch is never silently no-op'd.
-    _write_pnr_args_sidecar(out_dir, f"{die_w}x{die_h}", util)
+    # ORGANIC #593/#596 — persist the REQUESTED geometry (the `die_um`
+    # arg — NEVER mutated in this function; only die_w/die_h are
+    # auto-resized) as the cache KEY so the cache CHECK (which compares
+    # the requested arg) matches on an unchanged auto-die re-run. The
+    # effective post-resize die is recorded for DISCLOSURE only. #596:
+    # the pre-fix write recorded `f"{die_w}x{die_h}"` (effective) while
+    # the check compared `args.die_um` (requested) → permanent miss on
+    # every auto-resized design → route re-ran every invocation.
+    _write_pnr_args_sidecar(out_dir, die_um, util,
+                            effective_die_um=f"{die_w}x{die_h}")
 
     detail = f"def={def_file.name} sta={sta_file.name}" + spare_note
     if routing_audit_note:
@@ -4995,6 +5025,39 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
             detail = (f"FLOW_OFFGRID {_og['offgrid_total']}/{_og['total']} "
                       f"({_og['offgrid_fraction']:.0%}) off-grid vertices "
                       f"(flow grid defect, not design) | " + detail)
+            # ORGANIC #597 — isolate WHERE the off-grid geometry is born by
+            # classifying the routed DEF source. If the DEF streams on-grid
+            # (empirically the routed DEF is ~100% on-grid: 84/1.88M =
+            # 0.004% via residue), the OFFGRID DRC is introduced DOWNSTREAM
+            # at the DEF→GDS streamout/merge stage — a tool behaviour, NOT
+            # routing/floorplan — and triage must go container-side, not to
+            # the (clean) plugin floorplan. Records the source verdict so a
+            # future floorplan regression that DOES put the source off-grid
+            # is distinguished from the streamout tool defect.
+            try:
+                import def_manufacturing_grid_check as _dmg
+                _routed_def = (_pl.pnr_dir(project) / f"{top}.def")
+                if not _routed_def.is_file():
+                    _routed_def = _pl.pnr_dir(project) / "routed_preantenna.def"
+                if _routed_def.is_file():
+                    _grid_um = _dmg.read_mfg_grid_um(pdk.tech_lef)
+                    _src = _dmg.classify_def(
+                        _routed_def.read_text(errors="replace"), _grid_um)
+                    extras["offgrid_source"] = _src.get("verdict")
+                    extras["offgrid_source_fraction"] = \
+                        _src.get("offgrid_fraction")
+                    if _src.get("verdict") == "GRID_CLEAN_SOURCE":
+                        detail += (" | source DEF GRID-CLEAN → off-grid is a "
+                                   "DOWNSTREAM streamout/merge tool defect "
+                                   "(remediate container-side, #597), NOT "
+                                   "the plugin floorplan")
+                    elif _src.get("verdict") == "FLOW_OFFGRID_SOURCE":
+                        detail += (f" | source DEF is itself "
+                                   f"{_src['offgrid_fraction']:.1%} off-grid "
+                                   f"— floorplan/track origin mis-aligned "
+                                   f"(#597)")
+            except Exception:  # nosec — source isolation is provenance-only
+                pass
     except Exception:  # nosec — classification is provenance-only
         pass
     return StepResult("drc", status, time.time() - t0,

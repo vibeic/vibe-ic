@@ -139,12 +139,50 @@ the new version and stay in step 3.
 
 ### Step 4 — audit (verify the closed fix, reopen if inadequate)
 
+#### Verify discipline — ARTIFACT-FIRST (mandatory, chip-AGNOSTIC default)
+
+**Before launching ANY phase re-run, classify the closed fix's diff.**
+A full phase3 re-run is ~40 minutes (route ~21 min + DRC + LVS); most
+closed fixes do NOT need it. The asymmetry: the core-agent fixes
+autonomously via a persistent loop, so the field agent must NOT
+reintroduce 40-minute synchronous babysitting where a seconds-long
+artifact check is the faithful real-surface verification.
+
+1. **Classify the fix by what its diff TOUCHES:**
+   - **consumer-only** — a checker / classifier / verdict-message /
+     cache-decision / disclosure-line change (e.g. a DRC off-grid
+     classifier, an LVS cross-reference string, a pin-count disclosure,
+     a cache-validity line). The route, geometry, netlist, DEF, GDS and
+     report files are UNCHANGED by such a fix.
+   - **producer** — a change to the route/geometry producers: PnR Tcl,
+     floorplan, CTS, streamout, or a verdict that depends on the actual
+     run (e.g. a measure-only SPEF repair that prevents a segfault, a
+     route-convergence verdict keyed on the real DRT count).
+2. **consumer-only → drive the NEW program version against the
+   project's ALREADY-PERSISTED artifacts** (`reports/phase3/*.rpt`,
+   `lvs_verdict.json`, the netlist / DEF / GDS) and read the verdict.
+   This is the faithful real-surface check and it takes SECONDS — feed
+   the prior run's artifacts to the new program, do not regenerate them.
+3. **producer → a full phase3 re-run is justified** (clean-wipe +
+   re-run the affected phase(s) below). Only here.
+4. **A "check status" request is READ-ONLY**: report the persisted
+   artifact state; do NOT launch a run.
+
+This is **non-negotiable**: re-running phase3 to confirm a
+checker/message-only fix wastes ~40 min per issue for a verification an
+artifact check does faithfully in seconds.
+
+#### Audit execution
+
 **Re-dispatch a fresh general-purpose Agent** (not the original
 task — must be a clean context) with an audit prompt that:
 - names the specific issue + the v1.6.x test file that ships the
   fix
-- clean-wipes the affected benchmark IC(s) and re-runs phase1/
-  phase2/phase3 as needed against the **real benchmark**
+- **consumer-only fix**: drives the new program/gate against the
+  affected IC's already-persisted artifacts and reads the verdict
+  (seconds) — NO phase re-run
+- **producer fix only**: clean-wipes the affected benchmark IC(s) and
+  re-runs phase1/phase2/phase3 as needed against the **real benchmark**
 - inspects the load-bearing fields the fix touches
 - reports PASS criteria objectively
 - spot-checks the unaffected ICs for regression
