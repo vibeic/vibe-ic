@@ -4210,6 +4210,95 @@ def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
     return True, transcript
 
 
+# ── ORGANIC #600 — DEF→GDS streamout manufacturing-grid snap ────────────────
+# #597 proved the routed DEF source is on-grid (≥99.5%) and the OFFGRID
+# DRC wall is introduced ENTIRELY at the DEF→GDS streamout / boolean-merge
+# stage — a tool behaviour, NOT routing/floorplan. This pass snaps every
+# polygon vertex in the streamed GDS back to the PDK manufacturing grid
+# (sky130 = 5 nm) using KLayout's standard Region.snap idiom, BEFORE
+# signoff DRC. The displacement is at most half a grid step (≤2 nm), far
+# below any sky130 min-spacing (≥140 nm on met1), so it removes OFFGRID
+# vertices without creating real spacing violations.
+#
+# HONEST SCOPE: the snap LOGIC + grid arithmetic + wiring are verified
+# locally (below + tests); the actual GDS-OFFGRID-to-zero outcome is
+# tool/PDK-specific and is verified on real hardware in the container —
+# the #594 FLOW_OFFGRID classifier already measures it. The pass is
+# NONFATAL: if klayout is absent or the snap fails, the un-snapped GDS is
+# kept (the classifier then still surfaces the residual). chip-AGNOSTIC.
+_GDS_GRID_SNAP_PY = r'''
+import os, sys
+import pya
+gds_in = os.environ["GDS_IN"]
+gds_out = os.environ["GDS_OUT"]
+# Manufacturing grid in micron (sky130 = 0.005); MFG_GRID_UM env wins.
+grid_um = float(os.environ.get("MFG_GRID_UM", "0.005"))
+ly = pya.Layout()
+ly.read(gds_in)
+# grid in DBU: round(grid_um / dbu). dbu is micron/DBU (e.g. 0.001).
+grid_dbu = int(round(grid_um / ly.dbu))
+if grid_dbu < 1:
+    grid_dbu = 1
+snapped_layers = 0
+for ci in range(ly.cells()):
+    cell = ly.cell(ci)
+    for li in ly.layer_indexes():
+        sh = cell.shapes(li)
+        if sh.is_empty():
+            continue
+        reg = pya.Region(sh)
+        reg.snap(grid_dbu, grid_dbu)   # snap all vertices to the grid
+        sh.clear()
+        sh.insert(reg)
+        snapped_layers += 1
+ly.write(gds_out)
+print("GDS_GRID_SNAP_DONE grid_dbu=%d layers=%d" % (grid_dbu, snapped_layers))
+'''
+
+
+def _read_mfg_grid_um_for_pdk(pdk: "PdkConfig") -> float:
+    """Manufacturing grid (µm) from the PDK tech LEF, sky130 default."""
+    try:
+        import def_manufacturing_grid_check as _dmg
+        return _dmg.read_mfg_grid_um(pdk.tech_lef)
+    except Exception:
+        return 0.005
+
+
+def _gds_grid_snap(project: Path, top: str, pdk: PdkConfig,
+                   container: str, gds_path: Path) -> Tuple[bool, str]:
+    """ORGANIC #600 — snap the streamed GDS to the PDK manufacturing grid
+    via KLayout Region.snap. Returns (snapped_ok, note). NONFATAL: on any
+    failure the original GDS is left untouched. Verified-locally parts:
+    the script content + grid arithmetic + that it writes to the same
+    path; the GDS-OFFGRID-to-zero effect is container/PDK-specific."""
+    if not gds_path.is_file():
+        return False, "no GDS to snap"
+    if not _tool_in_path(container, "klayout"):
+        return False, "klayout not in container PATH — GDS grid-snap skipped"
+    pnr_dir = _pl.pnr_dir(project)
+    script = pnr_dir / "gds_grid_snap.py"
+    script.write_text(_GDS_GRID_SNAP_PY)
+    snapped = pnr_dir / f"{top}.snapped.gds"
+    grid_um = _read_mfg_grid_um_for_pdk(pdk)
+    cmd = (
+        f"export QT_QPA_PLATFORM=offscreen && "
+        f"export GDS_IN={_to_container_path(str(gds_path), container)} "
+        f"GDS_OUT={_to_container_path(str(snapped), container)} "
+        f"MFG_GRID_UM={grid_um} && "
+        f"klayout -zz -b -r {_to_container_path(str(script), container)}"
+    )
+    rc, out, err = _docker_exec(container, cmd, timeout=600)
+    if rc == 0 and snapped.is_file() and snapped.stat().st_size > 0:
+        # Replace the streamed GDS with the grid-snapped one.
+        try:
+            snapped.replace(gds_path)
+        except Exception as exc:
+            return False, f"snap wrote {snapped.name} but swap failed: {exc}"
+        return True, f"GDS snapped to {grid_um}µm grid (#600)"
+    return False, f"grid-snap NONFATAL: rc={rc} {(out + err)[-300:]}"
+
+
 def step_gds(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
@@ -4227,12 +4316,17 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     magic_ok, magic_transcript = _magic_def_to_gds(
         project, top, pdk, container, gds_out)
     if magic_ok and gds_out.is_file():
+        # ORGANIC #600 — manufacturing-grid snap before signoff DRC.
+        snap_ok, snap_note = _gds_grid_snap(project, top, pdk, container,
+                                            gds_out)
         return StepResult(
             "gds", "PASS", time.time() - t0,
             f"gds={gds_out.name} size={gds_out.stat().st_size} "
-            f"(streamout=magic, abutting geometry merged)",
+            f"(streamout=magic, abutting geometry merged"
+            f"{'; ' + snap_note if snap_ok else ''})",
             [str(gds_out)],
-            extras={"streamout_engine": "magic"})
+            extras={"streamout_engine": "magic",
+                    "grid_snap": snap_ok, "grid_snap_note": snap_note})
 
     script = pnr_dir / "stream_out.py"
     script.write_text(_GDS_STREAMOUT_PY)
@@ -4271,11 +4365,16 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     if rc != 0 or not gds_out.is_file():
         return StepResult("gds", "FAIL", time.time() - t0,
                           f"rc={rc} log_tail={(out+err)[-1500:]}")
+    # ORGANIC #600 — manufacturing-grid snap before signoff DRC.
+    snap_ok, snap_note = _gds_grid_snap(project, top, pdk, container, gds_out)
     return StepResult("gds", "PASS", time.time() - t0,
                       f"gds={gds_out.name} size={gds_out.stat().st_size} "
-                      f"(streamout=klayout)",
+                      f"(streamout=klayout"
+                      f"{'; ' + snap_note if snap_ok else ''})",
                       [str(gds_out)],
-                      extras={"streamout_engine": "klayout"})
+                      extras={"streamout_engine": "klayout",
+                              "grid_snap": snap_ok,
+                              "grid_snap_note": snap_note})
 
 
 # ---------------------------------------------------------------------------
