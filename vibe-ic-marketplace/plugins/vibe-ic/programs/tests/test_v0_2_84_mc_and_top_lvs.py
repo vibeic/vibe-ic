@@ -26,13 +26,31 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import analog_mc_yield_run as MC                 # noqa: E402
 import analog_corner_sweep_check as ACS          # noqa: E402
 import analog_real_corner_sweep as ARS           # noqa: E402
 import mixed_signal_top_lvs_run as TL            # noqa: E402
 
-MCP_SRC = Path("/home/reyerchu/vibe-ic/mcp-eda-server/src/index.js")
+
+def _find_mcp_src() -> Path:
+    """Resolve mcp-eda-server/src/index.js relative to the repo root by
+    walking up from this test file — NEVER a hardcoded absolute home path
+    (the old `/home/reyerchu/...` literal passed locally but does not
+    exist on the CI runner at `/home/runner/work/...`, so the test failed
+    the moment the suite ran to completion). The mcp-eda-server is an
+    OPTIONAL sibling of the plugin marketplace, so the test skips when it
+    is absent rather than erroring."""
+    for anc in Path(__file__).resolve().parents:
+        cand = anc / "mcp-eda-server" / "src" / "index.js"
+        if cand.is_file():
+            return cand
+    return Path("mcp-eda-server/src/index.js")  # sentinel; skip below
+
+
+MCP_SRC = _find_mcp_src()
 
 
 # ── analog_mc_yield_run ─────────────────────────────────────────────────────
@@ -114,6 +132,9 @@ def test_mc_seeds_are_distinct_in_decks(tmp_path, monkeypatch):
     assert all("sky130.lib.spice mc" in d.read_text() for d in decks)
 
 
+@pytest.mark.skipif(not MCP_SRC.is_file(),
+                    reason="mcp-eda-server/src/index.js not present "
+                           "(optional sibling; not in the plugin bundle)")
 def test_mcp_monte_carlo_param_is_wired():
     src = MCP_SRC.read_text()
     assert "monte_carlo_n was declared since v0.108 but NEVER" in src
