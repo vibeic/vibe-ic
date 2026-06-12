@@ -4213,12 +4213,30 @@ def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
 # ── ORGANIC #600 — DEF→GDS streamout manufacturing-grid snap ────────────────
 # #597 proved the routed DEF source is on-grid (≥99.5%) and the OFFGRID
 # DRC wall is introduced ENTIRELY at the DEF→GDS streamout / boolean-merge
-# stage — a tool behaviour, NOT routing/floorplan. This pass snaps every
-# polygon vertex in the streamed GDS back to the PDK manufacturing grid
-# (sky130 = 5 nm) using KLayout's standard Region.snap idiom, BEFORE
-# signoff DRC. The displacement is at most half a grid step (≤2 nm), far
+# stage — a tool behaviour, NOT routing/floorplan. This pass snaps the
+# streamed GDS back to the PDK manufacturing grid (sky130 = 5 nm) BEFORE
+# signoff DRC. The displacement is at most half a grid step (≤2.5 nm), far
 # below any sky130 min-spacing (≥140 nm on met1), so it removes OFFGRID
 # vertices without creating real spacing violations.
+#
+# ROUND 2 (field-verified counter-evidence on real Ibex): a vertex-only
+# Region.snap of each cell's LOCAL shapes is INSUFFICIENT — OFFGRID DRC
+# judges ABSOLUTE coordinates (after the instance transform chain is
+# applied), and the residual off-grid geometry comes from off-grid
+# instance PLACEMENT, not from the (already on-grid) cell-local library
+# shapes. Measured: local-only snap cut OFFGRID 46,614→32,729 (the entire
+# reduction was top-level flat m1; std-cell-internal ct/li and via m2 were
+# bit-identical because their LOCAL shapes were already on-grid — only the
+# placement transform put them off-grid). So this pass now ALSO snaps the
+# displacement of every instance (and any regular-array step vectors) to
+# the grid. For the orthogonal, magnification-1 transforms that PnR
+# placement uses (R0/R90/R180/R270/MX/MY/…), an on-grid origin + an
+# on-grid local shape ⇒ an on-grid ABSOLUTE coordinate (a 90°-multiple
+# rotation/mirror maps the grid onto itself), so cell-local snap +
+# placement snap together guarantee zero OFFGRID while PRESERVING the
+# hierarchy (cheap, LVS-friendly). For the rare exotic transform
+# (mag≠1 or non-90° angle) that breaks that guarantee, the pass FLATTENS
+# and re-snaps in absolute coordinates as a guaranteed fallback.
 #
 # HONEST SCOPE: the snap LOGIC + grid arithmetic + wiring are verified
 # locally (below + tests); the actual GDS-OFFGRID-to-zero outcome is
@@ -4227,8 +4245,9 @@ def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
 # NONFATAL: if klayout is absent or the snap fails, the un-snapped GDS is
 # kept (the classifier then still surfaces the residual). chip-AGNOSTIC.
 _GDS_GRID_SNAP_PY = r'''
-import os, sys
+import os
 import pya
+
 gds_in = os.environ["GDS_IN"]
 gds_out = os.environ["GDS_OUT"]
 # Manufacturing grid in micron (sky130 = 0.005); MFG_GRID_UM env wins.
@@ -4239,20 +4258,87 @@ ly.read(gds_in)
 grid_dbu = int(round(grid_um / ly.dbu))
 if grid_dbu < 1:
     grid_dbu = 1
-snapped_layers = 0
+
+
+def _snap_dbu(v):
+    return int(round(float(v) / grid_dbu)) * grid_dbu
+
+
+def _snap_local_shapes():
+    """Snap every cell's LOCAL geometry vertices to the grid."""
+    n = 0
+    for ci in range(ly.cells()):
+        cell = ly.cell(ci)
+        for li in ly.layer_indexes():
+            sh = cell.shapes(li)
+            if sh.is_empty():
+                continue
+            reg = pya.Region(sh)
+            reg.snap(grid_dbu, grid_dbu)
+            sh.clear()
+            sh.insert(reg)
+            n += 1
+    return n
+
+
+# (1) cell-LOCAL geometry → grid
+snapped_layers = _snap_local_shapes()
+
+# (2) instance PLACEMENT → grid. OFFGRID DRC judges ABSOLUTE coordinates
+#     (after the instance transform chain), so a std cell whose LOCAL
+#     shapes are on-grid still streams off-grid geometry when it is PLACED
+#     at an off-grid origin. Snap the displacement of every instance (and
+#     any regular-array step vectors) to the grid; for orthogonal, mag-1
+#     transforms this makes the absolute coordinates on-grid WITHOUT
+#     flattening. Track any exotic transform that breaks that guarantee.
+snapped_insts = 0
+nonorthogonal = 0
+inst_errs = 0
 for ci in range(ly.cells()):
     cell = ly.cell(ci)
-    for li in ly.layer_indexes():
-        sh = cell.shapes(li)
-        if sh.is_empty():
-            continue
-        reg = pya.Region(sh)
-        reg.snap(grid_dbu, grid_dbu)   # snap all vertices to the grid
-        sh.clear()
-        sh.insert(reg)
-        snapped_layers += 1
+    for inst in list(cell.each_inst()):
+        # Per-instance try/except so one problematic instance cannot abort
+        # the whole pass BEFORE ly.write — otherwise the runner would fall
+        # back to the original UN-snapped GDS and lose even the working
+        # cell-local snap. A nonzero inst_errs in the marker surfaces it.
+        try:
+            ct = inst.cplx_trans          # ICplxTrans, DBU displacement
+            if abs(ct.mag - 1.0) > 1e-9 or (round(ct.angle) % 90) != 0:
+                nonorthogonal += 1        # exotic: flatten fallback below
+            d = ct.disp
+            ndx, ndy = _snap_dbu(d.x), _snap_dbu(d.y)
+            changed = (ndx != d.x or ndy != d.y)
+            if changed:
+                inst.cplx_trans = pya.ICplxTrans(
+                    ct.mag, ct.angle, ct.is_mirror(), ndx, ndy)
+            # regular arrays: snap the a/b step vectors too
+            if inst.is_regular_array():
+                a, b = inst.a, inst.b
+                na = pya.Vector(_snap_dbu(a.x), _snap_dbu(a.y))
+                nb = pya.Vector(_snap_dbu(b.x), _snap_dbu(b.y))
+                if na != a or nb != b:
+                    inst.a, inst.b = na, nb
+                    changed = True
+            if changed:
+                snapped_insts += 1
+        except Exception:
+            inst_errs += 1
+
+# (3) guaranteed fallback for exotic transforms: flatten to absolute
+#     coordinates and re-snap. Skipped entirely in the common (orthogonal,
+#     mag-1) case so hierarchy + memory are preserved.
+flattened = 0
+if nonorthogonal > 0:
+    for tc in ly.top_cells():
+        tc.flatten(-1, True)
+        flattened += 1
+    snapped_layers += _snap_local_shapes()
+
 ly.write(gds_out)
-print("GDS_GRID_SNAP_DONE grid_dbu=%d layers=%d" % (grid_dbu, snapped_layers))
+print("GDS_GRID_SNAP_DONE grid_dbu=%d layers=%d insts=%d "
+      "nonorthogonal=%d flattened=%d inst_errs=%d"
+      % (grid_dbu, snapped_layers, snapped_insts, nonorthogonal,
+         flattened, inst_errs))
 '''
 
 
@@ -4267,11 +4353,14 @@ def _read_mfg_grid_um_for_pdk(pdk: "PdkConfig") -> float:
 
 def _gds_grid_snap(project: Path, top: str, pdk: PdkConfig,
                    container: str, gds_path: Path) -> Tuple[bool, str]:
-    """ORGANIC #600 — snap the streamed GDS to the PDK manufacturing grid
-    via KLayout Region.snap. Returns (snapped_ok, note). NONFATAL: on any
-    failure the original GDS is left untouched. Verified-locally parts:
-    the script content + grid arithmetic + that it writes to the same
-    path; the GDS-OFFGRID-to-zero effect is container/PDK-specific."""
+    """ORGANIC #600 — snap the streamed GDS to the PDK manufacturing grid:
+    cell-local shape vertices (Region.snap) AND instance-placement
+    displacements (round 2 — the off-grid residual lives in placement, not
+    local shapes), with a flatten fallback for exotic transforms. Returns
+    (snapped_ok, note). NONFATAL: on any failure the original GDS is left
+    untouched. Verified-locally parts: the script content + grid arithmetic
+    (local + placement) + that it writes to the same path; the
+    GDS-OFFGRID-to-zero effect is container/PDK-specific."""
     if not gds_path.is_file():
         return False, "no GDS to snap"
     if not _tool_in_path(container, "klayout"):
