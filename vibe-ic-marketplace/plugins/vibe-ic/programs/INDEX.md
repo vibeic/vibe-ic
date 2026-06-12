@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 672
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 672)
+- **Total programs (excluding helpers / shims):** 673
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 673)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 663 |
+| `any` | 664 |
 
 ## Alphabetical listing
 
@@ -555,6 +555,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rtl_scan_scope` | any | — | shared authoritative-RTL scan-scope policy (ORGANIC #545). |
 | `rtl_signal_name_semantic_check` | any | — | v1.6.232 (merged v229+v231). |
 | `rtl_unit_test_coverage_check` | any | v0.50.2 | v0.50.2 plugin gate |
+| `run_status` | any | — | ORGANIC #599. Universal runner watchdog. |
 | `rx_byte_assembler_ibt_flush_recovery_check` | any | Wave 15 | Wave 15 silent-bug gate. |
 | `rx_byte_valid_requires_ibt_gate_check` | any | Wave 26 | Wave 26 (v0.119.58) gate. |
 | `rx_classifier_no_threshold_gap_check` | any | Wave 26 | Wave 26 (v0.119.58) gate. |
@@ -744,7 +745,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (663 programs)
+### `any` (664 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1269,6 +1270,7 @@ _(no programs in this group)_
 - `rtl_scan_scope` — shared authoritative-RTL scan-scope policy (ORGANIC #545).
 - `rtl_signal_name_semantic_check` — v1.6.232 (merged v229+v231).
 - `rtl_unit_test_coverage_check` — v0.50.2 plugin gate  _[v0.50.2]_
+- `run_status` — ORGANIC #599. Universal runner watchdog.
 - `rx_byte_assembler_ibt_flush_recovery_check` — Wave 15 silent-bug gate.  _[Wave 15]_
 - `rx_byte_valid_requires_ibt_gate_check` — Wave 26 (v0.119.58) gate.  _[Wave 26]_
 - `rx_classifier_no_threshold_gap_check` — Wave 26 (v0.119.58) gate.  _[Wave 26]_

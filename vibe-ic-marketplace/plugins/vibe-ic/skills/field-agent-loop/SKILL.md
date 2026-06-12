@@ -166,7 +166,15 @@ artifact check is the faithful real-surface verification.
 3. **producer → a full phase3 re-run is justified** (clean-wipe +
    re-run the affected phase(s) below). Only here.
 4. **A "check status" request is READ-ONLY**: report the persisted
-   artifact state; do NOT launch a run.
+   artifact state; do NOT launch a run. The canonical answer is the
+   universal watchdog `run_status.py <project> [--phase auto]` (#599):
+   a bounded one-shot probe that returns DONE / DIED / STUCK /
+   RUNNING_ON_TIME in seconds from existing artifacts (the phase's
+   `reports/orchestrator/<phase>_one_shot.json` verdict, the live log
+   mtime as heartbeat, and the `.runner.lock` holder PID). Use it as
+   the field-agent heartbeat too: launch a producer re-run async, then
+   each status check is this one probe — never block on a wait-for-exit
+   watcher, which cannot tell a hung step from progress.
 
 This is **non-negotiable**: re-running phase3 to confirm a
 checker/message-only fix wastes ~40 min per issue for a verification an
