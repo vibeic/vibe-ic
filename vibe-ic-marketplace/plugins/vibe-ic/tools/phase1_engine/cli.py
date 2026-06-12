@@ -201,7 +201,8 @@ def _cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
-def _stub_l_docs_from_prose(docs_dir: Path, out_dir: Path) -> int:
+def _stub_l_docs_from_prose(docs_dir: Path, out_dir: Path,
+                            ic_name: str | None = None) -> int:
     """v0.1.38 fallback — when `docs_dir` contains prose `.md` files only
     (no `L*.json` siblings) and `from_existing_docs` returned 0 facts, emit
     a minimal L1/L3/L9 stub set heuristically from the prose so the
@@ -317,7 +318,11 @@ def _stub_l_docs_from_prose(docs_dir: Path, out_dir: Path) -> int:
         detected_class = "unknown_protocol_class"
         matched_kw = None
     out_dir.mkdir(parents=True, exist_ok=True)
-    l1 = {"ic_name": mod_name, "class_path": detected_class,
+    # ORGANIC #583 (b) — an explicit --ic-name override is authoritative
+    # for the CHIP name (CLI > docs per #541); the heuristic mod_name
+    # stays the RTL top (L9.top_module) — chip name and top module are
+    # distinct concepts.
+    l1 = {"ic_name": ic_name or mod_name, "class_path": detected_class,
           "summary": f"Stub L1 for {mod_name} (from prose .md).",
           "stub_origin": "_stub_l_docs_from_prose",
           "class_detection_method": ("keyword-match" if matched_kw
@@ -356,6 +361,35 @@ def _cmd_run_all(args: argparse.Namespace) -> int:
         )
     else:
         graph = from_structured_yaml(src)
+
+    # ORGANIC #583 (b) — honor an EXPLICIT --ic-name override exactly as
+    # the docs-mode runner does post-#541 (CLI > docs): force it onto the
+    # graph identity AND upsert the L1.ic_name fact so the rendered
+    # L1_DATASHEET.json carries the authoritative name. Pre-fix the
+    # forwarded --ic-name only reached from_existing_docs' fallback (a
+    # prompt-bridged docs/ holds no L*.json, so no L1.ic_name fact was
+    # ever created and L1 rendered without a name).
+    # `_ingested_n` (count BEFORE the upsert) keeps the prose-only stub
+    # fallback's trigger semantics intact — see the fallback gate below.
+    _ingested_n = len(graph.facts)
+    if args.ic_name:
+        graph.ic_name = args.ic_name
+        _f = graph.by_path("L1.ic_name")
+        if _f is not None:
+            _f.value = args.ic_name
+            _f.provenance.source = "user_stated"
+            _f.provenance.reasoning = (
+                "--ic-name CLI override (#583; CLI > docs per #541)")
+        else:
+            graph.add_fact(
+                path="L1.ic_name",
+                value=args.ic_name,
+                views=["L1"],
+                source="user_stated",
+                origin="--ic-name",
+                confidence=1.0,
+                reasoning="--ic-name CLI override (#583; CLI > docs per #541)",
+            )
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -424,10 +458,15 @@ def _cmd_run_all(args: argparse.Namespace) -> int:
     # module-name + port-table extraction so the spec-to-rtl WAIVE handoff
     # can fire. This is structural ONLY — no NL semantic extraction (that
     # needs an LLM and is intentionally out of scope for the deterministic
-    # CLI). The fallback fires only when both the input is a dir AND
-    # render_layers wrote nothing.
-    if src.is_dir() and len(written) == 0:
-        n_stub = _stub_l_docs_from_prose(src, docs_out)
+    # CLI).
+    # ORGANIC #583 — the gate is INGESTED facts, not rendered files: the
+    # --ic-name upsert adds one L1 fact, so a prose-only input now renders
+    # 1 file and `len(written) == 0` alone would skip the stub fallback
+    # (only 1/13 L docs → phase2 precheck HARD-FAIL). `_ingested_n` is
+    # captured before the upsert; the stub L1 carries the override name.
+    if src.is_dir() and (len(written) == 0 or _ingested_n == 0):
+        n_stub = _stub_l_docs_from_prose(src, docs_out,
+                                         ic_name=args.ic_name)
         if n_stub:
             print(f"[run-all] prose-only input → emitted {n_stub} stub L docs "
                   f"to {docs_out} (Bucket-A fallback)", file=sys.stderr)

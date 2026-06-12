@@ -3540,6 +3540,63 @@ _GENERATED_DESIGN_HEADER = (
 )
 
 
+def _chip_top_nonansi_port_decls(dut_text_masked: str, mod_name: str,
+                                 port_names: List[str]) -> Optional[str]:
+    """ORGANIC #582 — harvest the I/O declarations of a NON-ANSI module
+    body for the auto-emitted pass-through wrapper.
+
+    sv2v output is ALWAYS non-ANSI: the module header lists bare port
+    names and the directions/widths live in body declarations. Copying
+    that header verbatim into the wrapper produced
+    `module chip_top ( name1, name2, ... );` with ZERO input/output
+    declarations — yosys rejects every port with "port 'X' has no I/O
+    member declaration".
+
+    Returns the wrapper-body declaration lines (one per port, in
+    `port_names` order) or None when any listed port has no declaration
+    in the DUT body (caller falls back to the previous behaviour).
+    Storage keywords (reg/logic/var) are dropped — every wrapper net is
+    structurally driven (#463 doctrine) — and `wire` is made explicit so
+    the wrapper stays legal under `default_nettype none`.
+    `dut_text_masked` MUST be comment-masked. Chip-AGNOSTIC.
+    """
+    m = re.search(r"\bmodule\s+" + re.escape(mod_name) + r"\b",
+                  dut_text_masked)
+    if not m:
+        return None
+    end = dut_text_masked.find("endmodule", m.end())
+    body = dut_text_masked[m.end():end if end > 0 else len(dut_text_masked)]
+    semi = body.find(";")
+    if semi >= 0:
+        body = body[semi + 1:]
+    decls: Dict[str, Tuple[str, str, str]] = {}
+    decl_re = re.compile(
+        r"\b(input|output|inout)\b"
+        r"(?:\s+(?:wire|reg|logic|var|tri[01]?|wand|wor))?"
+        r"(\s+signed|\s+unsigned)?"
+        r"((?:\s*\[[^\]]+\])*)"
+        r"\s+([A-Za-z_$][\w$\s,]*?)\s*;")
+    for dm in decl_re.finditer(body):
+        direction = dm.group(1)
+        sign = (dm.group(2) or "").strip()
+        width = re.sub(r"\s+", " ", dm.group(3) or "").strip()
+        for name in re.findall(r"[A-Za-z_$][\w$]*", dm.group(4)):
+            decls.setdefault(name, (direction, sign, width))
+    lines = []
+    for n in port_names:
+        if n not in decls:
+            return None
+        direction, sign, width = decls[n]
+        parts = [direction, "wire"]
+        if sign:
+            parts.append(sign)
+        if width:
+            parts.append(width)
+        parts.append(n)
+        lines.append("  " + " ".join(parts) + ";")
+    return "\n".join(lines)
+
+
 def _chip_top_strip_output_storage(port_block: str) -> str:
     """ORGANIC-20260606 #463 — normalise an extracted ANSI port block for
     use as the auto-emitted pass-through wrapper's port list.
@@ -4008,6 +4065,24 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         # `output reg p` on an instance-driven wrapper output is lint-fatal
         # in strict SV.
         wrapper_port_block = _chip_top_strip_output_storage(port_block)
+        # ORGANIC #582 — sv2v output is ALWAYS non-ANSI (header lists bare
+        # names; directions/widths live in body declarations). Copying that
+        # header verbatim produced a wrapper with ZERO I/O declarations →
+        # yosys "port 'X' has no I/O member declaration" on every port.
+        # Detect a direction-keyword-free port list and harvest the DUT
+        # body's declarations into the wrapper body.
+        nonansi_decls = ""
+        if port_names and not _re.search(r"\b(?:input|output|inout)\b",
+                                         port_block):
+            try:
+                _dut_masked = _mask_comments(
+                    src_file.read_text(errors="ignore"))
+            except Exception:
+                _dut_masked = ""
+            _harvested = _chip_top_nonansi_port_decls(
+                _dut_masked, mod_name, port_names)
+            if _harvested:
+                nonansi_decls = _harvested + "\n"
         wrapper = (
             f"// SPDX-License-Identifier: Apache-2.0\n"
             f"{_GENERATED_DESIGN_HEADER}"
@@ -4017,6 +4092,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             f"// against L9's expected top without modifying the authored RTL.\n"
             f"`default_nettype none\n"
             f"module {synth_top}{param_header} {wrapper_port_block};\n"
+            f"{nonansi_decls}"
             f"  {mod_name}{inst_params} u_dut (\n    {connects}\n  );\n"
             f"endmodule\n"
             f"`default_nettype wire\n"

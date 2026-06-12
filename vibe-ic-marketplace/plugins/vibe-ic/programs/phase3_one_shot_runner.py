@@ -3015,6 +3015,16 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str) -> str:
     The pre-existing estimate_parasitics passes in pnr.tcl remain for CTS-domain
     optimisation; this block is the post-route truth pass.
 
+    ORGANIC #581 — the original emission nested a MULTI-LINE `catch {...}`
+    inside the bracketed `if {[catch {` expression AND a plain-string
+    fragment kept an f-string-escaped `}}`, producing unbalanced braces:
+    OpenROAD aborted pnr.tcl with `missing close-bracket in expression
+    "[catch { catch {def..."` AFTER detailed route converged, so GDS/final
+    DEF were never written. The block is now strictly SEQUENTIAL one-line
+    `if {[catch {...} e]} {...}` statements (no multi-line catch inside a
+    bracketed expression) and is pinned by a real tclsh parse/eval test —
+    string-content assertions alone proved insufficient.
+
     Chip-AGNOSTIC: pure standard OpenROAD TCL, captable path discovered by glob.
     """
     return (
@@ -3034,12 +3044,13 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str) -> str:
         "}\n"
         "if {$_prs_rules ne \"\"} {\n"
         "  puts \"SPEF_REPAIR_CAPTABLE: $_prs_rules\"\n"
-        "  if {[catch {\n"
-        "    catch {define_process_corner -ext_model_index 0 X}\n"
-        "    extract_parasitics -ext_model_file $_prs_rules "
-        "-corner_cnt 1 -max_res 50 -coupling_threshold 0.1\n"
+        "  catch {define_process_corner -ext_model_index 0 X}\n"
+        "  if {[catch {extract_parasitics -ext_model_file $_prs_rules "
+        "-corner_cnt 1 -max_res 50 -coupling_threshold 0.1} _prs_ext]} {\n"
+        "    puts \"SPEF_REPAIR_NONFATAL: extract_parasitics: $_prs_ext\"\n"
+        "  } else {\n"
         f"    if {{[catch {{write_spef {out_dir_c}/post_route_repair.spef}} "
-        "_prs_spef_wr]}} { puts \"SPEF_WRITE_NONFATAL: $_prs_spef_wr\" }\n"
+        f"_prs_spef_wr]}} {{ puts \"SPEF_WRITE_NONFATAL: $_prs_spef_wr\" }}\n"
         "    if {[catch {repair_design} _prs_rd]} { "
         "puts \"SPEF_REPAIR_DESIGN_NONFATAL: $_prs_rd\" }\n"
         "    if {[catch {repair_timing -setup} _prs_rts]} { "
@@ -3053,8 +3064,6 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str) -> str:
         "    if {[catch {detailed_route -droute_end_iter 1} _prs_dr]} { "
         "puts \"SPEF_REPAIR_DROUTE_NONFATAL: $_prs_dr\" }\n"
         "    puts \"SPEF_REPAIR_COMPLETE\"\n"
-        "  } _prs_outer_err]} {\n"
-        "    puts \"SPEF_REPAIR_NONFATAL: $_prs_outer_err\"\n"
         "  }\n"
         "} else {\n"
         "  puts \"SPEF_REPAIR_SKIP: no captable found; post-route SPEF repair skipped\"\n"
@@ -3241,6 +3250,209 @@ def _emit_cts_report_if_complete(project: Path, top: str):
     except OSError:
         pass
     return str(rpt)
+
+
+def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
+                        macro_lefs_tcl: str, liberty_c: str,
+                        macro_libs_tcl: str, netlist_c: str, top: str,
+                        sdc_c: str, dont_use_block: str,
+                        metal_prefix: str, die_w: int, die_h: int,
+                        core_pad: int, core_w: int, core_h: int,
+                        site: str, out_dir_c: str, tapcell_block: str,
+                        pdn_block: str, util: float,
+                        spare_protection_tcl: str,
+                        spare_postfix_tcl: str, clk_buf: str,
+                        clk_buf_root: str, routing_constraint_tcl: str,
+                        pg_cleanup_block: str, spef_repair_block: str,
+                        antenna_repair_block: str,
+                        filler_block: str) -> str:
+    """ORGANIC #581 — the COMPLETE pnr.tcl template as a PURE builder
+    (v0.1.49 doctrine: extract Tcl-block builders into pure helpers so
+    regression tests pin them). The #557 SPEF-repair block shipped with
+    unbalanced braces that aborted OpenROAD AFTER detailed route
+    converged; content-only assertions missed it, so the full template
+    is now validated by an actual tclsh parse/eval test
+    (test_v0_3_39_issue581_pnr_tcl_syntax.py).
+    Chip-AGNOSTIC: every placeholder is a parameter."""
+    return f"""
+read_lef {tech_lef_c}
+read_lef {cell_lef_c}
+{macro_lefs_tcl}
+read_liberty {liberty_c}
+{macro_libs_tcl}
+read_verilog {netlist_c}
+link_design {top}
+read_sdc {sdc_c}
+# === v0.2.14 — restrict the resizer/CTS/repair cell pool (after link_design,
+# before any optimization). Prevents OpenROAD from inserting PnR-forbidden cells
+# (probe / lpflow / DRC-failed) that TritonRoute then cannot route (DRT-0085).
+# See _dont_use_tcl. ===
+{dont_use_block}# === v0.1.26 wire-RC model ===
+# Without set_wire_rc, OpenROAD has no per-layer R/C, so (a) STA ignores
+# interconnect delay (optimistic) and (b) repair_timing -setup aborts with
+# RSZ-0089 "Could not find a resistance value for any corner" because it
+# cannot evaluate max wire length for buffering. Set signal nets to a mid
+# metal layer and clock nets to an upper layer (sky130 convention). The
+# layer names are resolved against the loaded tech LEF; a NONFATAL note
+# keeps the flow moving on PDKs whose layer names differ.
+if {{[catch {{set_wire_rc -signal -layer {metal_prefix}1}} _swr_sig]}} {{
+  if {{[catch {{set_wire_rc -layer {metal_prefix}1}} _swr_sig2]}} {{
+    puts "SET_WIRE_RC_SIGNAL_NONFATAL: $_swr_sig2"
+  }}
+}}
+if {{[catch {{set_wire_rc -clock -layer {metal_prefix}5}} _swr_clk]}} {{
+  puts "SET_WIRE_RC_CLOCK_NONFATAL: $_swr_clk"
+}}
+initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\
+                      -core_area "{core_pad} {core_pad} {core_w} {core_h}" \\
+                      -site {site}
+make_tracks
+place_pins -hor_layers {metal_prefix}3 -ver_layers {metal_prefix}2
+write_def {out_dir_c}/floorplan.def
+# === v0.1.46 — tapcell insertion for latch-up well-tie density ===
+# v0.1.44 spm pilot Tier 5 finding: prior runs (v0.1.25 and v0.1.45 alike)
+# inserted ZERO tap cells, leaving the design at latch-up risk that no
+# open-PDK DRC deck currently catches (sky130A.lydrc has nwell.4 — the
+# 'every nwell must contain a tap' rule — commented out). A real MPW
+# shuttle's Calibre LVS / latch-up rule deck would fail this. Insert
+# `sky130_fd_sc_hd__tapvpwrvgnd_1` at 14 µm spacing (SKY130 standard);
+# WNS improved +11.61 → +11.89 ns MET on spm pilot, DRC still 0.
+# NONFATAL-guarded — falls back if PDK has no tapcell master configured.
+{tapcell_block}{pdn_block}global_placement -density {util}
+detailed_placement
+write_def {out_dir_c}/placed.def
+# === Design-for-ECO Step 18: spare-cell insertion + PROTECTION ===
+# ORGANIC #562: spares inserted as PLACED; detailed_placement below snaps
+# them to the legal site/row grid (eliminates DPL-0006 DRC violations).
+# ORGANIC #563: spare_postfix_tcl sets them FIRM + runs check_placement.
+{spare_protection_tcl}if {{[catch {{detailed_placement}} _sp_dp_err]}} {{
+  puts "SPARE_LEGALIZE_NONFATAL: $_sp_dp_err"
+}}
+{spare_postfix_tcl}# === v0.1.26 SETUP / DRV repair (pre-CTS) ===
+# The prior template only ran `repair_timing -hold` post-CTS — it NEVER
+# buffered high-fanout nets nor fixed setup. That left control/enable nets
+# (e.g. FSM init/next/state decode driving hundreds of next-state flops, and
+# reset_n with 1000+ sinks) on zero-strength gates with no buffer tree,
+# producing single-gate delays of tens-to-hundreds of ns and a deeply
+# negative setup WNS. Estimate placement-RC, then repair max-fanout /
+# max-cap / max-slew (repair_design) and setup paths (repair_timing).
+# Spares are set_dont_touch above so they are preserved. All best-effort:
+# a NONFATAL note keeps the flow moving if a PDK lacks RC characterization.
+if {{[catch {{estimate_parasitics -placement}} _pe_pl]}} {{
+  puts "EST_PARASITICS_PLACEMENT_NONFATAL: $_pe_pl"
+}}
+if {{[catch {{repair_design}} _rd_err]}} {{
+  puts "REPAIR_DESIGN_NONFATAL: $_rd_err"
+}}
+if {{[catch {{repair_timing -setup}} _rts_err]}} {{
+  puts "REPAIR_TIMING_SETUP_NONFATAL: $_rts_err"
+}}
+if {{[catch {{detailed_placement}} _rt_dp_err]}} {{
+  puts "REPAIR_LEGALIZE_NONFATAL: $_rt_dp_err"
+}}
+if {{[catch {{clock_tree_synthesis -buf_list {{{clk_buf}}} -root_buf {clk_buf_root}}} cts_err]}} {{
+  puts "CTS_NONFATAL: $cts_err -- continuing without explicit CTS"
+}}
+write_def {out_dir_c}/post_cts.def
+# Hold fixing (best-effort). Even when no violations exist, run a
+# detailed-placement pass after CTS so post_hold.def differs from
+# post_cts.def (CTS may have left placement gaps that detailed_placement
+# closes). This prevents def_stage_progression_check from rejecting the
+# pair as identical fabrication.
+if {{[catch {{repair_timing -hold}} hold_err]}} {{
+  puts "HOLD_NONFATAL: $hold_err"
+}}
+detailed_placement
+write_def {out_dir_c}/post_hold.def
+# Emit a hold (min-path) slack report so hold_closure_check has PRIMARY
+# evidence that hold is closed even when zero hold buffers were inserted
+# (a small design at a relaxed period legitimately has NO hold violations,
+# so post_hold.def == post_cts.def in component count — without a report the
+# gate cannot tell "clean" from "silently failed" and FAILs). report_checks
+# -path_delay min is OpenROAD's hold path; "slack (MET)" / a min-path slack
+# number is what the checker parses. chip-AGNOSTIC.
+if {{[catch {{report_checks -path_delay min -format full_clock_expanded \
+        > {out_dir_c}/post_hold_timing.rpt}} _hold_rpt_err]}} {{
+  puts "HOLD_REPORT_NONFATAL: $_hold_rpt_err"
+}}
+# Append a canonical, gate-parseable worst-hold-slack line. report_checks
+# emits per-path "slack (MET)" lines whose number is NOT adjacent to the
+# token "hold", so hold_closure_check's `worst[_ ]hold[_ ]slack` /
+# `hold ... slack` regexes never match and the gate FAILs even on a clean
+# design. report_worst_slack -min returns the single worst min-path (hold)
+# slack; relabel it into the canonical phrasing the checker recognizes.
+# chip-AGNOSTIC: the number is OpenROAD's own hold slack, just renamed.
+if {{[catch {{
+    set _whs [sta::worst_slack -min]
+    set _fh [open {out_dir_c}/post_hold_timing.rpt a]
+    puts $_fh "# Hold (min-path) sign-off summary (report_worst_slack -min):"
+    puts $_fh "worst hold slack $_whs"
+    puts $_fh "hold WNS $_whs"
+    close $_fh
+}} _whs_err]}} {{
+  puts "HOLD_WHS_NONFATAL: $_whs_err"
+}}
+{routing_constraint_tcl}# === v0.2.14 — DRT-0305 PG-net cleanup (MUST precede global_route) ===
+# A non-special POWER/GROUND net in regular NETS (dangling zero_/one_ tie stub)
+# makes TritonRoute abort ALL detailed routing; remove/reclassify it first so the
+# design actually routes instead of silently shipping unrouted. See
+# _pg_net_cleanup_tcl for the full rationale.
+{pg_cleanup_block}global_route
+# === v0.1.26 post-global-route SETUP / DRV repair ===
+# Re-estimate RC from global routing and repair again so the final routed
+# netlist reflects setup-closed, fanout-buffered nets (best-effort).
+if {{[catch {{estimate_parasitics -global_routing}} _pe_gr]}} {{
+  puts "EST_PARASITICS_GR_NONFATAL: $_pe_gr"
+}}
+if {{[catch {{repair_design}} _rd2_err]}} {{
+  puts "REPAIR_DESIGN_GR_NONFATAL: $_rd2_err"
+}}
+if {{[catch {{repair_timing -setup}} _rts2_err]}} {{
+  puts "REPAIR_TIMING_SETUP_GR_NONFATAL: $_rts2_err"
+}}
+if {{[catch {{repair_timing -hold}} _rth2_err]}} {{
+  puts "REPAIR_TIMING_HOLD_GR_NONFATAL: $_rth2_err"
+}}
+if {{[catch {{detailed_placement}} _gr_dp_err]}} {{
+  puts "GR_REPAIR_LEGALIZE_NONFATAL: $_gr_dp_err"
+}}
+# Detailed route emits the actual `+ ROUTED ...` wire geometry that
+# def_stage_progression_check requires. Without it, routed.def carries
+# only NETS without geometry. Best-effort: surface a NONFATAL note if
+# detailed_route fails (open-source iic-osic-tools has it; some custom
+# PDKs without RC files have detailed_route that completes without wire
+# geometry but at least the global_route step does write SPECIALNETS).
+if {{[catch {{detailed_route}} dr_err]}} {{
+  puts "DETAILED_ROUTE_NONFATAL: $dr_err"
+}}
+# ORGANIC #571 (b) — CHECKPOINT the routed DEF the MOMENT detailed_route
+# finishes, BEFORE antenna repair. The repair_antennas + incremental-reroute
+# pass can run pathologically long (>75 min, single-threaded, no log) and any
+# kill/timeout during it would otherwise discard hours of completed routing
+# (routed.def was only written at the very end of the tcl). With this
+# checkpoint a timeout leaves a usable routed_preantenna.def to resume from.
+if {{[catch {{write_def {out_dir_c}/routed_preantenna.def}} _cp_err]}} {{
+  puts "ROUTED_CHECKPOINT_NONFATAL: $_cp_err"
+}}
+# === ORGANIC #557 — post-route SPEF-domain repair loop ===
+# Runs OpenRCX extraction (when a captable exists) → read_spef → repair_design /
+# repair_timing → detailed_placement → incremental reroute.  Best-effort:
+# any exception leaves the routing unchanged and issues a NONFATAL marker.
+{spef_repair_block}# === v0.2.14 — antenna repair (diode insertion) after detailed_route ===
+{antenna_repair_block}# === v0.1.48 — decap + filler insertion ===
+# spm pilot Tier 2 EM/decap finding: prior runs (v0.1.25 → v0.1.47) emitted
+# ZERO decap or filler cells. Empty std-cell-row gaps left an MPW-rejecting
+# combination: no dynamic IR margin (no decap), open density-fill rules
+# (no filler in row gaps), and unused silicon area. SKY130 spm pilot added
+# 2079 decap + 150 fill cells; DRC still 0, worst IR 35 µV (2500× margin).
+# NONFATAL-guarded so PDKs without the masters degrade gracefully.
+{filler_block}write_def {out_dir_c}/routed.def
+write_def {out_dir_c}/{top}.def
+write_verilog {out_dir_c}/{top}_pnr.v
+report_checks > {out_dir_c}/sta.rpt
+report_design_area > {out_dir_c}/area.rpt
+exit
+"""
 
 
 def step_pnr(project: Path, top: str, pdk: PdkConfig,
@@ -3480,185 +3692,23 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # OpenROAD command modifies the in-memory database; write_def after
     # each captures that stage. Catches the v10632 fabrication regression
     # where a runner copied routed.def to all 5 stage names.
-    pnr_tcl.write_text(f"""
-read_lef {tech_lef_c}
-read_lef {cell_lef_c}
-{macro_lefs_tcl}
-read_liberty {liberty_c}
-{macro_libs_tcl}
-read_verilog {netlist_c}
-link_design {top}
-read_sdc {sdc_c}
-# === v0.2.14 — restrict the resizer/CTS/repair cell pool (after link_design,
-# before any optimization). Prevents OpenROAD from inserting PnR-forbidden cells
-# (probe / lpflow / DRC-failed) that TritonRoute then cannot route (DRT-0085).
-# See _dont_use_tcl. ===
-{dont_use_block}# === v0.1.26 wire-RC model ===
-# Without set_wire_rc, OpenROAD has no per-layer R/C, so (a) STA ignores
-# interconnect delay (optimistic) and (b) repair_timing -setup aborts with
-# RSZ-0089 "Could not find a resistance value for any corner" because it
-# cannot evaluate max wire length for buffering. Set signal nets to a mid
-# metal layer and clock nets to an upper layer (sky130 convention). The
-# layer names are resolved against the loaded tech LEF; a NONFATAL note
-# keeps the flow moving on PDKs whose layer names differ.
-if {{[catch {{set_wire_rc -signal -layer {pdk.metal_prefix}1}} _swr_sig]}} {{
-  if {{[catch {{set_wire_rc -layer {pdk.metal_prefix}1}} _swr_sig2]}} {{
-    puts "SET_WIRE_RC_SIGNAL_NONFATAL: $_swr_sig2"
-  }}
-}}
-if {{[catch {{set_wire_rc -clock -layer {pdk.metal_prefix}5}} _swr_clk]}} {{
-  puts "SET_WIRE_RC_CLOCK_NONFATAL: $_swr_clk"
-}}
-initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\
-                      -core_area "{core_pad} {core_pad} {core_w} {core_h}" \\
-                      -site {pdk.site}
-make_tracks
-place_pins -hor_layers {pdk.metal_prefix}3 -ver_layers {pdk.metal_prefix}2
-write_def {out_dir_c}/floorplan.def
-# === v0.1.46 — tapcell insertion for latch-up well-tie density ===
-# v0.1.44 spm pilot Tier 5 finding: prior runs (v0.1.25 and v0.1.45 alike)
-# inserted ZERO tap cells, leaving the design at latch-up risk that no
-# open-PDK DRC deck currently catches (sky130A.lydrc has nwell.4 — the
-# 'every nwell must contain a tap' rule — commented out). A real MPW
-# shuttle's Calibre LVS / latch-up rule deck would fail this. Insert
-# `sky130_fd_sc_hd__tapvpwrvgnd_1` at 14 µm spacing (SKY130 standard);
-# WNS improved +11.61 → +11.89 ns MET on spm pilot, DRC still 0.
-# NONFATAL-guarded — falls back if PDK has no tapcell master configured.
-{tapcell_block}{pdn_block}global_placement -density {util}
-detailed_placement
-write_def {out_dir_c}/placed.def
-# === Design-for-ECO Step 18: spare-cell insertion + PROTECTION ===
-# ORGANIC #562: spares inserted as PLACED; detailed_placement below snaps
-# them to the legal site/row grid (eliminates DPL-0006 DRC violations).
-# ORGANIC #563: spare_postfix_tcl sets them FIRM + runs check_placement.
-{spare_protection_tcl}if {{[catch {{detailed_placement}} _sp_dp_err]}} {{
-  puts "SPARE_LEGALIZE_NONFATAL: $_sp_dp_err"
-}}
-{spare_postfix_tcl}# === v0.1.26 SETUP / DRV repair (pre-CTS) ===
-# The prior template only ran `repair_timing -hold` post-CTS — it NEVER
-# buffered high-fanout nets nor fixed setup. That left control/enable nets
-# (e.g. FSM init/next/state decode driving hundreds of next-state flops, and
-# reset_n with 1000+ sinks) on zero-strength gates with no buffer tree,
-# producing single-gate delays of tens-to-hundreds of ns and a deeply
-# negative setup WNS. Estimate placement-RC, then repair max-fanout /
-# max-cap / max-slew (repair_design) and setup paths (repair_timing).
-# Spares are set_dont_touch above so they are preserved. All best-effort:
-# a NONFATAL note keeps the flow moving if a PDK lacks RC characterization.
-if {{[catch {{estimate_parasitics -placement}} _pe_pl]}} {{
-  puts "EST_PARASITICS_PLACEMENT_NONFATAL: $_pe_pl"
-}}
-if {{[catch {{repair_design}} _rd_err]}} {{
-  puts "REPAIR_DESIGN_NONFATAL: $_rd_err"
-}}
-if {{[catch {{repair_timing -setup}} _rts_err]}} {{
-  puts "REPAIR_TIMING_SETUP_NONFATAL: $_rts_err"
-}}
-if {{[catch {{detailed_placement}} _rt_dp_err]}} {{
-  puts "REPAIR_LEGALIZE_NONFATAL: $_rt_dp_err"
-}}
-if {{[catch {{clock_tree_synthesis -buf_list {{{clk_buf}}} -root_buf {clk_buf_root}}} cts_err]}} {{
-  puts "CTS_NONFATAL: $cts_err -- continuing without explicit CTS"
-}}
-write_def {out_dir_c}/post_cts.def
-# Hold fixing (best-effort). Even when no violations exist, run a
-# detailed-placement pass after CTS so post_hold.def differs from
-# post_cts.def (CTS may have left placement gaps that detailed_placement
-# closes). This prevents def_stage_progression_check from rejecting the
-# pair as identical fabrication.
-if {{[catch {{repair_timing -hold}} hold_err]}} {{
-  puts "HOLD_NONFATAL: $hold_err"
-}}
-detailed_placement
-write_def {out_dir_c}/post_hold.def
-# Emit a hold (min-path) slack report so hold_closure_check has PRIMARY
-# evidence that hold is closed even when zero hold buffers were inserted
-# (a small design at a relaxed period legitimately has NO hold violations,
-# so post_hold.def == post_cts.def in component count — without a report the
-# gate cannot tell "clean" from "silently failed" and FAILs). report_checks
-# -path_delay min is OpenROAD's hold path; "slack (MET)" / a min-path slack
-# number is what the checker parses. chip-AGNOSTIC.
-if {{[catch {{report_checks -path_delay min -format full_clock_expanded \
-        > {out_dir_c}/post_hold_timing.rpt}} _hold_rpt_err]}} {{
-  puts "HOLD_REPORT_NONFATAL: $_hold_rpt_err"
-}}
-# Append a canonical, gate-parseable worst-hold-slack line. report_checks
-# emits per-path "slack (MET)" lines whose number is NOT adjacent to the
-# token "hold", so hold_closure_check's `worst[_ ]hold[_ ]slack` /
-# `hold ... slack` regexes never match and the gate FAILs even on a clean
-# design. report_worst_slack -min returns the single worst min-path (hold)
-# slack; relabel it into the canonical phrasing the checker recognizes.
-# chip-AGNOSTIC: the number is OpenROAD's own hold slack, just renamed.
-if {{[catch {{
-    set _whs [sta::worst_slack -min]
-    set _fh [open {out_dir_c}/post_hold_timing.rpt a]
-    puts $_fh "# Hold (min-path) sign-off summary (report_worst_slack -min):"
-    puts $_fh "worst hold slack $_whs"
-    puts $_fh "hold WNS $_whs"
-    close $_fh
-}} _whs_err]}} {{
-  puts "HOLD_WHS_NONFATAL: $_whs_err"
-}}
-{routing_constraint_tcl}# === v0.2.14 — DRT-0305 PG-net cleanup (MUST precede global_route) ===
-# A non-special POWER/GROUND net in regular NETS (dangling zero_/one_ tie stub)
-# makes TritonRoute abort ALL detailed routing; remove/reclassify it first so the
-# design actually routes instead of silently shipping unrouted. See
-# _pg_net_cleanup_tcl for the full rationale.
-{pg_cleanup_block}global_route
-# === v0.1.26 post-global-route SETUP / DRV repair ===
-# Re-estimate RC from global routing and repair again so the final routed
-# netlist reflects setup-closed, fanout-buffered nets (best-effort).
-if {{[catch {{estimate_parasitics -global_routing}} _pe_gr]}} {{
-  puts "EST_PARASITICS_GR_NONFATAL: $_pe_gr"
-}}
-if {{[catch {{repair_design}} _rd2_err]}} {{
-  puts "REPAIR_DESIGN_GR_NONFATAL: $_rd2_err"
-}}
-if {{[catch {{repair_timing -setup}} _rts2_err]}} {{
-  puts "REPAIR_TIMING_SETUP_GR_NONFATAL: $_rts2_err"
-}}
-if {{[catch {{repair_timing -hold}} _rth2_err]}} {{
-  puts "REPAIR_TIMING_HOLD_GR_NONFATAL: $_rth2_err"
-}}
-if {{[catch {{detailed_placement}} _gr_dp_err]}} {{
-  puts "GR_REPAIR_LEGALIZE_NONFATAL: $_gr_dp_err"
-}}
-# Detailed route emits the actual `+ ROUTED ...` wire geometry that
-# def_stage_progression_check requires. Without it, routed.def carries
-# only NETS without geometry. Best-effort: surface a NONFATAL note if
-# detailed_route fails (open-source iic-osic-tools has it; some custom
-# PDKs without RC files have detailed_route that completes without wire
-# geometry but at least the global_route step does write SPECIALNETS).
-if {{[catch {{detailed_route}} dr_err]}} {{
-  puts "DETAILED_ROUTE_NONFATAL: $dr_err"
-}}
-# ORGANIC #571 (b) — CHECKPOINT the routed DEF the MOMENT detailed_route
-# finishes, BEFORE antenna repair. The repair_antennas + incremental-reroute
-# pass can run pathologically long (>75 min, single-threaded, no log) and any
-# kill/timeout during it would otherwise discard hours of completed routing
-# (routed.def was only written at the very end of the tcl). With this
-# checkpoint a timeout leaves a usable routed_preantenna.def to resume from.
-if {{[catch {{write_def {out_dir_c}/routed_preantenna.def}} _cp_err]}} {{
-  puts "ROUTED_CHECKPOINT_NONFATAL: $_cp_err"
-}}
-# === ORGANIC #557 — post-route SPEF-domain repair loop ===
-# Runs OpenRCX extraction (when a captable exists) → read_spef → repair_design /
-# repair_timing → detailed_placement → incremental reroute.  Best-effort:
-# any exception leaves the routing unchanged and issues a NONFATAL marker.
-{spef_repair_block}# === v0.2.14 — antenna repair (diode insertion) after detailed_route ===
-{antenna_repair_block}# === v0.1.48 — decap + filler insertion ===
-# spm pilot Tier 2 EM/decap finding: prior runs (v0.1.25 → v0.1.47) emitted
-# ZERO decap or filler cells. Empty std-cell-row gaps left an MPW-rejecting
-# combination: no dynamic IR margin (no decap), open density-fill rules
-# (no filler in row gaps), and unused silicon area. SKY130 spm pilot added
-# 2079 decap + 150 fill cells; DRC still 0, worst IR 35 µV (2500× margin).
-# NONFATAL-guarded so PDKs without the masters degrade gracefully.
-{filler_block}write_def {out_dir_c}/routed.def
-write_def {out_dir_c}/{top}.def
-write_verilog {out_dir_c}/{top}_pnr.v
-report_checks > {out_dir_c}/sta.rpt
-report_design_area > {out_dir_c}/area.rpt
-exit
-""")
+    pnr_tcl.write_text(_build_pnr_tcl_text(
+        tech_lef_c=tech_lef_c, cell_lef_c=cell_lef_c,
+        macro_lefs_tcl=macro_lefs_tcl, liberty_c=liberty_c,
+        macro_libs_tcl=macro_libs_tcl, netlist_c=netlist_c, top=top,
+        sdc_c=sdc_c, dont_use_block=dont_use_block,
+        metal_prefix=pdk.metal_prefix, die_w=die_w, die_h=die_h,
+        core_pad=core_pad, core_w=core_w, core_h=core_h, site=pdk.site,
+        out_dir_c=out_dir_c, tapcell_block=tapcell_block,
+        pdn_block=pdn_block, util=util,
+        spare_protection_tcl=spare_protection_tcl,
+        spare_postfix_tcl=spare_postfix_tcl, clk_buf=clk_buf,
+        clk_buf_root=clk_buf_root,
+        routing_constraint_tcl=routing_constraint_tcl,
+        pg_cleanup_block=pg_cleanup_block,
+        spef_repair_block=spef_repair_block,
+        antenna_repair_block=antenna_repair_block,
+        filler_block=filler_block))
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
            f"openroad -no_init -exit {pnr_tcl_c} 2>&1 | "

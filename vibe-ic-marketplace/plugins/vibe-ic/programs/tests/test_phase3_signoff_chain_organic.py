@@ -397,8 +397,12 @@ class TestDontUseTcl:
         import inspect
         src = inspect.getsource(runner.step_pnr)
         assert "dont_use_block = _dont_use_tcl(pdk)" in src
-        # injected right after read_sdc, before the wire-RC / opt sequence
-        assert "{dont_use_block}# === v0.1.26 wire-RC model ===" in src
+        # ORGANIC #581 — the pnr.tcl template moved into the pure builder
+        # _build_pnr_tcl_text (tclsh-validated); the injection-point pin
+        # moves with it: right after read_sdc, before the wire-RC / opt
+        # sequence.
+        tmpl = inspect.getsource(runner._build_pnr_tcl_text)
+        assert "{dont_use_block}# === v0.1.26 wire-RC model ===" in tmpl
 
 
 class TestPgNetCleanupTcl:
@@ -431,7 +435,10 @@ class TestPgNetCleanupTcl:
         import inspect
         src = inspect.getsource(runner.step_pnr)
         assert "pg_cleanup_block = _pg_net_cleanup_tcl()" in src
-        assert "{pg_cleanup_block}global_route" in src
+        # ORGANIC #581 — interpolation point lives in the extracted pure
+        # template builder now (see TestDontUseTcl above).
+        tmpl = inspect.getsource(runner._build_pnr_tcl_text)
+        assert "{pg_cleanup_block}global_route" in tmpl
 
 
 class TestAntennaInSessionPreference:

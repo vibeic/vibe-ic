@@ -191,7 +191,22 @@ def test_no_identical_non_empty_sibling_fields_between_aes_and_dram(tmp_path_fac
                            # description_evidence above — a shared
                            # extraction-path marker, not a chip-class
                            # scaffold leak.
-                           "top_module_pins_evidence"):
+                           "top_module_pins_evidence",
+                           # ORGANIC #580 — the digital-only L5 skeleton's
+                           # structural N/A markers. Two digital-only ICs
+                           # legitimately share `NOT_APPLICABLE` + the
+                           # canonical reason string (same deterministic
+                           # emitter path by design); per-chip content
+                           # lives in ic_name. Same family as the strategy
+                           # markers above.
+                           "applicability",
+                           "applicability_reason",
+                           # source_documents is the per-project input
+                           # file list — both fixtures stage a single
+                           # `input/docs/README.md`, so the RELATIVE path
+                           # list coincides. A real-input filename echo,
+                           # not a scaffold leak.
+                           "source_documents"):
                     continue
                 suspect_fields.append(f"{layer}.{key} = {aes_val!r}")
 

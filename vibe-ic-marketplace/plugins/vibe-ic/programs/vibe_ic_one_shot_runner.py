@@ -88,18 +88,38 @@ def _phase1_decision(project: Path, force_skip: bool) -> Tuple[bool, str]:
     # Already has the full L-doc set → nothing to do.
     if L_count >= 13:
         return (False, "")
-    # Path A inputs (structured YAML / free-text prompt) → prompt mode.
-    if p1_struct.is_file() or p1_prompt.is_file():
+    def _has_extractable(d: Path) -> bool:
+        # #583 — "populated" means at least one real, non-empty,
+        # non-hidden document (a .gitkeep placeholder must not flip a
+        # prompt-only project into docs mode).
+        if not d.is_dir():
+            return False
+        for f in d.rglob("*"):
+            if f.is_file() and not f.name.startswith(".") \
+                    and f.stat().st_size > 0:
+                return True
+        return False
+
+    docs_populated = _has_extractable(docs)
+    input_doc_populated = bool(input_doc) and _has_extractable(input_doc)
+    # Structured YAML is a deliberately-authored fact graph — strongest
+    # Path-A signal; it wins even when docs are also staged.
+    if p1_struct.is_file():
         return (True, "prompt")
-    # Path B: populated vendor docs but no L docs yet → docs mode.
+    # ORGANIC #583 — a populated vendor docs/ tree outranks a free-text
+    # prompt file: when BOTH are staged the prompt is a SUMMARY, not the
+    # richer source. The pre-fix order picked prompt mode and L9
+    # extraction collapsed to a glossary term from the prompt (6 pins,
+    # all width=None) while the same plugin extracted a correct 47-port
+    # L9 from the sibling project whose decision resolved to docs mode.
     # phase1_one_shot_runner --mode docs routes raw corpora through the
     # doc-extraction track; phase1 itself re-detects the precise mode,
     # so passing --mode docs is the explicit, deterministic signal.
-    docs_populated = (docs.is_dir() and any(docs.iterdir()))
-    input_doc_populated = bool(
-        input_doc and input_doc.is_dir() and any(input_doc.iterdir()))
     if docs_populated or input_doc_populated:
         return (True, "docs")
+    # Path A free-text prompt only → prompt mode.
+    if p1_prompt.is_file():
+        return (True, "prompt")
     # No inputs at all — phase1 will SKIP gracefully (don't run).
     return (False, "")
 

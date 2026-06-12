@@ -45,6 +45,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import _path_layout as _pl
+import sdc_constraints as _sdc
 
 
 def _load_json(p: Path) -> Optional[dict]:
@@ -54,6 +55,46 @@ def _load_json(p: Path) -> Optional[dict]:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def _clock_mhz_from_l8_domains(l8: dict) -> Optional[float]:
+    """ORGANIC #579 — resolve the clock frequency from the layer-8
+    ``clock_domains[]`` records the staged-SDC ingest (#554) emits
+    (top-level ``clock_mhz`` stays null on that path). Prefers the
+    primary/master record; accepts ``freq_mhz`` → ``period_ns`` →
+    ``freq_hz`` per record. Returns MHz or None. Chip-AGNOSTIC:
+    schema keys only."""
+    domains = l8.get("clock_domains")
+    if not isinstance(domains, list):
+        return None
+
+    def _mhz(rec) -> Optional[float]:
+        if not isinstance(rec, dict):
+            return None
+        for key, conv in (("freq_mhz", lambda v: float(v)),
+                          ("period_ns", lambda v: 1000.0 / float(v)),
+                          ("freq_hz", lambda v: float(v) / 1e6)):
+            v = rec.get(key)
+            if v is None:
+                continue
+            try:
+                f = conv(v)
+            except (TypeError, ValueError, ZeroDivisionError):
+                continue
+            if f > 0:
+                return f
+        return None
+
+    primary = [r for r in domains if isinstance(r, dict)
+               and (r.get("domain_kind") == "primary"
+                    or r.get("role") == "master")]
+    rest = [r for r in domains
+            if isinstance(r, dict) and not any(r is p for p in primary)]
+    for rec in primary + rest:
+        f = _mhz(rec)
+        if f is not None:
+            return f
+    return None
 
 
 # v1.6.94 (issue #25 Bug 5) — AID-class half-duplex single-wire protocols
@@ -359,7 +400,7 @@ def _render_sdc(top: str, clock_port: str, period_ns: float,
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
-def main() -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -375,7 +416,7 @@ def main() -> int:
     p.add_argument("--ic-class", default=None,
                    help="IC class verdict from detect_ic_class "
                         "(e.g. aid_class_half_duplex)")
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     project = args.project.resolve()
     if not project.is_dir():
@@ -393,6 +434,13 @@ def main() -> int:
     # the L8.clock_mhz value (default 50 MHz). Only relax when L8 hasn't
     # been pinned to an explicit non-default — explicit `clock_mhz` always
     # wins over the per-class default.
+    # ORGANIC #579 — the staged-SDC ingest (#554) records the project's
+    # clock contract as L8.clock_domains[] (freq_mhz/period_ns) with the
+    # top-level clock_mhz left null; consult it (then the staged SDC files
+    # via the shared sdc_constraints module, #556 r2 precedent) BEFORE
+    # falling back to the 50 MHz default — otherwise the generator emits a
+    # wrong-period SDC while the sibling checker reads the real period and
+    # the structural gate can never pass on the staged-SDC path.
     explicit_clock = l8.get("clock_mhz")
     if explicit_clock is not None:
         try:
@@ -400,10 +448,19 @@ def main() -> int:
         except Exception:
             clock_mhz = _DEFAULT_MHZ
     else:
-        clock_mhz = _DEFAULT_MHZ
-        if args.board == "de10lite" and _is_aid_class(
-                project, l9, getattr(args, "ic_class", None)):
-            clock_mhz = _AID_CLASS_DEFAULT_MHZ_DE10LITE
+        domains_mhz = _clock_mhz_from_l8_domains(l8)
+        staged = None
+        if domains_mhz is None:
+            staged = _sdc.primary_clock(project)
+        if domains_mhz is not None:
+            clock_mhz = domains_mhz
+        elif staged is not None and staged.get("period_ns"):
+            clock_mhz = 1000.0 / float(staged["period_ns"])
+        else:
+            clock_mhz = _DEFAULT_MHZ
+            if args.board == "de10lite" and _is_aid_class(
+                    project, l9, getattr(args, "ic_class", None)):
+                clock_mhz = _AID_CLASS_DEFAULT_MHZ_DE10LITE
     period_ns = 1000.0 / clock_mhz
 
     rtl_files = _list_rtl(project)

@@ -51,6 +51,32 @@ REG_DECL_RE = re.compile(
 )
 # Match `name[HI:LO]` bit-select
 BITSELECT_RE = re.compile(r"\b(\w+)\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]")
+# ORGANIC #584 — module boundary markers for per-MODULE scoping.
+MODULE_RE = re.compile(r"^\s*module\s+([A-Za-z_]\w*)", re.M)
+ENDMODULE_RE = re.compile(r"^\s*endmodule\b", re.M)
+
+
+def _module_regions(text: str) -> List[Tuple[int, int, str]]:
+    """ORGANIC #584 — return [(start, end, module_name)] character ranges
+    of every module…endmodule region in the file. sv2v emits one .v per
+    source .sv but each file routinely holds MULTIPLE modules; the
+    declaration→index pairing must be scoped per module or two modules
+    using the same short signal name (a, b, q) at different widths
+    cross-match into false bitselect-out-of-range errors. Text outside
+    any region (none in legal Verilog) falls back to a whole-file region.
+    """
+    starts = [(m.start(), m.group(1)) for m in MODULE_RE.finditer(text)]
+    if not starts:
+        return [(0, len(text), "")]
+    ends = [m.end() for m in ENDMODULE_RE.finditer(text)]
+    regions: List[Tuple[int, int, str]] = []
+    for i, (s, name) in enumerate(starts):
+        nxt = starts[i + 1][0] if i + 1 < len(starts) else len(text)
+        # First endmodule after this module's start (and before the next
+        # module's start) closes the region; fall back to next start.
+        e = next((x for x in ends if s < x <= nxt), nxt)
+        regions.append((s, e, name))
+    return regions
 
 
 def analyze_file(path: Path) -> List[Finding]:
@@ -68,20 +94,38 @@ def analyze_file(path: Path) -> List[Finding]:
         )
         return findings
 
-    # Build symbol table of declared widths
-    widths: Dict[str, Tuple[int, int]] = {}  # name -> (hi, lo)
-    for m in REG_DECL_RE.finditer(text):
-        hi, lo, name = int(m.group(1)), int(m.group(2)), m.group(3)
-        widths[name] = (hi, lo)
+    # ORGANIC #584 — scope declaration→index pairing PER MODULE (the old
+    # per-FILE symbol table cross-matched same-name signals of different
+    # widths across the multiple modules sv2v packs into one file).
+    line_starts = [0]
+    for i, ch in enumerate(text):
+        if ch == "\n":
+            line_starts.append(i + 1)
 
-    # Scan for bit-selects referencing widths larger than declared
-    for lineno, line in enumerate(text.splitlines(), start=1):
-        # Skip comments
-        stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("*"):
-            continue
-        for m in BITSELECT_RE.finditer(line):
-            name, sel_hi, sel_lo = m.group(1), int(m.group(2)), int(m.group(3))
+    def _lineno(pos: int) -> int:
+        import bisect
+        return bisect.bisect_right(line_starts, pos)
+
+    for r_start, r_end, _mod in _module_regions(text):
+        region = text[r_start:r_end]
+        # Build the per-module symbol table of declared widths
+        widths: Dict[str, Tuple[int, int]] = {}  # name -> (hi, lo)
+        for m in REG_DECL_RE.finditer(region):
+            hi, lo, name = int(m.group(1)), int(m.group(2)), m.group(3)
+            widths[name] = (hi, lo)
+
+        # Scan this module's lines for out-of-range bit-selects
+        for lm in BITSELECT_RE.finditer(region):
+            abs_pos = r_start + lm.start()
+            lineno = _lineno(abs_pos)
+            line = text[line_starts[lineno - 1]:
+                        line_starts[lineno] - 1 if lineno < len(line_starts)
+                        else len(text)]
+            stripped = line.strip()
+            if stripped.startswith("//") or stripped.startswith("*"):
+                continue
+            name, sel_hi, sel_lo = (lm.group(1), int(lm.group(2)),
+                                    int(lm.group(3)))
             if name not in widths:
                 continue
             decl_hi, decl_lo = widths[name]
