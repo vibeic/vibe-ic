@@ -10868,7 +10868,7 @@ def _pin_has_port_like_evidence(pin) -> bool:
     return False
 
 
-def _is_real_port_token(tok, l1_chip_name=None):
+def _is_real_port_token(tok, l1_chip_name=None, pin=None):
     """v1.6.85 (#17 Bug A2) — chip-AGNOSTIC reject filter for harvested
     all-caps tokens proposed as top-level ports.
 
@@ -10901,7 +10901,21 @@ def _is_real_port_token(tok, l1_chip_name=None):
     if _is_stdcell_lib_shape_token(tok):
         return False
     up = tok.upper()
-    if up in _POWER_RAIL_TOKENS:
+    # #611 — provenance-aware exemptions (chip-AGNOSTIC). A pin the L1 stage
+    # deliberately enumerated from a banked range / structured port table
+    # (provenance ∈ _PORT_TABLE_STRATEGIES, e.g. backticked_interface_v455) is
+    # corroborated as a real port and must NOT be re-screened by the
+    # version-code SHAPE rejector as a part-number (IN1..IN6 / OUT1..OUT6 /
+    # CK4..CK6 were being dropped). A pin carrying an explicit FUNCTIONAL
+    # direction (input/output) is a signal port, never a supply rail (a VREF
+    # reference INPUT is not a VDD/VSS supply). Other callsites pass pin=None
+    # → both guards behave exactly as before (no behaviour change).
+    _pin = pin if isinstance(pin, dict) else {}
+    _strat = _pin.get("_extraction") or _pin.get("extraction_strategy")
+    _has_port_table_provenance = _strat in _PORT_TABLE_STRATEGIES
+    _dir = str(_pin.get("mode") or _pin.get("direction") or "").strip().lower()
+    _has_functional_dir = _dir in ("input", "output", "inout", "in", "out")
+    if up in _POWER_RAIL_TOKENS and not _has_functional_dir:
         return False
     if up in _NON_PORT_NARRATIVE_TOKENS:
         return False
@@ -10919,7 +10933,10 @@ def _is_real_port_token(tok, l1_chip_name=None):
     if tok.lower() in _VERILOG_RESERVED_KEYWORDS:
         return False
     # Pure chip-version codes: leading letters + digits only (E4, IC-A, A1101).
-    if _CHIP_VERSION_CODE_RE.match(up):
+    # #611 — but NOT when the pin was deliberately enumerated from a banked
+    # range / structured port table: that provenance corroborates a real
+    # port (IN1 / OUT6 / CK4) and overrides the part-number shape heuristic.
+    if _CHIP_VERSION_CODE_RE.match(up) and not _has_port_table_provenance:
         return False
     # v1.6.86 (#18 Bug 3) — board-pin labels (PIN_N5 / PIN_N14 / PIN_AB12)
     # are FPGA-package ball assignments, never chip top-level ports.
@@ -39666,7 +39683,10 @@ def gen_l9_integration_spec(project: Path,
             raw = p.get("name")
             if not raw:
                 continue
-            if not _is_real_port_token(str(raw), ic_name_l1):
+            # #611 — pass the source pin dict so provenance-aware exemptions
+            # (banked/port-table → skip version-code rejector; functional
+            # direction → skip power-rail rejector) can fire at promotion.
+            if not _is_real_port_token(str(raw), ic_name_l1, pin=p):
                 continue
             # ORGANIC-20260606 #475 (c) — positive port-like-evidence
             # corroboration. The deny/shape guards in _is_real_port_token
