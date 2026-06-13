@@ -25,7 +25,7 @@ import re
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 
 @dataclass
@@ -67,11 +67,74 @@ def strip_comments(src: str) -> str:
     return ''.join(out)
 
 
-def find_rtl_files(project_dir: Path) -> List[Path]:
+# ORGANIC #615 — circular-reset is a STRUCTURAL-RTL concern. A flat
+# gate-level netlist (post-synth / post-PnR) instantiates library leaf cells,
+# not the design's reset-graph modules, so re-parsing the multi-MB netlist
+# carries no module-instance reset hierarchy worth checking — the design RTL
+# already holds the full reset structure. Scanning those netlists was the
+# entire 380s/invocation cost. Skip them (and any machine-generated multi-MB
+# file) so the gate stays fast; skips are LOGGED (no silent cap).
+_SYNTH_PNR_DIR_PARTS = {"synth", "pnr", "cts"}
+# machine-emitted netlist filename stems (the token must END the stem so a
+# design file like `my_synthesizer.v` is NOT mistaken for a `_synth` netlist).
+_NETLIST_STEM_SUFFIXES = ("_synth", "_pnr", "_sv2v", "_route", "_routed",
+                          "_postroute")
+_SIZE_FLOOR_BYTES = 2_000_000  # 2 MB — only flat gate-level netlists reach this
+
+
+def _is_netlist_name(name: str) -> bool:
+    """True iff `name` is a machine-emitted netlist filename: it contains
+    `netlist` (netlist.v / netlist_yosys.v) or its stem ends in a synth/PnR
+    suffix (chip_top_synth.v / top_pnr.v / chip_top_sv2v.v). The end-anchored
+    suffix check avoids matching a design file such as `my_synthesizer.v`."""
+    n = name.lower()
+    if not n.endswith((".v", ".sv")):
+        return False
+    if "netlist" in n:
+        return True
+    stem = n.rsplit(".", 1)[0]
+    return stem.endswith(_NETLIST_STEM_SUFFIXES)
+
+
+def _is_synth_or_pnr_output(path: Path, root: Path) -> bool:
+    """True iff `path` is a synthesis / PnR output (a backend-stage dir or a
+    netlist-named file), i.e. NOT hand-written design RTL. Chip-AGNOSTIC:
+    flow-stage directory names + machine-emitted netlist filename conventions,
+    no chip-specific literal."""
+    try:
+        parts = [p.lower() for p in path.relative_to(root).parts[:-1]]
+    except ValueError:
+        parts = [p.lower() for p in path.parts[:-1]]
+    if _SYNTH_PNR_DIR_PARTS.intersection(parts):
+        return True
+    return _is_netlist_name(path.name)
+
+
+def find_rtl_files(project_dir: Path,
+                   _skipped: "Optional[List[Tuple[str, str]]]" = None
+                   ) -> List[Path]:
     files = []
     for ext in ('*.v', '*.sv'):
         files.extend(project_dir.rglob(ext))
-    return [f for f in files if f.is_file()]
+    kept: List[Path] = []
+    for f in files:
+        if not f.is_file():
+            continue
+        reason = None
+        if _is_synth_or_pnr_output(f, project_dir):
+            reason = "synth/pnr output (no design reset hierarchy)"
+        else:
+            try:
+                if f.stat().st_size > _SIZE_FLOOR_BYTES:
+                    reason = f"size>{_SIZE_FLOOR_BYTES}B (machine-generated)"
+            except OSError:
+                pass
+        if reason is not None:
+            if _skipped is not None:
+                _skipped.append((str(f), reason))
+            continue
+        kept.append(f)
+    return kept
 
 
 # Module instance: <TypeName> <inst_name> ( .port(sig), ... );
@@ -254,7 +317,8 @@ def audit(project_dir: str) -> AuditResult:
         result.summary = {'files_scanned': 0, 'violations': 1}
         return result
 
-    files = find_rtl_files(root)
+    skipped: List[Tuple[str, str]] = []
+    files = find_rtl_files(root, _skipped=skipped)
     # de-duplicate findings by (rule, file, line, message)
     seen: Set[Tuple[str, str, int, str]] = set()
     for f in files:
@@ -269,6 +333,11 @@ def audit(project_dir: str) -> AuditResult:
     result.summary = {
         'files_scanned': len(files),
         'violations': len(result.findings),
+        # ORGANIC #615 — transparency: report (not silently drop) the
+        # synth/PnR-output + multi-MB files excluded from the structural scan.
+        'files_skipped': len(skipped),
+        'skipped': [{'file': fp, 'reason': rsn}
+                    for fp, rsn in skipped[:50]],
     }
     return result
 
