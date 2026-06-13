@@ -88,6 +88,128 @@ def _normalize_addr(addr: str) -> str:
     return _ADDR_RANGE_SEP_RE.sub("-", addr).lower()
 
 
+# ---------------------------------------------------------------------------
+# #616 — GitHub-Flavored-Markdown pipe-delimited register summary tables.
+#
+# Auto-generated register docs (e.g. an `*_registers.md`) commonly render as::
+#
+#     | Name                         | Offset | Length | Description          |
+#     |------------------------------|--------|--------|----------------------|
+#     | [`ALERT_TEST`](#alert_test)  | 0x0    | 4      | Alert Test Register  |
+#
+# The address is NOT the first token (Name-first ordering) and cells are
+# `|`-delimited, so neither the dash nor the column-whitespace regex above
+# matches — the extractor returned ZERO rows for a 40+ register map. This
+# parser is HEADER-DRIVEN: it locates the column roles from a `|`-leading
+# header whose cells include a name keyword AND an offset/address keyword,
+# then reads each data row by those column indices. Chip-AGNOSTIC: pure GFM
+# table grammar, no chip/register-name vocabulary.
+# ---------------------------------------------------------------------------
+_GFM_NAME_HDR = {"name", "register", "field", "regname", "reg"}
+_GFM_OFFSET_HDR = {"offset", "address", "addr"}
+_GFM_LEN_HDR = {"length", "size", "width", "bytes"}
+_GFM_DESC_HDR = {"description", "desc", "notes", "function"}
+_GFM_ACCESS_HDR = {"access", "type", "rw", "mode", "permission", "perm"}
+_GFM_SEP_CELL_RE = re.compile(r"^:?-{2,}:?$")
+_GFM_OFFSET_RE = re.compile(r"(0x[0-9A-Fa-f]+|\b\d+\b)")
+# Register NAME inside a cell: a markdown link [`X`](#a) / [X](#a), or a bare
+# backticked `X`, or a lone identifier cell. The leading link/backtick form
+# wins so a "Foo.[`BAR`](#bar)" cell yields BAR (not the prose prefix).
+_GFM_LINK_NAME_RE = re.compile(r"\[\s*`?([A-Za-z_]\w*)`?\s*\]")
+_GFM_TICK_NAME_RE = re.compile(r"`([A-Za-z_]\w*)`")
+_GFM_BARE_NAME_RE = re.compile(r"^[A-Za-z_]\w*$")
+
+
+def _gfm_cells(line: str) -> List[str]:
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def _gfm_clean_name(cell: str) -> str:
+    m = _GFM_LINK_NAME_RE.search(cell)
+    if m:
+        return m.group(1)
+    m = _GFM_TICK_NAME_RE.search(cell)
+    if m:
+        return m.group(1)
+    s = cell.strip()
+    return s if _GFM_BARE_NAME_RE.match(s) else ""
+
+
+def _extract_gfm_pipe_table(text: str, source_path: str) -> List[Dict]:
+    """Parse `|`-delimited GFM register summary tables (Name-first). Returns
+    [] when no such table (with a name+offset header) is present, so callers
+    keep the dash/column regex behaviour for non-pipe docs."""
+    rows: List[Dict] = []
+    cols = None  # role -> column index, set from the detected header
+    for lineno, line in enumerate(text.split("\n"), start=1):
+        s = line.strip()
+        if not s.startswith("|"):
+            cols = None  # any non-pipe line ends the current table region
+            continue
+        cells = _gfm_cells(line)
+        nonempty = [c for c in cells if c]
+        # separator row (|---|:--:|---:|) — skip
+        if nonempty and all(_GFM_SEP_CELL_RE.match(c.replace(" ", ""))
+                            for c in nonempty):
+            continue
+        low = [c.lower() for c in cells]
+        if cols is None:
+            # header row iff it names both a register-name and an offset col
+            if any(c in _GFM_NAME_HDR for c in low) and \
+               any(c in _GFM_OFFSET_HDR for c in low):
+                cols = {}
+                for i, c in enumerate(low):
+                    if c in _GFM_NAME_HDR:
+                        cols.setdefault("name", i)
+                    elif c in _GFM_OFFSET_HDR:
+                        cols.setdefault("offset", i)
+                    elif c in _GFM_LEN_HDR:
+                        cols.setdefault("length", i)
+                    elif c in _GFM_DESC_HDR:
+                        cols.setdefault("desc", i)
+                    elif c in _GFM_ACCESS_HDR:
+                        cols.setdefault("access", i)
+            continue  # header consumed (or a pre-table pipe line ignored)
+        ni, oi = cols.get("name"), cols.get("offset")
+        if ni is None or oi is None or ni >= len(cells) or oi >= len(cells):
+            continue
+        name = _gfm_clean_name(cells[ni])
+        if not name or _is_header_row(name):
+            continue
+        mo = _GFM_OFFSET_RE.search(cells[oi])
+        if not mo:
+            continue
+        off = mo.group(1).lower()
+        addr_hex = off if off.startswith("0x") else hex(int(off))
+        desc = ""
+        if "desc" in cols and cols["desc"] < len(cells):
+            desc = cells[cols["desc"]]
+        if "length" in cols and cols["length"] < len(cells) and cells[cols["length"]]:
+            length = cells[cols["length"]]
+            desc = (f"{desc} (length={length})").strip() if desc else f"length={length}"
+        access_norm = ""
+        if "access" in cols and cols["access"] < len(cells):
+            access_norm = cells[cols["access"]].strip().lower().replace("/", "_")
+        rows.append({
+            "addr_hex": addr_hex,
+            "access": access_norm,
+            "name": name,
+            "description": desc.strip(),
+            "evidence": {
+                "source": source_path,
+                "line": lineno,
+                "matched_token": line.strip()[:120],
+                "extraction_strategy": "gfm_pipe_table_match",
+            },
+        })
+    return rows
+
+
 def extract_regmap_table(text: str, source_path: str) -> List[Dict]:
     """Return list of register dicts. Empty list if no rows match.
 
@@ -162,4 +284,8 @@ def extract_regmap_table(text: str, source_path: str) -> List[Dict]:
                 entry["addr_hex"] = addr_norm
             rows.append(entry)
             continue
+    # #616 — GFM pipe-delimited (Name-first) tables, which the line-by-line
+    # 0x-anchored regexes above cannot match. Disjoint from the regex rows
+    # (those never match a `|`-leading line), so a plain extend is safe.
+    rows.extend(_extract_gfm_pipe_table(text, source_path))
     return rows

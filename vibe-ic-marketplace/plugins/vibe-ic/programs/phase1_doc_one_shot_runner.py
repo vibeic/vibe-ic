@@ -43816,7 +43816,12 @@ def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
             existing_addrs.add(ah.lower())
 
     appended = 0
-    for txt_file in sorted(extracted_dir.glob("*.txt")):
+    # #616 — also re-scan `.md` register docs (e.g. an auto-generated GFM
+    # `*_registers.md`), not only `.txt`; the GFM pipe-table parser lives in
+    # extract_regmap_table and needs the .md content to reach it.
+    _reg_doc_files = (sorted(extracted_dir.glob("*.txt"))
+                      + sorted(extracted_dir.glob("*.md")))
+    for txt_file in _reg_doc_files:
         try:
             text = txt_file.read_text(encoding="utf-8", errors="replace")
         except Exception:
