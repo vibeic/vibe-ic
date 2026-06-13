@@ -7264,6 +7264,24 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # generator programs (called below in main()). Keep this step focused
     # on direct PnR-derived artefacts.
 
+    # ORGANIC #609 — idempotent coverage re-emit. The phase2 coverage producer
+    # ran BEFORE the named AI fallback (testbench-author) may have authored +
+    # run a self-checking functional TB, so coverage_actual.json can be a stale
+    # SKIPPED-CONDITION stub even though a real functional PASS now exists on
+    # disk (sim/results.xml failures=0 + l10_tb_conformance ok==total>0). This
+    # late re-emit upgrades it to PASS (no-op if already PASS / no passing TB).
+    try:
+        import sys as _sys609
+        if str(PROGRAMS_DIR) not in _sys609.path:
+            _sys609.path.insert(0, str(PROGRAMS_DIR))
+        import phase2_one_shot_runner as _p2_609
+        if _p2_609._v1_6_609_upgrade_coverage_from_functional_tb(project):
+            written.append("reports/phase2/coverage/coverage_actual.json")
+            notes.append("#609: upgraded coverage_actual.json to functional-TB "
+                         "PASS (sim/results.xml + l10 conformance)")
+    except Exception as _e609:  # pragma: no cover — defensive
+        notes.append(f"#609 coverage re-emit skipped: {_e609}")
+
     return StepResult(
         "canonicalize_artefacts", "PASS", time.time() - t0,
         f"emitted {len(written)} canonical artefacts" +
