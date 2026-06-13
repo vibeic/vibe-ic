@@ -127,6 +127,53 @@ def primary_clock(project: Path,
     return min(clocks, key=lambda c: c["period_ns"])
 
 
+_GET_PORTS_RE = re.compile(r"get_ports\s+\{?\s*([A-Za-z_]\w*)", re.IGNORECASE)
+# A `set <var> <value>` whose VAR names a clock/reset PORT (…_port / …_port_name),
+# e.g. `set clk_port_name clk_i`, `set reset_port rst_n`. Distinct from
+# `set clk_name core_clock` (a clock-OBJECT label, not a port).
+_PORT_VAR_RE = re.compile(r"(?:clk|clock|rst|reset)\w*_?port(?:_name)?$",
+                          re.IGNORECASE)
+_BARE_TOKEN_RE = re.compile(r"^\{?\s*([A-Za-z_]\w*)")
+
+
+def staged_constrained_ports(project: Path,
+                             extra_dirs: Optional[List[Path]] = None) -> set:
+    """ORGANIC #618 — return the SET (lowercased) of top-level port spellings
+    the design's OWN staged constraint SDC explicitly references: every
+    ``get_ports <name>`` identifier (after Tcl ``$var`` substitution) plus the
+    value of any ``set <…>_port[_name] <name>`` clock/reset-port variable.
+
+    This is the design's upstream-verified contract — the same ground-truth
+    ranking as the period/port resolution in :func:`primary_clock` (#554) and
+    the Phase-3 netlist-port binding (#623). A flow step that RENAMES a top
+    port (e.g. ``reset_clock_variant_alias``) must not rename a spelling pinned
+    here: doing so breaks the SDC's ``get_ports`` AND the
+    ``l9_rtl_pin_consistency_check`` (the sole strict-structural gate). Returns
+    an empty set when no staged SDC exists (so callers fall through to their
+    existing behaviour unchanged). Chip-AGNOSTIC: standard-SDC syntax only,
+    set-membership on port spellings, no chip-class literals."""
+    pinned: set = set()
+    for sdc in collect_sdc_files(project, extra_dirs=extra_dirs):
+        try:
+            text = sdc.read_text(errors="replace")
+        except OSError:
+            continue
+        variables = _collect_tcl_vars(text)
+        # (1) clock/reset port-name set-vars (the value may itself be a $ref).
+        for var, val in variables.items():
+            if _PORT_VAR_RE.search(var):
+                resolved = _substitute_vars(val, variables).strip()
+                m = _BARE_TOKEN_RE.match(resolved)
+                if m:
+                    pinned.add(m.group(1).lower())
+        # (2) every get_ports identifier, after full var substitution so
+        #     `[get_ports $clk_port_name]` resolves to the literal port.
+        body = _substitute_vars(text, variables) if variables else text
+        for m in _GET_PORTS_RE.finditer(body):
+            pinned.add(m.group(1).lower())
+    return pinned
+
+
 def main(argv=None) -> int:
     """CLI smoke-check: print the primary clock JSON for <project_path>.
     Returns 0; prints ``null`` when no staged SDC clocks are found."""
