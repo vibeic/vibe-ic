@@ -103,7 +103,8 @@ def main() -> int:
         print(f"ERROR: {project} not a directory", file=sys.stderr)
         return 2
 
-    findings: List[Tuple[str, str, bool]] = []  # (file, path, exists_on_disk)
+    # (file, path, exists_on_disk, from_log)
+    findings: List[Tuple[str, str, bool, bool]] = []
     seen: Set[str] = set()
     for pat in _SCAN_GLOBS:
         for f in project.glob(pat):
@@ -113,23 +114,48 @@ def main() -> int:
                 txt = f.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 continue
+            from_log = f.name.endswith(".log")
             for m in _PATH_RE.finditer(txt):
                 p = m.group(1).rstrip(".,;:)")
                 if p in seen:
                     continue
                 seen.add(p)
                 exists = Path(p).exists()
-                findings.append((str(f.relative_to(project)), p, exists))
+                findings.append(
+                    (str(f.relative_to(project)), p, exists, from_log))
 
-    if not findings:
+    # ORGANIC #622 — a /tmp reference found INSIDE A LOG FILE (*.log) is a
+    # tool-internal ephemeral path (e.g. a yosys/LEC scratch genlib the OS
+    # /tmp-sweep removes after the run), NOT a project OUTPUT that must live in
+    # the tree. Logs reference ephemeral tool paths by nature, so a log-sourced
+    # reference is auto-classified EPHEMERAL — disclosed but NON-BLOCKING, no
+    # per-path waiver required. Only references in the canonical artefact files
+    # (RESULT.md / waivers.json / reports/**/*.json|md / generated_docs/*.json)
+    # — where a real deliverable's location is declared — can FAIL this gate.
+    ephemeral = [(f, p, e) for (f, p, e, lg) in findings if lg]
+    nonlog = [(f, p, e) for (f, p, e, lg) in findings if not lg]
+
+    if ephemeral:
+        print(f"[INFO] project_outputs_in_tree_check: "
+              f"{len(ephemeral)} ephemeral tool-path reference(s) inside "
+              f"log file(s) — non-blocking (logs cite transient /tmp tool "
+              f"paths by nature; not project outputs):")
+        for f, p, e in ephemeral[:5]:
+            print(f"  - {f} → {p} "
+                  f"({'still present' if e else 'swept'})")
+        if len(ephemeral) > 5:
+            print(f"  ... +{len(ephemeral)-5} more")
+
+    if not nonlog:
         print("[PASS] project_outputs_in_tree_check: "
               "no /tmp / /var/tmp / /dev/shm / /run paths referenced "
-              "in RESULT.md / waivers.json / reports/ / generated_docs/")
+              "in RESULT.md / waivers.json / reports/ / generated_docs/ "
+              "(log-only ephemeral tool paths excluded — #622)")
         return 0
 
     # Split: live (file exists at /tmp) vs. dangling (referenced but gone)
-    live = [(f, p) for (f, p, e) in findings if e]
-    dangling = [(f, p) for (f, p, e) in findings if not e]
+    live = [(f, p) for (f, p, e) in nonlog if e]
+    dangling = [(f, p) for (f, p, e) in nonlog if not e]
 
     waiver_n = _waiver_count(project)
     fail_count = len(live) + len(dangling)
