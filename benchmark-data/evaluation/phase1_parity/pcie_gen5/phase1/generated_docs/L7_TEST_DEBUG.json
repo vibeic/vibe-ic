@@ -1,0 +1,119 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_debug",
+  "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
+  "test_scenarios": [],
+  "test_modes": [
+    {
+      "name": "Compliance Pattern",
+      "purpose": "LTSSM Polling.Compliance sub-state transmits a defined compliance pattern for electrical characterization."
+    },
+    {
+      "name": "Loopback",
+      "purpose": "Loopback Master transmits a known pattern; Loopback Slave retransmits it back. Used for receiver-eye testing."
+    },
+    {
+      "name": "Hot Reset",
+      "purpose": "Triggers Link re-training via a TS1 with the Hot Reset bit set."
+    },
+    {
+      "name": "Disable Link",
+      "purpose": "Force the Link into Electrical Idle for power / characterization."
+    }
+  ],
+  "no_test_modes_in_input": true,
+  "debug_observability": [],
+  "no_debug_observability_in_input": true,
+  "debug_registers": [],
+  "debug_parameters": [],
+  "no_debug_parameters_in_input": true,
+  "formal_interfaces": [],
+  "no_formal_interfaces_in_input": true,
+  "verification_strategy": [],
+  "no_verification_strategy_in_input": true,
+  "engineer_mode_unlock_sequence": null,
+  "no_engineer_mode_unlock_in_input": true,
+  "vsuite_per_kw_cap_skipped_v1_6_373": 0,
+  "extraction_evidence": {},
+  "class_path": "digital_cmd_driven",
+  "test_debug_architecture_present": true,
+  "spec_provided_observability": [
+    {
+      "name": "Lane Margining at the Receiver",
+      "purpose": "Gen5-mandatory in-system signal-integrity diagnostic: steps the receiver sampling point in time (left/right) and optionally voltage (up/down) while in L0 (no traffic interruption) and reports the error rate per lane."
+    },
+    {
+      "name": "Equalization phase status",
+      "purpose": "Link Status 2 Register exposes the current EQ phase / de-emphasis; the Secondary PCIe Extended Capability holds per-lane Transmitter Preset + Receiver Preset Hint."
+    },
+    {
+      "name": "LTSSM state probe",
+      "purpose": "Each Link's current LTSSM state (Detect / Polling / Configuration / L0 / L0s / L1 / L2 / Recovery / Disabled / Hot Reset / Loopback) is observable via Link Status Register + Link Capabilities Register + vendor-specific probe ports."
+    },
+    {
+      "name": "TLP / DLLP capture",
+      "purpose": "Protocol analyzers tap into the Link via electrical interposers or via vendor-side mirrored ports."
+    },
+    {
+      "name": "Retry Buffer monitor",
+      "purpose": "Per-Link retry-attempt counter (REPLAY_NUM) exposed as a status bit; retry-buffer occupancy is implementation-defined."
+    },
+    {
+      "name": "Credit accounting",
+      "purpose": "Per-VC running credits for each of 6 credit types (PH/PD/NPH/NPD/CplH/CplD) — observable via VC Resource Status Register + UpdateFC traffic."
+    },
+    {
+      "name": "8b/10b symbol stream",
+      "purpose": "Lane-by-Lane symbol stream is the lowest-level observable; bit/symbol/Lane-decoding errors are reported via Receiver Error in Link Status + AER Uncorrectable Error Status."
+    },
+    {
+      "name": "Lane skew status",
+      "purpose": "Multi-Lane elastic-buffer occupancy; SKP-set insertion + extraction rate is observable in the Physical Layer."
+    },
+    {
+      "name": "Link Width + Speed",
+      "purpose": "Negotiated width and current speed observable in Link Status Register."
+    },
+    {
+      "name": "Slot Status + Slot Capabilities",
+      "purpose": "Hot-plug event observability (Card Present, Power Indicator, Attention Indicator, MRL Sensor)."
+    }
+  ],
+  "error_detection_mechanisms": [
+    "8b/10b decode errors — invalid 10-bit symbol or running-disparity violation; reported as Receiver Error.",
+    "TLP LCRC error (16-bit) — Data Link Layer triggers NAK + replay.",
+    "TLP ECRC error (32-bit, optional) — Transaction Layer logs in AER Uncorrectable Error Status.",
+    "DLLP CRC error (16-bit) — DLLP discarded.",
+    "Sequence Number error — TLP arriving out of expected sequence; receiver NAKs.",
+    "REPLAY_NUM rollover — repeated NAK / timeout; declares Link as failed → LTSSM Recovery / Detect.",
+    "Completion Timeout — Non-Posted Request did not get a Completion within the timeout window.",
+    "Unsupported Request (UR), Completer Abort (CA), Configuration Retry Status (CRS) — abnormal Completion Status codes."
+  ],
+  "interrupt_or_event_sources": [
+    {
+      "event": "Hot-plug Card-Present change",
+      "trigger": "Card insertion / removal sensed by slot circuitry."
+    },
+    {
+      "event": "Link Up / Link Down",
+      "trigger": "LTSSM enters / exits L0."
+    },
+    {
+      "event": "Correctable Error",
+      "trigger": "Per AER capability; e.g. Receiver Error, Bad TLP, Bad DLLP, REPLAY_NUM rollover."
+    },
+    {
+      "event": "Uncorrectable Error (Fatal/Non-Fatal)",
+      "trigger": "Per AER capability; e.g. Poisoned TLP Received, Flow Control Protocol Error, Completion Timeout, Completer Abort."
+    },
+    {
+      "event": "Root Error reporting",
+      "trigger": "RC aggregates First / Next Uncorrectable Error sources via Root Error Status."
+    },
+    {
+      "event": "Power Management Event (PME)",
+      "trigger": "Endpoint generates PM_PME Message; routed up to RC."
+    }
+  ],
+  "notes": "PCI Express 5.0 adds Lane Margining at the Receiver as a mandatory protocol-level observability feature plus the per-lane equalization preset registers needed for the four-phase enhanced EQ. The in-band error framework (CRC + Sequence Number + replay + AER) is carried forward from base PCIe. JTAG / scan / BIST remain integrator-side at the SoC."
+}

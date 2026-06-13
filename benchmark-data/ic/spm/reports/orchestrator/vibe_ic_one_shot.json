@@ -1,0 +1,29 @@
+{
+  "phase": "vibe-ic",
+  "project": "/home/reyerchu/vibe-ic/benchmark_clean/spm",
+  "duration_s": 33.94236922264099,
+  "halted_at": "phase3",
+  "phases": [
+    {
+      "name": "phase1",
+      "verdict": "SKIPPED",
+      "rc": 0
+    },
+    {
+      "name": "phase2",
+      "verdict": "PASS_WITH_WAIVERS",
+      "rc": 0
+    },
+    {
+      "name": "analog",
+      "verdict": "SKIPPED",
+      "rc": 0
+    },
+    {
+      "name": "phase3",
+      "verdict": "FAIL",
+      "rc": 1
+    }
+  ],
+  "verdict": "FAIL"
+}

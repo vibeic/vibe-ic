@@ -1,0 +1,5 @@
+{
+  "ic_name": "IEEE 802.3 Management Data Input/Output (MDIO)",
+  "lab_calibration": "N/A — purely digital management protocol; no analog trim/calibration.",
+  "applicable": false
+}

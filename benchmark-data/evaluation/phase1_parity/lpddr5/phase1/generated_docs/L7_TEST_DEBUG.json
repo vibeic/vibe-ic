@@ -1,0 +1,56 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_debug",
+  "ic_name": "LPDDR5 SDRAM (JEDEC JESD209-5)",
+  "test_scenarios": [],
+  "test_modes": [],
+  "no_test_modes_in_input": true,
+  "debug_observability": [],
+  "no_debug_observability_in_input": true,
+  "debug_registers": [],
+  "debug_parameters": [],
+  "no_debug_parameters_in_input": true,
+  "formal_interfaces": [],
+  "no_formal_interfaces_in_input": true,
+  "verification_strategy": [],
+  "no_verification_strategy_in_input": true,
+  "engineer_mode_unlock_sequence": null,
+  "no_engineer_mode_unlock_in_input": true,
+  "vsuite_per_kw_cap_skipped_v1_6_373": 0,
+  "extraction_evidence": {},
+  "test_debug_architecture_present": "partial",
+  "spec_provided_observability": [
+    {
+      "name": "Mode Register Read (MRR)",
+      "purpose": "Reads device info / operating-mode / refresh / status mode registers — primary in-band observability."
+    },
+    {
+      "name": "Read DQ Calibration (RDCAL) / Read FIFO",
+      "purpose": "Returns a fixed pattern / FIFO contents for read-path training."
+    },
+    {
+      "name": "Write FIFO",
+      "purpose": "Loads an internal FIFO for write-path training without array access."
+    },
+    {
+      "name": "WCK2CK synchronization (WS_FS/WS_RD/WS_WR)",
+      "purpose": "Exercises/validates the WCK-to-CK phase-lock clock path."
+    },
+    {
+      "name": "Link ECC status",
+      "purpose": "Flags corrected single-bit errors on the wire."
+    },
+    {
+      "name": "Per-state IDD specifications",
+      "purpose": "Per-state current points for power-state observability."
+    }
+  ],
+  "no_jtag_on_DRAM_balls": "LPDDR5 SDRAM has no JTAG / boundary-scan pins at the package interface; vendor DFT runs at wafer probe.",
+  "controller_side_debug_aids": [
+    "Logic-analyzer / oscilloscope probing of CK / WCK / RDQS / CA[6:0] / CS / DQ / DMI.",
+    "LPDDR5 PHY / controller IPs expose FIFOs, WCK2CK leveling state, per-bit deskew, eye-margin sweeps, DFE taps via a vendor control register interface.",
+    "RDCAL fixed pattern as a deterministic read self-test.",
+    "Link-ECC error counters and controller-side system ECC."
+  ],
+  "notes": "LPDDR5 (JESD209-5) does not specify a formal in-system scan / JTAG architecture at the DRAM balls. Bus-level observability is limited to MRR, RDCAL / Read-FIFO / Write-FIFO training, WCK2CK sync, Link-ECC status, and IDD measurement, plus controller-side PHY observability. Internal DRAM scan/BIST/repair is vendor-proprietary."
+}

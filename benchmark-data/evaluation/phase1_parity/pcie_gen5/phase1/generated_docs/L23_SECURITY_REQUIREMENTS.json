@@ -1,0 +1,41 @@
+{
+  "doc_id": "L23",
+  "doc_name": "L23_SECURITY_REQUIREMENTS",
+  "applicability": "APPLICABLE",
+  "ic_class": "digital_cmd_driven",
+  "fields": {
+    "key_handling": {},
+    "attack_surface": [],
+    "side_channel_mitigation": [],
+    "secure_boot": false,
+    "security_requirements_present": false,
+    "notes": "PCI Express 5.0 base transactions are in plaintext on the Link; CRC + ECRC provide anti-corruption only. Cryptographic security (IDE link encryption, CMA/SPDM attestation) is provided by separate ECNs layered above the base PCIe 5.0 data path. The mandatory Lane Margining feature is a signal-integrity diagnostic, not a security feature.",
+    "anti_corruption_features": [
+      "16-bit LCRC at the Data Link Layer protects each TLP across the Link (catches all 1-bit + 2-bit errors and most burst errors).",
+      "16-bit CRC at the Data Link Layer protects each DLLP.",
+      "32-bit ECRC (optional) at the Transaction Layer provides end-to-end TLP integrity (detects corruption at intermediate Switches that the per-Link LCRC cannot).",
+      "8b/10b running-disparity rule + invalid-symbol detection catches PHY-level bit errors before the DLL layer sees them.",
+      "ACK / NAK + Retry Buffer guarantees in-order delivery despite single-bit transient errors.",
+      "Sequence Number monotonicity detection rejects duplicate or out-of-order packets.",
+      "Lane Margining at the Receiver provides in-system signal-integrity diagnostics (margin health), reducing silent data-corruption risk at 32 GT/s."
+    ],
+    "anti_tampering_features": [],
+    "confidentiality_features": [],
+    "authentication_features": [],
+    "future_security_pointers": [
+      "PCI Express Integrity & Data Encryption (IDE) — AES-GCM link encryption + integrity; a separate ECN layered on PCIe 5.0+.",
+      "Component Measurement and Authentication (CMA) / SPDM — device attestation, layered above the base protocol.",
+      "Compute Express Link (CXL), running on the PCIe 5.0 PHY via Alternate Protocol Negotiation, adds CXL.io/CXL.cache/CXL.mem with its own CXL IDE link security.",
+      "Access Control Services (ACS) and SR-IOV — peer-to-peer routing restriction / VM isolation; NOT cryptographic."
+    ],
+    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
+  },
+  "extraction_hints": [
+    "Look for key-management, side-channel, secure-boot sections.",
+    "Capture attack surface enumeration."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+  "extraction_evidence": {},
+  "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
+}

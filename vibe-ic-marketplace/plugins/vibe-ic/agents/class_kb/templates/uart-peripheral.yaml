@@ -1,0 +1,58 @@
+# uart-peripheral — UART TX/RX endpoint (verilog-uart style).
+# Inherits protocol-ic L3/L4 shape but UART framing is fixed and simple.
+class: uart-peripheral
+parent: protocol-ic
+
+facts:
+  L1:
+    - {path: data_width_bits,               type: integer,         required: true,  defaultable: true, default_candidate: 8, comment: "UART word length; DATA_WIDTH parameter"}
+    - {path: frame_format,                  type: string,          required: true,  defaultable: true, default_candidate: "8N1", comment: "e.g. 8N1 — 1 start + DATA_WIDTH + 1 stop, no parity"}
+    - {path: parity_support,                type: boolean,         required: true,  defaultable: true, default_candidate: false}
+    - {path: flow_control,                  type: string,          required: true,  defaultable: true, default_candidate: "none", comment: "none | RTS/CTS | XON/XOFF"}
+
+  L2:
+    - {path: oversampling,                  type: integer,         required: true,  defaultable: true, default_candidate: 8, comment: "verilog-uart uses 8x"}
+    - {path: baud_rate_calc,                type: string,          required: true,  comment: "e.g. prescale = Fclk / (baud * oversampling)"}
+    - {path: prescale_input_style,          type: string,          required: true,  defaultable: true, default_candidate: "wire-input", comment: "wire-input | register | parameter"}
+
+  L4:
+    - {path: bus_interface_family,          type: string,          required: true,  comment: "AXI-Stream | Wishbone | APB | none-wrapper-required"}
+    - {path: fifo_depth,                    type: dict,            required: true,  keys: [tx_fifo, rx_fifo], comment: "verilog-uart: both 0 (no FIFO)"}
+    - {path: status_signals,                type: list_of_strings, required: true,  comment: "tx_busy, rx_busy, rx_overrun_error, rx_frame_error"}
+
+  L8R:
+    - {path: irq_output,                    type: boolean,         required: true,  defaultable: true, default_candidate: false, comment: "verilog-uart has no dedicated IRQ — strobes only"}
+    - {path: overrun_policy,                type: string,          required: true,  defaultable: true, default_candidate: "drop-new", comment: "Behavior when RX not drained"}
+
+
+# -----------------------------------------------------------------------------
+# spec_floor — added v0.56 (2026-04-24)
+# -----------------------------------------------------------------------------
+# UART endpoint (verilog-uart, opencores uart16550 style). Tight scope.
+spec_floor:
+  L10_test_cases_min: 5                # tx-byte / rx-byte / overrun / frame-error / break
+  L10_cmd_response_min: 2
+  L11_calibration_tables_min: 1        # baud prescaler table
+  L12_sequences_min: 1
+  L12_required_sequence_categories:
+    - register_access_sequence
+  # No L3 opcode floor — UART carries arbitrary bytes, not opcodes.
+  L4_regmap_reg_count_min: 2           # STATUS + (TX/RX shared) DATA
+  L6_submodule_count_min: 4            # tx + rx + baud_gen + bus_iface
+  L9_internal_wire_count_min: 10
+  L9_top_level_port_count_min: 6       # txd + rxd + clock + reset + bus + irq
+
+# -----------------------------------------------------------------------------
+# sequence_naming — per-class strip_suffixes for l12_tb_coverage_check.py
+# -----------------------------------------------------------------------------
+# Added v0.56 C2 — every class with L12_required_sequence_categories
+# now ships its own strip_suffixes list, so the L12-tb-coverage gate
+# can match `tb_<short>.v` files even when the canonical sequence id
+# carries one of the conventional suffixes.
+sequence_naming:
+  strip_suffixes:
+    - sequence            # *_SEQUENCE → *
+    - chain               # *_CHAIN → *
+    - entry               # *_ENTRY → *
+    - exit                # *_EXIT → *
+    - init                # *_INIT → *

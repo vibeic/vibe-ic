@@ -1,0 +1,31 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "spm",
+  "analog_blocks_detected": false,
+  "analog_blocks": [],
+  "no_analog": true,
+  "external_components": [],
+  "electrical_specs": [],
+  "design_parameters": [
+    {
+      "parameter": "size",
+      "value": "32",
+      "type": "典型應用為 8 / 16 / 32;設計上應支援 ≥ 4 的任意正整數",
+      "description": "",
+      "source": "L3_external_interface.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/L1_product_metadata.md": [],
+    "input/docs/L2_architecture.md": [],
+    "input/docs/L3_external_interface.md": [],
+    "input/docs/L4_command_protocol.md": [],
+    "input/docs/L5_register_map.md": [],
+    "input/docs/L6_calibration.md": [],
+    "input/docs/L7_verification_plan.md": [],
+    "input/docs/L8_submodule_integration.md": [],
+    "input/docs/L9_constraints_floorplan.md": []
+  }
+}

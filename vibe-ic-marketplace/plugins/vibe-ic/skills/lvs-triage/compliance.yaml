@@ -1,0 +1,43 @@
+# Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
+testability: structured
+
+# Compliance spec for skill 'lvs-triage' (v0.40)
+# Enhanced: must categorize mismatches, provide layer+coordinate fixes, and report counts
+skill: lvs-triage
+
+requirements:
+  - id: R_has_output_section
+    description: "Output format/schema section present"
+    pattern: '(##\s+(?:Output|Findings|Result|Report))'
+    skill_section: 'Output/Handoff'
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line"
+    pattern: 'Next:\s*(?:run\s+)?/\w'
+    skill_section: 'Output/Handoff'
+  - id: R_status_or_summary
+    description: "Has a Summary or STATUS block"
+    pattern: '(##\s+Summary|\*\*STATUS\*\*:)'
+    skill_section: 'Output/Handoff'
+  - id: R_mismatch_categories
+    description: "LVS mismatches grouped by category (instances, nets, parameters, properties)"
+    pattern: '(unmatched.*instance|unmatched.*net|device.*mismatch|parameter.*mismatch|short|open|net.*mismatch)'
+    skill_section: 'Mismatch Classification'
+  - id: R_root_cause_analysis
+    description: "Root cause analysis for mismatches (missing labels, missing vias, wrong variant)"
+    pattern: '(root.*cause|missing.*label|missing.*via|wrong.*variant|cause|reason|because)'
+    skill_section: 'Root Cause'
+  - id: R_mismatch_count
+    description: "Reports total mismatch count and per-category breakdown"
+    pattern: '(mismatch.*\d+|\d+.*mismatch|total.*\d+|LVS.*clean|0.*error|error.*count)'
+    skill_section: 'Mismatch Count'
+
+cross_checks:
+  - id: X_synth_netlist_check
+    description: "Verify synthesis netlist exists for LVS comparison"
+    rule: postcheck_pass_only
+  - id: X_mcp_execution_verify
+    description: "Verify required MCP tools were actually executed (not just reported)"
+    rule: postcheck_pass_only
+  - id: X_lvs_report_check
+    description: "Verify LVS report has mismatch categories"
+    rule: postcheck_pass_only

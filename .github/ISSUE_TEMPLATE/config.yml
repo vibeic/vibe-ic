@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/vibeic/vibe-ic/security/advisories/new
+    about: Please report security issues privately — see SECURITY.md
+  - name: Companion project — awesome-open-ic
+    url: https://github.com/vibeic/awesome-open-ic
+    about: Curated list of open-source IC design tools, IP, PDKs, standards

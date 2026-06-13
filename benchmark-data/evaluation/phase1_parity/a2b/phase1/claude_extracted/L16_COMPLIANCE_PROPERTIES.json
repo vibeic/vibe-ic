@@ -1,0 +1,68 @@
+{
+  "fields": {
+    "properties": [],
+    "must_have_properties": [
+      "SDA and SCL both HIGH in bus-free state",
+      "Open-drain (or open-collector) outputs on SDA and SCL for Sm/Fm/Fm+/Hs modes (push-pull only for UFm)",
+      "Data on SDA stable while SCL HIGH; SDA changes only while SCL LOW (except for START / STOP / repeated START)",
+      "START condition: SDA HIGH→LOW while SCL HIGH",
+      "STOP condition: SDA LOW→HIGH while SCL HIGH",
+      "Every byte is 8 bits + 1 ACK = 9 SCL clock pulses",
+      "Receiver pulls SDA LOW on 9th SCL pulse to ACK",
+      "MSB-first byte ordering",
+      "Master generates all clock pulses including the 9th ACK pulse",
+      "In multi-master systems: arbitration on SDA while SCL HIGH; loser turns off SDA driver immediately",
+      "In multi-master systems: SCL synchronization via wired-AND (LOW dominates)",
+      "Input levels: VIL ≤ 0.3 VDD, VIH ≥ 0.7 VDD (legacy fixed 1.5/3.0 V acceptable for backward compatibility)",
+      "Bus capacitance Cb ≤ per-mode maximum (400 pF Sm/Fm, 550 pF Fm+, 100/400 pF Hs)"
+    ],
+    "must_not_have_properties": [
+      "Push-pull bidirectional drivers (forbidden — only open-drain in Sm/Fm/Fm+/Hs)",
+      "SDA transition while SCL HIGH (except for S/P/Sr)",
+      "Slave driving SCL HIGH (slave may only release SCL HIGH-Z or pull LOW for stretching)",
+      "Master responding to its own START byte",
+      "Slave acknowledging the START byte (0x01)",
+      "Mixing Ultra Fast-mode push-pull devices with bidirectional open-drain devices on the same physical bus"
+    ],
+    "compliance_failure_modes": [
+      {
+        "mode": "Bus stuck LOW",
+        "trigger": "SDA or SCL not released by some device after STOP."
+      },
+      {
+        "mode": "Arbitration loss",
+        "trigger": "Two masters started simultaneously; loser must abandon and retry when bus free."
+      },
+      {
+        "mode": "NACK at address",
+        "trigger": "No slave responds at the addressed 7-bit / 10-bit address."
+      },
+      {
+        "mode": "NACK at data",
+        "trigger": "Receiver cannot accept further data (e.g. buffer full)."
+      },
+      {
+        "mode": "Rise-time violation",
+        "trigger": "Bus capacitance × pull-up R exceeds tr_max for the mode."
+      }
+    ],
+    "min_bus_capacitance_constraint": "No minimum stated; maximum is per-mode (Sm/Fm 400 pF; Fm+ 550 pF; Hs 100 pF @ 3.4 MHz / 400 pF @ 1.7 MHz).",
+    "reset_behavior_compliance": "After Power-On Reset, devices must release both SDA and SCL (drive HIGH-Z). Bus-clear procedure: if SDA stuck LOW, master sends 9 SCL clocks to allow the holding device to release.",
+    "ic_name": "A2B_Transceiver",
+    "compliance_properties": [
+      "There shall be exactly one main node (master) per A2B bus.",
+      "There shall be at most ten sub nodes (slaves) in the daisy chain.",
+      "The superframe rate shall equal the audio sample rate (one superframe per sample period).",
+      "Each superframe shall contain a SYNC/control region, a downstream portion, and an upstream portion.",
+      "Discovery shall enumerate sub nodes in order from the main node outward, gated by segment-by-segment phantom-power switching.",
+      "All local I2S/TDM clocks shall be derived from the recovered bus clock so audio is sample-aligned across all nodes.",
+      "End-to-end audio latency shall be deterministic and approximately two samples."
+    ]
+  },
+  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "schema_version": "v0.1.62",
+  "doc_class": "L16",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l16_compliance v0.1.62",
+  "extraction_evidence": {},
+  "ic_name": "A2B_Transceiver"
+}

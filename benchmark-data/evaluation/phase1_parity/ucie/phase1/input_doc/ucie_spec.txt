@@ -1,0 +1,820 @@
+UCIe™
+(Universal Chiplet Interconnect Express™)
+
+Building an open ecosystem of chiplets
+for on-package innovations
+
+
+Tutorial for Hot Chips, 2023
+
+Presented by: Debendra Das Sharma1, Nathan Kalyanasundaram2, Swadesh
+Choudhary1, Marvin Denman3, Gerald Pasdast1, Anwar Kashem2, Jerome Giselle4,
+and Sridhar Muthrasanallur1
+1 : Intel Corporation, 2: AMD Corporation, 3: Nvidia Corporation, 4: Google Inc
+
+
+
+
+                                                                                                                   1
+        Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023         Hot Chips 2023 – UCIe Tutorial
+Tutorial Sessions
+• Overview
+• Protocol
+• Electrical
+
+    Coffee Break
+                                                                        2
+
+
+
+
+• Form-Factor and Compliance
+• Software, Manageability and Security
+                                                                                                             2
+    Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023       Hot Chips 2023 – UCIe Tutorial
+                     UCIe Overview
+
+
+
+                                                                                                     3
+Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023   Hot Chips 2023 – UCIe Tutorial
+                                                  120+ Member Companies and growing!
+
+
+
+    Board
+   Members
+
+ Leaders in semiconductors,
+   packaging, IP suppliers,
+foundries, and cloud service
+    providers are joining
+      together to drive
+The open chiplet ecosystem.
+
+
+
+      JOIN US!
+
+                                                                                                                        4
+            Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023          Hot Chips 2023 – UCIe Tutorial
+UCIe Consortium is open for membership
+• UCIe Consortium welcomes interested companies and institutions to join the
+  organization at the Contributor and Adopter level.
+
+• UCIe was founded in March 2022, incorporated in June 2022. Two levels of
+  memberships: Contributor and Adopter
+
+• Contributor Membership
+  − Access the Final Specifications (ex: 1.0, 1.1, 2.0, etc.)
+  − Implement with the IP protections as outlined in the Agreements
+  − Right to attend Corporation trade shows or other industry events as determined by the Board
+  − Participate in the technical working groups
+  − Influence the direction of the technology
+  − Access the intermediate (dot level) specifications
+  − Election to get to the Promoter Class/ Board every year when the term of half the board completes
+
+• Adopter Membership
+  − Access the Final Specifications (ex: 1.0, 1.1, 2.0, etc.), but not intermediate level specifications
+  − Implement with the IP protections as outlined in the Agreements
+  − Right to attend Corporation trade shows or other industry events as determined by the Board
+
+                                                                                                                                            5
+     Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                     Hot Chips 2023 – UCIe Tutorial
+On-Package Interconnects:
+Opportunities and Challenges
+
+
+
+
+                                                                                                       6
+  Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023   Hot Chips 2023 – UCIe Tutorial
+ Moore Predicted
+“Day of Reckoning”
+
+
+
+           “It may prove to be more economical to build
+           large systems out of smaller functions, which
+          are separately packaged and interconnected.”*
+                                                                             - Gordon E. Moore
+
+          *“Cramming more components onto integrated circuits,” Electronics, Volume 38, Number 8, April 19, 1965
+
+
+
+
+                                                                                                                                                    7
+       Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                           Hot Chips 2023 – UCIe Tutorial
+Drivers for On-Package Chiplets
+• Reticle Limit, yield optimization,
+  scalable performance
+  → Same dies on package (Scale-up)
+• Increasing design costs at leading
+  edge process nodes
+  → Disaggregate dies across different nodes
+  → Deploy latest process node for advanced
+    functionality
+• Time to Market (Late binding)
+• Easily enables Custom silicon for
+  different customers leveraging a
+  common base product
+  → E.g., Different acceleration functions with
+    common compute
+• Different process nodes optimized
+  for different functions
+  → E.g., Memory, logic, analog, co-packaged
+    optics
+• Enables high, power-efficient
+  bandwidth with low-latency access                                         Source: IBS (as cited in IEEE Heterogeneous Integration Roadmap)
+  (e.g., HBM memory)
+                                                                                                                                                              8
+        Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                                    Hot Chips 2023 – UCIe Tutorial
+Components of Chiplet Interoperability
+                  Chip                                                                            • Chiplet Form Factor
+                         Die (Chiplet)                                                              – Die Size / bump location
+                                                                                                    – Power delivery
+Chiplet                                                                              Die-to-Die
+ Form
+                                     Protocol
+                                                                                      Protocol    • SoC Construction (Application Layer)
+Factor                                                                                              – Reset and Initialization
+                                                                                                    – Register access
+                                 Die-to-Die I/O                   SoC Construction   Die-to-Die
+                                                                                        I/O         – Security
+                                                                                                  • Die-to-Die Protocols (Data Link to
+                                 Die-to-Die I/O
+                                                                                                    Transaction Layer)
+                                                                                                    – PCIe/ CXL/ Streaming
+                                                                                                    – Plug and play IPs
+                                     Protocol                                                     • Die-to-Die I/O (Physical Layer)
+                                                                                                    – Electrical, bump arrangement, channel, reset,
+                         Die (Chiplet)                                                                initialization, power, latency, test repair,
+                                                                                                      technology transition
+
+                                                (Example SoC showing two chiplets only)
+
+
+                                                                                                                                                                    9
+          Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                                        Hot Chips 2023 – UCIe Tutorial
+Design Choice: Seamless Integration from Node  Package  On-die
+Enables Reuse, Better User Experience
+
+
+                                                                                           CPU           CPU
+
+
+
+
+                                                                                                                        Mem
+                                                                             Mem
+
+
+
+
+                                                                                                                        Mem
+                                                                             Mem
+                                                                                        Accelerator    I/O Tile
+
+
+
+
+                                                                            CXL/ PCIe/ CPU-CPU                    DDR
+                                                                            (Electrical/ Optical/ …)
+
+
+
+
+       Node / Board Level                                                Package Level Integration
+                                                                                                                              On-die Integration
+          Integration                                                 (with on-package interconnects)
+         Same Software, IP, and Subsystem to build scalable solutions offers economies of scale , time to market
+     advantage, and seamless user experience. Innovations at the open slot in board level needs to migrate to package
+                                                level for multiple usages!
+                                                                                                                                                                      10
+        Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                                            Hot Chips 2023 – UCIe Tutorial
+Universal Chiplet Interconnect Express (UCIe):
+
+An Open Standard for Chiplets
+Guiding principles of UCIe
+
+1. Open Ecosystem with Plug-and-play
+2. Backward compatible evolution when appropriate to ensure
+   investment protection
+3. Best power, performance, and cost metrics across the
+   industry applicable across the entire compute continuum
+4. Continuously innovate to meet the needs of evolving
+   compute landscape
+
+(Leveraging decades of experience driving successful industry
+standards at the board level: PCIe, CXL, USB, etc.)
+
+
+
+
+                                                                                                               11
+          Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023   Hot Chips 2023 – UCIe Tutorial
+ Motivation
+      OPEN CHIPLET: PLATFORM ON A PACKAGE
+
+                                                 High-Speed Standardized
+                                                                                              Align Industry around an open platform
+                                                 Chip-to-Chip Interface (UCIe)
+                                                                                              to enable chiplet based solutions
+                                                              ▪ 20X I/O Performance at
+                                                                1/20th Power vs off-
+                                                                package SerDes at Launch
+    Customer IP &
+                                                              ▪ Gap more prominent with       • Enables construction of SoCs that exceed maximum
+                                                                better on-package
+  Customized Chiplets                                           technologies in future          reticle size
+                                                                                                 − Package becomes new System-on-a-Chip (SoC)
+                                                                                                   with same dies (Scale Up)
+
+                                                                                              • Reduces time-to-solution (e.g., enables die reuse)
+                                     Sea of Cores
+                                   (heterogeneous)                                            • Lowers portfolio cost (product & project)
+                                                                                     Memory      − Enables optimal process technologies
+                                                                                                 − Smaller (better yield)
+                                                                                                 − Reduces IP porting costs
+                                                                          Advanced               − Lowers product SKU cost
+                                                                        2D/2.5D/3D
+                                                                          Packaging
+                                                                                              • Enables a customizable, standard-based product for
+                                                                                                specific use cases (bespoke solutions)
+   Heterogeneous Integration Fueled by an Open Chiplet Ecosystem
+(Mix-and-match chiplets from different process nodes / fabs / companies / assembly)           • Scales innovation (manufacturing/ process locked IPs)
+
+                                                                                                                                                                         12
+                 Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                                      Hot Chips 2023 – UCIe Tutorial
+Key Metrics and Adoption Criteria
+Key Technology Metrics                                                    Factors Affecting Wide Adoption
+ • Bandwidth density (linear & area)                                      • Interoperability
+
+   − Data Rate & Bump Pitch                                               • Full-stack, plug-and-play with existing s/w is+
+
+ • Energy Efficiency (pJ/b)                                               • Different usages/segments
+
+   − Scalable energy consumption                                          • Technology
+
+   − Low idle power (entry/exit time)                                       − Across process nodes & packaging options
+
+ • Latency (end-to-end: Tx+Rx)                                              − Power delivery & cooling
+
+ • Channel Reach                                                            − Repair strategy (failure/yield improvement)
+
+ • Technology, frequency, & BER                                             − Debug – controllability & observability
+
+ • Reliability & Availability                                             • Broad industry support / Open ecosystem
+
+ • Cost (Standard vs advanced packaging)                                    − Learnings from other standards efforts
+
+                   UCIe - Architected and specified from the ground-up to deliver the best KPIs
+                   while meeting wide adoption criteria to drive innovations at package level
+                                                                                                                                               13
+      Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                       Hot Chips 2023 – UCIe Tutorial
+UCIe 1.0 Specification
+• Layered Approach with industry-leading KPIs
+• Physical Layer: Die-to-Die I/O                                              PROTOCOL LAYER                            Raw Mode
+                                                                              [PCIe ,CXL, Streaming (e.g., AXI, CHI,    (bypass D2D Adapter to
+                                                                              symmetric coherency, memory, etc)]        RDI – e.g., SERDES to SoC)
+• Die to Die Adapter: Reliable delivery
+  – Support for multiple protocols: bypassed in raw mode                                            Flit-Aware Die-to-Die
+                                                                                                    Interface (FDI)
+
+• Protocol: CXL/PCIe and Streaming                                                                                                  Arb/ Mux (if multiple protocols)
+                                                                                                                                    CRC/Retry (when applicable)
+  – CXL™/PCIe® for volume attach and plug-and-play                            DIE-TO-DIE ADAPTER                                    Link state management
+
+
+
+
+                                                                                                                                                                                      Scope of UCIe Specification
+     • SoC construction issues are addressed w/ CXL/PCIe                                                                            Parameter negotiation
+     • CXL/PCIe addresses common use cases                                                                                          Config Registers
+         • I/O attach, Memory, Accelerator
+                                                                                                      Raw Die-to-Die
+  – Streaming for other protocols                                                                     Interface (RDI)
+     • Scale-up (e.g., CPU/ GP-GPU/Switch from smaller dies)                                                                         Link Training
+     • Protocol can be anything (e.g., AXI/CHI/SFI/CPI/ etc)                                                                         Lane Repair / Reversal
+                                                                                                                                     (De) Scrambling
+                                                                                 PHYSICAL LAYER
+• Well defined specification: interoperability and                                                                                   Analog Front end/ Clocking
+                                                                                                                                     Sideband, Config Registers
+  future evolution                                                                                                                   Channel
+
+  – Configuration register for discovery and run-time                                               (Bumps/ Bump Map)
+     • control and status reporting in each layer
+     • transparent to existing drivers                                                               FORM FACTOR
+  – Form-factor and Management
+  – Compliance for interoperability
+  – Plug-and-play IPs with RDI/ FDI interface
+                                                                                                                                                                                      14
+          Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                                                          Hot Chips 2023 – UCIe Tutorial
+UCIe 1.0: Supports Standard and Advanced Packages
+
+       Die -1                               Die -0                          Die-2                    Die-1            Die-0                         Die-2
+
+                                                                                    Silicon Bridge                                                         Silicon Bridge
+                                                                                                                Package Substrate                           (e.g. EMIB)
+                                     Package Substrate                               (e.g. EMIB)
+
+
+
+                       (Standard Package)
+                                                                                                     Die-1            Die-0                         Die-2
+ Standard Package: 2D – cost effective, longer                                                               Interposer (e.g. CoWoS)
+ distance                                                                                                      Package Substrate
+
+
+ Advanced Package: 2.5D – power-efficient, high
+ bandwidth density
+
+ Dies can be manufactured anywhere and
+ assembled anywhere – can mix 2D and 2.5D in
+ same package – Flexibility for SoC designer
+                                                                                            (Multiple Advanced Package Choices)
+
+ One UCIe 1.0 spec supports different flavors of packaging options to build an open ecosystem
+
+        Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                                 Hot Chips 2023 – UCIe Tutorial
+                                                                                                                                                                            15
+UCIe PHY: Bump-out for Interoperability
+• UCIe architected with process portability in mind
+    − Circuit components can be built with common digital/ analog structures
+• Bump-out specified in the specification for interoperability even with future
+  bump-pitch reductions
+    − Die rotation and mirroring supported
+                txdatasb                  txcksb                    vccaon                    vccaon                    rxcksb                   rxdatasb
+    vccio                      vccio                    vcci o                    vccio                     vcci o                    vccio
+                  vss                       vss                      vcci o                     vss                       vss                      vss
+     vss                      txdata7                  txdata9                     vss                     rxdata8                   rxdata6
+
+
+     vss
+                txdata5
+                              txdata6
+                                           txckn
+                                                       txdata8
+                                                                   txdata11
+                                                                                   vss
+                                                                                             rxdata10
+                                                                                                           rxdata9
+                                                                                                                         rxckp
+                                                                                                                                     rxdata7
+                                                                                                                                                 rxdata4     Fixed beachfront allows for
+    vccio
+                txdata4
+                               vss
+                                           txckp
+                                                         vss
+                                                                   txdata10
+                                                                                  vccio
+                                                                                             rxdata11
+                                                                                                             vss
+                                                                                                                         rxckn
+                                                                                                                                       vss
+                                                                                                                                                 rxdata5     Multi-generational compatibility
+    vccio
+                txdata1
+                              txdata3
+                                           txvl d
+                                                      txdata13
+                                                                   txdata15
+                                                                                  vccio
+                                                                                             rxdata14
+                                                                                                          rxdata12
+                                                                                                                         rxtrk
+                                                                                                                                     rxdata2
+                                                                                                                                                 rxdata0     As bump pitches decrease
+                txdata0                    txtrk                   txdata14                  rxdata15                    rxvld                   rxdata1
+     vss                      txdata2                 txdata12                     vss                    rxdata13                   rxdata3
+
+
+                                         (UCIe-S Unstacked Bump-out)
+                                                                                                                                                                          rxcksbRD              rxcksb                   vccio                rxdatasb              rxdatasbRD
+                                                                                                                                                             txdatasbRD              txdatasb                vccio                 txcksb                txcksbRD
+                                                                                                                                                                          rxdata50              rxdata35               rxdata29               rxdata14              rxdataRD0
+                                                                                                                                                             rxdataRD3               rxdata49              rxdata34                rxdata28              rxdata13
+                                                                                                                                                                          rxdata51              rxdata36               rxdata30               rxdata15                 vss
+                                                                                                                                                              rxdata63                vccio                rxdata33                 vccio                rxdata12
+               m2rxdatasb                m2rxcksb                    vccaon                  m2txcksb                  m2txdatasb                 vccaon                  rxdata52                vss                  rxdata31                 vss                  rxdata0
+                                                                                                                                                                vss                  rxdata48              rxdata32                rxdata27              rxdata11
+  m1txdatasb                 m1txcksb                   vccaon                    vccaon                  m1rxcksb                  m1rxdatasb                            rxdata53              rxdata37               rxdataRD1              rxdata16               rxdata1
+                                                                                                                                                              rxdata62               rxdata47              rxdataRD2               rxdata26              rxdata10
+                  vcci o                   vccio                     vcci o                    vccio                      vccio                    vcci o                 rxdata54              rxdata38                  vss                 rxdata17                 vss
+                                                                                                                                                              rxdata61               rxdata46                vccio                 rxdata25              rxdata9
+      vss                       vss                      vss                       vss                       vss                       vss                                rxdata55              rxdata39                rxckRD                rxdata18               rxdata2
+                                                                                                                                                                vss                  rxdata45               rxvldRD                rxdata24              rxdata8
+               m2rxdata6                 m2rxdata8                    vss                    m2txdata9                 m2txdata7                    vss                   rxdata56                vss                   rxckn                 rxdata19               rxdata3
+                                                                                                                                                              rxdata60               rxdata44               rxvld                    vss                 rxdata7
+   m2rxdata4                  m2rxckp                 m2rxdata10                m2txdata11                 m2txckn                  m2txdata5                             rxdata57              rxdata40                rxckp                 rxdata20                 vss
+                                                                                                                                                              rxdata59               rxdata43                rxtrk                 rxdata23              rxdata6
+               m2rxdata7                 m2rxdata9                    vss                    m2txdata8                 m2txdata6                    vss                   rxdata58              rxdata41                  vss                 rxdata21               rxdata4
+   m2rxdata5                  m2rxckn                 m2rxdata11                m2txdata10                 m2txckp                  m2txdata4                   vss                  rxdata42                vccio                 rxdata22              rxdata5
+                                                                                                                                                                           vccio                 vccio                   vccio                 vccio                  vccio
+                   vss                      vss                       vss                       vss                       vss                       vss        vccio                 txdata21                vccio                 txdata41              txdata58
+                                                                                                                                                                          txdata5               txdata22                  vss                 txdata42                 vss
+   m2rxdata0                  m2rxtrk                 m2rxdata14                m2txdata15                 m2txvld                  m2txdata1                 txdata4                txdata20               txckp                  txdata40              txdata57
+                                                                                                                                                                          txdata6               txdata23                 txtrk                txdata43               txdata59
+               m2rxdata2                 m2rxdata12                   vss                    m2txdata13                m2txdata3                    vss         vss                  txdata19               txckn                    vss                 txdata56
+                                                                                                                                                                          txdata7                 vss                    txvld                txdata44               txdata60
+   m2rxdata1                  m2rxvld                 m2rxdata15                m2txdata14                 m2txtrk                  m2txdata0                 txdata3                txdata18               txckRD                 txdata39              txdata55
+               m2rxdata3                 m2rxdata13                  vcci o                  m2txdata12                m2txdata2                   vcci o                 txdata8               txdata24                txvldRD               txdata45                 vss
+                                                                                                                                                              txdata2                txdata17                vccio                 txdata38              txdata54
+     vccio                     vccio                    vcci o                    vccio                     vcci o                     vccio                              txdata9               txdata25                  vss                 txdata46               txdata61
+                                                                                                                                                               vccio                  vccio                  vccio                  vccio                 vccio
+                   vss                      vss                      vcci o                     vss                       vss                      vcci o                 txdata10              txdata26               txdataRD2              txdata47               txdata62
+                                                                                                                                                              txdata1                txdata16              txdataRD1               txdata37              txdata53
+      vss                    m1txdata7                m1txdata9                    vss                    m1rxdata8                 m1rxdata6                             txdata11              txdata27               txdata32               txdata48                 vss
+                                                                                                                                                              txdata0                  vss                 txdata31                  vss                 txdata52
+                m1txdata5                 m1txckn                  m1txdata11                m1rxdata10                 m1rxckp                  m1rxdata4                txdata12                vss                  txdata33                 vss                  txdata63
+                                                                                                                                                                vss                  txdata15              txdata30                txdata36              txdata51
+      vss                    m1txdata6                m1txdata8                    vss                    m1rxdata9                 m1rxdata7                             txdata13              txdata28               txdata34               txdata49              txdataRD3
+
+                m1txdata4                 m1txckp                  m1txdata10                m1rxdata11                 m1rxckn                  m1rxdata5   txdataRD0               txdata14              txdata29                txdata35              txdata50
+                                                                                                                                                                           vccio                 vccio                   vccio                 vccio                  vccio
+     vccio                      vss                      vss                      vccio                      vss                       vss                     vccio                  vccio                  vccio                  vccio                 vccio
+
+                m1txdata1                 m1txvl d                 m1txdata15                m1rxdata14                  m1rxtrk                 m1rxdata0
+     vccio
+                m1txdata0
+                             m1txdata3
+                                          m1txtrk
+                                                      m1txdata13
+                                                                   m1txdata14
+                                                                                  vccio
+                                                                                             m1rxdata15
+                                                                                                          m1rxdata12
+                                                                                                                        m1rxvl d
+                                                                                                                                    m1rxdata2
+                                                                                                                                                 m1rxdata1
+                                                                                                                                                                (UCIe-A Bump-out)                                                                                                FoCoS or
+      vss                    m1txdata2                m1txdata12                   vss                    m1rxdata13                m1rxdata3
+
+
+                                            (UCIe-S Stacked Bump-out)
+                                                                                                                                                                                                                                                                                                                     16
+                            Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                                                                                                                                                                       Hot Chips 2023 – UCIe Tutorial
+ Physical Layer
+ • Unit is One Module: uni-directional: 1, 2, or 4 modules form a Link
+     − 16 (64) SE Lanes for Std (Adv)
+     − 1 SE Lane of valid
+     − 1 differential pair of forwarded clock
+     − 1 lane (SE) calibration - Track
+     − Lane reversal on Transmit side
+     − Reliability: Spare Lanes in Adv; degradation in Std
+     − Supported frequencies: 4, 8, 12, 16, 24, 32 GHz
+     − A component must support all data rates up to its advertised maximum data rate for interoperability
+     − B/W per module/ dir: 64 GB/s Std, 256 GB/s Adv: Two module gets 2X, 4-module gets 4X
+ • Sideband: always on; 2 Lanes/ direction @ 800 MHz – data and clock
+     − Used for training, debug, management, etc; Leverages depopulated bumps to ensure no extra shore-line
+ • Valid used for effective dynamic power management
+
+
+
+
+                                                                                      (Four Module Configuration)
+                                                                                                                                    N=16 for Standard
+                                                                                  ( 4-Module Configuration with UCIe)
+(Single Module Configuration)                        (Two Module Configuration)                                                     N=64 for Advanced
+
+
+                                                                                                                                                    17
+            Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                 Hot Chips 2023 – UCIe Tutorial
+D2D Adapter and Flit Mapping through FDI
+
+• Responsible for packetization                                                    Byte
+                                                                                           Flit Hdr                            62B of Flit 1
+   − Adds Flit Header (2B) and CRC (2B)                                            0       (2B)
+                                                                                            2B of   CRC          Flit Hdr      58B of Flit 2 or
+                                                                                   64       Flit 1  (2B)         (2B)          all 0s if no Flit from Protocol Layer
+
+• Supported Flit Sizes: 68B and two flavors of                                 (a. 68-Byte Flit – usage CXL 2.0/ PCIe Non-Flit Mode/ Streaming)
+
+  256B                                                                              Byte
+                                                                                    0
+                                                                                           Flit Hdr
+                                                                                           (2B)
+                                                                                                                             62B of Flit Chunk 0
+
+   − Decided at negotiation                                                         64                                       64B of Flit Chunk 1
+
+
+• Flit Hdr (2B): Protocol ID (3b), Credit (1b), Flit                                128                                      64B of Flit Chunk 2
+
+                                                                                                                                               10B Rsvd/ CRC0                 CRC1
+  Ack/Nak management (2b command + 8b                                               192               46 B of Flit Chunk 3        (4B) DLP/
+                                                                                                                                  Flit Chunk 3 Opt Flit1 (2B)                 (2B)
+
+
+  sequence number), Rsvd (2b)                                                                  (b. 256-Byte Flit – usage CXL 3.0/ PCIe 6.0)
+
+                                                                                    Byte
+• CRC: Covers 128B payload (smaller payloads are                                       0
+                                                                                            Flit Hdr
+                                                                                            (2B)
+
+  0-extended)
+                                                                                                                                                                (DLP 2..5/
+                                                                                                                                                                4B Rsvd/
+                                                                                                                                                                              CRC0
+                                                                                    64                                                                                        (2B)
+                                                                                                                                                                Opt Flit2 )
+
+
+   − Triple bit flip detection guarantee with 16 bits                               128
+
+                                                                                    192                                                                                        CRC1
+   − Replay if CRC fails
+                                                                                                                                                   (10B Rsvd/ Opt Flit3)
+                                                                                                                                                                               (2B)
+
+
+   − Sample RTL code for CRC provided in the spec                               (c. 256-Byte Latency-Optimized Flit – usage CXL 3.0/ Streaming)
+
+                                                                           (Opt Flit is for better link efficiency to use the unused CRC/ FEC bytes in PCIe/ CXL)
+
+
+
+
+                                                                                                                                                                                      18
+       Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                                      Hot Chips 2023 – UCIe Tutorial
+Usage Models for UCIe: SoC at Package level
+
+• SoC as a Package level construct
+   − Standard and/ or Advanced package
+   − Homogeneous and/or heterogeneous chiplets
+   − Mix and match chiplets from multiple
+     suppliers
+• Across segments: Hand-held, Client,
+  Server, Workstation, Comms, HPC,
+  Automotive, IoT, etc
+
+• UCIe PHY and D2D adapter common
+   − PCIe/CXL protocol for plug-and-play
+   − Streaming for others (similar to board level
+     connectivity today where scale-up systems                             Processors: symmetric coherency protocol mapped on UCIe through FDI
+     are on PCIe PHY)                                                      Memory: CXL.Mem mapped on UCIe through FDI
+                                                                           Accelerators: PCIe/ CXL mapped on UCIe through FDI
+   − Similar to PCIe/ CXL at board level                                   Modem/ RF/ Optical: Raw mode on UCIe
+
+
+
+
+       Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                          Hot Chips 2023 – UCIe Tutorial
+                                                                                                                                                   19
+  Example Scale-up SoC from homogeneous dies: Large
+  Switch with on-die protocol as streaming over UCIe
+• Need large radix CXL switches – challenges: reticle limit, cost, etc.
+• UCIe based Chiplets should help with scalable products
+• 64G Gen6 x16b CXL links
+• UCIe as d2d interconnect – while this is a scale-up CXL switch , a
+  switch vendor may prefer to have their on-die interconnect protocol
+  be transported over UCIe rather than create a hierarchy of switches
+  which will not work for CXL 2.0 tree-based topology
+                                                                                                                                                 Unused x16 ports
+                                                                                                                                                 (2 per die)
+
+
+
+
+          Small CXL Switch (128 lanes)                Medium-sized CXL Switch (256 lanes)              Large CXL switch (512 lanes)
+
+
+        One can construct CPUs (low, medium, large core-count CPUs) from smaller dies connected through UCIe using the same principle
+                   Here the UCIe PHY and D2D adapter will carry the packetized version of internal CPU interconnect fabric
+
+
+                                                                                                                                                                20
+         Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                                Hot Chips 2023 – UCIe Tutorial
+ Example Scale-up Package using Streaming
+ and open-plug-in using PCIe/ CXL
+                 Compute                                                           Compute                                                                Acceleration
+
+   CPU         CPU            CPU                                        CPU
+                                                                          CPU         CPU
+                                                                                       CPU           CPU
+                                                                                                      CPU
+    CPU         CPU            CPU
+                                                                                                                                                                 Accelerators
+                                                                                                                                                                      GPU
+   CPU         CPU            CPU                                        CPU
+                                                                          CPU         CPU
+                                                                                       CPU           CPU
+                                                                                                      CPU
+    CPU         CPU            CPU
+                                              UCIe            UCIe                                                     UCIe              UCIe
+                                                                  D2D
+
+
+
+
+                                                                                                                                                      CHI/CXL
+                                                                                                                      D2D
+
+
+
+
+                                                                                                            CHI/CXL
+                                              D2D                                                                                              D2D               Internal (e.g.,
+                                                            PHY
+
+
+
+
+                                                                                                                             PHY
+                                                                                CHI interconnect
+
+
+
+
+                                                                                                                                        PHY
+                                                                  Adap
+                                                     PHY
+
+
+
+
+          CHI interconnect                   adapt                                                                    Adap                    Adapt
+                                               er                  ter                                                 ter                      er
+                                                                                                                                                                CHI) interconnect
+
+          Memory controller                                                      Memory controller                                                                Mem controller
+
+
+                                                                                                                                                                  (3 dies on one package)
+
+                                                                                                                                                                                                   Not drawn to scale
+• Transporting the same on-chip protocol
+  allows seamless use of architecture specific                                   AMBA CHI                                    Protocol                              CHI/ CXL                           Protocol
+  features without protocol conversion
+                                                                                                                         Streaming                                                                   Streaming
+• Streaming interface with additional flit                                          UCIe                                  Adapter                                    UCIe                             Adapter
+                                                                                                                            PHY                                                                         PHY
+  formats provide link robustness using UCIe
+  defined data-link CRC and retry                                                                                                                • Any device type in this open plug-in slot
+                                                                                                                                                   with CXL (or CHI if both support it)
+
+                                                                                                                                                                                                                   21
+            Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                                                                                Hot Chips 2023 – UCIe Tutorial
+UCIe Usage: Off-package connectivity w/ Retimers
+                                                                                                                                      (Optical connections: Intra-Rack and Pod)
+
+
+
+
+                                                                                                                                                                                                 (CXLSwitch Package)
+                                                                                                                                                                             UCIe Retimer
+                                                                                          TORS                (Memory/ Storage)          UCIe Retimer    UCIe Retimer
+                                                                                                                                                         Optical             Optical
+                                                                                                                                         Optical
+                                                                                                              (w/ UCIe-based SoCs)
+                                                                                     CXL Pooled Memory/
+                                                                                                                                           CXL 3.0+                        CXL 3.0+
+                                                                                      X
+
+                                                                                          Storage
+
+                                                                                                                                          Switch Die                      Switch Die
+
+
+
+
+                                                                                                                                                                   UCIe
+                                                                                         Compute                                                                                                CXL
+                                                                                           CPU   
+                                                                                     X                 CPU
+
+
+
+                                                                                         Compute
+                                                                                           SSD   
+                                                                                     X                 SSD
+
+
+
+                                                                                         Compute
+                                                                                                 
+                                                                                     X     HDD         HDD
+
+
+                                                                                                                                     (Pooled/ Shared Memory) (Pooled Accelerator)
+
+(Use Case: Load-Store I/O (CXL) as                                UCIe / CXL through UCIe Retimer
+                                                                                                             (Compute Drawer)        (Switch dies connected through UCIe PHY + Adapter
+                                                                                                             (w/ UCIe-based SoCs)    Running a proprietary switch internal protocol)
+the fabric across the Pod providing
+low-latency and high bandwidth
+                                                               Provision to extend off-package with UCIe Retimers                                           (CPU Package)
+resource pooling/ sharing as well as
+
+
+
+
+                                                                                                                                                                                      Mem
+
+
+
+                                                                                                                                                                                                    (Optical Connection to
+                                                                     connecting to other media (e.g., optics)                                           CPU               CPU
+
+
+
+
+                                                                                                                                                Mem
+
+
+
+
+                                                                                                                                                                                                    CXL Switch on Rack)
+message passing)
+                                                                                                                                                                 UCIe
+                                                                                                                                                                          Mem &
+
+
+
+
+                                                                                                                                                                                      Retimer
+                                                                                                                                                                                      UCIe
+                                                                                                                                                        CPU
+
+
+
+
+                                                                                                                                                 Mem
+                                                                                                                                                                          I/O
+            (Another example can be multi-terabit networking switches
+            Constructed from UCIe-based co-packaged optics and partitionable
+            networking switch dies connected through UCIe on package
+                                                                                                                                                   CXL/ PCIe                    DDR
+                                                                                                                                                   (Interconnects at drawer level)
+
+
+          Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                                                       Hot Chips 2023 – UCIe Tutorial
+                                                                                                                                                                                                                             22
+UCIe 1.0: Characteristics and Key Metrics
+CHARACTERISTICS                     STANDARD                        ADVANCED            COMMENTS
+                                    PACKAGE                         PACKAGE
+Data Rate (GT/s)                    4, 8, 12, 16, 24, 32                                 Lower speeds must be supported -interop (e.g., 4, 8, 12 for 12G
+                                                                                         device)
+                     Characteristics / KPIs                       Standard PackageWidth degradation
+                                                                                                 Data   / Outcome                Data / Outcome
+Width (each cluster)        16                                      64                              in Standard, spare lanes in Advanced
+                                                                               Your Key Performance        Add a few details describing • What results did you
+Bump Pitch (um)                     100 – 130                        25 - 55              Interoperate across bump pitches in each package type across nodes
+                                                                               Indicator goes here            the related activities      obtain from your
+Channel Reach (mm)                  <= 25                            <=2                                                                  project?
+                                                                                                                                        • Write them here.
+
+KPIs / TARGET FOR                        STANDARD                    ADVANCED           COMMENTS
+KEY METRICS                              PACKAGE                     PACKAGE                                                         • What results did you
+                                                                              Your Key Performance      Add a few details describing
+B/W Shoreline (GB/s/mm)                   28 – 224                   165 – 1317        Conservatively estimated: AP: 45u; Standard: 110u;   Proportionate
+                                                                                                                                       obtain from your to
+                                                                               Indicator goes here         the related activities
+                                                                                       data rate (4G – 32G)
+B/W Density (GB/s/mm2)                    22-125                     188-1350                                                          project?
+Power Efficiency target                   0.5                        0.25
+                                                                                                                                     • Write them here.
+(pJ/b)
+Low-power entry/exit latency              0.5ns <=16G, 0.5-1ns >=24G                     Power savings estimated at >= 85%
+                                                                      Your Key Performance        Add a few details describing   • What results did you
+Latency (Tx + Rx)                         < 2ns                                 Includes D2D Adapter and PHY (FDI to bump and back)
+                                                                        Indicator goes here           the related activities       obtain from your
+Reliability (FIT)                         0 < FIT (Failure In Time) << 1        FIT: #failures in a billion hours (expecting ~1E-10)  w/ UCIe Flit Mode
+                                                                                                                                   project?
+                                                                                                                                 • Write them here.
+                    UCIe 1.0 delivers the best KPIs while meeting the projected needs for the next 5-6 years
+                    across the compute continuum.
+                                                                                                                                                                                  23
+          Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                                                      Hot Chips 2023 – UCIe Tutorial
+Ingredients for a broad inter-operable chiplet ecosystem
+
+                            Broad Market
+                            Manufacturing,
+                              Packaging
+                               and Test                                                                            C&I
+                                                                                            D2D                    Test
+                                                                                           Specs                   Spec
+                                                            Die-to-Die                                                              Test Tools
+  Chiplets &                                            Open Industry                                                             And Procedures
+                               Thriving
+Chiplet Based                                             Standards w/             Well-defined Specs      Test criteria based
+                                Chiplet
+                                                       compelling KPIs                                     on Specs               Test H/W & S/W
+Product Attach                Ecosystem
+                                                     across wide usages            (Electrical,                                   Validates
+    Points                                                                         Logical,                                       Test criteria
+                                                                                                           (Test Definitions,
+                                                                                   Protocol (e.g., PCIe/   Pass/Fail Criteria:    • Compliance
+                                                                                   CXL)                    Electrical, Logical,   • Interoperability
+                                                                                   Software,               Protocol, Software)
+                               Die-to-Die                                          Form-Factor,
+                       IPs, VIPs, Tools, and                                       Management)
+                            Methodologies                                                                                                PASS
+                                                                                                                                          FAIL
+                                   Predictable path to design compliance with UCIe
+                                                                                                                                                                        24
+               Property of Universal Chiplet Interconnect Express™ (UCIe ™) 2023                                                       Hot Chips 2023 – UCIe Tutorial
+

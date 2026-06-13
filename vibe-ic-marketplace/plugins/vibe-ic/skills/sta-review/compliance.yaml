@@ -1,0 +1,43 @@
+# Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
+testability: structured
+
+# Compliance spec for skill 'sta-review' (v0.35)
+# Enhanced: multi-corner signoff required (SS/FF, not just TT)
+skill: sta-review
+
+requirements:
+  - id: R_has_output_section
+    description: "Output format/schema section present"
+    pattern: '(##\s+(?:Output|Findings|Result|Report))'
+    skill_section: 'Output/Handoff'
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line"
+    pattern: 'Next:\s*(?:run\s+)?/\w'
+    skill_section: 'Output/Handoff'
+  - id: R_status_or_summary
+    description: "Has a Summary or STATUS block"
+    pattern: '(##\s+Summary|\*\*STATUS\*\*:)'
+    skill_section: 'Output/Handoff'
+  - id: R_multi_corner_setup
+    description: "Multi-corner analysis must include SS and FF (not TT-only)"
+    pattern: '(ss.*ff|SS.*FF|slow.*fast|multi.corner|MCMM|corner.*ss|corner.*ff)'
+    skill_section: 'Corner Coverage'
+  - id: R_setup_hold_corners
+    description: "Setup analysis on slow corner, hold analysis on fast corner"
+    pattern: '(setup.*slow|setup.*ss|hold.*fast|hold.*ff|setup.*hold.*corner)'
+    skill_section: 'Timing Signoff'
+  - id: R_pvt_conditions
+    description: "PVT conditions documented (process, voltage, temperature)"
+    pattern: '(PVT|process.*voltage.*temp|voltage.*corner|temperature.*corner)'
+    skill_section: 'PVT Coverage'
+
+cross_checks:
+  - id: X_corner_coverage_audit
+    description: "Run corner_coverage_audit.py to verify SS+FF corners were actually executed"
+    rule: postcheck_pass_only
+  - id: X_mcp_execution_verify
+    description: "Verify required MCP tools were actually executed (not just reported)"
+    rule: postcheck_pass_only
+  - id: X_sta_report_check
+    description: "Verify STA report has WNS/TNS and setup/hold analysis"
+    rule: postcheck_pass_only

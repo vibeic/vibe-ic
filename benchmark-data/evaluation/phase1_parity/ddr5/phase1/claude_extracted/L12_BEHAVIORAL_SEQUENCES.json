@@ -1,0 +1,136 @@
+{
+  "schema_version": 2,
+  "doc_class": "behavioral_sequences",
+  "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)",
+  "behavioral_sequences": [],
+  "no_behavioral_sequences_in_input": true,
+  "no_calibration": false,
+  "extraction_evidence": {},
+  "class_path": "pure_analog",
+  "initialization_sequence": [
+    "1. Ramp supplies (VDDC, VDDQ, VDDQL, VPP) with RESET_n held LOW.",
+    "2. Deassert RESET_n once supplies/clocks are stable.",
+    "3. Program per-channel mode registers (RL/WL/BL, drive strength, ECC, RFM, pseudo-channel mode) via MRS.",
+    "4. Train the high-speed links per channel for 6.4 Gb/s/pin operation.",
+    "5. Bring each independent channel to IDLE; channels may initialize independently."
+  ],
+  "reset_sequence": [
+    "1. Assert RESET_n LOW; device enters reset (MRs cleared, outputs Hi-Z).",
+    "2. Re-run the initialization sequence from step 2."
+  ],
+  "row_open_sequence": [
+    "1. Issue ACT-1 (row high bits, bank / bank group).",
+    "2. Issue ACT-2 (row low bits) to complete opening the row.",
+    "3. Wait tRCD before the first column command."
+  ],
+  "read_sequence_BL16": [
+    "1. Open the target row (ACT-1, ACT-2; wait tRCD).",
+    "2. Issue CAS carrying WS_RD to synchronize WCK to CK for an immediately following read.",
+    "3. Issue RD with the column / bank / bank-group address (AP for auto-precharge if desired).",
+    "4. Wait the programmed Read Latency (RL); the DRAM enables and drives RDQS edge-aligned with DQ.",
+    "5. Capture 16 beats on both edges of RDQS; decode Read Link ECC and DBI as configured.",
+    "6. Optionally issue PRE after tRTP, or use RD with auto-precharge."
+  ],
+  "read_sequence_BL32": [
+    "1-2. Same as BL16 read up to the CAS(WS_RD) sync.",
+    "3. Issue RD32; optionally specify a starting position within the 32-word-aligned burst via C0 / B3.",
+    "4. Capture 32 beats on DQ framed by RDQS."
+  ],
+  "write_sequence_BL16": [
+    "1. Open the target row (ACT-1, ACT-2; wait tRCD).",
+    "2. Issue CAS carrying WS_WR to synchronize WCK to CK for an immediately following write.",
+    "3. Issue WR (or MWR for masked write) with the column / bank / bank-group address.",
+    "4. Wait the programmed Write Latency (WL); drive WCK and 16 beats of DQ (+ DMI) on both WCK edges; encode Write Link ECC.",
+    "5. After tWR, issue PRE; or use WR with auto-precharge."
+  ],
+  "write_x_sequence": [
+    "1. Open the target row and issue CAS(WS_WR) with the WRX option and WXS bit.",
+    "2. Issue the write; the DRAM fills the burst all-zero (WXS=0) / all-one (WXS=1) WITHOUT data transfer on the bus."
+  ],
+  "refresh_sequence": [
+    "1. Within tREFI, issue REFab (all-bank) or REFsb (same-bank across groups).",
+    "2. For REFsb, other banks remain accessible during the refresh.",
+    "3. Wait tRFC before accessing refreshed banks."
+  ],
+  "self_refresh_entry_exit_sequence": [
+    "1. Controller drives the channel into self-refresh; clock may stop.",
+    "2. To exit, restart the channel clock and resynchronize; pending refresh completes."
+  ],
+  "multi_bank_bank_group_sequence": [
+    "1. ACT a row in bank group BG0 bank0; respect tRRD_S to a different bank group, tRRD_L within the same bank group; at most 4 ACTs within tFAW.",
+    "2. Issue CAS(WS_FS) to free-start WCK for multiple following accesses across multiple banks.",
+    "3. RD/WR across banks honouring tCCD_S (different bank group) and tCCD_L (same bank group).",
+    "4. PRE (per-bank) or PREab (all-bank) when done; wait tRP."
+  ],
+  "dvfs_frequency_change_sequence": [
+    "1. Quiesce traffic; precharge banks as required.",
+    "2. Switch the active FSP via mode register; DVFSC selects VDD2H/VDD2L.",
+    "3. Change CK / WCK frequency; re-run ZQ calibration and WCK2CK sync; retrain DQ/RDQS read and WCK write with FSP-specific RL/WL/ODT/Vref/DFE.",
+    "4. Resume traffic at the new operating point."
+  ],
+  "power_down_entry_exit_sequence": [
+    "1. Enter per-channel power-down; clock may be gated.",
+    "2. Fast exit returns the channel to IDLE."
+  ],
+  "single_channel_read_sequence": [
+    "1. ACTIVATE on the R bus opens a row.",
+    "2. READ on the C bus selects the column for the addressed pseudo-channel.",
+    "3. At read latency RL, the DRAM drives the burst framed by RDQS_t/RDQS_c.",
+    "4. The host samples on both RDQS edges (DDR).",
+    "5. PRECHARGE (or auto-precharge) closes the row."
+  ],
+  "single_channel_write_sequence": [
+    "1. ACTIVATE on the R bus opens a row.",
+    "2. WRITE on the C bus selects the column for the addressed pseudo-channel.",
+    "3. At write latency WL, the host drives the burst framed by WDQS_t/WDQS_c.",
+    "4. The DRAM samples on both WDQS edges; on-die ECC protects the array.",
+    "5. PRECHARGE closes the row."
+  ],
+  "pseudo_channel_concurrent_sequence": [
+    "1. Within one 64-bit channel, the two pseudo-channels share the row command bus.",
+    "2. The controller issues independent column commands to pseudo-channel 0 and 1.",
+    "3. Each pseudo-channel streams its own 32-bit data concurrently."
+  ],
+  "multi_channel_independent_sequence": [
+    "1. The controller schedules ACT/RD/WR/REF/RFM independently on each of 16 channels.",
+    "2. Channels use their own clocks and need not be synchronous.",
+    "3. Aggregate bandwidth approaches 819 GB/s per stack when all channels are busy."
+  ],
+  "ras_error_handling_sequence": [
+    "1. On a link/on-die ECC uncorrectable error, the DRAM reports via AERR/DERR.",
+    "2. On a CA parity error, the DRAM raises the parity alert; controller retries/quarantines.",
+    "3. The controller may issue soft-repair for a persistently failing row/column."
+  ],
+  "power_up_init_sequence": [
+    "1. Ramp VDD/VDDQ to 1.1 V and VPP to 1.8 V (on a DIMM, the PMIC produces these from 12 V).",
+    "2. Release RESET_n and run device initialization.",
+    "3. Bring up the SPD hub and (RDIMM) the RCD over the sideband bus."
+  ],
+  "training_sequence": [
+    "1. CA training: deskew CA[13:0] and center VrefCA per sub-channel.",
+    "2. Write leveling: align DQS to CK at the DRAM.",
+    "3. Read training: per-DQ read deskew and VrefDQ centering.",
+    "4. Write training: tune the DFE tap coefficients and write VrefDQ; deskew write DQ.",
+    "5. ZQ calibration (via MPC) of the output drivers / ODT."
+  ],
+  "read_sequence": [
+    "1. ACTIVATE the target row (wait tRCD).",
+    "2. Issue READ; after CAS latency (CL) the device returns BL16 beats on DQ aligned to DQS_t/DQS_c (double data rate).",
+    "3. On-die ECC corrects any single-bit error before data leaves the die.",
+    "4. PRECHARGE the row (wait tRP) when finished."
+  ],
+  "write_sequence": [
+    "1. ACTIVATE the target row (wait tRCD).",
+    "2. Issue WRITE; drive BL16 beats on DQ with DQS; the device computes and stores on-die ECC check bits; optional write CRC.",
+    "3. Honor tWR (write recovery) before PRECHARGE.",
+    "4. PRECHARGE the row (wait tRP)."
+  ],
+  "subchannel_concurrency_sequence": [
+    "1. Sub-Channel A and Sub-Channel B each have their own CA bus, CS_n, and clock.",
+    "2. A read/write on Sub-Channel A proceeds independently of traffic on Sub-Channel B, doubling concurrent accesses."
+  ],
+  "self_refresh_sequence": [
+    "1. SELF REFRESH ENTRY places the device in low-power retention with internal refresh.",
+    "2. SELF REFRESH EXIT returns to READY; re-training may be required at high speed bins."
+  ]
+}

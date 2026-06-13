@@ -1,0 +1,23 @@
+class: any-ic
+layer: L5
+# v0.74 A-implement Phase 1: `analog_digital_interfaces` → `pads`
+qbank:
+  pads:
+    expert:       ["List all pads (name, type, digital controls, protection, analog sense)?"]
+    intermediate: ["Walk me through every pad — name, input/output, voltage level, any protection circuit."]
+    beginner:     ["What pins does the chip expose to the outside world?"]
+    follow_ups:
+      - if_user_says: ["only digital", "all CMOS"]
+        respond_with_default: "Standard CMOS levels: VIL=0.3*VDD, VIH=0.7*VDD"
+      - if_ambiguous: []
+        defer_to_default: true
+
+  timing_notes:
+    expert:       ["Any cross-domain timing notes (setup/hold, async bypass)?"]
+    intermediate: ["Are there any tricky timing corners we should document — async inputs, bypassed synchronizers?"]
+    beginner:     []   # advanced; PM omits
+
+  document_id:
+    expert:       []
+    intermediate: []
+    beginner:     []

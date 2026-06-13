@@ -1,0 +1,226 @@
+{
+  "fields": {
+    "versions": [],
+    "deprecated_features": [],
+    "backward_compat_traps": [
+      {
+        "trap_name": "Two_sub_channels_not_one",
+        "rule": "A DDR5 DIMM has TWO independent 32-bit (40-bit ECC) sub-channels.",
+        "trap": "Treating a DDR5 DIMM as a single 64/72-bit DDR4 bus is wrong."
+      },
+      {
+        "trap_name": "BL16_not_BL8",
+        "rule": "DDR5 native burst length is 16 (DDR4 is 8).",
+        "trap": "Assuming BL8 mis-sizes the 64-byte access on a 32-bit sub-channel."
+      },
+      {
+        "trap_name": "Internal_Vref",
+        "rule": "VrefDQ/VrefCA are generated on-die and trained.",
+        "trap": "Supplying an external VrefDQ as in older parts is wrong."
+      },
+      {
+        "trap_name": "Two_cycle_CA",
+        "rule": "DDR5 commands occupy two CA cycles.",
+        "trap": "Decoding DDR5 commands as single-cycle DDR4 commands is wrong."
+      },
+      {
+        "trap_name": "Not_LPDDR5_not_HBM3",
+        "rule": "DDR5 is the mainstream generation timed off CK/DQS with no WCK and no TSV stacking; LPDDR5 has a WCK and is low-power, HBM3 is 3D-stacked (TSV, 1024-bit, pseudo-channels).",
+        "trap": "Applying LPDDR5 WCK or HBM3 stacked/pseudo-channel assumptions to DDR5 is wrong."
+      }
+    ],
+    "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)",
+    "spec_version": "JEDEC Standard JESD79-5 (DDR5 SDRAM)",
+    "spec_lineage_lpddr": [
+      {
+        "version": "LPDDR (LPDDR1)",
+        "year": 2006,
+        "summary": "Original low-power DDR; 1.8 V; temperature-compensated / partial-array self-refresh; deep power-down."
+      },
+      {
+        "version": "LPDDR2 (JESD209-2)",
+        "year": 2009,
+        "summary": "1.2 V; 2n/4n prefetch + non-volatile option; 10-bit DDR CA bus; up to LPDDR2-1066."
+      },
+      {
+        "version": "LPDDR3 (JESD209-3)",
+        "year": 2012,
+        "summary": "1600 MT/s; write-leveling, CA training, optional ODT; 8n prefetch."
+      },
+      {
+        "version": "LPDDR4 (JESD209-4)",
+        "year": 2014,
+        "summary": "Two 16-bit channels; 6-bit CA bus (two-cycle commands, CS active-high, no CKE); 16n prefetch; DBI; up to 3200 MT/s. LPDDR4X reduces Vddq to 0.6 V."
+      },
+      {
+        "version": "LPDDR5 (JESD209-5)",
+        "year": 2019,
+        "summary": "WCK / RDQS on-demand clocking with quarter-speed CK; 7-bit DDR CA bus; 16 banks in 4 bank groups; 16n prefetch; VDDQ 0.5 V; link ECC; DVFS/DVFSC; deep sleep; Data-Copy / Write-X; CKE eliminated; up to 6400 Mbps."
+      },
+      {
+        "version": "LPDDR5X (JESD209-5B / JESD209-5X)",
+        "year": 2021,
+        "summary": "Speed up to 8533 Mbit/s; tx/rx equalization; Adaptive Refresh Management."
+      },
+      {
+        "version": "LPDDR6",
+        "year": 2025,
+        "summary": "Successor; CA bus narrowed further; 12-bit data bus per channel; higher speeds. Out of scope of JESD209-5."
+      }
+    ],
+    "key_changes_vs_lpddr4": [
+      {
+        "change": "New clocking architecture: quarter-speed CK + on-demand full-speed WCK + DRAM-driven RDQS",
+        "impact": "WCK/RDQS enabled only when needed -> major IO power saving; requires WCK2CK sync before every high-speed transfer."
+      },
+      {
+        "change": "CA bus widened to 7 bits, double data rate",
+        "impact": "Commands arrive at the same cadence as LPDDR4 despite quarter-speed CK; a command spans two CA transfers."
+      },
+      {
+        "change": "CAS command moved before the read/write (WS_FS/WS_RD/WS_WR)",
+        "impact": "CAS synchronizes WCK to CK (does not select a column), unlike LPDDR4's trailing CAS-2."
+      },
+      {
+        "change": "16 banks in four bank groups (DDR4-style)",
+        "impact": "Bank-group timing enables concurrency; 16n prefetch retained (NOT doubled)."
+      },
+      {
+        "change": "VDDQ reduced to 0.5 V",
+        "impact": "Lower IO power; DFE + (5B) tx/rx equalization required for SI."
+      },
+      {
+        "change": "Link ECC (Read/Write) + DBI",
+        "impact": "On-the-wire single-bit correction; reduced driven-bit count."
+      },
+      {
+        "change": "DVFS / DVFSC, deep sleep, Data-Copy / Write-X",
+        "impact": "Fine-grained power scaling and data-transfer reduction."
+      },
+      {
+        "change": "CKE pin eliminated",
+        "impact": "Low-power entry is a CA command bounded by CS."
+      }
+    ],
+    "version_naming_history_note": "DDR5 SDRAM is standardized by JEDEC as JESD79-5, the fifth generation in the JESD79 mainstream DDR family (DDR -> DDR2 -> DDR3 -> DDR4 -> DDR5). Each generation roughly doubles peak data rate while lowering the supply voltage. DDR5's defining additions over DDR4 (JESD79-4) are the two independent sub-channels, DFE, on-die ECC, same-bank refresh, BL16, internal VrefDQ/VrefCA, the 2-cycle CA protocol, and the DIMM PMIC/SPD-hub/RCD module architecture.",
+    "spec_lineage_hbm": [
+      {
+        "version": "JESD229 (Wide I/O)",
+        "year": 2011,
+        "summary": "Predecessor; four 128-bit channels, single-data-rate clocking."
+      },
+      {
+        "version": "JESD235 (HBM)",
+        "year": 2013,
+        "summary": "First HBM; 1.0 Gb/s/pin; 1024-bit; up to 4 GB/stack; ~128 GB/s."
+      },
+      {
+        "version": "JESD235a (HBM2)",
+        "year": 2016,
+        "summary": "HBM2; 8 channels of 128 bits; up to 8 GB/stack; ~256-307 GB/s."
+      },
+      {
+        "version": "HBM2E (update to JESD235)",
+        "year": 2018,
+        "summary": "Up to 3.2-3.6 Gb/s/pin; up to 307 GB/s/stack; 12-Hi for 24 GB."
+      },
+      {
+        "version": "JESD238 (HBM3)",
+        "year": 2022,
+        "summary": "16 channels of 64 bits (1024-bit total); up to 6.4 Gb/s/pin; up to 819 GB/s/stack; 8-Hi (16 GB) / 12-Hi (24 GB) of 16 Gb dies; on-die + link ECC; RFM; RAS."
+      },
+      {
+        "version": "JESD270-4 (HBM4)",
+        "year": 2025,
+        "summary": "2048-bit interface; up to 8 Gb/s/pin; up to 2 TB/s; backwards compatible with HBM3 controllers."
+      }
+    ],
+    "previous_versions_of_this_spec": [
+      {
+        "version": "JESD238 (HBM3)",
+        "date": "January 27, 2022",
+        "summary": "Initial JEDEC HBM3 standard release."
+      }
+    ],
+    "key_changes_vs_hbm2e": [
+      {
+        "change": "Channels doubled: 16 x 64-bit vs 8 x 128-bit",
+        "impact": "Finer access granularity; total still 1024 data pins."
+      },
+      {
+        "change": "Per-pin rate doubled to 6.4 Gb/s/pin (vs JEDEC HBM2E 3.2)",
+        "impact": "Up to 819 GB/s per stack vs ~307."
+      },
+      {
+        "change": "Pseudo-channel mode (two 32-bit per channel)",
+        "impact": "Independent column streams per channel half."
+      },
+      {
+        "change": "On-die ECC + link ECC standardized",
+        "impact": "Array + transmission error protection."
+      },
+      {
+        "change": "Refresh Management (RFM) added",
+        "impact": "Bounds row-hammer-class disturbance."
+      },
+      {
+        "change": "RAS (soft-repair, CA parity, error reporting)",
+        "impact": "In-field reliability/serviceability."
+      },
+      {
+        "change": "12-Hi stacks of 16 Gb dies (~30 µm thick) for 24 GB",
+        "impact": "Higher capacity at 1024-bit width."
+      }
+    ],
+    "previous_versions": [
+      "DDR (JESD79) — first double-data-rate SDRAM.",
+      "DDR2 (JESD79-2) — 1.8 V, 4n prefetch.",
+      "DDR3 (JESD79-3) — 1.5 V, DLL, 8n prefetch, single 64/72-bit bus, BL8.",
+      "DDR4 (JESD79-4) — 1.2 V, bank groups, single 64/72-bit bus, BL8, gear-down."
+    ],
+    "key_changes_vs_ddr4": [
+      {
+        "area": "Channel",
+        "summary": "Each DIMM is split into two independent 32-bit (40-bit ECC) sub-channels (DDR4: single 64/72-bit bus)."
+      },
+      {
+        "area": "Signal integrity",
+        "summary": "Decision Feedback Equalization (DFE) on DQ receivers and a Duty-Cycle Adjuster (DDR4: none)."
+      },
+      {
+        "area": "Reliability",
+        "summary": "On-die ECC standard in every device plus Error Check and Scrub (DDR4: not standard)."
+      },
+      {
+        "area": "Banks / refresh",
+        "summary": "32 banks in 8 bank groups and same-bank refresh (REFsb) (DDR4: 16 banks / 4 groups, no REFsb)."
+      },
+      {
+        "area": "Burst",
+        "summary": "Native BL16 (DDR4: BL8)."
+      },
+      {
+        "area": "Voltage",
+        "summary": "1.1 V VDD/VDDQ (DDR4: 1.2 V)."
+      },
+      {
+        "area": "Reference / training",
+        "summary": "Internal VrefDQ/VrefCA with CA/read/write training (DDR4: external VrefDQ in many configurations)."
+      },
+      {
+        "area": "Command bus",
+        "summary": "2-cycle CA protocol (DDR4: single-cycle)."
+      },
+      {
+        "area": "Module / power",
+        "summary": "DIMM-level PMIC, SPD hub, and RCD (DDR4: motherboard power, simpler SPD)."
+      }
+    ]
+  },
+  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "schema_version": "v0.1.62",
+  "doc_class": "L14",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l14_versioning v0.1.62",
+  "extraction_evidence": {},
+  "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)"
+}

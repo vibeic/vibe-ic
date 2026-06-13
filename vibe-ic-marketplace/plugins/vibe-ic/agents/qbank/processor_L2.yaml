@@ -1,0 +1,35 @@
+class: processor
+layer: L2
+qbank:
+  pipeline_depth:
+    expert:       ["Pipeline stage count?"]
+    intermediate: ["How many pipeline stages — 2 (simple), 3-5 (typical), 7+ (high-performance)?"]
+    beginner:     ["Is it a simple single-stage CPU, or deeply pipelined?"]
+
+  pipeline_style:
+    expert:       ["Pipeline style — in-order / scoreboarded / out-of-order / multi-cycle / bit-serial?"]
+    intermediate: ["Execution style — strict in-order, scoreboarded (writeback may reorder), or full OoO?"]
+    beginner:     []
+
+  issue_width:
+    expert:       ["Issue width?"]
+    intermediate: ["Instructions issued per cycle — 1 (scalar), 2 (dual-issue), more?"]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # 1
+
+  commit_width:
+    expert:       ["Commit width?"]
+    intermediate: []
+    beginner:     []
+
+  dispatch_order:
+    expert:       ["Dispatch order — in-order or out-of-order?"]
+    intermediate: []
+    beginner:     []
+
+  writeback_order:
+    expert:       ["Writeback order — in-order or out-of-order?"]
+    intermediate: []
+    beginner:     []

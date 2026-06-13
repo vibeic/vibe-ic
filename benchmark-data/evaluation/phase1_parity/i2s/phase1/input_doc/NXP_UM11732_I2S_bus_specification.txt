@@ -1,0 +1,725 @@
+  UM11732
+  2
+  I S bus specification
+  Rev. 3.0 — 17 February 2022                                              User manual
+
+
+
+
+Document information
+Information     Content
+                 2
+Keywords        I S bus, SCK, SD
+                                                                2
+Abstract        This document details the specifications of the I S bus.
+NXP Semiconductors
+                                                                                                                    UM11732
+                                                                                                                2
+                                                                                                                I S bus specification
+
+
+Revision history
+Rev           Date       Description
+v.3           20220217                                                                                      2
+                         • This document has been reconstructed from the I S bus specification, February 1986,
+                           revised June 5, 1996 by Philips Semiconductors. The format has been redesigned to
+                           comply with the new identity guidelines of NXP Semiconductors.
+                         • Updated terms "Master" and "Slave" to "Controller" and "Target" to support coherent
+                                                                           2
+                           inclusive language use in conjunction with the I S bus which is in broad use in the
+                           electronics community.
+v.2           19960605   Second version
+v.1           19860201   Initial version
+
+
+
+
+UM11732                        All information provided in this document is subject to legal disclaimers.           © NXP B.V. 2022. All rights reserved.
+
+User manual                               Rev. 3.0 — 17 February 2022
+                                                                                                                                                2 / 14
+NXP Semiconductors
+                                                                                                                      UM11732
+                                                                                                                  2
+                                                                                                                  I S bus specification
+
+
+1         Introduction
+                     Many digital audio systems are being introduced into the consumer audio market,
+                     including compact disc, digital audio tape, digital sound processors, and digital TV-sound.
+                     The digital audio signals in these systems are being processed by a number of (V)LSI
+                     ICs, such as:
+                     • A/D and D/A converters;
+                     • digital signal processors;
+                     • error correction for compact disc and digital recording;
+                     • digital filters;
+                     • digital input/output interfaces.
+                     Standardized communication structures are vital for both the equipment and the IC
+                     manufacturer, because they increase system flexibility. To this end, we have developed
+                                          2
+                     the inter-IC sound (I S) bus – a serial link especially for digital audio.
+
+2         Basic serial bus requirements
+                     The bus has only to handle audio data, while the other signals, such as sub-coding and
+                     control, are transferred separately. To minimize the number of pins required and to keep
+                     wiring simple, a 3-line serial bus is used consisting of a line for two time-multiplexed data
+                     channels, a word select line and a clock line.
+                     Since the transmitter and receiver have the same clock signal for data transmission,
+                     the transmitter as the controller, has to generate the bit clock, word-select signal and
+                     data. In complex systems however, there may be several transmitters and receivers,
+                     which makes it difficult to define the controller. In such systems, there is usually a system
+                     controller controlling digital audio data-flow between the various ICs. Transmitters then,
+                     have to generate data under the control of an external clock, and so act as a target.
+                     Figure 1 illustrates some simple system configurations and the basic interface timing.
+                     Note that the system controller can be combined with a transmitter or receiver, and it may
+                     be enabled or disabled under software control or by pin programming.
+
+
+
+
+UM11732                              All information provided in this document is subject to legal disclaimers.       © NXP B.V. 2022. All rights reserved.
+
+User manual                                     Rev. 3.0 — 17 February 2022
+                                                                                                                                                  3 / 14
+NXP Semiconductors
+                                                                                                                                               UM11732
+                                                                                                                                           2
+                                                                                                                                           I S bus specification
+
+
+                      clock SCK                                                                                                      SCK
+                     word select WS                                                                                                   WS
+    TRANSMITTER                             RECEIVER                                                        TRANSMITTER                                 RECEIVER
+                       data SD                                                                                                        SD
+
+
+              TRANSMITTER = CONTROLLER                                                                                       RECEIVER = CONTROLLER
+
+
+
+
+                                                                           CONTROLLER
+
+
+
+                                                                                 SCK
+                                                                                 WS
+                                              TRANSMITTER                                                  RECEIVER
+                                                                                  SD
+
+                                                            CONTROLLER = CONTROLLER
+
+
+
+
+                                      SCK
+
+
+                                      WS
+
+
+                                      SD                       MSB                                       LSB       MSB
+
+                                          WORD n-1                           WORD n                                WORD n+1
+                                       RIGHT CHANNEL                      LEFT CHANNEL                          RIGHT CHANNEL
+                                                                                                                                                               aaa-045276
+
+ Figure 1. Simple system configurations and basic interface timing
+
+               2
+3         The I S bus
+                          As shown in Figure 1, the bus has three lines:
+                          • Continuous Serial Clock (SCK);
+                          • Word Select (WS);
+                          • Serial Data (SD);
+                          and the device generating SCK and WS is the controller.
+
+                   3.1 Serial data
+                          Serial data is transmitted in two’s complement with the MSB first. The MSB is transmitted
+                          first because the transmitter and receiver may have different word lengths. It isn’t
+                          necessary for the transmitter to know how many bits the receiver can handle, nor does
+                          the receiver need to know how many bits are being transmitted.
+                          When the system word length is greater than the transmitter word length, the word is
+                          truncated (least significant data bits are set to ‘0’) for data transmission. If the receiver
+                          is sent more bits than its word length, the bits after the LSB are ignored. On the other
+                          hand, if the receiver is sent fewer bits than its word length, the missing bits are set to
+                          zero internally. And so, the MSB has a fixed position, whereas the position of the LSB
+                          depends on the word length. The transmitter always sends the MSB of the next word one
+                          clock period after the WS changes.
+                          Serial data sent by the transmitter may be synchronized with either the trailing (HIGH-to-
+                          LOW) or the leading (LOW-to-HIGH) edge of the clock signal. However, the serial data
+                          must be latched into the receiver on the leading edge of the serial clock signal, and so
+
+UM11732                                         All information provided in this document is subject to legal disclaimers.                     © NXP B.V. 2022. All rights reserved.
+
+User manual                                                Rev. 3.0 — 17 February 2022
+                                                                                                                                                                           4 / 14
+NXP Semiconductors
+                                                                                                                                           UM11732
+                                                                                                                                       2
+                                                                                                                                       I S bus specification
+
+
+                             there are some restrictions when transmitting data that is synchronized with the leading
+                             edge (see Figure 2 and Table 1).
+
+                   3.2 Word select
+                             The word select line indicates the channel being transmitted:
+                             • WS = 0; channel 1 (left);
+                             • WS = 1; channel 2 (right).
+                             WS may change either on a trailing or leading edge of the serial clock, but it doesn’t need
+                             to be symmetrical. In the target, this signal is latched on the leading edge of the clock
+                             signal. The WS line changes one clock period before the MSB is transmitted. This allows
+                             the target transmitter to derive synchronous timing of the serial data that will be set up for
+                             transmission. Furthermore, it enables the receiver to store the previous word and clear
+                             the input for the next word (see Figure 1).
+
+4         Timing
+                                    2
+                             In the I S format, any device can act as the system controller by providing the necessary
+                             clock signals. A target will usually derive its internal clock signal from an external clock
+                             input. This means, taking into account the propagation delays between controller clock
+                             and the data and/or word-select signals, that the total delay is simply the sum of:
+                             • the delay between the external (controller) clock and the target’s internal clock; and
+                             • the delay between the internal clock and the data and/or word-select signals.
+                             For data and word-select inputs, the external to internal clock delay is of no consequence
+                             because it only lengthens the effective set-up time (see Figure 2). The major part of the
+                             time margin is to accommodate the difference between the propagation delay of the
+                             transmitter, and the time required to set up the receiver.
+                             All timing requirements are specified relative to the clock period or to the minimum
+                             allowed clock period of a device. This means that higher data rates can be used in the
+                             future.
+
+                                                                 T
+                                            tRC*                         tLC ≥ 0.35T                     tHC ≥ 0.35T
+                                                                                                                          VH = 2.0 V
+                         SCK
+                                                                                                                          VL = 0.8 V
+                                             thtr ≥ 0
+                                            tdtr ≤ 0.8Τ
+                          SD
+                          and
+                          WS
+                                                                                                                          aaa-045277
+
+ T = clock period
+ Ttr = minimum allowed clock period for transmitter
+ T > Ttr
+ * tRC is only relevant for transmitters in target mode.
+                         2
+ Figure 2. Timing for I S transmitter
+
+
+
+
+UM11732                                      All information provided in this document is subject to legal disclaimers.                    © NXP B.V. 2022. All rights reserved.
+
+User manual                                             Rev. 3.0 — 17 February 2022
+                                                                                                                                                                       5 / 14
+NXP Semiconductors
+                                                                                                                                        UM11732
+                                                                                                                                    2
+                                                                                                                                    I S bus specification
+
+
+                                                              T
+                                                                      tLC ≥ 0.35T                      tHC ≥ 0.35
+                                                                                                                       VH = 2.0 V
+                       SCK
+                                                                                                                       VL = 0.8 V
+                                                                        tsr ≥ 0.2Τ                        thr ≥ 0
+                        SD
+                        and
+                        WS
+
+                                                                                                                       aaa-045278
+
+ T = clock period
+ Tr = minimum allowed clock period for transmitter
+ T > Tr
+                       2
+ Figure 3. Timing for I S receiver
+
+                           Note that the times given in both Figure 2 and Figure 3 are defined by the transmitter
+                           speed. The specification of the receiver has to be able to match the performance of the
+                           transmitter
+
+Table 1. Controller transmitter with data rate of 2.5 MHz (±10 %) (all values in ns)
+                               MIN        TYP                  MAX                   CONDITION
+clock period T                 360        400                  440                   Ttr = 360
+clock HIGH tHC                 160                                                   min > 0.35T = 140 (at typical data rate)
+clock LOW tLC                  160                                                   min > 0.35T = 140 (at typical data rate)
+delay tdtr                                                     300                   max < 0.80T = 320 (at typical data rate)
+hold time thtr                 100                                                   min > 0
+clock rise-time tRC                                            60                    max > 0.15Ttr = 54 (only relevant in target mode)
+
+
+
+Table 2. Target receiver with data rate of 2.5 MHz (±10 %) (all values in ns)
+                               MIN        TYP                  MAX                   CONDITION
+clock period T                 360        400                  440                   Ttr = 360
+clock HIGH tHC                 110                                                   min < 0.35T = 126
+clock LOW tLC                  110                                                   min < 0.35T = 126
+set-up time tsr                60                                                    min < 0.20T = 72
+hold time thtr                 0                                                     min < 0
+
+
+
+
+UM11732                                   All information provided in this document is subject to legal disclaimers.                    © NXP B.V. 2022. All rights reserved.
+
+User manual                                          Rev. 3.0 — 17 February 2022
+                                                                                                                                                                    6 / 14
+NXP Semiconductors
+                                                                                                                                                         UM11732
+                                                                                                                                                     2
+                                                                                                                                                     I S bus specification
+
+                            2
+Table 3. Timing for I S transmitters and receivers
+All timing values are specified with respect to high and low threshold levels.
+                                           TRANSMITTER                                                          RECEIVER                                                  NOTES
+                                           LOWER LIMIT                     UPPER LIMIT                          LOWER LIMIT                    UPPER LIMIT
+                                           MIN          MAX                MIN                MAX               MIN                  MAX       MIN       MAX
+                     T                                                                                                                                                    [1]
+Clock period                               Ttr                                                                  Tr
+                     HIGH tHC                                                                                                                                             [2]
+Controller                                 0.35Ttr                                                              0.35Ttr
+mode: clock          LOW tLC                                                                                                                                              [2]
+                                           0.35Ttr                                                              0.35Ttr
+generated by
+transmitter or
+receiver
+                                                        0.35Ttr                                                                      0.35Ttr                              [3]
+Target               HIGH tHC
+mode: clock                                             0.35Ttr                                                                      0.35Ttr                              [3]
+                     LOW tLC
+accepted by
+                                                                                                                                                                          [4]
+transmitter or       rise-time tRC                                         0.15Ttr
+receiver
+                                                                                                                                                                          [5]
+Transmitter          delay tdtr                                                               0.8T
+                                                                                                                                                                          [4]
+                     hold time thtr  0
+                     set-up time tsr                                                                                                                                      [6]
+Receiver                                                                                                                             0.2Tr
+                     hold time thr                                                                                                   0                                    [6]
+
+
+[1]   The system clock period T must be greater than Ttr and Tr because both the transmitter and receiver have to be able to handle the data transfer rate.
+[2]   At all data rates in the controller mode, the transmitter or receiver generates a clock signal with a fixed mark/space ratio. For this reason tHC and tLC are
+      specified with respect to T.
+[3]   In the target mode, the transmitter and receiver need a clock signal with minimum HIGH and LOW periods so that they can detect the signal. So long as
+      the minimum periods are greater than 0.35Tr, any clock that meets the requirements can be used (see Figure 3
+[4]   Because the delay (tdtr) and the maximum transmitter speed (defined by Ttr) are related, a fast transmitter driven by a slow clock edge can result in tdtr not
+      exceeding tRC which means thtr becomes zero or negative. Therefore, the transmitter has to guarantee that thtr is greater than or equal to zero, so long as
+      the clock rise-time tRC is not more than tRCmax, where tRCmax is not less than 0.15Ttr.
+[5]   To allow data to be clocked out on a falling edge, the delay is specified with respect to the rising edge of the clock signal and T, always giving the receiver
+      sufficient set-up time.
+[6]   The data set-up and hold time must not be less than the specified receiver set-up and hold time.
+
+
+
+
+                                                                                                                tRC
+                                                     ACTIVE RISING                                                        VH
+                                                      CLOCK EDGE                                                          VL
+                                                                                                                 thtr
+                                                                                            tdtr
+                                                                                                                          VH
+                                                                   DATA
+                                                                                                                          VL
+                                                                                                                        aaa-045279
+
+ Figure 4. Clock rise-time definition with respect to the voltage levels
+
+
+
+
+UM11732                                                 All information provided in this document is subject to legal disclaimers.                       © NXP B.V. 2022. All rights reserved.
+
+User manual                                                        Rev. 3.0 — 17 February 2022
+                                                                                                                                                                                     7 / 14
+NXP Semiconductors
+                                                                                                                      UM11732
+                                                                                                                  2
+                                                                                                                  I S bus specification
+
+
+5         Voltage level specification
+
+                 5.1 Output levels
+                     VL < 0.4 V
+                     VH > 2.4 V both levels able to drive one standard TTL input (IIL = –1.6 mA and IIH =
+                     0.04 mA).
+
+                 5.2 Input levels
+                     VIL = 0.8 V
+                     VIH = 2.0 V
+                     Note: At present, TTL is considered a standard for logic levels. As other IC (LSI)
+                     technologies become popular, other levels will also be supported.
+
+6         Possible hardware configurations
+
+                 6.1 Transmitter
+                     At each WS-level change, a pulse WSP is derived for synchronously parallel-loading the
+                     shift register. The output of one of the data latches is then enabled depending on the WS
+                     signal. Since the serial data input is zero, all the bits after the LSB will also be zero (see
+                     Figure 5).
+
+
+
+
+UM11732                              All information provided in this document is subject to legal disclaimers.       © NXP B.V. 2022. All rights reserved.
+
+User manual                                     Rev. 3.0 — 17 February 2022
+                                                                                                                                                  8 / 14
+NXP Semiconductors
+                                                                                                                                                 UM11732
+                                                                                                                                             2
+                                                                                                                                            I S bus specification
+
+
+
+                                           OE          DATA LEFT                                                         OE   DATA RIGHT
+                WSD                                                                                    WSD
+
+
+
+
+                                                           LSB                                                                      MSB
+                                                             D
+
+
+                                                                                        SHIFT REGISTER                                           SD
+
+
+                                                             CLK                                                              PL
+                                            SCK
+                                                                                                                                   SYNCHRONOUS
+                                                                 WSD                                                               PARALLEL
+                                                                                                                                   LOADING
+                                                                                                                     WSP
+                 WS         D     Q                                 D       Q
+                            CLK                                       CLK
+                                  Q
+                SCK
+
+
+                                  SCK
+
+
+                                  WS
+
+
+                                      SD                         MSB                                       LSB      MSB
+
+
+                                  WSP
+                                                                                                                                           aaa-044881
+
+ Figure 5. Possible transmitter configuration
+
+
+                 6.2 Receiver
+                       Following the first WS-level change, WSP will reset the counter on the falling edge of
+                       SCK. After decoding the counter value in a “1 out of n” decoder, the MSB latch (B1) is
+                       enabled (EN1 = 1), and the first serial data bit (the MSB) is latched into B1 on the rising
+                       edge of SCK. As the counter increases by one every clock pulse, subsequent data bits
+                       are latched into B2 to Bn.
+                       On the next WS-level change, the contents of the n latches are written in parallel,
+                       depending on WSD, into either the left or the right data-word latch. After this, latches B2
+                       to Bn are cleared and the counter reset. If there are more than n serial data bits to be
+                       latched, the counter is inhibited after Bn (the receiver’s LSB) is filled and subsequent bits
+                       are ignored (see Figure 6).
+                       Note: The counter and decoder can be replaced by an n-bit shift-register (see
+                       Figure 7) in which a single ‘1’ is loaded into the MSB position when WSP occurs. On
+                       every subsequent clock pulse, this ‘1’ shifts one place, enabling the N latches. This
+                       configuration may prove useful if the layout has to be taken into account.
+
+
+
+
+UM11732                                         All information provided in this document is subject to legal disclaimers.                       © NXP B.V. 2022. All rights reserved.
+
+User manual                                                Rev. 3.0 — 17 February 2022
+                                                                                                                                                                             9 / 14
+NXP Semiconductors
+                                                                                                                                                       UM11732
+                                                                                                                                                  2
+                                                                                                                                                  I S bus specification
+
+
+     WSD                         EN                                                                                                   EN                                     WSD
+     WSP                  SCK              DATA LEFT                                                                DATA RIGHT
+                                 CLK                                                                                                 CLK
+
+                                                                                                                                            SCK
+
+
+
+
+   SD
+
+                     MSB                                                                                                                              LSB
+                                          R                        R                                                                  R                   R
+                    D    Q             D    Q                   D    Q                                                             D    Q              D    Q
+              EN1   EN          EN2    EN          EN3          EN                                                                 EN       ENn        EN
+                    CLK                CLK                      CLK                                                                CLK                 CLK
+                      B1                 B2                       B3                                                                                     Bn
+
+  SCK
+                                                                                                                                                                  WSP
+
+
+
+
+                                       WSD
+                                                                                                                              R                                          EN1
+                                                                              WSP                                                                                        EN2
+   WS               D     Q            D     Q
+                    CLK                CLK                                                                           COUNTER
+
+
+                                                                                                                     CLK
+                                                                                                                              EN                                         ENn
+
+
+                                                                                                                                                                       aaa-045289
+
+ Figure 6. Possible receiver configuration. The latches and the counter use synchronous set, reset and enable
+ inputs, where set overrules the reset input, and reset overrules the enable input.
+
+
+
+
+UM11732                                          All information provided in this document is subject to legal disclaimers.                             © NXP B.V. 2022. All rights reserved.
+
+User manual                                                 Rev. 3.0 — 17 February 2022
+                                                                                                                                                                                  10 / 14
+NXP Semiconductors
+                                                                                                                                                      UM11732
+                                                                                                                                                  2
+                                                                                                                                                  I S bus specification
+
+
+          WSD                    EN                                                                                                   EN                                      WSD
+          WSP              SCK             DATA LEFT                                                                   DATA RIGHT
+                                 CLK                                                                                                CLK
+
+                                                                                                                                            SCK
+
+
+
+
+    SD
+
+                      MSB                                                                                                                             LSB
+                                          R                            R                                                           R                      R
+                     D    Q            D    Q                       D    Q                                                      D    Q                 D    Q
+                     EN                EN                           EN                                                          EN                     EN
+                     CLK               CLK                          CLK                                                         CLK                    CLK
+                       B1                B2                           B3                                                                                 Bn
+
+   SCK
+                                                                                                                                                                 WSP
+
+
+                         S                 R                             R                                                          R
+                     D       Q         D       Q                    D        Q                                                  D       Q
+
+                     CLK               CLK                          CLK                                                         CLK
+
+
+
+
+                                       WSD
+                                                                                 WSP
+    WS               D       Q         D       Q
+                     CLK               CLK
+
+
+                                                                                                                                                                      aaa-045290
+
+ Figure 7. Possible receiver configuration, using an n-bit shift-register to enable control of data input register.
+
+
+
+
+UM11732                                            All information provided in this document is subject to legal disclaimers.                          © NXP B.V. 2022. All rights reserved.
+
+User manual                                                   Rev. 3.0 — 17 February 2022
+                                                                                                                                                                                 11 / 14
+NXP Semiconductors
+                                                                                                                                                    UM11732
+                                                                                                                                                2
+                                                                                                                                                I S bus specification
+
+
+7         Legal information
+7.1 Definitions                                                                                   Terms and conditions of commercial sale — NXP Semiconductors
+                                                                                                  products are sold subject to the general terms and conditions of commercial
+                                                                                                  sale, as published at http://www.nxp.com/profile/terms, unless otherwise
+Draft — A draft status on a document indicates that the content is still                          agreed in a valid written individual agreement. In case an individual
+under internal review and subject to formal approval, which may result                            agreement is concluded only the terms and conditions of the respective
+in modifications or additions. NXP Semiconductors does not give any                               agreement shall apply. NXP Semiconductors hereby expressly objects to
+representations or warranties as to the accuracy or completeness of                               applying the customer’s general terms and conditions with regard to the
+information included in a draft version of a document and shall have no                           purchase of NXP Semiconductors products by customer.
+liability for the consequences of use of such information.
+                                                                                                  Export control — This document as well as the item(s) described herein
+                                                                                                  may be subject to export control regulations. Export might require a prior
+7.2 Disclaimers                                                                                   authorization from competent authorities.
+
+Limited warranty and liability — Information in this document is believed                         Suitability for use in non-automotive qualified products — Unless
+to be accurate and reliable. However, NXP Semiconductors does not give                            this data sheet expressly states that this specific NXP Semiconductors
+any representations or warranties, expressed or implied, as to the accuracy                       product is automotive qualified, the product is not suitable for automotive
+or completeness of such information and shall have no liability for the                           use. It is neither qualified nor tested in accordance with automotive testing
+consequences of use of such information. NXP Semiconductors takes no                              or application requirements. NXP Semiconductors accepts no liability for
+responsibility for the content in this document if provided by an information                     inclusion and/or use of non-automotive qualified products in automotive
+source outside of NXP Semiconductors.                                                             equipment or applications.
+In no event shall NXP Semiconductors be liable for any indirect, incidental,                      In the event that customer uses the product for design-in and use in
+punitive, special or consequential damages (including - without limitation -                      automotive applications to automotive specifications and standards,
+lost profits, lost savings, business interruption, costs related to the removal                   customer (a) shall use the product without NXP Semiconductors’ warranty
+or replacement of any products or rework charges) whether or not such                             of the product for such automotive applications, use and specifications, and
+damages are based on tort (including negligence), warranty, breach of                             (b) whenever customer uses the product for automotive applications beyond
+contract or any other legal theory.                                                               NXP Semiconductors’ specifications such use shall be solely at customer’s
+                                                                                                  own risk, and (c) customer fully indemnifies NXP Semiconductors for any
+Notwithstanding any damages that customer might incur for any reason
+                                                                                                  liability, damages or failed product claims resulting from customer design and
+whatsoever, NXP Semiconductors’ aggregate and cumulative liability
+                                                                                                  use of the product for automotive applications beyond NXP Semiconductors’
+towards customer for the products described herein shall be limited in
+                                                                                                  standard warranty and NXP Semiconductors’ product specifications.
+accordance with the Terms and conditions of commercial sale of NXP
+Semiconductors.
+                                                                                                  Translations — A non-English (translated) version of a document, including
+                                                                                                  the legal information in that document, is for reference only. The English
+Right to make changes — NXP Semiconductors reserves the right to
+                                                                                                  version shall prevail in case of any discrepancy between the translated and
+make changes to information published in this document, including without
+                                                                                                  English versions.
+limitation specifications and product descriptions, at any time and without
+notice. This document supersedes and replaces all information supplied prior
+                                                                                                  Security — Customer understands that all NXP products may be subject to
+to the publication hereof.
+                                                                                                  unidentified vulnerabilities or may support established security standards or
+                                                                                                  specifications with known limitations. Customer is responsible for the design
+Suitability for use — NXP Semiconductors products are not designed,
+                                                                                                  and operation of its applications and products throughout their lifecycles
+authorized or warranted to be suitable for use in life support, life-critical or
+                                                                                                  to reduce the effect of these vulnerabilities on customer’s applications
+safety-critical systems or equipment, nor in applications where failure or
+                                                                                                  and products. Customer’s responsibility also extends to other open and/or
+malfunction of an NXP Semiconductors product can reasonably be expected
+                                                                                                  proprietary technologies supported by NXP products for use in customer’s
+to result in personal injury, death or severe property or environmental
+                                                                                                  applications. NXP accepts no liability for any vulnerability. Customer should
+damage. NXP Semiconductors and its suppliers accept no liability for
+                                                                                                  regularly check security updates from NXP and follow up appropriately.
+inclusion and/or use of NXP Semiconductors products in such equipment or
+applications and therefore such inclusion and/or use is at the customer’s own                     Customer shall select products with security features that best meet rules,
+risk.                                                                                             regulations, and standards of the intended application and make the
+                                                                                                  ultimate design decisions regarding its products and is solely responsible
+                                                                                                  for compliance with all legal, regulatory, and security related requirements
+Applications — Applications that are described herein for any of these
+                                                                                                  concerning its products, regardless of any information or support that may be
+products are for illustrative purposes only. NXP Semiconductors makes no
+                                                                                                  provided by NXP.
+representation or warranty that such applications will be suitable for the
+specified use without further testing or modification.                                            NXP has a Product Security Incident Response Team (PSIRT) (reachable
+                                                                                                  at PSIRT@nxp.com) that manages the investigation, reporting, and solution
+Customers are responsible for the design and operation of their
+                                                                                                  release to security vulnerabilities of NXP products.
+applications and products using NXP Semiconductors products, and NXP
+Semiconductors accepts no liability for any assistance with applications or
+customer product design. It is customer’s sole responsibility to determine
+whether the NXP Semiconductors product is suitable and fit for the
+customer’s applications and products planned, as well as for the planned
+                                                                                                  7.3 Trademarks
+application and use of customer’s third party customer(s). Customers should
+                                                                                                  Notice: All referenced brands, product names, service names, and
+provide appropriate design and operating safeguards to minimize the risks
+                                                                                                  trademarks are the property of their respective owners.
+associated with their applications and products.
+NXP Semiconductors does not accept any liability related to any default,                          NXP — wordmark and logo are trademarks of NXP B.V.
+damage, costs or problem which is based on any weakness or default
+in the customer’s applications or products, or the application or use by
+customer’s third party customer(s). Customer is responsible for doing all
+necessary testing for the customer’s applications and products using NXP
+Semiconductors products in order to avoid a default of the applications
+and the products or of the application or use by customer’s third party
+customer(s). NXP does not accept any liability in this respect.
+
+
+
+
+UM11732                                                  All information provided in this document is subject to legal disclaimers.                  © NXP B.V. 2022. All rights reserved.
+
+User manual                                                         Rev. 3.0 — 17 February 2022
+                                                                                                                                                                               12 / 14
+NXP Semiconductors
+                                                                                                                                                          UM11732
+                                                                                                                                                      2
+                                                                                                                                                     I S bus specification
+
+
+
+Tables
+Tab. 1.   Controller transmitter with data rate of                                             Tab. 2.             Target receiver with data rate of 2.5 MHz
+          2.5 MHz (±10 %) (all values in ns) .................... 6                                                (±10 %) (all values in ns) .................................. 6
+                                                                                               Tab. 3.             Timing for I2S transmitters and receivers .......... 7
+
+
+Figures
+Fig. 1.   Simple system configurations and basic                                               Fig. 6.             Possible receiver configuration. The
+          interface timing ..................................................4                                     latches and the counter use synchronous
+Fig. 2.   Timing for I2S transmitter ..................................5                                           set, reset and enable inputs, where
+Fig. 3.   Timing for I2S receiver ......................................6                                          set overrules the reset input, and reset
+Fig. 4.   Clock rise-time definition with respect to the                                                           overrules the enable input. ..............................10
+          voltage levels .................................................... 7                Fig. 7.             Possible receiver configuration, using an n-
+Fig. 5.   Possible transmitter configuration ..................... 9                                               bit shift-register to enable control of data
+                                                                                                                   input register. ...................................................11
+
+
+
+
+UM11732                                               All information provided in this document is subject to legal disclaimers.                          © NXP B.V. 2022. All rights reserved.
+
+User manual                                                      Rev. 3.0 — 17 February 2022
+                                                                                                                                                                                    13 / 14
+NXP Semiconductors
+                                                                                                                                               UM11732
+                                                                                                                                           2
+                                                                                                                                          I S bus specification
+
+
+
+Contents
+1     Introduction ......................................................... 3
+2     Basic serial bus requirements ...........................3
+3     The I2S bus ......................................................... 4
+3.1     Serial data ......................................................... 4
+3.2     Word select ........................................................5
+4     Timing ...................................................................5
+5     Voltage level specification ................................. 8
+5.1     Output levels ......................................................8
+5.2     Input levels ........................................................ 8
+6     Possible hardware configurations .....................8
+6.1     Transmitter ......................................................... 8
+6.2     Receiver .............................................................9
+7     Legal information .............................................. 12
+
+
+
+
+                                                                                    Please be aware that important notices concerning this document and the product(s)
+                                                                                    described herein, have been included in section 'Legal information'.
+
+
+                                                                                    © NXP B.V. 2022.                                                 All rights reserved.
+                                                                                    For more information, please visit: http://www.nxp.com
+                                                                                    For sales office addresses, please send an email to: salesaddresses@nxp.com
+                                                                                                                                           Date of release: 17 February 2022
+                                                                                                                                              Document identifier: UM11732
+

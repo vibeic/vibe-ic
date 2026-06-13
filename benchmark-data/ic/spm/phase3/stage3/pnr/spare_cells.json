@@ -1,0 +1,92 @@
+{
+  "count": 7,
+  "density": 0.02,
+  "types": {
+    "inverter": 2,
+    "nand2": 1,
+    "nor2": 1,
+    "mux2": 1,
+    "aoi": 1,
+    "dff": 1
+  },
+  "tied_off": true,
+  "instances": [
+    {
+      "name": "spare_inverter_0",
+      "type": "inverter",
+      "cell": "sky130_fd_sc_hd__inv_1",
+      "llx": 9,
+      "lly": 9,
+      "keep": true
+    },
+    {
+      "name": "spare_inverter_1",
+      "type": "inverter",
+      "cell": "sky130_fd_sc_hd__inv_1",
+      "llx": 35,
+      "lly": 9,
+      "keep": true
+    },
+    {
+      "name": "spare_nand2_0",
+      "type": "nand2",
+      "cell": "sky130_fd_sc_hd__nand2_1",
+      "llx": 61,
+      "lly": 9,
+      "keep": true
+    },
+    {
+      "name": "spare_nor2_0",
+      "type": "nor2",
+      "cell": "sky130_fd_sc_hd__nor2_1",
+      "llx": 9,
+      "lly": 35,
+      "keep": true
+    },
+    {
+      "name": "spare_mux2_0",
+      "type": "mux2",
+      "cell": "sky130_fd_sc_hd__mux2_1",
+      "llx": 35,
+      "lly": 35,
+      "keep": true
+    },
+    {
+      "name": "spare_aoi_0",
+      "type": "aoi",
+      "cell": "sky130_fd_sc_hd__a21oi_1",
+      "llx": 61,
+      "lly": 35,
+      "keep": true
+    },
+    {
+      "name": "spare_dff_0",
+      "type": "dff",
+      "cell": "sky130_fd_sc_hd__dfrtp_1",
+      "llx": 9,
+      "lly": 61,
+      "keep": true
+    }
+  ],
+  "spare_pads": [],
+  "cell_map": {
+    "inverter": "sky130_fd_sc_hd__inv_1",
+    "nand2": "sky130_fd_sc_hd__nand2_1",
+    "nor2": "sky130_fd_sc_hd__nor2_1",
+    "mux2": "sky130_fd_sc_hd__mux2_1",
+    "aoi": "sky130_fd_sc_hd__a21oi_1",
+    "oai": "sky130_fd_sc_hd__o21ai_0",
+    "dff": "sky130_fd_sc_hd__dfrtp_1"
+  },
+  "placed_cells_est": 302,
+  "target_density": 0.02,
+  "actual_density": 0.023179,
+  "protection": {
+    "yosys_keep": true,
+    "openroad_dont_touch": true,
+    "inserted_after_abc": true,
+    "metal_fill_eco_aware": true,
+    "allowlist_doc": "Spare cells are tagged `(* keep *)` / `setattr -set keep 1`; Yosys opt_clean and `clean -purge` skip keep-marked objects by construction, so the runner's own clean/opt passes never strip them. Spares are inserted as physical instances AFTER abc so no logical optimization pass can reach them in the first place."
+  },
+  "injection_note": "Spares injected into the verified (non-container-mounted) artefacts as physical FIXED + dont_touch instances mirroring place_inst -status FIXED; positions re-gridded for the 96.36um verified die."
+}

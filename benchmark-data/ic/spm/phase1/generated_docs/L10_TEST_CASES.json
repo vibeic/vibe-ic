@@ -1,0 +1,10 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_cases",
+  "ic_name": "spm",
+  "test_cases": [],
+  "no_test_cases_in_input": true,
+  "bring_up_sequence": [],
+  "no_bring_up_sequence_in_input": true,
+  "extraction_evidence": {}
+}

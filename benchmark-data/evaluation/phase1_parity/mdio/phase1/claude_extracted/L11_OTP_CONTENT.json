@@ -1,0 +1,5 @@
+{
+  "ic_name": "IEEE 802.3 Management Data Input/Output (MDIO)",
+  "otp_content": "N/A — MDIO is a bus protocol, no one-time-programmable fuse content defined.",
+  "applicable": false
+}

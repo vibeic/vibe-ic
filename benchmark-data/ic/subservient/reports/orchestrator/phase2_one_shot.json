@@ -1,0 +1,343 @@
+{
+  "project": "/home/reyerchu/vibe-ic/benchmark_clean/subservient",
+  "ic_class": "digital_arithmetic_primitive",
+  "ic_class_evidence": "has_otp",
+  "steps": [
+    {
+      "name": "rig_topology_skeleton",
+      "status": "PASS",
+      "duration_s": 0.00017309188842773438,
+      "detail": "emitted skeleton at rig_topology.json — fill __TODO__ fields before final tape-out audit",
+      "output_files": [
+        "/home/reyerchu/vibe-ic/benchmark_clean/subservient/rig_topology.json"
+      ],
+      "extras": {}
+    },
+    {
+      "name": "phase1_precheck",
+      "status": "PASS",
+      "duration_s": 0.0,
+      "detail": "14/13 L docs present",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "detect_ic_class",
+      "status": "PASS",
+      "duration_s": 0.0,
+      "detail": "digital_arithmetic_primitive",
+      "output_files": [],
+      "extras": {
+        "evidence": "has_otp"
+      }
+    },
+    {
+      "name": "rtl_gen",
+      "status": "WAIVED",
+      "duration_s": 0.13265085220336914,
+      "detail": "IC class 'digital_arithmetic_primitive' registered but rtl_gen=null. Recommended action: AI invokes skill `catalog-glue-author`.\nIP catalog matches found (use catalog-glue-author skill to pull + author wrapper):\n  - cpu/serv v1.4.0 (ISC) confidence=0.45; matched: L2.cpu_isa starts with 'rv32i' AND L2.cpu_arch contains 'bit-serial' or 'bit_serial'\n  - arithmetic/fpu_single v1.0.0 (Usselmann-Permissive) confidence=0.45; matched: L2.cpu_extensions contains 'F' AND L2.cpu_isa starts with 'rv32'",
+      "output_files": [],
+      "extras": {
+        "fallback_skill": "catalog-glue-author",
+        "class_config": {
+          "name": "digital_arithmetic_primitive",
+          "description": "v1.6.522 — for #358 P2. Pure digital data-transform IP (multiplier, adder, filter, hash core, encoder/decoder, arithmetic sub-block). No SW-visible protocol / register map / calibration. Single top module with clock + reset + data ports. L4/L5/L6 legitimately N/A — L2 describes a deterministic combinational/sequential data transform. Phase 2 runner dispatches via fallback_skill=spec-to-rtl since there is no deterministic RTL generator for this open family.",
+          "synonyms": [
+            "digital_datapath",
+            "arithmetic_primitive",
+            "pure_datapath"
+          ],
+          "rtl_gen": null,
+          "fallback_skill": "spec-to-rtl",
+          "verification_track": "generic_full_stack",
+          "command_protocol_applicable": false,
+          "analog_applicable": false,
+          "half_duplex_bus": false,
+          "owner_plugin": "vibe-ic"
+        },
+        "ip_catalog_matches": [
+          {
+            "ip_name": "serv",
+            "category": "cpu",
+            "version": "1.4.0",
+            "license": "ISC",
+            "confidence": 0.45,
+            "matched_pattern": "L2.cpu_isa starts with 'rv32i' AND L2.cpu_arch contains 'bit-serial' or 'bit_serial'",
+            "manifest_path": "/home/reyerchu/vibe-ic/vibe-ic-marketplace/plugins/vibe-ic/ip_catalog/cpu/serv/manifest.yaml"
+          },
+          {
+            "ip_name": "fpu_single",
+            "category": "arithmetic",
+            "version": "1.0.0",
+            "license": "Usselmann-Permissive",
+            "confidence": 0.45,
+            "matched_pattern": "L2.cpu_extensions contains 'F' AND L2.cpu_isa starts with 'rv32'",
+            "manifest_path": "/home/reyerchu/vibe-ic/vibe-ic-marketplace/plugins/vibe-ic/ip_catalog/arithmetic/fpu_single/manifest.yaml"
+          }
+        ]
+      }
+    },
+    {
+      "name": "full_stack_tb_gen",
+      "status": "SKIP",
+      "duration_s": 9.369850158691406e-05,
+      "detail": "L9 has no top_ports (top_module='subservient')",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "reference_tb",
+      "status": "FAIL",
+      "duration_s": 1.3589859008789062e-05,
+      "detail": "rtl/ missing",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "eco_loop_iter",
+      "status": "ECO_LOOP",
+      "duration_s": 0.0,
+      "detail": "ref_tb FAIL → ECO iteration 1/3",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "rtl_gen",
+      "status": "WAIVED",
+      "duration_s": 0.12143659591674805,
+      "detail": "IC class 'digital_arithmetic_primitive' registered but rtl_gen=null. Recommended action: AI invokes skill `catalog-glue-author`.\nIP catalog matches found (use catalog-glue-author skill to pull + author wrapper):\n  - cpu/serv v1.4.0 (ISC) confidence=0.45; matched: L2.cpu_isa starts with 'rv32i' AND L2.cpu_arch contains 'bit-serial' or 'bit_serial'\n  - arithmetic/fpu_single v1.0.0 (Usselmann-Permissive) confidence=0.45; matched: L2.cpu_extensions contains 'F' AND L2.cpu_isa starts with 'rv32'",
+      "output_files": [],
+      "extras": {
+        "fallback_skill": "catalog-glue-author",
+        "class_config": {
+          "name": "digital_arithmetic_primitive",
+          "description": "v1.6.522 — for #358 P2. Pure digital data-transform IP (multiplier, adder, filter, hash core, encoder/decoder, arithmetic sub-block). No SW-visible protocol / register map / calibration. Single top module with clock + reset + data ports. L4/L5/L6 legitimately N/A — L2 describes a deterministic combinational/sequential data transform. Phase 2 runner dispatches via fallback_skill=spec-to-rtl since there is no deterministic RTL generator for this open family.",
+          "synonyms": [
+            "digital_datapath",
+            "arithmetic_primitive",
+            "pure_datapath"
+          ],
+          "rtl_gen": null,
+          "fallback_skill": "spec-to-rtl",
+          "verification_track": "generic_full_stack",
+          "command_protocol_applicable": false,
+          "analog_applicable": false,
+          "half_duplex_bus": false,
+          "owner_plugin": "vibe-ic"
+        },
+        "ip_catalog_matches": [
+          {
+            "ip_name": "serv",
+            "category": "cpu",
+            "version": "1.4.0",
+            "license": "ISC",
+            "confidence": 0.45,
+            "matched_pattern": "L2.cpu_isa starts with 'rv32i' AND L2.cpu_arch contains 'bit-serial' or 'bit_serial'",
+            "manifest_path": "/home/reyerchu/vibe-ic/vibe-ic-marketplace/plugins/vibe-ic/ip_catalog/cpu/serv/manifest.yaml"
+          },
+          {
+            "ip_name": "fpu_single",
+            "category": "arithmetic",
+            "version": "1.0.0",
+            "license": "Usselmann-Permissive",
+            "confidence": 0.45,
+            "matched_pattern": "L2.cpu_extensions contains 'F' AND L2.cpu_isa starts with 'rv32'",
+            "manifest_path": "/home/reyerchu/vibe-ic/vibe-ic-marketplace/plugins/vibe-ic/ip_catalog/arithmetic/fpu_single/manifest.yaml"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reference_tb",
+      "status": "FAIL",
+      "duration_s": 1.3589859008789062e-05,
+      "detail": "rtl/ missing",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "eco_loop_iter",
+      "status": "ECO_LOOP",
+      "duration_s": 0.0,
+      "detail": "ref_tb FAIL → ECO iteration 2/3",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "rtl_gen",
+      "status": "WAIVED",
+      "duration_s": 0.12143731117248535,
+      "detail": "IC class 'digital_arithmetic_primitive' registered but rtl_gen=null. Recommended action: AI invokes skill `catalog-glue-author`.\nIP catalog matches found (use catalog-glue-author skill to pull + author wrapper):\n  - cpu/serv v1.4.0 (ISC) confidence=0.45; matched: L2.cpu_isa starts with 'rv32i' AND L2.cpu_arch contains 'bit-serial' or 'bit_serial'\n  - arithmetic/fpu_single v1.0.0 (Usselmann-Permissive) confidence=0.45; matched: L2.cpu_extensions contains 'F' AND L2.cpu_isa starts with 'rv32'",
+      "output_files": [],
+      "extras": {
+        "fallback_skill": "catalog-glue-author",
+        "class_config": {
+          "name": "digital_arithmetic_primitive",
+          "description": "v1.6.522 — for #358 P2. Pure digital data-transform IP (multiplier, adder, filter, hash core, encoder/decoder, arithmetic sub-block). No SW-visible protocol / register map / calibration. Single top module with clock + reset + data ports. L4/L5/L6 legitimately N/A — L2 describes a deterministic combinational/sequential data transform. Phase 2 runner dispatches via fallback_skill=spec-to-rtl since there is no deterministic RTL generator for this open family.",
+          "synonyms": [
+            "digital_datapath",
+            "arithmetic_primitive",
+            "pure_datapath"
+          ],
+          "rtl_gen": null,
+          "fallback_skill": "spec-to-rtl",
+          "verification_track": "generic_full_stack",
+          "command_protocol_applicable": false,
+          "analog_applicable": false,
+          "half_duplex_bus": false,
+          "owner_plugin": "vibe-ic"
+        },
+        "ip_catalog_matches": [
+          {
+            "ip_name": "serv",
+            "category": "cpu",
+            "version": "1.4.0",
+            "license": "ISC",
+            "confidence": 0.45,
+            "matched_pattern": "L2.cpu_isa starts with 'rv32i' AND L2.cpu_arch contains 'bit-serial' or 'bit_serial'",
+            "manifest_path": "/home/reyerchu/vibe-ic/vibe-ic-marketplace/plugins/vibe-ic/ip_catalog/cpu/serv/manifest.yaml"
+          },
+          {
+            "ip_name": "fpu_single",
+            "category": "arithmetic",
+            "version": "1.0.0",
+            "license": "Usselmann-Permissive",
+            "confidence": 0.45,
+            "matched_pattern": "L2.cpu_extensions contains 'F' AND L2.cpu_isa starts with 'rv32'",
+            "manifest_path": "/home/reyerchu/vibe-ic/vibe-ic-marketplace/plugins/vibe-ic/ip_catalog/arithmetic/fpu_single/manifest.yaml"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reference_tb",
+      "status": "FAIL",
+      "duration_s": 1.33514404296875e-05,
+      "detail": "rtl/ missing",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "eco_loop_iter",
+      "status": "ECO_LOOP",
+      "duration_s": 0.0,
+      "detail": "ref_tb FAIL → ECO iteration 3/3",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "rtl_gen",
+      "status": "WAIVED",
+      "duration_s": 0.12140154838562012,
+      "detail": "IC class 'digital_arithmetic_primitive' registered but rtl_gen=null. Recommended action: AI invokes skill `catalog-glue-author`.\nIP catalog matches found (use catalog-glue-author skill to pull + author wrapper):\n  - cpu/serv v1.4.0 (ISC) confidence=0.45; matched: L2.cpu_isa starts with 'rv32i' AND L2.cpu_arch contains 'bit-serial' or 'bit_serial'\n  - arithmetic/fpu_single v1.0.0 (Usselmann-Permissive) confidence=0.45; matched: L2.cpu_extensions contains 'F' AND L2.cpu_isa starts with 'rv32'",
+      "output_files": [],
+      "extras": {
+        "fallback_skill": "catalog-glue-author",
+        "class_config": {
+          "name": "digital_arithmetic_primitive",
+          "description": "v1.6.522 — for #358 P2. Pure digital data-transform IP (multiplier, adder, filter, hash core, encoder/decoder, arithmetic sub-block). No SW-visible protocol / register map / calibration. Single top module with clock + reset + data ports. L4/L5/L6 legitimately N/A — L2 describes a deterministic combinational/sequential data transform. Phase 2 runner dispatches via fallback_skill=spec-to-rtl since there is no deterministic RTL generator for this open family.",
+          "synonyms": [
+            "digital_datapath",
+            "arithmetic_primitive",
+            "pure_datapath"
+          ],
+          "rtl_gen": null,
+          "fallback_skill": "spec-to-rtl",
+          "verification_track": "generic_full_stack",
+          "command_protocol_applicable": false,
+          "analog_applicable": false,
+          "half_duplex_bus": false,
+          "owner_plugin": "vibe-ic"
+        },
+        "ip_catalog_matches": [
+          {
+            "ip_name": "serv",
+            "category": "cpu",
+            "version": "1.4.0",
+            "license": "ISC",
+            "confidence": 0.45,
+            "matched_pattern": "L2.cpu_isa starts with 'rv32i' AND L2.cpu_arch contains 'bit-serial' or 'bit_serial'",
+            "manifest_path": "/home/reyerchu/vibe-ic/vibe-ic-marketplace/plugins/vibe-ic/ip_catalog/cpu/serv/manifest.yaml"
+          },
+          {
+            "ip_name": "fpu_single",
+            "category": "arithmetic",
+            "version": "1.0.0",
+            "license": "Usselmann-Permissive",
+            "confidence": 0.45,
+            "matched_pattern": "L2.cpu_extensions contains 'F' AND L2.cpu_isa starts with 'rv32'",
+            "manifest_path": "/home/reyerchu/vibe-ic/vibe-ic-marketplace/plugins/vibe-ic/ip_catalog/arithmetic/fpu_single/manifest.yaml"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reference_tb",
+      "status": "FAIL",
+      "duration_s": 1.2636184692382812e-05,
+      "detail": "rtl/ missing",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "yosys_synth",
+      "status": "FAIL",
+      "duration_s": 1.0728836059570312e-05,
+      "detail": "rtl/ missing",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "qsf_gen",
+      "status": "SKIP",
+      "duration_s": 0.0001506805419921875,
+      "detail": "DE10 QSF generation SKIPPED: class 'digital_arithmetic_primitive' verification_track='generic_full_stack' half_duplex_bus=False — the AID half-duplex single-wire reference TB (3-port clk/reset_n/id_bus) cannot bind this interface family. A memory-bus/data core has no DE10 board-pin contract (its top ports are a data/instruction bus, not board switches/LEDs). Supply a *de10*.{v,sv} board-harness top to enable board verification; otherwise gate-level synth + Phase 3 is the verification path.",
+      "output_files": [],
+      "extras": {
+        "verification_track": "generic_full_stack",
+        "board_pin_skipped_reason": "class 'digital_arithmetic_primitive' verification_track='generic_full_stack' half_duplex_bus=False — the AID half-duplex single-wire reference TB (3-port clk/reset_n/id_bus) cannot bind this interface family"
+      }
+    },
+    {
+      "name": "sdc_gen",
+      "status": "PASS",
+      "duration_s": 0.027886629104614258,
+      "detail": "emitted subservient.sdc (PASS sdc_gen: /home/reyerchu/vibe-ic/benchmark_clean/subservient/phase2/stage1/fpga/subservient.sdc (clock=clk@100.0MHz period=10.00ns; 0 in / 0 out / 0 false_path))",
+      "output_files": [
+        "/home/reyerchu/vibe-ic/benchmark_clean/subservient/phase2/stage1/fpga/subservient.sdc"
+      ],
+      "extras": {}
+    },
+    {
+      "name": "phase2_manifests",
+      "status": "PASS",
+      "duration_s": 0.0012259483337402344,
+      "detail": "11 manifest(s) written",
+      "output_files": [
+        "reports/phase2/lint/rtl_hygiene.json",
+        "reports/phase2/lint/rom_init_lint.json",
+        "reports/phase2/cdc/crossing.json",
+        "reports/phase2/cdc/async_input.json",
+        "reports/phase2/cdc/reset_dep.json",
+        "sim/pass.flag",
+        "sim/results.xml",
+        "reports/phase2/coverage/coverage_actual.json",
+        "formal/constraints.sby",
+        "reports/phase2/fpga/quartus_map_audit.json",
+        "reports/phase2/fpga/on_board_pass.json"
+      ],
+      "extras": {}
+    },
+    {
+      "name": "final_audit",
+      "status": "PASS",
+      "duration_s": 0.46301817893981934,
+      "detail": "  - [SKIPPED-CONDITION] Step A7: 🔁 Post-Layout Resimulation  (stage_analog)\n       └─ condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}\n  - [SKIPPED-CONDITION] Step A8: Hardmacro Generation (LEF + Liberty + GDS + Verilog)  (stage_analog)\n       └─ condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}\n  - [SKIPPED-CONDITION] Step A9: 🔁 Co-Simulation / HW Verification  (stage_analog)\n       └─ condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}\n  - [SKIPPED-CONDITION] Step A6: Analog Physical Verification (per-block DRC + LVS before merge)  (stage_analog)\n       └─ condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}\n  - [SKIPPED-CONDITION] Step M1: Mixed-Signal Top-Level Integration (A+D GDS merge + macro placement)  (stage_mixed_signal)\n       └─ condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}\n  - [SKIPPED-CONDITION] Step M2: Mixed-Signal Power Domain + Level Shifter / Isolation Verification  (stage_mixed_signal)\n       └─ condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}\n  - [SKIPPED-CONDITION] Step M3: Mixed-Signal Verification (AMS co-sim + RNM + interface signal integrity)  (stage_mixed_signal)\n       └─ condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}\n  - [SKIPPED-CONDITION] Step M4: Mixed-Signal Sign-Off (top-level PV + final verdict)  (stage_mixed_signal)\n       └─ condition not met: {'files_exist': ['phase1/analog/analog_block_list.json']}\n\nOverall: PASS  (strict=True)\n\nStep-level gates (informational, not gating --strict-structural): 4 step(s) FAIL/MISSING\n  • step1 (Spec-to-RTL): FAIL — missing files (any_of=True): ['phase2/stage1/rtl/*.sv', 'phase2/stage1/rtl/*.v']\n  • step2 (🔁 Lint (RTL + Quartus-unsafe patterns + RTL-bug claim schema)): FAIL — optional program failed: internal_vs_external_timing_check phase1/generated_docs/L8_TIMING_WAVEFORM.json --layer phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/int_vs_ext_timing.json\n  • step5 (🔁 Formal verification (assertions proved + bit-level full-stack phase2/stage1/tb)): FAIL — program failed: bit_level_full_stack_tb_check . --json reports/phase2/gates/bit_level_full_stack.json\n  • step6 (FPGA early prototype + verification report audit): FAIL — missing files (any_of=False): ['phase2/stage1/fpga/output_files/*.sof']\n  (Use --strict-step-artifacts to gate on these too.)",
+      "output_files": [
+        "/home/reyerchu/vibe-ic/benchmark_clean/subservient/reports/audit/flow_compliance_check.log"
+      ],
+      "extras": {}
+    }
+  ],
+  "verdict": "FAIL"
+}

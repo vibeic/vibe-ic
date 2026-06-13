@@ -1,0 +1,287 @@
+---
+name: benchmark-enhancement-capture
+description: "MANDATORY after ANY close-loop or real-case run where AI judgment recovered a previously-failing case — not just RTL authoring. Applies to EVERY step in the Vibe-IC flow: Phase 1 NL ingestion, Phase 2 spec-to-RTL / chip_top / synth / TB / eco_loop / lint / conformance / audit, Phase 3 synth / PnR / CTS / DRC / LVS / STA / IR-drop, Analog A1-A9, Mixed-Signal M1-M4, MCP-EDA tools, and benchmark harness itself. The skill turns each AI-judgment recovery into structured candidates for permanent absorption: (a) deterministic program rules patching the RIGHT program file per step, (b) skill section appended to the RIGHT skill file per step (ic-expert-agent for design judgment / sta-review for timing / drc-fix for DRC / analog-topology-select for analog topology / etc., per CAPTURE_ROUTING.json), (c) community-backlog entries for larger engineering work, or (d) honest discard. Without this loop, every recovery — RTL authoring, PnR closure, DRC waiver classification, analog topology authoring, MCP tool behavior — stays per-session and the plugin never compounds. Triggers on: 'capture enhancements', 'absorb recoveries', 'enhance plugin from this run', '把這次救回的東西寫回 plugin', 'closed-loop enhance', after every /vibe-ic-benchmark close-loop, after every real-case close-loop in benchmark_clean / /vibe-ic-all, after a phase3 timing close-loop, after an analog A2/A4/A6 close-loop, after an MCP tool gap surfaces."
+---
+
+# benchmark-enhancement-capture — the plugin's complement-and-codify loop
+
+This skill is what makes Vibe-IC's plugin **compound** over time. Without it,
+every AI-judgment recovery — at ANY step in the flow — is a one-off that
+evaporates with the session. With it, every recovery has a path to permanently
+improve the plugin so the same fix is automatic next time.
+
+## The fix-all-into-the-plugin principle
+
+> When you report a backlog / find an issue, the expectation is **NOT** to triage it into a
+> category and then decide whether it is "worth" fixing. **Every issue gets fixed, and the fix
+> lands in the next version of the vibe-ic plugin** — it does not matter whether the fix lives in
+> a deterministic program, an MCP tool, or a skill. The category is an implementation detail of
+> *where* the fix goes, never a reason to *skip* the fix.
+>
+> - Do **not** discard an issue as "not a plugin gap", "design-side", "clean-room variance",
+>   "spec ambiguity", or "the author should have known". If a fresh user could hit it, the plugin
+>   must handle it next time.
+> - A recovery that currently relies on a **skill-prose lesson** a fresh author might forget is
+>   itself an enhancement: **promote it to a deterministic program** (program-first) so it fires
+>   every time, automatically.
+> - The honest discard bucket (Bucket D) is reserved **only** for a fix that is genuinely
+>   non-generalizable (it would over-fit one design's quirk or peek at a hidden oracle) — and even
+>   then you record *why*, you do not silently drop it.
+>
+> **Convergence test (loop-until-dry):** a benchmark / flow close-loop has converged only when a
+> **fresh clean-room re-run on the newest plugin produces 0 residual that needs a plugin fix**.
+> As long as a clean-room run still surfaces any recoverable residual, the loop is not done:
+> capture it → fix it into the plugin → re-run. One round with zero new backlog is a candidate;
+> two consecutive zero-backlog clean-room rounds is convergence.
+
+The bucket ladder (A>B>C>D) below decides *where* a fix goes; it NEVER decides *whether* to fix.
+"not a plugin gap", "clean-room variance", and "design-side" are explicitly **NOT** valid Bucket-D
+discard reasons — only genuine non-generalizable over-fit is.
+
+## Applies to EVERY step, not just RTL authoring
+
+The first time this skill landed (v0.1.34) it captured 9 RTLLM spec-to-RTL
+recoveries into the `ic-expert-agent` skill. But the SAME mechanism applies
+to every step in the Vibe-IC flow — each step has its own canonical target
+program (Bucket A) and target skill (Bucket B), declared in
+`benchmark-harness/CAPTURE_ROUTING.json`:
+
+| Step domain | Bucket A target (program) | Bucket B target (skill) |
+|---|---|---|
+| Phase 1 NL ingestion | `phase1_one_shot_runner.py`, `phase1_engine/ingest.py` | `agents/ic-expert-agent.md` |
+| Phase 2 spec→RTL | `rtl_hygiene_lint.py`, `chip_top_gate_wrapper_gen.py`, `spec_conformance_check.py` | `agents/ic-expert-agent.md` |
+| Phase 2 yosys / eco_loop | `phase2_one_shot_runner.py` | `synth-doctor`, `rtl-repair`, `phase2-rtl-verify` |
+| Phase 3 synth / PnR | `phase3_one_shot_runner.py` | `synth-doctor`, `sta-review` |
+| Phase 3 CTS / hold | `phase3_one_shot_runner.py` | `hold-fix`, `sta-review` |
+| Phase 3 DRC | `phase3_one_shot_runner.py` | `drc-fix` |
+| Phase 3 LVS | `phase3_one_shot_runner.py` | `lvs-triage` |
+| Phase 3 IR-drop | `phase3_one_shot_runner.py` | `ir-drop-triage` |
+| Analog A2 topology | `analog_a2_topology_select_check.py` | `analog-topology-select` |
+| Analog A4 corner sweep | `analog_real_corner_sweep.py` | `ams-sim` |
+| Analog A6 per-block PV (DRC+LVS) | `analog_a6_block_pv_check.py` | `drc-fix` + `lvs-triage` |
+| Analog A7 post-layout resim | `analog_a7_post_layout_resim_check.py` | `analog-extraction-resim` |
+| Mixed-signal M1-M4 | `mixed_signal_m1_top_merge_check.py` | `mixed-signal-cosim` |
+| MCP-EDA tool behavior | `mcp-eda/src/tools/*.js` | per-skill (`synth-doctor`, etc.) |
+| Benchmark harness | `benchmark-harness/score_*.py` | `open-benchmark-methodology` |
+
+The routing table is consulted by `programs/enhancement_emit.py` to put each
+recovery in the right place.
+
+## When to invoke
+
+- **MANDATORY** after every `/vibe-ic-benchmark` close-loop where any
+  previously-failing design moved to PASS via AI judgment (not just
+  deterministic gate fix).
+- **MANDATORY** after every real-case run in `benchmark_clean/` or via
+  `/vibe-ic-all` where a close-loop agent applied a chip-agnostic fix that a
+  future runner could have applied automatically.
+- **STRONGLY ENCOURAGED** at the end of any session where multiple
+  AI-judgment fixes accumulated, even if individual fixes were small.
+
+## Program-First — the binding priority order (read BEFORE classifying)
+
+> **User directive (binding): "benchmark-enhancement-capture 一定要強調 Program-First."**
+> Every recovery is presumed Bucket A until proven otherwise. The buckets are a
+> priority LADDER, not a menu: A > B > C > D. You do not get to pick the bucket
+> you find easiest — you must climb DOWN the ladder only when the rung above is
+> genuinely impossible, and you must say WHY in writing.
+
+For EVERY recovery, answer these in order and stop at the first YES:
+
+1. **Can a deterministic Python rule (regex / width / structural pattern /
+   table lookup) detect-and-fix this without any LLM judgment?** → **Bucket A.**
+   This is the default. A "judgment call" that is really just an unwritten
+   regex (e.g. "the reflected CRC poly must be width-aware", "an `init` value
+   needs an explicit `0x` or it's a stray token") is Bucket A, NOT Bucket B.
+2. **Only if 1 is genuinely impossible** — the fix needs natural-language /
+   convention pattern-recognition that no regex captures — → **Bucket B**, AND
+   you MUST record `why_not_bucket_a` (one honest sentence: what judgment a
+   program cannot make here).
+3. **Only if A and B are both right but the engineering is large** (new program,
+   corpus, fixtures) → **Bucket C**, AND record `why_not_bucket_a` too.
+4. **Only if neither generalizes** → **Bucket D** with `why_discard`.
+
+**Anti-laziness rule:** "this needs judgment" is the single most over-used
+excuse to skip the program work. Before writing it, name the EXACT input the
+program would see and the EXACT decision it cannot make from that input. If you
+can name a regex/threshold/structure that decides it, it is Bucket A. The
+v0.2.15 CRC capture is the worked example: every "the model should just know
+the right poly width" instinct reduced to three regexes + one width-aware
+helper — four Bucket-A rules, zero backlog.
+
+**Enforcement:** `enhancement_emit.py` REFUSES any Bucket B/C record that lacks
+a non-empty `why_not_bucket_a` (run it; exit 1 lists the offenders). The gate
+exists so "I'll just append a skill paragraph" can never silently bypass the
+program-first question.
+
+### Bucket A is a LADDER of four, not two (v0.2.21 / M4 lesson)
+
+When the source is a *skill* whose prose hides a rule, "extract to a program"
+splits FOUR ways — decide per rule, in this order:
+
+1. **ALREADY-PROGRAM** — the rule is *already* implemented in an existing
+   `programs/*.py`; the skill is just documentation over it. Action: **none to
+   code** — trim the skill prose to a one-line `enforced by programs/<x>.py`
+   reference. **Check this FIRST.** In the v0.2.21 sweep of 20 skills, ~63% of
+   "extractable rules" were already programs (82 candidates → 49 genuinely new).
+   Creating a new program for a rule that already exists is duplication, not
+   program-first — and risks a *fabricated* near-duplicate. Grep `programs/` for
+   an existing checker before writing a new one.
+2. **EXTRACT-NEW** — a genuine gap: write `programs/<name>.py` + a dedicated
+   test (PASS + the real defect it guards + honest FAIL/SKIP on missing data).
+3. **AUGMENT-EXISTING** — the rule belongs in an existing *shared* program but
+   isn't there yet. When sweeping skills in parallel, **report** the augment for
+   central apply (don't let N agents edit the same shared program and conflict).
+4. **KEEP-JUDGMENT** — genuinely needs an LLM; leave in the skill with
+   `why_not_bucket_a`.
+
+**Corpus-sweep is mandatory and literal:** a new Bucket-A *guard* program must
+run CLEAN on the current repo before it ships — `python3 <new_check>.py` exit 0.
+If it fires on legitimate existing state it is a false-positive and MUST be
+narrowed or dropped (v0.2.24: an "orphan test file" guard fired on the
+mcp-eda / per-skill compliance suites that legitimately live outside
+`pytest.ini` testpaths — it was narrowed to "testpaths must be a single tree",
+which is the real invariant and fires zero false-positives). A guard that
+flags the very state you just shipped is not a guard, it's a bug.
+
+## The three buckets — every recovery goes into ONE
+
+For each `(design, before-RTL, after-RTL, AI-reasoning)` recovery record:
+
+### Bucket A — deterministic program rule
+The reasoning reduces to **a structural pattern** that a Python program can
+detect and apply without LLM judgment. Examples:
+- "Restoring division remainder must be `dividend_width + 1` bits, not
+  `dividend_width`" → new `rtl_hygiene_lint.py` rule + auto-`--fix`.
+- "Module hardcodes 64-bit width but module name contains 'pipe'/'pipeline'
+  → suggest adding `parameter DATA_WIDTH=64`" → new `spec_conformance_check`
+  WARN.
+- "Output port declared before clk/reset in description order, but TB likely
+  uses output-first positional → reorder" → `chip_top_gate_wrapper_gen`
+  enhancement.
+
+**Emit**: a patch to the relevant `programs/*.py` file with the new rule,
+PLUS a **corpus-sweep verification recipe**: list of repos / sample sets the
+new rule must run cleanly against before shipping (zero false-positives).
+
+### Bucket B — ic-expert-agent skill section
+The reasoning requires **LLM judgment / pattern recognition** that doesn't
+reduce to a deterministic rule. Examples:
+- "When TB samples the clock at `t = k·(PERIOD/2)` with blocking statements
+  in active region, use NBA toggle so sample lands pre-toggle."
+- "Phrase 'whether the result has been consumed' implies a downstream-ready
+  input port."
+- "RTLLM benchmark family conventionally uses positional output-first
+  instantiation."
+
+**Emit**: a new `### Skill: <name>` section appended to
+`agents/ic-expert-agent.md`, with the worked example + the general pattern.
+
+### Bucket C — community-backlog entry
+The fix is general and important but needs larger engineering work to ship
+properly (corpus sweep, new program, new test fixtures). Examples:
+- "Ship a deterministic `rtl_gen` for `digital_arithmetic_primitive` IC class"
+  — major undertaking; needs spec extraction + template library.
+- "Phase1 NL ingester emits 0 facts on free-form RTLLM prompts" — needs
+  re-engineering the fact extractor.
+
+**Emit**: a `community/backlogs/ORGANIC-<date>-<slug>.yaml` per the existing
+schema (type / severity / component / pattern / suggested_fix / id /
+submitted_at / session_context).
+
+### Bucket D — DISCARD (overfit / one-off) — the NARROWEST bucket
+The fix only works for that specific design's quirks or peeks at hidden TB
+conventions. This is the ONLY honest discard reason: a **genuinely
+non-generalizable over-fit**. The following are **NOT** valid Bucket-D reasons —
+each of these still gets fixed into the plugin (per the fix-all-into-the-plugin
+principle above): "not a plugin gap", "design-side", "clean-room variance",
+"spec ambiguity", "the author should have known", or "a skill already documents
+it" (that last one is a Bucket-A *promote-prose-to-program* signal, not a
+discard). Examples that ARE legitimately Bucket D:
+- "Rename module name from spec-stated `freq_diveven` to dir-name
+  `freq_divbyeven`" — works for THIS benchmark's typo but encoding it as a
+  general rule would over-fit. Document the *judgment* (description vs dir
+  typo handling) as Bucket B if generalizable; otherwise discard.
+- "Hardcode the exact 6-state encoding the TB happens to use" — pure
+  hidden-TB peek.
+
+**Emit**: nothing to plugin; record in the session's RESULT for honesty.
+**Real anti-example (ORGANIC #521):** a round-1 close-loop wrongly discarded
+two real residuals as Bucket-D "clean-room variance" / "incomplete-closeloop"
+and declared a FALSE convergence. They were in fact real plugin enhancements
+(#517–#520). "variance" is never a discard reason — capture and fix it.
+
+## Procedure
+
+1. **Collect recovery records**. Input: pairs `(<design>, <prior-fail-sample>, <recovered-pass-sample>, <AI-reasoning>)`. Source = the close-loop agents' final reports + git diff between samples/.
+
+2. **Per record, classify** into Bucket A/B/C/D. The 80/20 heuristic:
+   - If the fix is `s/foo/bar/` syntactic or a structural template → A.
+   - If the fix requires pattern-recognizing an English phrase or convention → B.
+   - If A or B looks right but the engineering effort is large → C.
+   - If neither A nor B generalizes → D.
+
+3. **Emit candidates** via `programs/enhancement_emit.py` (the deterministic helper):
+   ```bash
+   python3 ${CLAUDE_PLUGIN_ROOT}/programs/enhancement_emit.py \
+       --records <recoveries.json> \
+       --out-skill-section <patch.md> \
+       --out-program-rules <patch.py> \
+       --out-backlogs <dir>/
+   ```
+
+4. **Review the candidates** (Bucket A program rules need corpus-sweep verification BEFORE being applied; Bucket B skills can be appended directly; Bucket C backlogs can be filed immediately).
+
+5. **Apply Bucket A + B**. Commit + push. Bump plugin patch version.
+
+6. **Verify forward**: the NEXT benchmark run should pick up the rule
+   automatically. If the same design now passes from a fresh run without
+   close-loop, the loop closed correctly.
+
+## Honesty rules
+
+- **NEVER auto-apply a Bucket A rule** that triggers on the corpus-sweep set
+  with any false-positives. The rule must be strictly safer than the prior
+  state.
+- **NEVER add a Bucket B skill section** that names specific benchmark design
+  identifiers. Skills are general patterns, not lookup tables.
+- **NEVER expand Bucket B into "the AI should just author the right RTL"** —
+  that's not a skill, that's wishing the problem away.
+- **NEVER discard (Bucket D) without a written reason** in the session
+  RESULT. "Why this fix wasn't generalizable" is itself useful signal for
+  future benchmark designers.
+- **NEVER use "not a plugin gap" / "clean-room variance" / "design-side" /
+  "spec ambiguity" / "the author should have known" as a discard reason** —
+  per the fix-all-into-the-plugin principle, those all still get fixed into the
+  plugin. Bucket D is ONLY genuine non-generalizable over-fit.
+- **NEVER declare convergence on a single zero-backlog round.** Convergence is
+  a fresh clean-room re-run on the newest plugin producing 0 residual that needs
+  a plugin fix, confirmed across TWO consecutive rounds.
+
+## This skill is the difference between "we tried RTLLM" and "Vibe-IC ships better"
+
+Every AI-judgment recovery this session was a learning moment. Without this
+skill, those learnings stay in this session's RESULT and evaporate. With this
+skill, they become plugin code + agent skills + filed backlogs — and the next
+new user who installs Vibe-IC gets all of them automatically.
+
+That is the closed loop.
+
+
+## Compliance gate (mandatory)
+
+After producing your output, save it to a file and run:
+
+```bash
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/SKILL_NAME/compliance.yaml \
+    <your_output_file>
+```
+
+Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
+`compliance.yaml` in this skill directory enumerates every required
+element of your output: section headers, handoff lines, summary blocks.
+
+**Your task is not complete until the audit returns PASS.** Missing
+elements are the single largest source of skill-execution non-determinism
+across different agents.

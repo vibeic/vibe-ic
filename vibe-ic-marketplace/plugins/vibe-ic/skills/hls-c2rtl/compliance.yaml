@@ -1,0 +1,29 @@
+# Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
+testability: structured
+
+# Auto-generated compliance spec for skill 'hls-c2rtl'
+# Refines vibe-ic/skills/hls-c2rtl/SKILL.md output requirements.
+skill: hls-c2rtl
+
+requirements:
+  - id: R_has_output_section
+    description: "Output format/schema section present"
+    pattern: '(##\s+(?:Output|Findings|Result|Report))'
+    skill_section: 'Output/Handoff'
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line"
+    pattern: 'Next:\s*(?:run\s+)?/\w'
+    skill_section: 'Output/Handoff'
+  - id: R_status_or_summary
+    description: "Has a Summary or STATUS block"
+    pattern: '(##\s+Summary|\*\*STATUS\*\*:)'
+    skill_section: 'Output/Handoff'
+  - id: R_hls_output
+    description: "HLS output RTL generated"
+    pattern: '(generated.*RTL|output.*verilog|synthesized|HLS.*result)'
+    skill_section: 'Output'
+
+cross_checks:
+  - id: X_output_artifact_check
+    description: "Verify HLS output RTL exists on disk"
+    rule: postcheck_pass_only

@@ -1,0 +1,42 @@
+class: apb-peripheral
+layer: L2
+qbank:
+  clock_name:
+    expert:       ["APB clock signal name?"]
+    intermediate: ["What's the APB clock port named — HCLK, PCLK, aclk?"]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # HCLK
+
+  reset_name:
+    expert:       ["Reset port name?"]
+    intermediate: ["What's the reset port named — HRESETn, PRESETn?"]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # HRESETn
+
+  reset_polarity:
+    expert:       ["Reset polarity — active-high or active-low?"]
+    intermediate: ["Is reset active-high or active-low? APB convention is active-low."]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # active-low
+
+  wait_states:
+    expert:       ["Default wait-state count?"]
+    intermediate: ["Does the slave ever assert PREADY=0, and for how many cycles?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["none", "zero-wait"]
+        respond_with_default: "0 (PREADY always high)"
+
+  pslverr_supported:
+    expert:       ["PSLVERR supported?"]
+    intermediate: ["Does the slave ever signal an error via PSLVERR? (true/false)"]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # true

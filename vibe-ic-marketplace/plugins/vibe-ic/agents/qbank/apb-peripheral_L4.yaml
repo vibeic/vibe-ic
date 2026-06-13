@@ -1,0 +1,33 @@
+class: apb-peripheral
+layer: L4
+# v0.74 E+F-implement: APB register map + address alignment
+qbank:
+  register_map:
+    expert:       ["APB register map — offset, name, access (R/W/RW/W1C), reset, bit-fields?"]
+    intermediate: ["List each APB-mapped register — offset, name, RW permission, reset value."]
+    beginner:     ["What registers does software write to control this block?"]
+
+  address_alignment:
+    expert:       ["Byte / half-word / word alignment — PADDR[1:0] behavior for sub-word access?"]
+    intermediate: ["Must accesses be word-aligned, or does it handle byte/half-word?"]
+    beginner:     []
+
+  irq_count:
+    expert:       ["IRQ output count?"]
+    intermediate: ["How many interrupt outputs does the block drive?"]
+    beginner:     []
+
+  irq_type:
+    expert:       ["IRQ type — level / pulse / edge?"]
+    intermediate: ["Are the interrupt outputs level-sensitive, pulsed, or edge?"]
+    beginner:     []
+
+  irq_clear_mechanism:
+    expert:       ["IRQ clear — W1C / W0C / implicit-on-read?"]
+    intermediate: ["How does software clear a pending interrupt?"]
+    beginner:     []
+
+  set_clr_atomicity:
+    expert:       ["Does the block expose set / clr shadow registers for atomic bit ops?"]
+    intermediate: ["Are there separate set/clear addresses for atomic RMW-free access?"]
+    beginner:     []

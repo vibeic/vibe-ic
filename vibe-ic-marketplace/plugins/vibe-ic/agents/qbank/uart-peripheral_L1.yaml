@@ -1,0 +1,34 @@
+class: uart-peripheral
+layer: L1
+qbank:
+  data_width_bits:
+    expert:       ["UART word length (bits)?"]
+    intermediate: ["How many data bits per UART word — 8 is typical?"]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # 8
+
+  frame_format:
+    expert:       ["Frame format (e.g. 8N1)?"]
+    intermediate: ["UART framing — 8N1 (8-data, no parity, 1-stop) is standard."]
+    beginner:     ["Standard serial settings, or anything custom?"]
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # 8N1
+
+  parity_support:
+    expert:       ["Parity support — true/false?"]
+    intermediate: ["Does the IP compute parity? (default: no)"]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # false
+
+  flow_control:
+    expert:       ["Flow control — none / RTS-CTS / XON-XOFF?"]
+    intermediate: ["Any flow control — hardware RTS/CTS, software XON/XOFF, or none?"]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # none

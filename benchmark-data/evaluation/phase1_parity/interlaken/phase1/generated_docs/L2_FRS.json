@@ -1,0 +1,250 @@
+{
+  "schema_version": 2,
+  "doc_class": "frs",
+  "ic_name": "Interlaken Protocol Definition",
+  "frs_sections": [
+    {
+      "section": "1",
+      "title": "Introduction",
+      "content": "Interlaken is a narrow, high-speed, channelized chip-to-chip packet interface\nthat runs over multiple bonded SerDes lanes. It was jointly defined by Cortina\nSystems and Cisco Systems as a scalable interconnect for packet processors,\ntraffic managers, framers, and switch fabrics. Interlaken transports packets\nthat are segmented into bursts; each burst is delimited by Control Words while\nthe packet payload travels in Data Words. The protocol layers cleanly into a\nProtocol Layer (bursts, channels, flow control) running on top of a Framing\nLayer (64B/67B word encoding, metaframe, lane striping, integrity), which in\nturn rides on a set of bonded SerDes lanes (the PCS/PMA).\n\nInterlaken is a SerDes framing protocol, not a local-area-network link layer.\nWhereas a LAN link layer carries addressed m…",
+      "evidence": "input/docs/Interlaken_Protocol_Definition.txt",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "3",
+      "title": "Word Types",
+      "content": "There are two top-level word types selected by bit 64:\n  Control Word (bit 64 = 1) - a framing-layer word. Control Words include the\n    Burst/Idle Control Word (Protocol Layer framing) and the four metaframe\n    control words (Synchronization, Scrambler State, Skip, Diagnostic).\n  Data Word (bit 64 = 0) - 8 bytes of packet payload.\n\n4. Burst Framing (Protocol Layer)\nThe Protocol Layer segments each packet into bursts. A burst is a run of Data\nWords delimited by Control Words. The Control Word that PRECEDES a burst is the\nBurst Control Word and carries the Start-Of-Packet (SOP) indication, the channel\nnumber, and the in-band flow-control status. The Control Word that FOLLOWS a\nburst is the Idle/Burst Control Word and carries the End-Of-Packet (EOP)\nindication, an error bit, and the EOP_For…",
+      "evidence": "input/docs/Interlaken_Protocol_Definition.txt",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "7",
+      "title": "Lane Bonding and Striping",
+      "content": "The Protocol Layer hands a stream of 64-bit words to the Framing Layer, which\ndistributes (stripes) the words round-robin across the N bonded SerDes lanes.\nEach lane independently 64B/67B-encodes, scrambles, and inserts its own\nmetaframe. The receiver word-locks each lane on the Synchronization Word,\ndescrambles using the Scrambler State Word, deskews the lanes using the\nmetaframe boundaries (and absorbs clock difference via Skip Words), then\nde-stripes the words back into the original ordered word stream.",
+      "evidence": "input/docs/Interlaken_Protocol_Definition.txt",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "8",
+      "title": "Scrambling",
+      "content": "A self-synchronous scrambler with polynomial x^58 + x^39 + 1 is applied per lane\nto the payload to ensure transition density and DC balance. Bit 65 marks\nwhether a word was scrambled. The Scrambler State Word in each metaframe lets\nthe receiver lock its descrambler.\n\n9. Integrity (CRC-24 and CRC-32)\nInterlaken uses two CRCs:\n  CRC-24  Per-burst integrity carried in the Burst/Idle Control Word, polynomial\n          0x328B63, covering the burst Data Words and the Control Word. A CRC-24\n          mismatch marks the burst errored.\n  CRC-32  Per-lane diagnostic integrity carried in the Diagnostic Word of each\n          metaframe, polynomial 0x04C11DB7, covering the metaframe on that lane.",
+      "evidence": "input/docs/Interlaken_Protocol_Definition.txt",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "10",
+      "title": "Flow Control",
+      "content": "Interlaken carries flow control in-band: every Control Word includes a calendar\nof per-channel XON/XOFF status. The calendar advances through the channels so\nthat, over a small number of Control Words, the XON/XOFF state of every channel\nis communicated. XON (1) permits the far end to send on a channel; XOFF (0)\nback-pressures it. An out-of-band flow-control interface (a separate LVDS bus\nwith sync, data, and clock signals) is also defined for systems that prefer to\ncarry flow control outside the data path.",
+      "evidence": "input/docs/Interlaken_Protocol_Definition.txt",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "11",
+      "title": "Channels",
+      "content": "Interlaken is channelized: a single physical link multiplexes many logical\nchannels. The Channel Number field in the Burst Control Word selects the channel\nfor a burst. The protocol supports up to 65536 channels (16-bit channel number),\neach independently flow-controlled by the calendar.",
+      "evidence": "input/docs/Interlaken_Protocol_Definition.txt",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "12",
+      "title": "Signals",
+      "content": "An Interlaken interface consists of:\n  TX_SERDES[N-1:0]   - N transmit SerDes lanes (differential).\n  RX_SERDES[N-1:0]   - N receive SerDes lanes (differential).\n  TXCLK / RXCLK      - per-direction reference clocks for the SerDes.\n  FC_SYNC / FC_DATA / FC_CLK - optional out-of-band flow-control LVDS bus.\nThe number of lanes N is implementation-defined (e.g. 4, 10, 12, 24 lanes) and\neach lane runs at the SerDes line rate (e.g. 6.25, 10.3125, 12.5 Gbps).",
+      "evidence": "input/docs/Interlaken_Protocol_Definition.txt",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "13",
+      "title": "Reset and Alignment",
+      "content": "On reset the receiver searches each lane for the Synchronization Word to obtain\nword lock, then uses successive metaframe boundaries to deskew the bonded lanes\ninto alignment. The link is considered up when all lanes are word-locked,\ndescrambler-synchronized, deskewed, and the Diagnostic Word reports lanes\noperational.",
+      "evidence": "input/docs/Interlaken_Protocol_Definition.txt",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "14",
+      "title": "Parameters and Constants",
+      "content": "  WORD_PAYLOAD_BITS   64\n  WORD_WIRE_BITS      67 (64B/67B)\n  CTRL_TYPE_BIT       bit 64 (1 = Control Word, 0 = Data Word)\n  SCRAMBLED_BIT       bit 65\n  INVERSION_BIT       bit 66\n  CHANNEL_NUMBER_BITS 16 (up to 65536 channels)\n  CRC24_POLY          0x328B63\n  CRC32_POLY          0x04C11DB7\n  SCRAMBLER_POLY      x^58 + x^39 + 1\n  SYNC_WORD           0x78f678f678f6\n  METAFRAME_LENGTH    2048 words (configurable)\n  BURST_MAX           256 bytes (typical)\n  BURST_SHORT         32 bytes (typical)\n  BURST_MIN           64 bytes (multiple of 32, typical)\n  EOP_FORMAT          1..8 valid bytes in last Data Word (0 = not EOP)",
+      "evidence": "input/docs/Interlaken_Protocol_Definition.txt",
+      "heading_shape": "numbered"
+    }
+  ],
+  "no_frs_sections_in_input": false,
+  "protocol_overview": {
+    "type": "Channelized chip-to-chip packet interface over N bonded SerDes lanes",
+    "half_duplex": false,
+    "layers": [
+      "Protocol Layer (bursts, channels, flow control)",
+      "Framing Layer (64B/67B, metaframe, lane striping, integrity)",
+      "SerDes lanes (PCS/PMA)"
+    ],
+    "encoding": "64B/67B (64 payload bits + 3 framing bits)",
+    "word_types": [
+      "Control Word (bit 64 = 1)",
+      "Data Word (bit 64 = 0)"
+    ],
+    "channels_max": 65536,
+    "scrambler_poly": "x^58 + x^39 + 1",
+    "crc24_poly": "0x328B63",
+    "crc32_poly": "0x04C11DB7",
+    "sync_word": "0x78f678f678f6",
+    "metaframe_control_words": [
+      "Synchronization",
+      "Scrambler State",
+      "Skip",
+      "Diagnostic"
+    ],
+    "defined_by": "Cortina Systems and Cisco Systems"
+  },
+  "no_protocol_overview_in_input": false,
+  "compliance_requirements": [],
+  "timing_parameters": [],
+  "fmax_mhz": null,
+  "no_fmax_mhz_in_input": true,
+  "extraction_evidence": {
+    "input/docs/Interlaken_Protocol_Definition.txt": [
+      {
+        "literal": "1 Introduction",
+        "label": "FRS section"
+      },
+      {
+        "literal": "3 Word Types",
+        "label": "FRS section"
+      },
+      {
+        "literal": "7 Lane Bonding and Striping",
+        "label": "FRS section"
+      },
+      {
+        "literal": "8 Scrambling",
+        "label": "FRS section"
+      },
+      {
+        "literal": "10 Flow Control",
+        "label": "FRS section"
+      },
+      {
+        "literal": "11 Channels",
+        "label": "FRS section"
+      },
+      {
+        "literal": "12 Signals",
+        "label": "FRS section"
+      },
+      {
+        "literal": "13 Reset and Alignment",
+        "label": "FRS section"
+      },
+      {
+        "literal": "14 Parameters and Constants",
+        "label": "FRS section"
+      }
+    ]
+  },
+  "auto_cited_sections": [
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:1",
+      "sec_id": "",
+      "heading": "Interlaken Protocol Definition",
+      "slug": "interlaken_protocol_definition"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:4",
+      "sec_id": "1",
+      "heading": "Introduction",
+      "slug": "introduction"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:23",
+      "sec_id": "2",
+      "heading": "Word Encoding (64B/67B)",
+      "slug": "word_encoding_64b_67b"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:31",
+      "sec_id": "0",
+      "heading": "= Data Word (packet payload).",
+      "slug": "data_word_packet_payload"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:36",
+      "sec_id": "3",
+      "heading": "Word Types",
+      "slug": "word_types"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:43",
+      "sec_id": "4",
+      "heading": "Burst Framing (Protocol Layer)",
+      "slug": "burst_framing_protocol_layer"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:61",
+      "sec_id": "5",
+      "heading": "Control Word Format (Burst/Idle)",
+      "slug": "control_word_format_burst_idle"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:74",
+      "sec_id": "6",
+      "heading": "Metaframe (Framing Layer)",
+      "slug": "metaframe_framing_layer"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:92",
+      "sec_id": "7",
+      "heading": "Lane Bonding and Striping",
+      "slug": "lane_bonding_and_striping"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:101",
+      "sec_id": "8",
+      "heading": "Scrambling",
+      "slug": "scrambling"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:107",
+      "sec_id": "9",
+      "heading": "Integrity (CRC-24 and CRC-32)",
+      "slug": "integrity_crc_24_and_crc_32"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:115",
+      "sec_id": "10",
+      "heading": "Flow Control",
+      "slug": "flow_control"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:124",
+      "sec_id": "11",
+      "heading": "Channels",
+      "slug": "channels"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:130",
+      "sec_id": "12",
+      "heading": "Signals",
+      "slug": "signals"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:139",
+      "sec_id": "13",
+      "heading": "Reset and Alignment",
+      "slug": "reset_and_alignment"
+    },
+    {
+      "file_ref": "phase1/input_doc/Interlaken_Protocol_Definition.txt:146",
+      "sec_id": "14",
+      "heading": "Parameters and Constants",
+      "slug": "parameters_and_constants"
+    }
+  ],
+  "functional_requirements": [
+    "Each lane encodes payload as 64B/67B: 64 payload bits plus bit 64 (control/data type), bit 65 (scrambled), bit 66 (inversion).",
+    "The Protocol Layer segments each packet into bursts delimited by Control Words; the Burst Control Word carries SOP, channel number and flow-control status; the Idle/Burst Control Word carries EOP, error and EOP_Format (valid-byte count).",
+    "Burst length is bounded by BurstMax / BurstShort / BurstMin parameters.",
+    "The Framing Layer inserts a metaframe every MetaFrameLength words on each lane: Synchronization, Scrambler State, Skip and Diagnostic control words.",
+    "Per-burst integrity uses CRC-24 in the Burst/Idle Control Word; per-lane diagnostic integrity uses CRC-32 in the Diagnostic Word.",
+    "Words are striped round-robin across N bonded SerDes lanes; the receiver word-locks, descrambles, deskews (clock-compensates via Skip Words) and de-stripes.",
+    "In-band flow control carries a calendar of per-channel XON/XOFF status in Control Words; an out-of-band LVDS flow-control bus is also defined.",
+    "Interlaken has no MAC frame, no preamble/SFD, and no MAC addresses — it is not Ethernet."
+  ]
+}
