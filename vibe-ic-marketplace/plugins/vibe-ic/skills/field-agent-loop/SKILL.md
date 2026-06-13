@@ -153,37 +153,59 @@ artifact check is the faithful real-surface verification.
    eyeball it:**
    ```bash
    python3 plugins/vibe-ic/programs/fix_surface_classify.py <issue|sha>
-   #   exit 0  CONSUMER_ONLY → artifact-first verify (step 2)
-   #   exit 10 PRODUCER      → justified re-run (step 3)
-   #   exit 11 MIXED         → the judgment residual: read it (below)
+   #   exit 0  CONSUMER_ONLY → artifact-first verify (step 2)   [deterministic]
+   #   exit 10 PRODUCER      → justified re-run (step 3)         [deterministic]
+   #   exit 11 MIXED         → AI-adjudicate the residual (step 2.5)  [uncertain]
    ```
    It maps each diff hunk → its enclosing function/file → a maintained
    PRODUCER set (route/floorplan/streamout/geometry emitters: `step_pnr`,
    `make_tracks`, `_gds_grid_snap`, `_magic_def_to_gds`,
    `_klayout_merge_layers`, the `_GDS_*_PY` emitters, …) vs a CONSUMER
-   set (checkers / classifiers / verdict-message strings). The classes:
-   - **CONSUMER_ONLY** — a checker / classifier / verdict-message /
-     cache-decision / disclosure-line change (e.g. a DRC off-grid
-     classifier, an LVS cross-reference string, a pin-count disclosure,
-     a cache-validity line). The route, geometry, netlist, DEF, GDS and
-     report files are UNCHANGED by such a fix.
-   - **PRODUCER** — a change to the route/geometry producers: PnR Tcl,
-     floorplan, CTS, streamout, or a verdict that depends on the actual
-     run (e.g. a measure-only SPEF repair that prevents a segfault, a
-     route-convergence verdict keyed on the real DRT count).
-   - **MIXED** — touches both sets, or an unknown/ambiguous surface that
-     cannot be PROVEN consumer-only. **This is the only genuine judgment
-     residual** (why_not_bucket_a): read the ambiguous hunk and decide —
-     when in doubt treat as producer (re-run). The program is
-     conservative by construction, so it never reports CONSUMER_ONLY for
-     anything it cannot prove safe.
+   set (checkers / classifiers / verdict-message strings). **Three-tier
+   dispatch — the deterministic ends are decided by the program; only the
+   uncertain middle goes to an AI agent:**
+   - **CONSUMER_ONLY** (deterministic) — a checker / classifier /
+     verdict-message / cache-decision / disclosure-line change (e.g. a DRC
+     off-grid classifier, an LVS cross-reference string, a pin-count
+     disclosure, a cache-validity line). The route, geometry, netlist,
+     DEF, GDS and report files are UNCHANGED by such a fix.
+   - **PRODUCER** (deterministic) — a change to the route/geometry
+     producers: PnR Tcl, floorplan, CTS, streamout, or a verdict that
+     depends on the actual run (e.g. a measure-only SPEF repair that
+     prevents a segfault, a route-convergence verdict keyed on the real
+     DRT count).
+   - **MIXED** (uncertain) — touches both sets, OR an unknown/ambiguous
+     surface the rules could not PROVE consumer-only. **This is the
+     genuine judgment residual** (why_not_bucket_a) — and instead of
+     defaulting straight to a ~40-min re-run, it goes to an AI agent
+     (step 2.5). The program does NOT guess; it hands the agent the
+     minimal material.
 2. **CONSUMER_ONLY → drive the NEW program version against the
    project's ALREADY-PERSISTED artifacts** (`reports/phase3/*.rpt`,
    `lvs_verdict.json`, the netlist / DEF / GDS) and read the verdict.
    This is the faithful real-surface check and it takes SECONDS — feed
    the prior run's artifacts to the new program, do not regenerate them.
-3. **producer → a full phase3 re-run is justified** (clean-wipe +
-   re-run the affected phase(s) below). Only here.
+2.5. **MIXED → AI-adjudicate the ambiguous hunks BEFORE deciding to
+   re-run.** Get the minimal agent material — the ambiguous hunks only,
+   not the whole diff — from the program:
+   ```bash
+   python3 plugins/vibe-ic/programs/fix_surface_classify.py <issue|sha> \
+       --adjudication-bundle
+   ```
+   The bundle carries each ambiguous hunk's file + enclosing symbol +
+   changed lines + why it was ambiguous, plus what the engine already
+   decided (producers/consumers) as context, plus the decision question.
+   READ those hunks and decide per the bundle's rule: **ALL ambiguous
+   hunks are consumer → treat the commit as CONSUMER_ONLY and do step 2
+   (artifact-first, NO re-run); ANY is producer, or you cannot tell →
+   step 3 (re-run).** This is the program-first / agent-on-uncertain
+   split: the rules settle the certain hunks; the agent reads only the
+   residual the rules could not. Do NOT auto-re-run a MIXED without
+   reading the bundle — that throws away the whole point of the
+   classifier.
+3. **PRODUCER (or a MIXED the agent ruled producer/unsure) → a full
+   phase3 re-run is justified** (clean-wipe + re-run the affected
+   phase(s) below). Only here.
 4. **A "check status" request is READ-ONLY**: report the persisted
    artifact state; do NOT launch a run. The canonical answer is the
    universal watchdog `run_status.py <project> [--phase auto]` (#599):

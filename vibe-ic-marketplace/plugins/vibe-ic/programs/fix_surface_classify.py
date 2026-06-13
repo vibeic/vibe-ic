@@ -243,8 +243,9 @@ def classify_diff(diff_text: str) -> Dict:
         if nf:
             neutral.append(h["path"])
             continue
-        records.append(
-            classify_hunk(h["path"], h["symbol"], "\n".join(h["changed"])))
+        rec = classify_hunk(h["path"], h["symbol"], "\n".join(h["changed"]))
+        rec["changed"] = h["changed"]      # kept for the adjudication bundle
+        records.append(rec)
     classes = {r["class"] for r in records}
     has_p = "producer" in classes
     has_c = "consumer" in classes
@@ -255,11 +256,9 @@ def classify_diff(diff_text: str) -> Dict:
         verdict = "PRODUCER"
     else:
         verdict = "MIXED" if records else "CONSUMER_ONLY"
-    return {
+    rep = {
         "verdict": verdict,
-        "action": ("artifact-first verify"
-                   if verdict == "CONSUMER_ONLY"
-                   else "justified re-run (launch async + run_status)"),
+        "action": _ACTION[verdict],
         "hunks": records,
         "producers": sorted({r["symbol"] or r["path"]
                              for r in records if r["class"] == "producer"}),
@@ -269,6 +268,73 @@ def classify_diff(diff_text: str) -> Dict:
                              for r in records
                              if r["class"] in ("mixed", "unknown")}),
         "neutral": sorted(set(filter(None, neutral))),
+    }
+    # THREE-TIER DISPATCH: CONSUMER_ONLY / PRODUCER are deterministic; MIXED
+    # is the genuine uncertainty that the rule engine could NOT settle, so it
+    # carries an adjudication bundle for an AI agent to read (see
+    # adjudication_bundle). The agent's job is to decide the ambiguous hunks
+    # only — not re-derive the whole commit.
+    rep["adjudication"] = (adjudication_bundle(rep)
+                           if verdict == "MIXED" else None)
+    return rep
+
+
+# ── three-tier dispatch: the deterministic ends + the AI-adjudicated middle ─
+_ACTION = {
+    # deterministic — the rule engine is sure
+    "CONSUMER_ONLY": "artifact-first verify (no re-run)",
+    "PRODUCER": "justified re-run (launch async + run_status)",
+    # uncertain — hand the ambiguous hunks to an AI agent BEFORE deciding to
+    # spend a ~40-min re-run; only re-run if the agent finds a producer hunk
+    # or cannot tell.
+    "MIXED": ("AI-adjudicate the ambiguous hunks → artifact-first if the "
+              "agent rules them all consumer; re-run only if any is producer "
+              "or the agent is unsure"),
+}
+
+
+def adjudication_bundle(report: Dict) -> Dict:
+    """The MINIMAL material an AI agent needs to adjudicate a MIXED verdict.
+
+    Three-tier doctrine: CONSUMER_ONLY and PRODUCER are decided
+    deterministically by the rule engine and need no agent. MIXED is the
+    residual the program could NOT settle — so instead of defaulting to a
+    ~40-min re-run, we hand the agent ONLY the ambiguous hunks (their file,
+    enclosing symbol, changed lines, and why each is ambiguous), plus what
+    the engine already decided for the rest of the commit as context. The
+    agent reads just this — not the whole diff — and returns one of:
+    all-consumer → artifact-first; any-producer → re-run; unsure → re-run.
+    This is the program-first / agent-on-uncertain split (why_not_bucket_a):
+    deterministic where the rules are sure, LLM only on the genuine residual.
+    """
+    amb = [r for r in report["hunks"] if r["class"] in ("mixed", "unknown")]
+    return {
+        "verdict": report["verdict"],
+        "question": (
+            "For EACH ambiguous hunk below decide CONSUMER (the change only "
+            "re-interprets already-persisted artifacts — a checker / "
+            "classifier / verdict or message / disclosure string — so the "
+            "DEF/GDS/SPEF/netlist/reports are unchanged) or PRODUCER (the "
+            "change alters route / floorplan / placement / streamout / "
+            "geometry / netlist, so the persisted artifacts are stale). "
+            "Decision rule: ALL consumer → artifact-first verify (NO re-run); "
+            "ANY producer → re-run; cannot tell → re-run."),
+        "already_decided": {
+            "producers": report["producers"],
+            "consumers": report["consumers"],
+        },
+        "ambiguous_hunks": [
+            {
+                "path": r["path"],
+                "symbol": r["symbol"],
+                "why_ambiguous": (
+                    "touches both producer and consumer signals"
+                    if r["class"] == "mixed"
+                    else "no recognised producer or consumer signal"),
+                "changed": r.get("changed", []),
+            }
+            for r in amb
+        ],
     }
 
 
@@ -322,6 +388,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "(offline; skips git resolution)")
     ap.add_argument("--repo-root", default=".", help="git repo root")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--adjudication-bundle", action="store_true",
+                    help="emit ONLY the minimal AI-adjudication bundle for a "
+                         "MIXED verdict (the ambiguous hunks + question); "
+                         "empty for a deterministic CONSUMER_ONLY/PRODUCER")
     args = ap.parse_args(argv)
 
     if args.diff_file:
@@ -338,6 +408,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     rep = classify_diff(diff_text)
     rep["commit"] = sha
+
+    # --adjudication-bundle: emit ONLY the agent material (the MIXED middle
+    # tier). For a deterministic verdict there is nothing to adjudicate.
+    if args.adjudication_bundle:
+        print(json.dumps(rep["adjudication"], indent=2)
+              if rep["adjudication"] is not None
+              else json.dumps({"verdict": rep["verdict"],
+                               "adjudication": None,
+                               "note": "deterministic verdict — no agent "
+                                       "adjudication needed"}, indent=2))
+        return _VERDICTS.get(rep["verdict"], 11)
+
     if args.json:
         print(json.dumps(rep, indent=2))
     else:
@@ -347,7 +429,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         if rep["consumers"]:
             print(f"  consumers: {', '.join(rep['consumers'])}")
         if rep["ambiguous"]:
-            print(f"  ambiguous (needs read): {', '.join(rep['ambiguous'])}")
+            print(f"  ambiguous (AI-adjudicate): {', '.join(rep['ambiguous'])}")
+            print("  → run with --adjudication-bundle to get the agent "
+                  "material for these hunks")
     return _VERDICTS.get(rep["verdict"], 11)
 
 

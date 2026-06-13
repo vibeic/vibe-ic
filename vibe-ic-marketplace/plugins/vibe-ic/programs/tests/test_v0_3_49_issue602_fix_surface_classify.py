@@ -61,7 +61,7 @@ DIFF_UNKNOWN = """\
 def test_verdict_message_only_is_consumer_only():
     rep = F.classify_diff(DIFF_VERDICT_MSG)
     assert rep["verdict"] == "CONSUMER_ONLY"
-    assert rep["action"] == "artifact-first verify"
+    assert rep["action"].startswith("artifact-first verify")
 
 
 def test_step_pnr_is_producer():
