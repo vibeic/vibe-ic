@@ -1,0 +1,136 @@
+Enhanced Serial Peripheral Interface (eSPI) Base Specification
+Revision 1.5, Intel Corporation, Document Number 327432-004
+
+1. Introduction
+The Enhanced Serial Peripheral Interface (eSPI) is a bus interface that
+replaces the Low Pin Count (LPC) bus in PC platforms. eSPI connects a single
+master (the chipset / PCH) to one or more slaves (Embedded Controller (EC),
+Baseboard Management Controller (BMC), Super-I/O, or flash device) over a
+shared, source-synchronous, serial bus. eSPI reduces pin count, supports
+lower I/O voltage (1.8 V), and consolidates several legacy sideband signals
+into in-band Virtual Wire messages.
+
+2. Signal Definition
+The eSPI interface uses the following signals:
+  ESPI_CLK     - Master-driven clock. Common clock to all slaves. 20 MHz to 66 MHz.
+  ESPI_IO[3:0] - Bidirectional command/response data lines. Support Single (1-bit),
+                 Dual (2-bit), and Quad (4-bit) I/O modes.
+  ESPI_CS#[n]  - Active-low chip select, one per slave (point-to-point select).
+  ESPI_RESET#  - Active-low reset to all slaves.
+  ESPI_ALERT#  - Slave-driven alert. In single-master single-slave the slave may
+                 use ESPI_IO[1] as ALERT in the dedicated pin mode, or a separate
+                 ESPI_ALERT# pin in the shared mode.
+
+All signals are referenced to the 1.0 V / 1.8 V I/O rail. ESPI_CLK idles low.
+Data is driven on the rising edge and sampled on the falling edge for command
+phase; the turnaround (TAR) reverses bus ownership.
+
+3. Channels
+eSPI multiplexes four independent logical channels over the same physical bus.
+Each channel has independent flow control and ordering:
+  Channel 0  Peripheral Channel       - Memory, I/O, and message cycles (LPC-like).
+  Channel 1  Virtual Wire Channel      - In-band tunneling of sideband signals
+                                          (interrupts, SUS_STAT#, SLP_S3#, etc.).
+  Channel 2  OOB (Out-Of-Band) Channel - SMBus/MCTP tunneled messages.
+  Channel 3  Flash Access Channel      - Slave reads/writes the flash component
+                                          attached to the master (or master
+                                          attached, in slave-attached-flash).
+
+4. Transaction Model
+Every transaction begins with the master asserting ESPI_CS#, then driving an
+8-bit command opcode (CMD), followed by command-specific fields, an optional
+data payload, and a CRC byte. After the command phase the bus turns around
+(TAR) and the slave drives a RESPONSE: an 8-bit response code, optional data,
+status, and CRC. ESPI_CS# is then deasserted.
+
+5. Command Opcodes (CMD field, 8 bits)
+  0x00  PUT_PC          Put a posted/completion Peripheral Channel transaction
+  0x01  GET_PC          Get a posted/completion Peripheral Channel transaction
+  0x04  PUT_NP          Put a non-posted Peripheral Channel transaction
+  0x02  GET_NP          Get a non-posted Peripheral Channel transaction
+  0x06  PUT_IORD_SHORT  Short (1/2/4 byte) I/O read
+  0x07  PUT_IOWR_SHORT  Short I/O write
+  0x08  PUT_MEMRD32_SHORT Short 32-bit memory read
+  0x09  PUT_MEMWR32_SHORT Short 32-bit memory write
+  0x10  PUT_VWIRE       Put Virtual Wire packet (Channel 1)
+  0x11  GET_VWIRE       Get Virtual Wire packet
+  0x12  PUT_OOB         Put OOB (tunneled SMBus) message (Channel 2)
+  0x13  GET_OOB         Get OOB message
+  0x14  PUT_FLASH_C     Put Flash Access completion (Channel 3)
+  0x15  GET_FLASH_NP    Get Flash Access non-posted request
+  0x20  GET_STATUS      Get the 16-bit slave STATUS register
+  0x21  SET_CONFIGURATION  Write a slave configuration register
+  0x22  GET_CONFIGURATION  Read a slave configuration register
+  0xFF  RESET           In-band reset
+
+6. Response Codes (RSP field, 8 bits)
+  0x08  ACCEPT          Command accepted
+  0x01  DEFER           Non-posted command deferred; completion to follow
+  0x02  NON_FATAL_ERROR Recoverable error
+  0x03  FATAL_ERROR     Unrecoverable error; link must be re-initialized
+  0x04  WAIT_STATE      Slave inserts a wait state byte (0x0F nibble)
+  0x0C  NO_RESPONSE     Slave has no response (0xFF on bus)
+
+7. STATUS Register (16-bit, returned with every response)
+  Bit 0   PC_FREE          Peripheral posted/completion queue free
+  Bit 1   NP_FREE          Peripheral non-posted queue free
+  Bit 2   VWIRE_FREE       Virtual Wire queue free
+  Bit 3   OOB_FREE         OOB queue free
+  Bit 4   PC_AVAIL         Peripheral data available from slave
+  Bit 5   NP_AVAIL         Non-posted data available
+  Bit 6   VWIRE_AVAIL      Virtual Wire data available
+  Bit 7   OOB_AVAIL        OOB data available
+  Bit 8   FLASH_C_AVAIL    Flash completion available
+  Bit 9   FLASH_NP_AVAIL   Flash non-posted available
+  Bits 15:10 Reserved
+
+8. Configuration Registers (offset, accessed via GET/SET_CONFIGURATION)
+  0x04  Device Identification     - eSPI version (bits 7:0).
+  0x08  General Capabilities and Configuration
+          Bit 0     CRC Checking Enable
+          Bits 2:1  I/O Mode Supported (00=Single, 01=Single+Dual,
+                    10=Single+Quad, 11=Single+Dual+Quad)
+          Bits 3    I/O Mode Select
+          Bits 7:4  Operating Frequency (000=20MHz,001=25,010=33,011=50,100=66)
+          Bit 31    CRC Checking Supported
+  0x10  Channel 0 Capabilities and Configuration (Peripheral)
+  0x20  Channel 1 Capabilities and Configuration (Virtual Wire)
+  0x30  Channel 2 Capabilities and Configuration (OOB)
+  0x40  Channel 3 Capabilities and Configuration (Flash)
+Each channel capability register has Bit 0 = Channel Enable, Bit 1 = Channel Ready.
+
+9. Virtual Wire Encoding (Channel 1)
+A Virtual Wire packet carries a count byte followed by (index, data) pairs.
+Each VW index addresses a group of up to 4 virtual wires; the data byte carries
+4 valid bits and 4 wire-value bits. System Event indices include:
+  Index 0x02  SLP_S3#, SLP_S4#, SLP_S5#
+  Index 0x03  SUS_STAT#, PLTRST#, OOB_RST_WARN
+  Index 0x04  OOB_RST_ACK, WAKE#, PME#
+  Index 0x05  SLAVE_BOOT_LOAD_DONE, ERROR_FATAL, ERROR_NONFATAL, SLAVE_BOOT_LOAD_STATUS
+  Index 0x06  SCI#, SMI#, RCIN#, HOST_RST_ACK
+  Index 0x07  HOST_RST_WARN
+
+10. CRC
+eSPI uses CRC-8 with polynomial 0x07 (x^8 + x^2 + x + 1), initial value 0x00,
+computed over all command/response bytes excluding the CRC byte itself.
+CRC checking is optional and negotiated via the General Capabilities register.
+
+11. Alert and Wait States
+In-band ALERT: the slave signals service-required by driving ESPI_ALERT#
+(or ESPI_IO[1] in single-slave dedicated-alert mode). The master responds with
+a GET_STATUS to read which channel needs service. A slave that cannot respond
+immediately inserts WAIT STATE bytes (0x0F repeated) before its response code.
+
+12. Reset and Initialization
+On ESPI_RESET# deassertion the link operates in Single I/O mode at 20 MHz with
+CRC disabled. The master issues GET_CONFIGURATION / SET_CONFIGURATION to
+negotiate frequency, I/O mode, CRC, and to enable each channel by setting the
+Channel Enable bit and polling Channel Ready.
+
+13. Timing
+  ESPI_CLK frequency        20 MHz (boot) up to 66 MHz (negotiated)
+  Setup time tSU            2 ns
+  Hold time tHO             1 ns
+  CS# to CLK setup          2 clocks
+  Turnaround (TAR)          2 clock cycles (bus float)
+  Reset pulse width         minimum 100 us

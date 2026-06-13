@@ -1,0 +1,69 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "u_hawaii_ADC",
+  "analog_blocks_detected": true,
+  "analog_blocks": [
+    {
+      "name": "adc",
+      "type": "adc",
+      "spec": null,
+      "low_confidence": true,
+      "evidence": "input/docs/L1_DATASHEET.md (ADC)",
+      "evidence_paragraph": "## Product\n| Field | Value |\n|---|---|\n| product_name | `u_hawaii_adc` (UHEE628) |\n| product_family | mixed-signal incremental delta-sigma ADC front-end |\n| one-line | An array of 6 incremental delta-sigma modulator channels; one channel's ",
+      "count": 1,
+      "multiplicity": 1
+    },
+    {
+      "name": "ldo",
+      "type": "ldo",
+      "spec": null,
+      "low_confidence": true,
+      "evidence": "input/docs/L5_ANALOG_SPEC.md (LDO)",
+      "evidence_paragraph": "## Block A — `delta_sigma` : incremental delta-sigma modulator (×6 copies)\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| converter_type | incremental delta-sigma | — | — | resets/accumulates per conversion window |\n| Order",
+      "count": 6,
+      "multiplicity": 6
+    },
+    {
+      "name": "delta_sigma",
+      "type": "delta_sigma",
+      "spec": null,
+      "low_confidence": true,
+      "evidence": "input/docs/L5_ANALOG_SPEC.md (delta-sigma)",
+      "evidence_paragraph": "## Block A — `delta_sigma` : incremental delta-sigma modulator (×6 copies)\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| converter_type | incremental delta-sigma | — | — | resets/accumulates per conversion window |\n| Order",
+      "count": 6,
+      "multiplicity": 6
+    }
+  ],
+  "no_analog": false,
+  "external_components": [],
+  "electrical_specs": [],
+  "design_parameters": [
+    {
+      "parameter": "documented LEVEL",
+      "value": "1",
+      "source": "L5_ANALOG_SPEC.md",
+      "raw": "documented LEVEL=1 standin models — modeled, NOT silicon sign-off (disclosed in every result).",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/L1_DATASHEET.md": [
+      {
+        "literal": "ADC",
+        "label": "analog keyword class=adc (low_confidence)"
+      }
+    ],
+    "input/docs/L5_ANALOG_SPEC.md": [
+      {
+        "literal": "LDO",
+        "label": "analog keyword class=ldo (low_confidence)"
+      },
+      {
+        "literal": "delta-sigma",
+        "label": "analog keyword class=delta_sigma (low_confidence)"
+      }
+    ],
+    "input/docs/L9_CONSTRAINTS.md": []
+  }
+}

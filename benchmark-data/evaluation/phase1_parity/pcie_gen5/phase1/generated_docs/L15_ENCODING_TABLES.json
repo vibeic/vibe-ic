@@ -1,0 +1,384 @@
+{
+  "fields": {
+    "tables": [
+      "Data-rate progression table (Gen1-Gen6)",
+      "128b/130b block-encoding table",
+      "Transmitter equalization preset table (P0-P10)",
+      "Four-phase enhanced equalization table",
+      "TS1/TS2 Data Rate Identifier (supported-link-speeds incl. 32.0 GT/s bit)",
+      "LCRC / ECRC polynomial tables (carried forward from base PCIe)"
+    ],
+    "fmt_field_encoding_table": {
+      "header_columns": [
+        "Fmt[1:0]",
+        "Meaning"
+      ],
+      "rows": [
+        [
+          "00",
+          "3 DW header, no data"
+        ],
+        [
+          "01",
+          "4 DW header, no data"
+        ],
+        [
+          "10",
+          "3 DW header, with data"
+        ],
+        [
+          "11",
+          "4 DW header, with data"
+        ]
+      ]
+    },
+    "transaction_type_encoding_examples_table": {
+      "header_columns": [
+        "Type Name",
+        "Fmt[1:0]",
+        "Type[4:0]",
+        "Header DW",
+        "Has Data"
+      ],
+      "rows": [
+        [
+          "MRd  (Memory Read 32b addr)",
+          "00",
+          "00000",
+          3,
+          false
+        ],
+        [
+          "MRd  (Memory Read 64b addr)",
+          "01",
+          "00000",
+          4,
+          false
+        ],
+        [
+          "MWr  (Memory Write 32b addr)",
+          "10",
+          "00000",
+          3,
+          true
+        ],
+        [
+          "MWr  (Memory Write 64b addr)",
+          "11",
+          "00000",
+          4,
+          true
+        ],
+        [
+          "IORd (I/O Read)",
+          "00",
+          "00010",
+          3,
+          false
+        ],
+        [
+          "IOWr (I/O Write)",
+          "10",
+          "00010",
+          3,
+          true
+        ],
+        [
+          "CfgRd0 (Config Read Type 0)",
+          "00",
+          "00100",
+          3,
+          false
+        ],
+        [
+          "CfgWr0 (Config Write Type 0)",
+          "10",
+          "00100",
+          3,
+          true
+        ],
+        [
+          "CfgRd1 (Config Read Type 1)",
+          "00",
+          "00101",
+          3,
+          false
+        ],
+        [
+          "CfgWr1 (Config Write Type 1)",
+          "10",
+          "00101",
+          3,
+          true
+        ],
+        [
+          "Cpl  (Completion)",
+          "00",
+          "01010",
+          3,
+          false
+        ],
+        [
+          "CplD (Completion with data)",
+          "10",
+          "01010",
+          3,
+          true
+        ],
+        [
+          "Msg  (Message)",
+          "01",
+          "10rrr",
+          4,
+          false
+        ],
+        [
+          "MsgD (Message with data)",
+          "11",
+          "10rrr",
+          4,
+          true
+        ]
+      ]
+    },
+    "dllp_type_encoding_table": {
+      "header_columns": [
+        "DLLP Type",
+        "Purpose"
+      ],
+      "rows": [
+        [
+          "Ack",
+          "Acknowledge a TLP up to a given Sequence Number"
+        ],
+        [
+          "Nak",
+          "Negative acknowledge — request replay from last good Sequence Number"
+        ],
+        [
+          "InitFC1",
+          "Flow Control initialization, phase 1; per VC, per credit type"
+        ],
+        [
+          "InitFC2",
+          "Flow Control initialization, phase 2; confirms phase 1 receipt"
+        ],
+        [
+          "UpdateFC",
+          "Running Flow Control credit update"
+        ],
+        [
+          "PM_Enter_L1",
+          "Power Management — request L1 entry"
+        ],
+        [
+          "PM_Enter_L23",
+          "Power Management — request L2 / L3 entry"
+        ],
+        [
+          "PM_Active_State_Request_L1",
+          "Active State Power Management L1 request"
+        ],
+        [
+          "PM_Request_Ack",
+          "Acknowledge a PM request"
+        ],
+        [
+          "Vendor Specific",
+          "Vendor-defined DLLP"
+        ]
+      ]
+    },
+    "lcrc_polynomial_table": {
+      "header_columns": [
+        "Field",
+        "Value"
+      ],
+      "rows": [
+        [
+          "Polynomial",
+          "x^16 + x^12 + x^5 + 1 (CRC-16-CCITT)"
+        ],
+        [
+          "Hex",
+          "0x1021"
+        ],
+        [
+          "Initial value",
+          "0xFFFF"
+        ],
+        [
+          "Width",
+          "16 bits"
+        ],
+        [
+          "Covers",
+          "TLP: Sequence Number + TLP body. DLLP: DLLP type + DLLP-specific fields."
+        ]
+      ]
+    },
+    "ecrc_polynomial_table": {
+      "header_columns": [
+        "Field",
+        "Value"
+      ],
+      "rows": [
+        [
+          "Polynomial",
+          "x^32 + x^26 + x^23 + x^22 + x^16 + x^12 + x^11 + x^10 + x^8 + x^7 + x^5 + x^4 + x^2 + x + 1 (IEEE 802.3 CRC-32)"
+        ],
+        [
+          "Hex",
+          "0x04C11DB7"
+        ],
+        [
+          "Initial value",
+          "0xFFFFFFFF"
+        ],
+        [
+          "Width",
+          "32 bits"
+        ],
+        [
+          "Covers",
+          "TLP end-to-end (optional; signaled via TD = 1 in header)"
+        ]
+      ]
+    },
+    "8b_10b_encoding_note": "The PCI Express Physical Layer uses the IBM 8b/10b code published by Widmer + Franaszek in IBM J. Res. Dev. Vol 27 #5 (Sept 1983) — same code as Fibre Channel, Gigabit Ethernet 1000BASE-X, Serial ATA, and InfiniBand 1x. Provides DC balance + ≤ 5-bit run length + 12 unique 'comma' K-codes used by PCI Express as Special Symbols.",
+    "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
+    "data_rate_table": {
+      "header_columns": [
+        "Generation",
+        "Line Rate (GT/s)",
+        "Modulation",
+        "Encoding",
+        "x16 BW per direction"
+      ],
+      "rows": [
+        [
+          "PCIe 1.0",
+          "2.5",
+          "NRZ",
+          "8b/10b",
+          "~4 GB/s"
+        ],
+        [
+          "PCIe 2.0",
+          "5.0",
+          "NRZ",
+          "8b/10b",
+          "~8 GB/s"
+        ],
+        [
+          "PCIe 3.0",
+          "8.0",
+          "NRZ",
+          "128b/130b",
+          "~15.75 GB/s"
+        ],
+        [
+          "PCIe 4.0",
+          "16.0",
+          "NRZ",
+          "128b/130b",
+          "~31.5 GB/s"
+        ],
+        [
+          "PCIe 5.0 (this spec)",
+          "32.0",
+          "NRZ",
+          "128b/130b",
+          "~63 GB/s"
+        ],
+        [
+          "PCIe 6.0",
+          "64.0",
+          "PAM4",
+          "PAM4 + FEC + Flit",
+          "~126 GB/s"
+        ]
+      ]
+    },
+    "block_encoding_128b130b_table": {
+      "header_columns": [
+        "Field",
+        "Value"
+      ],
+      "rows": [
+        [
+          "Block size",
+          "130 bits"
+        ],
+        [
+          "Sync header",
+          "2 bits"
+        ],
+        [
+          "Payload",
+          "128 bits"
+        ],
+        [
+          "Sync header = 10b",
+          "Data Block"
+        ],
+        [
+          "Sync header = 01b",
+          "Ordered Set Block"
+        ],
+        [
+          "Overhead",
+          "~1.54%"
+        ],
+        [
+          "Scrambling",
+          "Per-lane LFSR on the 128-bit payload"
+        ]
+      ]
+    },
+    "data_rate_identifier_note": "The supported data rate is advertised via the Data Rate Identifier field in TS1/TS2 ordered sets; a new 32.0 GT/s bit is added to the supported-link-speeds vector for Gen5.",
+    "equalization_preset_table": {
+      "header_columns": [
+        "Preset",
+        "Use"
+      ],
+      "rows": [
+        [
+          "P0-P10",
+          "Transmitter equalization preset hints seeding the four-phase enhanced equalization."
+        ]
+      ]
+    },
+    "equalization_phases_table": {
+      "header_columns": [
+        "Phase",
+        "Action"
+      ],
+      "rows": [
+        [
+          "Phase 0",
+          "Initial preset exchange; partners + retimers adopt requested transmitter preset"
+        ],
+        [
+          "Phase 1",
+          "Establish a usable eye in the training direction"
+        ],
+        [
+          "Phase 2",
+          "Downstream port adjusts upstream port TX coefficients"
+        ],
+        [
+          "Phase 3",
+          "Upstream port adjusts downstream port TX coefficients"
+        ]
+      ]
+    },
+    "encoding_note": "PCIe 5.0 uses the 128b/130b block encoding from Gen3: a 130-bit block = 2-bit sync header + 128 bits of scrambled payload. Modulation is two-level NRZ (PAM4 is Gen6). 8b/10b (Gen1/Gen2) is NOT used at Gen5."
+  },
+  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "schema_version": "v0.1.62",
+  "doc_class": "L15",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l15_encoding_tables v0.1.62",
+  "extraction_evidence": {},
+  "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)"
+}

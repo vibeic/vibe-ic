@@ -1,0 +1,73 @@
+# protocol-ic — facts beyond any-ic for any IC that speaks a defined protocol
+class: protocol-ic
+parent: digital-ic
+
+facts:
+  L3:
+    - {path: document_id,                     type: string, required: true, defaultable: true}
+    - {path: protocol_name,                   type: string, required: true}
+    - {path: frame_format.wake,               type: string, required: true}
+    - {path: frame_format.break,              type: string, required: false}
+    - {path: frame_format.start_bit,          type: string, required: true}
+    - {path: frame_format.bit_encoding,       type: string, required: true}
+    - {path: frame_format.byte_order,         type: string, required: true, defaultable: true, default_candidate: "MSB first"}
+    - {path: frame_format.crc,                type: string, required: true}
+    # v0.74 A-implement: was `command_set` (alias `commands` matches benchmark)
+    - {path: commands,                        type: list_of_dicts, required: true, min_len: 1, schema: [opcode, name, direction, payload_bytes, response_bytes, description]}
+    # v0.74 A-implement Phase 2: protocol-critical (were present-in-benchmark but undeclared)
+    # Note: `crc` NOT declared here — benchmark uses `frame_format.crc` (already covered by line above).
+    - {path: packet_format,                   type: dict, required: false}
+    - {path: error_codes,                     type: list_of_dicts, required: false}
+    - {path: unknown_command_behavior,        type: string, required: false}
+
+  L4:
+    - {path: document_id,                     type: string, required: true, defaultable: true}
+    # v0.74 A-implement: was `control_registers_logical`
+    - {path: registers,                       type: list_of_dicts, required: true}
+
+  L8:
+    - {path: aid_bit_timing,                  type: dict, required: true, keys: [bit_period_us, bit0_low_us, bit1_low_us]}
+    - {path: wake_timing,                     type: dict, required: true, keys: [wake_low_min_us, wake_low_max_us]}
+    - {path: response_timing,                 type: dict, required: true, keys: [rx_to_tx_delay_us_min, rx_to_tx_delay_us_max]}
+
+  L8R:
+    - {path: bit_period_cycles,               type: integer, required: true, derives_from: L8.aid_bit_timing.bit_period_us + L8R.clock_frequency_hz}
+    - {path: crc8_polynomial,                 type: string, required: true, mirror: L3.frame_format.crc.poly}
+    - {path: crc8_init,                       type: string, required: true, mirror: L3.frame_format.crc.init}
+
+
+# -----------------------------------------------------------------------------
+# spec_floor — added v0.56 (2026-04-24)
+# -----------------------------------------------------------------------------
+# Generic protocol-IC parent class — kept conservative so the class can
+# parent diverse protocols (cable-side-id, smart-card, hid-bridge, etc.).
+# Subclasses may tighten any floor.
+spec_floor:
+  L10_test_cases_min: 4                # at minimum: identity / status / write / error
+  L10_cmd_response_min: 2
+  L11_calibration_tables_min: 1
+  L12_sequences_min: 1
+  L12_required_sequence_categories:
+    - validation_chain
+  L3_opcode_count_min: 4               # any non-trivial protocol has > 3 commands
+  # L3_crc_poly_allowed deliberately absent — many protocols use parity
+  # (UART-class) or LRC (modbus) instead of polynomial CRC.
+  L4_regmap_reg_count_min: 2
+  L6_submodule_count_min: 6            # rx + tx + decode + state + cmd + pad-or-bus
+  L9_internal_wire_count_min: 18
+  L9_top_level_port_count_min: 10
+
+# -----------------------------------------------------------------------------
+# sequence_naming — per-class strip_suffixes for l12_tb_coverage_check.py
+# -----------------------------------------------------------------------------
+# Added v0.56 C2 — every class with L12_required_sequence_categories
+# now ships its own strip_suffixes list, so the L12-tb-coverage gate
+# can match `tb_<short>.v` files even when the canonical sequence id
+# carries one of the conventional suffixes.
+sequence_naming:
+  strip_suffixes:
+    - sequence            # *_SEQUENCE → *
+    - chain               # *_CHAIN → *
+    - entry               # *_ENTRY → *
+    - exit                # *_EXIT → *
+    - init                # *_INIT → *

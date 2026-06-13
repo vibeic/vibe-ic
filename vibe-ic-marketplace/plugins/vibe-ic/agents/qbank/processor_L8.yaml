@@ -1,0 +1,18 @@
+class: processor
+layer: L8
+# v0.74 E+F-implement: processor timing (IPC, reset, clock)
+qbank:
+  reset_vector:
+    expert:       ["Reset vector (boot-up PC)?"]
+    intermediate: ["Where does the core start executing after reset?"]
+    beginner:     ["Where does the processor look for the first instruction when it starts?"]
+
+  exception_vector_base:
+    expert:       ["MTVEC base + mode (direct vs vectored)?"]
+    intermediate: ["Where does the core jump on trap/exception?"]
+    beginner:     []
+
+  clk_period_budget:
+    expert:       ["Target clock period (ns) for timing signoff?"]
+    intermediate: ["What's the target frequency for the core?"]
+    beginner:     []

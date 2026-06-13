@@ -1,0 +1,285 @@
+{
+  "_comment": "IC class registry — runners (phase2/aid_class_rtl_gen/etc.) consult this to dispatch deterministic generators per detected IC class. Third-party plugins can append entries to extend coverage.",
+  "schema_version": 1,
+  "classes": [
+    {
+      "name": "aid_class_half_duplex_single_wire",
+      "description": "Apple-Lightning-style half-duplex single-wire ID / authentication IC. Host emits BR + opcode (1-byte LSB-first) + optional payload; chip replies with response opcode + payload + CRC8 (poly 0x31 reflected, init 0xFF, residue 0).",
+      "synonyms": [
+        "aid_class",
+        "aid_class_half_duplex",
+        "aid_class_half_duplex_single_wire",
+        "aid_class_single_wire",
+        "apple_id_class"
+      ],
+      "rtl_gen": "aid_class_rtl_gen.py",
+      "rtl_gen_args": [
+        "--spec-compliance"
+      ],
+      "reference_tb": "tools/protocol_tb/aid_class_reference_tb.v",
+      "detect_markers": {
+        "L2": [
+          "half_duplex",
+          "half-duplex",
+          "single-wire",
+          "single_wire"
+        ],
+        "L3": [
+          "BR",
+          "break",
+          "opcode",
+          "CRC",
+          "crc8"
+        ],
+        "L8": [
+          "br_min",
+          "br_max",
+          "rx_classifier",
+          "ibt"
+        ]
+      },
+      "min_marker_score": 2,
+      "default_top": "chip_top",
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "aid_protocol",
+      "command_protocol_applicable": true,
+      "analog_applicable": false,
+      "half_duplex_bus": true,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": null,
+      "tb_fallback_skill": "testbench-author"
+    },
+    {
+      "name": "digital_cmd_driven",
+      "description": "Generic command-driven digital IC (UART / SPI / I2C / parallel cmd). RTL gen not yet covered by deterministic generator — defer to spec-to-rtl skill.",
+      "synonyms": [
+        "digital_cmd",
+        "uart_cmd",
+        "spi_cmd",
+        "i2c_cmd"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "aid_protocol",
+      "command_protocol_applicable": true,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
+    },
+    {
+      "name": "mixed_signal_otp",
+      "description": "Mixed-signal IC with OTP-driven configuration. Digital control logic + OTP read sequence — partial overlap with aid_class. v1.6.142 (#52) routes through MAIN_FSM_SPEC_COMPLIANT so the dispatcher consumes L3.opcodes (per-opcode case-arms + L3-enumerated silent-reject arms); BASELINE spam-responder produces silent DUT for chips with opcodes outside the AID-convention default reply path.",
+      "synonyms": [
+        "mixed_otp",
+        "otp_chip"
+      ],
+      "rtl_gen": "aid_class_rtl_gen.py",
+      "rtl_gen_args": [
+        "--spec-compliance"
+      ],
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "aid_protocol",
+      "command_protocol_applicable": true,
+      "analog_applicable": true,
+      "half_duplex_bus": true,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
+    },
+    {
+      "name": "pure_analog",
+      "description": "Pure analog IC — no digital RTL. Phase 2 SKIPs RTL gen; analog flow (A1..A8) handles via /vibe-ic-analog.",
+      "synonyms": [
+        "analog_only"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": null,
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": true,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": null,
+      "tb_fallback_skill": null
+    },
+    {
+      "name": "bare_fpga",
+      "description": "FPGA-only design with no silicon target. Phase 2 runs FPGA-side (RTL → SOF), Phase 3 SKIPs.",
+      "synonyms": [
+        "fpga_only"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
+    },
+    {
+      "name": "bus_interconnect_protocol",
+      "description": "v0.1.62 — for AMBA AXI/AHB/APB/ACE, Wishbone, TileLink, CHI, OCP, AvalonMM, STBus, and any other multi-channel master/slave bus-interconnect protocol SPEC document. Distinguished by valid/ready (or req/ack) handshake on per-direction channels with burst transfers and explicit master/slave (or manager/subordinate) roles. NO SW-visible opcode/command protocol — payload is data, not instructions; protocol behaviour is in channel-handshake rules. L4 (regmap), L5 (analog), L6 (FSM), L10 (test cases), L11 (OTP), L12 (calibration), L13 (lab) legitimately N/A — the spec defines wire-level protocol, not an end IC. L14-L18 (versioning, encoding tables, compliance rules, channel catalog, interconnect rules) are the SUBSTANTIVE content. Phase 2 runner dispatches via fallback_skill=spec-to-rtl when ingesting a spec for a protocol IP (e.g. an AXI master adapter); for the spec document itself, Phase 2 is N/A.",
+      "synonyms": [
+        "bus_protocol",
+        "interconnect_protocol",
+        "multi_channel_handshake_protocol"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
+    },
+    {
+      "name": "serial_peripheral_protocol",
+      "description": "v0.1.77 — for SPI / I2C / UART / I2S / 1-Wire / CAN / SMBus / Microwire and similar synchronous-or-asynchronous serial peripheral SPEC documents. Distinguished by a small fixed external pin count (typically 2-4) carrying named functions (data/clock/select), master/slave (or controller/target) roles, a shift register as the core data-movement primitive, and clock-divisor / baud-rate control. No multi-channel handshake (that's bus_interconnect_protocol) and no SW-visible opcode protocol (that's digital_cmd_driven). L4 register map IS present (configuration register file at the host-bus interface); L5 (analog), L11 (OTP), L13 (lab cal) typically N/A. L14-L18 (versioning, encoding tables, compliance rules, channel catalog, interconnect rules) all apply to the serial protocol layer. Phase 2 runner dispatches via fallback_skill=spec-to-rtl since the spec is a wire-level protocol, not a complete IC.",
+      "synonyms": [
+        "serial_protocol",
+        "synchronous_serial_protocol",
+        "asynchronous_serial_protocol",
+        "two_wire_interface",
+        "spi_protocol",
+        "i2c_protocol",
+        "uart_protocol"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
+    },
+    {
+      "name": "digital_arithmetic_primitive",
+      "description": "v1.6.522 — for #358 P2. Pure digital data-transform IP (multiplier, adder, filter, hash core, encoder/decoder, arithmetic sub-block). No SW-visible protocol / register map / calibration. Single top module with clock + reset + data ports. L4/L5/L6 legitimately N/A — L2 describes a deterministic combinational/sequential data transform. Phase 2 runner dispatches via fallback_skill=spec-to-rtl since there is no deterministic RTL generator for this open family.",
+      "synonyms": [
+        "digital_datapath",
+        "arithmetic_primitive",
+        "pure_datapath"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
+    },
+    {
+      "name": "processor_cpu",
+      "description": "v1.6.523 — CPU / processor core / SoC with a memory-bus / data top (instruction-fetch, load/store, register file). No SW-visible half-duplex command protocol on a single-wire bus and no analog content. The AID 3-port (clk/reset_n/id_bus) reference TB cannot bind a memory-bus top, so Phase 2 verification runs the generic full-stack TB driven from L9.top_ports + gate-level synth + Phase 3 instead. RTL gen via fallback_skill / IP-catalog glue (open-source RISC-V / SoC cores).",
+      "synonyms": [
+        "cpu",
+        "processor",
+        "soc",
+        "riscv_core",
+        "cpu_core",
+        "microprocessor"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
+    },
+    {
+      "name": "bus_peripheral",
+      "description": "ORGANIC #542 — Register-mapped peripheral IP: SW-visible register map (hjson/regmap or equivalent) exposed via a bus subordinate interface (TL-UL, APB, AXI-Lite, Wishbone, AHB). No ISA / instruction-fetch semantics. L4 register map is the primary specification layer. Distinguished from bus_interconnect_protocol (wire-level protocol spec) and processor_cpu (instruction-executing). crypto_accelerator takes priority when crypto algorithm features are present.",
+      "synonyms": [
+        "register_peripheral",
+        "mmio_peripheral",
+        "regmap_ip",
+        "apb_peripheral",
+        "axi_lite_peripheral",
+        "tlul_peripheral"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
+    },
+    {
+      "name": "crypto_accelerator",
+      "description": "ORGANIC #542 — Cryptographic accelerator IP: hardware implementation of AES, SHA, HMAC, ECC, ChaCha or similar. Typically pairs an algorithm data-path with a SW-accessible register interface for key loading, control, and status. Distinguishable by algorithm-domain vocabulary (encrypt/decrypt, key schedule, S-box, digest, IV/nonce) plus register-map features. Takes priority over bus_peripheral when crypto algorithm evidence is present.",
+      "synonyms": [
+        "aes_core",
+        "sha_core",
+        "hmac_core",
+        "crypto_core",
+        "cipher_engine",
+        "hash_engine"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": false,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
+    },
+    {
+      "name": "unknown_protocol_class",
+      "description": "Detection failed or class not yet registered. Runner fall-throughs to fallback_skill — AI takes over via /spec-to-rtl skill.",
+      "synonyms": [
+        "unknown"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "aid_protocol",
+      "command_protocol_applicable": true,
+      "analog_applicable": true,
+      "half_duplex_bus": true,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
+    }
+  ]
+}

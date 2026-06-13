@@ -1,0 +1,14 @@
+class: cable-side-id-ic
+layer: L4
+qbank:
+  otp_map_128x8:
+    expert:       ["128×8 OTP map — list {addr, name, description} for every used byte?"]
+    intermediate: ["Walk me through the OTP fuse map — 128 bytes total. What goes at which address?"]
+    beginner:     ["What permanent info does the chip store? (IDs, calibration, config)"]
+    follow_ups:
+      - if_user_says: ["standard cable-id", "IC-A-like"]
+        respond_with_default: "128-byte map: 0x00-0x07 vendor_id, 0x08-0x0F product_id, 0x10-0x3F cal_trim, 0x40-0x7F user_fuses"
+      - if_user_says: ["minimal"]
+        respond_with_default: "Partial 64-byte usage — vendor_id/product_id/trim only"
+      - if_ambiguous: ["I don't know"]
+        defer_to_default: true

@@ -1,0 +1,83 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_cases",
+  "ic_name": "A2B_Transceiver",
+  "test_cases": [
+    {
+      "id": "TC-DISCOVERY-01",
+      "description": "Power up a main node with N sub nodes; run discovery; verify all N sub nodes are enumerated in order with node addresses 0..N-1 and that phantom power is switched segment-by-segment."
+    },
+    {
+      "id": "TC-SUPERFRAME-02",
+      "description": "Verify exactly one superframe is transmitted per audio sample period and that it contains a SYNC/control region, a downstream portion, and an upstream portion."
+    },
+    {
+      "id": "TC-LATENCY-03",
+      "description": "Inject a known sample at the main node's local I2S input and verify it appears at the farthest sub node's local I2S output with deterministic latency of about two samples."
+    },
+    {
+      "id": "TC-AUDIO-DOWNSTREAM-04",
+      "description": "Map a downstream audio slot to a sub node and verify the correct channel is delivered to that node's local I2S/TDM output."
+    },
+    {
+      "id": "TC-AUDIO-UPSTREAM-05",
+      "description": "Map an upstream audio slot from a sub node (e.g. a microphone) and verify it arrives sample-aligned at the main node."
+    },
+    {
+      "id": "TC-I2C-TUNNEL-06",
+      "description": "From the host, read/write a sub node transceiver register and a sub-node-local I2C peripheral over the tunneled I2C path; verify correct access."
+    },
+    {
+      "id": "TC-GPIO-DISTANCE-07",
+      "description": "Toggle a sub node GPIO input and verify the state is reproduced at the main node (GPIO over distance)."
+    },
+    {
+      "id": "TC-PHANTOM-POWER-08",
+      "description": "Verify a bus-powered sub node operates with no local supply, drawing power from the line."
+    },
+    {
+      "id": "TC-LINE-FAULT-09",
+      "description": "Inject cable open / short-to-ground / short-to-battery / short-across-pair / reversed-wiring on a segment and verify the fault is detected, localized, and reported upstream via interrupt status."
+    },
+    {
+      "id": "TC-LOSS-OF-LOCK-10",
+      "description": "Force loss of bus lock at a mid-chain node and verify the downstream chain breaks and the event is reported upstream to the main node."
+    }
+  ],
+  "no_test_cases_in_input": true,
+  "bring_up_sequence": [
+    {
+      "step": 1,
+      "description": "PHANTOM POWER (BUS POWER) OVER THE TWISTED PAIR",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/a2b_spec.txt"
+    },
+    {
+      "step": 2,
+      "description": "TUNNELED I2S / TDM AUDIO, I2C CONTROL, GPIO, AND INTERRUPTS",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/a2b_spec.txt"
+    },
+    {
+      "step": 3,
+      "description": "I2S / TDM audio tunneling: each A2B transceiver has a local I2S/TDM port",
+      "expected": null,
+      "no_expected_in_input": true,
+      "extraction_strategy": "bring_up_paragraph_list_harvest",
+      "evidence": "input/docs/a2b_spec.txt"
+    }
+  ],
+  "no_bring_up_sequence_in_input": false,
+  "extraction_evidence": {},
+  "derived_compliance_test_categories": [
+    "Reset behavior verification.",
+    "Register access (read/write to all fields; reserved-bit behavior).",
+    "Nominal transfer / transaction across the protocol's operating modes.",
+    "Error and fault condition handling.",
+    "Back-to-back / sustained operation."
+  ]
+}

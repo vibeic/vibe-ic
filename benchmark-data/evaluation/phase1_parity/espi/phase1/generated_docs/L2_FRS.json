@@ -1,0 +1,236 @@
+{
+  "schema_version": 2,
+  "doc_class": "frs",
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
+  "frs_sections": [
+    {
+      "section": "1",
+      "title": "Introduction",
+      "content": "The Enhanced Serial Peripheral Interface (eSPI) is a bus interface that\nreplaces the Low Pin Count (LPC) bus in PC platforms. eSPI connects a single\nmaster (the chipset / PCH) to one or more slaves (Embedded Controller (EC),\nBaseboard Management Controller (BMC), Super-I/O, or flash device) over a\nshared, source-synchronous, serial bus. eSPI reduces pin count, supports\nlower I/O voltage (1.8 V), and consolidates several legacy sideband signals\ninto in-band Virtual Wire messages.",
+      "evidence": "input/docs/Intel_eSPI_Base_Specification.txt",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "2",
+      "title": "Signal Definition",
+      "content": "The eSPI interface uses the following signals:\n  ESPI_CLK     - Master-driven clock. Common clock to all slaves. 20 MHz to 66 MHz.\n  ESPI_IO[3:0] - Bidirectional command/response data lines. Support Single (1-bit),\n                 Dual (2-bit), and Quad (4-bit) I/O modes.\n  ESPI_CS#[n]  - Active-low chip select, one per slave (point-to-point select).\n  ESPI_RESET#  - Active-low reset to all slaves.\n  ESPI_ALERT#  - Slave-driven alert. In single-master single-slave the slave may\n                 use ESPI_IO[1] as ALERT in the dedicated pin mode, or a separate\n                 ESPI_ALERT# pin in the shared mode.\n\nAll signals are referenced to the 1.0 V / 1.8 V I/O rail. ESPI_CLK idles low.\nData is driven on the rising edge and sampled on the falling edge for command\nphase; the turnaround (T…",
+      "evidence": "input/docs/Intel_eSPI_Base_Specification.txt",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "3",
+      "title": "Channels",
+      "content": "eSPI multiplexes four independent logical channels over the same physical bus.\nEach channel has independent flow control and ordering:\n  Channel 0  Peripheral Channel       - Memory, I/O, and message cycles (LPC-like).\n  Channel 1  Virtual Wire Channel      - In-band tunneling of sideband signals\n                                          (interrupts, SUS_STAT#, SLP_S3#, etc.).\n  Channel 2  OOB (Out-Of-Band) Channel - SMBus/MCTP tunneled messages.\n  Channel 3  Flash Access Channel      - Slave reads/writes the flash component\n                                          attached to the master (or master\n                                          attached, in slave-attached-flash).",
+      "evidence": "input/docs/Intel_eSPI_Base_Specification.txt",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "4",
+      "title": "Transaction Model",
+      "content": "Every transaction begins with the master asserting ESPI_CS#, then driving an\n8-bit command opcode (CMD), followed by command-specific fields, an optional\ndata payload, and a CRC byte. After the command phase the bus turns around\n(TAR) and the slave drives a RESPONSE: an 8-bit response code, optional data,\nstatus, and CRC. ESPI_CS# is then deasserted.\n\n5. Command Opcodes (CMD field, 8 bits)\n  0x00  PUT_PC          Put a posted/completion Peripheral Channel transaction\n  0x01  GET_PC          Get a posted/completion Peripheral Channel transaction\n  0x04  PUT_NP          Put a non-posted Peripheral Channel transaction\n  0x02  GET_NP          Get a non-posted Peripheral Channel transaction\n  0x06  PUT_IORD_SHORT  Short (1/2/4 byte) I/O read\n  0x07  PUT_IOWR_SHORT  Short I/O write\n  0x08  PUT_M…",
+      "evidence": "input/docs/Intel_eSPI_Base_Specification.txt",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "11",
+      "title": "Alert and Wait States",
+      "content": "In-band ALERT: the slave signals service-required by driving ESPI_ALERT#\n(or ESPI_IO[1] in single-slave dedicated-alert mode). The master responds with\na GET_STATUS to read which channel needs service. A slave that cannot respond\nimmediately inserts WAIT STATE bytes (0x0F repeated) before its response code.",
+      "evidence": "input/docs/Intel_eSPI_Base_Specification.txt",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "12",
+      "title": "Reset and Initialization",
+      "content": "On ESPI_RESET# deassertion the link operates in Single I/O mode at 20 MHz with\nCRC disabled. The master issues GET_CONFIGURATION / SET_CONFIGURATION to\nnegotiate frequency, I/O mode, CRC, and to enable each channel by setting the\nChannel Enable bit and polling Channel Ready.",
+      "evidence": "input/docs/Intel_eSPI_Base_Specification.txt",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "13",
+      "title": "Timing",
+      "content": "  ESPI_CLK frequency        20 MHz (boot) up to 66 MHz (negotiated)\n  Setup time tSU            2 ns\n  Hold time tHO             1 ns\n  CS# to CLK setup          2 clocks\n  Turnaround (TAR)          2 clock cycles (bus float)\n  Reset pulse width         minimum 100 us",
+      "evidence": "input/docs/Intel_eSPI_Base_Specification.txt",
+      "heading_shape": "numbered"
+    }
+  ],
+  "no_frs_sections_in_input": false,
+  "protocol_overview": {
+    "type": "Source-synchronous serial bus, single master to one or more slaves",
+    "half_duplex": true,
+    "duplex": "half-duplex (command phase then turnaround then response phase)",
+    "synchronous": true,
+    "replaces": "Low Pin Count (LPC) bus",
+    "io_modes": [
+      "Single (1-bit)",
+      "Dual (2-bit)",
+      "Quad (4-bit)"
+    ],
+    "clock_mhz_range": [
+      20,
+      66
+    ],
+    "io_voltage_v": [
+      1.0,
+      1.8
+    ],
+    "channels": [
+      "Peripheral",
+      "Virtual Wire",
+      "OOB (Out-Of-Band)",
+      "Flash Access"
+    ],
+    "wire_names": [
+      "ESPI_CLK",
+      "ESPI_IO[3:0]",
+      "ESPI_CS#",
+      "ESPI_RESET#",
+      "ESPI_ALERT#"
+    ],
+    "crc": "optional CRC-8 (poly 0x07), negotiated"
+  },
+  "no_protocol_overview_in_input": true,
+  "compliance_requirements": [],
+  "timing_parameters": [
+    {
+      "name": "operating_frequency",
+      "parameter": "operating_frequency",
+      "value": 66,
+      "unit": "MHz",
+      "evidence": "input/docs/Intel_eSPI_Base_Specification.txt",
+      "raw": "up to 66 MHz",
+      "extraction_strategy": "prose_freq_promotion_verb_form_v1_6_570",
+      "low_confidence": true
+    }
+  ],
+  "fmax_mhz": 66.0,
+  "fmax_mhz_extraction_strategy": "max_of_operating_frequency_v1_6_570",
+  "no_fmax_mhz_in_input": false,
+  "extraction_evidence": {
+    "input/docs/Intel_eSPI_Base_Specification.txt": [
+      {
+        "literal": "1 Introduction",
+        "label": "FRS section"
+      },
+      {
+        "literal": "2 Signal Definition",
+        "label": "FRS section"
+      },
+      {
+        "literal": "3 Channels",
+        "label": "FRS section"
+      },
+      {
+        "literal": "4 Transaction Model",
+        "label": "FRS section"
+      },
+      {
+        "literal": "11 Alert and Wait States",
+        "label": "FRS section"
+      },
+      {
+        "literal": "12 Reset and Initialization",
+        "label": "FRS section"
+      },
+      {
+        "literal": "13 Timing",
+        "label": "FRS section"
+      }
+    ]
+  },
+  "auto_cited_sections": [
+    {
+      "file_ref": "phase1/input_doc/Intel_eSPI_Base_Specification.txt:4",
+      "sec_id": "1",
+      "heading": "Introduction",
+      "slug": "introduction"
+    },
+    {
+      "file_ref": "phase1/input_doc/Intel_eSPI_Base_Specification.txt:13",
+      "sec_id": "2",
+      "heading": "Signal Definition",
+      "slug": "signal_definition"
+    },
+    {
+      "file_ref": "phase1/input_doc/Intel_eSPI_Base_Specification.txt:28",
+      "sec_id": "3",
+      "heading": "Channels",
+      "slug": "channels"
+    },
+    {
+      "file_ref": "phase1/input_doc/Intel_eSPI_Base_Specification.txt:39",
+      "sec_id": "4",
+      "heading": "Transaction Model",
+      "slug": "transaction_model"
+    },
+    {
+      "file_ref": "phase1/input_doc/Intel_eSPI_Base_Specification.txt:46",
+      "sec_id": "5",
+      "heading": "Command Opcodes (CMD field, 8 bits)",
+      "slug": "command_opcodes_cmd_field_8_bits"
+    },
+    {
+      "file_ref": "phase1/input_doc/Intel_eSPI_Base_Specification.txt:66",
+      "sec_id": "6",
+      "heading": "Response Codes (RSP field, 8 bits)",
+      "slug": "response_codes_rsp_field_8_bits"
+    },
+    {
+      "file_ref": "phase1/input_doc/Intel_eSPI_Base_Specification.txt:74",
+      "sec_id": "7",
+      "heading": "STATUS Register (16-bit, returned with every response)",
+      "slug": "status_register_16_bit_returned_with_every_response"
+    },
+    {
+      "file_ref": "phase1/input_doc/Intel_eSPI_Base_Specification.txt:87",
+      "sec_id": "8",
+      "heading": "Configuration Registers (offset, accessed via GET/SET_CONFIGURATION)",
+      "slug": "configuration_registers_offset_accessed_via_get_set_configur"
+    },
+    {
+      "file_ref": "phase1/input_doc/Intel_eSPI_Base_Specification.txt:102",
+      "sec_id": "9",
+      "heading": "Virtual Wire Encoding (Channel 1)",
+      "slug": "virtual_wire_encoding_channel_1"
+    },
+    {
+      "file_ref": "phase1/input_doc/Intel_eSPI_Base_Specification.txt:105",
+      "sec_id": "4",
+      "heading": "valid bits and 4 wire-value bits. System Event indices include:",
+      "slug": "valid_bits_and_4_wire_value_bits_system_event_indices_includ"
+    },
+    {
+      "file_ref": "phase1/input_doc/Intel_eSPI_Base_Specification.txt:113",
+      "sec_id": "10",
+      "heading": "CRC",
+      "slug": "crc"
+    },
+    {
+      "file_ref": "phase1/input_doc/Intel_eSPI_Base_Specification.txt:118",
+      "sec_id": "11",
+      "heading": "Alert and Wait States",
+      "slug": "alert_and_wait_states"
+    },
+    {
+      "file_ref": "phase1/input_doc/Intel_eSPI_Base_Specification.txt:124",
+      "sec_id": "12",
+      "heading": "Reset and Initialization",
+      "slug": "reset_and_initialization"
+    },
+    {
+      "file_ref": "phase1/input_doc/Intel_eSPI_Base_Specification.txt:130",
+      "sec_id": "13",
+      "heading": "Timing",
+      "slug": "timing"
+    }
+  ],
+  "functional_requirements": [
+    "Master drives ESPI_CLK common to all slaves; data on rising edge, sample on falling edge (command phase).",
+    "Every transaction: CS# assert -> 8-bit CMD opcode -> command fields -> optional data -> CRC -> turnaround (TAR) -> RESPONSE (8-bit code + data + status + CRC) -> CS# deassert.",
+    "Four logical channels multiplexed over one physical bus, each with independent flow control and ordering.",
+    "Virtual Wire channel tunnels sideband signals (interrupts, SUS_STAT#, SLP_S3#, etc.) in-band.",
+    "OOB channel tunnels SMBus/MCTP messages.",
+    "Flash Access channel lets the slave read/write the flash component.",
+    "Configuration negotiated via GET_CONFIGURATION/SET_CONFIGURATION at offsets 0x08/0x10/0x20/0x30/0x40.",
+    "On reset: Single I/O mode, 20 MHz, CRC disabled."
+  ]
+}

@@ -1,0 +1,25 @@
+class: crypto-engine
+layer: L2
+qbank:
+  rounds:
+    expert:       ["Round count?"]
+    intermediate: ["How many rounds — AES-128=10, AES-256=14, SHA-256=64, Keccak=24?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["aes-128"]
+        respond_with_default: "10"
+      - if_user_says: ["aes-256"]
+        respond_with_default: "14"
+
+  mode_select:
+    expert:       ["Mode-select options — ENC/DEC, SHA-224/256, SHA3 variants?"]
+    intermediate: ["Does the block support multiple modes (encrypt/decrypt, digest widths)? List them."]
+    beginner:     []
+
+  hw_padding:
+    expert:       ["Hardware padding — true/false?"]
+    intermediate: ["Does the core pad its own input, or must the wrapper pad before feeding?"]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # false (caller pads)

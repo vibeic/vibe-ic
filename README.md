@@ -1,0 +1,279 @@
+# Vibe-IC
+
+**AI-native IC design with Claude — from natural-language intent to verified silicon.**
+
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Awesome](https://awesome.re/badge.svg)](https://github.com/vibeic/awesome-open-ic)
+[![Plugin v1.0.0](https://img.shields.io/badge/plugin-v1.0.0-brightgreen.svg)](vibe-ic-marketplace/README.md)
+[![MCP-EDA v1.0.0](https://img.shields.io/badge/mcp--eda-v1.0.0-brightgreen.svg)](vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/README.md)
+
+> **Status: v1.0 — first stable release.** The `vibe-ic` plugin is the
+> product: one install bundles and auto-registers the MCP server, the IP
+> catalog, and the benchmark harness. Install once, design in natural language.
+
+Vibe-IC is a Claude Code plugin + Model Context Protocol (MCP) server
+that bridges large language models to real open-source EDA tools so that
+designers can drive an entire IC flow — from a one-paragraph intent
+through L1-L23 design documents, RTL, FPGA verification, and tape-out
+sign-off — in natural language, with every step gated by deterministic
+checkers (no fabrication, no hallucinated PASS).
+
+---
+
+## What's in this repo
+
+```
+.
+├── vibe-ic-marketplace/        Claude Code plugin marketplace (+ partner plugins)
+│   └── plugins/vibe-ic/         ★ the vibe-ic plugin — one install = everything:
+│       ├── skills/  programs/    skills + deterministic programs
+│       ├── agents/  commands/  hooks/
+│       ├── mcp-eda/                  bundled MCP-EDA server — open-source EDA tools
+│       │                          + lab-device wrappers, auto-registered via .mcp.json
+│       ├── ip-catalog/           open-source IP catalog (manifests)
+│       └── benchmark/            benchmark harness + registry
+├── IP/                         open-core git submodules (serv · ibex · sha256 · opentitan)
+├── benchmark-data/             benchmark inputs + results (ic/<6 ICs> + evaluation/)
+├── tools/                      repo dev / CI utilities
+├── LICENSE                     Apache-2.0
+├── NOTICE                      Third-party attributions
+├── CONTRIBUTING.md             How to contribute
+├── CODE_OF_CONDUCT.md          Contributor Covenant v2.1
+└── SECURITY.md                 Vulnerability reporting
+```
+
+---
+
+## Quick Start
+
+### 1. EDA toolchain (Docker)
+
+All open-source EDA tools (Yosys, OpenROAD, KLayout, Magic, ngspice, …)
+run inside the `hpretl/iic-osic-tools` image:
+
+```bash
+docker pull hpretl/iic-osic-tools:latest
+```
+
+### 2. Install the `vibe-ic` plugin (one step)
+
+Add this repo as a marketplace and install the plugin. This **also bundles
+and auto-registers the MCP-EDA server** — no separate `claude mcp add` needed:
+
+```bash
+claude plugin marketplace add vibeic/vibe-ic
+claude plugin install vibe-ic
+```
+
+> The bundled MCP-EDA server is declared in the plugin's `.mcp.json` and
+> auto-registers on install; its npm dependencies install on first run via
+> the plugin's `post_install` hook.
+
+> Inside an interactive Claude Code session the same two commands are
+> `/plugin marketplace add vibeic/vibe-ic` and
+> `/plugin install vibe-ic@vibe-ic-marketplace`.
+
+### 4. Design something
+
+```bash
+claude "Design a temperature sensor IC: I2C interface, 12-bit, alert
+output, SOIC-8 package."
+```
+
+Claude will dispatch the appropriate skills, invoke MCP-EDA tools, and
+emit L1-L23 design docs + RTL + a verified bitstream.
+
+Optional for full lab integration:
+
+- **Intel Quartus Prime Lite** (free) — FPGA synthesis / bitstream burn
+- A Cyclone-/MAX10-family FPGA board (we test on Terasic DE10-Lite)
+- A USB scope (we test on Keysight DSO-X 3014T)
+- A custom protocol tester or any HID-class USB device (driver template
+  in `vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/src/devices/tester/`)
+
+---
+
+## Design flow at a glance
+
+```
+              Natural-language intent
+                       │
+                       ▼
+     ┌────────────────────────────────────┐
+     │   Phase 1  (doc / spec extraction) │
+     │   L1-L23 JSON design documents     │
+     └─────────────────┬──────────────────┘
+                       ▼
+     ┌────────────────────────────────────┐
+     │   Phase 2  (RTL + verification +   │
+     │            FPGA prototype)         │
+     │   Yosys lint → Icarus sim →        │
+     │   SymbiYosys formal → coverage →   │
+     │   Quartus synth → SOF → on-board   │
+     │   protocol verification            │
+     └─────────────────┬──────────────────┘
+                       ▼
+     ┌────────────────────────────────────┐
+     │   Phase 3   (sign-off + tape-out)  │
+     │   OpenSTA → DFT → OpenROAD PnR →   │
+     │   KLayout DRC → Netgen LVS → GDS   │
+     └────────────────────────────────────┘
+```
+
+For **analog and mixed-signal** designs, two extra stage tracks
+interleave with the digital phases:
+
+- **Analog track — A1-A9.** A1 spec extract (Phase 1) → A2 topology
+  select → A3 netlist + sizing → A4 corner sweep (Phase 2) → A5 layout →
+  A6 per-block physical verification → A7 post-layout resim → A8 hardmacro
+  generation → A9 silicon / hardware verify (Phase 3).
+- **Mixed-signal track — M1-M4** (Phase 3). M1 analog+digital GDS merge +
+  macro placement → M2 power-domain / level-shifter / isolation check →
+  M3 AMS co-sim + interface signal-integrity → M4 top-level PV sign-off.
+
+Throughout, a **canonical-flow compliance gate** verifies that every
+required step actually ran (no skipped phases, no waived sign-off), and
+a **chip-AGNOSTIC source guard** keeps proprietary IC names out of the
+public source tree.
+
+---
+
+## Agent roles & check-in governance
+
+Vibe-IC is operated by **five agent roles**, separated by scenario and — most
+importantly — by **what each may check in (git commit)**. The governing rule:
+**only the Core Agent edits the plugin or the MCP server.** Any other role that
+finds a problem files it on the backlog and lets the Core Agent resolve it into
+the plugin/MCP.
+
+| Agent | Scenario | May check in to | Plugin | MCP | On finding a problem |
+|---|---|---|---|---|---|
+| **Field Agent** | General usage / audit | `community/backlogs/` only | ❌ | ❌ | → backlog → Core Agent |
+| **Benchmark Agent** | Maintainer official runs + end-user local runs | `benchmark-data/` + backlog | ❌ | ❌ | → backlog → Core Agent |
+| **Core Agent** | Maintainer | everything (owns plugin + MCP) | ✅ only role | ✅ only role | resolves backlog → fixes plugin/MCP |
+| **PM Agent** | Phase 1 — natural-language dialogue | design-time, no repo check-in | — | — | — |
+| **IC Expert Agent** | Phase 1 — technical review | design-time, no repo check-in | — | — | — |
+
+- The **MCP server lives under the plugin tree** (`plugins/vibe-ic/mcp-eda/`),
+  so "cannot touch the plugin" already covers "cannot touch the MCP".
+- The **Benchmark Agent** runs *Benchmark Evaluation* (open benchmarks via
+  `/vibe-ic-benchmark`) and *Benchmark IC* (the canonical ICs via `/vibe-ic-all`
+  → `/benchmark-verify`), and owns `benchmark-data/`.
+- The **Field Agent** checks in nothing but the ORGANIC backlog mirror.
+- This boundary is **enforced by a deterministic gate**, not by trust —
+  `programs/agent_checkin_scope_guard.py --role <role> --staged` (exit 1 lists
+  any path outside the role's scope). Each role's charter lives in
+  `plugins/vibe-ic/agents/<role>.md`; the full matrix + Capture-Enhancement loop
+  is in [`AGENT_USAGE_GUIDE.md`](vibe-ic-marketplace/AGENT_USAGE_GUIDE.md).
+
+---
+
+## Key design principles
+
+1. **Single-agent RTL generation** — multi-agent approaches drift on
+   port naming across submodules.
+2. **L9 Integration Spec before any RTL** — submodule ports are
+   defined once, in one canonical place.
+3. **No stub modules** — the top-level instantiates everything.
+4. **Real-benchmark fixtures** — every walker / regex / merge patch
+   must ship with a real-world doc-shape fixture under
+   `tests/fixtures/real_benchmark/`, not just a minimal synthetic case.
+5. **Determinism over heuristics** — every check is a Python program
+   with a fixed verdict tier (PASS / PASS\_WITH\_WAIVERS / FAIL),
+   never an LLM-judged "looks fine".
+
+---
+
+## Documentation
+
+- **Plugin overview & changelog** — `vibe-ic-marketplace/README.md`
+- **Plugin install & skills** — `vibe-ic-marketplace/plugins/vibe-ic/README.md`
+- **MCP-EDA server & EDA tools** — `vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/README.md`
+  and `.../mcp-eda/INSTALL_GUIDE.md`
+- **Architecture, design & tutorials** — being curated for v1.0 (the prior
+  `docs/` tree is kept in the project's external docs archive).
+
+---
+
+## Companion project
+
+**[Awesome Open IC](https://github.com/vibeic/awesome-open-ic)** — a
+curated, MCP-aware map of every open-source IC design tool, IP core,
+PDK, benchmark, standard, and community we have evaluated. Each entry
+notes whether the bundled MCP-EDA server already wraps it.
+
+---
+
+## Contributing
+
+We welcome contributions of every size: bug reports, doc fixes, new
+skills, new EDA tool wrappers, new device drivers, new benchmark
+fixtures. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md) before opening a PR.
+
+For security vulnerabilities, see [SECURITY.md](SECURITY.md) — please
+do **not** open a public issue.
+
+---
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+This license is compatible with bundling Vibe-IC alongside open-source
+PDKs (SkyWater, GF180MCU, IHP — all Apache-2.0) and open-source EDA
+tools (Yosys — ISC; OpenROAD — BSD-3-Clause; KLayout — GPL-3.0 invoked
+as a separate program; Magic / netgen — MIT-style). Patent grant is
+explicit (Apache-2.0 §3).
+
+## IP ownership & commercial-tool firewall
+
+**Tool vs design.** Vibe-IC is a *tool*, not a *design*. Designs you
+produce with it (RTL, netlists, GDS, constraints, test vectors) are
+**yours**: Apache-2.0 places no claim and no copyleft on tool outputs —
+they are not derivative works of the flow, exactly as a binary compiled
+by GCC is not a derivative work of GCC.
+
+**AI-generated RTL.** Where a flow step is AI-authored (spec-to-RTL,
+oracle testbenches), the resulting code is held by **you, the user**,
+as your work product. Note the current US posture: an AI cannot be
+named *inventor* (Thaler v. Vidal, Fed. Cir. 2022), but AI-assisted
+output with significant human contribution is ordinary, ownable IP.
+Generated flow artifacts carry a provenance header stating exactly
+this.
+
+**Manufacturing responsibility.** Foundry sign-off, fabrication
+qualification, and product certification are the user's responsibility
+— Vibe-IC's sign-off gates are open-source equivalents and named
+honest disclosures, not a foundry guarantee.
+
+**Commercial-tool firewall.** The entire 1–44 flow runs on open-source
+tools only; Vibe-IC neither bundles nor requires any commercial EDA.
+If you substitute a commercial tool for a step (e.g. PrimeTime in
+place of OpenSTA), that tool's **outputs are governed by its EULA**,
+are your responsibility, and must **not** be contributed back into
+this repository. Open↔commercial substitutions are disclosed via
+`programs/tool_substitution_disclose.py`.
+
+**Contributions.** Inbound contributions follow Apache-2.0 §5 with an
+explicit DCO + patent non-assertion pledge — see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+## Acknowledgements
+
+Vibe-IC stands on the shoulders of an enormous open-source EDA
+community. See [NOTICE](NOTICE) for the third-party tools we wrap and
+the open standards we implement against.
+
+In particular:
+
+- The **OpenROAD**, **Yosys**, **KLayout**, **Magic**, **ngspice**, and
+  **cocotb** projects, whose decades of work make this kind of
+  AI-driven IC flow possible at all.
+- **IIC OSIC Tools** for the curated Docker image.
+- **FOSSi Foundation**, **libre-silicon**, and **RISC-V International**
+  for the community + standards.
+- **Tiny Tapeout** and **eFabless Caravel** for proving that hobbyist
+  tape-out is real.

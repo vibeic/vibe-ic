@@ -1,0 +1,490 @@
+[
+  {
+    "file": "phase2/stage1/rtl/serv_alu.v",
+    "line": 31,
+    "severity": "ERROR",
+    "rule": "undriven-wire",
+    "symbol": "result_add",
+    "message": "wire 'result_add' declared but never driven (no assign, no instance output)."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_alu.v",
+    "line": 36,
+    "severity": "ERROR",
+    "rule": "undriven-wire",
+    "symbol": "add_cy",
+    "message": "wire 'add_cy' declared but never driven (no assign, no instance output)."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_bufreg.v",
+    "line": 38,
+    "severity": "ERROR",
+    "rule": "undriven-wire",
+    "symbol": "c",
+    "message": "wire 'c' declared but never driven (no assign, no instance output)."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_bufreg.v",
+    "line": 39,
+    "severity": "ERROR",
+    "rule": "undriven-wire",
+    "symbol": "q",
+    "message": "wire 'q' declared but never driven (no assign, no instance output)."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_compdec.v",
+    "line": 43,
+    "severity": "WARN",
+    "rule": "case-no-default",
+    "symbol": "i_instr[1:0]",
+    "message": "case (i_instr[1:0]) has no default branch \u2014 values not enumerated may generate latch or undefined behavior."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_compdec.v",
+    "line": 46,
+    "severity": "WARN",
+    "rule": "case-no-default",
+    "symbol": "i_instr[15:14]",
+    "message": "case (i_instr[15:14]) has no default branch \u2014 values not enumerated may generate latch or undefined behavior."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_compdec.v",
+    "line": 79,
+    "severity": "WARN",
+    "rule": "case-no-default",
+    "symbol": "i_instr[15:13]",
+    "message": "case (i_instr[15:13]) has no default branch \u2014 values not enumerated may generate latch or undefined behavior."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_compdec.v",
+    "line": 116,
+    "severity": "WARN",
+    "rule": "case-no-default",
+    "symbol": "i_instr[11:10]",
+    "message": "case (i_instr[11:10]) has no default branch \u2014 values not enumerated may generate latch or undefined behavior."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_compdec.v",
+    "line": 133,
+    "severity": "WARN",
+    "rule": "case-no-default",
+    "symbol": "i_instr[6:5]",
+    "message": "case (i_instr[6:5]) has no default branch \u2014 values not enumerated may generate latch or undefined behavior."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_compdec.v",
+    "line": 178,
+    "severity": "WARN",
+    "rule": "case-no-default",
+    "symbol": "i_instr[15:14]",
+    "message": "case (i_instr[15:14]) has no default branch \u2014 values not enumerated may generate latch or undefined behavior."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_ctrl.v",
+    "line": 40,
+    "severity": "ERROR",
+    "rule": "undriven-wire",
+    "symbol": "pc_plus_4",
+    "message": "wire 'pc_plus_4' declared but never driven (no assign, no instance output)."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_ctrl.v",
+    "line": 41,
+    "severity": "ERROR",
+    "rule": "undriven-wire",
+    "symbol": "pc_plus_4_cy",
+    "message": "wire 'pc_plus_4_cy' declared but never driven (no assign, no instance output)."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_ctrl.v",
+    "line": 44,
+    "severity": "ERROR",
+    "rule": "undriven-wire",
+    "symbol": "pc_plus_offset",
+    "message": "wire 'pc_plus_offset' declared but never driven (no assign, no instance output)."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_ctrl.v",
+    "line": 45,
+    "severity": "ERROR",
+    "rule": "undriven-wire",
+    "symbol": "pc_plus_offset_cy",
+    "message": "wire 'pc_plus_offset_cy' declared but never driven (no assign, no instance output)."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "LUI",
+    "message": "reg 'LUI' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "AUIPC",
+    "message": "reg 'AUIPC' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "JAL",
+    "message": "reg 'JAL' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "JALR",
+    "message": "reg 'JALR' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "BEQ",
+    "message": "reg 'BEQ' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "BNE",
+    "message": "reg 'BNE' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "BLT",
+    "message": "reg 'BLT' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "BGE",
+    "message": "reg 'BGE' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "BLTU",
+    "message": "reg 'BLTU' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "BGEU",
+    "message": "reg 'BGEU' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "LB",
+    "message": "reg 'LB' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "LH",
+    "message": "reg 'LH' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "LW",
+    "message": "reg 'LW' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "LBU",
+    "message": "reg 'LBU' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "LHU",
+    "message": "reg 'LHU' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "SB",
+    "message": "reg 'SB' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "SH",
+    "message": "reg 'SH' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "SW",
+    "message": "reg 'SW' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "ADDI",
+    "message": "reg 'ADDI' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "SLTI",
+    "message": "reg 'SLTI' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "SLTIU",
+    "message": "reg 'SLTIU' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "XORI",
+    "message": "reg 'XORI' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "ORI",
+    "message": "reg 'ORI' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "ANDI",
+    "message": "reg 'ANDI' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "SLLI",
+    "message": "reg 'SLLI' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "SRLI",
+    "message": "reg 'SRLI' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "SRAI",
+    "message": "reg 'SRAI' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "ADD",
+    "message": "reg 'ADD' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "SUB",
+    "message": "reg 'SUB' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "SLL",
+    "message": "reg 'SLL' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "SLT",
+    "message": "reg 'SLT' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "SLTU",
+    "message": "reg 'SLTU' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "XOR",
+    "message": "reg 'XOR' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "SRL",
+    "message": "reg 'SRL' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "SRA",
+    "message": "reg 'SRA' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "OR",
+    "message": "reg 'OR' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "AND",
+    "message": "reg 'AND' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "FENCE",
+    "message": "reg 'FENCE' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "ECALL",
+    "message": "reg 'ECALL' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 185,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "EBREAK",
+    "message": "reg 'EBREAK' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 186,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "CSRRW",
+    "message": "reg 'CSRRW' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 186,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "CSRRS",
+    "message": "reg 'CSRRS' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 186,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "CSRRC",
+    "message": "reg 'CSRRC' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 186,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "CSRRWI",
+    "message": "reg 'CSRRWI' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 186,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "CSRRSI",
+    "message": "reg 'CSRRSI' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 186,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "CSRRCI",
+    "message": "reg 'CSRRCI' declared and written but never read."
+  },
+  {
+    "file": "phase2/stage1/rtl/serv_debug.v",
+    "line": 187,
+    "severity": "WARN",
+    "rule": "unread-reg",
+    "symbol": "OTHER",
+    "message": "reg 'OTHER' declared and written but never read."
+  }
+]

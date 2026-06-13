@@ -1,0 +1,9 @@
+{
+  "pass": false,
+  "rule": "RTL_DIR_EXISTS",
+  "error": "rtl dir phase2/stage1/rtl not found",
+  "rtl_dir": "phase2/stage1/rtl",
+  "sim_dir": "phase2/stage1/sim_full_stack",
+  "min_distinct": 10,
+  "min_opcodes": 3
+}

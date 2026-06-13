@@ -1,0 +1,18 @@
+class: processor
+layer: L4
+# v0.74 E+F-implement: processor CSR / debug register map
+qbank:
+  csr_list:
+    expert:       ["CSR set — mstatus / mtvec / mepc / mcause / mie / mip / custom?"]
+    intermediate: ["Which control/status registers does the core expose?"]
+    beginner:     []
+
+  debug_registers:
+    expert:       ["Debug-mode CSRs — dcsr / dpc / dscratch / trigger registers?"]
+    intermediate: ["Which CSRs support debug (dcsr, dpc, dscratch)?"]
+    beginner:     []
+
+  pmp_table_size:
+    expert:       ["PMP entry count?"]
+    intermediate: ["How many PMP entries does the core support?"]
+    beginner:     []

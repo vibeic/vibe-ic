@@ -1,0 +1,26 @@
+// Real-world AsciiDoc shape: table delimiter padded for visual
+// emphasis (length ≥ 3 per spec, idiomatic 23 chars). Synthetic
+// minimal `|===` 3-equals form does NOT exercise this — that gap
+// caused #392 R1+R2 to ship 0/55 row hits despite 100% unit-test PASS.
+//
+// Use in test:
+//   src = load_real_fixture("csr_block_with_visual_padding_delimiter.adoc")
+//   blocks = list(_V1_6_587_ASCIIDOC_TABLE_BLOCK_RE.finditer(src))
+//   assert len(blocks) == 1
+
+CSR Map
+=======
+
+The following table summarises the control / status registers.
+
+[cols="<1,<2,<2,<1,<5", options="header"]
+|=======================
+| Address | Name | Keyword | Access | Description
+
+| 0x300 | <<_ctl_status_a>>  | `CTL_STATUS_A`  | RW | Control / status register A
+| 0x304 | <<_ctl_int_en>>    | `CTL_INT_EN`    | RW | Interrupt-enable register
+| 0x305 | <<_ctl_trap_vec>>  | `CTL_TRAP_VEC`  | RW | Trap-handler base address
+| 0x340 | <<_ctl_scratch>>   | `CTL_SCRATCH`   | RW | Scratch register
+|=======================
+
+Trailing prose paragraph.

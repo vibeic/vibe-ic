@@ -1,0 +1,168 @@
+{
+  "schema_version": 2,
+  "doc_class": "cmd_protocol",
+  "ic_name": "A2B_Transceiver",
+  "opcodes": [],
+  "no_opcodes_in_input": true,
+  "placeholder_opcode_count": 0,
+  "no_opcode_names_in_input": false,
+  "crc_parameters": null,
+  "no_crc_parameters_in_input": true,
+  "verdict_byte_offset": null,
+  "verdict_byte_hex": null,
+  "no_verdict_byte_in_input": true,
+  "addr_max": null,
+  "len_max": null,
+  "payload_semantics": null,
+  "no_payload_semantics_in_input": true,
+  "opcode_synthesis_skipped_reason": "L2.protocol_overview.half_duplex is not True and no explicit opcode/command-table heading was found in input/docs/. Free-form hex bytes in prose, SVG labels, or PDF text do not constitute opcode evidence.",
+  "extraction_evidence": {
+    "input/docs/a2b_spec.txt": []
+  },
+  "protocol_type": "Synchronous, superframe-structured daisy-chain audio bus. The main node is the timing master; one superframe is transmitted per audio sample period and is divided into a synchronization/control region, a downstream portion, and an upstream portion. Control / register access (tunneled I2C), discovery, GPIO, and interrupts ride in the control region; audio rides in fixed slots. There is no general opcode/command set at the wire layer — control is register access tunneled over I2C.",
+  "channels": [
+    {
+      "name": "A-side twisted pair (downstream)",
+      "direction": "main node → sub nodes",
+      "description": "Differential twisted-pair link toward the next downstream sub node; carries the downstream portion of the superframe plus phantom power."
+    },
+    {
+      "name": "B-side twisted pair (upstream)",
+      "direction": "sub nodes → main node",
+      "description": "Differential twisted-pair link toward the main node; carries the upstream portion of the superframe."
+    },
+    {
+      "name": "Local I2S/TDM audio port (per node)",
+      "direction": "bidirectional (node-local)",
+      "description": "BCLK, SYNC/FSYNC/WS, DTX/DRX TDM slots; tunneled over the bus."
+    },
+    {
+      "name": "Local I2C control port (per node)",
+      "direction": "bidirectional (node-local)",
+      "description": "SDA / SCL; tunneled over the bus for host register access to sub nodes and their peripherals."
+    }
+  ],
+  "valid_ready_handshake_rules": [
+    "Per-byte handshake: receiver pulls SDA LOW during the 9th SCL clock pulse to ACK; leaves HIGH to NACK.",
+    "Optional clock-stretching handshake: slave holds SCL LOW after a byte to delay the next byte.",
+    "There is no AMBA-style per-cycle VALID/READY; the handshake is byte-level + bit-level via SCL synchronization."
+  ],
+  "burst_based": false,
+  "byte_oriented": false,
+  "byte_order": "MSB-first",
+  "transaction_framing": {
+    "start_S": "HIGH-to-LOW transition on SDA while SCL is HIGH",
+    "stop_P": "LOW-to-HIGH transition on SDA while SCL is HIGH",
+    "repeated_start_Sr": "Functionally identical to S; keeps bus busy without an intervening STOP",
+    "byte": "8 data bits + 1 ACK clock pulse = 9 SCL cycles",
+    "ack_bit": "Receiver pulls SDA LOW during 9th SCL clock pulse",
+    "nack_bit": "SDA remains HIGH during 9th SCL clock pulse"
+  },
+  "address_byte_format": {
+    "bits_0_to_7": "7-bit slave address (LSB-first into ADDRESS field, MSB-first on wire)",
+    "bit_8": "R/W direction bit; 0 = write to slave; 1 = read from slave",
+    "10_bit_addressing": "Two address bytes: first byte 0b11110XX0/1 (XX = upper 2 address bits + R/W); second byte = lower 8 address bits"
+  },
+  "single_response_for_write": "Every byte (including the address byte) is acknowledged by the receiver via an ACK / NACK on the 9th clock pulse.",
+  "per_beat_response_for_read": "Each read byte gets an ACK from the master-receiver, except the last byte where master sends NACK to signal end of transfer.",
+  "reserved_slave_addresses": {
+    "header": [
+      "Address (7-bit)",
+      "R/W",
+      "Description"
+    ],
+    "rows": [
+      [
+        "0000 000",
+        "0",
+        "General Call address"
+      ],
+      [
+        "0000 000",
+        "1",
+        "START byte"
+      ],
+      [
+        "0000 001",
+        "X",
+        "Cbus address"
+      ],
+      [
+        "0000 010",
+        "X",
+        "Reserved for different bus format"
+      ],
+      [
+        "0000 011",
+        "X",
+        "Reserved for future purposes"
+      ],
+      [
+        "0000 1XX",
+        "X",
+        "Hs-mode master code"
+      ],
+      [
+        "1111 0XX",
+        "X",
+        "10-bit slave addressing"
+      ],
+      [
+        "1111 1XX",
+        "X",
+        "Reserved for future purposes including Device ID"
+      ]
+    ]
+  },
+  "master_to_slave_write_transaction": [
+    "S → SLAVE_ADDR[7:1] || R/W=0 → ACK → DATA0 → ACK → DATA1 → ACK → … → P",
+    "Optional repeated START between bytes: S … DATA → ACK → Sr → SLAVE_ADDR2 || R/W → …"
+  ],
+  "slave_to_master_read_transaction": [
+    "S → SLAVE_ADDR[7:1] || R/W=1 → ACK (slave) → DATA0 (slave drives SDA) → ACK (master) → DATA1 → ACK → … → DATAN → NACK (master) → P"
+  ],
+  "superframe_structure": {
+    "rate": "equals the audio sample rate (SYNC rate), e.g. 48 kHz; one superframe per sample period",
+    "regions": [
+      {
+        "name": "Synchronization / control region (SYNC)",
+        "purpose": "Sub nodes lock to the bus on this preamble; carries tunneled I2C register access, discovery, GPIO, and interrupt traffic."
+      },
+      {
+        "name": "Downstream portion",
+        "purpose": "Audio slots flowing from the main node toward the sub nodes (e.g. amplifier / playback channels)."
+      },
+      {
+        "name": "Upstream portion",
+        "purpose": "Audio slots and status flowing from the sub nodes back toward the main node (e.g. microphone channels)."
+      }
+    ],
+    "slot_mapping": "Each node consumes the downstream slots addressed to it and inserts its data into the upstream slots assigned to it as the superframe passes.",
+    "latency": "Deterministic, ~2 samples end to end."
+  },
+  "discovery_protocol": {
+    "summary": "Phantom-power-gated, ordered discovery from the main node outward.",
+    "steps": [
+      "Host (via main node) initiates discovery of the next undiscovered node.",
+      "Phantom power is switched onto the next downstream segment, powering up the next sub node transceiver.",
+      "The newly powered sub node achieves bus lock and announces itself.",
+      "The main node assigns the sub node a node address (its chain position 0..9) and reads its identification / vendor / product registers.",
+      "The host configures the new node's audio slots, I2S/TDM format, I2C passthrough, GPIO, and interrupts via tunneled register writes.",
+      "Discovery repeats for the next downstream node until the chain is enumerated."
+    ],
+    "ordering_reason": "A downstream node cannot be discovered until its upstream neighbor is discovered and instructed to switch power to the next segment."
+  },
+  "addressing": {
+    "scheme": "node address = position in the daisy chain (0 nearest the main node, up to 9)",
+    "broadcast": "broadcast addressing to all nodes supported for common configuration",
+    "register_access": "host reaches every node's registers over tunneled I2C through the main node"
+  },
+  "tunneled_protocols": [
+    "I2S/TDM audio",
+    "I2C control/register access",
+    "GPIO over distance",
+    "interrupts"
+  ],
+  "frame_oriented": true,
+  "connection_oriented": false
+}

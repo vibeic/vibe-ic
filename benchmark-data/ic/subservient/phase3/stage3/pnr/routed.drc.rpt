@@ -1,0 +1,144 @@
+# OpenROAD detailed_route DRC summary -- emitted by
+# phase3_one_shot_runner v1.6.36 (canonicalize_artefacts step).
+# Tool: openroad detailed_route (drt)
+# Source log: phase3/stage3/pnr/openroad.log
+#
+# This report is the runner-side projection of OpenROAD
+# detailed_route output. Tool signature is `openroad` /
+# `detailed_route`; `violation report` line + per-violation
+# detail (when present) populate the substance check.
+#
+# Substance: post-route DRC count derived from openroad
+# detailed_route's per-net congestion/violation log lines.
+# This is the runner's open-source DRC pass; sign-off DRC
+# (Calibre) is invoked separately at Step 30 (waivable when
+# Calibre is unavailable in the sandbox).
+#
+# To upgrade to sign-off-grade DRC, run
+# `magic -dnull -noconsole -T <tech.tcl>` against the GDS,
+# or the Calibre DRC deck supplied at input/pdk/calibre/.
+#
+openroad / drt-pass: detailed_route invoked
+violation report: 1
+violation count summary: 1 violation(s) found
+DRC clean: NO
+tool: openroad
+
+# === detailed_route + global_route summary lines from openroad.log ===
+[INFO ODB-0227] LEF file: /foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef, created 14 layers, 25 vias
+[WARNING ODB-0220] WARNING (LEFPARS-2008): NOWIREEXTENSIONATPIN statement is obsolete in version 5.6 or later.
+[INFO ODB-0227] LEF file: /foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lef/sky130_fd_sc_hd.lef, created 437 library cells
+[INFO IFP-0105] Number of instances:                   3705
+[INFO PPL-0001] Number of available slots 1504
+[INFO PPL-0002] Number of I/O             31
+[INFO PPL-0003] Number of I/O w/sink      31
+[INFO PPL-0004] Number of I/O w/o sink    0
+[INFO GPL-0006] Number of instances:              3705
+[INFO GPL-0010] Number of nets:                   3747
+[INFO GPL-0011] Number of pins:                  14763
+[INFO GPL-0030] Number of bins:                   4096
+[WARNING GRT-0281] Net i_clk has a large fanout of 1394 terminals.
+[INFO DRT-0149] Reading tech and libs.
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer mcon
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer mcon
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via2
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via2
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via3
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via3
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via4
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via4
+Number of layers:     13
+Number of macros:     437
+Number of vias:       25
+Number of viarulegen: 25
+[INFO DRT-0150] Reading design.
+[WARNING DRT-0120] Large net _0820_ has 297 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net _0826_ has 297 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net _0828_ has 300 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net _0830_ has 297 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net i_clk has 1394 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net i_rst has 109 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net u_rf_ram.i_wdata[0] has 577 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net u_rf_ram.i_wdata[1] has 577 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net u_servile.rf_ram_if.rcnt[3] has 273 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net u_servile.rf_ram_if.rcnt[4] has 168 pins which may impact routing performance. Consider optimization.
+[ERROR DRT-0305] Net zero_ of signal type GROUND is not routable by TritonRoute. Move to special nets.
+DETAILED_ROUTE_NONFATAL: DRT-0305
+
+# === violation lines (last 100, if any) ===
+[INFO RSZ-0033] No hold violations found.
+[INFO DRT-0149] Reading tech and libs.
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer mcon
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer mcon
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via2
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via2
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via3
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via3
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via4
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via4
+[INFO DRT-0150] Reading design.
+[WARNING DRT-0120] Large net _0820_ has 297 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net _0826_ has 297 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net _0828_ has 300 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net _0830_ has 297 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net i_clk has 1394 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net i_rst has 109 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net u_rf_ram.i_wdata[0] has 577 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net u_rf_ram.i_wdata[1] has 577 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net u_servile.rf_ram_if.rcnt[3] has 273 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net u_servile.rf_ram_if.rcnt[4] has 168 pins which may impact routing performance. Consider optimization.
+[ERROR DRT-0305] Net zero_ of signal type GROUND is not routable by TritonRoute. Move to special nets.
+DETAILED_ROUTE_NONFATAL: DRT-0305
+# === full openroad.log (last 3 KB, for reviewer context) ===
+itonCTS found 0 clock nets.
+[WARNING CTS-0082] No valid clock nets in the design.
+[WARNING EST-0027] no estimated parasitics. Using wire load models.
+[INFO RSZ-0033] No hold violations found.
+Placement Analysis
+---------------------------------
+total displacement          0.0 u
+average displacement        0.0 u
+max displacement            0.0 u
+original HPWL           77498.1 u
+legalized HPWL          77498.1 u
+delta HPWL                    0 %
+
+[WARNING GRT-0281] Net i_clk has a large fanout of 1394 terminals.
+[INFO DRT-0149] Reading tech and libs.
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer mcon
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer mcon
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via2
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via2
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via3
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via3
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via4
+[WARNING DRT-0349] LEF58_ENCLOSURE with no CUTCLASS is not supported. Skipping for layer via4
+
+Units:                1000
+Number of layers:     13
+Number of macros:     437
+Number of vias:       25
+Number of viarulegen: 25
+
+[INFO DRT-0150] Reading design.
+[WARNING DRT-0120] Large net _0820_ has 297 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net _0826_ has 297 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net _0828_ has 300 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net _0830_ has 297 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net i_clk has 1394 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net i_rst has 109 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net u_rf_ram.i_wdata[0] has 577 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net u_rf_ram.i_wdata[1] has 577 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net u_servile.rf_ram_if.rcnt[3] has 273 pins which may impact routing performance. Consider optimization.
+[WARNING DRT-0120] Large net u_servile.rf_ram_if.rcnt[4] has 168 pins which may impact routing performance. Consider optimization.
+[ERROR DRT-0305] Net zero_ of signal type GROUND is not routable by TritonRoute. Move to special nets.
+DETAILED_ROUTE_NONFATAL: DRT-0305
+Design area 54381 um^2 37% utilization.
+
+# end of routed.drc.rpt

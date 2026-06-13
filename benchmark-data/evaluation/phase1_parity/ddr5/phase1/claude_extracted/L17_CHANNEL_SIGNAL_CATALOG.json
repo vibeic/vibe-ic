@@ -1,0 +1,200 @@
+{
+  "fields": {
+    "channels": [
+      {
+        "name": "Sub-Channel A / Sub-Channel B",
+        "direction": "independent",
+        "purpose": "Two independent 32-bit (40-bit ECC) sub-channels per DIMM, each with its own CA bus, CS_n, and clock.",
+        "active_levels": "N/A",
+        "idle_level": "idle/precharged"
+      },
+      {
+        "name": "DQ[31:0] (per sub-channel)",
+        "direction": "bidirectional (read/write)",
+        "purpose": "32-bit data bus (40 with ECC), double-pumped on DQS.",
+        "active_levels": "POD (VrefDQ-referenced)",
+        "idle_level": "tri-state"
+      },
+      {
+        "name": "DQS_t / DQS_c (per byte)",
+        "direction": "bidirectional strobe",
+        "purpose": "Differential data strobe; data captured on both edges (double data rate).",
+        "active_levels": "differential",
+        "idle_level": "parked"
+      },
+      {
+        "name": "CK_t / CK_c (per sub-channel)",
+        "direction": "input",
+        "purpose": "Differential clock; command/address timing reference.",
+        "active_levels": "differential",
+        "idle_level": "running"
+      },
+      {
+        "name": "CA[13:0] + CS_n (per sub-channel)",
+        "direction": "input",
+        "purpose": "Command/address bus (2-cycle commands) and chip select.",
+        "active_levels": "CMOS",
+        "idle_level": "deselected"
+      }
+    ],
+    "global_signals": [
+      {
+        "name": "RESET_n",
+        "purpose": "Asynchronous device reset."
+      },
+      {
+        "name": "CKE",
+        "purpose": "Clock enable / power-down control."
+      },
+      {
+        "name": "ALERT_n",
+        "purpose": "Write-CRC and command/address parity error alert."
+      },
+      {
+        "name": "ZQ",
+        "purpose": "External calibration reference resistor."
+      },
+      {
+        "name": "SPD-hub sideband",
+        "purpose": "I2C/I3C to PMIC / RCD / temperature sensors."
+      }
+    ],
+    "channel_counts": {
+      "total_interface_bits": 1024,
+      "channels": 16,
+      "bits_per_channel": 64,
+      "pseudo_channels": 32,
+      "bits_per_pseudo_channel": 32,
+      "differential_clock_pairs_per_channel": 1,
+      "write_strobe_pairs_per_pseudo_channel": 1,
+      "read_strobe_pairs_per_pseudo_channel": 1,
+      "sub_channels_per_dimm": 2,
+      "sub_channel_data_bits": 32,
+      "sub_channel_ecc_bits": 40,
+      "ca_bus_bits": 14,
+      "ca_command_cycles": 2,
+      "banks_x8": 32,
+      "bank_groups_x8": 8,
+      "burst_length": 16,
+      "core_command_count": 12,
+      "max_data_rate_MTps": 8400
+    },
+    "handshake_pairs": [
+      {
+        "name": "ACTIVATE / column access",
+        "from": "controller",
+        "to": "DRAM",
+        "rule": "ACTIVATE opens a row; after tRCD a READ/WRITE column access is allowed."
+      },
+      {
+        "name": "WRITE / tWR / PRECHARGE",
+        "from": "controller",
+        "to": "DRAM",
+        "rule": "tWR must elapse after the last write beat before PRECHARGE."
+      },
+      {
+        "name": "MRW / MRR",
+        "from": "controller",
+        "to": "DRAM",
+        "rule": "Mode-register write/read over the 2-cycle CA protocol."
+      },
+      {
+        "name": "ALERT_n",
+        "from": "DRAM",
+        "to": "controller",
+        "rule": "Signals a write-CRC or CA-parity error for retry/recovery."
+      }
+    ],
+    "dependency_graph": {
+      "common_rule": "Within a sub-channel, commands are issued as 2-cycle CA transactions on CA[13:0] qualified by CS_n and timed to CK_t/CK_c. A row must be ACTIVATEd (tRCD) before a column access and PRECHARGEd (tRP) before re-activation. The two sub-channels (A and B) are completely independent — traffic on one has no dependency on the other.",
+      "data_dependency": "A READ/WRITE requires: (1) the device initialized and trained (CA / read / write, DFE tap, VrefDQ/VrefCA, ZQ), (2) the target row open in the addressed bank, (3) bank-group spacing (tCCD_L within a group, tCCD_S across groups). Read data returns after CAS latency on DQ/DQS (double data rate) with on-die ECC applied; refresh (REFab/REFsb) must be maintained within tREFI."
+    },
+    "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)",
+    "power_pins": [
+      {
+        "name": "VDD",
+        "voltage": "1.1 V",
+        "purpose": "Core supply."
+      },
+      {
+        "name": "VDDQ",
+        "voltage": "1.1 V",
+        "purpose": "DQ IO supply."
+      },
+      {
+        "name": "VPP",
+        "voltage": "1.8 V",
+        "purpose": "Wordline-boost supply."
+      },
+      {
+        "name": "VSS",
+        "voltage": "0 V",
+        "purpose": "Ground."
+      }
+    ],
+    "channel_counts_per_x16_channel": {
+      "note": "DDR5 organizes a DIMM into two independent sub-channels rather than HBM-style per-die channels; an x16 device has 16 banks in 4 bank groups.",
+      "banks_x16": 16,
+      "bank_groups_x16": 4
+    },
+    "ordering_rules": {
+      "command_order": "Commands within a sub-channel are ordered to CK; the controller enforces tRCD/tRP/tRAS/tCCD/tWR/CL/tRFC.",
+      "sub_channel": "The two sub-channels are independent and may be scheduled concurrently.",
+      "bank_group": "Back-to-back accesses to different bank groups use tCCD_S; same-group accesses use the longer tCCD_L.",
+      "data_order": "BL16 beats are returned/accepted in burst order on DQ/DQS (double data rate)."
+    },
+    "logical_signaling_levels": [
+      {
+        "name": "Idle / precharged",
+        "meaning": "Banks precharged; CKE high; refresh within tREFI; DQ tri-stated."
+      },
+      {
+        "name": "Active access",
+        "meaning": "Row open; READ/WRITE BL16 bursts on DQ/DQS."
+      }
+    ],
+    "packet_types_summary": [
+      {
+        "class": "Core command",
+        "members": [
+          "ACTIVATE",
+          "READ",
+          "WRITE",
+          "PRECHARGE",
+          "PRECHARGE_ALL",
+          "REFRESH_ALL_BANK",
+          "REFRESH_SAME_BANK",
+          "SELF_REFRESH_ENTRY",
+          "SELF_REFRESH_EXIT",
+          "MODE_REGISTER_WRITE",
+          "MODE_REGISTER_READ",
+          "MULTI_PURPOSE_COMMAND"
+        ],
+        "count": 12
+      },
+      {
+        "class": "Refresh",
+        "members": [
+          "REFab",
+          "REFsb"
+        ],
+        "count": 2
+      },
+      {
+        "class": "Training",
+        "members": [
+          "MPC",
+          "MRW",
+          "MRR"
+        ],
+        "count": 3
+      }
+    ]
+  },
+  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "schema_version": "v0.1.62",
+  "doc_class": "L17",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l17_channels v0.1.62",
+  "extraction_evidence": {},
+  "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)"
+}

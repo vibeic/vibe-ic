@@ -1,0 +1,114 @@
+{
+  "schema_version": 2,
+  "doc_class": "lab_calibration",
+  "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)",
+  "calibration_targets": [
+    {
+      "name": "VDD",
+      "target": "VDD",
+      "spec": "1.1 V",
+      "evidence": "input/docs/ddr5_spec.txt"
+    }
+  ],
+  "no_lab_calibration_in_input": false,
+  "calibration_steps": [],
+  "no_calibration_steps_in_input": true,
+  "lab_equipment": [],
+  "no_lab_equipment_in_input": true,
+  "rig_pin_assignments": {},
+  "no_rig_pin_assignments_in_input": true,
+  "test_cases": [],
+  "no_l13_test_cases_in_input": true,
+  "trim_loop": [],
+  "extraction_evidence": {},
+  "class_path": "pure_analog",
+  "lab_calibration_present": true,
+  "notes": "DDR5 characterization centers on the DQ eye with DFE, internal VrefDQ/VrefCA centering, the Duty-Cycle Adjuster, ZQ calibration, the core timing parameters, refresh retention, and the on-module PMIC rails. Training (CA / read / write, DFE tap, Vref) is performed at bring-up; conformance is established by JEDEC DDR5 compliance testing.",
+  "calibration_summary": "HBM3 at up to 6.4 Gb/s/pin over short interposer links requires per-channel PHY training: write/read leveling, DQ-to-strobe centering, drive-strength/termination tuning. Refresh is calibrated to temperature via TEMP, and RAS soft-repair is exercised during screening. Calibration is per-channel because the 16 channels are independent.",
+  "wck2ck_synchronization_procedure": {
+    "purpose": "Phase-lock the DRAM's internal WCK to CK for deterministic high-speed data timing.",
+    "trigger": "At init, before high-speed transfers, after DVFS change, after deep-sleep exit.",
+    "options": [
+      {
+        "option": "WS_FS",
+        "use": "Free-start; may precede multiple reads/writes."
+      },
+      {
+        "option": "WS_RD",
+        "use": "Read-optimized."
+      },
+      {
+        "option": "WS_WR",
+        "use": "Write-optimized."
+      }
+    ],
+    "carried_by": "CAS command on the CA bus.",
+    "error_recovery": "If the WCK eye is not centered, adjust WCK phase / leveling and re-issue the synchronization."
+  },
+  "read_training_procedure": {
+    "purpose": "Find the optimal DQ sampling phase relative to the DRAM-driven RDQS.",
+    "prerequisites": "WCK locked to CK; DFE / equalization configured for the frequency set point.",
+    "procedure": [
+      "1. Issue RDCAL / read the internal FIFO for a deterministic pattern.",
+      "2. Sweep the DQ sampling phase with configured DFE taps.",
+      "3. Compare per-phase; record the pass window; pick the center."
+    ],
+    "error_recovery": "If no pass window is found, re-run ZQ calibration / WCK2CK sync, adjust DFE taps and Vref(dq), or reduce the frequency set point."
+  },
+  "write_training_procedure": {
+    "purpose": "Center the controller-driven WCK / DQ write eye at the DRAM sampling point.",
+    "procedure": [
+      "1. Use the Write FIFO to load a known pattern.",
+      "2. Sweep WCK-to-DQ phase and Vref(dq); read back; pick the best."
+    ],
+    "error_recovery": "Adjust WCK leveling, output-driver impedance, and Vref(dq); retrain."
+  },
+  "dvfs_retraining": "After a frequency-set-point change (DVFS / DVFSC), re-run ZQ calibration, WCK2CK sync, read training, and write training with the FSP-specific RL/WL/ODT/Vref/DFE values.",
+  "link_training_procedure": [
+    "1. Coarse/fine write leveling to align WDQS per channel.",
+    "2. Read leveling / DQ-RDQS centering with known patterns.",
+    "3. Drive-strength / termination tuning for 6.4 Gb/s/pin via mode registers.",
+    "4. Per-pseudo-channel verification of independent column streams."
+  ],
+  "refresh_temperature_calibration": [
+    "1. Read the on-die TEMP value.",
+    "2. Select refresh interval / RFM thresholds appropriate to temperature.",
+    "3. Re-evaluate periodically; increase refresh rate when hot."
+  ],
+  "repair_and_screening": [
+    "1. Apply factory hard-repair fuse maps during screening.",
+    "2. Run KGSD screening through the base-die test ports.",
+    "3. Exercise runtime soft-repair for in-field RAS."
+  ],
+  "no_analog_trim_at_protocol_interface": "HBM3 is a digital memory interface; calibration is link/PHY training, refresh-temperature adaptation, and repair rather than analog converter trim.",
+  "lab_measurement_targets_from_spec": [
+    {
+      "name": "DQ eye / DFE",
+      "purpose": "Verify the DQ data eye with Decision Feedback Equalization across the speed bins (DDR5-3200 .. DDR5-8400)."
+    },
+    {
+      "name": "VrefDQ / VrefCA centering",
+      "purpose": "Confirm the internal reference voltages center the sampling point during training."
+    },
+    {
+      "name": "Duty-Cycle Adjuster",
+      "purpose": "Measure DQ/DQS duty cycle after DCA correction."
+    },
+    {
+      "name": "ZQ calibration",
+      "purpose": "Verify output-driver / ODT impedance against the ZQ reference resistor."
+    },
+    {
+      "name": "Timing parameters",
+      "purpose": "Validate tRCD / tRP / tRAS / tRFC / tCCD / tWR / CL at the target speed bin."
+    },
+    {
+      "name": "Refresh",
+      "purpose": "Confirm REFab / REFsb and tREFI retention."
+    },
+    {
+      "name": "PMIC rails",
+      "purpose": "Measure the on-module 1.1 V / 1.8 V rails from the 12 V input."
+    }
+  ]
+}

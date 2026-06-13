@@ -1,0 +1,120 @@
+{
+  "schema_version": "1",
+  "doc_class": "timing_waveform",
+  "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
+  "timing_windows": [],
+  "timing_constants": [],
+  "waveforms": [],
+  "extraction_evidence": {},
+  "clock_domains": [
+    {
+      "name": "clk",
+      "source_pin": "clk",
+      "domain_kind": "primary",
+      "role": "master",
+      "source": "synthesised-from-L9.top_ports",
+      "evidence": "L9.top_ports",
+      "reset_strategy": "unspecified",
+      "freq_hz": null,
+      "freq_mhz": null,
+      "period_ns": null
+    }
+  ],
+  "clocks": [
+    {
+      "name": "clk",
+      "type": "input",
+      "freq_mhz": null,
+      "extraction_strategy": "seeded_from_l1_clock_port_v1_6_571",
+      "role": "master",
+      "source": "synthesised-from-L9.top_ports",
+      "domain_kind": "primary"
+    }
+  ],
+  "class_path": "digital_cmd_driven",
+  "packet_framing_waveform": {
+    "tlp_framing": "STP (K27.7) → 12-bit Sequence Number → TLP header (3 or 4 DW) → optional data payload → 16-bit LCRC → END (K29.7), or EDB (K30.7) for nullified TLP.",
+    "dllp_framing": "SDP (K28.2) → DLLP type byte + DLLP-specific fields → 16-bit CRC → END (K29.7).",
+    "lane_placement": "STP / SDP MUST be placed on Lane 0 when the Link is wider than x1.",
+    "logical_idle": "When no TLP / DLLP / ordered-set is being transmitted, IDL data character (00h) is sent on all Lanes, scrambled and 8b/10b-encoded."
+  },
+  "ordered_sets": {
+    "TS1": {
+      "length_symbols": 16,
+      "purpose": "Polling / Configuration / Equalization training; carries Link Number, Lane Number, N_FTS, the Data Rate Identifier (incl. 32.0 GT/s bit), EQ presets/coefficients, and Alternate Protocol Negotiation fields.",
+      "marker": "Ordered Set Block (sync header 01b)"
+    },
+    "TS2": {
+      "length_symbols": 16,
+      "purpose": "Final-handshake training set confirming Lane/Link and rate/EQ agreement before sustaining the trained rate.",
+      "marker": "Ordered Set Block (sync header 01b)"
+    },
+    "SKP": {
+      "length_symbols": "variable",
+      "purpose": "Skip ordered set; clock-tolerance compensation (±300 ppm) and carrier for Lane Margining control.",
+      "marker": "Ordered Set Block (sync header 01b)"
+    },
+    "FTS": {
+      "length_symbols": "configurable (N_FTS)",
+      "purpose": "Fast Training Sequence — exit L0s to L0.",
+      "marker": "Ordered Set Block (sync header 01b)"
+    },
+    "EIOS": {
+      "length_symbols": "fixed",
+      "purpose": "Electrical Idle Ordered Set before TX enters Electrical Idle.",
+      "marker": "Ordered Set Block (sync header 01b)"
+    },
+    "EIEOS": {
+      "length_symbols": "fixed",
+      "purpose": "Electrical Idle Exit Ordered Set — re-acquire block lock on exit.",
+      "marker": "Ordered Set Block (sync header 01b)"
+    }
+  },
+  "ltssm_transition_trigger_waveform": {
+    "Detect_to_Polling": "Receiver-detect circuit senses far-end termination.",
+    "Polling_to_Configuration": "Sufficient consecutive TS1/TS2 ordered sets with valid Lane/Link numbers observed.",
+    "Configuration_to_L0": "Lane width + Lane number agreement complete; initial L0 at 2.5 GT/s for backward compatibility.",
+    "L0_to_Recovery_for_speed_change": "Either end initiates a data-rate change; TS1/TS2 advertise the target rate via the Data Rate Identifier.",
+    "Recovery_Equalization_at_32GTs": "If both ends advertise 32.0 GT/s, Recovery runs the Phase 0-3 enhanced equalization (with preset hints and retimers) before settling at 32 GT/s.",
+    "L0_to_L0s": "TX sends EIOS then enters Electrical Idle (per direction).",
+    "L0_to_L1": "Both ends agree via PM DLLPs; transitions through Recovery.",
+    "L2_to_Detect": "Beacon (or WAKE#) re-trains from Detect."
+  },
+  "clock_tolerance_compensation": {
+    "purpose": "SKP ordered sets let the receive elastic buffer absorb/generate symbols to compensate up to ±300 ppm clock-rate mismatch; at Gen5 SKP also carries Lane Margining control.",
+    "clock_tolerance_ppm": 300
+  },
+  "general_timing_rule": "PCI Express 5.0 is character-timed at a 31.25 ps Unit Interval per Lane (32 GT/s, NRZ). Higher-level state machines (LTSSM sub-states, Recovery.Equalization, FC init, Replay) are specified in Symbol/Block Times so they scale across generations.",
+  "transmitter_eye_diagram_reference": "Figure 4-32 — Minimum Transmitter Timing and Voltage Output Compliance Specification.",
+  "receiver_eye_diagram_reference": "Figure 4-34 — Minimum Receiver Eye Timing and Voltage Compliance Specification.",
+  "voltage_levels": {
+    "modulation": "NRZ (two-level); eye opened by transmitter four-phase EQ + receiver CTLE/DFE.",
+    "ac_coupling": "Required at both ends.",
+    "lane_margining": "Receiver eye margin measured in-system via time (left/right) and optional voltage (up/down) margining."
+  },
+  "line_rate_waveform": {
+    "Gen5_line_rate_GT_s": 32.0,
+    "unit_interval_ps": 31.25,
+    "modulation": "NRZ (two-level)",
+    "encoding": "128b/130b — 128 payload bits + 2-bit sync header per 130-bit block; ~1.54% overhead.",
+    "raw_per_lane_bps": "32 Gb/s",
+    "effective_per_lane_bps": "~31.5 Gb/s",
+    "aggregate_x16_per_direction_GB_s": 63
+  },
+  "block_framing_waveform": {
+    "block_layout": "2-bit sync header (10b = Data Block, 01b = Ordered Set Block) + 128-bit scrambled payload, per lane.",
+    "tlp_framing": "TLP bytes carried inside Data Blocks; framing tokens are byte values, not 8b/10b K-codes.",
+    "lane_placement": "First byte of any TLP/DLLP on Lane 0 when wider than x1.",
+    "precoding": "Optional transmitter precoding before transmission."
+  },
+  "equalization_waveform": {
+    "phases": [
+      "Phase 0",
+      "Phase 1",
+      "Phase 2",
+      "Phase 3"
+    ],
+    "description": "At 32 GT/s the link runs Recovery.Equalization through four phases, exchanging transmitter coefficient/preset requests between partners and through any retimers, until the eye is open.",
+    "preset_hints": "Presets P0-P10 seed the equalization."
+  }
+}

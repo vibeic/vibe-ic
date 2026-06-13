@@ -1,0 +1,21 @@
+plugin_id: example-synth-tool
+namespace: example-org
+layer: eda
+version: 0.1.0
+schema_version: vibe-ic-plugin/v1
+
+publisher:
+  org: Example IC Design Lab
+  contact: ic-team@example.org
+  trust_tier: experimental
+
+provenance:
+  source_kind: open-source
+  built_from: 'local:./vibe-ic-marketplace/reference-plugins/example-eda'
+
+eda:
+  mcp_tool_name: eda_synth_example
+  capabilities: [synth, lint]
+  supported_platforms: [linux-x86_64, linux-aarch64]
+  vendor_endpoint: 'https://api.example.org/vibe-ic/synth/v1'
+  requires_license_server: false

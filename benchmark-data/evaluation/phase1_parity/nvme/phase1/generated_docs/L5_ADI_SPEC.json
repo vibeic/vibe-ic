@@ -1,0 +1,419 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "NVM Express (NVMe) Base Specification Rev 1.4",
+  "analog_blocks_detected": false,
+  "analog_blocks": [],
+  "no_analog": true,
+  "external_components": [],
+  "electrical_specs": [],
+  "design_parameters": [
+    {
+      "parameter": "showing a 1",
+      "value": "1",
+      "source": "NVMe_Spec.pdf",
+      "raw": "- showing a 1:1 mapping between Submission Queues and",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "bits 1",
+      "value": "0",
+      "source": "NVMe_Spec.pdf",
+      "raw": "- bits 1:0 cleared to 00b). The controller",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "bits 2",
+      "value": "0",
+      "source": "NVMe_Spec.pdf",
+      "raw": "- bits 2:0 cleared to 000b).",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "bits 12",
+      "value": "00",
+      "source": "NVMe_Spec.pdf",
+      "raw": "bits 12:00 form the Offset). If this entry is not the first PRP entry in the command or a PRP List",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "bits 6",
+      "value": "0",
+      "source": "NVMe_Spec.pdf",
+      "raw": "bits 6:0 of that field transition from a non-zero value to 0h, or from 0h to a non-zero value.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 6",
+      "value": "4",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 6:4 indicates the firmware slot that is going to be activated at the next Controller Level Reset.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 7",
+      "value": "4",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 7:4 are reserved.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 3",
+      "value": "0",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 3:0 indicates the status of the current device self-test operation as defined in the following",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 7",
+      "value": "3",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 7:3 are reserved.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "bytes 23",
+      "value": "04.",
+      "source": "NVMe_Spec.pdf",
+      "raw": "- bytes 23:04.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "bytes 63",
+      "value": "24.",
+      "source": "NVMe_Spec.pdf",
+      "raw": "- bytes 63:24.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "bytes 1023",
+      "value": "768.",
+      "source": "NVMe_Spec.pdf",
+      "raw": "- bytes 1023:768. If the NVM Subsystem NVMe Qualified Name field of the Identify",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "EL-VSIL-1",
+      "value": "8",
+      "source": "NVMe_Spec.pdf",
+      "raw": "EL-VSIL-1:8     subsystem. If virtualization management is implemented, then the list shall contain a",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 7",
+      "value": "1",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 7:1 are reserved.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "bytes 80",
+      "value": "16",
+      "source": "NVMe_Spec.pdf",
+      "raw": "- bytes 80:16 are not",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "M-1",
+      "value": "0",
+      "source": "NVMe_Spec.pdf",
+      "raw": "M-1:0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 15",
+      "value": "9",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 15:9 are reserved.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 7",
+      "value": "5",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 7:5 are reserved.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 7",
+      "value": "2",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 7:2 are reserved.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "organization. Bytes 111",
+      "value": "104",
+      "source": "NVMe_Spec.pdf",
+      "raw": "organization. Bytes 111:104 contain the vendor specific extension identifier assigned by",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 31",
+      "value": "15",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 31:15 are reserved.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 7",
+      "value": "0",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 7:0 are reserved.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 31",
+      "value": "10",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 31:10 are reserved.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Registration Authority. Bytes 127",
+      "value": "123",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Registration Authority. Bytes 127:123 contain an extension identifier assigned by the",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "corresponding organization. Bytes 119",
+      "value": "112",
+      "source": "NVMe_Spec.pdf",
+      "raw": "corresponding organization. Bytes 119:112 contain the vendor specific extension",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 15",
+      "value": "10",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 15:10 are reserved.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 3",
+      "value": "1",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 3:1 indicate the number of firmware slots that the controller supports. This field",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 15",
+      "value": "1",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 15:1 are reserved.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 15",
+      "value": "8",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 15:8 are reserved.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 2",
+      "value": "1",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 2:1 indicate Flush command behavior (refer to section 6.8) if the NSID value is",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 31",
+      "value": "1",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Bits 31:1 are reserved.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "contains bits 63",
+      "value": "32.",
+      "source": "NVMe_Spec.pdf",
+      "raw": "contains bits 63:32.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Range 0                       07",
+      "value": "04",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Range 0                       07:04                     Length in logical blocks",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Range 1                       23",
+      "value": "20",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Range 1                       23:20                     Length in logical blocks",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Range 255                   4087",
+      "value": "4084",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Range 255                   4087:4084                    Length in logical blocks",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Reserved             23",
+      "value": "11",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Reserved             23:11     Reserved",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Reserved            07",
+      "value": "06",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Reserved            07:06   Reserved",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "bits 63",
+      "value": "32.",
+      "source": "NVMe_Spec.pdf",
+      "raw": "bits 63: 32.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Dword 11 contains bits 63",
+      "value": "32.",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Dword 11 contains bits 63: 32.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Send 1     239",
+      "value": "224",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Send 1     239:224                      Nonce                      0…00h",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Receive 1   239",
+      "value": "224",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Receive 1   239:224                       Nonce                    0…00h",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Receive 1    239",
+      "value": "224",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Receive 1    239:224                                                 generated by the",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Security    239",
+      "value": "224",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Security    239:224                                                                        Read Data",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Security   243",
+      "value": "240",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Security   243:240                                                                        Request Device",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Security   239",
+      "value": "224",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Security   239:224                        Nonce                   0…00h                   Configuration",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Receive 1    243",
+      "value": "240",
+      "source": "NVMe_Spec.pdf",
+      "raw": "Receive 1    243:240                                                                        Block Read",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/NVMe_Spec.pdf": []
+  },
+  "class_path": "digital_arithmetic_primitive",
+  "analog_digital_interface_present": false,
+  "signaling_summary": "NVMe Base 1.4 is a register-level protocol spec layered on top of PCI Express. All electrical signaling — transmitter equalization, receiver equalization, lane training, differential voltage, eye masks — is defined by the underlying PCI Express Base Specification (Gen 1 / 2 / 3 / 4) and the form-factor specifications (U.2, M.2, EDSFF E1.S / E3.S, AIC). The NVMe spec itself does not specify any analog parameter.",
+  "transmitter_specs_minimum_canonical": {
+    "unit_interval_ns_nominal": 0.4,
+    "line_rate_GT_s": 2.5,
+    "differential_pp_voltage_V": {
+      "typical": 0.8,
+      "nominal_low": 0.4,
+      "nominal_high": 1.2,
+      "note": "specified as differential peak-to-peak; ≈ 800 mV typical"
+    },
+    "common_mode_voltage_V": 0.5,
+    "ac_coupling_required": true,
+    "de_emphasis_dB": -3.5,
+    "output_impedance_ohm": {
+      "differential": 100,
+      "single_ended": 50
+    },
+    "transmitter_disabled_state": "Electrical Idle — differential output transitions to undriven, common-mode held."
+  },
+  "receiver_specs_minimum_canonical": {
+    "differential_pp_voltage_V_min": 0.175,
+    "differential_pp_voltage_V_max": 1.2,
+    "input_impedance_ohm": {
+      "differential": 100,
+      "single_ended": 50
+    },
+    "ac_coupled_input": true,
+    "electrical_idle_detect_required": true,
+    "elastic_buffer_required": true,
+    "rx_eye_height_V_min": 0.175,
+    "rx_eye_width_UI_min": 0.4
+  },
+  "beacon_signaling": {
+    "purpose": "Wake the Link from L2 (deep sleep) when REFCLK is OFF.",
+    "frequency_range": "30 kHz to 500 MHz (modulated pulses)",
+    "coupling": "AC-coupled through ~75 nF capacitor",
+    "example": "A 30 kHz BEACON signal includes 2 ns pulses through a 75 nF capacitor (per Figure 4-31)."
+  },
+  "electrical_idle": {
+    "definition": "Differential transmitter output is undriven (high impedance or driven to common mode); no symbol stream produced.",
+    "indicated_by": "EIOS (Electrical Idle Ordered Set) before the transmitter enters Electrical Idle.",
+    "exit_indication": "EIEOS or FTS Ordered Sets, depending on the LTSSM exit state."
+  },
+  "voltage_classes": [
+    "Differential pp ≥ 0.8 V at TX nominal Gen 1",
+    "Differential pp ≥ 0.175 V at RX minimum (after channel loss)",
+    "DC common mode 0.5 V nominal at TX",
+    "Receiver tolerates different DC common mode than TX due to AC coupling"
+  ],
+  "8b_10b_role_in_analog": "The 8b/10b code provides DC balance and guaranteed transition density so the receiver's clock-data-recovery (CDR) loop can lock; the special K-codes (notably COM K28.5) provide the symbol-alignment marker.",
+  "transport_signaling_references": [
+    {
+      "reference": "PCI Express Base Specification",
+      "purpose": "All physical-layer signaling."
+    },
+    {
+      "reference": "SFF-8639 (U.2)",
+      "purpose": "U.2 connector mechanical + electrical."
+    },
+    {
+      "reference": "PCI-SIG M.2 ECN",
+      "purpose": "M.2 form-factor."
+    },
+    {
+      "reference": "EDSFF (SFF-TA-1006/1008)",
+      "purpose": "E1.S / E3.S form factors."
+    }
+  ],
+  "voltage_classes_via_pcie_formfactor": [
+    {
+      "class": "3.3 V (M.2, U.2)",
+      "description": "Standard PCIe slot/connector supply for storage form factors."
+    },
+    {
+      "class": "12 V (U.2, EDSFF)",
+      "description": "Primary supply for higher-power enterprise SSDs."
+    }
+  ],
+  "internal_analog_blocks_out_of_scope": "Internally requires PCIe SerDes PHY, reference clock buffer, PLLs, regulators, and on-die NAND charge-pump / sense amplifiers. None are specified by NVMe Base 1.4.",
+  "notes": "NVMe Base 1.4 is a software-visible protocol/register specification; it does not contain analog parameter tables."
+}

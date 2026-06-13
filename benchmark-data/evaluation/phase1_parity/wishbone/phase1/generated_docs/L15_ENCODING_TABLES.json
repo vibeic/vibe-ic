@@ -1,0 +1,184 @@
+{
+  "fields": {
+    "tables": [
+      {
+        "table_id": "Wishbone Table 3-1",
+        "name": "TAG TYPEs",
+        "field_bits": "TAG TYPE assignment per signal",
+        "encoding": [
+          {
+            "value": "TGA_O()",
+            "name": "Address tag (MASTER)",
+            "semantics": "Associated with [ADR_O()]; qualified by [STB_O]."
+          },
+          {
+            "value": "TGA_I()",
+            "name": "Address tag (SLAVE)",
+            "semantics": "Associated with [ADR_I()]; qualified by [STB_I]."
+          },
+          {
+            "value": "TGD_I()",
+            "name": "Data tag, input",
+            "semantics": "Associated with [DAT_I()]; qualified by [STB_I]."
+          },
+          {
+            "value": "TGD_O()",
+            "name": "Data tag, output",
+            "semantics": "Associated with [DAT_O()]; qualified by [STB_O]."
+          },
+          {
+            "value": "TGC_O()",
+            "name": "Cycle tag (MASTER)",
+            "semantics": "Associated with Bus Cycle; qualified by [CYC_O]."
+          },
+          {
+            "value": "TGC_I()",
+            "name": "Cycle tag (SLAVE)",
+            "semantics": "Associated with Bus Cycle; qualified by [CYC_I]."
+          }
+        ]
+      },
+      {
+        "table_id": "Wishbone Table 3-1 (Data Transfer Nomenclature)",
+        "name": "Data transfer width nomenclature",
+        "field_bits": "Operand width",
+        "encoding": [
+          {
+            "value": "BYTE(N)",
+            "name": "8-bit BYTE transfer at address 'N'",
+            "semantics": "Granularity = 8-bit."
+          },
+          {
+            "value": "WORD(N)",
+            "name": "16-bit WORD transfer at address 'N'",
+            "semantics": "Granularity = 16-bit."
+          },
+          {
+            "value": "DWORD(N)",
+            "name": "32-bit Double WORD transfer",
+            "semantics": "Granularity = 32-bit."
+          },
+          {
+            "value": "QWORD(N)",
+            "name": "64-bit Quadruple WORD transfer",
+            "semantics": "Granularity = 64-bit."
+          }
+        ]
+      },
+      {
+        "table_id": "Wishbone Table 4-2 CTI_O",
+        "name": "Cycle Type Identifiers (Registered Feedback)",
+        "field_bits": "CTI_O(2:0) / CTI_I(2:0)",
+        "encoding": [
+          {
+            "value": "3'b000",
+            "name": "Classic cycle",
+            "semantics": "Backwards compatible with non-Registered-Feedback SLAVEs."
+          },
+          {
+            "value": "3'b001",
+            "name": "Constant address burst cycle",
+            "semantics": "Multiple beats to same ADR_O."
+          },
+          {
+            "value": "3'b010",
+            "name": "Incrementing burst cycle",
+            "semantics": "Multiple beats; wrap mode set by BTE_O()."
+          },
+          {
+            "value": "3'b011",
+            "name": "Reserved",
+            "semantics": "Reserved for future use."
+          },
+          {
+            "value": "3'b100",
+            "name": "Reserved",
+            "semantics": "Reserved for future use."
+          },
+          {
+            "value": "3'b101",
+            "name": "Reserved",
+            "semantics": "Reserved for future use."
+          },
+          {
+            "value": "3'b110",
+            "name": "Reserved",
+            "semantics": "Reserved for future use."
+          },
+          {
+            "value": "3'b111",
+            "name": "End-of-Burst",
+            "semantics": "Asserted on last beat to signal burst end."
+          }
+        ]
+      },
+      {
+        "table_id": "Wishbone Table 4-2 BTE_IO",
+        "name": "Burst Type Extension for Incrementing/Decrementing Bursts",
+        "field_bits": "BTE_O(1:0) / BTE_I(1:0)",
+        "encoding": [
+          {
+            "value": "2'b00",
+            "name": "Linear burst",
+            "semantics": "Address increments by data size each beat, no wrap."
+          },
+          {
+            "value": "2'b01",
+            "name": "4-beat wrap burst",
+            "semantics": "Address wraps at (4 * data-size)-byte boundary."
+          },
+          {
+            "value": "2'b10",
+            "name": "8-beat wrap burst",
+            "semantics": "Address wraps at (8 * data-size)-byte boundary."
+          },
+          {
+            "value": "2'b11",
+            "name": "16-beat wrap burst",
+            "semantics": "Address wraps at (16 * data-size)-byte boundary."
+          }
+        ]
+      },
+      {
+        "table_id": "Wishbone Termination Encoding",
+        "name": "Cycle termination signals (mutually exclusive per RULE 3.45)",
+        "field_bits": "SLAVE response signals",
+        "encoding": [
+          {
+            "value": "ACK_O=1",
+            "name": "Normal termination",
+            "semantics": "Cycle completed successfully."
+          },
+          {
+            "value": "ERR_O=1",
+            "name": "Error termination",
+            "semantics": "Abnormal termination (optional)."
+          },
+          {
+            "value": "RTY_O=1",
+            "name": "Retry termination",
+            "semantics": "Bus not ready; MASTER should retry (optional)."
+          }
+        ]
+      }
+    ],
+    "ic_name": "Wishbone B4 (OpenCores SoC Interconnection Architecture)",
+    "wishbone_burst_address_equations": {
+      "Number_Bytes_per_beat": "port_size / 8 = bytes transferred per beat",
+      "Burst_Length_beats": "1 (Classic SINGLE), N (BLOCK / Registered Feedback)",
+      "Aligned_Address": "All beats of a burst SHOULD be aligned per RULE 3.1010 / 3.105 / 3.100 / 3.95 (data organization figures).",
+      "INCR_address_n": "ADR_O(n+1) = ADR_O(n) + (port_size_bits / 8)",
+      "WRAP_boundary": "Wrap-4 = 4 * port_size/8 bytes; Wrap-8 = 8 * port_size/8 bytes; Wrap-16 = 16 * port_size/8 bytes",
+      "WRAP_address_n": "ADR_O(n+1) = (ADR_O(n) + port_size/8) modulo (wrap_beats * port_size/8) within wrap range - per Table 4-3."
+    },
+    "endianness_definition": {
+      "BIG_ENDIAN": "Byte-lane ordering where the most significant byte is stored at the LOWER address (Section 3.5).",
+      "LITTLE_ENDIAN": "Byte-lane ordering where the most significant byte is stored at the HIGHER address."
+    }
+  },
+  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "schema_version": "v0.1.62",
+  "doc_class": "L15",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l15_encoding_tables v0.1.62",
+  "extraction_evidence": {}
+}

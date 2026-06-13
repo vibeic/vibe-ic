@@ -1,0 +1,105 @@
+skill: core-agent-loop
+
+# Compliance requirements for core-agent-loop fix comments.
+#
+# Every time the core-agent posts a 繁體中文 fix comment on a
+# GitHub issue (Step 4 of the loop), the comment body MUST follow
+# the canonical 5-section shape so:
+#   (a) field-agent verification scripts can deterministically
+#       parse the verdict / SHA / change summary
+#   (b) reviewers don't have to guess what was fixed
+#   (c) chip-AGNOSTIC discipline is enforced at the publish layer
+#       too (not only at the source-code patch layer)
+#
+# Save the candidate comment body to a file and run:
+#     python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+#         --requirements compliance.yaml <file>
+#
+# Exit 0 = PASS (post the comment); exit 1 = FAIL (patch and
+# re-run).
+#
+# NOTE: Uses key `requirements:` matching skill_compliance_check.py
+# (line 435 `compliance.get('requirements', ...)`), NOT the
+# `required_elements:` key seen in some older skills which is
+# parsed as a no-op.
+
+requirements:
+  - id: R1_handoff_line
+    description: >-
+      Comment must open with the canonical hand-off line
+      "Core agent 已推送修復：<short-sha>" where <short-sha> is
+      a 7+-char hex string. This is the field-agent's pickup
+      anchor.
+    pattern: 'Core agent 已推送修復：[0-9a-f]{7,40}'
+
+  - id: R2_problem_section
+    description: >-
+      Comment must contain a "**問題**：" section restating the
+      defect in the field-agent's terms.
+    pattern: '\*\*問題\*\*：'
+
+  - id: R3_root_cause_section
+    description: >-
+      Comment must contain a "**根因**：" section explaining the
+      root cause (not just symptoms).
+    pattern: '\*\*根因\*\*：'
+
+  - id: R4_fix_section
+    description: >-
+      Comment must contain a "**修法**：" section describing the
+      chip-AGNOSTIC fix + files changed.
+    pattern: '\*\*修法\*\*：'
+
+  - id: R5_local_verification_section
+    description: >-
+      Comment must contain a "**本機驗證**：" section reporting
+      gates / tests run and result (e.g. "N/N PASS").
+    pattern: '\*\*本機驗證\*\*：'
+
+  - id: R6_self_close_trailing_line
+    description: >-
+      Comment must contain the canonical self-close trailing line:
+      core agent has self-verified + closed the issue (core-closed
+      label applied) and invites the field agent to reopen + post
+      counter-evidence if its audit finds the fix inadequate. This
+      is the field-audit anchor that REPLACES the retired
+      wait-for-verification hand-back line.
+    pattern: 'Core agent 已自行驗證並關閉此 issue（已加 core-closed 標籤）。field agent 複查若發現未完整，請 reopen 並補反證。'
+
+  - id: R7_chip_agnostic_language
+    description: >-
+      Comment text MUST NOT carry chip-specific class literals as
+      detection logic. Naming a benchmark folder (e.g. "bench-a"
+      / "vendor") is allowed when it appears in an "evidence on"
+      / "on the … benchmark" context, but the same chip-class
+      string must not appear in a code-block declaring a regex /
+      deny-list / detection condition. Conservative pattern:
+      bare IC-A / aid / usb_hid_tester / Vendor OUTSIDE backticks → fail.
+      (chip-AGNOSTIC at the publish layer is a second line of
+      defence; the patch hunk is the primary one.)
+    pattern: '^(?!.*(?<![`a-zA-Z])(IC-A|usb_hid_tester)(?![`a-zA-Z])).*$'
+    required: false   # advisory; spot-checks rather than blocking
+
+  - id: R8_field_agent_not_debug_agent
+    description: >-
+      Comment must use the term "field agent" (lowercased or
+      titlecased), never "debug agent". Project terminology
+      decided 2026-05-10.
+    pattern: 'field agent'
+
+  - id: R9_acceptance_execution_trace
+    description: >-
+      The 本機驗證 section MUST carry an acceptance-execution trace,
+      not merely an "N/N PASS" suite line (#479 / #478). New-tests-
+      green + full-suite-green ALONE is insufficient to close: the
+      comment must show the core-agent ran the issue's ## 驗收
+      command(s) verbatim and reached an end-state. Satisfied by EITHER
+      (a) the token 驗收 appearing in the comment body (quoting the
+      issue's acceptance command), OR (b) the explicit 無驗收區
+      disclosure wording the SKILL.md prescribes for issues that
+      genuinely have no acceptance section. Pattern alternation makes
+      this tolerant of the no-acceptance-section case; a bare N/N PASS
+      with neither phrase fails. The deterministic verbatim-execution
+      check lives in acceptance_evidence_in_fix_comment_check.py (#478);
+      this requirement is the publish-layer second line of defence.
+    pattern: '(驗收|無驗收區)'

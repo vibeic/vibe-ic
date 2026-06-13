@@ -1,0 +1,128 @@
+# Class-agnostic alt-path → canonical-path alias rewrites.
+#
+# v1.6.286 — for #155 ORGANIC-phase1 closed-fix renderer assertions + under-
+# spec required-fact registry false-regress when LLM extraction routes
+# semantically-equivalent facts to ALTERNATE canonical paths instead of the
+# canonical L1.<typed_block>.* slot the gate inspects.
+#
+# v1.6.290 — for #170 ORGANIC-phase1 follow-on to #155. Two-dimensional
+# widening:
+#   (a) concrete entries for L8R / L9.<block> / L2.<block> / notes.* alt-path
+#       families observed in rotation-pass-4 fresh LLM extractions.
+#   (b) regex pattern source-key syntax — a key starting with `^` or
+#       containing `(`, `[`, `.*`, `\\` is treated as a regex source pattern.
+#       This captures whole alt-path families (e.g. any L[2-9R]<block>.
+#       synthesis_results) without enumerating every sub-path.
+#   (c) on multi-source collision (LLM emitted both canonical AND alt path
+#       in the same extraction) the rewriter MERGES rather than OVERWRITES:
+#         * list values: additive union deduped on identifying-key tuple
+#           (`config_name + technology + frequency_mhz` for synthesis_results;
+#           `name` for product_family.configuration_axes etc.)
+#         * dict values: shallow-merge (first-source dict keys preserved)
+#
+# Applied at fact-graph ingest time (FIRST normalisation step after LLM
+# extraction returns) by `tools/phase1_engine/nl_ingest.py
+# :: _apply_canonical_alias_rewrites`, and re-consumed by
+# `tools/phase1_engine/render.py :: compute_required_facts_coverage` so a
+# fact present at an alias source path counts toward the canonical required
+# fact's satisfied-pct.
+#
+# Maintenance contract
+# --------------------
+#   * Class-AGNOSTIC: only generic typed-block slot paths. No chip-class /
+#     chip-name / vendor literals.
+#   * One source of truth: add new aliases here; never duplicate in code.
+#   * Conflict policy (v1.6.286 base, v1.6.290 MERGE extension):
+#       - source path exists AND canonical missing/empty → MOVE source value
+#         to canonical (audit: rewrite_applied)
+#       - both source + canonical exist with non-empty values →
+#         v1.6.286: canonical WINS, audit records `path_conflict`
+#         v1.6.290: when both are list / dict and structurally MERGEABLE
+#         → MERGE (audit: alias_merged) instead of dropping
+#       - canonical already populated → NO-OP (silent)
+#
+# Audit trail
+# -----------
+# Every rewrite emits a record into the fact-graph root list
+# `_canonical_alias_rewrites: [{source, target, reason}, ...]`. The list is
+# the only side-effect when no rewrite is needed (i.e. it stays empty).
+# v1.6.290 multi-source merges are recorded in the same audit list with
+# reason `alias_merged` and a `merged_count` / `dedupe_count` field.
+aliases:
+  # Project / repo identity ------------------------------------------------
+  L1.meta.project_name:
+    L1.tapeout_metadata.project_origin.organisation
+  L1.meta.tapeout_date:
+    L1.tapeout_metadata.tapeout_date
+  L1.meta.repo_url:
+    L1.tapeout_metadata.upstream_repo.url
+
+  # Foundry / process / die ------------------------------------------------
+  L9.process:
+    L1.tapeout_metadata.process_node.pdk_id
+  L9.die_width_um:
+    L1.tapeout_metadata.die_dimensions_um.width
+  L9.die_height_um:
+    L1.tapeout_metadata.die_dimensions_um.length
+
+  # Tapeout status flags ---------------------------------------------------
+  L1.product.asic_taped_out:
+    L1.tapeout_metadata.tape_outs_status
+
+  # PPA / synthesis-results table -----------------------------------------
+  L10.performance.example_config.synthesis_results:
+    L1.synthesis_results
+
+  # Configurable-generic / family axes -------------------------------------
+  L2.cpu.core_count_options:
+    L1.product_family.configuration_axes
+
+  # ----------------------------------------------------------------------
+  # v1.6.290 — for #170. Concrete enumerated entries observed in rotation-
+  # pass-4 fresh LLM extractions.
+  # ----------------------------------------------------------------------
+
+  # synthesis_results — alt paths the LLM picks when the README presents a
+  # PPA table informally or under a non-canonical heading.
+  L8R.synthesis_results:                  L1.synthesis_results
+  L9.synthesis_results:                   L1.synthesis_results
+  L2.synthesis_results:                   L1.synthesis_results
+  notes.synthesis_results:                L1.synthesis_results
+  L1.notes.synthesis_results:             L1.synthesis_results
+
+  # product_family — alt paths observed at L8R / L9 layers.
+  L8R.product_family:                     L1.product_family
+  L9.product_family:                      L1.product_family
+  notes.product_family:                   L1.product_family
+
+  # tapeout_metadata — alt paths observed at L8R / L9 layers.
+  L8R.tapeout_metadata:                   L1.tapeout_metadata
+  L9.tapeout_metadata:                    L1.tapeout_metadata
+  notes.tapeout_metadata:                 L1.tapeout_metadata
+
+  # ----------------------------------------------------------------------
+  # v1.6.290 — for #170. Regex pattern source keys.
+  #
+  # Heuristic: a key starting with `^` or containing `(`, `[`, `.*`, `\\`
+  # is treated as a regex source pattern (`re.fullmatch` semantics on the
+  # extracted-key string). The target remains a fixed canonical path.
+  #
+  # Patterns below capture the L[2-9]R?[.<block>].synthesis_results
+  # family, the same family for product_family / tapeout_metadata, and
+  # the per-block `<block>.synthesis_results` shape under L2/L8R/L9.
+  # ----------------------------------------------------------------------
+
+  # L[2-9]R? optional `.<block>` `.synthesis_results`. Matches:
+  #   L8R.synthesis_results, L9.synthesis_results, L2.synthesis_results,
+  #   L2.cpu.synthesis_results, L8R.config_a.synthesis_results
+  # Does NOT match: L1.synthesis_results (canonical), L10.synthesis_results.
+  'L[2-9]R?(\.[a-z_][a-z0-9_]*)?\.synthesis_results':
+    L1.synthesis_results
+
+  # Same family for product_family.
+  'L[2-9]R?(\.[a-z_][a-z0-9_]*)?\.product_family':
+    L1.product_family
+
+  # Same family for tapeout_metadata.
+  'L[2-9]R?(\.[a-z_][a-z0-9_]*)?\.tapeout_metadata':
+    L1.tapeout_metadata

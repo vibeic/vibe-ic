@@ -1,0 +1,6 @@
+{
+  "tool": "openroad",
+  "source_log": "phase3/stage3/pnr/openroad.log",
+  "primary_clock": "clk",
+  "buf_strategy": "clkbuf chain (heuristic; ASIC-grade CTS skill should refine via cts-plan)"
+}
