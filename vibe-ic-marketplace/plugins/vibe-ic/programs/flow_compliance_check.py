@@ -1468,6 +1468,15 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
 # vs. were vacuously satisfied.
 _VACUOUS_HINT_PREFIX = "__VACUOUS_HINT__: "
 
+# ORGANIC #608 — internal marker a gate can emit to promote its step to
+# SKIPPED-CONDITION (not FAIL) when the gate's own evidence artifact HONESTLY
+# self-reports it was skipped (verdict ∈ SKIP/SKIPPED/SKIPPED-CONDITION) and the
+# success field the gate checks is therefore absent. Mirrors the #433c
+# verdict-self-report doctrine + the VACUOUS_HINT promotion pattern.
+_SKIP_HINT_PREFIX = "__SKIP_HINT__: "
+# Verdict tokens (normalised upper, `_`→`-`) that count as an honest skip.
+_SELF_SKIP_VERDICTS = frozenset({"SKIP", "SKIPPED", "SKIPPED-CONDITION"})
+
 
 def _stdout_signals_vacuous(snippet: str) -> bool:
     """Return True iff the program's combined stdout/stderr snippet
@@ -2426,6 +2435,19 @@ def _check_json_field_true(project: Path, spec: Dict[str, Any]) -> tuple[bool, s
     v: Any = data
     for part in field_key.split("."):
         if not isinstance(v, dict) or part not in v:
+            # ORGANIC #608 — the success field is ABSENT. If the SAME artifact
+            # HONESTLY self-reports it was skipped (verdict ∈ SKIP/…), this is a
+            # legitimate no-evidence skip (e.g. a hardware-skipped FPGA-final
+            # run whose on_board_pass.json says {"verdict":"SKIP"}), NOT a
+            # fabricated PASS or a real FAIL — promote to SKIPPED-CONDITION via
+            # the skip hint. (#433c doctrine; only fires on the ABSENT-field
+            # path, so a present-but-false field still FAILs.)
+            if isinstance(data, dict):
+                _vd = str(data.get("verdict", "")).upper().replace("_", "-")
+                if _vd in _SELF_SKIP_VERDICTS:
+                    return True, (f"{_SKIP_HINT_PREFIX}{rel}: artifact "
+                                  f"self-reports verdict={_vd} (field "
+                                  f"{field_key!r} N/A on a skipped run)")
             return False, f"field not found: {field_key}"
         v = v[part]
     return (v == expect), f"{field_key} = {v!r}"
@@ -2478,6 +2500,10 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
         passed, out = _check_json_field_true(project, gate["json_field_true"])
         if not passed:
             reasons.append(f"json gate failed: {out}")
+        elif out.startswith(_SKIP_HINT_PREFIX):
+            # ORGANIC #608 — bubble the self-reported-skip signal up so
+            # check_step promotes the step to SKIPPED-CONDITION, not PASS.
+            reasons.append(out)
         return passed, reasons
 
     # `optional_program_exit_zero` (added v0.55) — runs a program ONLY
@@ -2601,6 +2627,23 @@ _ENV_UNAVAILABLE_STEP_NAME_TO_ID: Dict[str, Any] = {
     "analog_cosim":            "A9",
     "mixed_signal_cosim":      "A9",
 }
+
+
+# ORGANIC #608 — the FPGA-board step ids that --skip-hardware waives, DERIVED
+# from the canonical name→id table above (single source of truth, kept in sync
+# with the flow YAML) instead of a stale magic-number literal. A Wave 90 /
+# v1.6.14 renumber shifted the FPGA-final-signoff step 37→39 (37 became "GDSII
+# output"), but the old literal `(6, 37)` was never updated — so --skip-hardware
+# both failed to waive the real FPGA-final step (39) AND wrongly waived a
+# non-FPGA backend step (37=GDSII). Deriving the set here makes it renumber-
+# proof: any future YAML renumber updates the table once, and this set follows.
+_FPGA_BOARD_STEP_NAMES = (
+    "fpga_compile", "fpga_early_prototype",
+    "fpga_onboard_test", "fpga_final_signoff", "fpga_signoff",
+)
+_FPGA_BOARD_STEP_IDS = frozenset(
+    _ENV_UNAVAILABLE_STEP_NAME_TO_ID[_n] for _n in _FPGA_BOARD_STEP_NAMES
+)  # = {6, 39}
 
 
 # ── v0.2.103 (#496): analog PDK-substitution waiver path ───────────────────
@@ -3190,15 +3233,18 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         result.reasons.append("analog track skipped via --skip-analog")
         return result
 
-    # v0.2.55 — --skip-hardware: the two FPGA-board steps (6 = early-prototype
-    # SOF, 37 = final on-board sign-off) require a physical FPGA (DE10-Lite-
-    # class) attached. A pure doc→GDS run launched with --skip-hardware (the
+    # v0.2.55 — --skip-hardware: the FPGA-board steps (early-prototype SOF +
+    # final on-board sign-off) require a physical FPGA (DE10-Lite-class)
+    # attached. A pure doc→GDS run launched with --skip-hardware (the
     # documented headless flow) cannot produce a .sof or run an on-board test,
     # so these steps FAILed unconditionally with no way to honor the run mode.
     # Mirror --skip-analog: downgrade them to WAIVED (review_required at
     # foundry/board-bringup time). All OTHER steps still gate normally — the
     # GDS, STA, DRC, LVS sign-off is unaffected. chip-AGNOSTIC.
-    if skip_hardware and isinstance(sid, int) and sid in (6, 37):
+    # ORGANIC #608 — the waived set is now DERIVED from the canonical name→id
+    # table (_FPGA_BOARD_STEP_IDS = {6, 39}), not the stale literal (6, 37) that
+    # a Wave 90 renumber broke (37 became GDSII; FPGA-final moved to 39).
+    if skip_hardware and isinstance(sid, int) and sid in _FPGA_BOARD_STEP_IDS:
         result.status = "WAIVED"
         result.reasons.append(
             "FPGA-board step waived via --skip-hardware: no physical FPGA "
@@ -3354,9 +3400,22 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         # internal markers before display either way.
         vacuous_hints = [r for r in reasons
                          if r.startswith(_VACUOUS_HINT_PREFIX)]
-        non_vacuous_reasons = [r for r in reasons
-                               if not r.startswith(_VACUOUS_HINT_PREFIX)]
-        if passed and vacuous_hints and not non_vacuous_reasons:
+        # ORGANIC #608 — a gate whose evidence artifact honestly self-reports a
+        # skip verdict emits a __SKIP_HINT__ marker; promote the step to
+        # SKIPPED-CONDITION (not PASS, not FAIL) the same way VACUOUS_PASS is
+        # promoted from __VACUOUS_HINT__.
+        skip_hints = [r for r in reasons
+                      if r.startswith(_SKIP_HINT_PREFIX)]
+        non_hint_reasons = [r for r in reasons
+                            if not r.startswith(_VACUOUS_HINT_PREFIX)
+                            and not r.startswith(_SKIP_HINT_PREFIX)]
+        if passed and skip_hints and not non_hint_reasons and not vacuous_hints:
+            result.status = "SKIPPED-CONDITION"
+            for h in skip_hints:
+                result.reasons.append(
+                    f"SKIPPED-CONDITION: gate evidence self-reports a skip "
+                    f"(#608): {h[len(_SKIP_HINT_PREFIX):]}")
+        elif passed and vacuous_hints and not non_hint_reasons:
             result.status = "VACUOUS_PASS"
             for h in vacuous_hints:
                 # Strip the internal prefix; surface a human-friendly
@@ -3368,7 +3427,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 )
         else:
             result.status = "PASS" if passed else "FAIL"
-            result.reasons.extend(non_vacuous_reasons)
+            result.reasons.extend(non_hint_reasons)
     else:
         # No gate — just presence of outputs counts
         result.status = "PASS" if result.evidence else "MISSING"
