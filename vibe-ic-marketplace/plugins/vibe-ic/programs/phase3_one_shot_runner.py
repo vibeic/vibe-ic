@@ -9978,6 +9978,22 @@ def _emit_perc_signoff_memo(project: Path, top: str,
     return memo
 
 
+# ORGANIC #621 — derived-artefact generator order. The data dependency is:
+# foundry_handoff_pack_gen.py PRODUCES the foundry handoff JSONs (mask_spec /
+# wat_plan / corner_kit) that tapeout_checklist_gen.py GRADES. So
+# foundry_handoff_pack_gen MUST run BEFORE tapeout_checklist_gen — otherwise the
+# checklist snapshot (reports/audit/tapeout_checklist.json) is written before
+# the foundry files exist and records verdict=BLOCKER_MISSING for files produced
+# tens of ms later in the same run. (eco_status_gen is independent and stays
+# first.) Extracted to a module constant so the order is testable and a future
+# reorder cannot silently re-break it. Each tuple = (generator, human-kind).
+_DERIVED_ARTEFACT_GENERATORS = (
+    ("eco_status_gen.py", "ECO no-op flag"),
+    ("foundry_handoff_pack_gen.py", "foundry handoff skeleton"),
+    ("tapeout_checklist_gen.py", "tapeout checklist"),
+)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -10170,11 +10186,10 @@ def main() -> int:
 
     # v1.6.36 — invoke the derived-artefact generators (each emits its
     # own canonical path; failures are best-effort and logged in notes).
-    for gen, kind in (
-        ("eco_status_gen.py", "ECO no-op flag"),
-        ("tapeout_checklist_gen.py", "tapeout checklist"),
-        ("foundry_handoff_pack_gen.py", "foundry handoff skeleton"),
-    ):
+    # ORGANIC #621 — order is the module constant: foundry_handoff_pack_gen
+    # runs BEFORE tapeout_checklist_gen so the checklist grades artefacts that
+    # already exist (not a snapshot written moments too early).
+    for gen, kind in _DERIVED_ARTEFACT_GENERATORS:
         gen_path = PROGRAMS_DIR / gen
         if gen_path.is_file():
             cmd = [sys.executable, str(gen_path), str(project)]
