@@ -113,6 +113,31 @@
       "tb_fallback_skill": null
     },
     {
+      "name": "data_converter",
+      "description": "ORGANIC #613 — data converter / mixed-signal IC with a digital serial readout: an analog→digital (or digital→analog) conversion core (sigma-delta / SAR / pipeline ADC, or DAC) that emits/consumes a digital serial bitstream. Has analog content AND a digital decimation / serial-readout datapath, but no SW-visible command protocol and no control FSM, so it must NOT collapse to pure_analog (which SKIPs RTL entirely). The analog track (A1..A8) sizes the converter; spec-to-rtl authors the digital decimation / serial-readout datapath; the digital backend (synth → PnR → GDS) implements it.",
+      "synonyms": [
+        "mixed_signal_adc",
+        "data_conversion",
+        "adc",
+        "dac",
+        "sigma_delta",
+        "delta_sigma",
+        "sar_adc",
+        "pipeline_adc"
+      ],
+      "rtl_gen": null,
+      "fallback_skill": "spec-to-rtl",
+      "verification_track": "generic_full_stack",
+      "command_protocol_applicable": false,
+      "analog_applicable": true,
+      "half_duplex_bus": false,
+      "owner_plugin": "vibe-ic",
+      "assertion_gen": null,
+      "assertion_fallback_skill": "assertion-gen",
+      "tb_gen": "oracle_tb_gen.py",
+      "tb_fallback_skill": "testbench-author"
+    },
+    {
       "name": "bare_fpga",
       "description": "FPGA-only design with no silicon target. Phase 2 runs FPGA-side (RTL → SOF), Phase 3 SKIPs.",
       "synonyms": [

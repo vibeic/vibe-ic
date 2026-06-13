@@ -439,6 +439,39 @@ def _l1_declares_analog_class(l1: Optional[dict]) -> bool:
     return False
 
 
+# ORGANIC #613 — digital serial-readout signature of a data converter's
+# analog→digital interface. A data converter (sigma-delta / SAR / pipeline ADC,
+# or DAC) emits a DIGITAL serial bitstream (1-bit serial outputs / dout-style
+# pins) — the digital half that a pure-analog PMIC/LDO/amplifier never has.
+# Generic data-converter readout vocabulary only; NO chip / vendor / SKU name.
+_V1_6_613_SERIAL_READOUT_RE = re.compile(
+    r"(?:digital\s+serial\s+output"        # "Digital serial outputs OUT1..OUT6"
+    r"|serial\s+bitstream"                  # "serial bitstream"
+    r"|digital\s+bitstream"                 # "digital bitstream per channel"
+    r"|1[\s\-]?bit\s+serial"                # "1-bit serial (OUTn / dout)"
+    r"|bitstream\s+per\s+channel"           # "digital bitstream per channel"
+    r"|\bdout\w*\s+serial|serial\s+\w*dout" # "dout serial"
+    r"|serial\s+readout"                    # "serial readout"
+    r")",
+    re.IGNORECASE)
+
+
+def _v1_6_613_has_digital_serial_readout(l1: Optional[dict],
+                                         l5: Optional[dict]) -> bool:
+    """ORGANIC #613 — True iff the design exposes a DIGITAL serial readout (a
+    1-bit serial output / dout-style digital bitstream). This is the
+    discriminator that separates a data_converter (analog content AND a digital
+    serial readout) from a pure_analog IC (analog content, NO digital readout) —
+    a pure-analog PMIC/LDO/amplifier never emits a digital bitstream, so it does
+    NOT match and stays pure_analog. Harvests L1+L5 string leaves; chip-AGNOSTIC
+    (generic serial-bitstream vocabulary, no chip name)."""
+    sink: List[str] = []
+    for d in (l1, l5):
+        if isinstance(d, dict):
+            _harvest_strings(d, sink)
+    return bool(_V1_6_613_SERIAL_READOUT_RE.search(" ".join(sink)))
+
+
 def _l6_has_fsm(l6: Optional[dict]) -> bool:
     if not isinstance(l6, dict):
         return False
@@ -560,6 +593,7 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
         "is_pure_analog": False,
         "is_pure_digital": False,
         "is_mixed_signal": False,
+        "is_data_converter": False,  # ORGANIC #613
         "ic_class": "unknown",
         # ORGANIC-20260607 #495 — the rule/feature(s) that DECIDED the
         # class. Recorded for drift diagnosis: when two plugin versions
@@ -636,6 +670,35 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
     if profile["protocol_class"] == "aid_class":
         profile["ic_class"] = "aid_class_half_duplex"
         profile["decisive_evidence"] = "protocol_class==aid_class"
+        return profile
+
+    # ORGANIC #613 — data-converter / mixed-signal-with-digital-readout class.
+    # A data converter (sigma-delta / SAR / pipeline ADC, or DAC) has analog
+    # content AND a digital serial readout (1-bit serial outputs / dout-style
+    # bitstream) but NO SW-visible command protocol and NO control FSM, so it
+    # would otherwise collapse to pure_analog (rtl_gen=null + fallback_skill=
+    # null → Phase 2 SKIPs RTL entirely, leaving NO generation path for the
+    # digital decimation / serial-readout datapath it genuinely needs).
+    # Detect it ABOVE the pure_analog fall-through, gated on a digital
+    # serial-readout signature that a pure-analog PMIC/LDO/amplifier never has
+    # (so pure_analog stays pure_analog). CRITICAL: is_pure_analog is set False
+    # so the design does NOT receive the pure-analog digital-backend WAIVE
+    # (both _project_is_pure_analog and _is_pure_analog_no_rtl_track key on that
+    # FLAG) — a data converter HAS a digital datapath that must reach
+    # synth → PnR → GDS via the registry's fallback_skill=spec-to-rtl.
+    # chip-AGNOSTIC: structural (has_analog + serial-readout vocab), no chip.
+    if (profile["has_analog"]
+            and not profile["has_command_protocol"]
+            and not profile["has_fsm"]
+            and _v1_6_613_has_digital_serial_readout(l1, l5)):
+        profile["is_data_converter"] = True
+        profile["is_pure_analog"] = False
+        profile["ic_class"] = "data_converter"
+        profile["decisive_evidence"] = (
+            "is_data_converter (has_analog + digital serial readout, no cmd, "
+            "no fsm) — analog→digital interface recognised; NOT pure_analog "
+            "so the digital decimation/serial-readout datapath reaches the "
+            "digital backend via spec-to-rtl (#613)")
         return profile
 
     if profile["is_pure_analog"]:
@@ -1315,6 +1378,7 @@ ALL_IC_CLASSES: frozenset = frozenset({
     "bus_interconnect_protocol",
     "serial_peripheral_protocol",
     "digital_arithmetic_primitive",
+    "data_converter",          # ORGANIC #613
 })
 
 # Every class reaches the protocol-synth dispatch (Option A). Kept as a
