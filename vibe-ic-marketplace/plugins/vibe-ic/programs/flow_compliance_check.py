@@ -2783,6 +2783,67 @@ def _line_containing(text: str, pos: int) -> str:
     return text[ls:le]
 
 
+# ORGANIC #607 — FPGA-board prototype capability-gap auto-deferral.
+_FPGA_SKIP_WAIVER_TICKET = "fpga-board-prototype-capgap-v1.0.18"
+
+
+def _fpga_skip_disclosed(project: Path) -> bool:
+    """ORGANIC #607 — True iff the runner HONESTLY self-reports a deliberate
+    FPGA skip: reports/phase2/fpga/quartus_map_audit.json carries
+    verdict==SKIP AND sof_present==False. This is the disclosed-skip predicate;
+    an UNDISCLOSED missing .sof (no audit file, a non-SKIP verdict, or
+    sof_present claimed True) returns False so the step's natural FAIL/MISSING
+    stands. chip-AGNOSTIC: keyed on the runner's own SKIP self-report, no chip
+    name."""
+    audit = project / "reports" / "phase2" / "fpga" / "quartus_map_audit.json"
+    try:
+        d = json.loads(audit.read_text())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(d, dict):
+        return False
+    return (str(d.get("verdict", "")).upper() == "SKIP"
+            and d.get("sof_present") is False)
+
+
+def _synthesise_fpga_skip_waivers(
+        project: Path, out: Dict[Any, Dict[str, Any]]) -> None:
+    """ORGANIC #607 — when the runner discloses a deliberate FPGA skip
+    (quartus_map_audit.json verdict=SKIP, sof_present=false — e.g. an IC class
+    with no DE10 board-pin contract, or no Quartus on host), add an
+    ENV_UNAVAILABLE-tier cap-gap waiver for the FPGA early-prototype step so its
+    natural MISSING (no .sof) converts to WAIVED-DEFERRED via check_step's
+    existing fallback, instead of hard-FAILing and cascading
+    blocked-by-upstream across stage2/stage3 → Overall:FAIL. Mirrors
+    `_synthesise_pdk_substitution_waivers` (#496) and the #430 cap-gap doctrine.
+    Mutates `out` in place; no-op when nothing is disclosed (undisclosed missing
+    .sof still hard-FAILs). chip-AGNOSTIC."""
+    if not _fpga_skip_disclosed(project):
+        return
+    sid = _ENV_UNAVAILABLE_STEP_NAME_TO_ID["fpga_early_prototype"]  # renumber-proof
+    if sid in out:
+        return  # an explicit waiver for this step takes precedence
+    out[sid] = {
+        "id": sid,
+        "reason": (
+            "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner "
+            "HONESTLY self-reports a deliberate FPGA skip "
+            "(reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, "
+            "sof_present=false) — no DE10-class board-pin contract for this IC "
+            "class and/or no Quartus on host. The on-board prototype .sof is "
+            "DEFERRED to board bring-up (NOT executed-PASS) "
+            f"[ticket={_FPGA_SKIP_WAIVER_TICKET}, review_required=True, "
+            "cap:fpga_board_prototype]"),
+        "approver": "field-agent-attest (fpga-board cap-gap tier)",
+        "ticket": _FPGA_SKIP_WAIVER_TICKET,
+        "verdict_tier": "ENV_UNAVAILABLE",
+        "review_required": True,
+        "evidence": ["reports/phase2/fpga/quartus_map_audit.json"],
+        "_env_unavailable": True,
+        "_fpga_skip": True,
+    }
+
+
 def _synthesise_pdk_substitution_waivers(
         project: Path, out: Dict[Any, Dict[str, Any]]) -> None:
     """v0.2.103 (#496) — when the disclosed-substitution predicate holds,
@@ -2836,6 +2897,7 @@ def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]
         # not permanently unpassable. An UNDISCLOSED mismatch → {} → FAIL.
         out: Dict[Any, Dict[str, Any]] = {}
         _synthesise_pdk_substitution_waivers(project, out)
+        _synthesise_fpga_skip_waivers(project, out)  # ORGANIC #607
         return out
     # Reuse waivers_schema_check for validation
     try:
@@ -2946,6 +3008,7 @@ def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]
         # deferral waivers (no-op when nothing is disclosed). Runs after
         # explicit waivers so hand-authored A-step entries take precedence.
         _synthesise_pdk_substitution_waivers(project, out)
+        _synthesise_fpga_skip_waivers(project, out)  # ORGANIC #607
         return out
     except Exception as exc:
         print(f"flow_compliance_check: cannot parse {wpath}: {exc}",
