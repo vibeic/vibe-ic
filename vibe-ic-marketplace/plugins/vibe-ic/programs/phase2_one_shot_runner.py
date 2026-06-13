@@ -5501,6 +5501,108 @@ def _cdc_top_clock_ports(rtl_files: List[Path],
     return union, "all modules (no resolvable top — conservative union)"
 
 
+def _v1_6_609_l10_conformance_ok(project: Path):
+    """ORGANIC #609 — return (ok, total) from the l10_tb_conformance manifest
+    (reports/phase2/gates/l10_tb_conformance.json, or any reports/**/
+    l10_tb_conformance.json), or None when absent/unparseable. chip-AGNOSTIC."""
+    cands = [project / "reports" / "phase2" / "gates"
+             / "l10_tb_conformance.json"]
+    rdir = project / "reports"
+    if rdir.is_dir():
+        cands += sorted(rdir.rglob("l10_tb_conformance.json"))
+    for c in cands:
+        if not c.is_file():
+            continue
+        try:
+            d = json.loads(c.read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(d, dict):
+            continue
+        ok = d.get("ok")
+        total = d.get("total")
+        if isinstance(ok, int) and isinstance(total, int):
+            return ok, total
+    return None
+
+
+def _v1_6_609_functional_tb_pass_payload(project: Path):
+    """ORGANIC #609 — when a genuinely-passing AI-authored functional TB exists
+    on disk, return a coverage_actual.json PASS payload citing it; else None.
+    The producer's reference-TB / oracle tracks miss the case where the named
+    AI fallback (testbench-author) authors a self-checking functional TB at the
+    conventional sim/ path that PASSes — so a real verified PASS was hidden as
+    SKIPPED-CONDITION.
+
+    Recognised as a real PASS ONLY when (honest, non-vacuous):
+      * phase2/stage1/sim/results.xml is a JUnit ``<testsuite>`` with
+        tests>=1 AND failures==0 AND errors==0, AND
+      * l10_tb_conformance reports ok==total>0.
+    Scenarios are the TB's OWN testcase names (never a canned cross-design list
+    — #436 preserved). chip-AGNOSTIC."""
+    res = _pl.sim_dir(project) / "results.xml"
+    try:
+        txt = res.read_text(errors="replace")
+    except OSError:
+        return None
+    # Must be the AI-TB's JUnit shape (a `<testsuite tests=...>`), NOT the
+    # producer's own `<results><verdict>` shape.
+    mt = re.search(r"<testsuite[^>]*\btests=[\"'](\d+)[\"']", txt)
+    if not mt:
+        return None
+    tests = int(mt.group(1))
+    mf = re.search(r"<testsuite[^>]*\bfailures=[\"'](\d+)[\"']", txt)
+    me = re.search(r"<testsuite[^>]*\berrors=[\"'](\d+)[\"']", txt)
+    failures = int(mf.group(1)) if mf else 0
+    errors = int(me.group(1)) if me else 0
+    if tests < 1 or failures != 0 or errors != 0:
+        return None
+    l10 = _v1_6_609_l10_conformance_ok(project)
+    if l10 is None:
+        return None
+    ok, total = l10
+    if not (total > 0 and ok == total):
+        return None
+    cases = re.findall(r"<testcase[^>]*\bname=[\"']([A-Za-z0-9_./-]+)[\"']", txt)
+    return {
+        "verdict": "PASS",
+        "verification_track": "authored_functional_tb",
+        "evidence": str(res.relative_to(project)),
+        "scenarios_covered": sorted(set(cases))[:24],
+        "l10_conformance": {"ok": ok, "total": total},
+        "note": ("authored self-checking functional TB PASS "
+                 "(phase2/stage1/sim/results.xml failures=0/errors=0, "
+                 "l10_tb_conformance ok==total>0); scenarios are the TB's own "
+                 "testcase names (#609; #436: never another design's canned "
+                 "list)"),
+    }
+
+
+def _v1_6_609_upgrade_coverage_from_functional_tb(project: Path) -> bool:
+    """ORGANIC #609 — idempotently upgrade
+    reports/phase2/coverage/coverage_actual.json from SKIPPED-CONDITION (or
+    absent) to a functional-TB PASS when one genuinely exists on disk. No-op
+    when coverage is already PASS, or when no passing functional TB is present
+    (honest — the SKIPPED-CONDITION self-report stands). Runs at a point AFTER
+    the AI fallback may have authored + run the TB (the producer ran before it).
+    Returns True iff it wrote an upgrade. chip-AGNOSTIC."""
+    cov = project / "reports" / "phase2" / "coverage" / "coverage_actual.json"
+    if cov.is_file():
+        try:
+            cur = json.loads(cov.read_text(errors="replace"))
+        except (OSError, ValueError):
+            cur = None
+        if (isinstance(cur, dict)
+                and str(cur.get("verdict", "")).upper().startswith("PASS")):
+            return False  # already PASS — idempotent
+    payload = _v1_6_609_functional_tb_pass_payload(project)
+    if payload is None:
+        return False
+    cov.parent.mkdir(parents=True, exist_ok=True)
+    cov.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    return True
+
+
 def step_emit_phase2_manifests(project: Path,
                                 plan: List[StepResult],
                                 top_name: Optional[str] = None) -> StepResult:
@@ -5733,12 +5835,23 @@ def step_emit_phase2_manifests(project: Path,
                      "design's canned list)"),
         })
     else:
-        w("reports/phase2/coverage/coverage_actual.json", {
-            "verdict": "SKIPPED-CONDITION",
-            "reason": ("no reference-TB transcript for THIS project — a "
-                       "coverage verdict cannot cite scenarios that never "
-                       "ran (#436)"),
-        })
+        # ORGANIC #609 — THIRD evidence track: a genuinely-passing AI-authored
+        # functional TB (JUnit sim/results.xml failures=0/errors=0, tests>=1 +
+        # l10_tb_conformance ok==total>0) is a real verified PASS, independent
+        # of the reference_tb / oracle tracks. Recognise it here so it is not
+        # hidden as SKIPPED-CONDITION. (The AI fallback may author the TB AFTER
+        # this producer runs — the idempotent re-emit in phase3
+        # step_canonicalize_artefacts then upgrades a stale stub; #609.)
+        _func_pass = _v1_6_609_functional_tb_pass_payload(project)
+        if _func_pass is not None:
+            w("reports/phase2/coverage/coverage_actual.json", _func_pass)
+        else:
+            w("reports/phase2/coverage/coverage_actual.json", {
+                "verdict": "SKIPPED-CONDITION",
+                "reason": ("no reference-TB transcript for THIS project — a "
+                           "coverage verdict cannot cite scenarios that never "
+                           "ran (#436)"),
+            })
 
     # Step 5: formal.
     # ORGANIC-20260606 #433(c): the formal step must NEVER copy testbench
