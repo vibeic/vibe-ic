@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 673
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 673)
+- **Total programs (excluding helpers / shims):** 674
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 674)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 664 |
+| `any` | 665 |
 
 ## Alphabetical listing
 
@@ -230,6 +230,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `final_report_generate` | any | — | generate canonical, chip-AGNOSTIC final |
 | `final_test_attestation_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
 | `fix_fault_cut_names` | any | v0.63 | Rewrite Fault-cut netlist so escaped identifiers with embedded dots |
+| `fix_surface_classify` | any | — | fix_surface_classify: deterministic consumer-vs-producer |
 | `flexray_protocol_synth` | any | — | FlexRay Communications System protocol synth helper (protocol #49). |
 | `floorplan_pdn_check` | any | — | Step 15 (Floorplan + PDN) SUBSTANCE gate. |
 | `flow_compliance_check` | any | Wave 91 | Strict Vibe-IC phase 2+3 gate (40 main-track |
@@ -745,7 +746,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (664 programs)
+### `any` (665 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -947,6 +948,7 @@ _(no programs in this group)_
 - `final_report_generate` — generate canonical, chip-AGNOSTIC final
 - `final_test_attestation_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
 - `fix_fault_cut_names` — Rewrite Fault-cut netlist so escaped identifiers with embedded dots  _[v0.63]_
+- `fix_surface_classify` — fix_surface_classify: deterministic consumer-vs-producer
 - `flexray_protocol_synth` — FlexRay Communications System protocol synth helper (protocol #49).
 - `floorplan_pdn_check` — Step 15 (Floorplan + PDN) SUBSTANCE gate.
 - `flow_compliance_check` — Strict Vibe-IC phase 2+3 gate (40 main-track  _[Wave 91]_

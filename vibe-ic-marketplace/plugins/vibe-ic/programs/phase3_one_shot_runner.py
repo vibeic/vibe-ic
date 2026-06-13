@@ -4388,6 +4388,87 @@ def _gds_grid_snap(project: Path, top: str, pdk: PdkConfig,
     return False, f"grid-snap NONFATAL: rc={rc} {(out + err)[-300:]}"
 
 
+# ── ORGANIC #601 — KLayout-native per-layer merge before signoff DRC ─────────
+# Magic streamout MERGES abutting same-layer geometry natively, so its GDS
+# carries no boundary edge-pairs. The KLayout streamout fallback does NOT
+# merge: two metal shapes that physically abut across a cell-instance
+# boundary (a cell pin meeting a route, two adjacent std-cells' met1) are
+# written as separate TOUCHING polygons, and signoff DRC reads the shared
+# boundary as a zero-spacing edge-pair → a FALSE m1.2 (min met1 spacing)
+# violation. Measured on a real CPU-class GDS (Ibex, streamout=klayout): a
+# flatten + per-layer Region.merge() cut m1.2 11,470 → 8,451 (−3,019 = 26%
+# were boundary edge-pair false positives); the remaining 8,451 are GENUINE
+# routing-spacing violations (a design-DRC matter, NOT a flow fix). The
+# merge MUST be KLayout-native because Magic's merge CANNOT be assumed — on
+# the very DEF that forced the KLayout fallback Magic streamout core-dumped
+# ("No layer defined for RECT"). So: whenever the GDS came from KLayout
+# streamout, run this merge before DRC; never leave an un-merged KLayout
+# GDS as the signoff artifact. NONFATAL: on failure the un-merged GDS is
+# kept (DRC then over-reports boundary edge-pairs, but does not crash).
+# chip-AGNOSTIC.
+_GDS_LAYER_MERGE_PY = r'''
+import os
+import pya
+
+gds_in = os.environ["GDS_IN"]
+gds_out = os.environ["GDS_OUT"]
+ly = pya.Layout()
+ly.read(gds_in)
+# Flatten so abutting geometry across cell-instance boundaries becomes
+# co-resident in one cell and merges (a hierarchical merge would not union
+# a cell pin against a top-level route).
+for tc in ly.top_cells():
+    tc.flatten(-1, True)
+merged_layers = 0
+for tc in ly.top_cells():
+    for li in ly.layer_indexes():
+        sh = tc.shapes(li)
+        if sh.is_empty():
+            continue
+        reg = pya.Region(sh)
+        reg.merge()                 # union abutting/overlapping same-layer
+        sh.clear()
+        sh.insert(reg)
+        merged_layers += 1
+ly.write(gds_out)
+print("GDS_LAYER_MERGE_DONE layers=%d" % merged_layers)
+'''
+
+
+def _klayout_merge_layers(project: Path, top: str, pdk: PdkConfig,
+                          container: str, gds_path: Path) -> Tuple[bool, str]:
+    """ORGANIC #601 — flatten + per-layer KLayout Region.merge() so abutting
+    same-layer geometry from KLayout streamout does not read as zero-spacing
+    boundary edge-pairs (false m1.2) at signoff DRC. Returns (merged_ok,
+    note). NONFATAL: on failure the un-merged GDS is left untouched. Only
+    the KLayout streamout path needs this — Magic merges natively. Verified-
+    locally: the script content (flatten + per-layer merge) + wiring; the
+    DRC false-positive reduction is container/PDK-specific (the #594
+    classifier / DRC counts measure it)."""
+    if not gds_path.is_file():
+        return False, "no GDS to merge"
+    if not _tool_in_path(container, "klayout"):
+        return False, "klayout not in container PATH — layer-merge skipped"
+    pnr_dir = _pl.pnr_dir(project)
+    script = pnr_dir / "gds_layer_merge.py"
+    script.write_text(_GDS_LAYER_MERGE_PY)
+    merged = pnr_dir / f"{top}.merged.gds"
+    cmd = (
+        f"export QT_QPA_PLATFORM=offscreen && "
+        f"export GDS_IN={_to_container_path(str(gds_path), container)} "
+        f"GDS_OUT={_to_container_path(str(merged), container)} && "
+        f"klayout -zz -b -r {_to_container_path(str(script), container)}"
+    )
+    rc, out, err = _docker_exec(container, cmd, timeout=600)
+    if rc == 0 and merged.is_file() and merged.stat().st_size > 0:
+        try:
+            merged.replace(gds_path)
+        except Exception as exc:
+            return False, f"merge wrote {merged.name} but swap failed: {exc}"
+        return True, "klayout-native per-layer merge applied (#601)"
+    return False, f"layer-merge NONFATAL: rc={rc} {(out + err)[-300:]}"
+
+
 def step_gds(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
@@ -4456,14 +4537,24 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                           f"rc={rc} log_tail={(out+err)[-1500:]}")
     # ORGANIC #600 — manufacturing-grid snap before signoff DRC.
     snap_ok, snap_note = _gds_grid_snap(project, top, pdk, container, gds_out)
+    # ORGANIC #601 — KLayout streamout does NOT merge abutting same-layer
+    # geometry (Magic does); a MUST flatten + per-layer merge before signoff
+    # DRC removes boundary edge-pair false m1.2. Magic-merge cannot be
+    # assumed (it core-dumps on the very DEFs that force this fallback), so
+    # the merge is KLayout-native. Never ship an un-merged KLayout GDS.
+    merge_ok, merge_note = _klayout_merge_layers(project, top, pdk, container,
+                                                 gds_out)
     return StepResult("gds", "PASS", time.time() - t0,
                       f"gds={gds_out.name} size={gds_out.stat().st_size} "
                       f"(streamout=klayout"
-                      f"{'; ' + snap_note if snap_ok else ''})",
+                      f"{'; ' + snap_note if snap_ok else ''}"
+                      f"{'; ' + merge_note if merge_ok else ''})",
                       [str(gds_out)],
                       extras={"streamout_engine": "klayout",
                               "grid_snap": snap_ok,
-                              "grid_snap_note": snap_note})
+                              "grid_snap_note": snap_note,
+                              "layer_merge": merge_ok,
+                              "layer_merge_note": merge_note})
 
 
 # ---------------------------------------------------------------------------

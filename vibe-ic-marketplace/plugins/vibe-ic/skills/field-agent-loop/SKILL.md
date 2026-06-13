@@ -148,17 +148,36 @@ autonomously via a persistent loop, so the field agent must NOT
 reintroduce 40-minute synchronous babysitting where a seconds-long
 artifact check is the faithful real-surface verification.
 
-1. **Classify the fix by what its diff TOUCHES:**
-   - **consumer-only** — a checker / classifier / verdict-message /
+1. **Classify the fix by what its diff TOUCHES — the deterministic
+   answer is the program `fix_surface_classify.py` (#602), do NOT
+   eyeball it:**
+   ```bash
+   python3 plugins/vibe-ic/programs/fix_surface_classify.py <issue|sha>
+   #   exit 0  CONSUMER_ONLY → artifact-first verify (step 2)
+   #   exit 10 PRODUCER      → justified re-run (step 3)
+   #   exit 11 MIXED         → the judgment residual: read it (below)
+   ```
+   It maps each diff hunk → its enclosing function/file → a maintained
+   PRODUCER set (route/floorplan/streamout/geometry emitters: `step_pnr`,
+   `make_tracks`, `_gds_grid_snap`, `_magic_def_to_gds`,
+   `_klayout_merge_layers`, the `_GDS_*_PY` emitters, …) vs a CONSUMER
+   set (checkers / classifiers / verdict-message strings). The classes:
+   - **CONSUMER_ONLY** — a checker / classifier / verdict-message /
      cache-decision / disclosure-line change (e.g. a DRC off-grid
      classifier, an LVS cross-reference string, a pin-count disclosure,
      a cache-validity line). The route, geometry, netlist, DEF, GDS and
      report files are UNCHANGED by such a fix.
-   - **producer** — a change to the route/geometry producers: PnR Tcl,
+   - **PRODUCER** — a change to the route/geometry producers: PnR Tcl,
      floorplan, CTS, streamout, or a verdict that depends on the actual
      run (e.g. a measure-only SPEF repair that prevents a segfault, a
      route-convergence verdict keyed on the real DRT count).
-2. **consumer-only → drive the NEW program version against the
+   - **MIXED** — touches both sets, or an unknown/ambiguous surface that
+     cannot be PROVEN consumer-only. **This is the only genuine judgment
+     residual** (why_not_bucket_a): read the ambiguous hunk and decide —
+     when in doubt treat as producer (re-run). The program is
+     conservative by construction, so it never reports CONSUMER_ONLY for
+     anything it cannot prove safe.
+2. **CONSUMER_ONLY → drive the NEW program version against the
    project's ALREADY-PERSISTED artifacts** (`reports/phase3/*.rpt`,
    `lvs_verdict.json`, the netlist / DEF / GDS) and read the verdict.
    This is the faithful real-surface check and it takes SECONDS — feed
