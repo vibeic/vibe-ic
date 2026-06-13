@@ -2968,6 +2968,24 @@ def _strip_v_comments(text: str) -> str:
     return re.sub(r"//[^\n]*", "", text)
 
 
+def _sibling_declares_module(sib_path: Path) -> bool:
+    """#614 — True iff the sibling SV/V file declares an instantiable
+    `module` (so an `include of it is a real composition / board-wrapper
+    signal). A pure macro/HEADER sibling (an `ifndef/`define include-guarded
+    header with only `` `define `` macros and NO `module` decl) returns
+    False: including such a header is normal SystemVerilog composition, never
+    a board-integration signal. Fail-open: an unreadable / module-less
+    sibling => False, so a real RTL leaf that merely includes a macro header
+    is NEVER dropped from the synth source list (dropping a real module is
+    fatal; a redundant include is harmless)."""
+    try:
+        txt = sib_path.read_text(errors="replace")
+    except Exception:
+        return False
+    body = _strip_v_comments(txt)
+    return bool(re.search(r'(?<![\w$])module\s+[A-Za-z_]\w*', body))
+
+
 def _is_fpga_board_wrapper(p: Path, sibling_basenames: Optional[set] = None) -> bool:
     """Return True iff `p` is an FPGA / board integration wrapper that must
     be excluded from the ASIC functional sim / synth source list.
@@ -2996,7 +3014,14 @@ def _is_fpga_board_wrapper(p: Path, sibling_basenames: Optional[set] = None) -> 
             if m:
                 inc_base = os.path.basename(m.group(1))
                 if inc_base in sibling_basenames and inc_base != p.name:
-                    return True
+                    # #614: only a sibling that DECLARES a module is a real
+                    # board-wrapper signal. Including a pure macro/header
+                    # sibling (no `module` decl, e.g. a guarded `define-only
+                    # assertion header) is normal SV composition — do NOT
+                    # exclude the includer from synth (that dropped real RTL
+                    # leaves and caused "unknown module" fatals).
+                    if _sibling_declares_module(p.parent / inc_base):
+                        return True
     # Signal 2: FPGA-vendor primitive instantiation (uncommented body).
     body = _strip_v_comments(raw)
     for prim in _FPGA_VENDOR_PRIMS:
