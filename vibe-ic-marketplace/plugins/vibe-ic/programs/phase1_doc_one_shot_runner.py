@@ -8056,6 +8056,12 @@ _PIN_PROSE_DENY = frozenset({
     "ARE", "CAN", "MAY", "PER", "VIA", "SEE", "PAD",
 })
 _RE_BACKTICK_TOKEN = re.compile(r"`([A-Za-z][A-Za-z0-9_\[\]:.\/]*)`")
+# ORGANIC #610 — an inline alternate-spelling annotation: `(or `alt`)` /
+# `(或 `alt`)` (ASCII or full-width parens). Captures the alt identifier so it
+# is attached as an alias rather than promoted as a second top-level port.
+_RE_V610_ALIAS_GROUP = re.compile(
+    r"[(（]\s*(?:or|或)\s+`([A-Za-z][A-Za-z0-9_\[\]:.\/]*)`\s*[)）]",
+    re.IGNORECASE)
 _RE_PIN_RANGE = re.compile(
     r"^([A-Za-z_]+)(\d+)\s*(?:\.\.|[-\u2013\u2014:])\s*([A-Za-z_]+)?(\d+)$")
 _RE_PIN_BRACKET_RANGE = re.compile(r"^([A-Za-z_]+)\[(\d+):(\d+)\]$")
@@ -8109,10 +8115,37 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
         for start, end in _port_context_heading_ranges(body):
             for line in body[start:end].splitlines():
                 direction = _v455_dir_from_line(line)
+                # ORGANIC #610 — a port cell may annotate ONE canonical port
+                # with an inline alternate-spelling: ``\`name\` (or \`alt\`)`` /
+                # ``\`name\` (或 \`alt\`)`` (a generic vendor-doc convention).
+                # The backtick walker otherwise promotes BOTH names as separate
+                # top-level ports; since the GFM path collapses it to one (alias
+                # captured), the two emit different name strings and the
+                # name-keyed merge never dedups → duplicate aliased ports cascade
+                # into L9. Per-line, capture each ``(or \`alt\`)`` group, attach
+                # the alt as an ALIAS of the canonical token immediately
+                # preceding it, and exclude the alt from separate promotion.
+                # Per-line scope: a DIFFERENT line declaring the same name as its
+                # own port is unaffected. chip-AGNOSTIC: generic alias grammar.
+                alias_idents: set = set()
+                alias_for: Dict[str, List[str]] = {}
+                for am in _RE_V610_ALIAS_GROUP.finditer(line):
+                    alias_id = am.group(1)
+                    prev = None
+                    for tm in _RE_BACKTICK_TOKEN.finditer(line[:am.start()]):
+                        prev = tm.group(1)
+                    alias_idents.add(alias_id)
+                    if prev:
+                        alias_for.setdefault(prev, []).append(alias_id)
                 for tok in _RE_BACKTICK_TOKEN.findall(line):
-                    for name in _v455_expand_pin_token(tok):
+                    expanded = _v455_expand_pin_token(tok)
+                    # aliases attach only to a single (non-banked) canonical tok
+                    tok_aliases = (alias_for.get(tok, [])
+                                   if expanded == [tok] else [])
+                    for name in expanded:
                         if (not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name)
                                 or len(name) > 24 or name in seen
+                                or name in alias_idents  # #610: alt-spelling
                                 or name.upper() in _PIN_PROSE_DENY
                                 or name.islower() and len(name) <= 2):
                             continue
@@ -8120,7 +8153,7 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
                         out.append({
                             "name": name,
                             "mode": direction,
-                            "aliases": [],
+                            "aliases": list(tok_aliases),
                             "rtl_name": name.lower(),
                             "board_name": name,
                             "io_standard": None,
