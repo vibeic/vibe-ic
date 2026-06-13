@@ -65,14 +65,39 @@ PRODUCER_PATTERNS = [
     r"_gds_\w+_py", r"_pnr_\w*tcl", r"global_route", r"detailed_route",
     r"\bpdn\b", r"tapcell", r"floorplan", r"placement",
     r"reg\.merge", r"reg\.snap", r"\.flatten\(",
+    # ORGANIC #603 — PRODUCER-ACTION tokens that ONLY appear in real
+    # artifact-writing code (not log filenames / comments): a function with
+    # no producer symbol name that nonetheless writes a DEF/GDS/SPEF is a
+    # producer. Kept deliberately NARROW (the `write_*` verb form) so a mere
+    # mention of a tool name in a log path or comment does not false-fire.
+    r"\bwrite_def\b", r"\bwrite_gds\b", r"\bwrite_spef\b",
 ]
 # CONSUMER: checkers / classifiers / verdict-message strings. A change here
 # only re-INTERPRETS existing artifacts, so it verifies against the persisted
 # reports in seconds.
+#
+# ORGANIC #603 — broadened to the full CONSUMER-OUTPUT family so a consumer
+# FUNCTION living INSIDE a runner/producer file (e.g. a verdict-message edit
+# to `_emit_lvs_verdict` in phase3_one_shot_runner.py) is recognised by what
+# the hunk DOES, not just by the file path. Two prior misses fixed: the
+# `\bverdict\b` word-boundary did not match `verdict` inside
+# `_emit_lvs_verdict` (underscore is a word char), and message-variable
+# edits (`note = "…"`) carried no consumer token. These are emitter /
+# verdict / message / note / report / finding / disclosure patterns — a
+# general output-string vocabulary, NOT chip/issue-specific literals.
+# NOTE on precision: tokens that are also ordinary English words (note,
+# finding, report) are matched ONLY in their CODE forms (a `note = …`
+# assignment, an `_emit_*` identifier) — never as a bare word — so the same
+# word inside a producer function's docstring/comment cannot false-fire it
+# into a consumer (the #602-round-1 "prose word" failure mode). Tokens that
+# read as code identifiers (verdict / classify / emit / msg / triage) keep
+# their substring form.
 CONSUMER_PATTERNS = [
-    r"\bclassify\w*", r"_count_\w+", r"_parse_\w+", r"\bverdict\b",
-    r"_scan\b", r"_audit\b", r"\bcheck\b", r"_msg\b", r"message",
-    r"_violations?\b", r"_triage\b", r"report\b",
+    r"classif\w*", r"_count_\w+", r"_parse\w*", r"verdict",
+    r"_scan\b", r"_audit\b", r"\bcheck\b", r"\bmsg\b", r"\bmessage\b",
+    r"_violations?\b", r"_triage\b", r"_report\b", r"_message\b",
+    r"_emit\w*", r"\bnote\s*=", r"\bfinding\s*=", r"disclos\w*",
+    r"\bcross.?ref", r"_mismatch\b", r"\bmismatch\s*=",
 ]
 # CONSUMER by FILE: standalone gate/checker/classifier modules. Used as a
 # fallback consumer signal (e.g. a verdict-message-only edit in a checker).
