@@ -406,6 +406,23 @@ def yosys_smoke(code: str, workdir: Path,
              f"read_verilog -sv {f}; synth -top {top}; stat"], timeout=300)
         blob = (out or "") + "\n" + (err or "")
         if rc != 0:
+            # #604: yosys binary ENTIRELY ABSENT (rc=127 is _run's
+            # FileNotFoundError sentinel) — or any case with NO evidence that
+            # yosys actually started — must NOT be misread as a frontend-gap and
+            # silently tolerated. Doing so degrades the synth smoke to a no-op
+            # while the report still reads PASS (the exact #531 silent
+            # false-PASS class this smoke exists to catch). The frontend-gap
+            # tolerance below therefore REQUIRES a real yosys start banner; a
+            # FileNotFoundError blob (which merely contains the literal 'yosys'
+            # command name) does not qualify as "yosys started".
+            yosys_started = bool(re.search(
+                r"Yosys\s+[\d.]|Executing\s+\w+\s+pass|/----", blob))
+            if rc == 127 or not yosys_started:
+                return False, (
+                    f"yosys-smoke CANNOT ENFORCE on module {top!r}: yosys did "
+                    f"not run (rc={rc}; no yosys start banner) — install yosys "
+                    f"or run on a host that has it. Refusing to tolerate as a "
+                    f"frontend-gap (#604).")
             # frontend vs synth-stage: the SYNTH pass header only appears
             # once the frontend parsed the file.
             frontend = "Executing SYNTH pass" not in blob \
@@ -705,6 +722,17 @@ def main(argv=None) -> int:
         print("ERROR: iverilog not available — the gate cannot enforce; "
               "refusing to emit ungated responses (#528)", file=sys.stderr)
         return 2
+    # #604: the synthesizability smoke (#531) is a HARD part of the gate. A
+    # host without yosys silently degraded that smoke to a no-op while the
+    # report still read PASS (yosys-absent rc=127 was misread as a tolerated
+    # frontend-gap). Mirror the iverilog guard: refuse rather than emit
+    # responses gated on iverilog parse/elab ALONE.
+    if shutil.which("yosys") is None:
+        print("ERROR: yosys not available — the synthesizability smoke (#531) "
+              "cannot be enforced; refusing to emit responses gated on iverilog "
+              "alone (a yosys-absent host degraded the synth gate to a silent "
+              "no-op PASS, #604)", file=sys.stderr)
+        return 2
     # version-parity disclosure (adversarial-review MED): the official
     # cvdp-sim scorer runs icarus 13; a different host major version means
     # the accepted-syntax / `sorry:` sets may diverge — disclose, don't hide.
@@ -715,6 +743,10 @@ def main(argv=None) -> int:
         print(f"WARN: host {iverilog_version!r} differs from the official "
               f"cvdp-sim icarus 13 — accepted-syntax sets may diverge "
               f"(disclosed in the gate report)", file=sys.stderr)
+    # #604: disclose the yosys the synth smoke ran against (symmetric with the
+    # iverilog disclosure; proves the synth gate was actually enforced).
+    _yrc, _yout, _yerr = _run(["yosys", "-V"])
+    yosys_version = ((_yout or _yerr or "").splitlines() or ["unknown"])[0]
     records: List[Dict] = []
     if args.batch_dir:
         bdir = Path(args.batch_dir)
@@ -870,6 +902,7 @@ def main(argv=None) -> int:
             json.dumps({"total": len(records), "passed": len(passed),
                         "blocked": blocked,
                         "iverilog_version": iverilog_version,
+                        "yosys_version": yosys_version,
                         "official_scorer": "icarus 13 (cvdp-sim)",
                         "records": report},
                        indent=2, ensure_ascii=False) + "\n")
