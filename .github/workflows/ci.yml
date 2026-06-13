@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  plugin-tests:
+    name: Plugin tests + chip-AGNOSTIC guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install pytest
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pyyaml
+
+      # The plugin suite exercises real EDA paths: the shape-C / port-rule
+      # gates compile fixtures with iverilog (gates_atomic.py), and the
+      # pnr.tcl emitter tests parse/eval the generated Tcl in tclsh.
+      # Without these the suite has NEVER been green on CI (the failures
+      # are FileNotFoundError: 'iverilog', not plugin regressions).
+      - name: Install EDA tools (iverilog + tclsh)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends iverilog tcl
+
+      - name: chip-AGNOSTIC source guard
+        run: |
+          python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py \
+            vibe-ic-marketplace/plugins/vibe-ic
+
+      - name: pytest (plugin)
+        run: |
+          cd vibe-ic-marketplace/plugins/vibe-ic
+          pytest -q --maxfail=10
+
+  server-tests:
+    name: mcp tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/package.json
+
+      - name: Install
+        run: |
+          cd vibe-ic-marketplace/plugins/vibe-ic/mcp-eda
+          npm install
+
+      - name: Smoke test
+        run: |
+          cd vibe-ic-marketplace/plugins/vibe-ic/mcp-eda
+          node -e "import('./src/index.js').then(() => console.log('import OK')).catch(e => { console.error(e); process.exit(1); })"
+
+  lint:
+    name: Lint (markdown + json + yaml)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate JSON
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, sys
+          bad = []
+          for p in pathlib.Path(".").rglob("*.json"):
+              if "node_modules" in p.parts or ".git" in p.parts:
+                  continue
+              try:
+                  json.load(open(p))
+              except Exception as e:
+                  bad.append(f"{p}: {e}")
+          if bad:
+              print("INVALID JSON (%d):" % len(bad))
+              for b in bad:
+                  print("  " + b)
+              sys.exit(1)
+          print("all JSON valid")
+          PY
+
+      - name: Validate YAML
+        run: |
+          python3 -m pip install pyyaml
+          python3 - <<'PY'
+          import yaml, pathlib, sys
+          bad = []
+          for p in list(pathlib.Path(".").rglob("*.yml")) + list(pathlib.Path(".").rglob("*.yaml")):
+              if "node_modules" in p.parts or ".git" in p.parts:
+                  continue
+              try:
+                  yaml.safe_load(open(p))
+              except Exception as e:
+                  bad.append(f"{p}: {e}")
+          if bad:
+              print("INVALID YAML (%d):" % len(bad))
+              for b in bad:
+                  print("  " + b)
+              sys.exit(1)
+          print("all YAML valid")
+          PY

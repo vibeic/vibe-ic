@@ -1,0 +1,23 @@
+{
+  "doc_id": "L20",
+  "doc_name": "L20_DFT_SCAN_TOPOLOGY",
+  "applicability": "APPLICABLE",
+  "ic_class": "digital_arithmetic_primitive",
+  "fields": {
+    "scan_chains": [],
+    "test_compression": null,
+    "bist_mbist": [],
+    "jtag_tap": null,
+    "dft_present": false,
+    "ic_name": "A2B_Transceiver",
+    "dft_notes": "A2B is a protocol; scan/DFT topology is a property of a concrete AD24xx transceiver implementation, not of the A2B protocol itself. In-system diagnostics (line-fault, power-fault, lock-status, interrupt aggregation) provide field observability over (tunneled) I2C."
+  },
+  "extraction_hints": [
+    "Look for scan / DFT / BIST / JTAG sections.",
+    "Capture chain count, length, frequency."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+  "extraction_evidence": {},
+  "ic_name": "A2B_Transceiver"
+}

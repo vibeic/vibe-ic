@@ -1,0 +1,85 @@
+{
+  "doc_id": "L20",
+  "doc_name": "L20_DFT_SCAN_TOPOLOGY",
+  "applicability": "APPLICABLE",
+  "ic_class": "pure_analog",
+  "fields": {
+    "scan_chains": [],
+    "test_compression": null,
+    "bist_mbist": [],
+    "jtag_tap": null,
+    "dft_present": "partial",
+    "notes": "DDR5's protocol-level DFT surface is the mode registers (MRR/MRW), MPC-driven training feedback, on-die-ECC / ECS reporting, ALERT_n for write-CRC and CA-parity, and ZQ calibration. Chip-level JTAG / scan / BIST remain DRAM-vendor concerns; conformance is established by JEDEC compliance testing.",
+    "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)",
+    "exposed_dft_features": [
+      {
+        "feature": "IEEE 1500 test access",
+        "purpose": "Wrapper-based test access through the base/logic die for boundary and interconnect (TSV/microbump) test."
+      },
+      {
+        "feature": "Direct Access (DA) test",
+        "purpose": "Direct probing of the DRAM dies through the base die for KGSD screening."
+      },
+      {
+        "feature": "MBIST",
+        "purpose": "Memory built-in self-test of the DRAM array per channel."
+      },
+      {
+        "feature": "Data-bus loopback",
+        "purpose": "Characterize the high-speed links at up to 6.4 Gb/s/pin."
+      },
+      {
+        "feature": "Hard / soft repair",
+        "purpose": "Fuse-based hard repair at manufacturing and runtime soft-repair for RAS."
+      },
+      {
+        "feature": "ECC / parity error counters",
+        "purpose": "Observe corrected/uncorrectable error counts (on-die ECC, link ECC, CA parity)."
+      }
+    ],
+    "test_in_base_die": "HBM3 concentrates test, repair, and RAS logic in the base/logic die so the DRAM dies remain dense; the base die exposes IEEE-1500 / DA ports to the interposer. TSMC produces the base die for HBM and is planned as a foundry for HBM stacking.",
+    "stacked_die_dft_flow": "Per-die screen -> stack assembly -> KGSD test through the base die -> stack-on-interposer interconnect test -> in-field RAS monitoring (ECC/parity counters, soft-repair).",
+    "in_band_test_facilities": [
+      {
+        "name": "Mode Register Read (MRR)",
+        "purpose": "Read status, on-die-ECC error counts, and ECS results."
+      },
+      {
+        "name": "MPC training/feature modes",
+        "purpose": "Exercise DFE, Vref, ZQ, and read/write training and read back results."
+      },
+      {
+        "name": "ALERT_n",
+        "purpose": "Observe write-CRC and CA-parity errors."
+      },
+      {
+        "name": "On-die-ECC / ECS reporting",
+        "purpose": "Single-bit error and scrub observability via mode registers."
+      },
+      {
+        "name": "ZQ calibration status",
+        "purpose": "Driver / ODT impedance calibration observability."
+      }
+    ],
+    "internal_diagnostics_observability": [
+      "Per-sub-channel training results (DFE taps, VrefDQ/VrefCA centers, read/write deskew).",
+      "On-die-ECC single-bit error counts and ECS status.",
+      "Write-CRC / CA-parity error indications (ALERT_n).",
+      "Refresh-management (RFM) state.",
+      "ZQ calibration result."
+    ],
+    "out_of_band_test_facilities": [
+      "JEDEC DDR5 compliance / interoperability testing.",
+      "Vendor DRAM-die ATE wafer/package test (implementation-defined).",
+      "Module-level SPD-hub / PMIC / RCD bring-up over the sideband bus."
+    ]
+  },
+  "extraction_hints": [
+    "Look for scan / DFT / BIST / JTAG sections.",
+    "Capture chain count, length, frequency."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v0.1.51",
+  "extraction_evidence": {},
+  "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)"
+}

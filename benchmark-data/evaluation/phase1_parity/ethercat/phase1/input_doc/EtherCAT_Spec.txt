@@ -1,0 +1,1252 @@
+EtherCAT – The Ethernet Fieldbus
+2   Contents                                                                       A bus system might not be everything …                                                               3
+
+
+
+
+    3    A bus system might not be everything …                                    … but a machine is nothing without it!                fastest Industrial Ethernet standard.
+                                                                                   It forms the core of the system architecture          This brochure also presents the EtherCAT
+    4    EtherCAT at a glance                                                      and its performance also determines                   Technology Group (ETG), the world’s largest
+                                                                                   whether the entire system is able to reach            fieldbus organization. Most importantly,
+    6    The EtherCAT Technology Group                                             its full potential. The bus system is also            we hope to convey why EtherCAT is the
+                                                                                   a key factor in determining system costs,             right choice for your application. If you
+    8    Why use EtherCAT?                                                         commissioning time, and robustness.                   have any questions, feel free to contact us.
+                                                                                   A good engineer therefore selects the right           We’re passionate about EtherCAT and look
+    10   The technology in detail                                                  bus technology first of all when designing            forward to hearing from you.
+    10   EtherCAT: Based on Ethernet technology                                    a system.
+    11   How does EtherCAT work?                                                       We’ve written this brochure to introduce          On behalf of the
+    12   The EtherCAT protocol                                                     you to EtherCAT, the Ethernet fieldbus. Not           EtherCAT Technology Group team,
+    14   Flexible topology                                                         only will you get to know EtherCAT – you              Martin Rostan, Executive Director,
+    16   Distributed Clocks for high-precision synchronization                     will also learn what makes EtherCAT the               EtherCAT Technology Group
+    18   Diagnostics and error localization
+    19   Principle of EtherCAT MainDevice independent diagnostic interface
+    21   High availability requirements
+    22   EtherCAT G: Communication at gigabit levels
+
+    24 System overview
+
+    26   EtherCAT P: Communication and power in one cable
+    28   Safety over EtherCAT
+    30   Communication profiles
+    33   Plant-wide communication with the EtherCAT Automation Protocol (EAP)
+    35   Integration of other bus systems
+    36   Powering the digital transformation with EtherCAT, Industry 4.0 and IoT
+
+    38 Implementing EtherCAT interfaces
+    40 Implementing a MainDevice (MDevice)
+    42 Implementing a SubDevice (SDevice)
+    44 Conformance and certification                                                                    Martin Rostan, Executive Director,         The worldwide ETG team
+                                                                                                        EtherCAT Technology Group                  at a global strategy meeting.
+
+    47 Contact
+4   EtherCAT at a glance                                                                                                                                                                           5
+
+
+
+
+    EtherCAT is a high-performance, low-cost,       Flexible topology                               Low-cost                                        Open technology
+    easy to use Industrial Ethernet technology
+    with a flexible topology. It was introduced     In addition it its speed, an EtherCAT network   EtherCAT delivers all of the advantages of      EtherCAT is an internationally standardized
+    in 2003 and has been an international           can support up to 65,535 devices without        Industrial Ethernet at fieldbus prices. How?    open technology, meaning anyone is
+    standard since 2007. The EtherCAT               placing restrictions on their topology:         Firstly, EtherCAT doesn’t require any active    free to use the technology in a compatible
+    Technology Group promotes EtherCAT and          line, bus, tree, star – or any combination      infrastructure components.                      form. However, being an open technology
+    is responsible for its continued development.   thereof. Fast Ethernet physics allows two           The controlling device doesn’t require      doesn’t mean that anyone can arbitrarily
+    EtherCAT is an open technology: anyone is       devices to be up to 100 m (330 ft) apart,       a special interface card and the connected      change EtherCAT to suit his or her needs.
+    allowed to implement or use it.                 and greater distance scan be achieved with      devices use highly integrated, cost-effective   This would put an end to interoperability.
+                                                    fiber optics. EtherCAT also has additional      chips available from a variety of suppliers.    The EtherCAT Technology Group, the
+                                                    features that offer further topological         Furthermore, there’s no need for costly         world’s largest fieldbus organization, is
+    How it works                                    flexibility, such as Hot Connect and            IT experts to commission or maintain the        responsible for the further development
+                                                    Hot Swap for devices, and added                 system.                                         of EtherCAT so it remains both open and
+    EtherCAT’s key functional principle lies in     redundancy through a ring topology.                                                             interoperable.
+    how its nodes process Ethernet frames:
+    each node reads the data addressed to it                                                        Industrial Ethernet
+    and writes its data back to the frame all       Versatility                                                                                     Tried and tested
+    while the frame is moving downstream.                                                           EtherCAT also supports common internet
+    This improves bandwidth utilization (one        EtherCAT is suitable for both centralized       technologies without jeopardizing the           EtherCAT is currently in use across the
+    frame per cycle is often sufficient for         and decentralized system architectures.         network’s real-time capability. Its Ethernet    globe in an unrivaled range of applications.
+    communication) while also eliminating           It can support MainDevice-to-MainDevice,        over EtherCAT protocol transports FTP,          EtherCAT is used in machine control,
+    the need for switches or hubs.                  MainDevice-to-SubDevice and SubDevice-          HTTP, TCP/IP, etc.                              measurement equipment, medical devices,
+                                                    to-SubDevice communication as well as                                                           automobiles and mobile machines, and in
+                                                    incorporate subordinate fieldbuses. At                                                          innumerable embedded systems.
+    Network performance                             factory level, the EtherCAT Automation          Functional safety
+                                                    Protocol has communication covered – all
+    The unique way EtherCAT processes frames        with the existing infrastructure.               Safety over EtherCAT is just like EtherCAT
+    makes it the fastest Industrial Ethernet                                                        itself – lean and fast. Functional safety
+    technology; no other technology can top                                                         is built directly into the bus with options
+    EtherCAT’s bandwidth utilization or the         Simplicity                                      for both centralized and decentralized
+    performance it elicits.                                                                         safety logic. Thanks to the Black Channel
+                                                    When compared to a classic fieldbus             approach, it is also available for other bus
+                                                    system, EtherCAT is the obvious choice:         systems.
+                                                    node addresses can be set automatically,
+                                                    there’s no need for network tuning, and
+                                                    onboard diagnostics with fault localization
+                                                    make pinpointing errors a snap. Despite
+                                                    these advanced features, EtherCAT is also
+                                                    easier to use than Industrial Ethernet:
+                                                    there are no switches to configure,
+                                                    and no complicated handling of MAC
+                                                    or IP addresses is required.
+ 6                              The EtherCAT Technology Group                                                                                                                                                                                                                                                                                                  7
+
+
+
+
+                                The EtherCAT Technology Group keeps             The ETG has the largest number of members
+                                EtherCAT technology open for all                out of any fieldbus organization in the         International standardization                                                      Global activities
+                                potential users. It brings EtherCAT device      world. The list of members can be found
+                                manufacturers, technology providers,            on the ETG’s homepage. However, the             The EtherCAT Technology Group is an                                                The EtherCAT Technology Group is active
+                                and users together to further the               crucial factor is not how many members          official partner of the IEC. Both EtherCAT                                         worldwide. Experts in the ETG offices in
+                                technology.                                     there are, but how active the members are       and Safety over EtherCAT are IEC standards                                         Germany, China, Japan, Korea, and the USA
+                                    It provides multiple Technical Working      in the ETG. Both the number and variety         (IEC 61158 and IEC 61784). These standards                                         support ETG members before, during, and
+                                Groups where experts carefully work on          of EtherCAT devices are unparalleled, and       not only include the lower protocol layers,                                        after implementation.
+                                various specific aspects of EtherCAT. All       EtherCAT’s adoption rate across the globe       but also the application layer and device                                              The technology is maintained in several
+                                of these activities are focused on one          is outstanding.                                 profiles, e.g. for drives. SEMI™ (Semiconductor                                    Technical Working Groups (TWG), which
+                                common goal: keeping EtherCAT stable                                                            Equipment and Materials International)                                             define enhancements and also homogenize
+                                and interoperable. That’s why there is                                                          has accepted EtherCAT as a communication                                           device behavior via device profiles and
+                                only a single version of EtherCAT, and not      Become a member                                 standard (E54.20) for the semiconductor                                            implementation guidelines. All members
+ETG exhibition booths present   a new version each year.                                                                        industry. The various task groups in                                               are encouraged to actively contribute to                                              EtherCAT is also a national standard
+the technology as well as the       The ETG holds multiple EtherCAT Plug        ETG membership is open to all companies,        the ETG Semiconductor Technical Work-                                              the TWGs.                                                                             in many countries, such as Korea
+broad EtherCAT product range.                                                                                                                                                                                                                                                                            and China.
+                                Fests in Europe, Asia, and America each         whether they be device manufacturers or         ing Group (TWG) have defined industry-
+                                year. These events bring EtherCAT device        users.                                          specific device profiles and implementation
+                                developers together to test and ensure          ETG members:                                    guidelines.
+                                device interoperability. Using the official      	receive access to technical specifications       The EtherCAT specification is available
+                                EtherCAT Conformance Test Tool, each                and the developer’s forum                   in English, Japanese, Korean, and Chinese.
+                                manufacturer tests its EtherCAT devices for      	contribute to the further development
+                                conformance prior to their release. The ETG         of EtherCAT in the way of Technical         EtherCAT milestones
+                                awards the manufacturer a conformance               Working Groups
+                                certificate following a successful test in an    	receive implementation support from
+                                accredited test lab.                                their local ETG office
+                                    The ETG also holds international             	receive free software stacks,                2003                2007                     2011                    2013                     2015                   2017                     2019                 2021                     2023                     2024
+                                seminars and workshops and represents               software tools, and access to additional      EtherCAT
+                                                                                                                                  introduced
+                                                                                                                                                      EtherCAT becomes
+                                                                                                                                                      an IEC standard
+                                                                                                                                                                             	EtherCAT interface
+                                                                                                                                                                               in standard µP + µC
+                                                                                                                                                                                                     	2500 members
+                                                                                                                                                                                                     	Test Center in China
+                                                                                                                                                                                                                                FSoE Test Center
+                                                                                                                                                                                                                              	Industrie 4.0
+                                                                                                                                                                                                                                                     	10 Years ETG Offices
+                                                                                                                                                                                                                                                       in China, Korea
+                                                                                                                                                                                                                                                                               EtherCAT G         	1st Interoperability
+                                                                                                                                                                                                                                                                                                     Testing Week
+                                                                                                                                                                                                                                                                                                                            	7000 members
+                                                                                                                                                                                                                                                                                                                            	20 Years of EtherCAT
+                                                                                                                                                                                                                                                                                                                                                     	7500 members
+
+                                                                                                                                                                                                                                                       and USA
+                                EtherCAT at exhibitions throughout the              development products                          ETG founded       	EtherCAT becomes
+                                                                                                                                                      a SEMI standard
+                                                                                                                                                                                                     	10 Years of EtherCAT     and IoT initiative
+                                                                                                                                                                                                                                                     	TSN Profile                                                           and ETG
+                                                                                                                                                                                                       and ETG
+                                globe. It also provides product guides, joint    	are permitted to use the EtherCAT
+ETG holds regional member       exhibition booths, and seminar exhibits             and ETG logos
+meetings on a regular basis.    to help its members market their EtherCAT        	display their EtherCAT products and
+                                products.                                           services in the official EtherCAT Product    2005               2008                     2012                    2014                     2016                   2018                     2020                 2022
+                                                                                    Guide, exhibitions, and at ETG events.         Safety over
+                                                                                                                                 EtherCAT
+                                                                                                                                                       EtherCAT
+                                                                                                                                                       Conformance
+                                                                                                                                                                              	2000 members            3000 members             4000 members           5000 members             6000 members        1st International
+                                                                                                                                                                                                                                                                                                     Technology Week
+                                                                                                                                                                              	semiconductor         	Test Center in         	EtherCAT P             50th Plug Fest         	3000 Vendor IDs
+                                                                                                                                   1st Plug Fest       Test Tool                profiles                North America                                                                                 Dynamic Process
+                                                                                                                                                                                                                               	10 Years ETG         	FSoE becomes
+                                                                                                                                                     	1st Asian Plug Fest    	EtherCAT becomes      	EtherCAT becomes                                                                               Data Channel
+                                                                                                                                                                                                                                 Office Japan           a Chinese standard
+                                                                                Bylaws, the registration form, and                                                              a Korean standard       a Chinese standard
+
+                                                                                additional information are available via
+                                                                                info@ethercat.org and www.ethercat.org
+                                                                                                                                  2006               2009
+                                                                                                                                    EtherCAT ASIC      1000 members
+                                                                                                                                                       Test Centers in
+                                                                                                                                                       Germany and
+                                                                                                                                                       Japan
+8   Why use EtherCAT?                                                                                                                                                                             9
+
+
+
+
+    The unique way that EtherCAT works makes it the engineer’s choice. The following
+    features are particularly advantageous for certain applications.
+
+
+
+    1. Exceptional performance                        nodes and network segments can be               4. Integrated safety                               For these reasons, EtherCAT
+                                                      disconnected during operation and then                                                             is often seen in:
+    EtherCAT is by and large the fastest Industrial   reconnected, even in another position if        Functional safety is integrated into the
+    Ethernet technology, but it also synchronizes     required. Line topology is extended to a ring   network architecture with FailSafe over            	robotics
+    with nanosecond accuracy.                         topology to assure cable redundancy. All the    EtherCAT (FSoE). FSoE has proven itself in           machine tools
+        This is a huge benefit for all applications   controlling device needs for this redundancy    practice as it is used in TÜV certified            	packaging machinery
+    in which the target system is controlled          is a second Ethernet port, and the connected    devices that have been on the market since         	printing presses
+    or measured via the bus system. The rapid         devices will then support cable redundancy.     2005. The protocol fulfills the requirements         plastic manufacturing equipment
+    reaction times reduce the wait times              This means that devices can be switched out     for SIL 3 systems and is suitable for both         	presses
+    during transitions between process steps,         during machine operation.                       centralized and decentralized control              	semiconductor manufacturing machines
+    which significantly improves application                                                          systems. Thanks to the Black Channel               	test benches
+    efficiency. Lastly, the EtherCAT system                                                           approach and the incredibly lean safety              pick and place machinery
+    architecture typically reduces the load on        3. Simple and robust                            container, FSoE can also be used in other          	measurement systems
+    the CPU by 25–30% in comparison to other                                                          bus systems. This integrated approach              	power plants
+    bus systems (given the same cycle time).          Configuration, diagnostics, and maintenance     and the lean protocol help keep system             	substations
+    When optimally applied, EtherCAT’s                are all factors that contribute to system       costs down. Additionally, a non-safety-              material handling applications
+    performance leads to improved accuracy,           costs. The Ethernet fieldbus makes all          critical controller can also receive and process   	baggage handling systems
+    greater throughput, and thus to lowered           of these tasks significantly easier: EtherCAT   safety data.                                         stage control systems
+    costs.                                            can be set to automatically assign addresses,                                                        automated assembly systems
+                                                      which eliminates manual configuration.                                                             	pulp and paper machinery
+                                                      A low bus load and peer-to-peer physics         5. Affordability                                   	tunnel control systems
+    2. Flexible topology                              improve electromagnetic noise immunity.                                                            	welding machinery
+                                                      The network reliably detects potential          EtherCAT delivers the features of Industrial         cranes and lifts
+    In EtherCAT applications, the machine             disturbances down to their exact location,      Ethernet at a price similar to or even below       	farm machinery
+    structure determines the network topology,        which makes troubleshooting far faster.         that for a classic fieldbus system. The only       	offshore applications
+    not the other way around. In conventional         During startup, the network compares the        hardware required by the MainDevice is               sawmills
+    Industrial Ethernet systems, there are            planned and actual layouts to detect any        an Ethernet port – no expensive interface          	window manufacturing equipment
+    limitations on how many switches and              discrepancies. EtherCAT performance also        cards or co-processors are necessary.              	building automation systems
+    hubs can be cascaded, which places limits on      helps during system configuration by            EtherCAT SubDevice Controllers are available       	iron and steelworks
+    the overall network topology. Since EtherCAT      eliminating the need for network tuning.        from various manufacturers in different            	wind turbines
+    doesn’t need hubs or switches, there are          Thanks to the large bandwidth, additional       formats: as an ASIC, based on FPGA, or               furniture manufacturing equipment
+    no limitations. In short, EtherCAT is             TCP/IP can be transmitted together with         as an option for a standard microprocessor           milling machinery
+    virtually limitless when it comes to network      the control data. However, since EtherCAT       series. Since these inexpensive controllers          automated guided vehicles
+    topology. You can create line, tree, star         itself isn’t based on TCP/IP, there is no       shoulder all the time-critical tasks, EtherCAT       entertainment automation
+    topologies and any combinations thereof           need to administer MAC addresses or             itself doesn’t place any performance               	medical devices
+    with a nearly unlimited number of nodes.          IP addresses or to have IT experts              requirements on the CPU of field devices,          	woodworking machinery
+    Thanks to automatic link detection,               configure switches and routers.                 which keeps device costs down. EtherCAT              flat glass manufacturing equipment
+                                                                                                      doesn’t require switches or other active           	weighing systems
+                                                                                                      infrastructure components, so the costs for        	and many more
+                                                                                                      these components and their installation,
+                                                                                                      configuration, and maintenance are also
+                                                                                                      eliminated.
+10   The technology                                                                                                                                                                               11
+
+
+
+     in detail
+     EtherCAT: Based on                                                                             How does EtherCAT work?
+     Ethernet technology
+                                                                                                    EtherCAT overcomes the difficulties described in the previous section with its
+                                                                                                    high-performing mode of operation, in which a single frame is usually sufficient
+     EtherCAT is Industrial Ethernet and utilizes standard frames and the physical layer as         to send and receive control data to and from all nodes!
+     defined in the Ethernet Standard IEEE 802.3. However, it also addresses the specific               The EtherCAT MainDevice sends a datagram that passes through each node. Each
+     demands faced in the automation industry, where:                                               EtherCAT field device reads the data addressed to it on the fly and inserts its data into
+        there are hardline real-time requirements with deterministic response times                 the frame as the frame is moving downstream. The frame is only delayed by hardware
+      	the system is usually made up of many nodes, and each node only has a                       propagation delay times. The last node in a segment or drop line detects an open port
+        small amount of cyclic process data                                                         and sends the message back to the MainDevice using Ethernet technology’s full duplex
+        hardware costs play an even bigger role here than they do in IT and office applications.    feature.
+                                                                                                        The datagram’s maximum effective data rate increases to over 90%, and, due to the
+     The above requirements make it practically impossible to use a standard Ethernet network       utilization of the full duplex feature, the theoretical effective data rate is even greater
+     at field level. If an individual Ethernet datagram is used for each node, the effective data   than 100 Mb/s.
+     rate sinks significantly for just a few bytes of cyclic process data: the shortest Ethernet        The EtherCAT MainDevice is the only node within a segment allowed to actively send
+     datagram is 84 bytes long (including the interpacket gap), of which 46 bytes can be            an EtherCAT frame; all other nodes merely forward frames downstream. This concept
+     used for process data. For example, if a drive sends 4 bytes of process data for the actual    prevents unpredictable delays and guarantees real-time capability.
+     position and status information and receives 4 bytes of data for the target position and           The control unit uses a standard Ethernet Media Access Controller (MAC) without an
+     control information, the effective data rate for both datagrams sinks to 4/84 = 4.8%.          additional communication processor. This allows a MainDevice to be implemented on
+     Additionally, the drive usually has a reaction time that triggers the transmission of the      any hardware platform with an available Ethernet port, regardless of which real-time
+     actual values after the target values have been received. At the end, not much of the          operating system or application software is used.
+     100 Mb/s transfer rate remains.                                                                    EtherCAT field devices use an EtherCAT SubDevice Controller (ESC) to process frames
+         Protocol stacks, such as those used in the IT world for routing (IP) connection (TCP),     on the fly and entirely in the hardware, making network performance predictable and
+     require additional overhead for each node and create further delays through the stack          independent of the individual SubDevice implementation.
+     runtimes.
+                                              The EtherCAT protocol
+                                                                                                                                                        the data from each node has to be read individually, sorted with the help of the
+12                                                                                                                                                      process controller, and copied into memory. With EtherCAT, the control device only                                 13
+                                                                                                                                                        needs to fill a single EtherCAT frame with new output data, and send the frame to
+                                                                                                                                                        the MAC controller via automatic direct memory access (DMA). When a frame with
+                                              EtherCAT embeds its payload in a standard Ethernet frame. The EtherCAT frame is                           new input data is received via the MAC controller, the control unit can copy the frame
+                                              identified by the identifier (Ox88A4) in the EtherType field. Since the EtherCAT                          into the computer’s memory via DMA – all without the CPU having to actively copy
+                                              protocol is optimized for short cyclic process data, bulky protocol stacks, such as                       any data.
+                                              TCP/IP or UDP/IP, can be eliminated.                                                                          In addition to cyclical data, further datagrams can be used for asynchronous or
+                                                                                                                                                        event-driven communication.
+
+
+
+                      Ethernet header                              ECAT                              EtherCAT frame                    Ethernet
+                                                                                                                                                            MAIN
+                                                                                                                                                           DEVICE
+     Preamble   SFD        DA           SA        EtherType      Frame HDR        Datagram 1        Datagram 2        Datagram n    PAD       FCS
+
+       (7)      (1)        (6)          (6)           (2)           (2)            (10+n+2)          (10+m+2)          (10+k+2)    (0…32)         (4)
+
+                                              EtherType Ox88A4
+
+
+                                              EtherCAT in a standard Ethernet frame (according to IEEE 802.3)
+
+
+
+
+                                              To ensure Ethernet IT communication between the nodes, TCP/IP connections can also
+                                              be tunneled through a mailbox channel without impacting real-time data transfer.
+                                                    During startup, the control unit configures and maps the process data on the
+                                              connected devices. Different amounts of data can be exchanged with each node,
+                                              from one bit to a few bytes, or even up to kilobytes of data.
+                                                                                                                                                               Ethernet header              ECAT HDR     Datagram 1        Datagram 2         Datagram 3        Ethernet
+                                                    The EtherCAT frame contains the frame header and one or more datagrams.
+                                              The datagram header indicates what type of access the MainDevice would like                                                                              Logical process,   Logical process,   Logical process,
+                                                                                                                                                                                                        image task 1       image task 2       image task 3
+                                              to execute:
+                                                	read, write, or read-write
+                                                	access to a specific field device through direct addressing, or access                              Inserting process data on the fly
+                                                    to multiple field devices through logical addressing (implicit addressing).
+                                              Logical addressing is used for the cyclical exchange of process data. Each datagram
+                                              addresses a specific part of the process image in the EtherCAT segment, for which                         In addition to logical addressing, the control unit can also address a field device via its
+                                              4 GB of address space is available. During network startup, each node is assigned                         position in the network. This method is used during network boot-up to determine the
+                                              one or more addresses in this global address space. If multiple nodes are assigned                        network topology and compare it to the planned topology.
+                                              addresses in the same area, they can all be addressed with a single datagram. Since                           After checking the network configuration, the MainDevice can assign each node
+                                              the datagrams contain all the data access related information in full, the MainDevice                     a configured node address and communicate with the node via this fixed address.
+                                              can decide when and which data to access. For example, the MainDevice can use                             This enables targeted access to devices, even when the network topology is changed
+                                              short cycle times to refresh data on the drives, while using a longer cycle time to                       during operation, for example with Hot Connect groups. There are two approaches
+                                              sample the I/O; a fixed process data structure is not necessary. This also relieves                       for SubDevice-to-SubDevice communication. A SubDevice can send data directly to
+                                              the controlling device in comparison to conventional fieldbus systems, in which                           another node that is connected further downstream in the network. Since EtherCAT frames
+     can only be processed going forward, this type of direct communication depends on the         When wiring the system, the combination of lines with drop lines is particularly beneficial:
+14   network’s topology, and is particularly suitable for for high-speed SubDevice-to-SubDevice    the ports required to create drop lines are directly integrated in many I/O modules, so no     15
+     communication in a fixed machine design (e.g. in printing or packaging machines). In          additional switches or active infrastructure components are required. The star topology,
+     contrast, freely configurable SubDevice-to-SubDevice communication runs through the           the Ethernet classic, can also be utilized.
+     control device and requires two bus cycles (but not necessarily two control cycles). Thanks        Modular machines or tool changers require network segments or individual nodes
+     to EtherCAT’s excellent performance, this type of SubDevice-to-SubDevice communication        to be connected and disconnected during operation. EtherCAT SubDevice Controllers
+     is still faster than that of other communication technologies.                                already include the basis for this Hot Connect feature. If a neighboring station is removed,
+                                                                                                   then the port is automatically closed so the rest of the network can continue to operate
+                                                                                                   without interference. Very short detection times of under 15 microseconds guarantee
+                                                                                                   a smooth changeover.
+                                                                                                        EtherCAT offers a lot of flexibility regarding cable types, so each segment can use the
+
+     Flexible topology
+                                                                                                   exact type of cable that best meets its needs. Inexpensive Industrial Ethernet cables can
+                                                                                                   be used between two nodes up to 100 m apart in 100BASE-TX mode. Furthermore, the
+                                                                                                   EtherCAT P technology enables data and power to be transmitted via one cable. This
+                                                                                                   option enables devices such as sensors to be connected with a single line. Optical fibers
+     Line, tree, star, or daisy-chain: EtherCAT supports almost all topologies. With               (such as 100BASE-FX) can also be used, for example for a node distance greater than 100 m.
+     EtherCAT, you can create a pure bus or line topology with hundreds of nodes                   The complete range of Ethernet wiring is also available for EtherCAT.
+     without the limitations that normally arise from cascading switches or hubs.                       Up to 65,535 devices can be connected to one EtherCAT segment, so network expansion
+                                                                                                   is virtually unlimited. As a practically unlimited number of nodes are available, modular
+                                                                                                   devices such as sliced I/O stations can be designed so that each module is an EtherCAT
+                                                                                                   node of its own. The local extension bus is thus eliminated; the high performance of
+         MAIN
+        DEVICE
+                                                                                                   EtherCAT reaches each module directly and without any delays since there is no gateway
+                                                                                                   in the bus coupler or head station anymore.
+
+
+
+
+     Flexible topology: line, tree, star, or daisy-chain
+     Distributed Clocks for
+                                                                                                  Since the time sent from the reference clock arrives at the field devices with a slight delay,
+16                                                                                                this propagation delay must be measured and compensated for in each field device in order        17
+
+     high-precision synchronization
+                                                                                                  to ensure synchronicity and simultaneousness. This delay is measured during network
+                                                                                                  startup or, if desired, continuously during operation, ensuring that the clocks are
+                                                                                                  simultaneous with each other at within much less than 1 µs.
+
+     In applications with spatially distributed processes that require simultaneous action,
+     precise synchronization is particularly important. For example, this is the case for
+     applications in which multiple servo axes execute coordinated movements.
+         In contrast to completely synchronous communication, where communication errors
+     have an immediate impact on quality, distributed synchronized clocks have a high degree
+     of tolerance for jitter in the communication system. Therefore, the EtherCAT solution for
+     synchronizing nodes is based on these distributed clocks (DC).
+
+
+
+
+                                                                                                                                                            Synchronicity and simultaneousness
+                                           t                                                                                                                – scope view of two distributed de-
+                                                                                                                                                            vices with 300 nodes and 120 m
+                                                                                                                                                            cable length
+
+         MAIN
+        DEVICE
+                                                                                                  If all nodes have the same time information, they can set their output signals simultaneously
+                                                                                                  and affix their input signals with a highly precise timestamp. In motion control applications,
+                                                                                                  cycle accuracy is also important, along with synchronicity and simultaneousness. In such
+                                                                                                  applications, velocity is typically derived from the measured position, so it is critical that
+                                                                                                  the position measurements are taken precisely equidistantly (i.e. in exact cycles). Even very
+                                                                                                  small inaccuracies in the position measurement timing can translate to larger inaccuracies
+                                                                                                  in the calculated velocity, especially in relation to short cycle times. With EtherCAT, the
+                                                                                                  position measurements are triggered by the precise local clock and not the bus system,
+                                                                                                  leading to far greater accuracy.
+                                                                                                       Furthermore, the use of Distributed Clocks also frees up the control unit; since actions
+                                                                                                  such as position measurement are triggered by the local clock instead of when the frame
+                                                                                                  is received, the requirements for sending frames are less strict for the control unit.
+                                                                                                  This allows the MainDevice stack to be implemented in software on standard Ethernet
+     Completely hardware-based synchronization with compensation for propagation delays           hardware. Even jitter in the range of several microseconds does not diminish the accuracy
+                                                                                                  of the Distributed Clocks! Since the accuracy of the clock does not depend on when it’s set,
+                                                                                                  the frame’s absolute transmission time becomes irrelevant. The EtherCAT MainDevice only
+                                                                                                  needs to ensure that the EtherCAT frame is sent early enough, before the DC signal in the
+     The calibration of the clocks in the nodes is completely hardware-based. The time from       nodes triggers the output.
+     the first DC SubDevice is cyclically distributed to all other devices in the system. With
+     this mechanism, the field device clocks can be precisely adjusted to this reference clock.
+     The resulting jitter in the system is significantly less than 1 μs.
+18   Diagnostics and error localization                                                                                                                                                             19
+                                                                                                                                                Cyclic synchronous diagnostics
+                                                                                                      Cyclic
+                                                                                                                                                - working counter
+     Experience with conventional fieldbus systems has shown that diagnostic characteristics
+     play a major role in determining a machine’s availability and commissioning time.
+     In addition to error detection, error localization is important during troubleshooting.
+     EtherCAT allows you to scan and compare the actual network topology with the planned
+     topology during boot-up. EtherCAT also has many additional diagnostic capabilities                                  Hardware diagnostics                          Software diagnostics
+     inherent to its system.                                                                          Acyclic            - lost link counters                          - state machine errors
+         The EtherCAT SubDevice Controller in each node uses a checksum to scan the moving                               - RX error counters                           - diagnosis history object
+     frame for errors. Information is only provided to the SubDevice application if the frame
+     has been received correctly. If there is a bit error, the error counter is incremented and the
+                                                                                                                                   Hardware                                           Software
+     subsequent nodes are informed that the frame contains an error. The control unit will
+     also detect that the frame is faulty and discard its information. The control unit is able
+     to detect where the fault originally occurred in the system by analyzing the nodes’ error        Summary of EtherCAT diagnostic functionalities
+     counters. This is an enormous advantage in comparison to conventional fieldbus systems,
+     in which an error is propagated along the entire party line, making it impossible to localize
+     the source of the error. EtherCAT can detect and localize occasional disturbances
+     before the issue impacts the machine’s operation.                                                Principle of vendor-independent diagnostic interface
+         Thanks to EtherCAT’s unique principle of bandwidth utilization, which is far better than
+     Industrial Ethernet technologies that use single frames, the likelihood of bit errors induced    These functionalities provide all of the necessary diagnostic information for monitoring
+     by disturbances within an EtherCAT frame is substantially lower if the same cycle time is        the network state and detecting and locating errors on the MainDevice in all EtherCAT
+     used.                                                                                            networks.
+         If, in typical EtherCAT fashion, much shorter cycle times are used, the time required            This raw information also needs to be provided to diagnostic tools and to end users
+     for error recovery is significantly reduced. Thus, it is also much simpler to resolve these      in order to be interpreted and used. With the ETG.1510 specification, the ETG has defined
+     issues within the application.                                                                   a solution which enables external tools to access the diagnostic information provided by
+         Within the frames, the working counter (WC) enables the information in each                  EtherCAT networks in a way that is independent from the specific MainDevice vendor
+     datagram to be monitored for consistency. Every node that is addressed by the datagram           and software implementation.
+     and whose memory is accessible increments the working counter automatically.                         The ETG.1510 profile enhances the ETG.1500 specification and extends the object
+     The control is then able to cyclically confirm whether all nodes are working with consistent     dictionary of the EtherCAT MainDevice defined in ETG.5001.3 Annex A. The diagnostic
+     data. If the working counter has a different value than it should, the MainDevice does not       objects can be read by the CAN application protocol over EtherCAT (CoE) mailbox protocol
+     forward this datagram’s data to the control application. The MainDevice is then able to          using the already specified mailbox gateway functionality. As it is fully based on existing
+     automatically detect the reason for the unexpected behavior with help from status and            standards, the new profile only requires a few elements in the object dictionary of the
+     error information from the nodes as well as the link status.                                     MainDevice. Both the network structure as expected by the MainDevice based on the
+         Since EtherCAT utilizes standard Ethernet frames, Ethernet network traffic                   offline configuration and the current network topology as detected by an online scan
+     can be recorded with the help of free Ethernet software tools. For example, the                  are provided. The diagnostic information itself is mapped in the form of consistent,
+     well-known Wireshark software comes with a protocol interpreter for EtherCAT,                    cumulative counters that summarize the network state from its start up to the present.
+     so that protocol-specific information, such as the working counter, commandos,                   As a result, the diagnostic interface can be accessed at a frequency that is independent
+     etc. are shown in plain text.                                                                    from the cycle time of the EtherCAT network, and realtime performance is not required
+                                                                                                      in the external tools.
+
+     Further information on diagnostics can be found here: www.ethercat.org/diag
+                                                                                                        High availability requirements
+         The diagnostic information is accessed via the well-established CAN application protocol
+20       over EtherCAT (CoE). Based on already existing and fully standard protocols and                                                                                                                21
+         functionalities, this diagnostic interface can easily be implemented as a lean software
+         extension on top of any standard MainDevice implementation. The amount of resources
+         required by such a software extension is very small, which makes implementation of             For machines or equipment with very high availability requirements, a cable break or a
+         the diagnostic interface feasible for all MainDevice solutions, including simple and compact   malfunctioning node should not mean that a network segment is no longer accessible,
+         embedded systems.                                                                              or that the entire network fails.
+             Using the EtherCAT diagnostic interface, providers of machine and network diagnostic            EtherCAT enables cable redundancy via simplicity. A cable from the last node can be
+         tools can use a general purpose, universal interface to collect diagnostic data from           connected to an additional Ethernet port in the MainDevice to transform a line topology
+         EtherCAT networks. They are able to report this information to technicians and engineers       is extended into a ring topology. A redundancy case, such as a cable break or a node
+         in a user friendly, graphically intuitive way. The networks do not need to change their        malfunction, is detected by a software add-on in the MainDevice stack. That’s all there is to
+         behavior to fit the specific MainDevice manufacturer nor use a vendor’s proprietary            it! The nodes themselves don’t need to be modified, and don’t even know that they’re
+         access protocol for each different MainDevice implementation.                                  being operated in a redundant network.
+
+
+
+                                                   MAIN
+                                 Diagnostic       DEVICE                        SUB            SUB          MAIN
+                                 interface        Vendor 1                     DEVICE         DEVICE       DEVICE
+
+
+
+
+          HMI or                                   MAIN
+                                 Diagnostic       DEVICE                        SUB            SUB
+        diagnostic               interface        Vendor 2                     DEVICE         DEVICE
+           tool
+
+
+                                                                                                        Inexpensive cable redundancy with standard EtherCAT field devices
+                                                   MAIN
+                                 Diagnostic       DEVICE                        SUB            SUB
+                                 interface        Vendor n                     DEVICE         DEVICE
+
+                                                                                                        Link detection in the connected devices automatically detects and resolves redundancy
+     The diagnostic interface enables vendor-independent access to EtherCAT diagnostic data             cases with a recovery time of less than 15 microseconds, so that only a single communication
+                                                                                                        cycle is disrupted at maximum. This means that even motion applications with very short
+                                                                                                        cycle times can continue working smoothly when a cable breaks.
+                                                                                                            With EtherCAT, MainDevice redundancy with hot standby can also be achieved.
+                                                                                                        Vulnerable network components, such as those connected with a drag chain, can be wired
+                                                                                                        with a drop line, so that even when a cable breaks, the rest of the machine keeps running.
+     EtherCAT G: Communication
+                                                                                                                                                            Segment 1
+
+
+22                                                                                                      MAIN
+                                                                                                                               EBC                                                             23
+                                                                                                       DEVICE
+     at gigabit levels
+                                                                                                                                                   1 Gb/s
+
+
+
+
+                                                                                                                                                            Segment 2
+     EtherCAT G is an extension of the standard EtherCAT protocol that enables data
+     communication at rates of 1 Gb/s up to 10 Gb/s. This is particularly useful when                                          EBC              100 Mb/s                            100 Mb/s
+
+     transmitting large amounts of process data per network participant, as is the case with              10 Gb/s
+     machine vision, high-end measurement technology or in complex motion applications.                                         SUB
+                                                                                                                                                                        Segment 3
+           The EtherCAT protocol itself, along with its positive features, are fully retained                                  DEVICE
+
+
+     in EtherCAT G/G10. EtherCAT G/G10 is fully compatible with the IEEE 802.3 standard and                                                                    EBC
+                                                                                                                                                                                    100 Mb/s
+                                                                                                                                                   1 Gb/s
+     the topology flexibility that it provides is also identical: drop lines, lines, daisy chains or                            SUB
+                                                                                                                               DEVICE
+     tree structures can all be created.
+           A central element of EtherCAT G is the branch concept. It is achieved with an                                                                    Segment 4
+
+
+     EtherCAT Branch Controller (EBC), which essentially fulfills two main functions:
+                                                                                                        EBC
+       	it acts as a kind of node for the integration of independent segments                                                                    1 Gb/s
+
+          with 100 Mb/s devices
+       	it enables parallel processing of the connected EtherCAT segments.
+
+                                                                                                                                                            Segment 5
+     As a result, the propagation delay is significantly reduced, which increases system
+     performance many times over previous levels.                                                         10 Gb/s
+                                                                                                                               EBC              100 Mb/s                            100 Mb/s
+         The data is forwarded into the single segments under priority and/or time control,
+     with each branch treated like an independent EtherCAT segment: the frame doesn’t run
+     through all segments in series; instead, the segments are processed in parallel. This
+     reduces propagation times in large networks significantly and increases the system                  Example setup for an EtherCAT G/G10 network
+     performance many times over.
+         With the branch concept, even big plants can be managed from one central control
+     unit. In typical EtherCAT fashion, the configuration of the EtherCAT Branch Controllers
+     is managed via the MainDevice, so no additional configuration tools are needed. The                 Further information about EtherCAT G can be found here: www.ethercat.org/ethercat-g
+     MainDevice only has to have an appropriate Gb/s port. Important features such as
+     diagnostics or network synchronization via Distributed Clocks are supported by the
+     EBCs and are forwarded into the connected segments transparently.
+         EtherCAT G/G10 thus taps into the advantages of significantly increased bandwidth
+     and reduced propagation times without the field devices themselves having to be
+     equipped with gigabit interfaces: the tried and tested 100 Mb/s devices are retained
+     and, through the EtherCAT Branch Controller concept, still benefit from the technology
+     expansion. This means that EtherCAT is ready to meet more stringent future requirements.
+System overview
+EtherCAT plant network                              EtherCAT machine control network
+
+      EtherCAT Automation Protocol (EAP)                  EtherCAT Device Protocol (EDP)
+
+
+
+
+                                                                                                                                                                                                                                 EPU
+                                                                                                                                                                                                                                           PORT 3
+
+                                                                                                                                                                                                                                                                                                                                                                                            External
+
+
+
+
+                                                                                                                                                                                                                                PORT 0
+
+
+
+
+                                                                                                                                                                                                                                                       PORT 1
+                                                           Standard                                                                    Decentralized
+                                                                                                                                                                                                                                           ESC                                       Optical fibre:
+                                                                                                                                                                                                                                                                                                                                     Distributed Clocks (DC):
+                                                                                                                                                                                                                                                                                                                                     provide extremely
+                                                                                                                                                                                                                                                                                                                                                                                            synchronization:
+                                                                                                                                                                                                                                                                                                                                                                                            - GPS
+                                                           Ethernet                                     Distributed Clock:             Safety over EtherCAT        Safety                            LVDS                                                                            up to 20 km between                             accurate synchronization;                              - IEEE 1588
+                                                           interface                                    reference clock                MainInstance                SubInstance                       backplane                                                                       two devices                                     jitter < 1 µs                                          - DCF77
+                                                                                                                                                                                                                                           PORT 2
+
+
+
+
+                                            MAIN                  SUB                                      SAFETY                         SAFETY
+                                                                 DEVICE                                   MainInstance
+                                           DEVICE                                                                                         SubInstance
+
+
+
+
+                                                                                                                                                                                                                                                                Flexible topology:
+      MES                                                                                                                                                                                                                                                       - line
+                                                                                                                                 Large amount of                                                                                                                - tree                                                            EtherCAT P:
+                                                                                    EtherCAT Branch                              process data:                                       High-end                                                                   - star                                                            data and power on                                               Up to 65,535
+                                                                                    Controller                                   e.g. machine vision                                 measurement                                                                - branch                                                          the same cable                                                  nodes
+
+
+
+
+                                            MAIN                                                                                                                                                                                                                                                                     EtherCAT P
+                                                                   EBC                                                                                                                                                                                                                                                 power
+                                           DEVICE                                                                                                                                                                                                                                                                      source
+
+
+
+                                                                                                                                                                                                                                                                                                           24 V DC
+                                                                                                      Segment 1
+
+
+
+
+                                                                                                                                                                                                                                               ID 01
+
+                                                                                                                                                                                                                                                                Hot Connect
+
+      ERP                                                                                                                                                                                                            Junction                                                                                                              Sensor                       Actor
+                                                                                                      Segment 2
+
+
+
+                        Switch
+                                                                   EBC                                                                                                                                                                         ID 02
+                                                                                                                                                                                                                                                                Explicit device
+                                                                                                                                                                                                                                                                identification
+                                                                                                                                                                                                                     Junction                                                                                                               Actor
+                                                                                                      Segment m
+
+
+                                   Controller to                                                                                                                                                                                               ID 03
+                                   controller
+                                   communication
+
+
+
+
+                                                                                                                                                                                                                                                                    Standard Ethernet
+                                                                                                                                                                                                                                         Data exchange &                                                                                   Drive integration:
+                                                                                                                                                                                                                                                                    integration:
+                                                                                                                                                                                                                                         synchronization                                                                                   - CAN application protocol over EtherCAT (CoE)
+      HMI                                                  Class A or class B                                     Copper cable:                                                                                                                                     - Ethernet over
+                                                                                                                                                                                                                                         between EtherCAT                                                                                    with DS402 drive profile
+                                                           MainDevice according to                                up to 100 m between                             Fieldbus integration               SubDevice to                                                     EtherCAT (EoE)
+                                                                                                                                                                                                                                         segments                                                                                          - Servo drive profile over EtherCAT (SoE)
+                                                           MainDevice Class Directive                             two devices                                     via gateways                       MainDevice                                                       e.g. TCP/IP
+                                                                                                                                                                                                                                                                                                                                           - Safety drive profile
+                                                                                                                                                                                                                                                                                                                                           - Modular Device Profile (MDP)
+
+
+                                                                                                                                                                                      MAIN
+                                            MAIN                                                                                                                                     DEVICE                         SUBDEVICE
+                                                                                                                                            Gateway                                      SUBDEVICE                                          Switch port
+                                           DEVICE                                                                                                                                                                   SUBDEVICE
+
+
+
+
+                                                           Centralized
+                                                           Safety over EtherCAT                                   High availability:
+                                                           MainInstance                                           cable redundancy
+     Tablet
+                        WiFi
+
+
+                                            MAIN
+                                           DEVICE               SAFETY
+                                                                SubInstance
+                                           SAFETY                                                                                                       Other fieldbuses
+                                           MainInstance
+26   EtherCAT P: Communication                                                                                                                                                                               27
+
+     and power in one cable
+                                                                                       RX-    TX-
+
+
+
+
+                                                                                                                  TX-    RX-
+                                                                                                                  US     UP
+
+
+
+                                                                                       TX+    RX+
+
+                                 SUB                      SUB                                        EtherCAT                                             SUB                       SUB
+                                DEVICE                   DEVICE                                      Power                                               DEVICE                    DEVICE
+                                                                                       US     UP
+
+
+
+                                                                                                                  TX+    RX+
+     Power: 2 x 24 V DC,                                                                                          GNDS   GNDP
+     3 A (US , UP)
+
+
+
+
+                            Two-cable connection: EtherCAT and power separated                GNDS                                                   EtherCAT P: data and power via one cable
+                                                                                       GNDP
+
+
+
+
+     EtherCAT P (P = power) is an addition to the previously described EtherCAT                                 This facilitates reduced cabling, more compact, cost-effective wiring, lower system costs,
+     protocol standard. It enables the transmission of both communication data                                  and a smaller footprint for devices, equipment, and machines.
+     and the peripheral voltage via a single, standard four-wire Ethernet cable.                                    EtherCAT P is especially useful for the parts of a machine that are self-contained and
+         EtherCAT and EtherCAT P are identical in terms of protocol technology, as                              often a bit isolated, as they can be supplied with data and power through a single stub
+     the addition exclusively affects the physical layer. New EtherCAT SubDevice                                cable. Sensors of all types are perfectly suitable for EtherCAT P: a single compact M8
+     Controllers are not required for using EtherCAT P. EtherCAT P has the same                                 connector enables efficient integration of these field devices into the high-speed network
+      communication advantages as EtherCAT, but also provides the power supply                                  and connects them to the supply voltage. Potential error sources while connecting devices
+     via the communication cable, offering attractive benefits and enhancements                                 are avoided, thanks to mechanical coding of the connector.
+     for numerous applications.                                                                                     EtherCAT P can be used in a network together with standard EtherCAT technology.
+         Two electrically isolated, individually switchable 24 V supplies power the                             Appropriate rectifier units transform common EtherCAT physics to EtherCAT P by
+     EtherCAT P devices, available with US for the system and sensors and UP for the                            consistently maintaining the Ethernet data encoding. In the same way, a device itself
+     periphery and actuators. Both voltages, US and UP, are directly coupled to the                             can be supplied with EtherCAT P and can also transmit.
+     100 Mb/s EtherCAT communication line. Thanks to this power transmission, the
+     user can cascade several EtherCAT P devices and therefore only needs one cable.                            Further information about EtherCAT P can be found here: www.ethercat.org/ethercat-p
+                     Safety over EtherCAT
+                                                                                                                                  additional information used to secure this data. The safety containers are transported as part
+28                                                                                                                                of the communication’s process data. The safety of the data transfer does not depend on the                       29
+                                                                                                                                  underlying communication technology, and isn’t restricted to EtherCAT; safety containers can
+                                                                                                                                  travel through fieldbus systems, Ethernet or similar technologies, and can make use of copper
+                     Modern communication systems not only transfer control data deterministically, they a                        cables, fiber optics, and even wireless connections.
+                     lso enable the transfer of safety-critical control data through the same medium. EtherCAT
+                     utilizes the Safety over EtherCAT (FSoE = FailSafe over EtherCAT) protocol for this very
+                     purpose and so provides:
+                                                                                                                                                                                    Ethernet telegram
+                       	a single communication system for both control and safety data
+                          the ability to flexibly modify and expand the safety system architecture                                         Ethernet header              ECAT HDR         Datagram 1                 Datagram 2             FSC
+
+                       	pre-certified solutions for simplifying safety applications
+                          powerful diagnostic capabilities for safety functions
+                                                                                                                                                                                           Safety over EtherCAT frame
+                          seamless integration of the safety design in the machine design
+                         the ability to use the same development tools for both standard and safety applications
+                                                                                                                                           CMD              Safe data       CRC_0         Safe data        CRC_1                      Conn ID
+
+
+
+                                                                                                                                  The Safety over EtherCAT frame (safety container) is embedded in the cyclical communication’s process data.
+
+      MAIN                                                                   MAIN
+     DEVICE                                                                 DEVICE
+                                                                                                                                  Due to this flexibility, safely connecting different parts of the machine becomes more
+                                                                                                                                  simple. The safety container is routed through the various controllers and processed in the
+                                                                                                                                  various parts of the machine. This makes it easy to implement emergency stop functions
+                                                                                                                                  for an entire machine or to bring targeted parts of a machine to a standstill – even if the
+      SAFETY                                                                                                                      parts of the machine are coupled with other communication systems (e.g. Ethernet).
+       relay logic
+                                                                                                                                      Implementing the FSoE protocol in a device requires few resources and can lead
+                                                                                                                                  to a high level of performance and result in short reaction times. In the robotics industry,
+                                                                                  SAFETY             SAFETY              SUB      for example, there are applications that use FSoE for safe motion control
+                                                                                  MainInstance       SubInstance        DEVICE
+                                                                                                                                  applications in an 8 kHz closed loop.
+
+
+
+                                                                                                                                                        Device 1                                                         Device 2
+
+
+                                                                                                                                        Controller A                Controller B                          Controller B               Controller A
+                                                                                                                                          safety                      safety                                safety                     safety
+                                                                                                                                         protocol                    protocol                              protocol                   protocol
+
+
+
+
+                                                                                                                                                 EtherCAT SubDevice Controller                          EtherCAT SubDevice Controller
+                     Safety over EtherCAT enables simpler and more flexible architectures than those achieved with relay logic.
+                                                                                                                                                       IN                OUT                                   IN              OUT
+                     The EtherCAT safety technology was developed according to IEC 61508, is approved by
+                     TÜV SÜD Rail, and is standardized in IEC 61784-3. The protocol is suitable for safety
+                     applications with a safety integrity level of up to SIL 3.                                                   Black channel principle: the standard communication interface can be used.
+                         With Safety over EtherCAT, the communication system is part of a black channel, which
+                     is not considered to be safety-relevant. The EtherCAT standard communication system
+                     makes use of a single channel to transfer both standard and safety-critical data. Safety                     Further information regarding Safety over EtherCAT can be found on the ETG website:
+                     over EtherCAT frames, known as safety containers, contain safety-critical process data and                   www.ethercat.org/safety
+                                                                                                                     CAN application protocol over EtherCAT (CoE)
+30   Communication profiles                                                                                                                                                                                         31
+                                                                                                                     With the CoE protocol, EtherCAT provides the same communication mechanisms
+                                                                                                                     as in CANopen® Standard EN 50325-4: object dictionary, mapping of process data objects
+     In order to configure and diagnose SubDevices, the variables provided for the network                           (PDO) and service data objects (SDO). Even the network management is similar.
+     can be accessed with the help of acyclic communication. This is based on a reliable                             This makes it possible to implement EtherCAT with minimal effort in devices that were
+     mailbox protocol with an auto-recover function for erroneous messages.                                          previously outfitted with CANopen, and large portions of the CANopen firmware can even
+         In order to support a wide variety of devices and application layers, the following                         be reused. Optionally, the legacy 8-byte PDO limitation can be waived, and the enhanced
+     EtherCAT communication profiles have been established:                                                          bandwidth of EtherCAT can also be used to support the upload of the entire object
+       	CAN application protocol over EtherCAT (CoE)                                                                dictionary. The device profiles, such as the CiA 402 drive profile, can also be reused for
+       	servo drive profile according to IEC 61800-7-204 (SoE)                                                      EtherCAT.
+       	Ethernet over EtherCAT (EoE)
+       	file access over EtherCAT (FoE)
+       	ADS over EtherCAT (AoE)                                                                                     Servo drive profile according to IEC 61800-7-204 (SoE)
+
+                                                                                                                     SERCOS™ is known as a real-time communication interface, especially for motion control
+        File system,       Subordinated      HTTP, FTP, etc.   IEC 61800-7-204       CANopen       Process data
+                                                                                                                     applications. The SERCOS™ profile for servo drives is included in the international standard
+        bootloader        object diction-                         application       application                      IEC 61800-7. The standard also contains the mapping of this profile to EtherCAT. The service
+                          aries or devices                         (SERCOS)
+                                                                                                                     channel, including access to all drive-internal parameters and functions, is mapped to
+                                                                                                                     the EtherCAT mailbox.
+
+
+                                                                                      Object
+                                             TCP UDP                    IDN         dictionary                       Ethernet over EtherCAT (EoE)
+                             Gateway                                Service
+         File access                            IP                                     SDO         PDO     AT
+                             function                               channel
+                                                                                                   map-   MDT        EtherCAT utilizes physical layers of Ethernet and the Ethernet frame. The term Ethernet
+                                                                                                   ping
+                                                Ethernet                                                             is also frequently associated with data transfer in IT applications, which are based on
+                                                                                                                     a TCP/IP connection. Any Ethernet data traffic can be transported within an EtherCAT
+                 FoE                AoE                EoE                    SoE            CoE           CoE/SoE   segment using the Ethernet over EtherCAT (EoE) protocol. Ethernet devices are connected
+
+
+                                               Mailbox                                             Process data
+                                                                                                                                                                         Switch port
+                                               EtherCAT SubDevice Controller                                            MAIN                                                                      Web
+                                                                                                                       DEVICE                                                                    server
+
+
+
+
+                                                       Physical layer
+
+
+     Different communication profiles can coexist in the same system.
+
+
+
+
+     A field device isn’t required to support all communication profiles; instead, it may
+     decide which profile is most suitable for its needs. The MainDevice is told which                               Transparent transmission of standard IT protocols
+     communication profiles have been implemented via the SubDevice description file.
+                                                                                                    Plant-wide communication
+     to an EtherCAT segment via switchports. The Ethernet frames are tunneled through the
+32   EtherCAT protocol, similar to the internet protocols (e.g. TCP/IP, VPN, PPPoE (DSL), etc.),                                                                                                             33
+
+                                                                                                    with the EtherCAT Automation
+     which makes the EtherCAT network completely transparent for Ethernet devices. The
+     device with the switchport property inserts TCP/IP fragments into the EtherCAT traffic
+
+                                                                                                    Protocol (EAP)
+     and therefore prevents the network’s real-time properties from being affected.
+         Additionally, EtherCAT devices may also support Ethernet protocols (such as HTTP)
+     and can therefore behave like a standard Ethernet node outside of the EtherCAT
+     segment. The control device acts as a layer 2 switch that sends the frames to the
+     corresponding nodes via EoE according to their MAC addresses. All Internet technologies        The process control level has special communication requirements that differ slightly
+     can thus also be implemented in an EtherCAT environment, such as an integrated web             from the requirements addressed by the EtherCAT Device Protocol, described in the
+     server, e-mail, FTP transfer, etc.                                                             previous sections. Machines or sections of a machine often need to exchange status
+                                                                                                    information and information on the following manufacturing steps with each other.
+                                                                                                    There is also usually a central controller that monitors the entire manufacturing
+     File access over EtherCAT (FoE)                                                                process, thus providing the user with status information on productivity, and assigning
+                                                                                                    orders to the various machine stations.
+     This simple protocol similar to TFTP (Trivial File Transfer Protocol) enables file access in
+     a device and a uniform firmware upload to devices across a network. The protocol is lean
+     and does not require much software to implement, so that it can be supported by boot
+                                                                                                                                ERP
+     loader programs. A TCP/IP stack isn’t required.                                                                                                                         EtherCAT Automation Protocol
+
+
+                                                                                                            HMI             Switch               Process            Config
+                                                                                                         (e.g. OPC,                              Control
+     ADS over EtherCAT (AoE)                                                                            thin client)                                                                        Hand-
+                                                                                                                                                                                             held
+     As a mailbox-based client-server protocol, ADS over EtherCAT (AoE) is defined by the
+     EtherCAT specification. While protocols such as CAN application protocol over EtherCAT
+     (CoE) provide a detailed semantic concept, AoE complements these perfectly via
+     routable and parallel services wherever use cases require such features. For example,
+     this might include access to sub-networks through EtherCAT using gateway devices                               MAIN                        MAIN        MAIN                MAIN          MAIN
+     from a PLC program such as CANopen®, IO-Link™, and others.                                                    DEVICE                      DEVICE      DEVICE              DEVICE        DEVICE
+
+         AoE comes with far less overhead compared to similar services provided by the
+     Internet Protocol (IP). Both sender and receiver addressing parameters are always                                                                     Switch
+                                                                                                                   SUB                                      port
+     contained in the AoE datagram. As a result, implementation on both ends (client and                          DEVICE
+
+     server) can be very lean. AoE is also the protocol of choice for acyclic communication via
+     the EtherCAT Automation Protocol (EAP) and therefore provides seamless communication
+     between an MES system, the EtherCAT MainDevice, and subordinated fieldbus devices
+     connected via gateways. AoE serves as the standard medium for obtaining EtherCAT
+     network diagnostic information from a remote diagnostics tool.                                                                                                               EtherCAT Device Protocol
+
+
+                                                                                                    Factory-wide communication with EtherCAT
+                                             The EtherCAT Automation Protocol (EAP) fulfills all of the above requirements.                          The cyclic EAP communication can be directly embedded in the Ethernet frame without
+34                                           The protocol defines interfaces and services for:                                                       additional transport or a routing protocol. Again, the EtherType Ox88A4 identifies the       35
+                                              	exchanging data between EtherCAT MainDevices                                                         EtherCAT-specific use of the frame. This enables the exchange of high-performance
+                                                 (MainDevice-to-MainDevice communication)                                                            data with EAP in a millisecond cycle. If data routing between distributed machines is
+                                                 communication to human machine interfaces (HMI)                                                     required, the process data can also be transmitted via UDP/IP or TCP/IP.
+                                              	a supervising controller to access devices belonging                                                     Additionally, with the help of the Safety over EtherCAT protocol, safety-critical data
+                                                 to underlying EtherCAT segments (routing),                                                          can also be transmitted via EAP. This is common in cases where parts of a large machine
+                                              	integration of tools for machine or plant configuration,                                            need to exchange safety-critical data to execute a global emergency stop function, or to
+                                                 and for device configuration.                                                                       inform neighboring machines of an emergency stop.
+
+
+
+                                                                PROCESS
+                                                                CONTROL                                                                              Integration of other bus systems
+              EtherCAT Automaton Protocol (EAP)
+                                                                                                                                                     EtherCAT’s ample bandwidth allows conventional fieldbus networks to be embedded
+                        Safety over EtherCAT
+                                                                                                                                                     as underlying systems via an EtherCAT gateway, which is particularly helpful when
+          MAIN                                                                                                                                       migrating from a conventional fieldbus to EtherCAT. The changeover to EtherCAT is gradual,
+        MDEVICE
+         DEVICE                                                   MAIN                         SAFETY          MAIN                                  making it possible to continue using automation components that don’t yet support an
+         SAFETY
+         SAFETY                                                  DEVICE                        MainInstance
+                                                                                                              DEVICE
+          MDEVICE
+         MainInstance
+                                                                                                                                                     EtherCAT interface.
+
+
+
+
+                                                                                                                                      MainInstance
+                                                                                                                                  SAFETY
+                           SAFETY
+
+
+
+
+                                                                             SAFETY
+                               SubInstance
+
+
+
+
+                                                                                 SubInstance
+
+
+
+
+                                                                                                                                                         MAIN                                            Gateway             Gateway
+
+                                                                                                                                                        DEVICE
+
+                                                                                                                 SAFETY              SUB
+                                                                                                                 SubInstance
+                                                                                                                                    DEVICE
+
+
+
+
+                                                                                                                  SUB              SAFETY
+                                                                                                                                    SubInstance
+                                                                                                                 DEVICE
+
+
+
+
+                        Machine module A                                  Machine module B                                     Machine module C
+
+
+     Factory-wide communication architecture with the EtherCAT Automation Protocol and Safety over EtherCAT
+
+
+
+
+                                             The communication protocols used in the EAP are part of the international standard                      EtherCAT enables the integration of decentralized fieldbus interfaces
+                                             IEC 61158. EAP can be transmitted via any Ethernet connection, including a wireless link,
+                                             making it possible to include automated guided vehicles (AGV), for example, which are
+                                             common in the semiconductor and automotive industries.                                                  The ability to integrate decentralized gateways also reduces the physical size of the
+                                                 Cyclic process data exchange with EAP follows either the push or poll principle.                    industrial PC, sometimes even to an embedded industrial PC, since extension slots
+                                             In push mode, each node sends its data either with its own cycle time or in a multiple                  are no longer necessary. In the past, extension slots were also required to connect
+                                             of its own cycle time. Each receiver can be configured to receive data from specific                    complex devices, such as fieldbus MainDevice and SubDevice gateways, fast serial
+                                             senders. Configuring the sender and receiver data is done through the familiar object                   interfaces, and other communication subsystems. In EtherCAT, only a single Ethernet
+                                             dictionary. In poll mode, a node (often the central controller) sends a frame to the                    port is needed to connect these devices. The process data from the underlying
+                                             other nodes, and each node responds with its own frame.                                                 subsystem is made directly available in the process image of the EtherCAT system.
+     Powering the digital transformation
+36   with EtherCAT, Industry 4.0 and IoT                                                                                                                                                                                           37
+
+
+
+
+     Process optimizations, predictive maintenance, manufacturing as a service, adaptive          The EtherCAT Technology Group (ETG) was also among the first fieldbus organizations
+     systems, resource-savings, smart factories, cost reductions: there are countless good        to partner with the OPC Foundation. The OPC UA protocol complements the EtherCAT
+     reasons to utilize control network data in higher level systems.                             portfolio because it is a scalable TCP/IP based client/server communication technology
+         The Internet of Things (IoT), Industry 4.0, Made in China 2025, Industrial Value         with integrated security, enabling encrypted data transfer in MES/ERP systems.
+     Chain Initiative – there is a common demand across the board for seamless, continuous            With OPC UA Pub/Sub, the usability of OPC UA has been improved in machine-to-
+     and standardized communication across all levels. Sensor data is uploaded into the cloud     machine (M2M) applications and for vertical communication to cloud-based services.
+     along with recipes and parameters downloaded from ERP systems into distributed               The ETG is actively contributing to all these developments to ensure that they fit
+     devices; take, for example, a feeding system shared by two machines: there are               seamlessly into the EtherCAT environment. EtherCAT is not only IoT-ready, EtherCAT is IoT!
+     requirements on the data flow both horizontally and vertically.
+
+     EtherCAT is inherently equipped to deal with digital transformation through its high
+     performance, flexibility, and open interfaces:
+                                                                                                                                                    OPC UA, AMQP, MQTT, TSN, EAP
+      	Superior system performance is a prerequisite for adding big data features to control
+        networks.
+      	EtherCAT provides the flexibility to add cloud connectivity to existing systems without
+        even touching the controller or updating the field devices: edge gateway can access
+                                                                                                                               ERP
+        any data within any EtherCAT field device via the mailbox gateway feature of the                                       MES
+
+        EtherCAT MainDevice. The edge gateway can either be a remote device and talk                          SUB                                                                               SUB      SUB
+                                                                                                             DEVICE                                                                            DEVICE   DEVICE
+        to the MainDevice via TCP or UDP/IP, or a software entity directly located on
+                                                                                                                                  MAIN
+        the same hardware as the EtherCAT MainDevice itself.                                        SUB       SUB      SUB       DEVICE                                               MAIN      SUB      SUB      SUB
+      	Additionally, open interfaces mean that any IT-based protocol can be integrated –          DEVICE    DEVICE   DEVICE       Edge
+                                                                                                                                 gateway
+                                                                                                                                                                                     DEVICE    DEVICE   DEVICE   DEVICE
+
+
+        including OPC UA, MQTT, AMQP or any others – either within the MainDevice or
+                                                                                                              SUB
+        directly into the connected devices, thus providing a direct link for IoT without                    DEVICE
+
+        protocol discontinuities from the sensor to the cloud.
+
+     All these features have always been part of the EtherCAT protocol, which shows how
+     forward-thinking the architecture is. Nevertheless, more networking features are added
+     as they evolve and become relevant. Of course, it is also important to consider the past
+     when looking forward: introduction of valuable new features is managed with total                                                                                                                   SUB
+                                                                                                                                                                                                        DEVICE
+     network continuity. The EtherCAT protocol has been stable at “Version 1” since it was
+     released in 2003.                                                                                                            MAIN                                    Edge        MAIN      SUB      SUB      SUB      SUB
+                                                                                                                                                                        gateway
+          Other new developments in Time-Sensitive Networking (TSN) features further improve                                     DEVICE                                              DEVICE    DEVICE   DEVICE   DEVICE   DEVICE
+
+
+     the real-time capabilities of controller-to-controller communication. Enabled by TSN,
+                                                                                                                                                                                                         SUB      SUB
+     control systems can access a network of EtherCAT devices across plant networks, too. Since                                    SUB      SUB        SUB      SUB                                     DEVICE   DEVICE
+                                                                                                                                  DEVICE   DEVICE     DEVICE   DEVICE
+     EtherCAT typically only needs one frame for an entire network, access is much leaner and
+     thus faster than any other fieldbus or industrial Ethernet technology. In fact, EtherCAT
+                                                                                                                                   SUB      SUB        SUB
+     Technology Group experts have contributed to the TSN task group of IEEE 802.1 from day                                       DEVICE   DEVICE     DEVICE
+
+     one, back when TSN was still known as AVB (Audio Video Bridging).
+                                                                                                                                                       SUB
+                                                                                                                                                      DEVICE
+
+
+
+                                                                                                            IoT protocols:
+     Further information about EtherCAT and TSN can be found here: www.ethercat.org/tsn                     OPC UA, AMQP, MQTT
+38                                                                                                                       39
+
+
+
+
+     Implementing          EtherCAT technology has been specially optimized to enable low-cost design, so adding an
+                           EtherCAT interface to a sensor, I/O device, or embedded controller should not significantly
+                           increase device costs. Furthermore, the EtherCAT interface doesn’t require a more powerful
+
+
+     EtherCAT interfaces   CPU; the CPU requirements are solely based on the needs of the target application.
+                               In addition to hardware and software requirements, development support and
+                           availability of the communication stacks are important factors when developing an
+                           interface. The EtherCAT Technology Group offers worldwide developer support as it
+                           answers questions and addresses technical issues quickly. Finally, evaluation kits
+                           available from multiple manufacturers, developer workshops, and free sample code
+                           make getting started a little easier.
+                               For the end user, the most important factor is the interoperability of EtherCAT devices
+                           from various manufacturers. To assure interoperability, device manufacturers are required
+                           to perform a conformance test before they bring their device on to the market. The test
+                           checks if the implementation follows the EtherCAT specification, and can be performed
+                           with the EtherCAT Conformance Test Tool. The test can also be used during device
+                           development to discover and correct implementation issues early on.
+40   Implementing a MainDevice                                                                                                                                                                                           41
+
+
+
+
+     The interface for an EtherCAT MainDevice (MDevice) has a sole, unbelievably simple,         The breadth of available MainDevice implementations and their supported functions varies.
+     hardware requirement: an Ethernet port. The implementation uses either the on-board         Depending on the target application, optional functions are either supported or deliberately
+     Ethernet controller or an inexpensive standard network card, so no special interface        omitted to optimize the utilization of hardware and software resources. For this reason,
+     card is required. That means that with just a standard Ethernet port, a MainDevice can      EtherCAT MainDevices are categorized into two classes: a class A MainDevice is a standard
+     implement a hard real-time network solution.                                                EtherCAT MainDevice, while a class B MainDevice is a MainDevice with fewer functions.
+         In most cases, the Ethernet controller is integrated via direct memory access (DMA),    In principle, all MainDevice implementations should aim for class A classification. Class B
+     so no CPU capacity is required for the data transfer between the MainDevice and             is only recommended for cases in which the available resources are insufficient to support
+     the network. In an EtherCAT network, mapping occurs in the connected field devices.         all functionalities, such as in embedded systems.
+     Each device writes its data to the right location in the process image and reads the data
+     addressed to it all while the frame is moving through the device. The process image
+     that arrives at the MainDevice has already been sorted correctly.
+         Since the MainDevice CPU is no longer responsible for the sorting, its performance                                                                                   Control task
+     requirements depend solely on the desired application and not on the EtherCAT interface.
+     Implementing an EtherCAT MainDevice is a snap, especially for small, mid-range, and
+     clearly defined applications. EtherCAT MainDevices have been implemented for a wide
+     variety of operating systems: Windows and Linux in various iterations, QNX, RTX, VxWorks,
+                                                                                                                                                         Process image
+     INtime, eCos are just a few examples.                                                                                                              description (XML)
+         ETG members offer a variety of options that support the implementation of an
+     EtherCAT MainDevice, ranging from free downloads of EtherCAT MainDevice libraries
+     and sample MainDevice code to complete packages (including services) for various
+                                                                                                         System                  EtherCAT Network
+     real-time operating systems and CPUs.                                                                                                                  XML parser
+                                                                                                      configuration              Information (ENI)
+         In order to operate a network, the EtherCAT MainDevice needs the cyclic process                   tool
+
+     data structure as well as boot-up commands for each field device. These commands can                                               XML
+
+     be exported to an EtherCAT Network Information (ENI) file with the help of an EtherCAT
+     configuration tool, which uses the EtherCAT SubDevice Information (ESI) files from the
+                                                                                                                                                        HW configuration                           Process data
+     connected devices.                                                                                                                                                             HDR
+                                                                                                                                                         init commands
+
+
+
+                                                                                                                                  Online functions
+                                                                                                   EtherCAT SubDevice
+                                                                                                    Information (ESI)
+                                                                                                                                                                      EtherCAT MainDevice driver
+                                                                                                           XML
+
+                                                                                                                                                                                                   EtherCAT MainDevice
+
+
+
+                                                                                                                                                                         Standard Ethernet MAC
+
+                                                                                                 Typical EtherCAT MainDevice architecture
+42   Implementing a SubDevice                                                                                                                                                                                                                                                43
+
+
+
+
+     EtherCAT field devices use inexpensive EtherCAT SubDevice Controllers (ESC) in the form          Host CPU                    HTTP,                RAM for TCP/IP
+     of an ASIC, FPGA, or integrated in a standard microcontroller. Simple field devices don’t                                   FTP, etc.              and complex
+                                                                                                         Process     Service     TCP/IP                 applications
+     even need an additional microcontroller, because inputs and outputs can be directly                  data        data       (optional)                                                    8 I/O    8 I/O    8 I/O      8 I/O
+
+     connected to the ESC. For more complex devices, the communication performance
+                                                                                                                          PDI (process data interface)                                                           PDI (process data interface)
+     only minimally depends on the microcontroller performance, and in most cases, an 8-bit
+                                                                                                         Process data       Mailbox                                 ESC                                  Process data                                     ESC
+     microcontroller is sufficient.                                                                                                                 (EtherCAT SubDevice                                                                   (EtherCAT SubDevice
+                                                                                                                Dual port memory                                                                       Dual port memory
+          EtherCAT SubDevice Controllers are available from multiple manufacturers, with                                                                     Controller)                                                                           Controller)
+                                                                                                                                                                               SII (e.g.                                                                             SII (e.g.
+     the size of the internal DPRAM and the number of Fieldbus Memory Management Units                        SYNC manager, FMMU                          Registers
+                                                                                                                                                                              EEPROM)
+                                                                                                                                                                                                    SYNC manager, FMMU                          Registers
+                                                                                                                                                                                                                                                                    EEPROM)
+     (FMMUs) varies depending on the type. Different process data interfaces (PDI) are available                        EtherCAT processing unit                                                              EtherCAT processing unit
+     so that the application controller can gain external access to the application memory.                        and auto-forwarder with loop back                                                     and auto-forwarder with loop back
+       	The 32-bit parallel I/O interface is suitable for connecting up to 32 digital inputs and                 EtherCAT Port 0       EtherCAT Port n                                                  EtherCAT Port 0    EtherCAT Port n
+                                                                                                                         MII                   MII                                                              MII                MII
+          outputs, but also for simple sensors or actuators for which 32 data bits are sufficient
+          and no application controller is required.                                                  RJ 45   Magnetics    PHY                PHY     Magnetics       RJ 45                 RJ 45   Magnetics    PHY                PHY     Magnetics       RJ 45
+       	The Serial Peripheral Interface (SPI) is targeted at applications with small amounts
+          of process data, such as analog I/O devices, encoders, or simple drives.                   SubDevice hardware: ESC with host CPU (example)                                       SubDevice hardware: ESC with direct I/O (example)
+       	The parallel 8/16-bit microcontroller interface corresponds to common interfaces
+          of fieldbus controllers with integrated DPRAM. It is particularly well-suited to complex
+          nodes with larger amounts of data.                                                         The hardware configuration is stored a in non-volatile memory (e.g. an EEPROM). In
+       	Suitable synchronous buses for various microcontrollers are provided for FPGA and           addition, this SubDevice Information Interface (SII) contains information on the main
+          system-on-chip (SoC) implementations.                                                      device features so that the MainDevice can read this at boot-up and operate the device
+                                                                                                     even if the device description file is not available. The EtherCAT SubDevice Information
+                                                                                                     (ESI) file that comes with the device is XML based and contains the complete description
+                                                                                                     of its network accessible properties, such as process data and mapping options for it,
+                                                                                                     the supported mailbox protocols including optional features, as well as the supported
+                                                                                                     modes of synchronization. An EtherCAT network configuration tool uses this information
+                                                                                                     for online and offline configuration of the network.
+                                                                                                         Various manufacturers offer evaluation kits for implementing SubDevices. These kits
+                                                                                                     include SubDevice application software in source code, and they sometimes also include
+                                                                                                     a test MainDevice. With an evaluation kit, a fully functional MainDevice-SubDevice
+                                                                                                     EtherCAT network can be commissioned in just a few steps.
+
+                                                                                                     The ETG website contains the ETG.2200 SubDevice Implementation Guide with useful tips
+                                                                                                     and recommendations for further documentation for implementing field devices:
+                                                                                                     www.ethercat.org/etg2200
+44   Conformance and certification                                                                                                                                                                45
+
+
+
+
+     Two of the most important factors for creating a successful communication standard are       Technical Working Group Conformance
+     conformance and interoperability, and the EtherCAT Technology Group takes both of these
+     factors very seriously. In addition to requiring a conformance test for each instance of     The EtherCAT Conformance Test Policy requires device manufacturers to test each device
+     device implementation (aided by the automated EtherCAT Conformance Test Tool), the           with a valid version of the EtherCAT Conformance Test Tool before the device is brought
+     ETG undertakes a wide variety of activities to ensure interoperability between EtherCAT      onto the market. The manufacturer may conduct this test in-house.
+     MainDevices, field devices, and EtherCAT configuration tools.                                    The ETG Technical Committee (TC) established a Technical Working Group (TWG)
+                                                                                                  for Conformance, which determines the test procedures, the contents of the test, and the
+                                                                                                  implementation of the Conformance Test Tool. The TWG Conformance continuously
+     EtherCAT Plug Fest                                                                           expands the tests and their depth.
+                                                                                                      The TWG Conformance also established an interoperability test process, which can be
+     When we test whether multiple devices are interoperable, one of the most pragmatic           used to test devices in the context of an entire network.
+     things to do is to try connecting the devices together. With this approach in mind, the
+     ETG holds multiple EtherCAT Plug Fests each year, with each one usually spanning
+     two days. During these events, MainDevice and field device manufacturers meet to test        EtherCAT Test Center
+     how their devices behave together, which improves the usability of devices in the field.
+     Members can exchange EtherCAT tips and tricks and have their questions answered by           The official EtherCAT Test Centers (ETC) in Europe, Asia, and North America are
+     EtherCAT experts. The ETG holds EtherCAT Plug Fests in Europe, North America, and Asia.      accredited by the ETG and perform the official EtherCAT Conformance Test.
+                                                                                                  The EtherCAT Conformance Test includes the automated tests run with the CTT,
+                                                                                                  interoperability tests within a network, and an examination of the device’s
+     EtherCAT Conformance Test Tool                                                               indicators, markings, and tests of the EtherCAT interfaces.
+                                                                                                      Device manufacturers are encouraged but not obligated to have their devices tested
+     The EtherCAT Conformance Test Tool (CTT) enables an EtherCAT field device’s behavior         at an ETC. After the conformance test has been passed, the manufacturer receives an
+     to be tested automatically.                                                                  EtherCAT Conformance Tested certificate for the device. This certificate is only issued for
+         It’s a Windows program that only requires a standard Ethernet port. The tool sends       devices that have passed the official conformance test at an ETC, and not for those which
+     EtherCAT frames to the device under test (DuT) and receives responses from it. A test case   have been tested in-house.
+     is marked as passed if the response from the DuT corresponds to the defined response.            The additional test in an accredited EtherCAT Test Center further increases compatibility
+     The test cases are defined as XML files. This means that the test cases can be modified      and aids uniform operation and diagnostics of EtherCAT implementations. End users
+     or expanded without having to modify the actual test tool. The Technical Working Group       should be sure to ask for the EtherCAT Conformance Tested certificate when choosing
+     Conformance is responsible for specifying and releasing the latest valid test cases.         devices for their application.
+         In addition to the protocol tests, the CTT also examines whether the values in               In addition to the EtherCAT Conformance Test, there’s another conformance test which
+     the EtherCAT SubDevice Information (ESI) file are valid. Finally, the CTT performs           has been developed especially for devices with a safety interface and which is mandatory
+     device-specific protocol tests, such as for the CiA 402 drive profile.                       for manufacturers of FSoE devices according to the FSoE policy. The test is conducted by an
+         All of the testing steps and results are saved in a test logger, and can be analyzed     official notified body and provides solid confirmation of reliable and standard compliant
+     or saved as a documented verification for the device release.                                implementation of the Safety over EtherCAT protocol.
+         The ETG consistently maintains and adds new test cases to the CTT. It is important
+     that a device manufacturer always has the most recent version of the tool for testing
+     products prior to release. To make this easier, the CTT is offered as a subscription. The    More information on conformance and certification is available on the ETG website:
+     CTT is also useful for uncovering early errors in the interface implementation during        www.ethercat.org/conformance
+     the design phase.
+46   www.ethercat.org                                                                     ETG worldwide                                                                     47
+
+
+
+     The EtherCAT website provides comprehensive information about the technology
+     as well as upcoming events, the latest EtherCAT products, and the current
+     membership directory. It also covers special topics such as functional safety
+     and conformance of EtherCAT devices. You can find out about the benefits
+     of free membership, download presentations, press articles, and publications                                                                        ETG Office
+                                                                                                                         ETG Headquarters
+                                                                                                                                                         Korea
+     at www.ethercat.org/downloads.                                                                                      Germany
+                                                                                                                                            ETG Office         ETG Office
+                                                                                                         ETG Office                         China              Japan
+                                                                                                         North America
+
+     EtherCAT Product Guide
+
+     The EtherCAT Product Guide is a directory listing a selection of EtherCAT products
+     and services based on information provided by ETG members, and is available
+     online at www.ethercat.org/products. If you have any questions about the
+     products, please contact the manufacturer directly, as the ETG itself does not
+     sell any products.
+
+
+
+     Events
+                                                                                          Contact
+     The event section shows the events hosted by the ETG worldwide and those
+     that are organized in conjunction with the association. www.ethercat.org/events      ETG Headquarters               ETG Office North America
+     is a calendar where all the important dates can be found, including those            Ostendstraße 196               San Jose, CA, USA
+     for the technical working group meetings, exhibition appearances, EtherCAT           90482 Nuremberg                +1 (877) ETHERCAT
+     workshops, and Industrial Ethernet seminars.                                         Germany                        info.na@ethercat.org
+                                                                                          + 49 (911) 5 40 56 20
+                                                                                          info@ethercat.org              ETG Office China
+     Member Area                                                                                                         Beijing, China
+                                                                                                                         + 86 (10) 8220 0090
+     Members have insider access to the protected area of the website at                                                 info@ethercat.org.cn
+     www.ethercat.org/memberarea, which contains valuable additional items
+     such as all EtherCAT specifications, the online developer forum, and a knowledge                                    ETG Office Japan
+     base containing with all necessary information for implementation, configuration                                    Yokohama, Japan
+     and diagnosis of EtherCAT devices and networks.                                                                     + 81 (45) 650 1610
+                                                                                                                         info.jp@ethercat.org
+
+                                                                                                                         ETG Office Korea
+                                                                                                                         Seoul, Korea
+                                                                                                                         +82 (0)2 2107 3242
+                                                                                                                         info.kr@ethercat.org
+
+
+
+                                                                                          Technical support
+
+                                                                                          ETG Headquarters
+                                                                                          Ostendstraße 196
+                                                                                          90482 Nuremberg
+                                                                                          Germany
+                                                                                          + 49 (911) 5 40 56 222
+                                                                                          techinfo@ethercat.org
+EtherCAT®, EtherCAT G®, EtherCAT P®, and Safety over EtherCAT® are registered
+trademarks and patented technologies licensed by Beckhoff Automation GmbH,
+Germany. Other designations used in this publication may be trademarks which,
+when used by third parties for their own purposes, could violate the rights of
+the owners.
+
+02/2024
+

@@ -1,0 +1,21 @@
+{
+  "schema_version": 2,
+  "doc_class": "regmap",
+  "ic_name": "AMBA AXI / ACE Protocol Specification (ARM IHI 0022E)",
+  "registers": [],
+  "no_registers_in_input": true,
+  "otp_layout": null,
+  "no_otp_layout_in_input": true,
+  "otp_ip_macro": {},
+  "internal_registers": [],
+  "extraction_evidence": {},
+  "register_map_present": false,
+  "notes": "If a future system-integration L4 is required for an ACE-coherent SoC, the canonical 'address-side fields' to capture would be: AxADDR width (implementation-defined), AxDOMAIN (2 bits), AxSNOOP (4 bits for AR, 3 bits for AW), AxBAR (2 bits), AxCACHE (4 bits), AxPROT (3 bits), AxREGION (4 bits); plus snoop-channel: ACADDR (matches AxADDR width), ACSNOOP (4 bits), ACPROT (3 bits).",
+  "base_address": "Defined at SoC level; offsets given relative to module base.",
+  "fields": {
+    "ic_name": "AMBA AXI / ACE Protocol Specification (ARM IHI 0022E)",
+    "register_map_present": false,
+    "rationale": "ACE is a bus/interconnect protocol that extends AXI4 with coherency. There is no MMIO register map in this document. The AW/AR address channels carry an arbitrary slave address (AxADDR) chosen by system integrators, and the spec only defines the *signaling* and the (AxBAR, AxDOMAIN, AxSNOOP) field tuples that encode coherent operations.",
+    "notes": "If a future system-integration L4 is required for an ACE-coherent SoC, the canonical 'address-side fields' to capture would be: AxADDR width (implementation-defined), AxDOMAIN (2 bits), AxSNOOP (4 bits for AR, 3 bits for AW), AxBAR (2 bits), AxCACHE (4 bits), AxPROT (3 bits), AxREGION (4 bits); plus snoop-channel: ACADDR (matches AxADDR width), ACSNOOP (4 bits), ACPROT (3 bits)."
+  }
+}

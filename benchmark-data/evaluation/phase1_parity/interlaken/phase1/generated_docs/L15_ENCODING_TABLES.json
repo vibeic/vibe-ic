@@ -1,0 +1,142 @@
+{
+  "fields": {
+    "tables": [],
+    "word_type_table": {
+      "header_columns": [
+        "bit 64",
+        "Word Type"
+      ],
+      "rows": [
+        [
+          "1",
+          "Control Word"
+        ],
+        [
+          "0",
+          "Data Word"
+        ]
+      ]
+    },
+    "framing_bit_table": {
+      "header_columns": [
+        "Bit",
+        "Meaning"
+      ],
+      "rows": [
+        [
+          "bit 64",
+          "Control/Data type (1=Control, 0=Data)"
+        ],
+        [
+          "bit 65",
+          "Scrambled"
+        ],
+        [
+          "bit 66",
+          "Inversion"
+        ]
+      ]
+    },
+    "metaframe_word_table": {
+      "header_columns": [
+        "Control Word",
+        "Purpose"
+      ],
+      "rows": [
+        [
+          "Synchronization Word",
+          "Word lock / lane alignment (0x78f678f678f6)"
+        ],
+        [
+          "Scrambler State Word",
+          "Descrambler synchronization (x^58 + x^39 + 1)"
+        ],
+        [
+          "Skip Word",
+          "Clock compensation (rate match)"
+        ],
+        [
+          "Diagnostic Word",
+          "Per-lane CRC-32 + lane health/status"
+        ]
+      ]
+    },
+    "control_word_field_table": {
+      "header_columns": [
+        "Field",
+        "Meaning"
+      ],
+      "rows": [
+        [
+          "SOP",
+          "Start-Of-Packet"
+        ],
+        [
+          "EOP_Format",
+          "0=not EOP, 1..8=valid bytes in last Data Word"
+        ],
+        [
+          "Error",
+          "Burst errored"
+        ],
+        [
+          "Channel Number",
+          "Logical channel (up to 65536)"
+        ],
+        [
+          "Flow Control",
+          "Per-channel XON/XOFF calendar"
+        ],
+        [
+          "CRC-24",
+          "Per-burst integrity (0x328B63)"
+        ]
+      ]
+    },
+    "crc_table": {
+      "header_columns": [
+        "CRC",
+        "Polynomial",
+        "Scope"
+      ],
+      "rows": [
+        [
+          "CRC-24",
+          "0x328B63",
+          "Per burst (Burst/Idle Control Word)"
+        ],
+        [
+          "CRC-32",
+          "0x04C11DB7",
+          "Per lane (Diagnostic Word)"
+        ]
+      ]
+    },
+    "burst_param_table": {
+      "header_columns": [
+        "Parameter",
+        "Typical"
+      ],
+      "rows": [
+        [
+          "BurstMax",
+          "256 bytes"
+        ],
+        [
+          "BurstShort",
+          "32 bytes"
+        ],
+        [
+          "BurstMin",
+          "64 bytes (multiple of 32)"
+        ]
+      ]
+    }
+  },
+  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "schema_version": "v0.1.62",
+  "doc_class": "L15",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l15_encoding_tables v0.1.62",
+  "extraction_evidence": {},
+  "ic_name": "Interlaken Protocol Definition"
+}

@@ -1,0 +1,49 @@
+{
+  "project": "/home/reyerchu/vibe-ic/benchmark_clean/spm",
+  "pdk": "sky130A",
+  "top": "chip_top",
+  "steps": [
+    {
+      "name": "synth",
+      "status": "FAIL",
+      "duration_s": 0.38257861137390137,
+      "detail": "rc=1 log_tail=[INFO] Final PATH variable: /foss/tools/bin:/foss/tools/sak:/usr/local/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/foss/tools/kactus2:/foss/tools/klayout:/foss/tools/osic-multitool\n[INFO] Final PYTHONPATH variable: /usr/lib/python312.zip:/usr/lib/python3.12:/usr/lib/python3.12/lib-dynload:/usr/local/lib/python3.12/dist-packages:/usr/lib/python3/dist-packages:/foss/tools/ngspyce/local/lib/python3.12/dist-packages:/foss/tools/openems/local/lib/python3.12/dist-packages:/foss/tools/pyopus/local/lib/python3.12/dist-packages:/foss/tools/yosys/share/yosys/python3:/foss/tools/klayout/pymod\nbash: line 1: cd: /home/reyerchu/vibe-ic/benchmark_clean/spm/phase2/stage2/synth: No such file or directory\n",
+      "output_files": [
+        "/home/reyerchu/vibe-ic/benchmark_clean/spm/phase2/stage2/synth/synth.log"
+      ],
+      "extras": {
+        "synth_frontend": "none",
+        "synth_frontend_reason": "default frontend failed but no SV signature / .sv input — fallback would not help"
+      }
+    },
+    {
+      "name": "drc",
+      "status": "SKIP",
+      "duration_s": 3.528594970703125e-05,
+      "detail": "GDS missing: /home/reyerchu/vibe-ic/benchmark_clean/spm/phase3/stage3/pnr/chip_top.gds",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "lvs",
+      "status": "WAIVED",
+      "duration_s": 0.06979823112487793,
+      "detail": "LVS requires SPICE-extracted netlist + reference; deferred to dedicated extraction flow (netgen IS available — re-run after extraction step lands)",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "canonicalize_artefacts",
+      "status": "PASS",
+      "duration_s": 0.004299163818359375,
+      "detail": "emitted 3 canonical artefacts; notes: per-stage DEFs missing: ['floorplan.def', 'placed.def', 'post_cts.def', 'post_hold.def', 'routed.def']. Re-run phase3_one_shot_runner from scratch (delete phase3/stage3/pnr/) so v1.6.36's per-stage write_def fires.; schema-aligned on_board_pass.json fields",
+      "output_files": [
+        "/home/reyerchu/vibe-ic/benchmark_clean/spm/phase2/stage2/constraints/pvt_matrix.json",
+        "/home/reyerchu/vibe-ic/benchmark_clean/spm/phase3/stage4/foundry_handoff/spm.gds",
+        "/home/reyerchu/vibe-ic/benchmark_clean/spm/reports/phase2/fpga/on_board_pass.json"
+      ],
+      "extras": {}
+    }
+  ],
+  "verdict": "FAIL"
+}

@@ -1,0 +1,28 @@
+class: protocol-ic
+layer: L8
+qbank:
+  aid_bit_timing:
+    expert:       ["AID-bus bit timing — {bit_period_us, bit0_low_us, bit1_low_us}?"]
+    intermediate: ["What's the bit period on the wire, and the low-phase width for a '0' and '1'?"]
+    beginner:     []   # PM applies default (10 µs period, 3/7 low)
+    follow_ups:
+      - if_user_says: ["standard cable-id", "IC-A"]
+        respond_with_default: "{bit_period_us: 10, bit0_low_us: 3, bit1_low_us: 7}"
+      - if_ambiguous: []
+        defer_to_default: true
+
+  wake_timing:
+    expert:       ["Wake pulse timing — {wake_low_min_us, wake_low_max_us}?"]
+    intermediate: ["How long must the host hold the bus low to wake the chip — min and max?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["standard"]
+        respond_with_default: "{wake_low_min_us: 150, wake_low_max_us: 1500}"
+
+  response_timing:
+    expert:       ["Response delay — {rx_to_tx_delay_us_min, rx_to_tx_delay_us_max}?"]
+    intermediate: ["After the host finishes its command, when can the chip start replying? Give min and max."]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["standard"]
+        respond_with_default: "{rx_to_tx_delay_us_min: 100, rx_to_tx_delay_us_max: 200}"

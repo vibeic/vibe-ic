@@ -1,0 +1,56 @@
+/* Real-world PDK Liberty tie-cell block shape (generic-ised,
+ * chip-AGNOSTIC). Every production-grade PDK Liberty file
+ * includes `pg_pin(VDD)` and `pg_pin(VSS)` declarations BEFORE
+ * the signal pins (per Liberty spec / power-aware synthesis
+ * requirement). The synthetic minimal fixture used in v1.6.596
+ * unit tests omits `pg_pin` entirely — that gap caused #404 R1
+ * to ship a hilomap directive pointing at the power-rail pin
+ * `VDD` instead of the true output pin `Z`.
+ *
+ * Use in test:
+ *   src = load_real_fixture("pdk_liberty_tie_cell_block.lib")
+ *   tmp = tmp_path / "lib.lib"; tmp.write_text(src)
+ *   out = _v1_6_596_discover_tie_cells(str(tmp))
+ *   assert out["hi_pin"] == "Z"
+ *   assert out["lo_pin"] == "ZN"
+ */
+
+library(generic_tie_cells) {
+
+    cell (lib_tieh) {
+        area : 1.92 ;
+        pg_pin (VDD) {
+            voltage_name : VDD ;
+            pg_type      : primary_power ;
+        }
+        pg_pin (VSS) {
+            voltage_name : VSS ;
+            pg_type      : primary_ground ;
+        }
+        pin (Z) {
+            direction : output ;
+            function  : "1" ;
+            related_power_pin  : VDD ;
+            related_ground_pin : VSS ;
+        }
+    }
+
+    cell (lib_tiel) {
+        area : 1.92 ;
+        pg_pin (VDD) {
+            voltage_name : VDD ;
+            pg_type      : primary_power ;
+        }
+        pg_pin (VSS) {
+            voltage_name : VSS ;
+            pg_type      : primary_ground ;
+        }
+        pin (ZN) {
+            direction : output ;
+            function  : "0" ;
+            related_power_pin  : VDD ;
+            related_ground_pin : VSS ;
+        }
+    }
+
+}

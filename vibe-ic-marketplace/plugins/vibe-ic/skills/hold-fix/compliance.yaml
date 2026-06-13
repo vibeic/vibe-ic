@@ -1,0 +1,29 @@
+# Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
+testability: structured
+
+# Auto-generated compliance spec for skill 'hold-fix'
+# Refines vibe-ic/skills/hold-fix/SKILL.md output requirements.
+skill: hold-fix
+
+requirements:
+  - id: R_has_output_section
+    description: "Output format/schema section present"
+    pattern: '(##\s+(?:Output|Findings|Result|Report))'
+    skill_section: 'Output/Handoff'
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line"
+    pattern: 'Next:\s*(?:run\s+)?/\w'
+    skill_section: 'Output/Handoff'
+  - id: R_status_or_summary
+    description: "Has a Summary or STATUS block"
+    pattern: '(##\s+Summary|\*\*STATUS\*\*:)'
+    skill_section: 'Output/Handoff'
+  - id: R_hold_violations
+    description: "Hold violation count and fix strategy"
+    pattern: '(hold.*violation|hold.*slack|buffer.*insert|delay.*cell|fix.*hold)'
+    skill_section: 'Hold Fix'
+
+cross_checks:
+  - id: X_eda_log_check
+    description: "Verify hold fix log exists with expected content"
+    rule: postcheck_pass_only

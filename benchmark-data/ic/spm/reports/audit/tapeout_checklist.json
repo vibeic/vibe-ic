@@ -1,0 +1,42 @@
+{
+  "program": "signoff_audit:tapeout",
+  "passed": true,
+  "findings": [
+    {
+      "rule": "TAPEOUT_GDS_EXISTS",
+      "severity": "INFO",
+      "message": "GDS file found: spm.gds",
+      "file": "phase3/stage4/gds/spm.gds"
+    },
+    {
+      "rule": "TAPEOUT_NETLIST_EXISTS",
+      "severity": "INFO",
+      "message": "Synthesis netlist found: netlist.v",
+      "file": "phase2/stage2/synth/netlist.v"
+    },
+    {
+      "rule": "TAPEOUT_TIMING_EXISTS",
+      "severity": "INFO",
+      "message": "Timing report found: spm_fpga_bist.sta.rpt",
+      "file": "phase2/stage1/fpga/output_files/spm_fpga_bist.sta.rpt"
+    },
+    {
+      "rule": "TAPEOUT_DRC_EXISTS",
+      "severity": "INFO",
+      "message": "DRC report found: drc.rpt",
+      "file": "phase3/reports/drc.rpt"
+    }
+  ],
+  "summary": {
+    "evidence": {
+      "gds": true,
+      "netlist": true,
+      "timing": true,
+      "drc": true
+    },
+    "evidence_count": 4,
+    "threshold": 4,
+    "env_unavailable_steps": [],
+    "verdict_tier": "PASS"
+  }
+}

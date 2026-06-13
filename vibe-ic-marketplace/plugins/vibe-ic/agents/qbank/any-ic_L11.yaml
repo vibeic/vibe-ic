@@ -1,0 +1,47 @@
+class: any-ic
+layer: L11
+# L11 CALIBRATION — platform-specific tuning tables (FPGA counter windows,
+# XOR-trim masks, OTP burn pulses, oscillator scale factors). Every entry
+# MUST declare domain_clock + source_clock + scale_factor so
+# `clock_scale_consistency_check.py` can verify µs↔cycle conversions.
+# Path convention: L11.tables[i].{name, domain_clock, source_clock, scale_factor, entries}
+qbank:
+  tables[0].name:
+    expert:       ["First calibration table name (e.g. rx_window_us_to_cycles, otp_burn_pulse)?"]
+    intermediate: ["What's the first calibration table called?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["none", "no calibration"]
+        respond_with_default: "platform_clock_only"
+
+  tables[0].domain_clock:
+    expert:       ["Domain clock the table's values execute against (e.g. core 5MHz, FPGA 50MHz)?"]
+    intermediate: ["Which clock domain does this table run in? e.g. `5MHz` (core) or `50MHz` (FPGA testbench)."]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true
+
+  tables[0].source_clock:
+    expert:       ["Source clock the spec values were authored against (e.g. spec doc said cycles@50MHz)?"]
+    intermediate: ["What clock did the original spec values use? e.g. `50MHz` (vendor tester) or just `µs` (clock-independent)."]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["us", "microseconds", "no clock"]
+        respond_with_default: "absolute_us"
+
+  tables[0].scale_factor:
+    expert:       ["scale_factor = source_clock_hz / domain_clock_hz (or 1.0 if both µs)?"]
+    intermediate: ["What multiplier converts spec values to design values? Usually 1.0 if both use µs; otherwise source_Hz / domain_Hz."]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # 1.0
+
+  tables[0].entries:
+    expert:       ["Table entries (list of {key, value} dicts or k:v map)?"]
+    intermediate: ["Give the table contents — e.g. `[{name: bit0_min, value_us: 0.6}, {name: bit0_max, value_us: 3.6}]`."]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true

@@ -1,0 +1,505 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "Bluetooth Low Energy 5.2 (Bluetooth Core Specification)",
+  "analog_blocks_detected": false,
+  "analog_blocks": [],
+  "no_analog": true,
+  "external_components": [],
+  "electrical_specs": [
+    {
+      "param": "RF CHANNELS A RELAXED INTERFERENCE REQUIREMENT C/I",
+      "parameter": "RF channels a relaxed interference requirement C/I",
+      "value": "-17",
+      "unit": "dB",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "RF channels a relaxed interference requirement C/I = -17 dB shall be met.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "FREQUENCIES A RELAXED INTERFERENCE REQUIREMENT C/I",
+      "parameter": "frequencies a relaxed interference requirement C/I",
+      "value": "-15",
+      "unit": "dB",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "frequencies a relaxed interference requirement C/I = -15 dB for π/4-DQPSK",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "WORST-CASE VALUES (DRIFT",
+      "parameter": "worst-case values (drift",
+      "value": "250",
+      "unit": "ppm",
+      "condition": null,
+      "source": "BLE_Spec.pdf",
+      "raw": "worst-case values (drift = 250 ppm and jitter = 10 µs) shall be used.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    }
+  ],
+  "design_parameters": [
+    {
+      "parameter": "Covered Core Package Version",
+      "value": "5.2",
+      "source": "BLE_Spec.pdf",
+      "raw": "Covered Core Package Version: 5.2",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "LE Coded             1 Msym/s                       S",
+      "value": "8",
+      "source": "BLE_Spec.pdf",
+      "raw": "LE Coded             1 Msym/s                       S=8                    125 kb/s",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "modulation   S",
+      "value": "8",
+      "source": "BLE_Spec.pdf",
+      "raw": "modulation   S=8",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "LE 1M                LE Coded S",
+      "value": "8",
+      "source": "BLE_Spec.pdf",
+      "raw": "LE 1M                LE Coded S=8      LE 1M               LE Coded S=8",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "LE 1M                            LE Coded S",
+      "value": "8",
+      "source": "BLE_Spec.pdf",
+      "raw": "LE 1M                            LE Coded S=8",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "V5A",
+      "value": "802.11",
+      "source": "BLE_Spec.pdf",
+      "raw": "V5A: 802.11 Protocol Adaptation                                 6421, 7036",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "ISO/IEC 9834.8",
+      "value": "2014.",
+      "source": "BLE_Spec.pdf",
+      "raw": "ISO/IEC 9834.8:2014.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "bit period product BT",
+      "value": "0.5.",
+      "source": "BLE_Spec.pdf",
+      "raw": "bit period product BT=0.5. The Modulation index shall be between 0.28 and",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "valued signal points. M",
+      "value": "4",
+      "source": "BLE_Spec.pdf",
+      "raw": "valued signal points. M=4 applies for 2 Mb/s and M=8 applies for 3 Mb/s. Gray",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "alternatives (n",
+      "value": "3,",
+      "source": "BLE_Spec.pdf",
+      "raw": "alternatives (n=3, 4, or 5).",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bit Rate",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Bit Rate = 1 Mb/s ±1 ppm",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Symbol Rate",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Symbol Rate = 1 Msym/s ± 1 ppm",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "time_base_offset                 slave_offset",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "time_base_offset                 slave_offset = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "maximum value X",
+      "value": "2500",
+      "source": "BLE_Spec.pdf",
+      "raw": "maximum value X=2500 µs, or even at f(k), f(k+6),...f(k+6i) which gives a",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "maximum value X",
+      "value": "3750",
+      "source": "BLE_Spec.pdf",
+      "raw": "maximum value X=3750 µs. The RX hop frequencies used shall correspond to",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "a 3-bit parameter X",
+      "value": "3",
+      "source": "BLE_Spec.pdf",
+      "raw": "- a 3-bit parameter X=3 is sent as:",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "b 0 b 1 b 2",
+      "value": "110",
+      "source": "BLE_Spec.pdf",
+      "raw": "b 0 b 1 b 2 = 110",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "expurgated code guarantees large Hamming distance ( d min",
+      "value": "14",
+      "source": "BLE_Spec.pdf",
+      "raw": "expurgated code guarantees large Hamming distance ( d min = 14 ) between",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "g(D)",
+      "value": "260534236651,",
+      "source": "BLE_Spec.pdf",
+      "raw": "g(D) = 260534236651,                                             (EQ 9)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "h(D)",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "h(D) = 1 + D + D 3 + D 4 + D 6 shall be used. The LFSR and its starting state are",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "continue-fragment indications (LLID",
+      "value": "10",
+      "source": "BLE_Spec.pdf",
+      "raw": "continue-fragment indications (LLID=10 and LLID=01) also retain their",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "length",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "length=0 and LLID=01. The payload flow bit has its own meaning for each",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "ASB-U             Always set FLOW",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "ASB-U             Always set FLOW=1 on transmission and ignore the bit",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "PBD               Always set FLOW",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "PBD               Always set FLOW=0 on transmission and ignore the bit",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Position",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Position:            0         1      2     3    4          5        6         7",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "LLID",
+      "value": "10",
+      "source": "BLE_Spec.pdf",
+      "raw": "LLID = 10 in the payload header for the next L2CAP message. This informs the",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "so NBC",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "so NBC=1 means that each broadcast packet should be sent only once but may",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "TeSCO",
+      "value": "6",
+      "source": "BLE_Spec.pdf",
+      "raw": "TeSCO=6 slots, which would correspond to a 64 kb/s synchronous link.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "clk_adj_instant",
+      "value": "12",
+      "source": "BLE_Spec.pdf",
+      "raw": "clk_adj_instant = 12",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Nsniff attempt",
+      "value": "0",
+      "source": "BLE_Spec.pdf",
+      "raw": "Nsniff attempt =0 shall not be used.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Let sgn(x)",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Let sgn(x) = 1 for x ≥ 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "name offset",
+      "value": "0.",
+      "source": "BLE_Spec.pdf",
+      "raw": "- name offset=0.",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Bits 27",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "Bits 27:1 of the Bluetooth",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "sniff_subrating   4         u_int32   slots      Bits 27",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "sniff_subrating   4         u_int32   slots      Bits 27:1 of the master",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "EV4",
+      "value": "16",
+      "source": "BLE_Spec.pdf",
+      "raw": "EV4: 16",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "EV3",
+      "value": "6",
+      "source": "BLE_Spec.pdf",
+      "raw": "EV3: 6",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "EV5",
+      "value": "16",
+      "source": "BLE_Spec.pdf",
+      "raw": "EV5: 16",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "1",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "2",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 2",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "3",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 3",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "4",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 4",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "5",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 5",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "6",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 6",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "7",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 7",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "8",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 8",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "9",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 9",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "10",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 10",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "11",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 11",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "12",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 12",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "13",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 13",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "14",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 14",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "15",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 15",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "L",
+      "value": "16",
+      "source": "BLE_Spec.pdf",
+      "raw": "L = 16",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/BLE_Spec.pdf": []
+  },
+  "class_path": "digital_arithmetic_primitive",
+  "analog_digital_interface_present": true,
+  "signaling_summary": "Bluetooth Low Energy 5.2 is a wireless 2.4 GHz radio protocol. The analog/RF parameters specified by Vol 6 Part A include: GFSK modulation with bandwidth-time product BT = 0.5; modulation index 0.45..0.55 (LE 1M / LE Coded), 0.45..0.55 (LE 2M with stable modulation index = 0.495..0.505 if SMI feature bit set); 40 RF channels each 2 MHz wide spanning 2.4000-2.4835 GHz; symbol rate 1 Msym/s (LE 1M, LE Coded) or 2 Msym/s (LE 2M); maximum transmit power +20 dBm (Class 1) / +10 dBm (Class 1.5) / +4 dBm (Class 2) / 0 dBm (Class 3); minimum receiver sensitivity ≤ -70 dBm at LE 1M, ≤ -75 dBm at LE 2M, ≤ -75 dBm at LE Coded S=2, ≤ -82 dBm at LE Coded S=8; frequency accuracy ≤ ±50 ppm over voltage / temperature; symbol timing accuracy ≤ ±50 ppm; in-band blocking, image rejection, and out-of-band blocking masks defined in Section 4 of Vol 6 Part A.",
+  "voltage_classes_of_devices": [
+    "Low-power bus-powered: ≤ 100 mA from VBUS (powered before configuration)",
+    "High-power bus-powered: ≤ 100 mA before configuration; up to 500 mA after configuration",
+    "Self-powered: draws power from local supply; ≤ 100 mA from VBUS at power-on for enumeration",
+    "Suspended: ≤ 500 µA per device from VBUS"
+  ],
+  "high_speed_chirp_handshake": "After USB Reset: device may chirp K-state (driver current source) for 1..7 ms; if hub/host responds with chirp K-J-K-J-K-J sequence, the connection negotiates HS mode.",
+  "rf_parameters_summary": {
+    "frequency_band_low_MHz": 2400.0,
+    "frequency_band_high_MHz": 2483.5,
+    "channel_count": 40,
+    "channel_spacing_MHz": 2.0,
+    "channel_0_center_MHz": 2402.0,
+    "channel_36_center_MHz": 2478.0,
+    "primary_adv_channel_37_MHz": 2402,
+    "primary_adv_channel_38_MHz": 2426,
+    "primary_adv_channel_39_MHz": 2480,
+    "symbol_rate_1M_Msym_s": 1.0,
+    "symbol_rate_2M_Msym_s": 2.0,
+    "modulation": "GFSK, BT=0.5",
+    "modulation_index_min": 0.45,
+    "modulation_index_max": 0.55,
+    "frequency_tolerance_ppm": 50,
+    "symbol_timing_tolerance_ppm": 50
+  },
+  "tx_power_classes": [
+    {
+      "class": "Class 1",
+      "max_tx_dBm": 20,
+      "min_tx_dBm": -20,
+      "use_case": "Long-range, high-power applications; +20 dBm only on LE Coded with regulatory compliance."
+    },
+    {
+      "class": "Class 1.5",
+      "max_tx_dBm": 10,
+      "min_tx_dBm": -20,
+      "use_case": "Mid-range power; common in BLE 5 LE Coded use."
+    },
+    {
+      "class": "Class 2",
+      "max_tx_dBm": 4,
+      "min_tx_dBm": -20,
+      "use_case": "Mid-power consumer (smartphones, BLE peripherals)."
+    },
+    {
+      "class": "Class 3",
+      "max_tx_dBm": 0,
+      "min_tx_dBm": -20,
+      "use_case": "Low-power coin-cell devices."
+    }
+  ],
+  "receiver_sensitivity": [
+    {
+      "PHY": "LE 1M",
+      "max_sensitivity_dBm": -70,
+      "BER_pct_target": 0.1,
+      "notes": "30.7% packet error rate at -70 dBm with 37-byte payload."
+    },
+    {
+      "PHY": "LE 2M",
+      "max_sensitivity_dBm": -70,
+      "BER_pct_target": 0.1,
+      "notes": "Same PER target as 1M; lower sensitivity due to higher bandwidth."
+    },
+    {
+      "PHY": "LE Coded S=2",
+      "max_sensitivity_dBm": -75,
+      "BER_pct_target": 0.1,
+      "notes": "FEC + interleaver improve sensitivity ~5 dB over LE 1M."
+    },
+    {
+      "PHY": "LE Coded S=8",
+      "max_sensitivity_dBm": -82,
+      "BER_pct_target": 0.1,
+      "notes": "Up to 12 dB improvement over LE 1M — ~4x range."
+    }
+  ],
+  "voltage_classes": [
+    "VDD_RADIO  — typically 1.8 V or 3.3 V; per-controller-vendor",
+    "VDD_DIGITAL — typically 0.9-1.2 V core supply",
+    "VDD_IO     — 1.8 V / 3.3 V I/O ring",
+    "Coin-cell battery operation common (CR2032 nominal 3.0 V) for low-power Peripherals",
+    "Energy harvesting (NFC / solar / piezo) supported in LE 5.2 LE Audio Hearing Access scenarios"
+  ],
+  "rssi_path_loss_5_2": "BLE 5.2 LE Power Control + Path Loss Monitoring exchange RSSI estimates over LL_POWER_CONTROL_REQ / LL_POWER_CONTROL_RSP / LL_POWER_CHANGE_IND, allowing TX-power adjustment per remote-peer feedback. Path-Loss thresholds (HIGH / MIDDLE / LOW) can be set per zone; controller raises a Path Loss Threshold Event when crossing a zone."
+}

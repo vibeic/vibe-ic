@@ -1,0 +1,26 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_cases",
+  "ic_name": "DDR5 SDRAM (JEDEC JESD79-5)",
+  "test_cases": [],
+  "no_test_cases_in_input": true,
+  "bring_up_sequence": [],
+  "no_bring_up_sequence_in_input": true,
+  "extraction_evidence": {},
+  "class_path": "pure_analog",
+  "test_cases_present": "partial - the specification defines device behaviors rather than an embedded testbench; the categories below are derived from the spec.",
+  "derived_compliance_test_categories": [
+    "Power-up / initialization / RESET_n sequence at 1.1 V VDD/VDDQ, 1.8 V VPP.",
+    "Training: CA training, write leveling, read training, write training (DFE tap tuning, VrefDQ/VrefCA centering), ZQ calibration via MPC.",
+    "Two-sub-channel independence: concurrent unrelated access on Sub-Channel A and Sub-Channel B.",
+    "Row cycle: ACTIVATE (tRCD) -> READ/WRITE (BL16) -> PRECHARGE (tRP); tRAS / tWR / CL.",
+    "Bank-group timing: tCCD_L within a group vs tCCD_S across groups; 32 banks / 8 groups.",
+    "Refresh: all-bank (REFab) and same-bank (REFsb); tRFC / tREFI; fine-granularity and temperature refresh.",
+    "Burst: BL16 and BL32 burst-chop; on-the-fly burst control.",
+    "On-die ECC: single-bit correction and Error Check and Scrub (ECS).",
+    "Integrity: write CRC and command/address parity errors on ALERT_n.",
+    "Mode registers: MRW / MRR across the expanded MR space.",
+    "Speed-bin sweep: DDR5-3200 .. DDR5-8400; double-data-rate capture on DQS.",
+    "Module: PMIC rail bring-up, SPD-hub configuration, RCD CK/CA re-drive (RDIMM)."
+  ]
+}

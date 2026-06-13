@@ -1,0 +1,81 @@
+class: cable-side-id-ic
+layer: L1
+qbank:
+  electrical_characteristics.supply_vbus:
+    expert:       ["VBUS supply range — {min, typ, max, unit}?"]
+    intermediate: ["What voltage range does the chip tolerate on VBUS?"]
+    beginner:     ["What's the power the chip sees from the cable?"]
+    follow_ups:
+      - if_user_says: ["usb", "type-c", "standard"]
+        respond_with_default: "{min: 2.6, typ: 5.0, max: 21.5, unit: V}  (USB-PD range)"
+      - if_ambiguous: []
+        defer_to_default: true
+
+  electrical_characteristics.supply_1v8:
+    expert:       ["1V8 internal rail tolerance — {min, typ, max, unit}?"]
+    intermediate: ["The internal 1.8 V LDO output — what min/typ/max do you spec?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["standard", "typical"]
+        respond_with_default: "{min: 1.62, typ: 1.8, max: 1.98, unit: V} (JESD8-7A ±10%)"
+
+  electrical_characteristics.osc_freq:
+    expert:       ["Oscillator nominal frequency, trim range?"]
+    intermediate: ["The internal RC oscillator — what frequency and trim percentage?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["standard cable-id", "IC-A"]
+        respond_with_default: "{nominal: 5, unit: MHz, trim_range_percent: 10}"
+
+  electrical_characteristics.id_bus_vil:
+    expert:       ["ID_BUS VIL threshold (V)?"]
+    intermediate: ["Below what voltage is the ID_BUS considered a logic '0'?"]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # typ 0.8 V
+
+  electrical_characteristics.id_bus_vih:
+    expert:       ["ID_BUS VIH threshold (V)?"]
+    intermediate: ["Above what voltage is the ID_BUS considered a logic '1'?"]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # typ 2.0 V
+
+  pinout.VBUS:
+    expert:       ["VBUS pin role?"]
+    intermediate: ["Describe the VBUS pin."]
+    beginner:     ["Where does the chip get its main power?"]
+    follow_ups:
+      - if_user_says: ["usb", "5v", "cable power"]
+        respond_with_default: "Supply in (2.6–21.5 V VBUS from USB-C cable)"
+
+  pinout.ID_BUS:
+    expert:       ["ID_BUS pin role?"]
+    intermediate: ["Describe the ID_BUS pin."]
+    beginner:     ["Which pin talks to the host?"]
+    follow_ups:
+      - if_user_says: ["single wire", "id wire"]
+        respond_with_default: "Open-drain single-wire ID bus, pulled up on host side"
+
+  pinout.CC_I:
+    expert:       ["CC_I pin role?"]
+    intermediate: ["Describe the CC input pin."]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true
+
+  pinout.CC_O:
+    expert:       ["CC_O pin role?"]
+    intermediate: ["Describe the CC output pin."]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true
+
+  protocol_summary:
+    expert:       ["One-paragraph protocol summary?"]
+    intermediate: ["In a short paragraph, how does the chip talk to the host?"]
+    beginner:     ["Briefly — how does the chip and the device chat?"]

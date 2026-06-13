@@ -1,0 +1,17 @@
+{
+  "_doc": "Wave 36 (v0.119.68) example. Place this file at <project>/extraction_patterns.json (NOT here) to teach extraction_coverage_check.py and phase1_coverage_report_gen.py how to find chip-specific literals.",
+  "_doc_pin_names": "Custom pin name regexes — supply project-specific names that the chip-agnostic `\\bPIN_[A-Z]\\d+\\b` default does not match. Example below shows generic accessory-ID / output / supply names; substitute your chip's pin names.",
+  "patterns": {
+    "pin_names": [
+      "\\bACC_ID\\b",
+      "\\bOUT[12]\\b",
+      "\\bVBUS\\b"
+    ],
+    "register_names": [
+      "\\b[A-Z][A-Z0-9_]{2,}_REG\\b"
+    ],
+    "constants": [
+      "\\bT_[A-Z][A-Z0-9_]+_TICKS\\b"
+    ]
+  }
+}

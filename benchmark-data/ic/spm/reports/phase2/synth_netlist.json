@@ -1,0 +1,27 @@
+{
+  "program": "synth_netlist_check",
+  "version": "1.0.0",
+  "netlist": "phase2/stage2/synth/netlist.v",
+  "min_cells": 10,
+  "summary": {
+    "file_exists": true,
+    "total_cells": 599,
+    "unique_cell_types": 4,
+    "findings_count": 0,
+    "pass": true
+  },
+  "stats": {
+    "file_exists": true,
+    "file_size_bytes": 61667,
+    "has_module": true,
+    "total_cells": 599,
+    "unique_cell_types": 4,
+    "cell_type_counts": {
+      "$_NOR_": 219,
+      "$_NAND_": 190,
+      "$_NOT_": 126,
+      "$_DFF_P_": 64
+    }
+  },
+  "findings": []
+}

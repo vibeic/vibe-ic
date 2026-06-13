@@ -1,0 +1,80 @@
+{
+  "schema_version": 2,
+  "doc_class": "behavioral_sequences",
+  "ic_name": "LPDDR5 SDRAM (JEDEC JESD209-5)",
+  "behavioral_sequences": [],
+  "no_behavioral_sequences_in_input": true,
+  "no_calibration": false,
+  "extraction_evidence": {},
+  "initialization_sequence": [
+    "1. Hold RESET_n LOW. Ramp the supplies in the defined order: VDD1 (~1.8 V), VDD2H / VDD2L, VDDQ (0.5 V).",
+    "2. Once supplies are stable, deassert RESET_n; wait the defined reset-exit time.",
+    "3. Start the quarter-speed differential CK; stabilize.",
+    "4. Program mode registers via MRW (two CA cycles each): FSP, RL/WL, bank mode, WCK ratio, link-ECC / DBI, ODT / drive impedance, Vref(ca)/Vref(dq).",
+    "5. Run ZQ calibration (start/latch via MPC).",
+    "6. Perform the initial WCK2CK synchronization (CAS WS_FS) and train DQ/RDQS read and WCK write timing (DFE/eq) for the active FSP.",
+    "7. Device ready for normal operation."
+  ],
+  "reset_sequence": [
+    "1. Assert RESET_n LOW; device enters reset (MRs cleared, outputs Hi-Z).",
+    "2. Re-run the initialization sequence from step 2."
+  ],
+  "row_open_sequence": [
+    "1. Issue ACT-1 (row high bits, bank / bank group).",
+    "2. Issue ACT-2 (row low bits) to complete opening the row.",
+    "3. Wait tRCD before the first column command."
+  ],
+  "read_sequence_BL16": [
+    "1. Open the target row (ACT-1, ACT-2; wait tRCD).",
+    "2. Issue CAS carrying WS_RD to synchronize WCK to CK for an immediately following read.",
+    "3. Issue RD with the column / bank / bank-group address (AP for auto-precharge if desired).",
+    "4. Wait the programmed Read Latency (RL); the DRAM enables and drives RDQS edge-aligned with DQ.",
+    "5. Capture 16 beats on both edges of RDQS; decode Read Link ECC and DBI as configured.",
+    "6. Optionally issue PRE after tRTP, or use RD with auto-precharge."
+  ],
+  "read_sequence_BL32": [
+    "1-2. Same as BL16 read up to the CAS(WS_RD) sync.",
+    "3. Issue RD32; optionally specify a starting position within the 32-word-aligned burst via C0 / B3.",
+    "4. Capture 32 beats on DQ framed by RDQS."
+  ],
+  "write_sequence_BL16": [
+    "1. Open the target row (ACT-1, ACT-2; wait tRCD).",
+    "2. Issue CAS carrying WS_WR to synchronize WCK to CK for an immediately following write.",
+    "3. Issue WR (or MWR for masked write) with the column / bank / bank-group address.",
+    "4. Wait the programmed Write Latency (WL); drive WCK and 16 beats of DQ (+ DMI) on both WCK edges; encode Write Link ECC.",
+    "5. After tWR, issue PRE; or use WR with auto-precharge."
+  ],
+  "write_x_sequence": [
+    "1. Open the target row and issue CAS(WS_WR) with the WRX option and WXS bit.",
+    "2. Issue the write; the DRAM fills the burst all-zero (WXS=0) / all-one (WXS=1) WITHOUT data transfer on the bus."
+  ],
+  "refresh_sequence": [
+    "1. Track elapsed time since last refresh; target average tREFI for the current temperature range (via MRR status).",
+    "2. Issue REFab (all-bank) and wait tRFCab; OR REFpb (per-bank round-robin) and wait tRFCpb while accessing other banks.",
+    "3. If RFM is enabled, issue RFM commands per the activation-count policy.",
+    "4. Execute required refreshes before entering self-refresh / deep sleep."
+  ],
+  "self_refresh_entry_exit_sequence": [
+    "1. Bring the device to a refreshable idle state (banks precharged).",
+    "2. Issue SRE over the CA bus (no CKE); CK may be stopped per the defined window.",
+    "3. To exit: restart CK, issue SRX (or rely on CS activity), and resynchronize WCK before the next transfer.",
+    "4. For Deep Sleep Mode (DSE at entry): re-run the full initialization sequence on exit."
+  ],
+  "multi_bank_bank_group_sequence": [
+    "1. ACT a row in bank group BG0 bank0; respect tRRD_S to a different bank group, tRRD_L within the same bank group; at most 4 ACTs within tFAW.",
+    "2. Issue CAS(WS_FS) to free-start WCK for multiple following accesses across multiple banks.",
+    "3. RD/WR across banks honouring tCCD_S (different bank group) and tCCD_L (same bank group).",
+    "4. PRE (per-bank) or PREab (all-bank) when done; wait tRP."
+  ],
+  "dvfs_frequency_change_sequence": [
+    "1. Quiesce traffic; precharge banks as required.",
+    "2. Switch the active FSP via mode register; DVFSC selects VDD2H/VDD2L.",
+    "3. Change CK / WCK frequency; re-run ZQ calibration and WCK2CK sync; retrain DQ/RDQS read and WCK write with FSP-specific RL/WL/ODT/Vref/DFE.",
+    "4. Resume traffic at the new operating point."
+  ],
+  "power_down_entry_exit_sequence": [
+    "1. Issue a power-down entry command over the CA bus (PD bit). There is NO CKE pin.",
+    "2. The mode lasts until CS next goes high.",
+    "3. On CS activity, exit power-down; resynchronize WCK before the next transfer."
+  ]
+}

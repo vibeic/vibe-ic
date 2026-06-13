@@ -1,0 +1,29 @@
+# Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
+testability: structured
+
+# Auto-generated compliance spec for skill 'ppa-predict'
+# Refines vibe-ic/skills/ppa-predict/SKILL.md output requirements.
+skill: ppa-predict
+
+requirements:
+  - id: R_has_output_section
+    description: "Output format/schema section present"
+    pattern: '(##\s+(?:Output|Findings|Result|Report))'
+    skill_section: 'Output/Handoff'
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line"
+    pattern: 'Next:\s*(?:run\s+)?/\w'
+    skill_section: 'Output/Handoff'
+  - id: R_status_or_summary
+    description: "Has a Summary or STATUS block"
+    pattern: '(##\s+Summary|\*\*STATUS\*\*:)'
+    skill_section: 'Output/Handoff'
+  - id: R_ppa_numbers
+    description: "PPA numbers (cells, area, frequency)"
+    pattern: '(cell|area|um2|µm|frequency|MHz|power|mW|µW)'
+    skill_section: 'PPA'
+
+cross_checks:
+  - id: X_output_artifact_check
+    description: "Verify PPA report exists on disk"
+    rule: postcheck_pass_only

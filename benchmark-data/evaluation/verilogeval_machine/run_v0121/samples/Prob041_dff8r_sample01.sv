@@ -1,0 +1,17 @@
+module TopModule (
+  input clk,
+  input [7:0] d,
+  input reset,
+  output reg [7:0] q
+);
+
+  initial q = 8'd0;
+
+  always @(posedge clk) begin
+    if (reset)
+      q <= 8'd0;
+    else
+      q <= d;
+  end
+
+endmodule

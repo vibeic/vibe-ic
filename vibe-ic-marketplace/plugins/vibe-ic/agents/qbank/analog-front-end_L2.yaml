@@ -1,0 +1,33 @@
+class: analog-front-end
+layer: L2
+# v0.74 E+F-implement: AFE functional requirements (sample rate, modes, interface)
+qbank:
+  sample_rate_sps:
+    expert:       ["Maximum sample / update rate in SPS?"]
+    intermediate: ["How fast does the chip convert — samples per second?"]
+    beginner:     ["How quickly does it need to read the signal?"]
+
+  response_time_us:
+    expert:       ["Propagation delay (comparator/PGA) or conversion latency (ADC)?"]
+    intermediate: ["How quickly does the output reflect a change at the input?"]
+    beginner:     []
+
+  comparator_channels:
+    expert:       ["Comparator channel count (if any)?"]
+    intermediate: ["Are there any comparator channels (threshold detectors)?"]
+    beginner:     []
+
+  gain_stages:
+    expert:       ["Gain-stage configuration — PGA settings, max gain?"]
+    intermediate: ["Any programmable gain stages? What gain range?"]
+    beginner:     []
+
+  power_modes:
+    expert:       ["Power modes — active / standby / shutdown currents?"]
+    intermediate: ["How many power states — run, standby, sleep?"]
+    beginner:     ["What are the power states — running, idle, off?"]
+
+  digital_interface:
+    expert:       ["Digital interface — I2C / SPI / parallel / one-wire?"]
+    intermediate: ["How does the host talk to the chip — I2C, SPI, parallel?"]
+    beginner:     ["How does the main processor read from the chip?"]

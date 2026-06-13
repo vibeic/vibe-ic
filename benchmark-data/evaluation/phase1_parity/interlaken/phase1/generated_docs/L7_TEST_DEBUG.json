@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_debug",
+  "ic_name": "Interlaken Protocol Definition",
+  "test_scenarios": [],
+  "test_modes": [],
+  "no_test_modes_in_input": true,
+  "debug_observability": [],
+  "no_debug_observability_in_input": true,
+  "debug_registers": [],
+  "debug_parameters": [],
+  "no_debug_parameters_in_input": true,
+  "formal_interfaces": [],
+  "no_formal_interfaces_in_input": true,
+  "verification_strategy": [],
+  "no_verification_strategy_in_input": true,
+  "engineer_mode_unlock_sequence": null,
+  "no_engineer_mode_unlock_in_input": true,
+  "vsuite_per_kw_cap_skipped_v1_6_373": 0,
+  "extraction_evidence": {},
+  "test_debug": {
+    "lane_health": "Diagnostic Word reports per-lane status (operational) and lane number",
+    "per_lane_crc": "CRC-32 (poly 0x04C11DB7) in the Diagnostic Word detects per-lane bit errors",
+    "per_burst_crc": "CRC-24 (poly 0x328B63) in the Burst/Idle Control Word detects burst errors",
+    "word_lock": "Receiver locks on the Synchronization Word 0x78f678f678f6",
+    "skip_word": "Skip Words added/deleted for clock compensation and observable for rate-match debug"
+  }
+}

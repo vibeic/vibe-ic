@@ -1,0 +1,131 @@
+{
+  "schema_version": 2,
+  "doc_class": "control_logic",
+  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
+  "reject_rules": [],
+  "fsm_states": [
+    {
+      "name": "IDLE",
+      "transitions": [
+        "IDLE -> RX_CMD when ESPI_CS# asserted"
+      ],
+      "actions": [
+        "Release ESPI_IO[3:0] (tristate)",
+        "Wait for chip-select (spec §4: CS# assert begins a transaction)"
+      ]
+    },
+    {
+      "name": "RX_CMD",
+      "transitions": [
+        "RX_CMD -> RX_CRC after 8-bit CMD opcode + command fields + optional data"
+      ],
+      "actions": [
+        "Sample 8-bit command opcode on ESPI_IO (spec §5)",
+        "Sample command-specific fields and optional payload (spec §4)"
+      ]
+    },
+    {
+      "name": "RX_CRC",
+      "transitions": [
+        "RX_CRC -> TURNAROUND when CRC valid (or CRC disabled)",
+        "RX_CRC -> RESP_ERROR when CRC mismatch"
+      ],
+      "actions": [
+        "Sample CRC byte and check CRC-8 poly 0x07 (spec §10)",
+        "CRC optional/negotiated via General Capabilities (spec §8/§10)"
+      ]
+    },
+    {
+      "name": "TURNAROUND",
+      "transitions": [
+        "TURNAROUND -> WAIT_STATE when slave not ready",
+        "TURNAROUND -> DRIVE_RESP when slave ready"
+      ],
+      "actions": [
+        "Float bus for 2 ESPI_CLK cycles (TAR, spec §4/§13)",
+        "Take bus ownership for the response phase"
+      ]
+    },
+    {
+      "name": "WAIT_STATE",
+      "transitions": [
+        "WAIT_STATE -> WAIT_STATE while not ready",
+        "WAIT_STATE -> DRIVE_RESP when ready"
+      ],
+      "actions": [
+        "Drive WAIT_STATE bytes (0x0F nibble) before response code (spec §6/§11)"
+      ]
+    },
+    {
+      "name": "DRIVE_RESP",
+      "transitions": [
+        "DRIVE_RESP -> DRIVE_STATUS_CRC after 8-bit response code + data"
+      ],
+      "actions": [
+        "Drive 8-bit response code (ACCEPT/DEFER/.../NO_RESPONSE, spec §6)",
+        "Drive optional response data"
+      ]
+    },
+    {
+      "name": "DRIVE_STATUS_CRC",
+      "transitions": [
+        "DRIVE_STATUS_CRC -> DEASSERT after 16-bit STATUS + CRC byte"
+      ],
+      "actions": [
+        "Drive 16-bit STATUS register (FREE/AVAIL bits, spec §7)",
+        "Drive response CRC byte (CRC-8 poly 0x07, spec §10)"
+      ]
+    },
+    {
+      "name": "RESP_ERROR",
+      "transitions": [
+        "RESP_ERROR -> DEASSERT"
+      ],
+      "actions": [
+        "Return NON_FATAL_ERROR (0x02) / FATAL_ERROR (0x03) on CRC or protocol error (spec §6)"
+      ]
+    },
+    {
+      "name": "DEASSERT",
+      "transitions": [
+        "DEASSERT -> IDLE when ESPI_CS# deasserted"
+      ],
+      "actions": [
+        "Release the bus; complete transaction on CS# deassert (spec §4)"
+      ]
+    }
+  ],
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
+  "fsm_tokens": [],
+  "extraction_evidence": {
+    "input/docs/Intel_eSPI_Base_Specification.txt": []
+  },
+  "control_logic": {
+    "master_fsm": [
+      "Idle (CS# high)",
+      "Assert CS#",
+      "Drive CMD opcode",
+      "Drive command fields/data",
+      "Drive CRC",
+      "Turnaround (release bus)",
+      "Sample response code",
+      "Sample response data/status/CRC",
+      "Deassert CS#"
+    ],
+    "slave_fsm": [
+      "Wait CS# assert",
+      "Receive CMD + fields + CRC",
+      "Check CRC",
+      "Turnaround (take bus)",
+      "Insert WAIT_STATE bytes if not ready",
+      "Drive response code",
+      "Drive response data/status/CRC",
+      "Release on CS# deassert"
+    ],
+    "flow_control": "Per-channel FREE/AVAIL bits in STATUS gate PUT/GET; DEFER for non-posted; completion returned later.",
+    "alert": "Slave drives ESPI_ALERT# (or ESPI_IO[1] in single-slave dedicated-alert mode); master responds with GET_STATUS."
+  }
+}

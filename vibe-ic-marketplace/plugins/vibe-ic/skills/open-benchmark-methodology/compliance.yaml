@@ -1,0 +1,15 @@
+# Auto-generated compliance spec for skill 'open-benchmark-methodology'
+# Refines vibe-ic/skills/open-benchmark-methodology/SKILL.md output requirements.
+skill: open-benchmark-methodology
+
+requirements:
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line OR clear next-action statement"
+    pattern: '(?:Next:\s*(?:run\s+)?/\w|## Next |proceed to)'
+    skill_section: 'Output/Handoff'
+  - id: R_status_or_summary
+    description: "Has a Summary or STATUS block"
+    pattern: '(##\s+Summary|\*\*STATUS\*\*:|## Result|## Verdict)'
+    skill_section: 'Output/Handoff'
+
+cross_checks: []

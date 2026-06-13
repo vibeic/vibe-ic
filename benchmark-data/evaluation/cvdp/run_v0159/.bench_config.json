@@ -1,0 +1,7 @@
+{
+  "bench": "cvdp",
+  "dataset": "/home/reyerchu/AI_IC_design/_extbench/cvdp_benchmark/example_dataset",
+  "shape": "D",
+  "problems": 2,
+  "batches": 1
+}

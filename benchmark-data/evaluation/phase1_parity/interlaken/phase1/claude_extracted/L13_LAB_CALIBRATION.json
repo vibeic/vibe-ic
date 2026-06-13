@@ -1,0 +1,5 @@
+{
+  "ic_name": "Interlaken Protocol Definition",
+  "lab_calibration": "N/A — protocol/framing layers are digital; SerDes electrical calibration (CDR, equalization) is implementation-defined.",
+  "applicable": false
+}

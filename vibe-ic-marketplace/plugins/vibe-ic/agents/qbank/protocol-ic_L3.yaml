@@ -1,0 +1,41 @@
+class: protocol-ic
+layer: L3
+qbank:
+  protocol_name:
+    expert:       ["Protocol name?"]
+    intermediate: ["What's the name/standard of the communication protocol?"]
+    beginner:     ["How does the chip talk to the host — USB? I2C? Something custom?"]
+
+  frame_format.wake:
+    expert:       ["Wake pulse spec?"]
+    intermediate: ["How does the host wake up the chip — long low pulse, edge, what?"]
+    beginner:     []
+
+  frame_format.break:
+    expert:       ["Break pulse spec (or N/A)?"]
+    intermediate: ["Is there a reset/break pulse? How is it generated?"]
+    beginner:     []
+
+  frame_format.bit_encoding:
+    expert:       ["Bit encoding — PWM, Manchester, NRZ, other?"]
+    intermediate: ["How is each bit represented on the wire?"]
+    beginner:     []
+
+  frame_format.byte_order:
+    expert:       ["Byte order?"]
+    intermediate: ["MSB-first or LSB-first?"]
+    beginner:     []
+
+  frame_format.crc:
+    expert:       ["CRC polynomial and init?"]
+    intermediate: ["What error-check scheme does the protocol use — CRC-8, CRC-16, parity?"]
+    beginner:     ["How important is error detection — strict or best-effort?"]
+    follow_ups:
+      - if_user_says: ["standard", "default", "ccitt"]
+        respond_with_default: "CRC-8, poly=0x07, init=0xFF"
+
+  # v0.74 A-implement Phase 1: command_set → commands (matches benchmark)
+  commands:
+    expert:       ["List commands (opcode, name, payload, response)?"]
+    intermediate: ["Walk me through every command the host can send — opcode, name, what it returns."]
+    beginner:     ["What can the host ask the chip to do? List the actions."]

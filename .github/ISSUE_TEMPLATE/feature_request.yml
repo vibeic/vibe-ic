@@ -1,0 +1,44 @@
+name: Feature request
+description: A new skill, a new MCP tool wrapper, or a new gate.
+title: "[feat] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before requesting a feature, please open a discussion if the
+        scope is large — design alignment beats long PRs.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - "New skill"
+        - "New MCP tool wrapper (bundled MCP server)"
+        - "New deterministic check / gate (programs/)"
+        - "New device driver (mcp-eda/src/devices/)"
+        - "New benchmark fixture"
+        - "Documentation improvement"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: "What can't be done today? Who is blocked?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: "Optional. If you have a design sketch, share it."
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

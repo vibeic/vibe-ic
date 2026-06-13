@@ -1,0 +1,9 @@
+{
+  "program": "reset_dependency_check",
+  "passed": true,
+  "findings": [],
+  "summary": {
+    "files_scanned": 21,
+    "violations": 0
+  }
+}

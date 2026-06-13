@@ -1,0 +1,104 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "AMBA AXI / ACE Protocol Specification",
+  "analog_blocks_detected": false,
+  "analog_blocks": [],
+  "no_analog": true,
+  "external_components": [],
+  "electrical_specs": [],
+  "design_parameters": [
+    {
+      "parameter": "Number_Bytes",
+      "value": "2",
+      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "raw": "Number_Bytes = 2 ^ AxSIZE",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Burst length",
+      "value": "4",
+      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "raw": "Burst length: 4 transfers",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Burst length",
+      "value": "5",
+      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "raw": "Burst length: 5 transfers    0x0F     0x0E         0x0D    0x0C    4th transfer",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "AWLEN",
+      "value": "0",
+      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "raw": "- AWLEN=0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "ARESETn",
+      "value": "0",
+      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "raw": "ARESETn = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "SYSCOREQ",
+      "value": "0",
+      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "raw": "SYSCOREQ = 0                                                                           SYSCOREQ = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "SYSCOACK",
+      "value": "0",
+      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "raw": "SYSCOACK = 0                                                                           SYSCOACK = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "SYSCOREQ",
+      "value": "1",
+      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "raw": "SYSCOREQ = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "SYSCOACK",
+      "value": "1",
+      "source": "IHI0022H_amba_axi_protocol_spec.pdf",
+      "raw": "SYSCOACK = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/IHI0022H_amba_axi_protocol_spec.pdf": []
+  },
+  "extraction_strategy": {
+    "hallucination_scrub_v0_1_60": [
+      {
+        "l_doc": "L5_ADI_SPEC",
+        "pattern_name": "ic_name_from_license_clause",
+        "path": "ic_name",
+        "old_value": "SUCH ARM TECHNOLOGY",
+        "new_value": "UNKNOWN_IC",
+        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
+      }
+    ]
+  },
+  "analog_digital_interface_present": false,
+  "signaling_summary": "Pure digital protocol: synchronous CMOS single-ended signals; rising-edge sampling on ACLK; no analog content.",
+  "fields": {
+    "ic_name": "AMBA AXI / ACE Protocol Specification",
+    "analog_digital_interface_present": false,
+    "rationale": "AXI/ACE is a purely digital, synchronous on-chip bus protocol. There are no analog signals, no DC electrical specifications, no AC timing parameters, no IO standards.",
+    "signaling_summary": {
+      "clock": "Single ACLK per ACE interface; rising-edge sampled.",
+      "reset": "Single active-LOW ARESETn. Async assert, sync deassert.",
+      "io_count": "All AXI + ACE channels are unidirectional. No tri-state, no open-drain, no analog.",
+      "default_state_during_reset": "Master drives ARVALID/AWVALID/WVALID/CRVALID/CDVALID LOW; interconnect drives RVALID/BVALID/ACVALID LOW.",
+      "combinatorial_path_rule": "No combinatorial paths between input and output signals. Applies equally to AC/CR/CD snoop channels."
+    }
+  }
+}

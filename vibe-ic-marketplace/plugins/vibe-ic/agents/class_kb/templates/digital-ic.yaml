@@ -1,0 +1,10 @@
+# digital-ic — intermediate class for synchronous, purely-digital designs.
+# Added v0.74 E+F-implement to close the qbank fallback chain:
+# protocol-ic / apb-peripheral / processor / etc. declare `parent: digital-ic`,
+# so the chain must reach any-ic through here. This template adds no new
+# facts beyond any-ic (digital-ic is a pure categorical intermediate in
+# the class tree); its sole job is to keep the fallback walk contiguous.
+class: digital-ic
+parent: any-ic
+
+facts: {}

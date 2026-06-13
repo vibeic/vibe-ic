@@ -1,0 +1,5 @@
+{
+  "verdict": "SKIP",
+  "evidence": "usb_hid_tester_verify not run",
+  "all_scenarios_passed": false
+}

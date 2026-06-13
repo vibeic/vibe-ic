@@ -1,0 +1,230 @@
+{
+  "fields": {
+    "tables": [
+      {
+        "table_id": "AHB Table 3-1",
+        "name": "Transfer type encoding (HTRANS)",
+        "field_bits": "HTRANS[1:0]",
+        "encoding": [
+          {
+            "value": "2'b00",
+            "name": "IDLE",
+            "semantics": "No data transfer."
+          },
+          {
+            "value": "2'b01",
+            "name": "BUSY",
+            "semantics": "Mid-burst pause."
+          },
+          {
+            "value": "2'b10",
+            "name": "NONSEQ",
+            "semantics": "Single or first burst transfer."
+          },
+          {
+            "value": "2'b11",
+            "name": "SEQ",
+            "semantics": "Subsequent burst transfer."
+          }
+        ]
+      },
+      {
+        "table_id": "AHB Table 3-2",
+        "name": "Transfer size encoding (HSIZE)",
+        "field_bits": "HSIZE[2:0]",
+        "encoding": [
+          {
+            "value": "3'b000",
+            "name": "Byte",
+            "semantics": "8 bits per transfer."
+          },
+          {
+            "value": "3'b001",
+            "name": "Halfword",
+            "semantics": "16 bits."
+          },
+          {
+            "value": "3'b010",
+            "name": "Word",
+            "semantics": "32 bits."
+          },
+          {
+            "value": "3'b011",
+            "name": "Doubleword",
+            "semantics": "64 bits."
+          },
+          {
+            "value": "3'b100",
+            "name": "4-word line",
+            "semantics": "128 bits."
+          },
+          {
+            "value": "3'b101",
+            "name": "8-word line",
+            "semantics": "256 bits."
+          },
+          {
+            "value": "3'b110",
+            "name": "-",
+            "semantics": "512 bits."
+          },
+          {
+            "value": "3'b111",
+            "name": "-",
+            "semantics": "1024 bits."
+          }
+        ]
+      },
+      {
+        "table_id": "AHB Table 3-4",
+        "name": "Burst signal encoding (HBURST)",
+        "field_bits": "HBURST[2:0]",
+        "encoding": [
+          {
+            "value": "3'b000",
+            "name": "SINGLE",
+            "semantics": "Single transfer burst."
+          },
+          {
+            "value": "3'b001",
+            "name": "INCR",
+            "semantics": "Incrementing burst of undefined length."
+          },
+          {
+            "value": "3'b010",
+            "name": "WRAP4",
+            "semantics": "4-beat wrapping burst."
+          },
+          {
+            "value": "3'b011",
+            "name": "INCR4",
+            "semantics": "4-beat incrementing burst."
+          },
+          {
+            "value": "3'b100",
+            "name": "WRAP8",
+            "semantics": "8-beat wrapping burst."
+          },
+          {
+            "value": "3'b101",
+            "name": "INCR8",
+            "semantics": "8-beat incrementing burst."
+          },
+          {
+            "value": "3'b110",
+            "name": "WRAP16",
+            "semantics": "16-beat wrapping burst."
+          },
+          {
+            "value": "3'b111",
+            "name": "INCR16",
+            "semantics": "16-beat incrementing burst."
+          }
+        ]
+      },
+      {
+        "table_id": "AHB Table 3-5",
+        "name": "HPROT basic 4-bit",
+        "field_bits": "HPROT[3:0]",
+        "encoding": [
+          {
+            "value": "HPROT[0]",
+            "name": "Data/Opcode",
+            "semantics": "1=Data, 0=Opcode fetch."
+          },
+          {
+            "value": "HPROT[1]",
+            "name": "Privileged/User",
+            "semantics": "1=Privileged, 0=User."
+          },
+          {
+            "value": "HPROT[2]",
+            "name": "Bufferable",
+            "semantics": "1=Bufferable."
+          },
+          {
+            "value": "HPROT[3]",
+            "name": "Modifiable/Cacheable",
+            "semantics": "1=Cacheable (Issue A) / Modifiable (Issue B+)."
+          }
+        ]
+      },
+      {
+        "table_id": "AHB Section 5.1",
+        "name": "Response encoding (HRESP)",
+        "field_bits": "HRESP",
+        "encoding": [
+          {
+            "value": "1'b0",
+            "name": "OKAY",
+            "semantics": "Normal access."
+          },
+          {
+            "value": "1'b1",
+            "name": "ERROR",
+            "semantics": "Two-cycle error response."
+          }
+        ]
+      },
+      {
+        "table_id": "APB Table 3-1",
+        "name": "Protection encoding (PPROT, APB4)",
+        "field_bits": "PPROT[2:0]",
+        "encoding": [
+          {
+            "value": "PPROT[0]",
+            "name": "Normal/Privileged",
+            "semantics": "1=Privileged, 0=Normal."
+          },
+          {
+            "value": "PPROT[1]",
+            "name": "Secure/Non-secure",
+            "semantics": "1=Non-secure (HIGH-for-Non-secure), 0=Secure."
+          },
+          {
+            "value": "PPROT[2]",
+            "name": "Data/Instruction",
+            "semantics": "1=Instruction, 0=Data."
+          }
+        ]
+      },
+      {
+        "table_id": "APB Operating states (Figure 4-1)",
+        "name": "APB state encoding",
+        "field_bits": "{PSELx, PENABLE}",
+        "encoding": [
+          {
+            "value": "{0,0}",
+            "name": "IDLE",
+            "semantics": "Default state."
+          },
+          {
+            "value": "{1,0}",
+            "name": "SETUP",
+            "semantics": "One cycle; unconditional -> ACCESS."
+          },
+          {
+            "value": "{1,1}",
+            "name": "ACCESS",
+            "semantics": "PREADY-controlled wait + exit."
+          }
+        ]
+      }
+    ],
+    "ic_name": "AMBA AHB + APB (ARM IHI 0033C + IHI 0024C)",
+    "ahb_burst_address_equations": {
+      "Number_Bytes_per_beat": "2 ^ HSIZE",
+      "Burst_Length_beats": "1 (SINGLE) / undefined (INCR) / 4 / 8 / 16",
+      "Aligned_Address": "Manager must align HADDR to (1 << HSIZE) bytes for each transfer in a burst.",
+      "INCR_address_n": "HADDR_(n+1) = HADDR_n + Number_Bytes",
+      "WRAP_boundary": "Wrap boundary = Burst_Length_beats * Number_Bytes",
+      "WRAP_address_n": "HADDR_(n+1) = (HADDR_n + Number_Bytes) modulo Wrap_boundary (mod within the (start_address & ~(Wrap_boundary-1))..+Wrap_boundary range)",
+      "INCR_1KB_rule": "Incrementing burst must not cross a 1KB address boundary."
+    }
+  },
+  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "schema_version": "v0.1.62",
+  "doc_class": "L15",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l15_encoding_tables v0.1.62",
+  "extraction_evidence": {}
+}

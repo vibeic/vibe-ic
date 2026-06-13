@@ -1,0 +1,703 @@
+#!/usr/bin/env python3
+"""enhancement_emit.py — driver for the benchmark-enhancement-capture skill.
+
+Takes a recoveries.json listing (step, design, before-state, after-state,
+ai-reasoning, bucket) records and produces concrete artifacts ROUTED PER STEP
+via benchmark/CAPTURE_ROUTING.json:
+  - markdown fragments appended to the RIGHT skill file per step
+    (ic-expert-agent.md for design judgment; sta-review for timing;
+     drc-fix for DRC; analog-topology-select for analog; etc.) (Bucket B)
+  - python patch sketches targeting the RIGHT program file per step
+    (rtl_hygiene_lint.py for RTL hygiene; phase3_one_shot_runner.py for
+     PnR; analog_a2_topology_select_check.py for analog A2; etc.) (Bucket A)
+  - YAML backlog entries for community/backlogs/ (Bucket C)
+  - a discard log for Bucket D entries
+
+The actual program/skill modifications are NEVER applied automatically — this
+script just emits candidates for human review (Bucket A) or direct append
+(Bucket B / C). Bucket A patches require a corpus-sweep verification before
+being merged, per the skill's honesty rule.
+
+recoveries.json schema (v0.1.35+):
+  [{
+    "step": "phase3.pnr_setup_repair",     # canonical step ID (see CAPTURE_ROUTING.json)
+    "design": "sha256",
+    "bucket": "A" | "B" | "C" | "D",
+    # PROGRAM-FIRST gate: Bucket B and C records MUST carry a non-empty
+    # `why_not_bucket_a` (one honest sentence: the exact decision a
+    # deterministic program could not make). Missing/empty -> emit refuses
+    # (exit 1). Bucket A and D do not need it.
+    "why_not_bucket_a": "...",
+    # Bucket-B (skill section) fields:
+    "skill_title": "...",
+    "pattern": "...",
+    "when": "...",
+    "what": "...",
+    "example": "...",
+    "generality": "...",
+    # Bucket-A (program rule) fields:
+    "rule_name": "...",
+    "docstring": "...",
+    "expected_signal": "WARN"|"ERROR"|"AUTO-FIX",
+    "fix_action": "...",
+    # Bucket-C (backlog) fields:
+    "title": "...",
+    "suggested_fix": "...",
+    "backlog_slug": "...",
+    "backlog_type": "bug"|"enhancement",
+    "severity": "P0"|"P1"|"P2"|"P3",
+    "component": "...",
+    "session_context": "...",
+    # Bucket-D fields:
+    "why_discard": "..."
+  }, ...]
+
+Usage:
+    python3 enhancement_emit.py --records recoveries.json --out-dir candidates/
+"""
+from __future__ import annotations
+import argparse, json, datetime, sys
+from pathlib import Path
+
+ROUTING_FILE = Path(__file__).resolve().parent.parent / "benchmark" / "CAPTURE_ROUTING.json"
+
+
+def _load_routing() -> dict:
+    if not ROUTING_FILE.is_file():
+        return {"steps": {}, "default_routing": {
+            "bucket_A_program": None,
+            "bucket_B_skill_file": "agents/ic-expert-agent.md",
+        }}
+    return json.loads(ROUTING_FILE.read_text())
+
+
+def route_for(step: str, routing: dict) -> dict:
+    """Return the target paths for a given step ID, with default fallback."""
+    return routing.get("steps", {}).get(step, routing.get("default_routing", {}))
+
+
+def _slug(s: str) -> str:
+    return "".join(c if c.isalnum() else "-" for c in s.lower()).strip("-")[:80]
+
+
+# v0.1.39 (audit Finding 1 fix) — DESIGN_LEAK_PATTERN matches benchmark-design
+# identifiers that the honesty rule forbids in Bucket-B skill text:
+#   - VerilogEval Prob IDs:  ProbNNN_…  (e.g. Prob089_ece241_2014_q5a)
+#   - benchmark family tags: RTLLM, VerilogEval-{v2,Human,Machine}, CVDP, MetRex, …
+# When matched, emit_skill_section sanitizes them OUT of the worked-pattern field
+# so the captured skill stays general regardless of what the caller passed.
+_DESIGN_LEAK_PATTERN = (
+    r"\bProb\d+[A-Za-z0-9_]*"                                              # ProbNNN_xxx
+    r"|\b(?:RTLLM|VerilogEval(?:-(?:v[12]|Human|Machine))?|CVDP|MetRex|ResBench|RTL-Repo|PyHDL-Eval)\b"
+)
+import re as _leak_re  # local alias to avoid clobbering caller's `re` if any
+
+
+def _scrub_design_leak(text: str) -> str:
+    """Strip benchmark-design-identifier leaks from free-text fields.
+
+    Layered strategy (each layer catches what the prior one missed):
+
+      Layer 1 — known-leak parentheticals. Drop ONLY brackets whose lead-in
+        is an attribution keyword AND whose contents look like an
+        identifier (or an enumerated benchmark token). This preserves
+        legitimate spec text like "(e.g. mod-256)" / "(per IEEE 1364)"
+        that doesn't contain identifiers. The narrower rule was added in
+        v0.1.40 after the v0.1.39 broad-strip damaged technical content
+        (re-audit NEW-4 fix).
+
+      Layer 2 — enumerated benchmark-identifier tokens (ProbNNN_…, RTLLM,
+        VerilogEval-{v2,Human,Machine,…}, CVDP, MetRex, ResBench,
+        RTL-Repo, PyHDL-Eval) anywhere they appear.
+
+      Layer 3 — design-name shapes that aren't in any enumeration. Strict
+        heuristic: an identifier of >=2 underscore-separated lowercase
+        tokens (e.g. radix2_div, sequence_detector, freq_divbyeven,
+        adder_pipe_64bit) appearing in `(from X)` / `(captured by X)` /
+        `(refs X)` / `worked example: X:` contexts. Added in v0.1.40 —
+        catches design leaf names that no enumeration can list. Outside
+        attribution contexts, snake_case identifiers are technical RTL
+        signal/module names that should NOT be touched.
+
+    Honest about scrubbing — appends an `[anonymized]` marker so the reader
+    can see the sanitisation happened. chip-AGNOSTIC.
+    """
+    if not text:
+        return text
+    original = text
+    # Layer 1 — narrow attribution-bracket strip. v0.1.40 (re-audit NEW-4)
+    # requires the bracket interior to look like an identifier list (alphanum
+    # + `_` + commas + whitespace + Prob-or-bench token) so legitimate spec
+    # parentheticals like "(per IEEE 1364)" and "(e.g. mod-256)" survive.
+    # Identifier-shape: contains at least one token matching either an
+    # enumerated bench token OR a 2+-underscore-separated identifier.
+    _ATTR_LEAD = r"(?:from|captured\s+by|worked\s+(?:miss|example))\s+"
+    _IDENT_INSIDE = (r"[A-Za-z0-9_,\s\-]*"
+                     r"(?:" + _DESIGN_LEAK_PATTERN +
+                     r"|[a-z][a-z0-9]*(?:_[a-z0-9]+){1,})"
+                     r"[A-Za-z0-9_,\s\-]*")
+    text = _leak_re.sub(
+        r"\(\s*" + _ATTR_LEAD + _IDENT_INSIDE + r"\)",
+        "", text, flags=_leak_re.IGNORECASE)
+    # Layer 2 — enumerated tokens anywhere outside (…).
+    text = _leak_re.sub(_DESIGN_LEAK_PATTERN, "", text, flags=_leak_re.IGNORECASE)
+    # Layer 3 — design leaf names in `Worked example:` / `Refs:` style prose
+    # (no parenthesis). Only fires in explicit attribution contexts.
+    text = _leak_re.sub(
+        r"(?i)(worked\s+(?:miss|example)|refs?)\s*[:\-]\s*[a-z][a-z0-9_]*(?:_[a-z0-9]+){1,}",
+        r"\1: [anonymized]", text)
+    text = _leak_re.sub(r"\s{2,}", " ", text)
+    text = _leak_re.sub(r"\s+([,.;:])", r"\1", text)
+    text = text.strip()
+    if text != original:
+        text += "  [identifiers anonymized per benchmark-enhancement-capture honesty rule]"
+    return text
+
+
+import unicodedata as _ucd
+
+
+def _normalize_text(text: str) -> str:
+    """v0.1.43 (Round-5 R5-2 fix) — Unicode normalization.
+
+    The v0.1.42 regex used Python's default Unicode-aware `\\w`, which means:
+      - Fullwidth underscore U+FF3F doesn't match ASCII `_` → snake_case rule misses
+      - Cyrillic `а`/`о` (look like ASCII a/o) are `\\w` chars → break `\\b` word
+        boundaries → ProbNNN scanner misses `рrоb089`
+
+    Fix: NFKC-normalize so fullwidth/compatibility characters fold to ASCII;
+    refuse mixed-script tokens (a token containing both Latin AND Cyrillic
+    characters is a homoglyph attack — no legitimate IC text mixes scripts).
+    """
+    # NFKC: fullwidth ＿ → ASCII _, fullwidth digits → ASCII digits, etc.
+    n = _ucd.normalize("NFKC", text)
+    # Detect mixed-script identifiers (≥1 Latin letter AND ≥1 non-Latin letter
+    # in the SAME word). Greek/math letters are intentionally allowed
+    # (ΔΣ topology titles); but a single token mixing Latin + Cyrillic is
+    # never legitimate skill prose. Refuse here so the structural regex
+    # doesn't have to deal with it.
+    for m in _leak_re.finditer(r"\w{2,}", n, _leak_re.UNICODE):
+        tok = m.group()
+        has_latin = any("LATIN" in _ucd.name(c, "") for c in tok if c.isalpha())
+        has_cyrillic = any("CYRILLIC" in _ucd.name(c, "") for c in tok if c.isalpha())
+        if has_latin and has_cyrillic:
+            raise ValueError(
+                f"input contains a mixed-script identifier ({tok!r}); "
+                f"refusing. A token mixing Latin and Cyrillic letters is a "
+                f"homoglyph (Cyrillic 'а' / 'о' / 'р' look like ASCII "
+                f"'a' / 'o' / 'p'). Skill prose should be ASCII / Greek "
+                f"letters only.")
+    return n
+
+
+def _check_backtick_content(field_name: str, value: str) -> None:
+    """v0.1.43 (Round-5 R5-1 fix) — validate the contents of each
+    backtick-wrapped token. The v0.1.42 backtick exemption was UNCONDITIONAL
+    (any string wrapped in `…` shipped verbatim), so an attacker could write
+    `` `radix2_div` `` and bypass the entire structural rule.
+
+    v0.1.43 distinguishes two legitimate uses of markdown backticks:
+
+      (1) Single identifier (`rst_n`, `data_width`, `eda_cocotb`):
+          Apply strict identifier-shape rules. Refuse ProbNNN,
+          digit-embedded-in-lowercase (radix2div), over-long tokens.
+
+      (2) Multi-token CODE SNIPPET (`initial clk=X; always #(PERIOD/2) ...`,
+          `assign MATCH = state == MATCH_STATE`):
+          Skill text often quotes multi-statement Verilog/Python in
+          backticks. Apply only the absolute taboos: ProbNNN, mixed-script
+          homoglyphs, enumerated benchmark family names. Skip the
+          single-identifier rules (length, snake_case, digit-embed).
+
+    Distinguishing: a backtick content with whitespace OR Verilog/Python
+    operator characters is a code snippet. A contiguous alphanumeric+
+    underscore token is an identifier.
+    """
+    if not value or "`" not in value:
+        return
+    for m in _leak_re.finditer(r"`([^`]*)`", value):
+        tok = m.group(1).strip()
+        if not tok:
+            continue
+        # Absolute taboos (apply to BOTH identifier and code-snippet form):
+        # Reject ProbNNN inside backticks (case-insensitive).
+        if _leak_re.search(r"\bprob\d+\b", tok, _leak_re.IGNORECASE | _leak_re.ASCII):
+            raise ValueError(
+                f"{field_name} contains a backtick-wrapped Prob ID "
+                f"(`{tok}`); refusing. Backtick wrapping does not exempt "
+                f"benchmark-specific identifiers from the honesty rule.")
+        # Reject enumerated benchmark family tokens.
+        if _leak_re.search(_DESIGN_LEAK_PATTERN, tok, _leak_re.IGNORECASE):
+            raise ValueError(
+                f"{field_name} contains a backtick-wrapped benchmark "
+                f"family name (`{tok}`); refusing.")
+        # Distinguish identifier vs code snippet by presence of operator
+        # characters or whitespace (code snippets have these; identifiers
+        # don't).
+        is_code_snippet = bool(_leak_re.search(r"[\s=;,()\[\]<>&|+\-*/!#@]", tok))
+        if is_code_snippet:
+            continue  # Code snippets: only Prob/family checks above apply.
+        # Identifier-form additional rules:
+        # Allowlist match passes unconditionally.
+        if tok.lower() in _INDUSTRY_TECH_ALLOWLIST:
+            continue
+        # Reject digit-embedded-in-lowercase (radix2div, mux256to1 style)
+        # — this is the exact shape Round-4 NEW-2 used to bypass v0.1.41.
+        # Snake-case forms like `radix2_div` also match (the `2_` boundary
+        # makes the trailing `_div` not interfere with the `[a-z0-9]*$` tail).
+        if _leak_re.search(
+                r"^[a-z]{2,}\d+[a-z0-9_]*$", tok, _leak_re.ASCII):
+            raise ValueError(
+                f"{field_name} contains a backtick-wrapped identifier "
+                f"that matches a benchmark-leaf-name shape (`{tok}`); "
+                f"refusing. Examples of this shape: radix2_div, "
+                f"freq_divbyeven, mux256to1. Wrap legitimate industry "
+                f"identifiers like `rst_n` (no digits) or use a generic "
+                f"description instead.")
+        # Cap length: real industry identifiers are short.
+        if len(tok) > 30:
+            raise ValueError(
+                f"{field_name} contains a backtick-wrapped identifier "
+                f"longer than 30 chars (`{tok}`); refusing as likely "
+                f"concatenated identifier.")
+
+
+def _strip_backticks(text: str) -> str:
+    """v0.1.42 — replace `code` spans with same-length whitespace.
+
+    v0.1.43 (Round-5 R5-1 fix): backtick-wrapped contents are now also
+    leak-checked by `_validate_general_text` via `_check_backtick_content`
+    BEFORE this strip runs. The strip itself is for finding leaks OUTSIDE
+    backticks; the prior check handles leaks INSIDE. The strip is still
+    needed so a legitimate backtick-wrapped industry term (`rst_n`,
+    `always_ff`) is exempt from the snake_case rule on the outer text.
+    """
+    return _leak_re.sub(r"`[^`]*`", lambda m: " " * len(m.group()), text)
+
+
+def _load_industry_tech_allowlist() -> frozenset:
+    """v0.1.44 — load the allowlist from `industry_tech_allowlist.yaml`
+    so the community can propose additions via PR without touching code.
+
+    YAML schema:
+        categories:
+          <category_name>:
+            description: <one-line>
+            entries: [<lowercase-term>, ...]
+
+    Each `entries` value is normalised to lowercase and added to the
+    returned frozenset. Categories are organisational only; lookup is flat.
+
+    Falls back to the v0.1.43-shipped seed set if YAML is missing or
+    malformed (so a corrupted-yaml PR can't break the validator).
+    """
+    yaml_path = _Path(__file__).parent / "industry_tech_allowlist.yaml"
+    seed = frozenset({
+        # Minimal safe-fallback set; identical to the v0.1.43 inline list.
+        "rst_n", "reset_n", "rst", "clk", "clk_n", "clk_p",
+        "always_ff", "always_comb", "always_latch", "chip_top",
+        "next_state", "current_state",
+        "res_valid", "res_ready", "dout_valid", "din_valid",
+        "data_width", "addr_width", "fifo_depth",
+        "compile_error", "sim_timeout", "functional_mismatch", "work_dir",
+        "skywater", "gf180", "tsmc", "sky130",
+        "module_not_found_error",
+        "dbm", "mah", "mhz", "ghz", "khz",
+        "t_setup", "t_hold", "t_su", "t_h", "t_cyc", "t_recovery", "t_removal",
+    })
+    if not yaml_path.is_file():
+        return seed
+    try:
+        import yaml as _yaml
+        data = _yaml.safe_load(yaml_path.read_text())
+        out = set()
+        for cat in (data.get("categories") or {}).values():
+            for entry in (cat.get("entries") or []):
+                if isinstance(entry, str) and entry:
+                    out.add(entry.lower())
+        return frozenset(out) if out else seed
+    except Exception:
+        # PyYAML missing or YAML malformed → safe fallback.
+        return seed
+
+
+# Lazy + cached: read the YAML once on first use.
+from pathlib import Path as _Path
+_INDUSTRY_TECH_ALLOWLIST = _load_industry_tech_allowlist()
+
+
+def _validate_general_text(field_name: str, value: str,
+                            *, allow_underscores: bool = False) -> str:
+    """v0.1.42 (Round-4 audit fix) — universal structural check applied to
+    EVERY field that becomes plugin content (title, slug, body fields).
+
+    Round-4 auditor's verdict: the v0.1.41 inversion only protected
+    title+slug; the 5 free-text body fields (pattern, when, what, example,
+    generality) still leaked. v0.1.42 applies the same structural rule to
+    all 7 fields, with a meaningful escape hatch:
+
+      Backtick-wrapped identifiers ARE allowed.
+      Bare underscore identifiers (snake_case) NOT in the industry-tech
+        allowlist ARE refused.
+      Case-insensitive `prob\\d+` ANYWHERE — refused.
+      Enumerated benchmark family names (RTLLM / VerilogEval-* / CVDP /
+        MetRex / etc.) — refused.
+      Any single token > 25 chars without a space — refused.
+
+    The escape hatch means a skill author who wants to discuss `rst_n` as
+    an industry convention can write `` `rst_n` `` in markdown style;
+    the bare snake_case `radix2_div` (a benchmark leaf name) is refused
+    structurally. The rule applies symmetrically across the 7 fields so
+    a Round-5 auditor cannot produce a clean-title + dirty-body leak.
+
+    Raises ValueError citing the structural violation; caller MUST fix
+    the input (either by wrapping a legitimate identifier in backticks
+    OR by rewriting in general-pattern language).
+    """
+    if not value:
+        return value
+    # v0.1.43 (Round-5 R5-2 fix) — Unicode-normalize + reject homoglyphs
+    # BEFORE the regex pass so fullwidth ＿ / Cyrillic а / ProbＮＮＮ all
+    # get caught.
+    value = _normalize_text(value)
+    # v0.1.43 (Round-5 R5-1 fix) — validate INSIDE backticks too: a token
+    # wrapped in backticks must be a real industry term or a safely-shaped
+    # identifier, NOT just any string the caller chose to backtick.
+    _check_backtick_content(field_name, value)
+    # Backtick-wrapped identifiers are exempt from the outer-text rules
+    # (the caller's positive declaration that this is a known technical
+    # term, not a benchmark leaf-name).
+    text = _strip_backticks(value)
+    # All structural regexes use re.ASCII so Unicode `\\w` doesn't break
+    # `\\b` word boundaries (Round-5 R5-2 fix supplements R5-2-A above).
+    # 1. Snake-case identifiers OUTSIDE the industry allowlist.
+    for m in _leak_re.finditer(
+            r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b", text, _leak_re.ASCII):
+        tok = m.group()
+        if tok.lower() in _INDUSTRY_TECH_ALLOWLIST:
+            continue
+        raise ValueError(
+            f"{field_name} contains a bare underscore-bearing identifier "
+            f"({tok!r}); refusing. Per benchmark-enhancement-capture "
+            f"honesty rule (v0.1.42 structural rule): if {tok!r} is a "
+            f"legitimate industry-convention term (rst_n, always_ff), "
+            f"wrap it in markdown backticks: `{tok}`. If {tok!r} is a "
+            f"benchmark design leaf-name (radix2_div, freq_divbyeven), "
+            f"rewrite the {field_name} to describe the GENERAL pattern "
+            f"without naming the specific design.")
+    # 1b. Digit-embedded-in-lowercase token: `radix2div`, `mux256to1`.
+    for m in _leak_re.finditer(
+            r"\b[a-z]{2,}\d+[a-z][A-Za-z0-9]*\b", text, _leak_re.ASCII):
+        tok = m.group()
+        if tok in _INDUSTRY_TECH_ALLOWLIST:
+            continue
+        raise ValueError(
+            f"{field_name} contains a digit-embedded-in-lowercase "
+            f"identifier ({tok!r}); refusing. This shape matches benchmark "
+            f"design leaf-names. Wrap in backticks if legitimate: `{tok}` "
+            f"— or rewrite as general pattern.")
+    # 1c. camelCase / PascalCase compound identifier. v0.1.43 (Round-5
+    #     R5-10 fix) — require min length 5 so `dBm`, `aBc`, `mAh` etc.
+    #     short unit suffixes don't get refused. Real PascalCase compound
+    #     identifiers (`SequenceDetector`, `TopModule`) are ≥7 chars; the
+    #     5-char floor keeps the rule effective without false-positives
+    #     on industry unit suffixes.
+    for m in _leak_re.finditer(
+            r"\b[A-Za-z]*[a-z][A-Z][a-z]+[A-Za-z0-9]*\b", text, _leak_re.ASCII):
+        tok = m.group()
+        if tok in _INDUSTRY_TECH_ALLOWLIST or tok.lower() in _INDUSTRY_TECH_ALLOWLIST:
+            continue
+        if len(tok) < 5:
+            continue  # Unit suffixes / 3-char abbreviations exempt.
+        raise ValueError(
+            f"{field_name} contains a camelCase/PascalCase compound "
+            f"identifier ({tok!r}); refusing. Wrap in backticks if "
+            f"legitimate: `{tok}` — or rewrite as space-separated words.")
+    # 1d. Kebab-case identifier with digit-bearing leading token.
+    for m in _leak_re.finditer(
+            r"\b[a-z]{2,}\d+(?:-[a-z0-9]+){1,}\b", text, _leak_re.ASCII):
+        tok = m.group()
+        if tok in _INDUSTRY_TECH_ALLOWLIST:
+            continue
+        raise ValueError(
+            f"{field_name} contains a kebab-case identifier with a "
+            f"digit-bearing token ({tok!r}); refusing. This shape matches "
+            f"benchmark design leaf-names. Wrap in backticks if legitimate: "
+            f"`{tok}`, or rewrite without the digit-bearing token.")
+    # 2. Prob## case-insensitive.
+    pm = _leak_re.search(r"\bprob\d+\b", text, _leak_re.IGNORECASE | _leak_re.ASCII)
+    if pm:
+        raise ValueError(
+            f"{field_name} contains a benchmark Prob ID ({pm.group()!r}); "
+            f"refusing. Skill content must describe general patterns, not "
+            f"specific benchmark problems.")
+    # 3. Enumerated benchmark-family tokens (RTLLM / VerilogEval-* / CVDP /
+    #    MetRex / ResBench / RTL-Repo / PyHDL-Eval).
+    em = _leak_re.search(_DESIGN_LEAK_PATTERN, text, _leak_re.IGNORECASE)
+    if em:
+        raise ValueError(
+            f"{field_name} contains a benchmark family name "
+            f"({em.group()!r}); refusing. Describe the general convention "
+            f"without naming the source benchmark.")
+    # 4. Over-long contiguous alphanumeric token (likely a concatenated
+    #    identifier like 'radix2divbyeven' or 'freqdivbyeven').
+    for tok in _leak_re.findall(r"[A-Za-z][A-Za-z0-9]+", text):
+        if len(tok) > 25:
+            raise ValueError(
+                f"{field_name} contains an over-long contiguous token "
+                f"({tok!r}, {len(tok)} chars) — likely a concatenated "
+                f"identifier. Insert spaces or wrap in backticks.")
+    # 5. Field-specific shape — slug must be kebab-case AFTER all leak
+    #    checks pass.
+    if field_name == "backlog_slug":
+        if not _leak_re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", value):
+            raise ValueError(
+                f"backlog_slug must be kebab-case "
+                f"([a-z0-9-], no uppercase, no underscore): {value!r}")
+        for tok in value.split("-"):
+            # Note: prob\d+ check at step 2 already catches `prob089`. The
+            # NEW-3 Round-4 case `prob-089-issue` has separate `prob` and
+            # `089` tokens; the `\bprob\d+\b` check at step 2 won't match
+            # split tokens. Catch the dispersed Prob## here:
+            if tok == "prob" or _leak_re.fullmatch(r"prob\d+", tok):
+                raise ValueError(
+                    f"backlog_slug token {tok!r} suggests a benchmark "
+                    f"Prob ID (possibly separated by dashes): {value!r}.")
+    return value
+
+
+def _refuse_if_leaks(field_name: str, value: str) -> str:
+    """v0.1.42 — thin wrapper preserving v0.1.41 callsites. The structural
+    work moved to `_validate_general_text` which is applied to all 7 fields.
+    """
+    return _validate_general_text(field_name, value)
+
+
+# v0.1.43 (Round-5 R5-8 fix) — `_refuse_if_leaks_v0141_DEPRECATED` was
+# 99 lines of unreachable code carried since v0.1.42 for "audit traceability".
+# Removed in v0.1.43; the v0.1.41 → v0.1.42 transition rationale lives in
+# the git history (commits d3ae455 v0.1.41 and 0622db4 v0.1.42).
+
+
+def emit_skill_section(rec: dict) -> str:
+    # v0.1.39 (audit Finding 1) — REQUIRE skill_title; never default to the
+    # design slug (which would inject the benchmark identifier into the section
+    # header).
+    name = rec.get("skill_title")
+    if not name:
+        raise ValueError(
+            "emit_skill_section: rec missing 'skill_title' — refusing to "
+            "default to design slug per benchmark-enhancement-capture honesty "
+            "rule ('NEVER add a Bucket B skill section that names specific "
+            "benchmark design identifiers'). Caller must supply a generic "
+            "skill title describing the general PATTERN.")
+    # v0.1.40 (re-audit F1 補洞) — title must itself be leak-free; refuse on
+    # leaky title (a sloppy caller is the failure mode the prior audit
+    # warned about).
+    name = _validate_general_text("skill_title", name)
+    # v0.1.42 (Round-4 audit fix) — the structural rule applies to ALL 5
+    # body fields, not just title. A Round-4 reproducer (clean title +
+    # `radix2_div` in pattern) would otherwise emit a leaked artifact.
+    pattern = _validate_general_text("pattern", rec.get("pattern", ""))
+    when = _validate_general_text("when", rec.get("when", ""))
+    what = _validate_general_text("what", rec.get("what", ""))
+    example = _validate_general_text("example", rec.get("example", ""))
+    generality = _validate_general_text("generality", rec.get("generality", ""))
+    return (
+        f"### Skill: {name}\n\n"
+        f"**Pattern**: {pattern}\n\n"
+        f"**When to apply**: {when}\n\n"
+        f"**What to do**: {what}\n\n"
+        f"**Worked pattern** (anonymized): {example}\n\n"
+        f"**Why this is GENERAL**: {generality}\n\n"
+        f"_Captured by benchmark-enhancement-capture {datetime.date.today().isoformat()}._\n"
+    )
+
+
+def emit_program_rule_sketch(rec: dict) -> str:
+    # v0.1.39 (audit Finding 1) — drop the "Source: <design>" breadcrumb so the
+    # in-tree program sketch is chip-AGNOSTIC. Pattern + docstring still capture
+    # the lesson without naming the originating benchmark design.
+    rname = _slug(rec.get("rule_name", "todo")).replace("-", "_")
+    pattern = _validate_general_text("pattern", rec.get("pattern", ""))
+    docstring = _validate_general_text("docstring", rec.get("docstring", ""))
+    fix_action = _validate_general_text("fix_action", rec.get("fix_action", ""))
+    return (
+        f"# v0.1.34+ — auto-captured by benchmark-enhancement-capture\n"
+        f"# Pattern: {pattern}\n"
+        f"# CORPUS-SWEEP REQUIRED before merging: zero false-positives across\n"
+        f"# the open-benchmark corpora used by `score_iverilog_tb.py`.\n"
+        f"\n"
+        f"def rule_{rname}(sample_text, ports):\n"
+        f"    \"\"\"{docstring}\"\"\"\n"
+        f"    # Expected signal: {rec.get('expected_signal', 'WARN')}\n"
+        f"    # Suggested fix action: {fix_action}\n"
+        f"    return []  # list of findings — TODO implement\n"
+    )
+
+
+def emit_backlog(rec: dict, today: str):
+    # v0.1.39 (audit Finding 1) — REQUIRE backlog_slug; never default to the
+    # design slug. Backlog filenames become part of the repo's permanent
+    # record; a Prob ID baked into a filename can never be silently scrubbed
+    # later without breaking links.
+    slug = rec.get("backlog_slug")
+    if not slug:
+        raise ValueError(
+            "emit_backlog: rec missing 'backlog_slug' — refusing to default "
+            "to design slug. Caller must supply a generic kebab-case slug "
+            "describing the issue category (e.g. 'rtl-hygiene-internal-reg-"
+            "init'), not the originating benchmark design name.")
+    # v0.1.40 (re-audit F1 補洞) — slug becomes part of the permanent
+    # filename and YAML id. Refuse on leaky slug.
+    slug = _validate_general_text("backlog_slug", slug)
+    slug = _slug(slug)
+    fname = f"ORGANIC-{today.replace('-','')}-{slug}.yaml"
+    indent = "  "
+    # v0.1.42 — structural validation across body fields (Round-4 NEW-4 fix).
+    pat = _validate_general_text("pattern", rec.get("pattern", "")).replace("\n", "\n" + indent)
+    fix = _validate_general_text("suggested_fix", rec.get("suggested_fix", "")).replace("\n", "\n" + indent)
+    ctx = _validate_general_text("session_context", rec.get("session_context", ""))
+    body = (
+        f"type: {rec.get('backlog_type', 'enhancement')}\n"
+        f"severity: {rec.get('severity', 'P2')}\n"
+        f"component: {rec.get('component', '')}\n"
+        f"plugin_version: \"{rec.get('plugin_version', '0.1.33')}\"\n\n"
+        f"title: >-\n  {_validate_general_text('title', rec.get('title', ''))}\n\n"
+        f"pattern: |\n  {pat}\n\n"
+        f"suggested_fix: |\n  {fix}\n\n"
+        f"id: \"ORGANIC-{today.replace('-','')}-{slug}\"\n"
+        f"submitted_at: \"{today}T00:00:00+08:00\"\n"
+        f"session_context: >-\n  {ctx}\n"
+    )
+    return fname, body
+
+
+def emit_discard_note(rec: dict) -> str:
+    # v0.1.39 (audit Finding 1) — discard log is an INTERNAL session record
+    # (lives in candidates/, NOT shipped as plugin content), so keeping the
+    # design name here is fine for audit traceability. But scrub the why-discard
+    # prose so a copy-pasted discard reason can't smuggle a Prob ID into a
+    # downstream Bucket-B section.
+    return (f"- **{rec.get('design', '?')}**: "
+            f"{_scrub_design_leak(rec.get('why_discard', 'no reason given'))}\n")
+
+
+def check_program_first(recs: list) -> list:
+    """PROGRAM-FIRST gate (user directive: capture must enforce program-first).
+
+    Bucket B (skill) and Bucket C (backlog) are a DOWNGRADE from the default
+    Bucket A (deterministic program rule). A downgrade is only honest if the
+    author states why a program could not do it. Returns a list of human
+    -readable offender strings; empty list == pass.
+    """
+    offenders = []
+    for i, r in enumerate(recs):
+        b = (r.get("bucket") or "D").upper()
+        if b in ("B", "C"):
+            why = (r.get("why_not_bucket_a") or "").strip()
+            if len(why) < 10:
+                who = r.get("skill_title") or r.get("title") or r.get(
+                    "design") or f"record[{i}]"
+                offenders.append(
+                    f"Bucket {b} '{who}' lacks a non-empty why_not_bucket_a "
+                    f"(>=10 chars). Program-first: justify why no deterministic "
+                    f"program rule (Bucket A) can make this fix, or reclassify.")
+    return offenders
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--records", required=True)
+    ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--allow-unjustified-downgrade", action="store_true",
+                    help="bypass the program-first why_not_bucket_a gate "
+                         "(discouraged; for migrating legacy record sets only)")
+    a = ap.parse_args()
+
+    recs = json.loads(Path(a.records).read_text())
+
+    offenders = check_program_first(recs)
+    if offenders and not a.allow_unjustified_downgrade:
+        print("PROGRAM-FIRST GATE FAILED — Bucket B/C downgrades need "
+              "why_not_bucket_a:", file=sys.stderr)
+        for o in offenders:
+            print("  - " + o, file=sys.stderr)
+        sys.exit(1)
+    out = Path(a.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    today = datetime.date.today().isoformat()
+    routing = _load_routing()
+
+    by_bucket = {"A": [], "B": [], "C": [], "D": []}
+    for r in recs:
+        b = (r.get("bucket") or "D").upper()
+        by_bucket.setdefault(b, []).append(r)
+
+    summary = {"date": today, "totals": {k: len(v) for k, v in by_bucket.items()},
+               "routing_used": {}}
+
+    # v0.1.35+ — route Bucket A and Bucket B per `step` field
+    if by_bucket["A"]:
+        # group by target program file
+        by_target: dict[str, list[dict]] = {}
+        for r in by_bucket["A"]:
+            tgt = route_for(r.get("step", ""), routing).get(
+                "bucket_A_program", "programs/__unrouted__.py")
+            by_target.setdefault(tgt, []).append(r)
+        bucket_A_files = []
+        for tgt, items in by_target.items():
+            safe = tgt.replace("/", "_").replace(".py", "")
+            p = out / f"bucket_A_{safe}_rule_sketches.py"
+            chunks = [f"# Bucket A — program-rule sketches for {tgt}\n"
+                      f"# Corpus-sweep REQUIRED before merging into {tgt}.\n"]
+            for r in items:
+                chunks.append(emit_program_rule_sketch(r))
+            p.write_text("\n".join(chunks))
+            bucket_A_files.append(str(p))
+        summary["bucket_A_files"] = bucket_A_files
+        summary["routing_used"]["bucket_A"] = list(by_target.keys())
+
+    if by_bucket["B"]:
+        by_target = {}
+        for r in by_bucket["B"]:
+            tgt = route_for(r.get("step", ""), routing).get(
+                "bucket_B_skill_file", "agents/ic-expert-agent.md")
+            by_target.setdefault(tgt, []).append(r)
+        bucket_B_files = []
+        for tgt, items in by_target.items():
+            safe = tgt.replace("/", "_").replace(".md", "")
+            p = out / f"bucket_B_{safe}_sections.md"
+            chunks = [f"# Bucket B — skill sections to APPEND to {tgt}\n"]
+            for r in items:
+                chunks.append(emit_skill_section(r))
+            p.write_text("\n".join(chunks))
+            bucket_B_files.append({"target": tgt, "patch": str(p)})
+        summary["bucket_B_files"] = bucket_B_files
+        summary["routing_used"]["bucket_B"] = sorted({x["target"] for x in bucket_B_files})
+
+    if by_bucket["C"]:
+        d = out / "bucket_C_backlogs"
+        d.mkdir(exist_ok=True)
+        files = []
+        for r in by_bucket["C"]:
+            fname, body = emit_backlog(r, today)
+            (d / fname).write_text(body)
+            files.append(fname)
+        summary["bucket_C_dir"] = str(d)
+        summary["bucket_C_files"] = files
+
+    if by_bucket["D"]:
+        p = out / "bucket_D_discarded.md"
+        chunks = [f"# Bucket D — discarded ({len(by_bucket['D'])} entries)\n"]
+        for r in by_bucket["D"]:
+            chunks.append(emit_discard_note(r))
+        p.write_text("\n".join(chunks))
+        summary["bucket_D_file"] = str(p)
+
+    (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    print(json.dumps(summary, indent=2))
+
+
+if __name__ == "__main__":
+    main()

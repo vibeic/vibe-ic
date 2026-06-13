@@ -1,0 +1,97 @@
+{
+  "fields": {
+    "properties": [
+      {
+        "anchor_token": "must",
+        "english_form": "(12.8 GB/s of bandwidth).[11] To achieve this bandwidth, the controller must implement dual-channel memory. For example, this is the case for the Exynos 5",
+        "line": 151,
+        "scope": "general"
+      },
+      {
+        "anchor_token": "must",
+        "english_form": "Data is accessed in bursts of either 16 or 32 transfers (256 or 512 bits, 32 or 64 bytes, 8 or 16 cycles DDR). Bursts must begin on 64-bit boundaries.",
+        "line": 189,
+        "scope": "general"
+      },
+      {
+        "anchor_token": "must",
+        "english_form": "Write commands must begin on a column address which is a multiple of 16; C2 and C3 must be zero for a write command.",
+        "line": 238,
+        "scope": "general"
+      }
+    ],
+    "ic_name": "LPDDR5 SDRAM (JEDEC JESD209-5)",
+    "must_have_properties": [
+      "Command/address shall be transferred on a 7-bit CA bus (CA[6:0]) at double data rate referenced to the quarter-speed CK; a command occupies two CA transfers.",
+      "A full-speed differential WCK (4x CK) shall frame data, enabled only when a transfer is imminent.",
+      "During reads the DRAM shall drive a full-speed differential RDQS edge-aligned with the read data.",
+      "Before any high-speed read/write the controller shall perform a WCK2CK synchronization (WS_FS/WS_RD/WS_WR via CAS) to lock internal WCK to CK.",
+      "Opening a row shall require two Activate commands (Activate-1 then Activate-2).",
+      "LPDDR5 shall NOT use a CKE pin; low-power entry shall be a CA command that lasts until CS next goes high.",
+      "The device shall provide 16 banks (four bank groups of four banks in BG mode; 16B / 8B modes).",
+      "Prefetch shall be 16n; default burst length BL16 with double-length BL32.",
+      "Data transfer rate shall be up to 6400 Mbit/s per pin (LPDDR5); up to 8533 Mbit/s for LPDDR5X.",
+      "VDDQ shall be 0.5 V; DVFSC selects VDD2H/VDD2L per frequency set point.",
+      "Read/Write Link ECC (16-bit) and DBI shall be supported and configured consistently.",
+      "Refresh shall support REFab and REFpb (round-robin); tREFI/tRFCab/tRFCpb honoured; RFM per JESD209-5B.",
+      "Bank-group timing (tCCD_L/tRRD_L; tCCD_S/tRRD_S) and tFAW shall be honoured.",
+      "Read data at programmed RL; write data accepted at programmed WL (Set A / Set B).",
+      "Vref(ca)/Vref(dq) and DFE / equalization settings shall be valid for the active FSP.",
+      "Deep Sleep Mode (DSE) shall be supported; exit shall require the full initialization sequence."
+    ],
+    "must_not_have_properties": [
+      "A high-speed read/write shall not be issued without a prior WCK2CK synchronization (WCK is otherwise disabled).",
+      "The CAS command shall not be treated as a column-selecting command.",
+      "A CKE pin shall not be relied upon — LPDDR5 has none.",
+      "VDDQ shall not be driven above 0.5 V.",
+      "Writes shall not start at a non-multiple-of-16 column (B0-B3 must be zero; reads may use non-zero B3).",
+      "Traffic shall not resume after deep-sleep exit without re-running the full initialization.",
+      "Mismatched Read/Write Link-ECC or DBI configuration shall not be used (silent corruption)."
+    ],
+    "compliance_failure_modes": [
+      {
+        "mode": "WCK2CK sync omitted",
+        "trigger": "Read/Write while WCK disabled / not phase-locked — data timing undefined."
+      },
+      {
+        "mode": "CAS misinterpreted as column select",
+        "trigger": "Controller treats LPDDR5 CAS like LPDDR4 CAS-2 — wrong addressing/timing."
+      },
+      {
+        "mode": "Column start not multiple-of-16 on write",
+        "trigger": "Write with non-zero B0-B3 — mis-aligned burst start."
+      },
+      {
+        "mode": "Missed refresh",
+        "trigger": "Scheduler bug / extended low-power without REF — data loss; no protocol flag."
+      },
+      {
+        "mode": "Bank-group timing violation",
+        "trigger": "tCCD_L/tRRD_L not honoured for same-group accesses — undefined."
+      },
+      {
+        "mode": "VDDQ over-voltage",
+        "trigger": "IO above 0.5 V — device stress / damage."
+      },
+      {
+        "mode": "Link-ECC / DBI mismatch",
+        "trigger": "Controller and DRAM configured differently — silent corruption."
+      },
+      {
+        "mode": "DVFS without retraining",
+        "trigger": "FSP change without ZQ/WCK2CK/read/write retraining — errors."
+      },
+      {
+        "mode": "Deep-sleep exit without re-init",
+        "trigger": "Resuming traffic immediately after DSM exit — undefined."
+      }
+    ],
+    "min_clock_constraint": "Operating data rate is set by the FSP: LPDDR5 up to 6400 Mbps (WCK 3200 MHz, CK 800 MHz); LPDDR5X up to 8533 Mbps (WCK 4266 MHz, CK 1066 MHz). The quarter-speed CK and 4:1 WCK:CK ratio must be maintained; WCK is enabled only when a transfer is imminent.",
+    "reset_behavior_compliance": "Asserting RESET_n LOW returns the device to its reset state — banks closed, mode registers cleared (must be re-programmed), outputs Hi-Z. After RESET_n rises, the initialization sequence (supply ramp with VDDQ=0.5 V, CK start, MR programming, ZQ calibration, initial WCK2CK sync, read/write training) must complete before normal operation. Deep-sleep exit also requires the full initialization sequence."
+  },
+  "extraction_status": "EXTRACTED",
+  "schema_version": "v0.1.62",
+  "doc_class": "L16",
+  "emitted_by": "phase1_protocol_spec_extract.extract_l16_compliance v0.1.62",
+  "extraction_evidence": {}
+}

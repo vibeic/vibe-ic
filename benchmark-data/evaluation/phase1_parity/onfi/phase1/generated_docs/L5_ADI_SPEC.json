@@ -1,0 +1,568 @@
+{
+  "schema_version": 2,
+  "doc_class": "adi_spec",
+  "ic_name": "ONFI 4.1 (Open NAND Flash Interface)",
+  "analog_blocks_detected": false,
+  "analog_blocks": [],
+  "no_analog": true,
+  "external_components": [
+    {
+      "value": "300Ohm",
+      "source": "ONFI_Spec.pdf",
+      "extraction_strategy": "external_anchored_kv"
+    },
+    {
+      "value": "35Ohm",
+      "source": "ONFI_Spec.pdf",
+      "extraction_strategy": "external_anchored_kv"
+    },
+    {
+      "value": "37.5Ohm",
+      "source": "ONFI_Spec.pdf",
+      "extraction_strategy": "external_anchored_kv"
+    },
+    {
+      "value": "50Ohm",
+      "source": "ONFI_Spec.pdf",
+      "extraction_strategy": "external_anchored_kv"
+    }
+  ],
+  "electrical_specs": [
+    {
+      "param": "VOUT",
+      "parameter": "VOUT",
+      "value": "0V",
+      "source": "ONFI_Spec.pdf"
+    },
+    {
+      "param": "VOL",
+      "parameter": "VOL",
+      "value": "0.4 V",
+      "source": "ONFI_Spec.pdf"
+    },
+    {
+      "param": "VOL",
+      "parameter": "VOL",
+      "value": "0.2 V",
+      "source": "ONFI_Spec.pdf"
+    },
+    {
+      "param": "VCC",
+      "parameter": "Vcc",
+      "value": "3.3",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "Vcc = 3.3V and VccQ = 3.3V nominal",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "VCC",
+      "parameter": "Vcc",
+      "value": "2.5",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "Vcc = 2.5V and VccQ = 1.8V nominal",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "VCC",
+      "parameter": "Vcc",
+      "value": "1.8",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "Vcc = 1.8V and VccQ = 1.8V nominal",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "VCCQ",
+      "parameter": "VccQ",
+      "value": "3.3",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "- VccQ = 3.3V",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "VCCQ",
+      "parameter": "VccQ",
+      "value": "1.8",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "- VccQ = 1.8V",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "VCCQ",
+      "parameter": "VccQ",
+      "value": "1.2",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "- VccQ = 1.2V",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "IST              TRISE",
+      "parameter": "IST              tRise",
+      "value": "1",
+      "unit": "ms",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "IST              tRise = 1 ms             -            -             10           mA",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "CLINE",
+      "parameter": "cLine",
+      "value": "0.1",
+      "unit": "µF",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "cLine = 0.1 µF",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "WITHOUT IOUT",
+      "parameter": "without IOUT",
+      "value": "0",
+      "unit": "mA",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "without IOUT = 0 mA may be calculated for each output pin assuming 50% data switching as (IccQ = 0.5 * CL *",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "POWER-UP CURRENT                7        TRISE",
+      "parameter": "power-up current                7        tRise",
+      "value": "1",
+      "unit": "ms",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "power-up current                7        tRise = 1 ms      Controller       -          -            20",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "IOUT",
+      "parameter": "IOUT",
+      "value": "0",
+      "unit": "mA",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "IOUT = 0 mA may be calculated for each output pin assuming 50% data switching as (IccQ = 0.5 * C L * VccQ *",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "INPUT LEAKAGE CURRENT     ILI        VIN",
+      "parameter": "Input leakage current     ILI        VIN",
+      "value": "0",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "Input leakage current     ILI        VIN=0V to VccQ          -             -           +-10            µA",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "ILO      VOUT",
+      "parameter": "ILO      VOUT",
+      "value": "0",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "ILO      VOUT=0V to VccQ           -             -           +-10            µA",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "OUTPUT HIGH VOLTAGE      VOH          IOH",
+      "parameter": "Output high voltage      VOH          IOH",
+      "value": "-400",
+      "unit": "µA",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "Output high voltage      VOH          IOH=-400 µA                          -             -              V",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "VOL",
+      "parameter": "VOL",
+      "value": "0.4",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "VOL=0.4 V             8          10             -          mA",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "INPUT LEAKAGE CURRENT     ILI          VIN",
+      "parameter": "Input leakage current     ILI          VIN",
+      "value": "0",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "Input leakage current     ILI          VIN=0V to VccQ      -          -            +-10        µA",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "IOL(R/B_N)     VOL",
+      "parameter": "IOL(R/B_n)     VOL",
+      "value": "0.2",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "IOL(R/B_n)     VOL=0.2 V            3           4              -         mA",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "INPUT LEAKAGE CURRENT        ILI        VIN",
+      "parameter": "Input leakage current        ILI        VIN",
+      "value": "0",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "Input leakage current        ILI        VIN=0V to VccQ              -           -       +-10            µA",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "IOL(R/B_N)      VOL",
+      "parameter": "IOL(R/B_n)      VOL",
+      "value": "0.2",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "IOL(R/B_n)      VOL=0.2 V           3          4                    -         mA",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "INPUT LEAKAGE CURRENT          ILI         VIN",
+      "parameter": "Input leakage current          ILI         VIN",
+      "value": "0",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "Input leakage current          ILI         VIN=0V to VccQ            -         -            +-10      µA",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "IOL(R/B_N)        VOL",
+      "parameter": "IOL(R/B_n)        VOL",
+      "value": "0.2",
+      "unit": "V",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "IOL(R/B_n)        VOL=0.2 V               3         4             -        mA",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "VSENS",
+      "parameter": "VSens",
+      "value": "0.2",
+      "unit": "%",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "- VSens = 0.2% / mV",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "DQS_T/DQS_C SLEW RATE DERATING VIH/L(AC)",
+      "parameter": "DQS_t/DQS_c Slew Rate Derating VIH/L(AC)",
+      "value": "250",
+      "unit": "mV",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "DQS_t/DQS_c Slew Rate Derating VIH/L(AC) = 250 mV",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "VIH/L(DC)",
+      "parameter": "VIH/L(DC)",
+      "value": "125",
+      "unit": "mV",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "- VIH/L(DC) = 125 mV",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "DQS SLEW RATE DERATING VIH/L(AC)",
+      "parameter": "DQS Slew Rate Derating VIH/L(AC)",
+      "value": "250",
+      "unit": "mV",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "DQS Slew Rate Derating VIH/L(AC) = 250 mV",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "DQS_T/DQS_C SLEW RATE DERATING VIH/L(AC)",
+      "parameter": "DQS_t/DQS_c Slew Rate Derating VIH/L(AC)",
+      "value": "150",
+      "unit": "mV",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "DQS_t/DQS_c Slew Rate Derating VIH/L(AC) = 150 mV",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "VIH/L(DC)",
+      "parameter": "VIH/L(DC)",
+      "value": "100",
+      "unit": "mV",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "- VIH/L(DC) = 100 mV",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "DQS SLEW RATE DERATING VIH/L(AC)",
+      "parameter": "DQS Slew Rate Derating VIH/L(AC)",
+      "value": "150",
+      "unit": "mV",
+      "condition": null,
+      "source": "ONFI_Spec.pdf",
+      "raw": "DQS Slew Rate Derating VIH/L(AC) = 150 mV",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    }
+  ],
+  "design_parameters": [
+    {
+      "parameter": "Minimum input slew rate               tIS",
+      "value": "1.0",
+      "source": "ONFI_Spec.pdf",
+      "raw": "Minimum input slew rate               tIS = 1.0 V/ns        tIS = 1.0 V/ns              tIS = 2.0 V/ns",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Rtt",
+      "value": "50",
+      "source": "ONFI_Spec.pdf",
+      "raw": "Rtt = 50 Ohms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Tdriftrate",
+      "value": "1",
+      "source": "ONFI_Spec.pdf",
+      "raw": "- Tdriftrate = 1 oC / sec and Vdriftrate =",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "a RZQ",
+      "value": "300",
+      "source": "ONFI_Spec.pdf",
+      "raw": "- a RZQ = 300 Ohm +/- 1% tolerance external resistor",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "RON",
+      "value": "18",
+      "source": "ONFI_Spec.pdf",
+      "raw": "RON = 18 Ohms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "RON",
+      "value": "25",
+      "source": "ONFI_Spec.pdf",
+      "raw": "RON = 25 Ohms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "RON",
+      "value": "35",
+      "source": "ONFI_Spec.pdf",
+      "raw": "RON = 35 Ohms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "RON",
+      "value": "50",
+      "source": "ONFI_Spec.pdf",
+      "raw": "RON = 50 Ohms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "RON",
+      "value": "37.5",
+      "source": "ONFI_Spec.pdf",
+      "raw": "RON = 37.5 Ohms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Rtt",
+      "value": "75",
+      "source": "ONFI_Spec.pdf",
+      "raw": "Rtt = 75 Ohms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Rtt",
+      "value": "100",
+      "source": "ONFI_Spec.pdf",
+      "raw": "Rtt = 100 Ohms4",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Rtt",
+      "value": "150",
+      "source": "ONFI_Spec.pdf",
+      "raw": "Rtt = 150 Ohms",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "ALE",
+      "value": "0",
+      "source": "ONFI_Spec.pdf",
+      "raw": "ALE = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "CLE",
+      "value": "0",
+      "source": "ONFI_Spec.pdf",
+      "raw": "- CLE = 0",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "DQS",
+      "value": "1",
+      "source": "ONFI_Spec.pdf",
+      "raw": "- DQS = 1",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "RE_n",
+      "value": "1,",
+      "source": "ONFI_Spec.pdf",
+      "raw": "- RE_n = 1,",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "Drive strength          000b",
+      "value": "18",
+      "source": "ONFI_Spec.pdf",
+      "raw": "Drive strength          000b:    18 Ohm (Optional, not supported for NV-DDR3)",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "User 0000",
+      "value": "08",
+      "source": "ONFI_Spec.pdf",
+      "raw": "User 0000 : 08 Bytes",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "defined 0001",
+      "value": "16",
+      "source": "ONFI_Spec.pdf",
+      "raw": "defined 0001 : 16 Bytes",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "pattern 0010",
+      "value": "24",
+      "source": "ONFI_Spec.pdf",
+      "raw": "pattern 0010 : 24 Bytes",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "parameter": "length 0011",
+      "value": "32",
+      "source": "ONFI_Spec.pdf",
+      "raw": "length 0011 : 32 Bytes",
+      "extraction_strategy": "bullet_kv_pair_spec"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/ONFI_Spec.pdf": [
+      {
+        "literal": "300Ohm",
+        "label": "BOM/spec value (external-anchored)"
+      },
+      {
+        "literal": "35Ohm",
+        "label": "BOM/spec value (external-anchored)"
+      },
+      {
+        "literal": "37.5Ohm",
+        "label": "BOM/spec value (external-anchored)"
+      },
+      {
+        "literal": "50Ohm",
+        "label": "BOM/spec value (external-anchored)"
+      }
+    ]
+  },
+  "class_path": "digital_arithmetic_primitive",
+  "analog_digital_interface_present": false,
+  "signaling_summary": "ONFI 4.1 defines four data-interface signaling families on a common 8-bit DQ bus plus control strobes. SDR (LVCMOS at VccQ); NV-DDR (single-ended bidirectional DQS + CLK on WE_n pin); NV-DDR2 (differential DQS_t/DQS_c + ZQ Calibration + ODT); NV-DDR3 (differential DQS_t/DQS_c AND RE_t/RE_c + DCC/DQ training + matrix termination). VREFQ is the input threshold for NV-DDR2/3 single-ended path. Internal NAND-array circuitry is highly analog but out of scope.",
+  "voltage_classes": [
+    {
+      "class": "3.3 V VccQ",
+      "VccQ_range_V": "3.0 - 3.6",
+      "applicable_modes": "SDR (legacy)"
+    },
+    {
+      "class": "1.8 V VccQ",
+      "VccQ_range_V": "1.7 - 1.95",
+      "applicable_modes": "SDR, NV-DDR, NV-DDR2, NV-DDR3"
+    },
+    {
+      "class": "1.2 V VccQ",
+      "VccQ_range_V": "1.14 - 1.26",
+      "applicable_modes": "NV-DDR2 / NV-DDR3 advanced"
+    }
+  ],
+  "differential_signals_nv_ddr2_3": [
+    {
+      "name": "DQS_t / DQS_c",
+      "description": "Bidirectional differential data strobe."
+    },
+    {
+      "name": "RE_t / RE_c",
+      "description": "Differential Read Enable (NV-DDR3; optional NV-DDR2)."
+    }
+  ],
+  "vref_specification": {
+    "VREFQ_purpose": "External voltage reference for input/output signals in NV-DDR2 / NV-DDR3.",
+    "VREFQ_tolerance": "Per Section 2.12.2; typically VREFQ = 0.5 × VccQ ±2 %.",
+    "VREFQ_pin": "Dedicated pin VREFQ_x per data bus."
+  },
+  "zq_calibration": {
+    "purpose": "Calibrate output driver impedance against external RZQ.",
+    "long_command": "F9h ZQ Calibration Long; tZQCL ≥ 1 µs.",
+    "short_command": "D9h ZQ Calibration Short.",
+    "applicability": "NV-DDR2 and NV-DDR3."
+  },
+  "on_die_termination_nv_ddr2_3": {
+    "states": [
+      "Deselected",
+      "Selected",
+      "Sniff"
+    ],
+    "modes": [
+      "Self-termination ODT",
+      "Matrix termination ODT"
+    ],
+    "command": "ODT Configure (E2h) for matrix termination; Set Features for self-termination.",
+    "purpose": "Bus-end termination for high-speed source-synchronous signaling."
+  },
+  "input_threshold_levels": {
+    "SDR_3v3": "VIH_min = 0.7 × VccQ, VIL_max = 0.3 × VccQ",
+    "SDR_1v8": "VIH_min = 0.8 × VccQ, VIL_max = 0.2 × VccQ",
+    "NV_DDR2_3": "VIH_min = VREFQ + 100 mV, VIL_max = VREFQ - 100 mV"
+  },
+  "ac_overshoot_undershoot": {
+    "purpose": "Section 2.11 of ONFI 4.1 specifies allowed overshoot / undershoot envelope on all input/output pins to bound EMI and prevent latch-up.",
+    "applicability": "All data interfaces; tighter envelope on NV-DDR3."
+  },
+  "pin_capacitance": {
+    "I/O_pin_capacitance": "Parameter Page byte 128 (max in 0.1 pF units), bytes 150-151 (typical NV-DDR2/3).",
+    "input_pin_capacitance": "Parameter Page bytes 152-153 (typical).",
+    "CLK_pin_capacitance": "Parameter Page bytes 148-149 (typical, NV-DDR family)."
+  },
+  "notes": "Internal NAND array (floating-gate / charge-trap cells, bit-lines, sense amplifiers, page registers, charge pumps, on-die ADC for TLC/QLC read margining) is heavily analog but intentionally out of scope. ONFI 4.1 treats the array as a black box."
+}
