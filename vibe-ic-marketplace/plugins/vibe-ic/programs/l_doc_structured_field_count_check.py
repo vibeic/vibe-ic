@@ -364,6 +364,40 @@ def _class_no_cmd_protocol(ic_class: str) -> bool:
     return ic_class in _DATAPATH_COMPUTE_CLASSES
 
 
+def _class_sparse_control_timing(ic_class: str) -> bool:
+    """ORGANIC #605 — True iff the registry marks this class as having a
+    SPARSE control+timing surface: pure datapath / compute / accelerator
+    transforms that delegate the internal micro-architecture FSM to the
+    implementation and document only a handful of timing facts (clock period,
+    cycle count, latency). These get the relaxed L6 (≥2 FSM) / L8 (≥3 timing)
+    floors instead of the strict protocol-genre ≥5 / ≥10.
+
+    Distinct from `_class_no_cmd_protocol`: a bus / serial PROTOCOL class is
+    ALSO `command_protocol_applicable==False` in the registry, but it carries a
+    RICH protocol state machine + timing-waveform spec, so it must KEEP the
+    strict 5/10 floors (v0.1.83 doctrine + test_protocol_stays_strict). The
+    registry's `command_protocol_applicable` flag therefore cannot drive this
+    relaxation — it does not separate sparse compute classes from rich protocol
+    classes. A dedicated semantic registry flag (`sparse_control_timing`) does.
+
+    bare_fpga / unknown_protocol_class stay fail-closed; falls back to the
+    legacy `_DATAPATH_COMPUTE_CLASSES` literal when the registry is unreadable.
+    Chip-AGNOSTIC: a registry semantic flag, no chip-name literal."""
+    if ic_class in _NO_PROTOCOL_FAIL_CLOSED:
+        return False
+    try:
+        reg = json.loads(
+            (Path(__file__).resolve().parent / "ic_class_registry.json")
+            .read_text())
+        for e in reg.get("classes", []):
+            if (e.get("name") == ic_class
+                    or ic_class in (e.get("synonyms") or [])):
+                return e.get("sparse_control_timing") is True
+    except (OSError, ValueError):
+        pass
+    return ic_class in _DATAPATH_COMPUTE_CLASSES
+
+
 def _check_l_doc(layer: int, data: dict,
                  escapes: dict[str, bool] | None = None,
                  ic_class: str = "unknown") -> tuple[bool, str]:
@@ -574,7 +608,16 @@ def _check_l_doc(layer: int, data: dict,
         # and realistically documents a minimal control FSM (idle/active/done).
         # Relax to ≥2 for those classes — a real floor, not a skip. Command-
         # driven / protocol / unknown classes keep ≥5 (fail-closed).
-        l6_min = 2 if ic_class in _DATAPATH_COMPUTE_CLASSES else 5
+        # ORGANIC #605 — key the relaxation on the registry-driven
+        # `sparse_control_timing` SEMANTIC flag (not the stale hardcoded
+        # `_DATAPATH_COMPUTE_CLASSES` literal, which recognised only 2 of the
+        # genuinely-sparse compute classes — a crypto_accelerator was wrongly
+        # inheriting the strict 5/10 protocol-genre floor it has no source to
+        # populate). NOTE: deliberately NOT `_class_no_cmd_protocol` — that
+        # predicate also matches bus/serial PROTOCOL classes, which carry a
+        # rich FSM/timing spec and must keep the strict floor
+        # (test_protocol_stays_strict). bare_fpga / unknown stay fail-closed.
+        l6_min = 2 if _class_sparse_control_timing(ic_class) else 5
         states = (data.get("fsm_states") or data.get("states")
                   or data.get("state_table"))
         n_states = _list_len_of_dicts(states)
@@ -690,7 +733,10 @@ def _check_l_doc(layer: int, data: dict,
         # or CPU-SoC documents a handful of timing facts (clock period, cycle
         # count, latency); relax to ≥3 for those classes. Protocol / command /
         # unknown classes keep ≥10 (fail-closed).
-        l8_min = 3 if ic_class in _DATAPATH_COMPUTE_CLASSES else 10
+        # ORGANIC #605 — registry-driven `sparse_control_timing` flag (see the
+        # L6 note above); NOT `_class_no_cmd_protocol` (protocol classes keep
+        # the strict ≥10 floor). bare_fpga / unknown stay fail-closed.
+        l8_min = 3 if _class_sparse_control_timing(ic_class) else 10
         if n < l8_min:
             return False, (
                 f"L8 timing_waveform must carry ≥{l8_min} typed timing "
