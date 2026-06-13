@@ -83,6 +83,40 @@ def _sha(path: Path) -> str:
     return h.hexdigest()
 
 
+# ORGANIC #624 — OpenROAD's own hold (min-path) sign-off slack line, emitted
+# into pnr/post_hold_timing.rpt by the hold-fix step (`worst hold slack <n>` /
+# `hold WNS <n>`). A non-negative (or INF) worst hold slack means the design is
+# hold-CLEAN — the resizer had 0 hold violations to repair.
+_HOLD_SLACK_RE = re.compile(
+    r"(?:worst[ _]hold[ _]slack|hold[ _]wns)\s+"
+    r"([-+]?(?:\d+(?:\.\d+)?(?:[eE][-+]?\d+)?|inf))",
+    re.IGNORECASE)
+
+
+def _hold_clean_noop_ok(project: Path) -> bool:
+    """ORGANIC #624 — True iff the hold (min-path) sign-off report proves the
+    design is hold-CLEAN (worst hold slack >= 0 / INF). A byte-identical
+    post_hold.def == post_cts.def is then a LEGITIMATE no-op hold-fix (the
+    resizer reported 0 hold violations to repair, so the hold step made no
+    geometry change), NOT a fabricated copy/stub. Returns False (FAIL-CLOSED)
+    when no report exists, the slack is negative (unrepaired hold violations),
+    or the report is unparseable. Chip-AGNOSTIC: parses OpenROAD's own hold
+    slack number, no chip literal."""
+    rpt = _pl.pnr_dir(project) / "post_hold_timing.rpt"
+    try:
+        text = rpt.read_text(errors="replace")
+    except OSError:
+        return False
+    worst = None
+    for m in _HOLD_SLACK_RE.finditer(text):
+        tok = m.group(1).lower()
+        val = float("inf") if "inf" in tok else float(tok)
+        worst = val if worst is None else min(worst, val)
+    if worst is None:
+        return False  # no parseable hold-slack evidence → cannot prove clean
+    return worst >= 0.0
+
+
 def _count_components(path: Path) -> int:
     """Count instances in COMPONENTS section."""
     in_components = False
@@ -201,6 +235,17 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
         hash_to_stages.setdefault(i.sha256, []).append(i.name)
     for h, stages in hash_to_stages.items():
         if len(stages) > 1:
+            # ORGANIC #624 — a byte-identical post_cts/post_hold pair is a
+            # LEGITIMATE no-op when the design was hold-clean after CTS (the
+            # resizer had 0 hold violations to repair, so the hold-fix step
+            # made no geometry change → post_hold.def == post_cts.def BY
+            # CONSTRUCTION). Exempt ONLY that EXACT pair AND only with positive
+            # proof from the hold report (worst hold slack >= 0). Every other
+            # identical-stage group — and a post_cts/post_hold pair with
+            # UNREPAIRED hold violations or no report — still FAILs as fraud.
+            if (set(stages) == {"post_cts", "post_hold"}
+                    and _hold_clean_noop_ok(project)):
+                continue
             findings.append(Finding(
                 severity="error",
                 rule="identical-def-fraud",
