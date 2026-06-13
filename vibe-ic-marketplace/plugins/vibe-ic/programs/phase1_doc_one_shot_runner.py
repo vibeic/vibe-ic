@@ -38572,15 +38572,34 @@ def _v1_6_442_is_fpga_bench_context(text_window) -> bool:
 # floorplan blockage planning. Reject them at emit time: a memory
 # entry is "useful" iff at least one of (name, depth, width) is
 # non-None. Chip-AGNOSTIC: pure structural completeness gate.
+# #612 — memory-name tokens. A name-only memory entry is only credible when
+# the NAME ITSELF carries one of these (data_ram / inst_fifo / l1_cache …).
+_MEMORY_NAME_TOKEN_RE = re.compile(
+    r"(?:^|[^A-Za-z])(ram|rom|sram|dram|cache|regfile|fifo|mem)(?:[^A-Za-z]|[0-9]|$)",
+    re.IGNORECASE,
+)
+
+
 def _v1_6_441_is_useful_memory_entry(entry) -> bool:
-    """Return True iff the memory entry has at least one
-    non-null structural field. Bare-keyword prose mentions
-    ("when entering the cache region", "FIFO buffers data")
-    that yield (name=None, depth=None, width=None) are
-    rejected. Chip-AGNOSTIC."""
+    """Return True iff the memory entry carries genuine macro evidence.
+
+    Structural fields (depth / width / port_count) are the primary signal —
+    any one present => a real macro.
+
+    #612 — a NAME-ONLY entry (depth, width, port_count ALL None) is useful
+    ONLY when the name itself carries a memory token (ram/rom/sram/dram/
+    cache/regfile/fifo/mem). Otherwise the prose back-walker latched a
+    NON-memory identifier off a nearby bare SRAM/RAM/ROM mention — an i_*/o_*
+    I/O pin, an UPPER_SNAKE EDA config key (FP_CORE_UTIL / PL_TARGET_DENSITY /
+    WITH_CSR / *_PC), or a PDK/FPGA platform token (GF180MCU / Cyclone10LP /
+    sky130_fd_sc_hd). Those go to memory_candidates[], never memories[].
+    Chip-AGNOSTIC: pure structural / name-shape gate."""
     if not isinstance(entry, dict):
         return False
-    return any(entry.get(k) for k in ("name", "depth", "width"))
+    if any(entry.get(k) for k in ("depth", "width", "port_count")):
+        return True
+    name = entry.get("name")
+    return bool(name and _MEMORY_NAME_TOKEN_RE.search(str(name)))
 
 
 def _v1_6_453_sync_no_memories_flag(l9: dict) -> None:
