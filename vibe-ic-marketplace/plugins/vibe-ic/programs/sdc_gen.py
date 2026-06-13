@@ -296,6 +296,38 @@ def _parse_module_ports(txt: str) -> List[Tuple[str, str, int]]:
     return out
 
 
+def _collect_all_module_ports(rtl_files: List[Path]) -> set:
+    """ORGANIC #619 — return the UNION of every port NAME declared by any
+    module in the synthesizable RTL (rtl/). This is the design's actual
+    synthesizable port surface: a name absent from it does not exist on the
+    elaborated netlist, so an SDC `get_ports <name>` on it would error in
+    STA/PnR.
+
+    The UNION (across the top wrapper AND its inner/sub-modules) is used
+    deliberately rather than only the top module's ports: the reset/clock
+    alias wrapper (#518/#618) renames the top's clock/reset port while the
+    inner `*__rcvar_inner` keeps the original spelling, so the union holds
+    BOTH spellings — filtering against it never drops a legitimately-present
+    port merely because of an alias rename. Returns an empty set when rtl/ is
+    absent or unparseable (callers then DO NOT filter — pure-L9 fallback).
+    Chip-AGNOSTIC: pure Verilog module-header parsing, no chip names."""
+    names: set = set()
+    mod_hdr = re.compile(r"\bmodule\s+[A-Za-z_]\w*")
+    for f in rtl_files:
+        try:
+            txt = _strip_v_comments(f.read_text(encoding="utf-8",
+                                                errors="ignore"))
+        except Exception:
+            continue
+        # Parse each module's port list independently (a file may declare
+        # several modules — e.g. chip_top + chip_top__rcvar_inner).
+        for m in mod_hdr.finditer(txt):
+            for name, _dir, _w in _parse_module_ports(txt[m.start():]):
+                if name:
+                    names.add(name)
+    return names
+
+
 # ---------------------------------------------------------------------------
 # Port classification
 # ---------------------------------------------------------------------------
@@ -480,6 +512,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     outputs: List[str] = []
     async_ports: List[str] = []
     clock_port: Optional[str] = None
+    dropped_pins: List[str] = []
+    rtl_ports: set = set()  # union of synthesizable RTL ports (#619)
 
     if wrapper and top == wrapper[0]:
         ports = _parse_module_ports(wrapper[1])
@@ -497,11 +531,24 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 inputs.extend(sigs)
     else:
-        # L9 namespace
+        # L9 namespace. ORGANIC #619 — the L9 doc top_module_pins describe the
+        # FULL upstream IP surface (all config-gated security/ECC/lockstep/
+        # debug ports), but for a config-reduced-wrapper / REUSED-IP design the
+        # synthesizable RTL top exposes only the enabled subset. Emitting
+        # set_input/output_delay [get_ports <name>] for an L9 pin that is NOT
+        # on the synthesizable surface makes STA/PnR error out on that
+        # constraint. So intersect the L9 pin list with the actual RTL port
+        # surface (union of all rtl/ module ports). When rtl/ is absent /
+        # unparseable, rtl_ports is empty and NO filtering happens (pure-L9
+        # fallback preserved). Chip-AGNOSTIC: set membership on parsed ports.
+        rtl_ports = _collect_all_module_ports(rtl_files)  # union; may be empty
         for port in l9.get("top_module_pins", []):
             if not isinstance(port, dict):
                 continue
             name = port.get("name", "")
+            if rtl_ports and name and name not in rtl_ports:
+                dropped_pins.append(name)
+                continue
             mode = (port.get("mode") or "").lower()
             if _is_clock(name):
                 clock_port = name
@@ -515,12 +562,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                 inputs.append(name)
 
     if not clock_port:
-        # Fallback: take first 'clk*' from L9, else 'clk'
+        # Fallback: take first 'clk*' from L9 that EXISTS on the synthesizable
+        # surface (#619), else 'clk'.
         clock_port = "clk"
         for port in l9.get("top_module_pins", []):
-            if isinstance(port, dict) and _is_clock(port.get("name", "")):
-                clock_port = port["name"]
-                break
+            if not (isinstance(port, dict) and _is_clock(port.get("name", ""))):
+                continue
+            cand = port["name"]
+            if rtl_ports and cand not in rtl_ports:
+                continue  # #619: don't bind a clock absent from the RTL surface
+            clock_port = cand
+            break
 
     fpga_dir = _pl.fpga_early_dir(project)
     fpga_dir.mkdir(parents=True, exist_ok=True)
@@ -537,7 +589,11 @@ def main(argv: Optional[List[str]] = None) -> int:
           f"(clock={clock_port}@{clock_mhz}MHz period={period_ns:.2f}ns; "
           f"{len(inputs)} in / {len(outputs)} out / "
           f"{len(async_ports)} false_path / "
-          f"{len(gen_clocks)} generated_clock)")
+          f"{len(gen_clocks)} generated_clock"
+          + (f"; dropped {len(dropped_pins)} L9 pin(s) absent from "
+             f"synthesizable RTL surface: {sorted(dropped_pins)} (#619)"
+             if dropped_pins else "")
+          + ")")
     return 0
 
 
