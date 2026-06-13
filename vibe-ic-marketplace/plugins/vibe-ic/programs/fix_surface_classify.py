@@ -78,9 +78,27 @@ CONSUMER_PATTERNS = [
 # fallback consumer signal (e.g. a verdict-message-only edit in a checker).
 CONSUMER_FILE_PATTERNS = [
     r"_check\.py$", r"_classif\w*\.py$", r"_audit\w*\.py$", r"_scan\w*\.py$",
-    r"_gate\w*\.py$", r"^acceptance_", r"_acceptance", r"^defect_",
+    r"_gate\w*\.py$", r"(^|/)acceptance_", r"_acceptance", r"(^|/)defect_",
     r"run_status\.py$", r"field_agent_\w+\.py$", r"_version_\w*\.py$",
     r"version_\w+_check\.py$", r"marketplace_\w+_check\.py$",
+]
+# ORGANIC #602 round 2 — classify-NEUTRAL files. EVERY core-agent fix commit
+# bumps marketplace.json + plugin.json (a mandatory push step), regenerates
+# INDEX.md, and ships test files (the author's EVIDENCE, not a runtime
+# surface) + prose .md (docs / skills). If any of these counted as a
+# surface, a single bumped version line would drop every real commit into
+# "ambiguous" → MIXED → a needless 40-min re-run on EVERY fix — defeating
+# the whole point of the classifier (the field agent measured exactly this:
+# #599/#600/#597 all wrongly returned MIXED). So these files are EXCLUDED
+# from producer/consumer/ambiguous bucketing entirely; the verdict is
+# decided only by the genuine runtime surfaces a commit touches.
+NEUTRAL_FILE_PATTERNS = [
+    r"(^|/)marketplace\.json$",          # version bump (mandatory)
+    r"(^|/)plugin\.json$",               # version bump (mandatory)
+    r"(^|/)INDEX\.md$",                  # auto-regenerated catalog
+    r"(^|/)tests?/",                     # any tests directory (evidence)
+    r"(^|/)test_[^/]*\.py$",             # test modules (evidence)
+    r"\.md$",                            # docs / skills / prose
 ]
 
 _VERDICTS = {
@@ -103,6 +121,18 @@ def _consumer_file(path: Optional[str]) -> Optional[str]:
     base = path.rsplit("/", 1)[-1]
     for p in CONSUMER_FILE_PATTERNS:
         if re.search(p, path, re.IGNORECASE) or re.search(p, base, re.IGNORECASE):
+            return p
+    return None
+
+
+def _neutral_file(path: Optional[str]) -> Optional[str]:
+    """ORGANIC #602 r2 — is this a classify-neutral file (version bump /
+    generated index / test evidence / prose)? Such hunks are dropped before
+    bucketing so a mandatory version-bump line can't force MIXED."""
+    if not path:
+        return None
+    for p in NEUTRAL_FILE_PATTERNS:
+        if re.search(p, path, re.IGNORECASE):
             return p
     return None
 
@@ -130,18 +160,26 @@ def classify_hunk(path: Optional[str], symbol: Optional[str],
 def _symbol_from_context(ctx: str) -> Optional[str]:
     """Pull the enclosing symbol from a git hunk-header context, e.g.
     `def step_pnr(project):` → step_pnr, `class Foo:` → Foo,
-    `_GDS_GRID_SNAP_PY = r'''` → _GDS_GRID_SNAP_PY."""
+    `_GDS_GRID_SNAP_PY = r'''` → _GDS_GRID_SNAP_PY.
+
+    ORGANIC #602 r2 — ONLY a real Python `def`/`class`/module-assignment is
+    a symbol. The earlier generic first-word fallback scraped words out of
+    JSON/markdown/prose hunk contexts (`Auto`, `the`, `artifact`, `_`) and
+    fed them in as bogus 'function names'; return None instead so such a
+    hunk is decided by its file/changed-line signals (and neutral files are
+    excluded upstream anyway)."""
     ctx = ctx.strip()
     if not ctx:
         return None
     m = re.search(r"\b(?:def|class)\s+(\w+)", ctx)
     if m:
         return m.group(1)
-    m = re.match(r"(\w+)\s*=", ctx)        # module-level assignment
-    if m:
+    # module-level assignment of an UPPER/underscore constant (e.g. an
+    # embedded TCL/py emitter blob) — a real code symbol, not prose.
+    m = re.match(r"([A-Za-z_]\w*)\s*=", ctx)
+    if m and ("_" in m.group(1) or m.group(1).isupper()):
         return m.group(1)
-    m = re.match(r"(\w+)", ctx)
-    return m.group(1) if m else None
+    return None
 
 
 def parse_unified_diff(diff_text: str) -> List[Dict]:
@@ -168,9 +206,18 @@ def parse_unified_diff(diff_text: str) -> List[Dict]:
 
 
 def classify_diff(diff_text: str) -> Dict:
-    """Classify a whole unified diff → CONSUMER_ONLY / PRODUCER / MIXED."""
+    """Classify a whole unified diff → CONSUMER_ONLY / PRODUCER / MIXED.
+
+    ORGANIC #602 r2 — classify-neutral files (version bumps, INDEX.md,
+    tests, prose .md) are dropped BEFORE bucketing so a mandatory
+    version-bump line cannot force every real commit to MIXED."""
     records = []
+    neutral = []
     for h in parse_unified_diff(diff_text):
+        nf = _neutral_file(h["path"])
+        if nf:
+            neutral.append(h["path"])
+            continue
         records.append(
             classify_hunk(h["path"], h["symbol"], "\n".join(h["changed"])))
     classes = {r["class"] for r in records}
@@ -196,6 +243,7 @@ def classify_diff(diff_text: str) -> Dict:
         "ambiguous": sorted({r["symbol"] or r["path"]
                              for r in records
                              if r["class"] in ("mixed", "unknown")}),
+        "neutral": sorted(set(filter(None, neutral))),
     }
 
 
