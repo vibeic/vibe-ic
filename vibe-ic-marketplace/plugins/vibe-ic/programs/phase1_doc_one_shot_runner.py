@@ -29110,6 +29110,28 @@ def _v455_attach_block_specs(blocks: List[dict],
                 break
 
 
+# ORGANIC #613 — digital serial-readout signature in the input docs (the
+# digital half of a data converter's analog→digital interface). Same generic
+# data-converter readout vocabulary the ic_class profiler keys on; no chip name.
+_V1_6_613_L5_SERIAL_READOUT_RE = re.compile(
+    r"(?:digital\s+serial\s+output|serial\s+bitstream|digital\s+bitstream"
+    r"|1[\s\-]?bit\s+serial|bitstream\s+per\s+channel"
+    r"|\bdout\w*\s+serial|serial\s+\w*dout|serial\s+readout)",
+    re.IGNORECASE)
+
+
+def _v1_6_613_input_has_digital_serial_readout(extracted: Dict[str, str]) -> bool:
+    """ORGANIC #613 — True iff the input docs declare a DIGITAL serial readout
+    (1-bit serial outputs / dout-style digital bitstream). Used with
+    analog_blocks_detected to set L5.analog_digital_interface_present=True for a
+    data converter (its analog→digital boundary), instead of the unconditional
+    setdefault(False). chip-AGNOSTIC."""
+    for txt in (extracted or {}).values():
+        if isinstance(txt, str) and _V1_6_613_L5_SERIAL_READOUT_RE.search(txt):
+            return True
+    return False
+
+
 def gen_l5_adi_spec(project: Path,
                     extracted: Dict[str, str]) -> LDocResult:
     """L5: analog block discovery via Wave-47 keyword scan + chip-AGNOSTIC
@@ -29679,6 +29701,15 @@ def gen_l5_adi_spec(project: Path,
         # shared-blob vector this skeleton exists to eliminate.
         return _write_l_doc(project, "L5_ADI_SPEC", content, {})
 
+    # ORGANIC #613 — recognise the analog→digital boundary of a data converter:
+    # when analog blocks ARE detected AND the input docs declare a digital
+    # serial readout (1-bit serial outputs / dout-style bitstream), the design
+    # HAS an analog/digital interface. Previously this was only ever
+    # setdefault(False), so any data converter's A/D boundary was structurally
+    # unrecognised. chip-AGNOSTIC: analog_blocks_detected ∧ serial-readout vocab.
+    _v613_adi_present = (
+        bool(blocks)
+        and _v1_6_613_input_has_digital_serial_readout(extracted))
     content = {
         "schema_version": 2,
         "doc_class": "adi_spec",
@@ -29686,10 +29717,16 @@ def gen_l5_adi_spec(project: Path,
         "analog_blocks_detected": bool(blocks),
         "analog_blocks": blocks if blocks else [],
         "no_analog": _no_analog_flag,
+        "analog_digital_interface_present": _v613_adi_present,
         "external_components": bom,
         "electrical_specs": elec_specs,
         "design_parameters": design_parameters,
     }
+    if _v613_adi_present:
+        content["signaling_summary"] = (
+            "Mixed-signal data converter: analog conversion core with a digital "
+            "serial readout (1-bit serial / dout-style bitstream output) — an "
+            "analog→digital interface, not a pure-digital protocol (#613).")
     # ORGANIC #466 R2 — surface dropped product-name hallucinations for
     # audit (NOT consumed by the sizing A-track). Only present when the
     # deterministic enumeration guard actually dropped something.
