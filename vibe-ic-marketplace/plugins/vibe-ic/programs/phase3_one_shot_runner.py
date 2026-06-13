@@ -584,12 +584,97 @@ def _v1_6_595_extract_clock_port_from_rtl(project: Path, top: str = ""):
     return None
 
 
+def _v1_6_623_clock_port_in_netlist_text(text: str, top: str = ""):
+    """v1.6.623 — for #623 ORGANIC. Return the first clock-matching port of
+    the TOP module in a Verilog netlist `text`. When a `top` name is given
+    and a module with that exact name is present, search ONLY that module's
+    header (the netlist top is the authoritative surface — a sub-module's
+    clock port must NOT leak in); when the top module is absent, scan every
+    module header (bounded). Handles both ANSI port decls
+    (`module top(input i_clk, ...)`) and Verilog-1995 header name lists
+    (`module top(i_clk, ...); input i_clk;`, the form yosys write_verilog
+    emits). Chip-AGNOSTIC: pure Verilog grammar, clock-port name regex."""
+    headers = []
+    for m in _V1_6_595_RTL_MODULE_HEADER_RE.finditer(text or ""):
+        headers.append((m.group(1) or "", m.group(2) or ""))
+        if len(headers) > 64:
+            break
+    if not headers:
+        return None
+    if top:
+        top_headers = [hb for (nm, hb) in headers if nm.lower() == top.lower()]
+        # Found the named top module → trust ONLY it (no sibling leakage).
+        search = top_headers if top_headers else [hb for (_n, hb) in headers]
+    else:
+        search = [hb for (_n, hb) in headers]
+    count = 0
+    for header_body in search:
+        count += 1
+        if count > 8:
+            break
+        for pm in _V1_6_595_RTL_PORT_DECL_RE.finditer(header_body):
+            if _V1_6_595_CLOCK_PORT_RE.match(pm.group(1)):
+                return pm.group(1)
+        for sp in re.split(r"[,\s]+", header_body):
+            sp = sp.strip()
+            if sp and _V1_6_595_CLOCK_PORT_RE.match(sp):
+                return sp
+    return None
+
+
+def _v1_6_623_extract_clock_port_from_netlist(project: Path, top: str = ""):
+    """v1.6.623 — for #623 ORGANIC. The Phase-3 auto-SDC
+    `create_clock ... [get_ports <port>]` binds against the POST-SYNTH
+    NETLIST top port list — that netlist is the literal artefact
+    OpenROAD/TritonCTS resolve `get_ports` against. When the synth netlist
+    top clock port carries the doc/RTL name (e.g. `i_clk` / `clk_i`) but the
+    resolver fell back to the canonical literal `clk`, `[get_ports clk]`
+    matches nothing → CTS-0008 (0 clock nets) / CTS-0082, and no clock tree
+    is built.
+
+    Read the ACTUAL post-synth netlist top module's port list and return the
+    first port matching the clock-port regex. Candidate netlists, in
+    priority order, are the canonical phase2 synth outputs (the same files
+    step_pnr / streamout consume): `<top>_synth.v`, `netlist.v`,
+    `netlist_yosys.v`, then any other `*_synth.v` in the synth dir. Returns
+    None when no netlist exists yet (the resolver can run before synth) or no
+    top clock port — the caller then falls through to the existing
+    L8/L9/RTL/SDC chain UNCHANGED. Chip-AGNOSTIC: keyed on the netlist's own
+    clock port, never a fixed name."""
+    synth = _pl.synth_dir(project)
+    candidates = []
+    if top:
+        candidates.append(synth / f"{top}_synth.v")
+    candidates.extend([synth / "netlist.v", synth / "netlist_yosys.v"])
+    if synth.is_dir():
+        candidates.extend(sorted(synth.glob("*_synth.v")))
+    seen = set()
+    files = []
+    for c in candidates:
+        if c in seen:
+            continue
+        seen.add(c)
+        if c.is_file():
+            files.append(c)
+    for nf in files:
+        try:
+            text = nf.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        port = _v1_6_623_clock_port_in_netlist_text(text, top=top)
+        if port:
+            return port
+    return None
+
+
 def _v1_6_595_resolve_clock_port_name(project: Path, top: str = "",
                                        config_port: str = "clk") -> tuple:
     """v1.6.595 — for #403 P2 ORGANIC. Resolve the chip's clock-port
     name from Phase 1 (doc-extraction) artefacts + RTL. Returns
     `(port_name, resolution_path)` where `resolution_path` is one of:
 
+      - 'post_synth_netlist_top_port'  (ORGANIC #623 — the literal artefact
+        `[get_ports]` resolves against; ranked first)
       - 'L8.clocks[].port_name'
       - 'L9.top_ports[]'
       - 'rtl_module_header_scan'
@@ -598,6 +683,16 @@ def _v1_6_595_resolve_clock_port_name(project: Path, top: str = "",
 
     Chip-AGNOSTIC.
     """
+    # a0. ORGANIC #623 — the post-synth netlist top port is the LITERAL
+    #     artefact OpenROAD / TritonCTS resolve `[get_ports]` against, so it
+    #     is the authoritative ground truth for the auto-SDC create_clock
+    #     binding. Ranked first; returns None (falls through to the L8/L9/RTL
+    #     /SDC chain unchanged) when no netlist exists yet — the resolver may
+    #     run before synth, and explicit config CLOCK_PORT still wins upstream
+    #     in `_resolve_clock_spec` (#554 (b)).
+    v = _v1_6_623_extract_clock_port_from_netlist(project, top=top)
+    if v:
+        return (v, "post_synth_netlist_top_port")
     # a. L8 generated_docs
     l8 = _v1_6_595_load_phase1_doc(project, "L8")
     if l8 is not None:
