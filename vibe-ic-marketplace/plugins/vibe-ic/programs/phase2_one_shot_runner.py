@@ -1276,6 +1276,39 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0,
                           "top reset/clock ports already canonical")
+    # ORGANIC #618 — spec-aware suppression (applies UNCONDITIONALLY, before
+    # the resolved_via_chip_top-gated L9 guard below). The alias emitter
+    # renames a recognised non-canonical clock/reset spelling to a hardcoded
+    # canon for the legitimate #518 hidden-TB-uses-a-different-equivalent-name
+    # case. But when the design's OWN staged constraint SDC
+    # (input/constraints/*.sdc + input/reference_flow/**/*.sdc — the
+    # upstream-verified ground truth, same ranking as #554/#623) already pins
+    # the ORIGINAL spelling (`set clk_port_name clk_i` / `create_clock
+    # [get_ports {clk_i}]`), renaming it is GUARANTEED to break that SDC's
+    # get_ports AND the l9_rtl_pin_consistency_check (the sole strict-
+    # structural gate → Overall:FAIL). The design's own constraint IS the
+    # contract → drop those renames. The #618 ibex case took the directly-
+    # authored chip_top branch (resolved_via_chip_top=False) AND its L9 top
+    # (ibex_top) != tgt (chip_top), so the existing L9 guard never fired —
+    # hence this must be unconditional and SDC-keyed. No-leak: the #518
+    # designs ship NO staged SDC pinning the renamed port, so pinned is empty
+    # and the rename proceeds unchanged. Chip-AGNOSTIC: standard-SDC syntax +
+    # set-membership on port spellings, no chip names.
+    try:
+        import sdc_constraints as _rcv_sdc
+        _pinned_sdc = _rcv_sdc.staged_constrained_ports(project)
+    except Exception:  # pragma: no cover — defensive
+        _pinned_sdc = set()
+    _sdc_pinned = sorted(p for p in plan if p.lower() in _pinned_sdc)
+    for _p in _sdc_pinned:
+        del plan[_p]
+    if not plan:
+        return StepResult(
+            "reset_clock_variant_aliases", "SKIP", time.time() - t0,
+            f"design's staged constraint SDC already pins the original "
+            f"spelling(s) {_sdc_pinned}; renaming would break the SDC "
+            f"get_ports + l9_rtl_pin_consistency_check — refusing to rename "
+            f"the design's own contract (#618)")
     # In-flow EVIDENCE guard (#518 round-4 adversarial review, HIGH): when the
     # alias target was resolved from the runner's default top-name AND the
     # project's L9 explicitly declares the NATIVE spelling of a port this plan
