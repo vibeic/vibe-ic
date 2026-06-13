@@ -295,6 +295,32 @@ def check(waveform: Any, rtl_constants: Any | None) -> list[Finding]:
     return findings
 
 
+# ORGANIC #617 — half-duplex protocol symbol-timing tokens. A `waveforms[]`
+# entry carrying any of these references directional (rx/tx/host/dut) timing or
+# H0/H1/BR/IBT-style symbol pulses; a generic single-/few-signal WaveDrom
+# diagram (clk/addr/data/valid) emitted by doc-extraction carries none.
+_WAVEFORM_PROTOCOL_TOKENS = (
+    "rx_", "tx_", "host_", "dut_", "external_", "internal_",
+    "_low", "_high", "ibt", "break", "_counters", "_cycles",
+    "h0_", "h1_", "br_",
+)
+
+
+def _waveforms_carry_protocol_symbols(wfs: Any) -> bool:
+    """ORGANIC #617 — True iff a `waveforms[]` value carries half-duplex
+    protocol symbol-timing content (directional rx/tx/host/dut tokens or
+    H0/H1/BR/IBT symbol pulses), as opposed to a GENERIC WaveDrom diagram
+    (clk/addr/data/valid) auto-populated by doc-extraction. Conservative
+    substring scan over the serialised value. chip-AGNOSTIC."""
+    if not wfs:
+        return False
+    try:
+        blob = json.dumps(wfs).lower()
+    except (TypeError, ValueError):
+        blob = str(wfs).lower()
+    return any(tok in blob for tok in _WAVEFORM_PROTOCOL_TOKENS)
+
+
 def _resolve_waveform_path(arg: str) -> Path | None:
     """v1.6.38 — accept either an L8 JSON file directly OR a project_dir
     (in which case look up phase1/generated_docs/L8_TIMING_WAVEFORM.json).
@@ -425,9 +451,27 @@ def main() -> int:
     # complements the explicit L2.half_duplex=false escape above for the
     # common case where L2 simply never mentions a protocol. chip-AGNOSTIC:
     # keyed on the absence of symbol-timing content, not on any chip.
+    #
+    # ORGANIC #617 — a `waveforms[]` entry counts as EMPTY for this escape
+    # unless it actually carries half-duplex protocol symbol-timing content
+    # (rx_/tx_/host_/dut_ directional tokens or H0/H1/BR/IBT-style symbol
+    # pulses). doc-extraction auto-populates `waveforms[]` with a GENERIC
+    # single-/few-signal WaveDrom diagram (e.g. a basic memory-transaction or
+    # bus diagram from a source .rst) that has zero rx_/tx_ symbol groups; a
+    # non-empty `waveforms[]` of that kind previously defeated the
+    # all(_empty(...)) short-circuit, so a non-half-duplex compute/CPU IC
+    # (whose L2 also has no protocol_overview → half_duplex_l2 is None, not
+    # False) ran the hard rx_/tx_ demand and false-FAILed. A genuine
+    # half-duplex L8 (rx_/tx_ groups, or symbol pulses in waveforms) is
+    # unaffected — its waveforms carry protocol tokens so it is NOT treated
+    # as empty.
     def _empty(key):
         v = waveform.get(key)
-        return not v  # None / [] / {} / 0 all count as empty
+        if not v:  # None / [] / {} / 0 all count as empty
+            return True
+        if key == "waveforms" and not _waveforms_carry_protocol_symbols(v):
+            return True  # generic WaveDrom diagram, no protocol symbols (#617)
+        return False
     # Only VACUOUS_PASS when there is genuinely NO protocol/symbol timing
     # content by ANY name. Besides the canonical containers (timing_windows /
     # timing_constants / waveforms), the gate's own check() also recognises
@@ -449,7 +493,8 @@ def main() -> int:
                                 "waveforms")):
         msg = ("VACUOUS_PASS: L8_TIMING_WAVEFORM carries no symbol/protocol "
                "timing content (timing_windows / timing_constants / waveforms "
-               "all empty) — RX/TX timing-split rule is N/A for this "
+               "all empty, or waveforms is a generic diagram with no rx_/tx_ "
+               "symbol groups) — RX/TX timing-split rule is N/A for this "
                "non-protocol IC.")
         if args.json:
             txt = json.dumps({
