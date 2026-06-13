@@ -63,24 +63,26 @@ _DOC = """# 外部介面
 """
 
 # RTL top WITHOUT the doc-optional `i_gpio` (the legal omission the
-# round-4 reopen exercised) but WITH both alias spellings the doc
-# declares via `(or ...)` annotations.
+# round-4 reopen exercised). ORGANIC #610 — uses the CANONICAL spelling of
+# each `name (or alt)` port (`o_sram_data` / `i_sram_data`), NOT the alternate
+# spelling. The `(or ...)` annotation documents ONE port under an equivalent
+# alias, so the corrected L9 carries a single canonical top-level port (not a
+# duplicate); a realistic RTL declares that one port, never two redundant
+# data ports. (Pre-#610 this fixture declared BOTH spellings to match the old
+# alias double-promotion bug.)
 _RTL = """module chip_top(
   input  wire i_clk,
   input  wire i_rst,
   output wire o_gpio,
   output wire [9:0] o_sram_addr,
   output wire [7:0] o_sram_data,
-  output wire [7:0] o_sram_wdata,
   input  wire [7:0] i_sram_data,
-  input  wire [7:0] i_sram_rdata,
   output wire o_sram_we,
   output wire o_sram_cyc
 );
   assign o_gpio = 1'b0;
   assign o_sram_addr = 10'h0;
   assign o_sram_data = 8'h0;
-  assign o_sram_wdata = 8'h0;
   assign o_sram_we = 1'b0;
   assign o_sram_cyc = 1'b0;
 endmodule
