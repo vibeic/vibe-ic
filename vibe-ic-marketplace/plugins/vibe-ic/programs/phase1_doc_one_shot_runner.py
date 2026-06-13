@@ -30099,6 +30099,34 @@ def _v1_6_606_is_data_movement_to(text: str, m: "re.Match") -> bool:
     clause = re.split(r"[.;:\n]", clause)[-1]
     return bool(_V1_6_606_DATA_MOVE_VERB_RE.search(clause))
 
+
+# ORGANIC #625 — English transition / control VERBS that the state-to-state
+# walker's `<from> to <to>` regex captures as the from-endpoint when an FSM is
+# described in ordinary prose ("the FSM transitions to LOAD", "RUN returns to
+# IDLE"). These are sentence grammar, never FSM state identifiers. Matched as
+# the WHOLE normalised from-token (exact membership) so a real compound state
+# like RETURN_STATE / GO_WAIT is NOT rejected — only the bare verb form is.
+_V1_6_625_TRANSITION_VERBS = frozenset({
+    "TRANSITIONS", "TRANSITION", "RETURNS", "RETURN", "WHEN", "GOES", "GO",
+    "MOVES", "MOVE", "PROCEEDS", "PROCEED", "ENTERS", "ENTER", "ADVANCES",
+    "ADVANCE", "THEN", "NEXT",
+})
+
+
+def _v1_6_625_is_transition_verb_from(m: "re.Match") -> bool:
+    """ORGANIC #625 — True iff a `_V1_6_484_FSM_STATE_TO_STATE_RE` match uses the
+    BARE WORD operator `to` (not an arrow) AND the FROM-endpoint is a bare
+    English transition/control verb (TRANSITIONS / RETURNS / GOES / MOVES /
+    WHEN / …) — i.e. the sentence's verb captured as a state name, not a real
+    state. Used to suppress ONLY the from-endpoint; the to-endpoint (the
+    transition OBJECT) and arrow-form matches are never suppressed, so a real
+    state named GO / RETURN_STATE / WAIT in object or arrow position survives.
+    chip-AGNOSTIC: grammar-role + verb deny-list, no chip name."""
+    op = m.group(0)
+    if "->" in op or "→" in op or "=>" in op:
+        return False  # arrow notation — both endpoints are real states
+    return m.group("from_state").upper() in _V1_6_625_TRANSITION_VERBS
+
 # v1.6.498 — for #349 R5. List-form FSM declaration walker.
 # Real benchmark debug-spec txt files declare FSM states in
 # list-form prose ("is in one of N states: ``a``, ``b``, ... or ``z``")
@@ -30816,10 +30844,17 @@ def gen_l6_control_logic(project: Path,
             if not _v1_6_484_prose_fsm_window_has_anchor(
                     text, m.start()):
                 continue
-            _v1_6_484_add_prose_state(
-                m.group("from_state"), fname,
-                "prose state-to-state v1.6.484",
-            )
+            # ORGANIC #625 — when the operator is the bare word `to` and the
+            # from-endpoint is a bare English transition verb (TRANSITIONS /
+            # RETURNS / GOES / …), it is the sentence's verb, not a state —
+            # suppress ONLY that from-endpoint. The to-endpoint (the transition
+            # OBJECT, e.g. `... transitions to LOAD`) is ALWAYS promoted, and
+            # arrow-form matches keep both endpoints, so real states survive.
+            if not _v1_6_625_is_transition_verb_from(m):
+                _v1_6_484_add_prose_state(
+                    m.group("from_state"), fname,
+                    "prose state-to-state v1.6.484",
+                )
             _v1_6_484_add_prose_state(
                 m.group("to_state"), fname,
                 "prose state-to-state v1.6.484",
