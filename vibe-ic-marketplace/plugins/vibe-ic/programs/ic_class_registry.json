@@ -176,6 +176,7 @@
     },
     {
       "name": "digital_arithmetic_primitive",
+      "sparse_control_timing": true,
       "description": "v1.6.522 — for #358 P2. Pure digital data-transform IP (multiplier, adder, filter, hash core, encoder/decoder, arithmetic sub-block). No SW-visible protocol / register map / calibration. Single top module with clock + reset + data ports. L4/L5/L6 legitimately N/A — L2 describes a deterministic combinational/sequential data transform. Phase 2 runner dispatches via fallback_skill=spec-to-rtl since there is no deterministic RTL generator for this open family.",
       "synonyms": [
         "digital_datapath",
@@ -196,6 +197,7 @@
     },
     {
       "name": "processor_cpu",
+      "sparse_control_timing": true,
       "description": "v1.6.523 — CPU / processor core / SoC with a memory-bus / data top (instruction-fetch, load/store, register file). No SW-visible half-duplex command protocol on a single-wire bus and no analog content. The AID 3-port (clk/reset_n/id_bus) reference TB cannot bind a memory-bus top, so Phase 2 verification runs the generic full-stack TB driven from L9.top_ports + gate-level synth + Phase 3 instead. RTL gen via fallback_skill / IP-catalog glue (open-source RISC-V / SoC cores).",
       "synonyms": [
         "cpu",
@@ -242,6 +244,7 @@
     },
     {
       "name": "crypto_accelerator",
+      "sparse_control_timing": true,
       "description": "ORGANIC #542 — Cryptographic accelerator IP: hardware implementation of AES, SHA, HMAC, ECC, ChaCha or similar. Typically pairs an algorithm data-path with a SW-accessible register interface for key loading, control, and status. Distinguishable by algorithm-domain vocabulary (encrypt/decrypt, key schedule, S-box, digest, IV/nonce) plus register-map features. Takes priority over bus_peripheral when crypto algorithm evidence is present.",
       "synonyms": [
         "aes_core",
