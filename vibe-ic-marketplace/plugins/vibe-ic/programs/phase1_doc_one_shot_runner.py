@@ -30065,6 +30065,40 @@ _V1_6_484_FSM_INIT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ORGANIC #606 — register / address-map identifier shape. Data-movement /
+# register-map prose ("write X to ADDR_BLOCKn", "the CTRL_REG holds …") can
+# leak register / address-map names into the FSM prose walker. Real FSM states
+# never carry these naming conventions, so a candidate matching this shape is
+# rejected from the FSM-state set on EVERY walker path. Chip-AGNOSTIC: pure
+# register/address-map naming grammar, no chip/register literal.
+_V1_6_606_REGMAP_NAME_RE = re.compile(
+    r"(?:^ADDR[_0-9]|_ADDR$|^REG_|_REG$|_REGISTER$|^OFFSET_)", re.IGNORECASE)
+# Data-movement verbs that introduce a "<noun> to <ADDR/REG>" dataflow clause
+# (as opposed to an FSM "<STATE> to <STATE>" transition). Used only to gate the
+# BARE-WORD `to` operator of the state-to-state walker; arrow operators
+# (-> / → / =>) — the real FSM-diagram notation — are never gated.
+_V1_6_606_DATA_MOVE_VERB_RE = re.compile(
+    r"\b(?:write|writes|read|reads|move|moves|copy|copies|store|stores|"
+    r"load|loads|send|sends|fetch|fetches|transfer|transfers|push|pushes|"
+    r"pop|pops|put|puts)\b", re.IGNORECASE)
+
+
+def _v1_6_606_is_data_movement_to(text: str, m: "re.Match") -> bool:
+    """ORGANIC #606 — True iff a `_V1_6_484_FSM_STATE_TO_STATE_RE` match uses
+    the BARE WORD operator `to` (not an arrow) AND a data-movement verb
+    precedes the from-endpoint within the same clause — i.e. the match is a
+    data-movement sentence ('write 512-bit block to ADDR_BLOCK0'), NOT an FSM
+    transition. Arrow-operator matches (`->` / `→` / `=>`, the real FSM-diagram
+    notation) are never treated as data-movement. Chip-AGNOSTIC."""
+    op = m.group(0)
+    if "->" in op or "→" in op or "=>" in op:
+        return False  # explicit arrow notation — a real FSM transition
+    start = m.start("from_state")
+    clause = text[max(0, start - 60):start]
+    # stay inside the same clause (cut at the nearest boundary)
+    clause = re.split(r"[.;:\n]", clause)[-1]
+    return bool(_V1_6_606_DATA_MOVE_VERB_RE.search(clause))
+
 # v1.6.498 — for #349 R5. List-form FSM declaration walker.
 # Real benchmark debug-spec txt files declare FSM states in
 # list-form prose ("is in one of N states: ``a``, ``b``, ... or ``z``")
@@ -30642,6 +30676,12 @@ def gen_l6_control_logic(project: Path,
         to dict-field readers."""
         if not name:
             return
+        # ORGANIC #606 — reject register / address-map identifiers the prose
+        # walker can latch from data-movement sentences ("write X to
+        # ADDR_BLOCKn"). Applied on EVERY walker path (canonical-vocab bypass
+        # AND fall-through), since a register name never names a real FSM state.
+        if _V1_6_606_REGMAP_NAME_RE.search(name):
+            return
         nm = name.upper()
         if nm in _V1_6_484_FSM_STATE_VOCAB:
             # Manually run the bypass path: replicate the rest of
@@ -30764,6 +30804,14 @@ def gen_l6_control_logic(project: Path,
         # existing anchor check (the v1.6.484 contract is unchanged).
         for m in _V1_6_484_FSM_STATE_TO_STATE_RE.finditer(text):
             if not _v1_6_496_state_match_acceptable(text, m):
+                continue
+            # ORGANIC #606 — a BARE-WORD `to` preceded by a data-movement verb
+            # is a dataflow sentence ("write block to ADDR_BLOCK0"), not an FSM
+            # transition — skip the whole match so neither endpoint (the data
+            # noun NOR the address-map target) is promoted as an FSM state.
+            # Arrow-operator matches are unaffected (real FSM diagrams use `->`
+            # / `→` / `=>`).
+            if _v1_6_606_is_data_movement_to(text, m):
                 continue
             if not _v1_6_484_prose_fsm_window_has_anchor(
                     text, m.start()):
