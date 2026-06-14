@@ -1824,14 +1824,77 @@ def _v629_rtl_top_ports(project: Path,
             if ports:
                 # parse_module_ports only yields ANSI ports carrying a
                 # direction keyword; a parameter (in the `#()` block) is never
-                # here. Keep the RTL order.
-                out: List[Tuple[str, str]] = []
+                # here. Keep the RTL order. ORGANIC #643 — preserve the port
+                # WIDTH (the `[msb:lsb]` cell) so the TB declares a multi-bit
+                # bus at its real width (a 32-bit `wbs_dat_i` declared 1-bit
+                # made the connectivity TB uncompilable).
+                out: List[Tuple[str, str, str]] = []
                 for d, _w, n in ports:
                     if n:
-                        out.append(((d or "input").strip().lower(), n))
+                        out.append(((d or "input").strip().lower(), n,
+                                    (_w or "").strip()))
                 if out:
                     return out
     return []
+
+
+# ORGANIC #643 — TB-emit safety guards for SoC-class wrappers (multi-bit
+# buses + power pins). chip-AGNOSTIC: legal-identifier shape, generic
+# power-rail vocabulary, and a width prefix derived from the parsed RTL /
+# L9 — no chip / vendor / SKU literal.
+_V643_LEGAL_ID_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+_V643_POWER_PIN_RE = re.compile(
+    r"^(?:v(?:ccd|ssd|dda|ssa|pwr|gnd|dd|ss|bat|ccio|ssio|ddpst|ddio)|"
+    r"vpb|vnb|gnd|dvdd|dvss|avdd|avss)\w*$",
+    re.IGNORECASE)
+
+
+def _v643_legal_verilog_id(nm: str) -> bool:
+    """ORGANIC #643 — True iff `nm` is a legal Verilog identifier. The TB gen
+    must NEVER emit an illegal id: a corrupted L9 port name (e.g. one carrying
+    a '/' — companion #644 fixes the L9 source) would otherwise make the WHOLE
+    connectivity TB uncompilable (rc!=0), cascading to block ~25 downstream
+    Phase-2/3 steps."""
+    return bool(_V643_LEGAL_ID_RE.match(nm or ""))
+
+
+def _v643_is_power_pin(p: dict, nm: str) -> bool:
+    """ORGANIC #643 — True iff the port is a POWER / ground rail (L9
+    io=='POWER'/'GROUND', or a generic power-rail name like vccd1 / vssd1 /
+    vdda / vgnd). Such an inout is TIED (left undriven for `USE_POWER_PINS`),
+    never driven as stimulus. chip-AGNOSTIC: generic power vocabulary."""
+    io = str(p.get("io") or p.get("io_type") or p.get("pin_type")
+             or "").strip().upper()
+    if io in ("POWER", "GROUND", "SUPPLY", "PWR", "GND"):
+        return True
+    return bool(_V643_POWER_PIN_RE.match(nm or ""))
+
+
+def _v643_width_decl(p: dict) -> str:
+    """ORGANIC #643 — the ` [msb:lsb]` width prefix for a port declaration, or
+    "" for a 1-bit port. Prefers the RTL-parsed `width_decl` cell (`[31:0]`),
+    else builds it from L9 `msb`/`lsb` or `width`. A multi-bit bus declared
+    1-bit (the pre-#643 behaviour) made the TB uncompilable on a real SoC
+    wrapper."""
+    wd = p.get("width_decl")
+    if isinstance(wd, str) and wd.strip():
+        # ORGANIC #643 — ONLY a CONSTANT numeric width may be emitted into the
+        # TB scope. A PARAMETERIZED width (`[size-1:0]`) references a parameter
+        # not visible in the TB and would fail elaboration ("Dimensions must be
+        # constant"); fall through to the 1-bit declaration (compiles with a
+        # benign port-width padding warning), preserving the pre-#643 behaviour
+        # for parameterized datapath tops.
+        m = re.match(r"^\[\s*(\d+)\s*:\s*(\d+)\s*\]$", wd.strip())
+        if m:
+            return f" [{m.group(1)}:{m.group(2)}]"
+        return ""
+    msb, lsb = p.get("msb"), p.get("lsb")
+    if isinstance(msb, int) and isinstance(lsb, int) and msb != lsb:
+        return f" [{msb}:{lsb}]"
+    w = p.get("width")
+    if isinstance(w, int) and w > 1:
+        return f" [{w - 1}:0]"
+    return ""
 
 
 def step_full_stack_tb_gen(project: Path,
@@ -1888,7 +1951,7 @@ def step_full_stack_tb_gen(project: Path,
     if _rtl_ports:
         _l9_names = {(_p.get("name") or "").strip()
                      for _p in top_ports if isinstance(_p, dict)}
-        _rtl_names = {n for _d, n in _rtl_ports}
+        _rtl_names = {n for _d, n, _w in _rtl_ports}
         if _l9_names != _rtl_names:
             _dropped = sorted(_rtl_names - _l9_names)
             _phantom = sorted(_l9_names - _rtl_names)
@@ -1897,7 +1960,10 @@ def step_full_stack_tb_gen(project: Path,
                 f"missing-from-L9={_dropped}, not-in-RTL={_phantom}; the "
                 f"upstream Phase-1 extraction is the real defect, NOT an RTL "
                 f"structural fault)")
-        top_ports = [{"name": n, "direction": d} for d, n in _rtl_ports]
+        # ORGANIC #643 — carry the parsed RTL width (`[msb:lsb]` cell) so the
+        # declaration loop below emits a multi-bit bus at its real width.
+        top_ports = [{"name": n, "direction": d, "width_decl": w}
+                     for d, n, w in _rtl_ports]
 
     sim_dir = _pl.sim_full_stack_dir(project)
     sim_dir.mkdir(parents=True, exist_ok=True)
@@ -1964,27 +2030,49 @@ def step_full_stack_tb_gen(project: Path,
     decl_lines: List[str] = []
     inst_args: List[str] = []
     inout_names: List[str] = []
+    _v643_skipped_illegal: List[str] = []
     for p in top_ports:
         if not isinstance(p, dict):
             continue
         nm = (p.get("name") or "").strip()
         if not nm:
             continue
+        # ORGANIC #643 — NEVER emit an illegal Verilog identifier. A corrupted
+        # L9 port name (e.g. a '/' in the name) cannot bind to any RTL port and
+        # would make the whole TB uncompilable; skip it (companion #644 fixes
+        # the L9 source).
+        if not _v643_legal_verilog_id(nm):
+            _v643_skipped_illegal.append(nm)
+            continue
         direction = (p.get("direction") or p.get("mode") or "input").lower()
+        # ORGANIC #643 — declare every port at its REAL width (`[msb:lsb]`),
+        # from the parsed RTL surface or L9; a multi-bit bus declared 1-bit was
+        # the dominant uncompilable-TB defect on SoC wrappers.
+        w = _v643_width_decl(p)
         if nm in ("clk", "reset_n"):
             inst_args.append(f"    .{nm}({nm})")
             continue
+        # ORGANIC #643 — a POWER / ground inout is TIED (left undriven for
+        # USE_POWER_PINS), never driven as connectivity stimulus.
+        if direction == "inout" and _v643_is_power_pin(p, nm):
+            decl_lines.append(
+                f"  wire{w} {nm};  // power/ground pin — tied, not driven "
+                f"(#643, USE_POWER_PINS)")
+            inst_args.append(f"    .{nm}({nm})")
+            continue
         if direction == "input":
-            decl_lines.append(f"  reg {nm} = 0;")
+            decl_lines.append(f"  reg{w} {nm} = 0;")
             inst_args.append(f"    .{nm}({nm})")
         elif direction == "inout":
-            decl_lines.append(f"  wire {nm};")
-            decl_lines.append(f"  reg {nm}_drive = 1'bz;")
+            decl_lines.append(f"  wire{w} {nm};")
+            # `'bz` is the width-safe unsized high-Z fill (a multi-bit reg
+            # initialised `= 1'bz` only sets bit 0 — a width defect).
+            decl_lines.append(f"  reg{w} {nm}_drive = 'bz;")
             decl_lines.append(f"  assign {nm} = {nm}_drive;")
             inst_args.append(f"    .{nm}({nm})")
             inout_names.append(nm)
         else:
-            decl_lines.append(f"  wire {nm};")
+            decl_lines.append(f"  wire{w} {nm};")
             inst_args.append(f"    .{nm}({nm})")
 
     lines.extend(decl_lines)
