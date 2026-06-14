@@ -1411,6 +1411,16 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
                    ``__VACUOUS_HINT__:`` sentinel so check_step
                    promotes the step to the VACUOUS_PASS verdict tier
                    instead of plain PASS.
+      * rc == 3  → PASS_WITH_WAIVERS — the #651 waiver convention used by
+                   `tapeout_signoff_check` (signoff_audit) when the tapeout
+                   threshold was met but a DRC/LVS slot was credited via a
+                   waiver. The snippet is prefixed with the `__WAIVER_HINT__:`
+                   sentinel so check_step promotes the step to WAIVED-DEFERRED
+                   (→ Overall PASS_WITH_WAIVERS) instead of a bare PASS. Only
+                   honoured when the program ALSO printed the
+                   `PASS_WITH_WAIVERS` stdout sentinel — a bare rc=3 with no
+                   sentinel stays a FAIL (an unrelated program's exit 3 is
+                   never silently waived).
       * rc == 1  → FAIL
       * other    → FAIL
     """
@@ -1438,6 +1448,14 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
             # Treat as vacuous pass — surface the program command so
             # reviewers know which gate vacuously passed.
             return True, f"{_VACUOUS_HINT_PREFIX}{cmd_str}"
+        if (r.returncode == _WAIVER_EXIT_CODE
+                and _stdout_signals_waiver(r.stdout)):
+            # #651 — PASS_WITH_WAIVERS: the gate passed its threshold but a
+            # slot was credited via a waiver. Promote to WAIVED-DEFERRED (not
+            # bare PASS) so the WITH_WAIVERS distinction survives the rc-only
+            # gate. Requires the stdout sentinel too, so a stray rc=3 from an
+            # unrelated program is NOT silently waived.
+            return True, f"{_WAIVER_HINT_PREFIX}{cmd_str}"
         return False, snippet
     except subprocess.TimeoutExpired:
         # #525 — a timeout is NOT a verdict: the gate program was killed
@@ -1477,6 +1495,31 @@ _SKIP_HINT_PREFIX = "__SKIP_HINT__: "
 # Verdict tokens (normalised upper, `_`→`-`) that count as an honest skip.
 _SELF_SKIP_VERDICTS = frozenset({"SKIP", "SKIPPED", "SKIPPED-CONDITION"})
 
+# #651 — PASS_WITH_WAIVERS hint. A `program_exit_zero` gate program (notably
+# `tapeout_signoff_check` = signoff_audit --mode tapeout) signals "I PASSED
+# the threshold but a slot was credited via a WAIVER" by BOTH:
+#   * exiting with rc == _WAIVER_EXIT_CODE (3), AND
+#   * printing a line starting with _WAIVER_STDOUT_SENTINEL.
+# When both fire, check_step promotes the step to WAIVED-DEFERRED (counted as
+# a waiver, never a bare PASS) so the Overall verdict resolves to
+# PASS_WITH_WAIVERS — carrying the distinction the rc-only gate used to lose
+# (CLAUDE.md rule 11). Requiring BOTH the rc AND the sentinel keeps an
+# unrelated rc-3 program from being mis-promoted into a waiver.
+_WAIVER_HINT_PREFIX = "__WAIVER_HINT__: "
+_WAIVER_EXIT_CODE = 3
+_WAIVER_STDOUT_SENTINEL = "PASS_WITH_WAIVERS"
+
+
+def _stdout_signals_waiver(snippet: str) -> bool:
+    """Return True iff the program's combined stdout/stderr snippet contains
+    a `PASS_WITH_WAIVERS` token at line-start (leading whitespace allowed)."""
+    if not snippet:
+        return False
+    for line in snippet.splitlines():
+        if line.lstrip().startswith(_WAIVER_STDOUT_SENTINEL):
+            return True
+    return False
+
 
 def _stdout_signals_vacuous(snippet: str) -> bool:
     """Return True iff the program's combined stdout/stderr snippet
@@ -1505,10 +1548,45 @@ def _run_yosys_gates(project: Path) -> tuple[bool, List[str]]:
     """
     ys_path = _find_synth_ys(project)
     if ys_path is None:
-        # No .ys file at all — not a FAIL because flows without Yosys are
-        # legitimate (e.g. Cadence Genus or GlobalFoundries flows). The
-        # wider flow_compliance_check still catches a missing netlist
-        # via step 9's required_outputs.
+        # No .ys file — the project may still have synthesised via the
+        # runner's inline `yosys -p '<cmds>'` path (no .ys script). ORGANIC
+        # #649: returning an unconditional PASS here structurally BYPASSED
+        # the hilomap / -flatten conformance check for EVERY inline-yosys
+        # flow (the gate emitted VACUOUS_PASS and PnR could ship a netlist
+        # missing tie cells that detailed_route then crashes on, DRT-0305).
+        #
+        # Extract the ACTUAL inline command yosys echoed into
+        # phase{2,3}/stage2/synth/{yosys,synth}.log and verify hilomap /
+        # -flatten conformance against THAT command. A real-PDK inline synth
+        # (binds a Liberty library) that runs hilomap → PASS; one missing
+        # hilomap → FAIL (not VACUOUS_PASS). A simulation-only inline synth
+        # (no Liberty) legitimately waives hilomap. chip-AGNOSTIC.
+        if str(PROGRAMS_DIR) not in sys.path:
+            sys.path.insert(0, str(PROGRAMS_DIR))
+        try:
+            from _yosys_inline_mode_detect import audit_inline_yosys
+        except Exception:
+            # Detector unavailable (incomplete install): fall back to the
+            # pre-#649 behaviour rather than hard-erroring the whole flow.
+            return True, []
+        verdict, evidence_logs, inline_reasons = audit_inline_yosys(project)
+        if verdict == "FAIL":
+            reasons = [
+                "FAIL: inline `yosys -p` real-PDK synthesis command "
+                "(extracted from the runner's synth log) is non-conformant "
+                "— PnR will crash at detailed_route with DRT-0305 'zero_ "
+                "GROUND' on the unmapped tie net (CLAUDE.md rule 4)."
+            ]
+            reasons.extend(f"    {r}" for r in inline_reasons)
+            return False, reasons
+        # verdict in {"PASS", "NO_INLINE_COMMAND"}:
+        #   PASS              — inline command verified conformant (or only a
+        #                       sim-only inline synth ran); no .ys to audit.
+        #   NO_INLINE_COMMAND — no inline yosys command was echoed at all;
+        #                       flows without Yosys are legitimate (Cadence
+        #                       Genus / GF flows), and the wider
+        #                       flow_compliance_check still catches a missing
+        #                       netlist via step 9's required_outputs.
         return True, []
 
     reasons: List[str] = []
@@ -2562,6 +2640,11 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
             # Wave 93 — bubble the rc=2 vacuous signal up so check_step
             # promotes the step's status to VACUOUS_PASS instead of PASS.
             reasons.append(out)
+        elif out.startswith(_WAIVER_HINT_PREFIX):
+            # #651 — bubble the rc=3 PASS_WITH_WAIVERS signal up so check_step
+            # promotes the step's status to WAIVED-DEFERRED instead of a bare
+            # PASS, carrying the WITH_WAIVERS distinction to the Overall verdict.
+            reasons.append(out)
         return passed, reasons
 
     # `json_field_true`
@@ -2628,6 +2711,10 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
                 return False, reasons
             for hint in r:
                 if hint.startswith(_VACUOUS_HINT_PREFIX):
+                    reasons.append(hint)
+                elif hint.startswith(_WAIVER_HINT_PREFIX):
+                    # #651 — a PASS_WITH_WAIVERS sub-gate makes the whole
+                    # all_of step WAIVED-DEFERRED (carried via the hint).
                     reasons.append(hint)
         return True, reasons
 
@@ -3575,10 +3662,29 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         # promoted from __VACUOUS_HINT__.
         skip_hints = [r for r in reasons
                       if r.startswith(_SKIP_HINT_PREFIX)]
+        # #651 — a gate program that PASSed-WITH-WAIVERS emits a
+        # __WAIVER_HINT__ marker; promote the step to WAIVED-DEFERRED so the
+        # Overall verdict resolves to PASS_WITH_WAIVERS, never a bare PASS.
+        waiver_hints = [r for r in reasons
+                        if r.startswith(_WAIVER_HINT_PREFIX)]
         non_hint_reasons = [r for r in reasons
                             if not r.startswith(_VACUOUS_HINT_PREFIX)
-                            and not r.startswith(_SKIP_HINT_PREFIX)]
-        if passed and skip_hints and not non_hint_reasons and not vacuous_hints:
+                            and not r.startswith(_SKIP_HINT_PREFIX)
+                            and not r.startswith(_WAIVER_HINT_PREFIX)]
+        if (passed and waiver_hints and not non_hint_reasons
+                and not skip_hints and not vacuous_hints):
+            # WAIVED here means "DEFERRED via waiver": it leaves the required
+            # denominator the same way an explicit waivers.json entry does and
+            # drives Overall → PASS_WITH_WAIVERS. The gate DID pass its
+            # threshold; the WITH_WAIVERS distinction is the whole point (#651).
+            result.status = "WAIVED"
+            for h in waiver_hints:
+                result.reasons.append(
+                    f"WAIVED-DEFERRED: gate program signalled PASS_WITH_WAIVERS "
+                    f"(#651 — a slot credited via a waiver, NOT a bare PASS; "
+                    f"production tapeout review must close it): "
+                    f"{h[len(_WAIVER_HINT_PREFIX):]}")
+        elif passed and skip_hints and not non_hint_reasons and not vacuous_hints:
             result.status = "SKIPPED-CONDITION"
             for h in skip_hints:
                 result.reasons.append(

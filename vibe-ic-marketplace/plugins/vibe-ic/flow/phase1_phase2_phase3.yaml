@@ -1283,6 +1283,14 @@ steps:
       - tapeout_signoff_check
     required_outputs:
       - "reports/audit/tapeout_checklist.json"
+    # #651 — `tapeout_signoff_check` (= signoff_audit --mode tapeout) carries
+    # the PASS_WITH_WAIVERS verdict tier in its EXIT CODE, not only inside the
+    # summary JSON: rc 0 = bare/absolute PASS, rc 1 = FAIL, rc 3 (+ a
+    # `PASS_WITH_WAIVERS` stdout sentinel) = PASS_WITH_WAIVERS. The rc-3 path
+    # is recognised by flow_compliance_check._check_program_exit_zero and
+    # promotes THIS step to WAIVED-DEFERRED, so a DRC-waived tapeout reports
+    # Overall: PASS_WITH_WAIVERS and never collapses onto a bare PASS
+    # (CLAUDE.md rule 11).
     gate:
       program_exit_zero: "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
     blocks_on: [31, 32, 33, 34]

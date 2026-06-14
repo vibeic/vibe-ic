@@ -27,8 +27,15 @@ Usage:
     python3 signoff_audit.py <project_dir> --mode flow --json out.json
 
 Exit codes:
-    0 = PASS (sufficient evidence found)
+    0 = PASS (sufficient evidence found, NO waivers — a bare/absolute PASS)
     1 = FAIL (insufficient evidence)
+    3 = PASS_WITH_WAIVERS (sufficient evidence, but at least one slot was
+        credited via a WAIVER — e.g. a DRC step waived because it was
+        100% stdcell-library-internal, or DRC/LVS ENV_UNAVAILABLE). A
+        distinct rc so the flow gate (`tapeout_signoff_check`, an rc-only
+        `program_exit_zero` predicate) can carry the WITH_WAIVERS
+        distinction instead of collapsing it onto a bare PASS. #651 /
+        CLAUDE.md rule 11: PASS_WITH_WAIVERS must NEVER read as bare PASS.
 
 No external tool dependencies -- pure Python.
 """
@@ -42,6 +49,19 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List
+
+# #651 — dedicated, documented exit code for the PASS_WITH_WAIVERS verdict
+# tier. Distinct from 0 (bare PASS) and 1 (FAIL); also distinct from the
+# flow-runner's rc=2 "VACUOUS/SKIP input-missing" convention so a waived
+# tapeout is NEVER misread as either a clean pass or a no-op skip.
+WAIVER_EXIT_CODE = 3
+
+# #651 — stdout sentinel printed (line-start) alongside rc=WAIVER_EXIT_CODE.
+# The flow gate (`flow_compliance_check._check_program_exit_zero`) promotes
+# a step to WAIVED-DEFERRED only when BOTH the rc AND this sentinel are
+# present, so an unrelated program that merely happens to exit 3 cannot be
+# mis-promoted into a waiver.
+WAIVER_STDOUT_SENTINEL = "PASS_WITH_WAIVERS:"
 
 
 def _resolve_threshold(default_strict: int, total: int) -> int:
@@ -537,6 +557,74 @@ MODE_MAP = {
 
 
 # ---------------------------------------------------------------------------
+# #651 — waivers.json waiver-entry emitter
+# ---------------------------------------------------------------------------
+# Canonical Step-36 (tapeout checklist) id in the phase1_phase2_phase3 flow.
+_TAPEOUT_STEP_ID = 36
+_TAPEOUT_WAIVER_TICKET = "ORGANIC-20260613-tapeout-drc-waiver"
+
+
+def _emit_tapeout_waiver_entry(project_dir: Path, result: "AuditResult") -> None:
+    """Record the tapeout DRC/LVS waiver in <project>/waivers.json so
+    flow_compliance_check counts the tapeout step as DEFERRED-via-waiver
+    (NOT executed-PASS). chip-AGNOSTIC: the entry is keyed on the structural
+    Step-36 id + the waiver evidence the auditor already gathered (which
+    DRC slot was waived and why), never on a chip/vendor literal.
+
+    The entry shape matches the `waived_steps[*]` schema flow_compliance_check
+    consumes: `id` + `reason`/`rationale` + `ticket` + `review_required:true`
+    + `evidence[]`. Idempotent: re-running signoff_audit will not duplicate
+    the entry, and an existing hand-authored waiver for the same step is left
+    untouched (it takes precedence).
+    """
+    summary = result.summary or {}
+    evidence_files = [f.file for f in result.findings
+                      if f.file and "WAIVED" in f.rule]
+    waiver_entry = {
+        "id": _TAPEOUT_STEP_ID,
+        "reason": ("tapeout sign-off reached the evidence threshold but a "
+                   "DRC/LVS slot was credited via a waiver "
+                   "(verdict_tier=PASS_WITH_WAIVERS) — NOT a bare/absolute "
+                   "PASS. Production tapeout review must close the waived "
+                   "slot before mask order (CLAUDE.md rule 11)."),
+        "ticket": _TAPEOUT_WAIVER_TICKET,
+        "review_required": True,
+        "approver": "tapeout-review-pending",
+        "evidence": evidence_files or ["reports/audit/tapeout_checklist.json"],
+        "verdict_tier": "PASS_WITH_WAIVERS",
+        "drc_library_internal_waived": bool(
+            summary.get("drc_library_internal_waived")),
+        "env_unavailable_steps": list(summary.get("env_unavailable_steps", [])),
+    }
+    wpath = project_dir / "waivers.json"
+    try:
+        if wpath.exists():
+            data = json.loads(wpath.read_text(errors="replace"))
+            if not isinstance(data, dict):
+                data = {}
+        else:
+            data = {}
+    except (json.JSONDecodeError, OSError):
+        # Do NOT clobber an existing-but-unreadable waivers.json; leave it
+        # for the human/flow-gate to surface as a schema error.
+        return
+    waived = data.get("waived_steps")
+    if not isinstance(waived, list):
+        waived = []
+    # Idempotent + precedence-preserving: if any entry already targets this
+    # step, leave it (a hand-authored waiver outranks this auto-entry).
+    for w in waived:
+        if isinstance(w, dict) and str(w.get("id")) == str(_TAPEOUT_STEP_ID):
+            return
+    waived.append(waiver_entry)
+    data["waived_steps"] = waived
+    try:
+        wpath.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    except OSError:
+        return
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def main(argv: list = None) -> int:
@@ -565,6 +653,25 @@ def main(argv: list = None) -> int:
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(report_json)
+
+    # #651 — verdict_tier is the authority for the exit code, not just
+    # `result.passed`. A PASS_WITH_WAIVERS run is STILL passing (it cleared
+    # the threshold) but at least one slot was credited via a waiver, so it
+    # must NOT collapse onto the same rc as a clean/absolute PASS — otherwise
+    # the rc-only flow gate (`tapeout_signoff_check`) reports a bare PASS and
+    # the WITH_WAIVERS distinction is lost (CLAUDE.md rule 11). The DRC slot
+    # being waived was already recorded in the verdict_tier; here we (a) print
+    # a line-start sentinel and (b) emit a waivers.json step entry so the
+    # waiver is also visible to flow_compliance_check's waiver accounting
+    # (counted DEFERRED, never as an executed-PASS).
+    verdict_tier = (result.summary or {}).get("verdict_tier", "")
+    if result.passed and verdict_tier == "PASS_WITH_WAIVERS":
+        _emit_tapeout_waiver_entry(project_dir, result)
+        print(f"{WAIVER_STDOUT_SENTINEL} tapeout sign-off passed WITH WAIVERS "
+              f"(verdict_tier=PASS_WITH_WAIVERS) — production tapeout review "
+              f"must close the waived slot(s) before mask order.")
+        print(report_json)
+        return WAIVER_EXIT_CODE
 
     print(report_json)
     return 0 if result.passed else 1
