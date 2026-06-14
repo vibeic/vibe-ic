@@ -2137,6 +2137,49 @@ _CLASS_SKIPPABLE_ANALOG_GATES: frozenset[str] = frozenset({
 })
 
 
+# ORGANIC-20260614 (#632) — structural-name prefixes that identify the
+# analog / mixed-signal sub-gates inside the P0 structural-RTL umbrella.
+# Derived from the canonical gate FILE names (analog_*, mixed_signal_*,
+# pdk_analog_*, spice_correlation_*), NOT from any chip / vendor / SKU
+# literal — so it auto-extends as new analog gates are registered in
+# `_STRUCTURAL_RTL_GATES` and stays chip-AGNOSTIC. This is the same
+# naming convention `_CLASS_SKIPPABLE_ANALOG_GATES` (above) already keys
+# off and that the A-step (A1..A9) suppression uses.
+_ANALOG_STRUCTURAL_GATE_PREFIXES: tuple[str, ...] = (
+    "analog_",
+    "mixed_signal_",
+    "pdk_analog_",
+    "spice_correlation_",
+)
+
+
+def _is_analog_structural_gate(gate_name: str) -> bool:
+    """True when `gate_name` is an analog / mixed-signal sub-gate of the
+    P0 structural-RTL umbrella (by canonical file-name prefix).
+
+    chip-AGNOSTIC: matches on the gate program's own name prefix, never
+    on a chip / vendor / SKU string. `_skip_analog_p0_gates()` filters
+    this against the registered `_STRUCTURAL_RTL_GATES` tuple so only
+    real, registered gates are ever returned.
+    """
+    return any(gate_name.startswith(p)
+               for p in _ANALOG_STRUCTURAL_GATE_PREFIXES)
+
+
+def _skip_analog_p0_gates() -> frozenset[str]:
+    """The set of analog / mixed-signal structural-RTL gates suppressed
+    by `--skip-analog` inside the P0 umbrella.
+
+    Derived from `_STRUCTURAL_RTL_GATES` (the single source of truth for
+    which gates the umbrella runs) by analog name-prefix — so it can
+    never name a gate that the umbrella does not actually run, and it
+    auto-extends when new analog gates are added. chip-AGNOSTIC.
+    """
+    return frozenset(
+        g for g in _STRUCTURAL_RTL_GATES if _is_analog_structural_gate(g)
+    )
+
+
 def _class_skipped_gates(project: Path) -> Dict[str, str]:
     """v1.6.523 — return {gate_name: skip_reason} for gates that are
     N/A for the detected IC class (chip-AGNOSTIC).
@@ -2304,7 +2347,8 @@ def _project_is_pure_analog(project: Path) -> Tuple[bool, str]:
 
 def _run_structural_rtl_gates(project: Path,
                               strict_timing: bool = False,
-                              allow_thin_input: bool = False
+                              allow_thin_input: bool = False,
+                              skip_analog: bool = False
                               ) -> tuple[bool, List[str], List[str], List[Dict[str, Any]]]:
     """v0.104: run all structural-RTL gates on the project's RTL directory.
 
@@ -2317,6 +2361,19 @@ def _run_structural_rtl_gates(project: Path,
     docs, FAILs from ``_THIN_INPUT_WAIVER_GATES`` are converted to
     waiver entries (recorded in ``waiver_entries``) instead of fails.
     Other gates' FAILs propagate normally.
+
+    ORGANIC-20260614 (#632) — when ``skip_analog=True`` the analog /
+    mixed-signal sub-gates of this umbrella (``_skip_analog_p0_gates()``)
+    are DOWNGRADED to a SKIP entry with a deferred-track reason instead
+    of being run / FAILed — mirroring the A-step (A1..A9) suppression in
+    ``check_step`` and the ``--skip-hardware`` FPGA-board downgrade. This
+    is the SAME mechanism the per-IC-class ``_class_skipped_gates`` skip
+    uses, so a deferred-analog digital deliverable can reach
+    PASS_WITH_WAIVERS while the analog track is an explicit deferred
+    open-work item (review_required at analog / foundry sign-off). The
+    NON-analog gates still run and still FAIL — the flag never relaxes a
+    digital floor (an empty / digital-only doc is unaffected; this only
+    changes how the analog sub-gates report under the explicit flag).
     """
     rtl_dir = None
     for candidate in ("phase2/stage1/rtl", "rtl", "src", "hdl"):
@@ -2350,12 +2407,24 @@ def _run_structural_rtl_gates(project: Path,
     # for the detected IC class SKIP with an explicit reason instead of
     # FAILing. Fail-closed: empty dict (unknown class) runs every gate.
     class_skips = _class_skipped_gates(project)
+    # ORGANIC-20260614 (#632) — --skip-analog suppression of the analog /
+    # mixed-signal sub-gates inside this umbrella. Only active when the
+    # flag is explicitly set; derived from `_STRUCTURAL_RTL_GATES` by
+    # analog name-prefix so it stays chip-AGNOSTIC and never names a
+    # gate the umbrella does not run.
+    analog_skip_gates = _skip_analog_p0_gates() if skip_analog else frozenset()
     for gate_name in _STRUCTURAL_RTL_GATES:
         prog = PROGRAMS_DIR / f"{gate_name}.py"
         if not prog.exists():
             continue
         if gate_name in class_skips:
             skips.append(f"{gate_name} (SKIP: {class_skips[gate_name]})")
+            continue
+        if gate_name in analog_skip_gates:
+            skips.append(
+                f"{gate_name} (SKIP: analog track deferred via "
+                "--skip-analog (review_required at analog / foundry "
+                "sign-off))")
             continue
         try:
             # v0.118 fix: pass `project` (not `rtl_dir`) so gates can
@@ -3953,6 +4022,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             project,
             strict_timing=getattr(args, "strict_timing", False),
             allow_thin_input=getattr(args, "allow_thin_input", False),
+            # ORGANIC-20260614 (#632) — thread --skip-analog into the P0
+            # umbrella the same way check_step receives it, so the analog
+            # sub-gates obey the flag instead of FAILing the umbrella for
+            # an explicitly-deferred analog track.
+            skip_analog=getattr(args, "skip_analog", False),
         )
         structural_waivers = s_waivers
         if s_fails or s_skips or s_waivers:

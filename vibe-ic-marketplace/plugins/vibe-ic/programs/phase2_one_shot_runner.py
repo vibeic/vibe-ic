@@ -2214,10 +2214,57 @@ def _iverilog_compile_with_sv_fallback(
             _docker_exec(container, f"rm -rf {stage}", timeout=30)
             return rc, out, err, "iverilog_g2012"
         container_sv.append(f"{stage}/{p.name}")
+    # ORGANIC #640 - mirror the #587 synth-frontend closure treatment in
+    # the reference-TB sv2v pre-pass. The canonical assertion-macro header
+    # (ifdef VERILATOR / elsif SYNTHESIS / else -> include
+    # "<standard-macros>.svh") is shipped in a SYNTHESIS-pruned REUSED-IP
+    # closure with ONLY the synthesis-arm dummy-macros .svh staged; the
+    # sim-arm standard-macros .svh is intentionally excluded. Pre-fix this
+    # path (a) staged NO .svh / package closure and passed NO -I, and
+    # (b) hardcoded -DSIMULATION, so the else arm took, included a
+    # never-staged header, and sv2v died at the lexer before any parsing,
+    # even though the IDENTICAL closure converts clean under -DSYNTHESIS.
+    # (1) Gather + stage the .svh/.vh/.h + *_pkg.* closure that lives next
+    #     to the RTL sources, then pass -I <stage> so `include resolves.
+    rtl_src_dirs: List[Path] = []
+    _seen_dirs: set = set()
+    for p in rtl_files:
+        d = p.parent
+        if str(d) not in _seen_dirs:
+            _seen_dirs.add(str(d))
+            rtl_src_dirs.append(d)
+    closure_extra: List[Path] = []
+    _seen_extra: set = set()
+    for d in rtl_src_dirs:
+        if not d.is_dir():
+            continue
+        for pat in ("*.svh", "*.vh", "*.h", "*_pkg.sv", "*_pkg.v"):
+            for hp in sorted(d.rglob(pat)):
+                rp = str(hp.resolve())
+                if (hp.is_file() and str(hp) not in
+                        {str(x) for x in rtl_files} and rp not in _seen_extra):
+                    _seen_extra.add(rp)
+                    closure_extra.append(hp)
+    for hp in closure_extra:
+        _run(["docker", "cp", str(hp), f"{container}:{stage}/{hp.name}"],
+             timeout=60)
+    # (2) Pick the sv2v define-set STRUCTURALLY (chip-AGNOSTIC): if the
+    #     `include closure has a hole under -DSIMULATION that -DSYNTHESIS
+    #     resolves cleanly, convert under -DSYNTHESIS so the staged arm is
+    #     selected. Otherwise keep -DSIMULATION (historical behaviour) so a
+    #     genuine missing-include / RTL defect still FAILs honestly.
+    _files_text: Dict[str, str] = {}
+    for fp in list(sv_files) + closure_extra:
+        try:
+            _files_text[str(fp)] = fp.read_text(errors="replace")
+        except OSError:
+            continue
+    sv2v_define, define_reason = _sf.decide_sv2v_tb_define(_files_text)
     conv_c = f"{stage}/_sv2v_converted.v"
     sv2v_cmd = (
         f"cd {stage} && export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
-        f"sv2v -DSIMULATION {' '.join(container_sv)} > {conv_c} 2>sv2v.err")
+        f"sv2v -D{sv2v_define} -I {stage} {' '.join(container_sv)} "
+        f"> {conv_c} 2>sv2v.err")
     rc_s, out_s, err_s = _docker_exec(container, sv2v_cmd, timeout=300)
     converted_host = run_dir / "_sv2v_converted.v"
     if rc_s == 0:
@@ -2254,7 +2301,8 @@ def _iverilog_compile_with_sv_fallback(
     new_cmd.append(str(converted_host))
     rc2, out2, err2 = _run(new_cmd, cwd=run_dir, timeout=120)
     if rc2 == 0:
-        return rc2, (out2 + f"\n[sv2v fallback frontend: {fe_reason}]"), \
+        return rc2, (out2 + f"\n[sv2v fallback frontend: {fe_reason}]"
+                     f"\n[sv2v TB pre-pass: {define_reason}]"), \
             err2, "iverilog_sv2v"
     # sv2v-converted compile still failed → a genuine defect; return the
     # converted-attempt diagnostics so the caller's FAIL is informative.
@@ -4302,6 +4350,42 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         _autoemit_chip_top_if_needed()
     except Exception:
         pass  # non-fatal: yosys will still try and may succeed
+    # ORGANIC #639 — REUSED-IP / catalog-glue staging has no
+    # instantiation-closure pruning or duplicate-module dedup. A flat
+    # vendor RTL dump (no per-IP rtl_files manifest) stages every *.sv/*.v
+    # file, and vendor bundles ship DUPLICATE-MODULE defects (two source
+    # files declaring the same `module` name) that surface as a raw
+    # "duplicate definition" yosys-slang crash with NO diagnostic. Run the
+    # deterministic closure resolver on the staged set BEFORE the expensive
+    # elaborate; if it finds a duplicate-module bundle defect among the
+    # reachable closure of synth_top, FAIL early with the precise diagnosis
+    # (which file is canonical, which is the variant/shim to drop) instead
+    # of letting yosys crash opaquely. Chip-AGNOSTIC: pure SV
+    # instantiation-graph + filename-canonical heuristic, no vendor/IP/
+    # module literal. The PRUNE half is left advisory (we never auto-drop
+    # a staged file at synth time — that would risk dropping a needed dep);
+    # only the crash-preventing duplicate-module half hard-gates here.
+    try:
+        import catalog_glue_closure_resolver as _cg
+        _cg_report = _cg.resolve(synth_top, rtl_dir)
+        if _cg_report.get("verdict") == "DUPLICATE":
+            _dups = _cg_report.get("duplicates", [])
+            _msg = "; ".join(d["message"] for d in _dups[:8])
+            _prune_n = _cg_report.get("files_prunable", 0)
+            _prune_note = (
+                f" Closure also flags {_prune_n} staged file(s) NOT "
+                f"reachable from {synth_top} (over-broad set — "
+                f"consider pruning to the closure)." if _prune_n else "")
+            return StepResult(
+                "yosys_synth", "FAIL",
+                time.time() - t0,
+                (f"CATALOG_GLUE_CLOSURE (#639): vendor bundle "
+                 f"duplicate-module defect in the staged synth set — "
+                 f"yosys-slang would crash with a raw 'duplicate "
+                 f"definition' abort. {_msg}{_prune_note}"),
+                extras={"catalog_glue_closure": _cg_report})
+    except Exception:  # nosec — preflight is best-effort, never masks synth
+        pass
     # Stage stub OTP hex inside synth_dir so $readmemh resolves at synth.
     for stem in ("apple.hex", "otp_image.hex"):
         stub = synth_dir / stem

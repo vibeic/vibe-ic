@@ -146,3 +146,72 @@ def decide_iverilog_sv_fallback(
     return decide_synth_frontend(
         rtl_files, default_rc, default_artifact_exists, default_log,
         error_signatures=IVERILOG_SV_ERROR_SIGNATURES)
+
+
+def decide_sv2v_tb_define(
+    files_text: "dict[str, str]",
+    sim_define: str = "SIMULATION",
+    synth_define: str = "SYNTHESIS",
+) -> Tuple[str, str]:
+    """Pick the sv2v -D<define> for the reference-TB pre-pass so the
+    staged conditional-compilation arm actually resolves (ORGANIC #640).
+
+    The canonical vendor assertion-macro header (ifdef VERILATOR / elsif
+    SYNTHESIS / else -> include "<standard-macros>.svh") is frequently
+    shipped in a SYNTHESIS-pruned REUSED-IP closure with ONLY the
+    synthesis-arm dummy-macros .svh staged; the simulation-arm
+    standard-macros .svh is intentionally excluded. The TB pre-pass
+    historically hardcoded -DSIMULATION, which takes the else arm and
+    includes a file that was never staged, so sv2v dies at the lexer
+    ("Could not find file ...") before any parsing, even though the
+    IDENTICAL closure converts clean under -DSYNTHESIS (which the #587
+    synth-frontend path already uses, and which PASSes).
+
+    This decision is purely STRUCTURAL and chip-AGNOSTIC: it asks the
+    shared sv_package_closure_check.audit gate whether the include
+    closure resolves under the simulation define-set; if and ONLY IF the
+    sim define-set leaves an UNRESOLVED include hole that the synth
+    define-set instead resolves cleanly, flip to the synth define so the
+    staged arm is selected. There is NO chip/vendor/SKU/file string
+    literal in the logic; the only inputs are the closure-gate verdicts
+    under two abstract define-sets.
+
+    Returns (define, reason) where define is the chosen macro name
+    (default sim_define; the historical behaviour is preserved for every
+    closure that already resolves under simulation, so this NEVER masks a
+    genuine missing-include / RTL defect: when BOTH define-sets leave a
+    hole, or neither does, the sim define is kept and the honest failure
+    stands)."""
+    try:
+        import sv_package_closure_check as _cc
+    except Exception as exc:  # pragma: no cover - import guard
+        return sim_define, f"closure gate unavailable ({exc}); keep -D{sim_define}"
+
+    if not files_text:
+        # Empty input must NOT trigger a flip; an under-populated closure
+        # is itself a defect the honest failure should still surface.
+        return sim_define, f"no staged sources; keep -D{sim_define}"
+
+    try:
+        sim_report = _cc.audit(files_text, {sim_define})
+        synth_report = _cc.audit(files_text, {synth_define})
+    except Exception as exc:  # pragma: no cover - defensive
+        return sim_define, f"closure audit error ({exc}); keep -D{sim_define}"
+
+    sim_missing = sim_report.get("missing_includes") or []
+    synth_missing = synth_report.get("missing_includes") or []
+
+    # Flip ONLY when the simulation arm has an include hole AND the
+    # synthesis arm resolves that very closure cleanly (every include
+    # missing under -DSIMULATION is present under -DSYNTHESIS). If the
+    # synth arm ALSO leaves an include unresolved, the closure is genuinely
+    # under-staged; keep -DSIMULATION so the honest failure stands.
+    if sim_missing and not synth_missing:
+        return synth_define, (
+            f"-D{sim_define} leaves an include closure hole "
+            f"{sim_missing!r} that -D{synth_define} resolves "
+            f"(synthesis-pruned assertion-macro closure, #640); "
+            f"selecting -D{synth_define}")
+    return sim_define, (
+        f"-D{sim_define} include closure complete (or both arms "
+        f"under-staged); keep -D{sim_define}")

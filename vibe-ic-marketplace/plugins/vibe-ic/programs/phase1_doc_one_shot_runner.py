@@ -4324,6 +4324,295 @@ def _v0_3_2_emit_pins_from_gfm_tables(text: str):
             yield rec
 
 
+# ===========================================================================
+# Comportable-style interface harvester (#638)
+# ---------------------------------------------------------------------------
+# The auto-generated "Comportable" register-tool interface convention (used
+# by the OpenTitan-style REUSED-IP register-mapped accelerator class, and any
+# IP whose interface doc is emitted by `regtool --interfaces`) declares the
+# canonical top-level interface as a bullet block:
+#
+#     the module `<name>` has the following hardware interfaces defined
+#     - Primary Clock: `clk_i`
+#     - Other Clocks: `clk_edn_i`
+#     - Bus Device Interfaces (TL-UL): `tl`
+#     - Bus Host Interfaces (TL-UL): *none*
+#     - Peripheral Pins for Chip IO: *none*
+#     - Interrupts: *none*
+#
+# plus an "Inter-Module Signals" pipe-table whose DIRECTION is carried by an
+# `Act` (req / rcv / rsp / uni) role column rather than an input/output cell:
+#
+#     | Port Name | Package::Struct | Type    | Act | Width | Description |
+#     | tl        | tlul_pkg::tl    | req_rsp | rsp | 1     |             |
+#
+# Before #638 NONE of these were harvested into L1.pin_table / L9.top_ports:
+#   (a) no positive harvester existed for the clock/bus bullet block, so the
+#       primary clock(s) and the primary device bus were dropped entirely;
+#   (b) the GFM walker requires a name+direction header, but the Inter-Module
+#       table has no input/output column, so its `req_rsp`/`rsp` bus row was
+#       dropped (only the secondary "Other Signals" input/output table was
+#       picked up); and
+#   (c) the `<name>` token in the narrative intro sentence could leak as a
+#       phantom input port.
+#
+# This harvester closes (a)+(b) with a POSITIVE structural parse, and exposes
+# the intro module-name token so the caller can deny (c). Chip-AGNOSTIC: pure
+# Comportable doc-convention vocabulary (Primary/Other Clock(s), Bus
+# Device/Host Interfaces, Peripheral Pins, Interrupts, Act-role keywords); no
+# chip-class / SKU literal participates.
+# ===========================================================================
+
+# Comportable intro sentence: `the module `<name>` has the following hardware
+# interface(s)`. The name token (bold-or-plain backticked) is captured so the
+# narrative line-scan can deny promoting it as a phantom port.
+_RE_V638_COMPORTABLE_INTRO = re.compile(
+    r"the\s+module\s+\*{0,2}`(?P<name>[A-Za-z_][A-Za-z0-9_]{0,40})`\*{0,2}"
+    r"\s+has\s+the\s+following\s+hardware\s+interface",
+    re.IGNORECASE,
+)
+
+# One bullet line of the comportable interface block. The label classifies
+# the role (clock vs bus vs other); the value region carries one or more
+# backticked tokens (bold-or-plain) OR the sentinel `*none*`.
+_RE_V638_COMPORTABLE_BULLET = re.compile(
+    r"(?im)^\s*[-*+]\s+"
+    r"(?P<label>Primary\s+Clock|Other\s+Clocks?|"
+    r"Bus\s+(?:Device|Host)\s+Interfaces?|"
+    r"Peripheral\s+Pins(?:\s+for\s+Chip\s+IO)?|Interrupts?|"
+    r"Inter-?Module\s+Signals?)"
+    r"\s*(?:\([^)\n]{0,40}\))?\s*:\s*(?P<value>[^\n]*)$"
+)
+
+# A backticked identifier token inside a bullet value region (bold markup
+# tolerated on either side). Reused for the clock/bus bullets.
+_RE_V638_BACKTICK_TOKEN = re.compile(
+    r"\*{0,2}`(?P<tok>[A-Za-z_][A-Za-z0-9_]{0,40})`\*{0,2}"
+)
+
+# Inter-Module-Signals `Act` role column keywords. `req`/`rsp` denote a
+# bidirectional request/response (struct) bus port; `rcv` is an inbound
+# (received) signal; `uni` is a unidirectional signal whose direction the
+# `Act` value alone does not pin down. The `Type` column distinguishes a
+# `req_rsp` struct bus from a `uni` simple signal. Chip-AGNOSTIC: these are
+# the Comportable inter-signal-handling role keywords, not chip literals.
+_V638_ACT_TO_DIRECTION = {
+    "req": "inout",   # this module drives a request (struct bus master/dev)
+    "rsp": "inout",   # this module answers a request (struct bus device)
+    "rcv": "input",   # received (inbound)
+}
+
+
+def _v638_comportable_module_name(text: str):
+    """#638 — return the backticked module-name token from the Comportable
+    intro sentence (`the module `<name>` has the following hardware
+    interface...`), or None. Chip-AGNOSTIC: matched purely on the convention
+    sentence shape; the captured token is whatever the doc names."""
+    if not isinstance(text, str) or not text:
+        return None
+    m = _RE_V638_COMPORTABLE_INTRO.search(text)
+    return m.group("name") if m else None
+
+
+def _v638_comportable_interface_harvest(text: str):
+    """#638 — POSITIVE harvester for the Comportable interface bullet block
+    and the Inter-Module-Signals Act-role table. Yields canonical port
+    records ``{name, direction, width, description, source_row,
+    extraction_strategy}``.
+
+    Facet (a): the `Primary Clock` / `Other Clocks` bullets emit each
+    backticked token as an input clock port; the `Bus Device/Host
+    Interfaces (<proto>)` bullets emit each backticked token as an inout
+    (struct) bus port. The sentinel `*none*` and empty values emit nothing.
+    `Peripheral Pins` / `Interrupts` bullet tokens emit with suffix-inferred
+    direction (default input).
+
+    Facet (b): the `Inter-Module Signals` pipe-table — header carrying a
+    `Port Name` (name) column plus an `Act` (req/rcv/rsp/uni) role column —
+    emits the `req_rsp`/`rsp`/`req` bus row(s) (e.g. `tl`) as inout struct
+    ports. Rows whose `Act` role does not map to a direction are skipped
+    (never emitted with a null/fabricated direction).
+
+    Chip-AGNOSTIC: pure Comportable doc-convention vocabulary + pipe-table
+    grammar; no chip-class literal participates.
+    """
+    if not isinstance(text, str) or not text:
+        return
+
+    # ---- Facet (a): the clock / bus bullet block -----------------------
+    for bm in _RE_V638_COMPORTABLE_BULLET.finditer(text):
+        label = re.sub(r"\s+", " ", bm.group("label").strip().lower())
+        value = bm.group("value") or ""
+        # The `*none*` sentinel (and any empty value) means the interface
+        # is absent — emit nothing.
+        if not value.strip() or re.search(r"\*\s*none\s*\*", value, re.I):
+            continue
+        if label.startswith("inter") or label.startswith("inter-module"):
+            # Heading-only bullet; the table walker handles its rows.
+            continue
+        is_clock = "clock" in label
+        is_bus = label.startswith("bus ")
+        for tm in _RE_V638_BACKTICK_TOKEN.finditer(value):
+            tok = tm.group("tok")
+            if len(tok) < 2:
+                continue
+            if is_clock:
+                direction = "input"
+                strat = "comportable_clock_bullet_v638"
+            elif is_bus:
+                direction = "inout"
+                strat = "comportable_bus_bullet_v638"
+            else:
+                # Peripheral pins / interrupts — infer from RTL suffix,
+                # default input.
+                if _RE_DIR_SUFFIX_OUTPUT.search(tok):
+                    direction = "output"
+                elif _RE_DIR_SUFFIX_INOUT.search(tok):
+                    direction = "inout"
+                else:
+                    direction = "input"
+                strat = "comportable_iface_bullet_v638"
+            yield {
+                "name": tok,
+                "direction": direction,
+                "width": None,
+                "description": None,
+                "source_row": bm.group(0).strip()[:120],
+                "extraction_strategy": strat,
+            }
+
+    # ---- Facet (b): the Inter-Module-Signals Act-role table ------------
+    for roles, rows, _ncols in _v0_3_2_iter_gfm_act_tables(text):
+        name_i = roles["name"]
+        act_i = roles["act"]
+        type_i = roles.get("type")
+        width_i = roles.get("width")
+        desc_i = roles.get("description")
+        for cells in rows:
+            if name_i >= len(cells) or act_i >= len(cells):
+                continue
+            name, _opt, _al = _v0_3_4_sanitize_pin_name_cell(
+                cells[name_i] or "")
+            act = (cells[act_i] or "").strip(" *`").strip().lower()
+            if not name:
+                continue
+            if name.lower() in (
+                _V0_3_2_HEADER_NAME_TOKENS | {"port name", "port", "act",
+                                              "type", "package::struct"}
+            ):
+                continue
+            # The req_rsp struct bus rows (e.g. the `tl` TL-UL device port)
+            # are the load-bearing addition: they carry NO direction-suffix
+            # twin in the secondary "Other Signals" input/output table, so
+            # without this harvester the primary device bus is dropped
+            # entirely. `uni`-Type inter-signals, by contrast, are ALSO
+            # surfaced (direction-suffixed) by the Other-Signals table, so
+            # emitting their bare base name here would only create a
+            # duplicate base/suffixed pair. Restrict to the `req_rsp` struct
+            # bus rows. Chip-AGNOSTIC: the `req_rsp` Type keyword is the
+            # Comportable struct-bus convention, not a chip literal.
+            type_cell = ""
+            if type_i is not None and type_i < len(cells):
+                type_cell = (cells[type_i] or "").strip(" *`").strip().lower()
+            if type_cell != "req_rsp":
+                continue
+            direction = _V638_ACT_TO_DIRECTION.get(act)
+            if direction is None:
+                # An unrecognised Act value does not by itself pin a
+                # direction — skip rather than fabricate one.
+                continue
+            width_arg = None
+            if width_i is not None and width_i < len(cells):
+                wraw = (cells[width_i] or "").strip(" *`").strip()
+                if wraw.isdigit():
+                    width_arg = wraw
+            desc_arg = None
+            if desc_i is not None and desc_i < len(cells):
+                desc_arg = (cells[desc_i] or "").strip() or None
+            yield {
+                "name": name,
+                "direction": direction,
+                "width": width_arg,
+                "description": desc_arg,
+                "source_row": " | ".join(cells)[:120],
+                "extraction_strategy": "comportable_intermodule_act_v638",
+            }
+
+
+def _v638_classify_act_header(cells):
+    """#638 — map an Inter-Module-Signals header row to column roles.
+    Returns a dict with at least `name` + `act` indices (plus optional
+    `type` / `width` / `description`) or None. Requires BOTH a name column
+    (`Port Name`/`Name`/`Signal`/…) and an `Act` role column — this is what
+    distinguishes the Comportable inter-signal table from an ordinary
+    input/output port table. Chip-AGNOSTIC."""
+    if not cells:
+        return None
+    roles = {}
+    for i, raw in enumerate(cells):
+        cell = (raw or "").strip(" *`").strip().lower()
+        if not cell:
+            continue
+        if cell in _V0_3_2_HEADER_NAME_TOKENS and "name" not in roles:
+            roles["name"] = i
+        elif cell in {"port name", "port"} and "name" not in roles:
+            roles["name"] = i
+        elif cell == "act" and "act" not in roles:
+            roles["act"] = i
+        elif cell == "type" and "type" not in roles:
+            roles["type"] = i
+        elif cell in _V0_3_2_HEADER_WIDTH_TOKENS and "width" not in roles:
+            roles["width"] = i
+        elif cell in _V0_3_2_HEADER_DESC_TOKENS and "description" not in roles:
+            roles["description"] = i
+    if "name" not in roles or "act" not in roles:
+        return None
+    return roles
+
+
+def _v0_3_2_iter_gfm_act_tables(text: str):
+    """#638 — sibling of `_v0_3_2_iter_gfm_pin_tables` that yields the
+    Inter-Module-Signals tables (header with a name column + an `Act` role
+    column). Reuses the same block-detection grammar. Chip-AGNOSTIC."""
+    if not isinstance(text, str) or not text:
+        return
+    lines = text.split("\n")
+    n = len(lines)
+    i = 0
+    while i < n:
+        line = lines[i]
+        if (_v0_3_2_is_pipe_row(line)
+                and not _v0_3_2_is_sep_row(line)
+                and i + 1 < n
+                and _v0_3_2_is_sep_row(lines[i + 1])):
+            header_cells = _v0_3_2_split_pipe_cells(line)
+            roles = _v638_classify_act_header(header_cells)
+            ncols = len(header_cells)
+            rows = []
+            j = i + 2
+            while j < n:
+                rl = lines[j]
+                if not rl.strip():
+                    break
+                if not _v0_3_2_is_pipe_row(rl):
+                    break
+                if (j + 1 < n and _v0_3_2_is_sep_row(lines[j + 1])
+                        and not _v0_3_2_is_sep_row(rl)):
+                    break
+                if _v0_3_2_is_sep_row(rl):
+                    j += 1
+                    continue
+                rows.append(_v0_3_2_split_pipe_cells(rl))
+                j += 1
+                if len(rows) >= 256:
+                    break
+            if roles is not None and rows:
+                yield (roles, rows, ncols)
+            i = max(j, i + 2)
+            continue
+        i += 1
+
+
 # v1.6.463 — for #328 R2 ORGANIC. Cascade L1.pin_table[].description
 # into L9.top_ports[].description by exact name match. The v1.6.456
 # enricher fills L1.pin_table descriptions correctly (81 / 100 / 50 %
@@ -8190,6 +8479,27 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
                                 or len(name) > 24 or name in seen
                                 or name in alias_idents  # #610: alt-spelling
                                 or name.upper() in _PIN_PROSE_DENY
+                                # ORGANIC #628 — wire the #475 token-class
+                                # guards (SDC-directive / stdcell-library
+                                # SHAPE) into this backtick walker. A port-
+                                # context range opened over a PROSE bullet
+                                # (e.g. a heading whose text merely CONTAINS
+                                # the 'I/O' substring) would otherwise promote
+                                # `set_input_delay` / `set_output_delay` /
+                                # `sky130_fd_sc_hd` as phantom mode=input
+                                # ports. The correct rejectors already exist
+                                # (`_is_sdc_directive_token` /
+                                # `_is_stdcell_lib_shape_token` from #475) but
+                                # were not called on this code path. Use the
+                                # two SHAPE predicates directly (NOT the
+                                # broader `_is_real_port_token`, whose length
+                                # floor / version-code rules would drop the
+                                # #627 single-letter datapath ports a/b/q that
+                                # a port-table row legitimately carries).
+                                # chip-AGNOSTIC: pure SHAPE guards, no
+                                # chip/vendor literal.
+                                or _is_sdc_directive_token(name)
+                                or _is_stdcell_lib_shape_token(name)
                                 or _short_drop):
                             continue
                         seen.add(name)
@@ -8244,6 +8554,14 @@ def _v455_sanitize_and_merge_pins(pins: List[dict],
     kept: List[dict] = []
     for entry in pins:
         name = str(entry.get("name") or "")
+        # ORGANIC #628 — defence-in-depth: a backticked-interface pin
+        # carrying an SDC-directive / stdcell-library SHAPE (#475 token
+        # classes) is never a real top-level port, even if it reached
+        # this merge pass from another walker path. Drop it here too so
+        # the guard holds regardless of which extractor produced it.
+        # SHAPE-only predicates → chip-AGNOSTIC; no chip/vendor literal.
+        if _is_sdc_directive_token(name) or _is_stdcell_lib_shape_token(name):
+            continue
         if name.isupper() and name.isalpha():
             if name in _PIN_PROSE_DENY and name not in backticked:
                 continue  # ALL-CAPS English prose word — hallucination
@@ -17429,6 +17747,18 @@ def gen_l1_datasheet(project: Path,
     _v1_6_337_has_io_token = _v1_6_337_doc_has_io_standard_token(
         _v1_6_337_concat)
 
+    # #638 — collect the backticked module-name token(s) from any
+    # Comportable intro sentence ("the module `<name>` has the following
+    # hardware interface..."). The narrative line-scan must NOT promote
+    # this token as a phantom port. Lower-cased for case-insensitive deny.
+    # Chip-AGNOSTIC: the token is whatever the doc's convention sentence
+    # names — no chip-class literal is hard-coded.
+    _v638_module_name_deny: Set[str] = set()
+    for _v638_text in extracted.values():
+        _v638_mn = _v638_comportable_module_name(_v638_text)
+        if _v638_mn:
+            _v638_module_name_deny.add(_v638_mn.lower())
+
     # Look for pin table — any doc with input/output/inout/bidir keywords.
     # v1.6.266 — for #125 ORGANIC. `pin_index` maps name → index in
     # `pins` so a second emit can score against the first instead of
@@ -17872,6 +18202,26 @@ def gen_l1_datasheet(project: Path,
                 ev.append({
                     "literal": (_row_v032.get("source_row") or "")[:120],
                     "label": "pin (GFM multi-table header-role)"})
+        # #638 — Comportable interface bullet block (Primary/Other Clocks +
+        # Bus Device/Host Interfaces) and the Inter-Module-Signals Act-role
+        # table (e.g. the `tl` req_rsp/rsp bus row). Neither shape carries an
+        # input/output direction cell, so the GFM walker above never sees
+        # them — this POSITIVE harvester emits them with role-derived
+        # direction. Chip-AGNOSTIC.
+        for _row_v638 in _v638_comportable_interface_harvest(text or ""):
+            _add_pin(
+                name=_row_v638.get("name") or "",
+                mode=_row_v638.get("direction") or "input",
+                fname=fname,
+                width=_row_v638.get("width"),
+                description=_row_v638.get("description"),
+                extraction_strategy=_row_v638.get("extraction_strategy"),
+                source_row=_row_v638.get("source_row") or "",
+            )
+            if len(ev) < 24:
+                ev.append({
+                    "literal": (_row_v638.get("source_row") or "")[:120],
+                    "label": "pin (Comportable interface harvest)"})
         # v1.6.262 — for #120 ORGANIC. RST `.. list-table:: Signals`
         # POSITIVE parse. Sibling of v1.6.258 #118 reject path; this
         # turns the body rows into real ports when the table carries
@@ -18165,6 +18515,13 @@ def gen_l1_datasheet(project: Path,
                     # only the legacy line-scan emit (the one with
                     # no `extraction_strategy`) is filtered here.
                     if t.lower() in _L1_PIN_NARRATIVE_DENY_LOWERCASE:
+                        continue
+                    # #638 — a bare token equal to the doc-derived module/IP
+                    # name from the Comportable intro sentence is the module
+                    # identifier, not a port. Deny it on the narrative line-
+                    # scan path (structural extractors carry an
+                    # `extraction_strategy` and never reach this gate).
+                    if t.lower() in _v638_module_name_deny:
                         continue
                     # v1.6.85 (#17 Bug A2) — additional reject filters
                     # for power rails, chip name, narrative tokens, and
