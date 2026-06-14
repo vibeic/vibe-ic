@@ -301,6 +301,62 @@ def canonical_ic_class(project_dir: Optional[Path]) -> Optional[str]:
     return "unknown"
 
 
+def restamp_l_doc_skeletons(project_dir: Optional[Path]) -> list[str]:
+    """ORGANIC #635 — re-stamp any generated L*.json doc whose top-level
+    `ic_class` DIVERGES from the now-authoritative persisted class
+    (`reports/ic_class.json` via `canonical_ic_class`).
+
+    Closes the phase1-before-phase2 ORDERING hole: the L14-L23 skeletons are
+    stamped during phase1 — BEFORE phase2 persists `reports/ic_class.json`. At
+    that point `canonical_ic_class()` reads an absent file → `"unknown"` and
+    the emitter's mid-emission fallback can resolve a wrong/default class
+    (e.g. `digital_arithmetic_primitive` for a data converter), which then
+    freezes to disk and is never re-stamped. Call this at the phase2 boundary
+    (right after the authoritative class is re-persisted) to rewrite the frozen
+    stamps to the true class.
+
+    SAFE + idempotent + chip-AGNOSTIC: rewrites ONLY a doc that ALREADY carries
+    a non-empty string `ic_class` that DIFFERS from the authoritative class
+    (never adds the field, never touches a doc that omits it); a no-op when the
+    authoritative class is `unknown` (not yet resolved → cannot prove drift) or
+    `None` (no project). Returns the list of rewritten relative paths. No chip /
+    vendor / SKU literal — pure field comparison."""
+    if project_dir is None:
+        return []
+    project = Path(project_dir)
+    authoritative = canonical_ic_class(project)
+    if not authoritative or authoritative == "unknown":
+        return []
+    rewritten: list[str] = []
+    seen: set = set()
+    for sub in ("phase1/generated_docs", "generated_docs", "l_docs"):
+        d = project / sub
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("L*.json")):
+            rp = f.resolve()
+            if rp in seen:
+                continue
+            seen.add(rp)
+            try:
+                doc = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(doc, dict):
+                continue
+            stamped = doc.get("ic_class")
+            if (isinstance(stamped, str) and stamped
+                    and stamped != authoritative):
+                doc["ic_class"] = authoritative
+                try:
+                    f.write_text(
+                        json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+                    rewritten.append(str(f.relative_to(project)))
+                except OSError:
+                    pass
+    return rewritten
+
+
 # ---------------------------------------------------------------------------
 # L14-L23 skeleton emission
 # ---------------------------------------------------------------------------
