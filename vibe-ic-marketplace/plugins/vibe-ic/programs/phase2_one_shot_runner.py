@@ -1777,6 +1777,51 @@ def _finalize_full_stack_results(per_vector: List[Dict[str, Any]],
     return results
 
 
+def _v629_rtl_top_ports(project: Path,
+                        top_module: str) -> List[Tuple[str, str]]:
+    """ORGANIC #629 — the authoritative DUT port surface, parsed from the
+    synthesizable RTL top, as [(direction, name), ...].
+
+    Reuses the SAME ANSI-port parser the chip_top wrapper gen / #518 machinery
+    already trust (`reset_clock_variant_alias.parse_module_ports`), which reads
+    the module's `(...)` PORT list AFTER the optional `#(...)` PARAMETER block —
+    so a `parameter`/`localparam` is structurally EXCLUDED and can never be
+    returned as a port. Returns [] when the top is not found or is non-ANSI
+    (bare-name port list, no in-header directions) — the caller then falls back
+    to L9.top_ports verbatim (no regression). chip-AGNOSTIC: pure RTL parse, no
+    IC-class / token literals."""
+    if not top_module:
+        return []
+    rtl_dir = _pl.rtl_dir(project)
+    if not rtl_dir.is_dir():
+        return []
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import reset_clock_variant_alias as _rcv
+    except Exception:  # pragma: no cover — defensive import guard
+        return []
+    for ext in (".v", ".sv"):
+        for f in sorted(rtl_dir.rglob(f"*{ext}")):
+            try:
+                txt = f.read_text(errors="replace")
+            except OSError:
+                continue
+            ports = _rcv.parse_module_ports(txt, top_module)
+            if ports:
+                # parse_module_ports only yields ANSI ports carrying a
+                # direction keyword; a parameter (in the `#()` block) is never
+                # here. Keep the RTL order.
+                out: List[Tuple[str, str]] = []
+                for d, _w, n in ports:
+                    if n:
+                        out.append(((d or "input").strip().lower(), n))
+                if out:
+                    return out
+    return []
+
+
 def step_full_stack_tb_gen(project: Path,
                            top_name: str = "chip_top") -> StepResult:
     """v1.6.88 (#20 Bug 3 P0 BLOCKER) — synthesise a chip-AGNOSTIC
@@ -1814,6 +1859,33 @@ def step_full_stack_tb_gen(project: Path,
         return StepResult("full_stack_tb_gen", "SKIP",
                           time.time() - t0,
                           f"L9 has no top_ports (top_module={top_module!r})")
+
+    # ORGANIC #629 — reconcile the DUT binding against the parsed synthesizable
+    # RTL top surface, NOT L9.top_ports verbatim. A mis-extracted L9 (a width-
+    # cell parameter promoted as a port, real short ports dropped — see #627)
+    # would otherwise be inherited verbatim: the TB binds the PARAMETER as a DUT
+    # port and OMITS the real ports, iverilog rejects "port `<param>` is not a
+    # port of u_dut", and the reference_tb step mislabels it a "real structural
+    # defect" though the RTL is correct — a FALSE attribution that halts the
+    # functional-sim gate and renders the ECO loop inert. The chip_top wrapper
+    # gen already parses the RTL surface (ports vs parameters); do the same here.
+    # Prefer the RTL surface; fall back to L9 only when the RTL top is absent /
+    # non-ANSI (no regression). chip-AGNOSTIC: structural RTL parse.
+    _rtl_ports = _v629_rtl_top_ports(project, top_module)
+    _reconcile_note = ""
+    if _rtl_ports:
+        _l9_names = {(_p.get("name") or "").strip()
+                     for _p in top_ports if isinstance(_p, dict)}
+        _rtl_names = {n for _d, n in _rtl_ports}
+        if _l9_names != _rtl_names:
+            _dropped = sorted(_rtl_names - _l9_names)
+            _phantom = sorted(_l9_names - _rtl_names)
+            _reconcile_note = (
+                f" (RECONCILED to RTL surface — L9.top_ports diverged: "
+                f"missing-from-L9={_dropped}, not-in-RTL={_phantom}; the "
+                f"upstream Phase-1 extraction is the real defect, NOT an RTL "
+                f"structural fault)")
+        top_ports = [{"name": n, "direction": d} for d, n in _rtl_ports]
 
     sim_dir = _pl.sim_full_stack_dir(project)
     sim_dir.mkdir(parents=True, exist_ok=True)
@@ -2075,7 +2147,7 @@ def step_full_stack_tb_gen(project: Path,
                 "the bit-level oracle (with goldens) or gate-level "
                 "synth + Phase 3.")
     return StepResult("full_stack_tb_gen", verdict_word,
-                      time.time() - t0, note,
+                      time.time() - t0, note + _reconcile_note,
                       [str(tb_path), str(sim_dir / "results.json")])
 
 
