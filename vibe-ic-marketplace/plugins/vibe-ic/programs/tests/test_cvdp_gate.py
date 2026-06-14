@@ -316,7 +316,11 @@ def test_review_two_fence_writeback_not_duplicated(tmp_path):
     body = recs[0]["completion"]
     assert body.count("module f1") == 1
     assert body.count("module f2") == 1
-    assert body.count("```verilog") == 2     # fence structure preserved
+    # ORGANIC #626 — the emitted completion is DE-FENCED (the bytes the gate
+    # compiled): no fence markers survive, so the scorer's verbatim-written
+    # .sv compiles. (Was: assert two ```verilog fences retained — that was the
+    # fence-marker defect that ELAB_ERRORed at scoring.)
+    assert "```" not in body
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
@@ -430,9 +434,13 @@ def test_535_batch_dir_intake_gate_does_own_json(tmp_path):
     assert rc == 0
     recs = _read_jsonl(out)
     assert [r["id"] for r in recs] == ["p_rt"]
-    # CRLF normalized; code still extractable from the DELIVERED record
+    # CRLF normalized; code still extractable from the DELIVERED record.
+    # ORGANIC #626 — the fenced draft is emitted DE-FENCED, so the delivered
+    # record's kind is now 'bare' (the compiled bytes), not 'fenced'. The
+    # round-trip integrity guarantees under test (module survives, CRLF gone)
+    # are unchanged.
     code, kind = G.extract_code(recs[0]["completion"])
-    assert kind == "fenced" and "module rt" in code and "\r" not in recs[0]["completion"]
+    assert kind == "bare" and "module rt" in code and "\r" not in recs[0]["completion"]
 
 
 @pytest.mark.skipif(not (_HAS_IVERILOG and _HAS_YOSYS),
