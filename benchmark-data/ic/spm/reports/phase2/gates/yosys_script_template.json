@@ -7,6 +7,6 @@
     "phase2/stage2/synth/yosys.log",
     "phase2/stage2/synth/synth.log"
   ],
-  "project": "/home/reyerchu/vibe-ic/benchmark_clean/spm",
+  "project": "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm",
   "findings": []
 }

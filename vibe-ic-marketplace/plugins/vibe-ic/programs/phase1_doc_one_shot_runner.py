@@ -11349,7 +11349,17 @@ def _is_real_port_token(tok, l1_chip_name=None, pin=None):
     # filters above (power rails, Verilog reserved words, version codes like
     # `E4`, power/narrative tokens) already screen the common 2-char noise, so
     # the length floor only needs to reject 1-char tokens. Chip-AGNOSTIC.
-    if len(tok) < 2:
+    # ORGANIC #627 round-2 — port-table-PROVENANCE exemption (mirrors the
+    # #611 version-code exemption above at the `_CHIP_VERSION_CODE_RE` line).
+    # The v455 walker (#627 round-1) correctly recovers single-letter datapath
+    # ports (x / y / p / a / b / q) into L1.pin_table, but on the L1→L9
+    # promotion path this 1-char floor dropped them AGAIN — so
+    # l9_rtl_pin_consistency_check FAILed "RTL top has ports not in L9:
+    # [p,x,y]". A 1-char token deliberately enumerated from a port TABLE
+    # (provenance ∈ _PORT_TABLE_STRATEGIES, e.g. backticked_interface_v455)
+    # IS a real port; only drop a 1-char token WITHOUT that provenance (a bare
+    # prose glyph). chip-AGNOSTIC: provenance flag, no chip/vendor literal.
+    if len(tok) < 2 and not _has_port_table_provenance:
         return False
     return True
 
@@ -20619,6 +20629,30 @@ def gen_l2_frs(project: Path,
                 break
         if len(timing_parameters) >= 256:
             break
+
+    # ORGANIC #634 round-2 — fold the converter spec-table / scalar timing
+    # facts (fclk / OSR / order, via the facet-(a) harvester) into L2
+    # timing_parameters. A data-converter's L2 architecture spec documents its
+    # timing surface in the same spec-table SHAPE the L8 harvest reads, but the
+    # prose-frequency promotion above does not reach a `| fclk | 1.0 | MHz |`
+    # row, leaving L2.timing_parameters empty — the field-count gate then read 1
+    # typed field short of the ≥15 floor on a real converter (round-2 reopen).
+    # Dedupe by name against the prose-harvested entries. No-fabrication: empty
+    # when the input carries no spec-table / scalar timing. chip-AGNOSTIC.
+    _v634r2_seen_tp = {str(t.get("name") or t.get("parameter") or "").lower()
+                       for t in timing_parameters}
+    for _ct in _v634_harvest_converter_timing(extracted):
+        if _ct["name"].lower() in _v634r2_seen_tp:
+            continue
+        _v634r2_seen_tp.add(_ct["name"].lower())
+        timing_parameters.append({
+            "name": _ct["name"],
+            "parameter": _ct["name"],
+            "value": _ct["value"],
+            "unit": _ct["unit"],
+            "evidence": _ct["source"],
+            "extraction_strategy": _ct["extraction_strategy"],
+        })
 
     content = {
         "schema_version": 2,
@@ -53222,6 +53256,28 @@ def main() -> int:
             print(f"      → batch synth applied to L17/L18/L8_TIMING/L9 (after 14c2)")
     except Exception as _r46b_err:
         print(f"      R46-relocated batch synth FAILED (fail-open): {_r46b_err}",
+              file=sys.stderr)
+
+    # ORGANIC #634 round-2 — re-stamp the AUTHORITATIVE ic_class now that ALL
+    # L1-L13 docs (incl L5 analog_blocks) are emitted. The early per-L-doc
+    # detect (~line 7447) persisted reports/ic_class.json BEFORE L5 existed → it
+    # saw has_analog=False and froze a wrong class (e.g.
+    # digital_arithmetic_primitive for a data converter); phase1 NEVER refreshed
+    # it (zero refresh=True calls), so the field-count gate's data_converter
+    # L5/L8 floor relaxation was DEAD CODE — it keyed on the stale class.
+    # (#635's re-stamp is at the phase2 boundary — too late for this phase1-time
+    # gate.) detect_ic_class(refresh=True) re-infers from the now-complete L
+    # docs and re-persists the single source of truth, so both this gate AND the
+    # L19-L23 skeleton emit below read the correct class. Best-effort +
+    # fail-open. chip-AGNOSTIC (the class comes from the canonical classifier,
+    # never a chip literal).
+    try:
+        from ic_class_profile import detect_ic_class as _v634r2_detect
+        _v634r2 = _v634r2_detect(project, refresh=True) or {}
+        print(f"[14c3/15] ic_class re-stamp (all L1-L13 emitted) → "
+              f"{_v634r2.get('ic_class', 'unknown')}")
+    except Exception as _v634r2_err:
+        print(f"      ic_class re-stamp FAILED (fail-open): {_v634r2_err}",
               file=sys.stderr)
 
     # v0.1.63 capture (R15): emit L19-L23 typed skeleton stubs (or na_stubs

@@ -1,4 +1,9 @@
 {
-  "verdict": "PASS",
-  "evidence": "sim/reference_tb/ref_tb.log"
+  "verdict": "SKIP",
+  "reason": "no substantiating reference-TB evidence — refusing a verdict-only PASS (#433): reference_tb step verdict=WAIVED; transcripts found=0",
+  "design_identity": {
+    "design": "subservient",
+    "ic_name": "subservient",
+    "top": "subservient"
+  }
 }

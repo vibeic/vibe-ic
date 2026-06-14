@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "doc_class": "timing_waveform",
-  "ic_name": "u_hawaii_ADC",
+  "ic_name": "u_hawaii_adc",
   "timing_windows": [],
   "timing_constants": [],
   "waveforms": [],

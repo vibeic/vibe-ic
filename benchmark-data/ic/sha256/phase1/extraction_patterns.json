@@ -634,6 +634,10 @@
       "label": "auto-discovered (numeric_unit)"
     },
     {
+      "literal": "5.2 ns",
+      "label": "auto-discovered (numeric_unit)"
+    },
+    {
       "literal": "SDC",
       "label": "auto-discovered (upper_ident)"
     },

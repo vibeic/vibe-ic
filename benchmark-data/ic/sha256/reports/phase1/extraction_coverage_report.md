@@ -1,22 +1,22 @@
 # Extraction coverage report
 
-- denominator (unique literals in input_doc/): **168**
-- numerator (cited in L*.json extraction_evidence): **168**
+- denominator (unique literals in input_doc/): **169**
+- numerator (cited in L*.json extraction_evidence): **169**
 - **overall.pct = 100.0%**
 - status: **PASS** (target ≥80%)
-- curated: **168/168 = 100.0%**
-- hands_on: **168/168 = 100.0%**
+- curated: **169/169 = 100.0%**
+- hands_on: **169/169 = 100.0%**
 
 ## Per-L-doc
 
-- L1_DATASHEET: evidence=13 todo=0
+- L1_DATASHEET: evidence=21 todo=0
 - L2_FRS: evidence=8 todo=0
 - L3_CMD_PROTOCOL: evidence=0 todo=0
 - L4_REGMAP: evidence=2 todo=0
 - L5_ADI_SPEC: evidence=0 todo=0
 - L6_CONTROL_LOGIC: evidence=2 todo=0
 - L7_TEST_DEBUG: evidence=2 todo=0
-- L8_RTL_CONSTANTS: evidence=3 todo=0
+- L8_RTL_CONSTANTS: evidence=4 todo=0
 - L9_INTEGRATION_SPEC: evidence=0 todo=0
 - L10_TEST_CASES: evidence=8 todo=0
 - L11_OTP_CONTENT: evidence=0 todo=0
@@ -28,7 +28,7 @@
 - L16_COMPLIANCE_PROPERTIES: evidence=0 todo=0
 - L17_CHANNEL_SIGNAL_CATALOG: evidence=0 todo=0
 - L18_INTERCONNECT_TOPOLOGY: evidence=0 todo=0
-- L19_CONSTRAINTS_PDK: evidence=0 todo=0
+- L19_CONSTRAINTS_PDK: evidence=1 todo=0
 - L20_DFT_SCAN_TOPOLOGY: evidence=0 todo=0
 - L21_POWER_INTENT: evidence=0 todo=0
 - L22_VERIFICATION_PLAN: evidence=0 todo=0

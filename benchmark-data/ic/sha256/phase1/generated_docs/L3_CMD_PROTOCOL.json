@@ -26,6 +26,5 @@
     "input/docs/L7_verification_plan.md": [],
     "input/docs/L8_submodule_integration.md": [],
     "input/docs/L9_constraints_floorplan.md": []
-  },
-  "class_path": "digital_arithmetic_primitive"
+  }
 }

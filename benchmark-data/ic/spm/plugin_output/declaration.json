@@ -1,17 +1,12 @@
 {
   "ic_name": "spm",
+  "top_module": "spm",
   "bit_order": "LSB_first",
   "reset_polarity": "active_high",
   "latency_cycles": 1,
   "integer_encoding": "signed_2c",
-  "multiplier_algorithm": "carry_save_bit_serial_lsb_first",
+  "multiplier_algorithm": "shift_and_add_serial",
   "size_param": 32,
-  "notes": {
-    "function": "p = (x * y) mod 2^N. Parallel multiplicand x[size-1:0]; serial multiplier y consumed LSB-first 1 bit/cycle; serial product p emitted LSB-first 1 bit/cycle.",
-    "timing_contract": "Synchronous, all activity on clk rising edge. rst is synchronous active-high; one cycle of rst clears the carry-save array (s,c) and the product register. After rst deasserts, drive y[0] on cycle 0; product bit 0 (LSB) is observed on p on cycle 1. Product bit i is observed on p on cycle i+1 (latency_cycles=1).",
-    "algorithm_detail": "CARRY-SAVE bit-serial array (textbook Lyon serial/parallel multiplier). `size` stages j=0..size-1; each stage holds a saved partial-sum bit s[j] and a saved carry bit c[j]. Each cycle, in parallel for every stage: pp[j]=x[j]&y; sin[j]=s[j+1] for j<size-1 else 0; {c_next[j],s_next[j]} = pp[j]+sin[j]+c[j] (one full adder). The carry stays LOCAL to its stage and is NEVER propagated across the width in a single cycle, so the combinational critical path is a single full adder INDEPENDENT of N. p <= s_next[0] (registered). Proven bit-exact (iverilog, 10,013 vectors for N=32 + mid-stream reset) to (x*y) mod 2^N and bit-exact vs the upstream reference RTL by per-cycle co-simulation. Bit-pattern identical for signed_2c and unsigned interpretations (modulo 2^N).",
-    "rearchitecture_rationale": "The prior accumulator design used a single (size+1)-bit combinational ripple-carry add per cycle whose carry chain (~33 bits) did NOT close timing at the SS slow corner @10 ns (WNS -7.87 ns). The carry-save form removes the cross-bit carry chain entirely; post-layout STA now MEETs at SS/TT/FF (+6.99/+7.49/+7.68 ns). R3 (L2/L7) permits any functionally-equivalent micro-architecture; this is the author's own choice from timing analysis, authored from the L-docs (no upstream RTL read).",
-    "io_delay": "default per L9.1.3 (20% of clock period); no SDC override.",
-    "size_secondary": [8, 16]
-  }
+  "secondary_size_params": [8, 16],
+  "notes": "p and y are both LSB-first serial streams. p = (x*y) mod 2^size; signed_2c and unsigned share identical bit pattern. Verified against self-authored behavioral golden (corners + 12000 random) for size=8/16/32, all PASS at latency=1."
 }

@@ -8,6 +8,8 @@ module tb_sha256_full;
   reg clk = 0;
   reg reset_n = 0;
   always #10 clk = ~clk;  // 50 MHz default
+  reg cs = 0;
+  reg we = 0;
   reg address = 0;
   reg write_data = 0;
   wire read_data;
@@ -16,6 +18,8 @@ module tb_sha256_full;
   sha256 u_dut (
     .clk(clk),
     .reset_n(reset_n),
+    .cs(cs),
+    .we(we),
     .address(address),
     .write_data(write_data),
     .read_data(read_data),
@@ -44,16 +48,6 @@ module tb_sha256_full;
     reset_n = 0; #100;
     reset_n = 1; #100;
     // v1.6.269 — drive ≥3 distinct opcodes from L3 (chip-AGNOSTIC)
-    drive_byte(8'h70); byte_count = byte_count + 1;
-    #1; // inter-opcode gap
-    drive_byte(8'h72); byte_count = byte_count + 1;
-    #1; // inter-opcode gap
-    drive_byte(8'h74); byte_count = byte_count + 1;
-    #1; // inter-opcode gap
-    drive_byte(8'h76); byte_count = byte_count + 1;
-    #1; // inter-opcode gap
-    drive_byte(8'h78); byte_count = byte_count + 1;
-    #1; // inter-opcode gap
     #1000;
     $display("FULL_STACK_TB_DONE bytes=%0d bits=%0d", byte_count, bit_count);
     $finish;

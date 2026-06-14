@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "version": "0.119.62",
-  "run_at": "2026-05-26T14:19:20.240699+00:00",
+  "run_at": "2026-06-13T16:24:16.831354+00:00",
   "phase": "all",
   "strict_structural": false,
   "strict_step_artifacts": false,
@@ -11,11 +11,12 @@
   "failed_gate_count": 0,
   "passed_gate_count": 0,
   "step_counts": {
-    "PASS": 2,
-    "FAIL": 1,
-    "MISSING": 36,
-    "WAIVED": 0,
-    "SKIPPED-CONDITION": 17,
+    "PASS": 0,
+    "FAIL": 0,
+    "MISSING": 9,
+    "WAIVED": 1,
+    "DEFERRED-BY-UPSTREAM": 0,
+    "SKIPPED-CONDITION": 49,
     "SKIPPED-SETUP-REQUIRED": 0,
     "VACUOUS_PASS": 0
   },
@@ -30,8 +31,8 @@
   ],
   "open_source_constraints_deferrals": [],
   "command_argv": [
-    "/home/reyerchu/vibe-ic/vibe-ic-marketplace/plugins/vibe-ic/programs/flow_compliance_check.py",
-    "/home/reyerchu/vibe-ic/benchmark_clean/u_hawaii_adc",
+    "/home/reyerchu/.claude/plugins/cache/vibe-ic-marketplace/vibe-ic/1.0.0/programs/flow_compliance_check.py",
+    "/home/reyerchu/AI_IC_design/_bench6_v100_r1/u_hawaii_adc",
     "--strict"
   ]
 }

@@ -1,7 +1,7 @@
 {
   "_comment": "Auto-emitted skeleton — fill the __TODO__ fields with values from your specific lab rig before claiming Phase 2+3 PASS.",
   "tester": {
-    "_name_options": "<dir-name under mcp-eda-server/src/devices/tester/> | 'n/a' | 'none' | 'no_hardware' | 'digital_only' (any of the latter four marks the project as having no tester rig and usb_hid_tester_verify will SKIP permanently)",
+    "_name_options": "<dir-name under mcp-eda/src/devices/tester/> | 'n/a' | 'none' | 'no_hardware' | 'digital_only' (any of the latter four marks the project as having no tester rig and usb_hid_tester_verify will SKIP permanently)",
     "_auto_detected_note": "no host-tester device registered with MCP-EDA-server (DEVICES_ROOT/tester/ has no driver.py); the hardware-verify step will SKIP cleanly",
     "name": "none",
     "vendor": "__TODO__",

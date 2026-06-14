@@ -20,7 +20,7 @@
   "per_l_doc": [
     {
       "name": "L1_DATASHEET",
-      "evidence_count": 8,
+      "evidence_count": 17,
       "todo_count": 0
     },
     {
@@ -115,7 +115,7 @@
     },
     {
       "name": "L19_CONSTRAINTS_PDK",
-      "evidence_count": 0,
+      "evidence_count": 1,
       "todo_count": 0
     },
     {

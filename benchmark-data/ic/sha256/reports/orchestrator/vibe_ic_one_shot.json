@@ -1,7 +1,7 @@
 {
   "phase": "vibe-ic",
-  "project": "/home/reyerchu/vibe-ic/benchmark_clean/sha256",
-  "duration_s": 443.3171389102936,
+  "project": "/home/reyerchu/AI_IC_design/_bench6_v100_r1/sha256",
+  "duration_s": 101.81694889068604,
   "halted_at": "phase2",
   "phases": [
     {
@@ -25,5 +25,6 @@
       "rc": 0
     }
   ],
+  "advisories": [],
   "verdict": "FAIL"
 }

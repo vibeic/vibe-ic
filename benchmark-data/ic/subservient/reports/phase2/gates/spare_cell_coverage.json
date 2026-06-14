@@ -1,8 +1,8 @@
 {
   "target_density": 0.02,
-  "actual_density": 0.020243,
-  "count": 75,
-  "distinct_positions": 75,
+  "actual_density": 0.020022,
+  "count": 130,
+  "distinct_positions": 130,
   "distribution_ok": true,
   "tie_off_ok": true,
   "density_ok": true,

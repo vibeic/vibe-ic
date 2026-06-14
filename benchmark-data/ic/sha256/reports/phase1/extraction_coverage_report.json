@@ -1,26 +1,26 @@
 {
   "overall": {
-    "denominator": 168,
+    "denominator": 169,
     "total": 83,
-    "numerator": 168,
+    "numerator": 169,
     "pct": 100.0,
     "target_pct": 80.0,
     "status": "PASS"
   },
   "curated": {
-    "denominator": 168,
-    "numerator": 168,
+    "denominator": 169,
+    "numerator": 169,
     "pct": 100.0
   },
   "hands_on": {
-    "denominator": 168,
-    "numerator": 168,
+    "denominator": 169,
+    "numerator": 169,
     "pct": 100.0
   },
   "per_l_doc": [
     {
       "name": "L1_DATASHEET",
-      "evidence_count": 13,
+      "evidence_count": 21,
       "todo_count": 0
     },
     {
@@ -55,7 +55,7 @@
     },
     {
       "name": "L8_RTL_CONSTANTS",
-      "evidence_count": 3,
+      "evidence_count": 4,
       "todo_count": 0
     },
     {
@@ -115,7 +115,7 @@
     },
     {
       "name": "L19_CONSTRAINTS_PDK",
-      "evidence_count": 0,
+      "evidence_count": 1,
       "todo_count": 0
     },
     {

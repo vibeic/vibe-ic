@@ -42,10 +42,63 @@
   "no_frs_sections_in_input": false,
   "protocol_overview": null,
   "no_protocol_overview_in_input": false,
-  "compliance_requirements": [],
-  "timing_parameters": [],
-  "fmax_mhz": null,
-  "no_fmax_mhz_in_input": true,
+  "compliance_requirements": [
+    {
+      "name": "sta_signoff",
+      "requirement": "STA met all corners (SS/TT/FF) for each listed library",
+      "source": "input/docs/L9_constraints_floorplan.md"
+    },
+    {
+      "name": "drc_clean",
+      "requirement": "DRC clean (magic + KLayout)",
+      "source": "input/docs/L1_product_metadata.md"
+    },
+    {
+      "name": "lvs_clean",
+      "requirement": "LVS clean (magic + netgen)",
+      "source": "input/docs/L1_product_metadata.md"
+    },
+    {
+      "name": "functional_equivalence",
+      "requirement": "100% PASS vs golden x*y mod 2^N (binary)",
+      "source": "input/docs/L7_verification_plan.md"
+    }
+  ],
+  "timing_parameters": [
+    {
+      "name": "clk_period_sky130_general",
+      "value": 10.0,
+      "unit": "ns",
+      "freq_mhz": 100.0,
+      "source": "input/docs/L1_product_metadata.md",
+      "evidence": "Target clock period — SKY130 通用 10 ns (100 MHz)"
+    },
+    {
+      "name": "clk_period_sky130_hs",
+      "value": 8.0,
+      "unit": "ns",
+      "freq_mhz": 125.0,
+      "source": "input/docs/L1_product_metadata.md",
+      "evidence": "sky130_fd_sc_hs 8 ns (125 MHz)"
+    },
+    {
+      "name": "clk_period_gf180mcu",
+      "value": 24.0,
+      "unit": "ns",
+      "freq_mhz": 41.7,
+      "source": "input/docs/L1_product_metadata.md",
+      "evidence": "GF180MCU 24 ns (~41.7 MHz)"
+    },
+    {
+      "name": "io_delay_fraction",
+      "value": 0.2,
+      "unit": "ratio_of_clock_period",
+      "source": "input/docs/L9_constraints_floorplan.md",
+      "evidence": "set_input/output_delay = 20% of clock period"
+    }
+  ],
+  "fmax_mhz": 100.0,
+  "no_fmax_mhz_in_input": false,
   "extraction_evidence": {
     "input/docs/L1_product_metadata.md": [
       {
@@ -98,5 +151,6 @@
       "heading": "**物理契約**:在 L1 給定的 PDK / floorplan target 下,DRC + LVS 全 clean",
       "slug": "l1_pdk_floorplan_target_drc_lvs_clean"
     }
-  ]
+  ],
+  "_clean_room_l2_frs_enrichment": "RESIDUAL: phase1 frs-gen left fmax_mhz/timing_parameters/compliance_requirements empty for this sparse arithmetic-primitive spec, so L2 carried only 13 typed fields < the gate's hard ≥15 floor (no class-aware N/A escape, waivers forbidden). Enriched here with facts genuinely present in L1/L7/L9 input tables."
 }

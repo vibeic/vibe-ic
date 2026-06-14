@@ -5,6 +5,6 @@
   "inline_evidence": [
     "phase2/stage2/synth/yosys.log"
   ],
-  "project": "/home/reyerchu/vibe-ic/benchmark_clean/sha256",
+  "project": "/home/reyerchu/AI_IC_design/_bench6_v100_r1/sha256",
   "findings": []
 }

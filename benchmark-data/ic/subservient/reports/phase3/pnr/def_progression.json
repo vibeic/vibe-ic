@@ -4,60 +4,48 @@
       "name": "floorplan",
       "path": "phase3/stage3/pnr/floorplan.def",
       "exists": true,
-      "size": 501484,
-      "sha256": "c36e0c8c725a54992e36b1731e81ac2c4a8bafe237a155860e8a18a480b9718d",
-      "num_components": 3705,
+      "size": 900774,
+      "sha256": "4ec06f090edb78681273df5013113e227eb39857cf9e1d44b9a9d978de5f2a55",
+      "num_components": 6493,
       "has_routing": false
     },
     {
       "name": "placed",
       "path": "phase3/stage3/pnr/placed.def",
       "exists": true,
-      "size": 609399,
-      "sha256": "033512682f8dbe7e15d7c892cac1ee7e9fd700709d9387ea8fc0f54acd0591f4",
-      "num_components": 3705,
-      "has_routing": false
+      "size": 12052009,
+      "sha256": "04b97111cc6e7757adb549d53fbe98f887dccb94223925eab7a4e3dd6a16a75c",
+      "num_components": 35219,
+      "has_routing": true
     },
     {
       "name": "post_cts",
       "path": "phase3/stage3/pnr/post_cts.def",
       "exists": true,
-      "size": 615007,
-      "sha256": "44731dc575aaf5847296872a3db4374eb651ae796b5c9426d15412a4cdc100b9",
-      "num_components": 3780,
-      "has_routing": false
+      "size": 14546739,
+      "sha256": "6d47399cf2bb254e700228c0cdc8768f3dc464a4696635a4ed134a5b263ac9fd",
+      "num_components": 35465,
+      "has_routing": true
     },
     {
       "name": "post_hold",
       "path": "phase3/stage3/pnr/post_hold.def",
       "exists": true,
-      "size": 615007,
-      "sha256": "44731dc575aaf5847296872a3db4374eb651ae796b5c9426d15412a4cdc100b9",
-      "num_components": 3780,
-      "has_routing": false
+      "size": 14546739,
+      "sha256": "6d47399cf2bb254e700228c0cdc8768f3dc464a4696635a4ed134a5b263ac9fd",
+      "num_components": 35465,
+      "has_routing": true
     },
     {
       "name": "routed",
       "path": "phase3/stage3/pnr/routed.def",
       "exists": true,
-      "size": 615071,
-      "sha256": "e96e970c012c9c97b912ca28915a2f7f6345f1a230020db0f424b98ad0cdf570",
-      "num_components": 3780,
-      "has_routing": false
+      "size": 35629014,
+      "sha256": "50546c72cdaa2312a5766056156f28d64b71b153918ce19bb97ff7f5505a956f",
+      "num_components": 206135,
+      "has_routing": true
     }
   ],
-  "errors": [
-    {
-      "severity": "error",
-      "rule": "identical-def-fraud",
-      "message": "stages ['post_cts', 'post_hold'] share sha256 44731dc575aa... \u2014 at least one is a copy/stub, not a real PnR output."
-    }
-  ],
-  "warnings": [
-    {
-      "severity": "warning",
-      "rule": "no-routing-geometry-global-route-only",
-      "message": "routed.def has no `+ ROUTED` / `+ SHAPE` geometry, but `DETAILED_ROUTE_NONFATAL:` marker (or routing_mode.json mode=global_only) is present \u2014 this run completed in global-route mode only. Demoted from error to warning."
-    }
-  ]
+  "errors": [],
+  "warnings": []
 }

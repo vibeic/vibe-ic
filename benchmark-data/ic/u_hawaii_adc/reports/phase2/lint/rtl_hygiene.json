@@ -1,0 +1,12 @@
+{
+  "verdict": "PASS",
+  "source": "yosys_synth (errors-as-fail)",
+  "rtl_files": [],
+  "evidence": "reports/yosys_synth.log",
+  "rule_set": "yosys-elaborate-noncrit-warn",
+  "design_identity": {
+    "design": "u_hawaii_adc",
+    "ic_name": "u_hawaii_adc",
+    "top": "u_hawaii_adc"
+  }
+}

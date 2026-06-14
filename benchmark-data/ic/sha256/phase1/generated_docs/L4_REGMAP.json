@@ -206,5 +206,7 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive"
+  "register_map_present": true,
+  "base_address": "Defined at SoC level; offsets given relative to module base.",
+  "notes": "Module memory map per spec. Reads from reserved bits return zeros and writes to reserved bits have no effect."
 }

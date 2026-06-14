@@ -1,0 +1,5 @@
+LEC REPORT — subservient chip_top
+Tool: yosys equiv_opt -assert -multiclock synth
+Result: Equivalence successfully proven!
+$equiv cells: 29 total, 29 proven, 0 unproven (k-induction)
+Verdict: PASS

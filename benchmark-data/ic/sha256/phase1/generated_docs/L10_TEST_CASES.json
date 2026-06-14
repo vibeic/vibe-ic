@@ -99,5 +99,12 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive"
+  "test_cases_present": "partial - the spec provides functional descriptions and waveform figures that map to compliance test scenarios but does not provide a formal test plan or testbench.",
+  "derived_compliance_test_categories": [
+    "Reset behavior verification.",
+    "Register access (read/write to all fields; reserved-bit behavior).",
+    "Nominal transfer / transaction across the protocol's operating modes.",
+    "Error and fault condition handling.",
+    "Back-to-back / sustained operation."
+  ]
 }

@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "control_logic",
-  "ic_name": "u_hawaii_ADC",
+  "ic_name": "u_hawaii_adc",
   "reject_rules": [],
   "fsm_states": [],
   "pipeline_stages": [],

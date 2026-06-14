@@ -9,7 +9,7 @@
 
 ## Per-L-doc
 
-- L1_DATASHEET: evidence=8 todo=0
+- L1_DATASHEET: evidence=17 todo=0
 - L2_FRS: evidence=8 todo=0
 - L3_CMD_PROTOCOL: evidence=0 todo=0
 - L4_REGMAP: evidence=1 todo=0
@@ -28,7 +28,7 @@
 - L16_COMPLIANCE_PROPERTIES: evidence=0 todo=0
 - L17_CHANNEL_SIGNAL_CATALOG: evidence=0 todo=0
 - L18_INTERCONNECT_TOPOLOGY: evidence=0 todo=0
-- L19_CONSTRAINTS_PDK: evidence=0 todo=0
+- L19_CONSTRAINTS_PDK: evidence=1 todo=0
 - L20_DFT_SCAN_TOPOLOGY: evidence=0 todo=0
 - L21_POWER_INTENT: evidence=0 todo=0
 - L22_VERIFICATION_PLAN: evidence=0 todo=0
