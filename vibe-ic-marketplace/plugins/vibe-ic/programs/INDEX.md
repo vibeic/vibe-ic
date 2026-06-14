@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 681
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 681)
+- **Total programs (excluding helpers / shims):** 682
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 682)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 672 |
+| `any` | 673 |
 
 ## Alphabetical listing
 
@@ -368,6 +368,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_todo_stub_count_check` | any | — | D3 program-first capture of the |
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `latchup_esd_spacing_check` | any | v0.2.30 | the OPEN-SOURCE GEOMETRY-LAYER half of PERC |
+| `latency_conformance_check` | any | — | v1.0 plugin gate (ORGANIC #705). |
 | `layer_extension_presence_check` | any | v0.50 | v0.50 plugin gate |
 | `leaf_typo_alias_emit` | any | v0.3.18 | v0.3.18 (ORGANIC #517). |
 | `lec_equivalence_check` | any | — | Step 13 deterministic LEC substance gate. |
@@ -753,7 +754,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (672 programs)
+### `any` (673 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1092,6 +1093,7 @@ _(no programs in this group)_
 - `l_doc_todo_stub_count_check` — D3 program-first capture of the
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `latchup_esd_spacing_check` — the OPEN-SOURCE GEOMETRY-LAYER half of PERC  _[v0.2.30]_
+- `latency_conformance_check` — v1.0 plugin gate (ORGANIC #705).
 - `layer_extension_presence_check` — v0.50 plugin gate  _[v0.50]_
 - `leaf_typo_alias_emit` — v0.3.18 (ORGANIC #517).  _[v0.3.18]_
 - `lec_equivalence_check` — Step 13 deterministic LEC substance gate.

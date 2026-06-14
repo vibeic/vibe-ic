@@ -333,6 +333,52 @@ per-cycle mismatches — IS the program (`diff_verify_harness`); this step recor
 the judgment residual (deriving the reference + adjudicating).
 
 
+## Latency/timing conformance — the PROGRAM measures, not your self-TB (#705)
+
+When the spec states an **EXACT** latency — "output asserts **N cycles** after
+the start event", "**WIDTH+2**-cycle delay", "**1 cycle overhead** when
+transitioning IDLE→BUSY registering inputs" — **DO NOT trust your self-TB's
+measurement.** Empirically, across four blind authoring strategies agents scored
+**0/8** on off-by-one latency failures: each improvised a counting convention
+that happened to match its OWN (wrong) RTL, so the self-TB confirmed the wrong
+behaviour. There is no independent yard-stick in a single-self-TB flow.
+
+`latency_conformance_check.py` IS that yard-stick. It generates its OWN canonical
+measurement testbench, **counts the way a hidden scorer counts** (pulse the event
+HIGH for exactly one clock = one latch edge, then count posedges until the output
+first asserts), resolves the spec literal against the module's real parameters,
+and **BLOCKS on any mismatch**. Run it and fix the RTL until it prints
+`latency-conformance ok`:
+
+```bash
+python3 plugins/vibe-ic/programs/latency_conformance_check.py \
+    --rtl <your_rtl.sv> --top <module> \
+    --event <start_port> --output <valid_port> --expect "<expr>"
+```
+
+- `--expect` is the spec latency literal as arithmetic over the module's
+  parameters (`WIDTH+2`, `N+1`, `8`); resolved against the `#(...)` defaults (or
+  a `--param NAME=VAL` override). It is evaluated by a tiny SAFE evaluator
+  (digits, param names, `+ - * // ( )` only — never `eval`).
+- `LATENCY-MISMATCH: measured=<m> but spec <expr>=<e>` (rc 1) = your RTL's real
+  latency is `<m>`, the spec demands `<e>` — an off-by-one. Fix the RTL (one
+  iteration / one register stage off) and re-run.
+- `latency-conformance ok: measured=<m> == spec <expr>` (rc 0) = the measured
+  latency matches the spec literal — emit.
+- iverilog absent → a distinct `SKIP` (rc 0), **never** a fabricated PASS; the
+  output never asserting → `LATENCY-TIMEOUT` (rc 1).
+
+**why_not_bucket_a:** the canonical MEASUREMENT (build the TB, pulse the event,
+count posedges to the output assertion) + the comparison against the resolved
+literal IS the deterministic program. The LLM residual is reading the spec to
+decide **WHICH** port is the event, **WHICH** is the output, and **WHICH**
+expected expression the prose names (`WIDTH+2` vs `N+1` vs a constant). This is
+the timing complement to **#697** (coverage attribution — force the self-TB to
+COVER each dimension) and **#700** (independent differential verify — cross-check
+a second derivation): #705 supplies the absolute latency yard-stick those two do
+not.
+
+
 ## Compliance gate (mandatory)
 
 After producing your output, save it to a file and run:
