@@ -148,6 +148,80 @@ def decide_iverilog_sv_fallback(
         error_signatures=IVERILOG_SV_ERROR_SIGNATURES)
 
 
+# `sv2v` parse-error signatures that indicate the construct is an
+# SVA / sequence / property the converter cannot lower — NOT a genuine RTL
+# defect. The synth path escapes such closures via `yosys -m slang` (full
+# SV-2017), but the simulation / reference_tb path historically had iverilog
+# → sv2v ONLY with no slang/verilator escape, so an identical closure that
+# SYNTHESISES clean was structurally unreachable in sim (ORGANIC #657). The
+# canonical signature is sv2v's consecutive-repetition lexer token
+# `(Sym_brack_l_aster)` / `unexpected token [*` inside a sequence/property
+# block. chip-AGNOSTIC: tool error-token + SV-keyword surface only.
+SV2V_ASSERTION_PARSE_SIGNATURES: Tuple[str, ...] = (
+    "Sym_brack_l_aster",        # sv2v lexer token for `[*` (consecutive-rep)
+    "unexpected token [*",      # sv2v parse error rendering of the same
+    "unexpected token [=",      # `[=N]` non-consecutive repetition
+    "unexpected token [->",     # `[->N]` goto repetition
+    "Parse error",              # sv2v generic parse error (qualified below)
+)
+
+# SystemVerilog assertion / sequence / property KEYWORDS. A sv2v parse error
+# is treated as an assertion-construct gap (→ verilator escape) only when the
+# converted source ALSO carries one of these — so a genuine non-assertion RTL
+# defect that happens to print "Parse error" still FAILs honestly.
+SVA_KEYWORDS: Tuple[str, ...] = (
+    "assert property", "assume property", "cover property",
+    "sequence ", "property ", " throughout ", " intersect ", " within ",
+    "[*", "[=", "[->",
+)
+
+
+def sim_frontend_should_try_verilator(
+    rtl_files: Sequence[Union[str, Path]],
+    sv2v_rc: int,
+    sv2v_err: str,
+    rtl_text_blob: str,
+) -> Tuple[bool, str]:
+    """Decide whether the SIM / reference_tb frontend should escape to a
+    verilator (or slang) elaboration after the iverilog → sv2v ladder has
+    FAILED on an SVA / sequence / property construct (ORGANIC #657).
+
+    Mirrors the asymmetry the synth path already closes via `yosys -m slang`:
+    the synth frontend accepts full SV-2017 (incl. SVA sequences), but the
+    sim frontend trailed it. The verilator escape is attempted ONLY when:
+
+      * the sv2v pre-pass itself FAILED (sv2v_rc != 0), AND
+      * sv2v's stderr carries an SVA/sequence/property parse signature
+        (e.g. the consecutive-repetition `[*N]` lexer token), AND
+      * the actual RTL text carries an SVA keyword (so a non-assertion
+        "Parse error" — a real RTL defect — does NOT trigger the escape), AND
+      * at least one `.sv` input is present.
+
+    Returns (should_try, reason). Honesty preserved: a defect ALL SV-2017
+    frontends reject still FAILs (verilator will also fail, and the caller
+    keeps the honest FAIL). chip-AGNOSTIC: tool error-token + SV-keyword
+    surface only — no chip/vendor/file literal."""
+    has_sv = any(str(f).lower().endswith(".sv") for f in rtl_files)
+    if not has_sv:
+        return False, "no .sv input — verilator escape would not help"
+    if sv2v_rc == 0:
+        return False, "sv2v converted cleanly — no escape needed"
+    err = sv2v_err or ""
+    sig_hit = any(s in err for s in SV2V_ASSERTION_PARSE_SIGNATURES)
+    if not sig_hit:
+        return False, ("sv2v failure carries no SVA/sequence parse "
+                       "signature — not an assertion-construct gap")
+    blob = rtl_text_blob or ""
+    kw_hit = any(k in blob for k in SVA_KEYWORDS)
+    if not kw_hit:
+        return False, ("sv2v parse error but RTL has no SVA/sequence/"
+                       "property keyword — treat as genuine defect, FAIL")
+    return True, ("sv2v cannot lower an SVA/sequence/property construct "
+                  "(e.g. consecutive-repetition [*N]); the identical "
+                  "closure elaborates under a full SV-2017 frontend — "
+                  "escaping to verilator (mirrors the synth slang path)")
+
+
 def decide_sv2v_tb_define(
     files_text: "dict[str, str]",
     sim_define: str = "SIMULATION",

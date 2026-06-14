@@ -2291,6 +2291,82 @@ def step_full_stack_tb_gen(project: Path,
 # returned for the caller to record in StepResult extras. Chip-AGNOSTIC:
 # extension + error-signature only; the iverilog SUBSET is universal.
 # -------------------------------------------------------------------------
+def _verilator_sim_escape(
+        rtl_files: List[Path], tb_path: Path, run_dir: Path,
+        container: str, top_name: str, reason: str,
+        ) -> Tuple[int, str, str, str]:
+    """ORGANIC #657 — SIM-path verilator escape, mirroring the synth path's
+    `yosys -m slang` escape.
+
+    When the iverilog → sv2v ladder cannot lower an SVA / sequence / property
+    construct (a gap the full SV-2017 synth frontend already passes), build +
+    run the TB+RTL closure with verilator (a full SV-2017 simulator present in
+    the container) so SVA-bearing REUSED-IP SV can SIMULATE. The TB's own
+    completion / pass markers (FULL_STACK_TB_DONE, ORACLE_TB_DONE, vector
+    PASS/FAIL lines) are emitted to stdout exactly as under iverilog+vvp, so
+    the caller's transcript parsing is unchanged.
+
+    Returns (rc, out, err, frontend). frontend='verilator_sva' on a clean
+    build+run; on any failure (verilator absent / also rejects / build error)
+    returns the failing (rc, out, err) with frontend='iverilog_g2012' so the
+    caller keeps the HONEST iverilog failure. chip-AGNOSTIC: no chip/vendor
+    literal — only the closure files and the standard verilator invocation."""
+    if not _tool_in_container(container, "verilator"):
+        return 127, "", "verilator not available in container", \
+            "iverilog_g2012"
+    stage = f"/tmp/vibeic_vl_sim_{os.getpid()}_{int(time.time())}"
+    rc_m, _o, _e = _docker_exec(container, f"mkdir -p {stage}", timeout=30)
+    if rc_m != 0:
+        return 1, "", "could not create verilator staging dir", \
+            "iverilog_g2012"
+    # Stage the TB + every RTL source (+ the .svh/.vh/.h + *_pkg closure that
+    # lives next to the sources) so `include and package imports resolve.
+    staged: List[str] = []
+    _src = [tb_path] + list(rtl_files)
+    for p in _src:
+        if not p.is_file():
+            continue
+        rc_c, _o, _e = _run(
+            ["docker", "cp", str(p), f"{container}:{stage}/{p.name}"],
+            timeout=60)
+        if rc_c != 0:
+            _docker_exec(container, f"rm -rf {stage}", timeout=30)
+            return 1, "", f"docker cp {p.name} → container failed", \
+                "iverilog_g2012"
+        if p is not tb_path:
+            staged.append(p.name)
+    _seen_dirs: set = set()
+    for p in _src:
+        d = p.parent
+        if str(d) in _seen_dirs or not d.is_dir():
+            continue
+        _seen_dirs.add(str(d))
+        for pat in ("*.svh", "*.vh", "*.h", "*_pkg.sv", "*_pkg.v"):
+            for hp in sorted(d.rglob(pat)):
+                if hp.is_file() and hp.name not in {x.name for x in _src}:
+                    _run(["docker", "cp", str(hp),
+                          f"{container}:{stage}/{hp.name}"], timeout=60)
+    obj = f"{stage}/obj_dir"
+    # verilator --binary builds a standalone simulation executable from the
+    # TB (which contains the $finish-terminated initial block). -Wno-* keeps
+    # lint pedantry from failing an otherwise-elaboratable closure; the goal
+    # here is functional reachability, not a clean-lint gate.
+    vl_cmd = (
+        f"cd {stage} && export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
+        f"verilator --binary --timing -Wno-fatal -Wno-lint "
+        f"-DSIMULATION -DDUT_TOP_NAME={top_name} "
+        f"--top-module {tb_path.stem} -Mdir {obj} "
+        f"{tb_path.name} {' '.join(staged)} 2>&1 && "
+        f"{obj}/V{tb_path.stem}")
+    vrc, vout, verr = _docker_exec(container, vl_cmd, timeout=600)
+    _docker_exec(container, f"rm -rf {stage}", timeout=30)
+    if vrc == 0:
+        return vrc, (vout + f"\n[verilator SVA escape: {reason}]"), \
+            verr, "verilator_sva"
+    # verilator also rejected the closure → genuine defect; keep honest FAIL.
+    return vrc, vout, verr, "iverilog_g2012"
+
+
 def _iverilog_compile_with_sv_fallback(
         base_cmd: List[str], rtl_files: List[Path], tb_path: Path,
         run_dir: Path, container: str, top_name: str,
@@ -2392,6 +2468,15 @@ def _iverilog_compile_with_sv_fallback(
         f"> {conv_c} 2>sv2v.err")
     rc_s, out_s, err_s = _docker_exec(container, sv2v_cmd, timeout=300)
     converted_host = run_dir / "_sv2v_converted.v"
+    # ORGANIC #657 — capture sv2v's own stderr (written to {stage}/sv2v.err)
+    # BEFORE the staging dir is torn down, so the verilator-escape decision
+    # can inspect the SVA/sequence parse signature when sv2v fails to lower an
+    # assertion construct (e.g. consecutive-repetition `[*N]`).
+    _sv2v_err_txt = err_s or ""
+    _rc_e, _o_e, _e_e = _docker_exec(
+        container, f"cat {stage}/sv2v.err 2>/dev/null", timeout=30)
+    if _rc_e == 0 and _o_e:
+        _sv2v_err_txt = _sv2v_err_txt + "\n" + _o_e
     if rc_s == 0:
         rc_cp, _o, e_cp = _run(
             ["docker", "cp", f"{container}:{conv_c}", str(converted_host)],
@@ -2400,7 +2485,26 @@ def _iverilog_compile_with_sv_fallback(
             rc_s = rc_cp
     _docker_exec(container, f"rm -rf {stage}", timeout=30)
     if rc_s != 0 or not converted_host.is_file():
-        # sv2v could not convert — honest iverilog failure stands.
+        # sv2v could not convert. ORGANIC #657 — before declaring the honest
+        # iverilog failure, mirror the synth path's slang escape: if sv2v
+        # failed on an SVA/sequence/property construct (a gap the full SV-2017
+        # synth frontend already passes), elaborate the DUT+TB closure via
+        # verilator in the container. A genuine defect ALL frontends reject
+        # still FAILs (verilator fails too). chip-AGNOSTIC: tool error-token +
+        # SV-keyword surface, no chip/vendor literal.
+        try:
+            _rtl_blob = "".join(_files_text.values())
+        except Exception:
+            _rtl_blob = ""
+        _try_vl, _vl_reason = _sf.sim_frontend_should_try_verilator(
+            rtl_files, rc_s if rc_s != 0 else 1, _sv2v_err_txt, _rtl_blob)
+        if _try_vl:
+            vrc, vout, verr, vfe = _verilator_sim_escape(
+                rtl_files, tb_path, run_dir, container, top_name, _vl_reason)
+            if vrc == 0:
+                return vrc, vout, verr, vfe
+        # verilator unavailable / also rejected / non-assertion failure —
+        # honest iverilog failure stands.
         return rc, out, err, "iverilog_g2012"
 
     # ORGANIC #546 — sv2v hw2reg / packed-struct patterns can produce
@@ -2437,6 +2541,69 @@ def _iverilog_compile_with_sv_fallback(
 # -------------------------------------------------------------------------
 # 3. iverilog reference TB
 # -------------------------------------------------------------------------
+def _emit_connectivity_sim_bridge(project: Path, transcript: Path,
+                                  top_name: str, track_reason: str) -> bool:
+    """ORGANIC #654 — write the Step-4 Simulation gate artifacts
+    (phase2/stage1/sim/{results.xml,pass.flag}) for the no-oracle
+    generic_full_stack CPU/SoC class as an explicit CONNECTIVITY-PASS /
+    functional-DEFERRED capability-gap waiver.
+
+    For this class there is no command/opcode oracle and no L10 golden
+    vectors, so the oracle-sim bridge (which requires vectors_passed ==
+    vectors_total > 0) can never fire and the canonical sim/ dir stayed
+    EMPTY — making Step 4 hard-FAIL by construction ('missing files:
+    phase2/stage1/sim/results.xml, pass.flag') for ANY such IC, independent
+    of RTL quality. The connectivity full-stack TB DID compile + run to
+    FULL_STACK_TB_DONE against the real rtl/ (structural/connectivity
+    evidence), so this bridge records that honestly:
+
+      * verdict CONNECTIVITY_PASS (NOT a functional PASS),
+      * functional_verified=false preserved,
+      * a cap:cpu_functional_oracle capability-gap marker, and
+      * an <evidence> backlink to the real full_stack.log transcript.
+
+    The Step-4 gate's cpu_functional_oracle_waiver_check reads this marker
+    and promotes the step to WAIVED-DEFERRED (Overall PASS_WITH_WAIVERS),
+    so the connectivity-PASS is never silently counted as a functional PASS
+    AND the chain is no longer halted by an opaque missing-file FAIL.
+
+    Returns True iff the bridge was written. chip-AGNOSTIC: no chip/PDK
+    literal — class-driven (verification_track + the connectivity transcript
+    marker)."""
+    try:
+        if not (transcript.is_file() and transcript.stat().st_size > 0):
+            return False
+        if "FULL_STACK_TB_DONE" not in transcript.read_text(errors="replace"):
+            # Only an actually-run connectivity TB may emit the bridge; a
+            # missing / non-completing transcript must NOT be waived.
+            return False
+    except OSError:
+        return False
+    sim_dir = _pl.sim_dir(project)
+    sim_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        log_rel = str(transcript.relative_to(project))
+    except ValueError:
+        log_rel = str(transcript)
+    (sim_dir / "pass.flag").write_text("CONNECTIVITY_PASS\n")
+    _bridge_xml = (
+        "<results><verdict>CONNECTIVITY_PASS</verdict>"
+        "<functional_verified>false</functional_verified>"
+        "<verification_track>generic_full_stack</verification_track>"
+        "<capability_gap>cap:cpu_functional_oracle</capability_gap>"
+        f"<evidence>{log_rel}</evidence>"
+        "<source>step_reference_tb connectivity full-stack TB transcript "
+        "(#654)</source>"
+        f"<waiver_reason>{track_reason}; no command/opcode oracle and no "
+        "L10 golden vectors for this class — functional verification "
+        "DEFERRED to a per-IC oracle TB (skill testbench-author). "
+        "Connectivity/structural binding to real rtl/ PASSED "
+        "(FULL_STACK_TB_DONE).</waiver_reason>"
+        "</results>\n")
+    (sim_dir / "results.xml").write_text(_bridge_xml)
+    return True
+
+
 def _emit_oracle_sim_bridge(project: Path, transcript: Path,
                             n_pass: int, n_total: int) -> bool:
     """ORGANIC-20260606 #460 — write the Step-4 Simulation gate artifacts
@@ -3154,6 +3321,24 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
             # direction — the per-IC oracle TB (deterministic
             # oracle_tb_gen or AI testbench-author) is the only
             # functional PASS path.
+            # ORGANIC #654 — for the no-oracle generic_full_stack CPU/SoC
+            # class (no command/opcode oracle, no L10 golden vectors), the
+            # functional-oracle PASS path is structurally unreachable, so the
+            # canonical phase2/stage1/sim/{results.xml,pass.flag} that Step-4's
+            # gate requires was NEVER written and Step 4 hard-FAILed by
+            # construction even with valid synthesisable RTL. Emit a
+            # CONNECTIVITY bridge to that canonical path carrying an explicit
+            # connectivity-PASS / functional-DEFERRED capability-gap waiver
+            # (cap:cpu_functional_oracle) with a reviewable evidence pointer.
+            # This is NOT a false functional PASS — verification_track and
+            # functional_verified=false are preserved, and the Step-4 gate's
+            # cpu_functional_oracle_waiver_check promotes the step to
+            # WAIVED-DEFERRED (Overall PASS_WITH_WAIVERS), not a bare PASS.
+            try:
+                _emit_connectivity_sim_bridge(
+                    project, transcript, top_name, track_reason)
+            except Exception:
+                pass  # bridge failure must not retract the connectivity WAIVE
             return StepResult(
                 "reference_tb", "WAIVED",
                 time.time() - t0,
@@ -3167,6 +3352,8 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                 extras={"verification_track": "generic_full_stack",
                         "aid_tb_skipped_reason": track_reason,
                         "functional_verified": False,
+                        "connectivity_pass_functional_deferred": True,
+                        "capability_gap": "cap:cpu_functional_oracle",
                         "fallback_skill": "testbench-author",
                         "tb_frontend": tb_frontend})
         # Ran but did not reach the completion marker → real defect.
@@ -3945,6 +4132,44 @@ def _chip_top_strip_output_storage(port_block: str) -> str:
     return new_body
 
 
+# ORGANIC #660 — SystemVerilog-only construct detector for the auto-emitted
+# chip_top wrapper. `_autoemit_chip_top_if_needed` copies the wrapped DUT's
+# `#(parameter …)` block VERBATIM into the wrapper header so widths resolve.
+# When that param block carries SV-2017-only syntax — a package-scoped
+# scope-resolution param TYPE (`parameter pkg::enum_e P = …`), or an
+# enum/typedef/struct/interface/`logic`/packed-array param type — emitting the
+# wrapper as `<top>.v` is a defect: the reference_tb sv2v pre-pass filters
+# strictly on the `.sv` extension, so the runner-generated `.v` is passed to
+# `iverilog -g2012` UNCONVERTED and syntax-errors on its own SV param types.
+# Emitting `<top>.sv` instead joins the .sv sv2v-conversion set in BOTH the
+# synth and reference_tb frontends, so the same content converts cleanly.
+#
+# chip-AGNOSTIC: pure SV-syntax surface predicate over the captured param
+# text — no chip/vendor/SKU/file literal. The detection is structural; a
+# plain Verilog-2005 param block (`parameter WIDTH = 8`) returns False and the
+# wrapper stays `.v` (byte-identical historical behaviour).
+_CHIP_TOP_SV_PARAM_SIGNATURES = (
+    # package-scoped scope-resolution used as a param TYPE: `pkg::type P = …`.
+    re.compile(r'\bparameter\b[^=,;()]*?[A-Za-z_]\w*\s*::\s*[A-Za-z_]\w*'),
+    # explicit SV-only param TYPE keyword between `parameter` and the name.
+    re.compile(r'\bparameter\b\s+(?:enum|struct|union|typedef|interface|'
+               r'logic|bit)\b'),
+)
+
+
+def _chip_top_param_block_needs_sv(param_block: str) -> bool:
+    """True iff the captured DUT `#(parameter …)` block carries SV-2017-only
+    syntax that `iverilog -g2012` cannot parse, so the auto-emitted wrapper
+    must be written as `.sv` (joining the sv2v-conversion set) rather than
+    `.v`. chip-AGNOSTIC: SV-syntax surface only — no chip/vendor literal."""
+    if not param_block or not param_block.strip():
+        return False
+    for sig in _CHIP_TOP_SV_PARAM_SIGNATURES:
+        if sig.search(param_block):
+            return True
+    return False
+
+
 # -------------------------------------------------------------------------
 # v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — SystemVerilog-frontend
 # fallback for the Phase-2 yosys-synth step. Runs inside the iic-osic-tools
@@ -4469,8 +4694,22 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             f"endmodule\n"
             f"`default_nettype wire\n"
         )
-        chip_top_v.write_text(wrapper)
-        rtl_files.append(str(chip_top_v))
+        # ORGANIC #660 — when the copied param block carries SV-2017-only
+        # syntax (package-scoped `pkg::type` param types, enum/typedef/struct/
+        # interface/logic-typed params), emit the wrapper as `<top>.sv` so it
+        # joins the .sv sv2v-conversion set in BOTH the synth and reference_tb
+        # frontends. The reference_tb sv2v pre-pass filters strictly on `.sv`;
+        # a `.v` wrapper carrying SV param syntax would be passed to
+        # `iverilog -g2012` UNCONVERTED and syntax-error on the runner's own
+        # output. A plain Verilog-2005 param block keeps the `.v` extension
+        # (byte-identical historical behaviour). chip-AGNOSTIC SV-syntax
+        # surface predicate — no chip/vendor literal.
+        if _chip_top_param_block_needs_sv(param_block):
+            chip_top_dst = chip_top_sv
+        else:
+            chip_top_dst = chip_top_v
+        chip_top_dst.write_text(wrapper)
+        rtl_files.append(str(chip_top_dst))
     try:
         _autoemit_chip_top_if_needed()
     except Exception:

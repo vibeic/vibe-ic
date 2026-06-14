@@ -2690,6 +2690,14 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
         if not passed:
             reasons.append(f"optional program failed: {cmd}")
             reasons.append(f"output: {out[:200]}")
+        elif out.startswith(_WAIVER_HINT_PREFIX):
+            # ORGANIC #654 — an OPTIONAL gate program may also signal
+            # PASS_WITH_WAIVERS (rc=3 + sentinel). _check_program_exit_zero
+            # already validated the rc+sentinel pair and returned the
+            # `__WAIVER_HINT__:` tuple; forward it so check_step promotes the
+            # step to WAIVED-DEFERRED (Overall PASS_WITH_WAIVERS) instead of a
+            # bare PASS — mirrors the non-optional `program_exit_zero` branch.
+            reasons.append(out)
         elif _stdout_signals_vacuous(out):
             # Wave 93 — preserve the VACUOUS signal for upstream verdict
             # aggregation. The hint is filtered out before display so the
