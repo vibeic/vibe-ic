@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 678
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 678)
+- **Total programs (excluding helpers / shims):** 679
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 679)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 669 |
+| `any` | 670 |
 
 ## Alphabetical listing
 
@@ -313,6 +313,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `i3c_protocol_synth` | any | v0.1.84 | I3C-class protocol synth helper. |
 | `ic_class_consistency_check` | any | Wave 42 | gate (Wave 42, v0.119.70 / SF6). |
 | `ic_class_profile` | any | Wave 36 | IC class detection helper (Wave 36, v0.119.68). |
+| `iface_conformance_v2` | any | — | prompt→interface conformance gate (ORGANIC #695). |
 | `infiniband_protocol_synth` | any | — | InfiniBand Architecture (IBTA) protocol synth helper. |
 | `input_docs_coverage_check` | any | v0.50 | v0.50 plugin gate |
 | `integration_spec_audit` | any | — | Deterministic compliance check for integration-spec-gen. |
@@ -750,7 +751,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (669 programs)
+### `any` (670 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1035,6 +1036,7 @@ _(no programs in this group)_
 - `i3c_protocol_synth` — I3C-class protocol synth helper.  _[v0.1.84]_
 - `ic_class_consistency_check` — gate (Wave 42, v0.119.70 / SF6).  _[Wave 42]_
 - `ic_class_profile` — IC class detection helper (Wave 36, v0.119.68).  _[Wave 36]_
+- `iface_conformance_v2` — prompt→interface conformance gate (ORGANIC #695).
 - `infiniband_protocol_synth` — InfiniBand Architecture (IBTA) protocol synth helper.
 - `input_docs_coverage_check` — v0.50 plugin gate  _[v0.50]_
 - `integration_spec_audit` — Deterministic compliance check for integration-spec-gen.
