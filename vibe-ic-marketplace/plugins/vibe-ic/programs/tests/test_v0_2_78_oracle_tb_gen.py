@@ -137,7 +137,11 @@ def test_oracle_tb_catches_wrong_dut(tmp_path):
 
 def test_skeleton_completion_is_waived_not_pass():
     i = _P2_SRC.index('"FULL_STACK_TB_DONE" in out')
-    window = _P2_SRC[i:i + 2200]
+    # Window widened (ORGANIC #654 inserted the connectivity-bridge emission
+    # + capability-gap waiver comment block ahead of the `fallback_skill`
+    # extra in this same WAIVED return; the assertions below still pin the
+    # skeleton-completion-is-WAIVED-not-PASS contract).
+    window = _P2_SRC[i:i + 3800]
     assert '"reference_tb", "WAIVED"' in window
     assert '"fallback_skill": "testbench-author"' in window
     assert "#439" in window

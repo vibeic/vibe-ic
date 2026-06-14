@@ -351,6 +351,19 @@ steps:
       all_of:
         - files_exist: ["phase2/stage1/sim/results.xml", "phase2/stage1/sim/pass.flag"]
           any_of: true
+        # ORGANIC #654 — connectivity-PASS / functional-DEFERRED capability-gap
+        # waiver for the no-oracle generic_full_stack CPU/SoC class. When the
+        # canonical sim/results.xml is the connectivity bridge the runner emits
+        # for a processor/SoC with no command/opcode oracle + no L10 golden
+        # vectors, this gate (rc=3 PASS_WITH_WAIVERS) promotes Step 4 to
+        # WAIVED-DEFERRED with a reviewable cap:cpu_functional_oracle evidence
+        # pointer — instead of the chain halting on the opaque missing-file
+        # FAIL that was structurally unavoidable for this class. A genuine
+        # functional PASS (oracle bridge) is N/A here (rc=0); a forged waiver
+        # (no/empty evidence, or functional_verified=true) FAILs.
+        - optional_program_exit_zero:
+            command: "cpu_functional_oracle_waiver_check . --json reports/phase2/gates/cpu_functional_oracle_waiver.json"
+            condition_files_exist: ["phase2/stage1/sim/results.xml"]
         # L10 tb-conformance: run only when L10_TEST_CASES.json exists.
         - optional_program_exit_zero:
             command: "l10_tb_conformance_check --l10 phase1/generated_docs/L10_TEST_CASES.json --tb-dir phase2/stage1/sim/tb --out reports/phase2/gates/l10_tb_conformance.json"
