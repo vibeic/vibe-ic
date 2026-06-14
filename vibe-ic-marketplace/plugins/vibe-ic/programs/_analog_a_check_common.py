@@ -58,6 +58,96 @@ def load_block_list(project: Path) -> Optional[List[str]]:
     return out
 
 
+# ── ORGANIC #676 — analog class-N/A predicate ──────────────────────────────
+# The 3 analog P0 gates (analog_flow_compliance_check /
+# analog_digital_interface_check / analog_a6_block_pv_check) used to hard-FAIL
+# whenever analog_block_list.json carried ANY block — even a phantom
+# `low_confidence` block fabricated from a digital keyword ("POR") on a
+# pure-digital SoC classified `analog_applicable=false` /
+# `verification_track=generic_full_stack`. The SIBLING analog gates already
+# self-skip as N/A on a non-analog IC; these 3 lacked any class awareness.
+# This shared predicate gives all three the SAME class-N/A read so a digital
+# SoC SKIPs (N/A) instead of FAILing.
+#
+# §4.05 no-leak: returns True (→ N/A skip) ONLY when the IC is positively
+# classified non-analog AND every declared block is low_confidence (a phantom
+# keyword hit). A REAL analog IC (has_analog:true / analog_applicable:true) or
+# a high-confidence (spec-backed) block returns False → still gated.
+# chip-AGNOSTIC: reads the IC-class verdict + the per-block low_confidence tag;
+# no chip / vendor / class literal.
+
+def _ic_class_says_non_analog(project: Path) -> bool:
+    """True iff the IC is positively classified as NON-analog, via
+    reports/ic_class.json (`has_analog:false`) and/or the registry
+    verification flags (`analog_applicable:false` /
+    `verification_track=="generic_full_stack"`). Fail-closed: if no class
+    verdict is available at all, returns False (the IC is NOT assumed
+    non-analog — existing gating is never weakened)."""
+    for rel in ("reports/ic_class.json",
+                "reports/phase1/ic_class.json"):
+        p = project / rel
+        if not p.is_file():
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        # Direct, explicit non-analog signal.
+        if data.get("has_analog") is False:
+            return True
+        if data.get("is_pure_analog") is True or data.get("is_mixed_signal") is True:
+            return False
+        # Registry-backed verification flags (analog_applicable /
+        # verification_track) for the detected class.
+        ic_class = data.get("ic_class")
+        if isinstance(ic_class, str) and ic_class:
+            try:
+                import ic_class_profile as _icp
+                flags = _icp.class_verification_flags(ic_class)
+                if (flags.get("analog_applicable") is False
+                        and flags.get("verification_track")
+                        == "generic_full_stack"):
+                    return True
+            except Exception:
+                pass
+    return False
+
+
+def _all_blocks_low_confidence(project: Path) -> bool:
+    """True iff EVERY declared analog block is tagged `low_confidence:true`
+    (a phantom keyword hit, never a spec-backed block). An empty list returns
+    False here — the caller's existing empty-list VACUOUS path handles that.
+    A list with ANY high-confidence (spec-backed) block returns False so a real
+    analog IC is still gated."""
+    path = project / "phase3" / "analog" / "analog_block_list.json"
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    blocks = data.get("blocks") if isinstance(data, dict) else data
+    if not isinstance(blocks, list) or not blocks:
+        return False
+    for entry in blocks:
+        if not isinstance(entry, dict):
+            return False  # bare-string block → treat as confident → gate it
+        if entry.get("low_confidence") is not True:
+            return False
+    return True
+
+
+def analog_class_is_na(project: Path) -> bool:
+    """ORGANIC #676 — True iff the analog P0 gates should SKIP (N/A) on this
+    IC: it is positively classified NON-analog AND every block declared in
+    analog_block_list.json is a low_confidence (phantom) keyword hit. Both
+    conditions are required so the skip is defence-in-depth, never a blanket
+    bypass: a real analog IC fails (1), a confident analog block fails (2)."""
+    return _ic_class_says_non_analog(project) and _all_blocks_low_confidence(project)
+
+
 def select_blocks(blocks: List[str],
                   block_filter: Optional[str]) -> List[str]:
     """When `--block <name>` is given, restrict to that block (even
