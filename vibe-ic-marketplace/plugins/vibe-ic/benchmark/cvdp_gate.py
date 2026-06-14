@@ -907,7 +907,6 @@ def main(argv=None) -> int:
                 #     only WARNs — never blocks — on an id-stem mismatch.
                 req = (required_module_names_from_prompt(
                     prompts.get(str(rec.get("id")), "")) if prompts else set())
-                _id_derived = not req
                 if not req:
                     _derived_top = required_top_from_id(str(rec.get("id")))
                     if _derived_top:
@@ -915,25 +914,31 @@ def main(argv=None) -> int:
                 if req:
                     mods = completion_module_names(out_rec.get("completion"))
                     if mods and not (req & mods):
-                        _src = ("the draft id implies the harness top might be "
-                                "`{0}` (advisory only — the harness TOPLEVEL is "
-                                "the prompt's stated Module Name for ~97% of "
-                                "CVDP problems)".format(sorted(req)[0])
-                                if _id_derived else
-                                "the prompt states the required module name")
-                        msg = (f"harness requires a module named {sorted(req)} "
-                               f"({_src}); completion declares {sorted(mods)} — "
-                               f"the harness forces TOPLEVEL to that name so "
-                               f"this ELAB_ERRORs at scoring (#642)")
-                        # id-derived mismatch is advisory; --prompts-advisory
-                        # downgrades a prompt-derived mismatch to advisory too.
-                        if _id_derived or args.prompts_advisory:
-                            entry.setdefault("notes", []).append(
-                                "WARN filename-module-mismatch: " + msg)
-                        else:
-                            entry["verdict"] = "BLOCKED"
-                            entry["filename_conformance"] = msg
-                            ok = False
+                        # ORGANIC #642 round-2 — name-conformance is ADVISORY
+                        # (WARN) ONLY, NEVER a hard-BLOCK. The CVDP harness's
+                        # cocotb TOPLEVEL is fixed by the HIDDEN test harness
+                        # from the module DECLARATION name — which is NOT
+                        # reliably the prompt's save-filename stem (`rtl/<X>.sv`)
+                        # NOR any prose hint NOR the id stem. Field round-2
+                        # measured 7/302 correct answers whose filename-stem !=
+                        # module-name == harness TOPLEVEL == scorer PASS, yet
+                        # were hard-blocked and dropped from the scoring set.
+                        # §4.05 asymmetry: a false-BLOCK discards a PASSING
+                        # answer irreversibly, whereas a genuine module mismatch
+                        # is emitted-and-WARNed and the SCORER ELAB_ERRORs it
+                        # anyway (identical final outcome). So surface the
+                        # potential mismatch as advisory and ALWAYS emit — the
+                        # scorer remains the sole arbiter of TOPLEVEL. (The
+                        # `--prompts-advisory` flag is retained for compat but
+                        # is now a no-op: conformance is always advisory.)
+                        msg = (f"a prompt name hint suggests the harness top may "
+                               f"be {sorted(req)}; completion declares "
+                               f"{sorted(mods)} — if these disagree with the "
+                               f"hidden harness TOPLEVEL the scorer ELAB_ERRORs "
+                               f"it (advisory; the gate cannot prove the harness "
+                               f"TOPLEVEL — #642 round-2)")
+                        entry.setdefault("notes", []).append(
+                            "WARN module-name-conformance: " + msg)
             report.append(entry)
             if ok:
                 passed.append(out_rec)

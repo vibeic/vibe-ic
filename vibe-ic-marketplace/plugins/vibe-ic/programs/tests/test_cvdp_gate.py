@@ -88,8 +88,11 @@ def test_559_required_module_names_from_prompt():
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
-def test_559_filename_module_mismatch_blocked_with_prompts(tmp_path):
-    # prompt requires rtl/foo.sv but completion declares module 'bar'
+def test_559_filename_module_mismatch_is_advisory_with_prompts(tmp_path):
+    # ORGANIC #642 round-2 — a filename hint (`rtl/foo.sv`) is NOT the harness
+    # TOPLEVEL (cocotb sets it from the module DECLARATION name). A
+    # filename-vs-module mismatch is ADVISORY (WARN + emit), never a hard-BLOCK:
+    # the completion is emitted and the scorer arbitrates.
     batch = _write_batch(tmp_path, [
         {"id": "p1", "completion": "```verilog\nmodule bar(input a, "
                                    "output b);\nassign b=a;\nendmodule\n```\n"}])
@@ -100,11 +103,13 @@ def test_559_filename_module_mismatch_blocked_with_prompts(tmp_path):
     rep = tmp_path / "rep.json"
     rc = G.main(["--batch", str(batch), "--out", str(out),
                  "--report", str(rep), "--prompts", str(prompts)])
-    assert rc == 1
-    assert _read_jsonl(out) == []
+    assert rc == 0
+    assert len(_read_jsonl(out)) == 1            # emitted (not discarded)
     e = _json.loads(rep.read_text())["records"][0]
-    assert e["verdict"] == "BLOCKED"
-    assert "filename_conformance" in e
+    assert e["verdict"] == "PASS"
+    assert "filename_conformance" not in e        # never hard-blocked
+    assert any("module-name-conformance" in n     # advisory, not silent
+               for n in e.get("notes", []))
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
