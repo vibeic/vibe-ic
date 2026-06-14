@@ -135,8 +135,16 @@ def test_mixed_signal_otp_class_reachable(tmp_path: Path) -> None:
     _w(p, "L5_ADI_SPEC.json", {
         "analog_blocks": [{"name": "bandgap"}],
     })
+    # ORGANIC-20260614 (#653): a geometry-only otp_layout (e.g. bare
+    # `size_bits`) is no longer OTP evidence — the layout must carry at
+    # least one populated CONTENT sub-field (fields/lockbits/...).  Give
+    # this genuine mixed_signal_otp fixture real OTP content so it still
+    # reaches the class for the right reason.
     _w(p, "L4_REGMAP.json", {
-        "otp_layout": {"size_bits": 1024},
+        "otp_layout": {
+            "size_bits": 1024,
+            "fields": [{"name": "CHIP_ID", "bits": 32}],
+        },
     })
     cls, _ = detect_ic_class(p)
     assert cls == "mixed_signal_otp"

@@ -321,6 +321,42 @@ def _waveforms_carry_protocol_symbols(wfs: Any) -> bool:
     return any(tok in blob for tok in _WAVEFORM_PROTOCOL_TOKENS)
 
 
+# ORGANIC #655 — half-duplex protocol per-symbol timing tokens for the
+# `timing_constants[]` container. Mirrors the #617 `waveforms[]` treatment:
+# a `timing_constants[]` entry carrying any of these references directional
+# (rx/tx/host/dut) timing or H0/H1/BR/IBT-style symbol pulses; a bare scalar
+# clock-frequency constant (e.g. {name:fclk,value:1.0,unit:MHz}) promoted into
+# L8 by doc-extraction from an L5/spec clock table carries none. The tokens are
+# the SAME protocol symbol-timing vocabulary as #617 — a scalar clk/fclk
+# frequency name (clk*/fclk/sysclk/refclk…) with a Hz/MHz/GHz unit is NOT
+# symbol-timing and must NOT defeat the VACUOUS_PASS escape.
+_TIMING_CONSTANT_PROTOCOL_TOKENS = (
+    "rx_", "tx_", "host_", "dut_", "external_", "internal_",
+    "_low", "_high", "ibt", "break", "_counters", "_cycles",
+    "h0_", "h1_", "br_", "_tdw", "_tdt", "tb_",
+)
+
+
+def _timing_constants_carry_protocol_symbols(tcs: Any) -> bool:
+    """ORGANIC #655 — True iff a `timing_constants[]` value carries half-duplex
+    protocol symbol-timing content (directional rx/tx/host/dut tokens or
+    H0/H1/BR/IBT symbol pulses / per-symbol LOW/HIGH pulse widths), as opposed
+    to a bare scalar clock-FREQUENCY constant (name like clk*/fclk, unit
+    Hz/MHz/GHz, one numeric value) auto-promoted by doc-extraction from an
+    L5/spec clock table. A scalar clock-frequency entry is NOT protocol
+    symbol-timing — there is no RX/TX direction to split — so it must count as
+    EMPTY for the VACUOUS_PASS escape. Conservative substring scan over the
+    serialised value, SAME vocabulary as #617. chip-AGNOSTIC: keyed on the
+    protocol symbol-timing token shape, not on any chip or unit."""
+    if not tcs:
+        return False
+    try:
+        blob = json.dumps(tcs).lower()
+    except (TypeError, ValueError):
+        blob = str(tcs).lower()
+    return any(tok in blob for tok in _TIMING_CONSTANT_PROTOCOL_TOKENS)
+
+
 def _resolve_waveform_path(arg: str) -> Path | None:
     """v1.6.38 — accept either an L8 JSON file directly OR a project_dir
     (in which case look up phase1/generated_docs/L8_TIMING_WAVEFORM.json).
@@ -465,12 +501,31 @@ def main() -> int:
     # half-duplex L8 (rx_/tx_ groups, or symbol pulses in waveforms) is
     # unaffected — its waveforms carry protocol tokens so it is NOT treated
     # as empty.
+    #
+    # ORGANIC #655 — the SAME content-discriminator must apply to the
+    # `timing_constants[]` container. doc-extraction promotes a bare scalar
+    # clock-FREQUENCY constant (e.g. {name:fclk,value:1.0,unit:MHz}) into L8
+    # from an L5/spec clock table. That single non-protocol entry previously
+    # made `_empty('timing_constants')` False → defeated the all(_empty(...))
+    # short-circuit → forced the hard half-duplex RX/TX per-symbol-group demand
+    # on a non-protocol IC (delta-sigma ADC, CPU core, …) whose L2 also has no
+    # protocol_overview (half_duplex_l2 is None, not False), so the gate
+    # unconditionally FAILed with missing_rx_group + missing_tx_group. A scalar
+    # clock-frequency entry is NOT protocol symbol-timing — there is no RX/TX
+    # direction to split — so it counts as EMPTY unless it actually carries
+    # directional / per-symbol protocol content (rx_/tx_/host_/dut_ tokens or
+    # H0/H1/BR/IBT-style pulse widths). A genuine half-duplex L8 that stores
+    # per-symbol counters/cycles in timing_constants[] carries those tokens and
+    # is therefore NOT treated empty — the strict split still runs (no-leak).
     def _empty(key):
         v = waveform.get(key)
         if not v:  # None / [] / {} / 0 all count as empty
             return True
         if key == "waveforms" and not _waveforms_carry_protocol_symbols(v):
             return True  # generic WaveDrom diagram, no protocol symbols (#617)
+        if key == "timing_constants" and \
+                not _timing_constants_carry_protocol_symbols(v):
+            return True  # scalar clock-frequency only, no protocol symbols (#655)
         return False
     # Only VACUOUS_PASS when there is genuinely NO protocol/symbol timing
     # content by ANY name. Besides the canonical containers (timing_windows /

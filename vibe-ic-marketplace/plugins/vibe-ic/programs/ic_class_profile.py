@@ -247,6 +247,21 @@ def _l4_has_otp(l4: Optional[dict], l11: Optional[dict],
     different ICs (otp_field_table, otp_image_hex, otp_registers,
     otp_bytes, otp_program_table, otp_section_layout, otp_dump,
     otp_macro).
+
+    ORGANIC-20260614 (#653) — the Phase-1 L4 generator emits an
+    ``otp_layout`` SKELETON dict (default depth/width geometry, all
+    content lists empty: fields/read_map/write_map/lockbits/
+    trim_registers/mask_sources=[]) for NO-OTP ICs.  A non-empty dict
+    is truthy, so the old ``if v: return True`` reported has_otp=True
+    even for ICs that explicitly declare ``otp_present: false`` /
+    ``no_otp_layout_in_input: true``.  Fix is two-fold and chip-AGNOSTIC:
+      (1) an explicit absence veto (L11 ``otp_present == False`` OR
+          L4/L11 ``no_otp_layout_in_input``/``no_otp_in_input``) is a
+          HARD short-circuit to False; and
+      (2) a dict-valued OTP key only counts as evidence when at least
+          one CONTENT sub-field is non-empty — geometry-only skeletons
+          do not.  Non-dict OTP values (e.g. a populated ``lockbits``
+          list or ``otp_bytes`` blob) keep their plain truthiness.
     """
     otp_keys = (
         "otp_layout", "otp_table", "otp_image",
@@ -260,12 +275,46 @@ def _l4_has_otp(l4: Optional[dict], l11: Optional[dict],
         "otp_field_table", "otp_image_hex", "otp_registers",
         "otp_bytes", "otp_program_table", "otp_content",
     )
+    # Content sub-fields that distinguish a POPULATED OTP-layout dict from
+    # a geometry-only skeleton (which carries only depth/width defaults).
+    otp_content_subkeys = (
+        "fields", "read_map", "write_map", "lockbits",
+        "otp_bytes", "trim_registers", "mask_sources",
+        "registers", "image", "image_hex", "program_table",
+        "entries", "rows",
+    )
+
+    def _dict_has_content(d: dict) -> bool:
+        """True iff a dict-valued OTP key holds real content, not just
+        a geometry-only skeleton (all content sub-fields empty)."""
+        for ck in otp_content_subkeys:
+            if d.get(ck):
+                return True
+        return False
+
+    def _otp_value_is_evidence(v: Any) -> bool:
+        if isinstance(v, dict):
+            return _dict_has_content(v)
+        return bool(v)
+
+    # (1) Explicit absence veto — hard short-circuit to False.  A no-OTP
+    #     IC may carry a truthy-but-empty skeleton AND an honest negative
+    #     declaration; the declaration wins.
+    for j in (l4, l11, l14_otp):
+        if not isinstance(j, dict):
+            continue
+        if j.get("otp_present") is False:
+            return False
+        for veto_key in ("no_otp_layout_in_input", "no_otp_in_input"):
+            if j.get(veto_key) is True:
+                return False
+
     for j in (l4, l11, l14_otp):
         if not isinstance(j, dict):
             continue
         for k in otp_keys:
             v = j.get(k)
-            if v:
+            if _otp_value_is_evidence(v):
                 return True
         # Nested under L4_REGMAP / L11_OTP_CONTENT structure
         for nested_key in (
@@ -273,8 +322,15 @@ def _l4_has_otp(l4: Optional[dict], l11: Optional[dict],
         ):
             nv = j.get(nested_key)
             if isinstance(nv, dict):
+                if nv.get("otp_present") is False:
+                    return False
+                for veto_key in (
+                    "no_otp_layout_in_input", "no_otp_in_input",
+                ):
+                    if nv.get(veto_key) is True:
+                        return False
                 for k in nested_otp_keys:
-                    if nv.get(k):
+                    if _otp_value_is_evidence(nv.get(k)):
                         return True
     return False
 

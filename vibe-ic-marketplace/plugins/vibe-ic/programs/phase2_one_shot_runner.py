@@ -1343,9 +1343,13 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
                     f"refusing to rename against the project's own contract")
     try:
         pblock, pnames = _rcv.parse_module_params(target_txt, tgt)
+        # ORGANIC #656 — carry the consumed `import pkg::*;` clauses through to
+        # the wrapper header so package-scoped port-width params resolve on the
+        # outer wrapper (else: deterministic SV undeclared-identifier FAIL).
+        iblock = _rcv.parse_module_imports(target_txt, tgt)
         wrapper = _rcv.emit_variant_alias_wrapper(
             inner, ports, plan, wrapper_name=tgt,
-            param_block=pblock, param_names=pnames)
+            param_block=pblock, param_names=pnames, import_block=iblock)
     except ValueError as e:  # cross-polarity guard — never alias unsafely
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0, f"polarity-guard declined: {e}")

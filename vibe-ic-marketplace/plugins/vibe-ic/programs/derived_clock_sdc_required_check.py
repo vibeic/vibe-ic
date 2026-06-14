@@ -308,11 +308,28 @@ def audit(rtl_target: Path, sdc_path: Optional[Path]) -> List[Finding]:
 
     def _is_consumed(div: str) -> bool:
         # direct clock use, exported as a port, fed to ANY instance pin, or a
-        # downstream alias of div is itself consumed/exported (transitive,
-        # depth-bounded). Conservative: any of these → NOT a shadow bit.
+        # downstream alias of div that is GENUINELY consumed (transitive,
+        # depth-bounded). Conservative for the direct net: any of these → NOT
+        # a shadow bit.
         if (div in clock_consumers or div in output_ports
                 or div in instance_pin_nets):
             return True
+        # ORGANIC #658 — the alias frontier must NOT count a downstream net
+        # that is *merely re-exported* as an output port. The #569 alias walk
+        # treated ANY `assign <out> = <toggle>` (out an output port) as a clock
+        # consumer, conservatively assuming an exported toggle could be an
+        # external clock — but a 1-bit DATA/status flag exported via
+        # `assign phase = phase_q;` with NO `posedge phase` / clock-pin
+        # consumer anywhere is never used as a clock, so it must keep the #569
+        # `derived_clock_no_consumer` INFO classification (not a false ERROR).
+        # An aliased net counts ONLY when it is GENUINELY consumed as a clock
+        # (`posedge/negedge <alias>` or a clock-named pin) or fed to ANY
+        # instance pin (a real structural connection). KEEP no-leak: if the
+        # exported net IS actually used as a clock edge somewhere, it lands in
+        # `clock_consumers` and still gates (real exported derived clock → SDC
+        # required → ERROR). The DIRECT-export path above is unchanged: a net
+        # that is ITSELF the output port (`output reg core_clk; core_clk<=~`)
+        # stays conservatively gated.
         seen = set()
         frontier = list(assign_aliases.get(div, ()))
         while frontier:
@@ -320,8 +337,7 @@ def audit(rtl_target: Path, sdc_path: Optional[Path]) -> List[Finding]:
             if a in seen:
                 continue
             seen.add(a)
-            if (a in clock_consumers or a in output_ports
-                    or a in instance_pin_nets):
+            if a in clock_consumers or a in instance_pin_nets:
                 return True
             frontier.extend(assign_aliases.get(a, ()))
         return False

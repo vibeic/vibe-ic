@@ -649,16 +649,44 @@ _REQ_FILENAME_RE = re.compile(
     r"\b([A-Za-z_]\w*)\.s?v\b",
     re.IGNORECASE)
 
+# ORGANIC #642 round-2 (field-agent reopen) — the CVDP harness derives its
+# cocotb TOPLEVEL from the prompt's stated module name, NOT only from an
+# `rtl/<name>.sv` filename line. Field-measured: of 302 nonagentic problems
+# only 9 carry an `rtl/cvdp_copilot_<id>.sv` filename line; the other 293
+# state the required top via a `Module Name:` declaration (markdown
+# `### Module Name:` / `Module Name:` followed by a backtick-quoted or plain
+# identifier). The #559 filename-only extractor missed those 293, so the gate
+# fell through to the id-derived fallback and false-BLOCKED 97% of correct
+# completions (directly contradicting the official scorer — counter-example
+# `cvdp_copilot_16qam_mapper_0001`, top `qam16_mapper_interpolated`, which the
+# scorer PASSes but the gate BLOCKed). Recognising the `Module Name:`
+# declaration recovers the real prompt-derived top so it (not the id stem) is
+# the authoritative conformance target. chip-AGNOSTIC: pure prompt-prose
+# structure, no chip / vendor / SKU literal.
+_REQ_MODULE_NAME_RE = re.compile(
+    r"module\s+name\s*[`'\"*]*\s*[:\-]?\s*\n?\s*"
+    r"(?:[`'\"*]+\s*)?([A-Za-z_]\w*)",
+    re.IGNORECASE)
+
 
 def required_module_names_from_prompt(prompt_text):
-    """ORGANIC #559 — extract the set of filename STEMS the prompt asks the
-    author to save (rtl/<name>.sv, 'save it to foo.sv', 'a file named
-    bar.v'). The CVDP harness derives TOPLEVEL from the file layout, so the
-    completion must declare a module of the same name. Pure structural
-    parse — chip-AGNOSTIC. Returns a set of stems (possibly empty)."""
+    """ORGANIC #559 / #642 round-2 — extract the set of module-name STEMS the
+    prompt asks the author to implement. Two structural sources, both used by
+    the CVDP harness to derive its cocotb TOPLEVEL:
+      (a) #559 — a saved filename `rtl/<name>.sv` ('save it to foo.sv', 'a
+          file named bar.v');
+      (b) #642 round-2 — a `Module Name:` declaration (markdown
+          `### Module Name:` / `Module Name:` then a backtick-quoted or plain
+          identifier), the form 293/302 nonagentic problems actually use.
+    Pure structural parse — chip-AGNOSTIC. Returns a set of stems (possibly
+    empty)."""
     stems = set()
     for m in _REQ_FILENAME_RE.finditer(prompt_text or ""):
         nm = m.group(1) or m.group(2)
+        if nm:
+            stems.add(nm)
+    for m in _REQ_MODULE_NAME_RE.finditer(prompt_text or ""):
+        nm = m.group(1)
         if nm:
             stems.add(nm)
     return stems
@@ -675,25 +703,34 @@ def completion_module_names(completion):
 
 # ORGANIC #642 — a CVDP draft id follows the harness's universal naming
 # scheme `cvdp_copilot_<problem>` plus an optional trailing `_NNNN` variant
-# suffix. The official cocotb harness elaborates each completion with
-# `iverilog -s cvdp_copilot_<problem> ... rtl/cvdp_copilot_<problem>.sv`, i.e.
-# it FORCES the top module to be named `cvdp_copilot_<problem>`. A completion
-# whose top is named differently (the short/functional prose name) compiles
-# clean at this gate but ELAB_ERRORs at scoring ("cannot find top") — the same
-# gate-compile != scorer-compile class as the fence-emit gap #626. Deriving the
-# required top from the id lets the gate enforce the #559 module-name
-# conformance BY DEFAULT (without --prompts), so a name-mismatch is BLOCKED here
-# rather than shipped to ELAB. chip-AGNOSTIC: pure id-string structure (the
-# harness's own naming convention, applied uniformly to EVERY CVDP problem) —
-# no chip / vendor / SKU literal.
+# suffix. The id stem `cvdp_copilot_<problem>` is the harness TOPLEVEL for the
+# MINORITY of problems whose prompt also pins `rtl/cvdp_copilot_<problem>.sv`
+# (field-measured 9/302); for the other 293/302 the harness TOPLEVEL is the
+# prompt's stated functional `Module Name:`, NOT the id stem.
+#
+# v1.0.27 (round-1) wrongly treated the id stem as a HARD harness-top
+# requirement BY DEFAULT (without --prompts), which BLOCKED 97% of correct
+# completions — directly contradicting the official scorer (counter-example
+# `cvdp_copilot_16qam_mapper_0001`, top `qam16_mapper_interpolated`, scorer
+# PASS but gate BLOCK). Field-agent reopen: the id-derived stem must be
+# ADVISORY-only (it cannot prove the harness top without prompt evidence), and
+# only a PROMPT-derived name (filename or `Module Name:`) may hard-block. The
+# genuine 9/302 still hard-block correctly because their prompt carries
+# `rtl/cvdp_copilot_<problem>.sv` → required_module_names_from_prompt extracts
+# the stem from the prompt (prompt-derived, not id-derived). chip-AGNOSTIC:
+# pure id-string structure (the harness's own naming convention) — no chip /
+# vendor / SKU literal.
 _V642_VARIANT_SUFFIX_RE = re.compile(r"^(cvdp_copilot_.+?)_\d{3,}$")
 
 
 def required_top_from_id(rid):
-    """ORGANIC #642 — the harness-required top module name `cvdp_copilot_<stem>`
-    for a CVDP draft id (the id minus a trailing `_NNNN` variant suffix), or
-    None when the id does not follow the `cvdp_copilot_` convention (then no
-    id-derived requirement is imposed and the gate behaves as before)."""
+    """ORGANIC #642 — the id-derived top-module name `cvdp_copilot_<stem>` for
+    a CVDP draft id (the id minus a trailing `_NNNN` variant suffix), or None
+    when the id does not follow the `cvdp_copilot_` convention. ADVISORY-only
+    (round-2 field-agent reopen): the harness TOPLEVEL is the prompt's stated
+    `Module Name:` for 293/302 problems, so a mismatch against this id-derived
+    name is a WARN note, never a hard BLOCK — only a PROMPT-derived name
+    (required_module_names_from_prompt) is authoritative enough to block."""
     rid = (rid or "").strip()
     if not rid.startswith("cvdp_copilot_"):
         return None
@@ -852,15 +889,24 @@ def main(argv=None) -> int:
             # that declares no module matching the requested filename
             # ELAB_ERRORs. Advisory mode WARNs instead of blocking.
             if ok:
-                # #559 — prompt-stated required filename (when --prompts given).
+                # #559 / #642 round-2 — module-name conformance. TWO tiers:
+                #   • PROMPT-derived (filename rtl/<name>.sv OR `Module Name:`
+                #     declaration) — AUTHORITATIVE: the harness derives its
+                #     cocotb TOPLEVEL from exactly this, so a mismatch
+                #     ELAB_ERRORs at scoring → hard BLOCK (unless
+                #     --prompts-advisory). This is the form 293/302 nonagentic
+                #     problems use, and it also catches the genuine 9/302
+                #     `rtl/cvdp_copilot_<id>.sv` cases (their stem is
+                #     prompt-stated, so it lands here, not in the id fallback).
+                #   • id-DERIVED (`cvdp_copilot_<stem>`, used only when no
+                #     prompt-derived name is available) — ADVISORY-only: the
+                #     id stem is NOT the harness top for 293/302, so v1.0.27's
+                #     hard-BLOCK-by-default false-blocked 97% of correct
+                #     completions (round-2 field-agent reopen). Without prompt
+                #     evidence the gate cannot prove the harness top, so it
+                #     only WARNs — never blocks — on an id-stem mismatch.
                 req = (required_module_names_from_prompt(
                     prompts.get(str(rec.get("id")), "")) if prompts else set())
-                # ORGANIC #642 — when the prompt did not state a required
-                # filename (or --prompts was not passed — the documented
-                # --batch-dir flow), DERIVE the harness-required top name
-                # `cvdp_copilot_<stem>` from the draft id, so the module-name
-                # conformance is enforced BY DEFAULT and a name-mismatch is
-                # BLOCKED here instead of ELAB_ERRORing at scoring.
                 _id_derived = not req
                 if not req:
                     _derived_top = required_top_from_id(str(rec.get("id")))
@@ -869,15 +915,19 @@ def main(argv=None) -> int:
                 if req:
                     mods = completion_module_names(out_rec.get("completion"))
                     if mods and not (req & mods):
-                        _src = ("the draft id implies the harness top "
-                                "`-s {0}` (rtl/{0}.sv)".format(sorted(req)[0])
+                        _src = ("the draft id implies the harness top might be "
+                                "`{0}` (advisory only — the harness TOPLEVEL is "
+                                "the prompt's stated Module Name for ~97% of "
+                                "CVDP problems)".format(sorted(req)[0])
                                 if _id_derived else
-                                "the requested rtl/<name>.sv")
+                                "the prompt states the required module name")
                         msg = (f"harness requires a module named {sorted(req)} "
                                f"({_src}); completion declares {sorted(mods)} — "
                                f"the harness forces TOPLEVEL to that name so "
                                f"this ELAB_ERRORs at scoring (#642)")
-                        if args.prompts_advisory:
+                        # id-derived mismatch is advisory; --prompts-advisory
+                        # downgrades a prompt-derived mismatch to advisory too.
+                        if _id_derived or args.prompts_advisory:
                             entry.setdefault("notes", []).append(
                                 "WARN filename-module-mismatch: " + msg)
                         else:

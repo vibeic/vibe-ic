@@ -169,6 +169,161 @@ def _is_implicit_pin(name: str) -> bool:
     return any(p.match(name) for p in _IMPLICIT_PIN_PATTERNS)
 
 
+# ─── ORGANIC #659 — reused-IP struct-flatten reconciliation ────────
+# A catalog-glue / reused-IP wrapper (phase2/stage1/rtl/SOURCE_MANIFEST.json
+# with reused_ip=true) legitimately diverges from the L9 production pin
+# contract in TWO chip-AGNOSTIC ways:
+#
+#   (a) Struct-bus prefix-expansion. L9 declares a struct-typed bus port
+#       by its ROOT name `X` (e.g. a packed interface), but the chip_top
+#       flattens it into prefix-expanded scalar pads `X_a_*` / `X_d_*` /
+#       `X_*`. The L9 root then reads as "missing from RTL" and every
+#       expanded pad reads as "RTL has a port not in L9" — neither is a
+#       real mismatch.
+#   (b) Documented tie-offs. The manifest documents struct interfaces it
+#       drives to a constant internally (no pad). L9 still lists the
+#       interface root, but the chip_top has no matching pad — an
+#       INTENTIONAL omission, not a dropped pin.
+#
+# Reconciliation is chip-AGNOSTIC: it keys ONLY on the SOURCE_MANIFEST
+# structure (reused_ip flag + tie-off declarations) and the name-prefix
+# SHAPE of the expanded pads — never on a bus/vendor literal. A non-
+# reused-IP design (no manifest / reused_ip != true) gets NO relaxation,
+# so a genuine pin mismatch there still FAILs. A reused-IP design whose
+# L9-only pin is neither tied-off nor prefix-covered ALSO still FAILs.
+
+# The manifest may document its intentionally-omitted (tied-off /
+# internally-driven) struct interfaces under any of these list/dict keys.
+# All are deduped into one name set. Chip-AGNOSTIC: structure-only.
+_MANIFEST_TIEOFF_KEYS = (
+    "tie_offs",
+    "tied_interfaces",
+    "tied_off",
+    "tie_off",
+)
+# The manifest may ALSO explicitly declare which L9 roots are flattened
+# into prefix-expanded pads. When present this is authoritative; when
+# absent we fall back to pure name-prefix-shape coverage detection.
+_MANIFEST_FLATTEN_KEYS = (
+    "flattened_buses",
+    "flattened_interfaces",
+    "flattened",
+)
+
+
+def _manifest_name_set(manifest: dict, keys: tuple[str, ...]) -> set:
+    """Collect interface/port names from any of `keys` in the manifest.
+
+    Tolerates each value being a list of strings, a list of dicts (each
+    carrying a `name`/`port`/`interface`/`root` field), or a dict whose
+    KEYS are the interface names. Chip-AGNOSTIC: structure-only, no
+    literal. Returns a set of stripped names."""
+    out: set = set()
+    if not isinstance(manifest, dict):
+        return out
+    for key in keys:
+        v = manifest.get(key)
+        if isinstance(v, dict):
+            for name in v.keys():
+                if isinstance(name, str) and name.strip():
+                    out.add(name.strip())
+        elif isinstance(v, list):
+            for entry in v:
+                if isinstance(entry, str) and entry.strip():
+                    out.add(entry.strip())
+                elif isinstance(entry, dict):
+                    nm = (entry.get("name") or entry.get("port")
+                          or entry.get("interface") or entry.get("root"))
+                    if isinstance(nm, str) and nm.strip():
+                        out.add(nm.strip())
+    return out
+
+
+def load_source_manifest(project: Path) -> Optional[dict]:
+    """ORGANIC #659 — return phase2/stage1/rtl/SOURCE_MANIFEST.json's
+    parsed dict ONLY when it exists AND declares reused_ip truthily.
+
+    Returns None when the manifest is absent, unparseable, or does not
+    assert reused_ip=true — in EVERY such case the gate keeps its exact-
+    name comparison with NO reused-IP relaxation (no-leak). Chip-AGNOSTIC:
+    pure file read + boolean flag, no chip/vendor literal."""
+    mf = _pl.rtl_dir(project) / "SOURCE_MANIFEST.json"
+    if not mf.is_file():
+        return None
+    try:
+        data = json.loads(mf.read_text())
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("reused_ip") is not True:
+        return None
+    return data
+
+
+def reconcile_reused_ip(only_l9: list, only_rtl: list,
+                        manifest: dict) -> tuple[list, list, list, list]:
+    """ORGANIC #659 — structurally reconcile a reused-IP wrapper's L9-only
+    and RTL-only pin diffs against SOURCE_MANIFEST + name-prefix shape.
+
+    Returns (residual_l9_only, residual_rtl_only, tied_off, prefix_matched):
+      - residual_l9_only   : L9 roots that are NEITHER tied-off NOR
+                             prefix-covered — still a genuine mismatch.
+      - residual_rtl_only  : RTL pads not consumed by any prefix-expansion
+                             match — still a genuine extra port.
+      - tied_off           : L9 roots dropped as documented intentional
+                             tie-offs (advisory WARN, not FAIL).
+      - prefix_matched     : [(root, [pads…]), …] reconciled bus roots.
+
+    Order: tie-offs are resolved FIRST (a manifest-documented tied root is
+    dropped even if no pads exist), then remaining L9 roots attempt prefix-
+    expansion against the RTL-only pool. A root claims pads named `root_*`
+    (with the underscore boundary, so `tl` claims `tl_a_*`/`tl_d_*` but
+    never `tlx`). A root is prefix-matched ONLY when it claims ≥1 pad.
+
+    Chip-AGNOSTIC: matches on manifest structure + the `root_` name-prefix
+    SHAPE only; never a bus/vendor literal."""
+    tie_set = _manifest_name_set(manifest, _MANIFEST_TIEOFF_KEYS)
+    declared_flatten = _manifest_name_set(manifest, _MANIFEST_FLATTEN_KEYS)
+
+    tied_off: list = []
+    remaining_l9: list = []
+    # (1) Drop manifest-documented tie-offs from the L9-only diff first.
+    for p in only_l9:
+        if p in tie_set:
+            tied_off.append(p)
+        else:
+            remaining_l9.append(p)
+
+    # (2) Prefix-expansion: each remaining L9 root claims `root_`-prefixed
+    #     scalar pads out of the RTL-only pool. Longer roots match first so
+    #     a more-specific root (`tl_a`) claims its pads before a shorter
+    #     sibling (`tl`) could greedily absorb them.
+    rtl_pool = list(only_rtl)
+    prefix_matched: list = []
+    residual_l9: list = []
+    for root in sorted(remaining_l9, key=lambda r: (-len(r), r)):
+        prefix = root + "_"
+        claimed = [pad for pad in rtl_pool if pad.startswith(prefix)]
+        # When the manifest explicitly declares this root as flattened we
+        # honour it even though the structural prefix check is the same;
+        # the declaration is documentation, the SHAPE check is the proof.
+        if claimed:
+            for pad in claimed:
+                rtl_pool.remove(pad)
+            prefix_matched.append((root, sorted(claimed)))
+        elif root in declared_flatten:
+            # Declared flattened but no pads survived in the RTL-only pool
+            # (e.g. all pads were also implicit-stripped) — treat as
+            # reconciled documentation, not a residual mismatch.
+            prefix_matched.append((root, []))
+        else:
+            residual_l9.append(root)
+
+    return sorted(residual_l9), sorted(rtl_pool), sorted(tied_off), \
+        prefix_matched
+
+
 # ─── L9 ingestion ─────────────────────────────────────────────────
 def find_l9(project: Path) -> Optional[Path]:
     gd = _pl.generated_docs_dir(project)
@@ -616,6 +771,22 @@ def main(argv: list[str]) -> int:
     only_l9_all = sorted(l9_names - rtl_names)
     only_rtl_all = sorted(rtl_names - l9_names)
 
+    # ORGANIC #659 — reused-IP struct-flatten reconciliation. BEFORE the
+    # optional/debug splits, if phase2/stage1/rtl/SOURCE_MANIFEST.json
+    # declares reused_ip=true, reconcile the raw diffs: drop documented
+    # tie-offs (advisory) and collapse struct-bus prefix-expansion
+    # (`root` ↔ `root_*` pads) so only genuinely-unmatched pins survive.
+    # Non-reused-IP designs get manifest=None → NO relaxation → exact-name
+    # diff preserved (no-leak). Chip-AGNOSTIC: manifest structure + name-
+    # prefix shape only.
+    reused_tied_off: list = []
+    reused_prefix_matched: list = []
+    manifest = load_source_manifest(project)
+    if manifest is not None:
+        (only_l9_all, only_rtl_all,
+         reused_tied_off, reused_prefix_matched) = reconcile_reused_ip(
+            only_l9_all, only_rtl_all, manifest)
+
     # v0.3.4 — ORGANIC #491 R4. Split L9-only pins into doc-declared
     # OPTIONAL vs required. A doc says "(optional) pin" → the RTL top
     # legitimately may omit it; absence is advisory, not FAIL (mirror
@@ -699,6 +870,23 @@ def main(argv: list[str]) -> int:
             print(
                 f"  WARN (advisory) — L9 doc-OPTIONAL pin(s) not in "
                 f"RTL top: {only_l9_optional}"
+            )
+        if reused_prefix_matched:
+            # ORGANIC #659 advisory (non-gating): reused-IP struct-bus
+            # roots reconciled with their prefix-expanded scalar pads.
+            _pm = ", ".join(
+                f"{root}→{pads}" for root, pads in reused_prefix_matched)
+            print(
+                f"  WARN (advisory) — reused-IP struct-bus flatten "
+                f"reconciled (root ↔ prefix-expanded pads): {_pm}"
+            )
+        if reused_tied_off:
+            # ORGANIC #659 advisory (non-gating): SOURCE_MANIFEST-
+            # documented intentional tie-offs dropped from the L9-only diff.
+            print(
+                f"  WARN (advisory) — reused-IP SOURCE_MANIFEST tie-off(s) "
+                f"omitted from RTL top (intentional, internally driven): "
+                f"{reused_tied_off}"
             )
         return 0
 

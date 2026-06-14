@@ -148,12 +148,20 @@ def _strip_comments(text: str) -> str:
 
 
 def _module_header(text: str, module: str
-                   ) -> Optional[Tuple[Optional[str], str]]:
-    """Return (param_block, port_block) for `module <module> [#(...)] (...)`,
-    SKIPPING/capturing an optional `#(parameter ...)` block (balanced-paren +
-    string-literal aware). None if not found. Same parameterized-module fix as
-    #517 reopen — a clocked chip-top is often parameterized
-    (`module foo #(parameter W=8) (...)`)."""
+                   ) -> Optional[Tuple[Optional[str], str, List[str]]]:
+    """Return (param_block, port_block, import_clauses) for
+    `module <module> [import pkg::*;]* [#(...)] (...)`, SKIPPING/capturing an
+    optional `#(parameter ...)` block (balanced-paren + string-literal aware)
+    and CAPTURING any `import pkg::*;` clauses that sit between the module name
+    and the param/port regions. None if not found. Same parameterized-module
+    fix as #517 reopen — a clocked chip-top is often parameterized
+    (`module foo #(parameter W=8) (...)`).
+
+    The `import_clauses` list (ORGANIC #656) carries the verbatim
+    `import pkg::*;` text the regex loop consumes, so the wrapper emitter can
+    RE-EMIT them in the wrapper header — without it the wrapper references
+    package-scoped port-width params (e.g. a bus-pkg width localparam) with no
+    import in scope → a deterministic SV `use of undeclared identifier` error."""
     text = _strip_comments(text)
     m = re.search(rf"\bmodule\s+{re.escape(module)}\b", text)
     if not m:
@@ -194,10 +202,15 @@ def _module_header(text: str, module: str
     # the `#`/`(` test below finds `import` and returns None, so the port
     # parser / clock-reset alias emitter see zero ports on any package-
     # importing top (REUSED-IP / IP-integration-wrapper class). Repeatable.
+    # ORGANIC #656 — CAPTURE the consumed clauses (verbatim) so the wrapper
+    # emitter can re-emit them; package-scoped port-width params only resolve
+    # if the import is back in scope on the outer wrapper.
+    import_clauses: List[str] = []
     while True:
         im = re.match(r"import\s+[\w:\*\s,]+;", text[i:])
         if not im:
             break
+        import_clauses.append(im.group(0).strip())
         i = _skip_ws(i + im.end())
     param_block: Optional[str] = None
     if i < n and text[i] == "#":
@@ -212,7 +225,7 @@ def _module_header(text: str, module: str
         j = _skip_balanced(i)
         if j is None:
             return None
-        return (param_block, text[i + 1:j - 1])
+        return (param_block, text[i + 1:j - 1], import_clauses)
     return None
 
 
@@ -232,6 +245,19 @@ def parse_module_params(rtl_text: str, module: str
     return (hdr[0], re.findall(r"(\w+)\s*=", hdr[0]))
 
 
+def parse_module_imports(rtl_text: str, module: str) -> List[str]:
+    """Return the verbatim `import pkg::*;` clauses (in source order) sitting
+    between `module <module>` and its param/port regions; [] when there are
+    none (ORGANIC #656). Mirrors parse_module_params so the reset/clock wrapper
+    of a package-importing top RE-EMITS the imports its port widths depend on —
+    package-scoped width params (e.g. a bus-pkg width localparam) only resolve
+    on the outer wrapper if the import is back in scope there."""
+    hdr = _module_header(rtl_text, module)
+    if hdr is None:
+        return []
+    return list(hdr[2])
+
+
 def parse_module_ports(rtl_text: str, module: str
                        ) -> List[Tuple[str, str, str]]:
     block = _module_portlist_block(rtl_text, module)
@@ -246,7 +272,8 @@ def emit_variant_alias_wrapper(core_module: str,
                                rename_map: Dict[str, str],
                                wrapper_name: Optional[str] = None,
                                param_block: Optional[str] = None,
-                               param_names: Optional[List[str]] = None) -> str:
+                               param_names: Optional[List[str]] = None,
+                               import_block: Optional[List[str]] = None) -> str:
     """Render a wrapper that exposes each renamed reset/clock port under its
     TB-facing variant name and wires it 1:1 to the core's original port; all
     other ports pass straight through. RAISES ValueError on a cross-polarity
@@ -254,7 +281,15 @@ def emit_variant_alias_wrapper(core_module: str,
 
     When the core is PARAMETERIZED, the wrapper inherits the same `#(...)` block
     and forwards every parameter to the instance, so a parameterized clocked top
-    elaborates (its `[W-1:0]` reset/clock-adjacent port widths resolve)."""
+    elaborates (its `[W-1:0]` reset/clock-adjacent port widths resolve).
+
+    When the core IMPORTS PACKAGES (ORGANIC #656), `import_block` carries the
+    `import pkg::*;` clauses the parser consumed; they are re-emitted in the
+    wrapper header (immediately after `module <wrapper>`, before the param
+    header and the port list) so package-scoped port-width identifiers —
+    e.g. a bus-pkg width localparam used as `[PKG_WIDTH-1:0]` in the inherited
+    port decls — resolve on the outer wrapper instead of erroring as
+    `use of undeclared identifier`. None/[] re-emits no import line."""
     for orig, new in rename_map.items():
         if not _same_class(orig, new):
             raise ValueError(
@@ -280,6 +315,13 @@ def emit_variant_alias_wrapper(core_module: str,
         if param_names:
             inst_params = " #(" + ", ".join(
                 f".{p}({p})" for p in param_names) + ")"
+    # ORGANIC #656 — re-emit the consumed `import pkg::*;` clauses on the
+    # wrapper header so package-scoped port-width params resolve. Rendered
+    # right after `module <wrapper>` and before `#(...)` / the port list,
+    # matching the standard SV ordering `module X import pkg::*; #(p) (ports);`.
+    import_hdr = ""
+    if import_block:
+        import_hdr = "\n  " + "\n  ".join(c.strip() for c in import_block)
     decls, conns = [], []
     for direction, width, name in ports:
         face = rename_map.get(name, name)
@@ -293,7 +335,7 @@ def emit_variant_alias_wrapper(core_module: str,
         "// testbench using a different but equivalent STANDARD name elaborates.",
         "// Polarity is preserved 1:1. Generated by reset_clock_variant_alias.py"
         " (#518).",
-        f"module {wrapper_name}{param_hdr} (",
+        f"module {wrapper_name}{import_hdr}{param_hdr} (",
         ",\n".join(decls),
         ");",
         f"    {core_module}{inst_params} u_{core_module} (",
