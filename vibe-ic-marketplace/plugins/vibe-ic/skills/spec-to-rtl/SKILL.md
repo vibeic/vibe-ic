@@ -90,6 +90,31 @@ When `phase2_one_shot_runner.step_rtl_gen` WAIVES with the message:
    to catch spec-INTERPRETATION mismatches (it cannot — that residual stays an
    authoring judgment). When a tool is absent it discloses and skips (or, under
    `--require-tools`, hard-refuses) — it never fakes a pass.
+6b. **Prompt→interface conformance pre-emit check (ORGANIC #695)**. Before
+   handing back, run the deterministic interface gate — it reads ONLY the
+   prompt + your RTL (BLIND; never the oracle/hidden TB) and flags the three
+   PROMPT-DERIVABLE interface misses the hidden cocotb harness gets you on:
+
+   ```bash
+   python3 plugins/vibe-ic/programs/iface_conformance_v2.py \
+       --id <problem_id> \
+       --prompt <prompt.txt> \
+       --rtl <project>/phase2/stage1/rtl/<module_name>.v
+   ```
+
+   It checks (1) MODULE-NAME-CASE — the RTL module name must match the
+   canonical id stem the harness uses as TOPLEVEL CASE-EXACTLY (`-s
+   findfasterclock` won't find `FindFasterClock`); (2) MISSING-PORT — every
+   interface signal the prompt NAMES (table rows, backtick signal names with a
+   nearby direction, a given-code module header, wavedrom `name` entries) must
+   appear in your port list (AXI master must keep `ar*`/`aw*`, `s_ready`, etc.);
+   (3) PORT-DIRECTION — a port's direction must match the prompt's signal table
+   (don't declare `output sram_valid` when the harness drives it as an input).
+   ADVISORY by default (prompt extraction is heuristic — an internal signal
+   mentioned in prose is NOT a port and must not block); add `--strict` to make
+   any finding exit 1 once you've confirmed the named signals really are ports.
+   FIX every confirmed finding before emit — these are deterministic
+   elaboration/bind failures the scorer would hit, not authoring judgment.
 7. **Tell the orchestrator you're done**. The caller will re-invoke
    `vibe_ic_one_shot_runner.py` so the runner detects the RTL at the
    expected path, skips `step_rtl_gen`, and continues with: chip_top
