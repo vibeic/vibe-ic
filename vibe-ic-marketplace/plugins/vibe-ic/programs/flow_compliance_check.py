@@ -2975,37 +2975,53 @@ def _synthesise_fpga_skip_waivers(
     """ORGANIC #607 — when the runner discloses a deliberate FPGA skip
     (quartus_map_audit.json verdict=SKIP, sof_present=false — e.g. an IC class
     with no DE10 board-pin contract, or no Quartus on host), add an
-    ENV_UNAVAILABLE-tier cap-gap waiver for the FPGA early-prototype step so its
-    natural MISSING (no .sof) converts to WAIVED-DEFERRED via check_step's
+    ENV_UNAVAILABLE-tier cap-gap waiver for EVERY FPGA-board step so its
+    natural MISSING/FAIL (no .sof) converts to WAIVED-DEFERRED via check_step's
     existing fallback, instead of hard-FAILing and cascading
     blocked-by-upstream across stage2/stage3 → Overall:FAIL. Mirrors
     `_synthesise_pdk_substitution_waivers` (#496) and the #430 cap-gap doctrine.
     Mutates `out` in place; no-op when nothing is disclosed (undisclosed missing
-    .sof still hard-FAILs). chip-AGNOSTIC."""
+    .sof still hard-FAILs). chip-AGNOSTIC.
+
+    ORGANIC #663 — the early-prototype step (id 6) AND the final on-board
+    sign-off step (id 39) are BOTH board-absent capability gaps under the SAME
+    disclosed-skip predicate. v1.0.18 hard-coded only the early-prototype id, so
+    the canonical no-flag `--strict` audit left the final-signoff step at a hard
+    FAIL ('no-hardware-evidence' from the program_exit_zero attestation gate)
+    while only the early step deferred — asymmetric with the --skip-hardware
+    board-step downgrade (which already covers the whole renumber-proof set
+    `_FPGA_BOARD_STEP_IDS`). Iterate that same renumber-proof set so the cap-gap
+    auto-deferral is SYMMETRIC across all board steps. The waiver-synthesis layer
+    is the right place because the final-signoff gate is an all_of containing a
+    program_exit_zero attestation check that the #608 json_field_true self-skip
+    promotion never reaches; check_step's fallback honours this waiver."""
     if not _fpga_skip_disclosed(project):
         return
-    sid = _ENV_UNAVAILABLE_STEP_NAME_TO_ID["fpga_early_prototype"]  # renumber-proof
-    if sid in out:
-        return  # an explicit waiver for this step takes precedence
-    out[sid] = {
-        "id": sid,
-        "reason": (
-            "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner "
-            "HONESTLY self-reports a deliberate FPGA skip "
-            "(reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, "
-            "sof_present=false) — no DE10-class board-pin contract for this IC "
-            "class and/or no Quartus on host. The on-board prototype .sof is "
-            "DEFERRED to board bring-up (NOT executed-PASS) "
-            f"[ticket={_FPGA_SKIP_WAIVER_TICKET}, review_required=True, "
-            "cap:fpga_board_prototype]"),
-        "approver": "field-agent-attest (fpga-board cap-gap tier)",
-        "ticket": _FPGA_SKIP_WAIVER_TICKET,
-        "verdict_tier": "ENV_UNAVAILABLE",
-        "review_required": True,
-        "evidence": ["reports/phase2/fpga/quartus_map_audit.json"],
-        "_env_unavailable": True,
-        "_fpga_skip": True,
-    }
+    # renumber-proof: derive from the canonical step-name→id table (single
+    # source of truth, kept in sync with the flow YAML) rather than literals.
+    for sid in sorted(_FPGA_BOARD_STEP_IDS, key=lambda x: (str(type(x)), x)):
+        if sid in out:
+            continue  # an explicit waiver for this step takes precedence
+        out[sid] = {
+            "id": sid,
+            "reason": (
+                "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner "
+                "HONESTLY self-reports a deliberate FPGA skip "
+                "(reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, "
+                "sof_present=false) — no DE10-class board-pin contract for this "
+                "IC class and/or no Quartus on host. The on-board .sof "
+                "(early-prototype AND final sign-off) is DEFERRED to board "
+                "bring-up (NOT executed-PASS) "
+                f"[ticket={_FPGA_SKIP_WAIVER_TICKET}, review_required=True, "
+                "cap:fpga_board_prototype]"),
+            "approver": "field-agent-attest (fpga-board cap-gap tier)",
+            "ticket": _FPGA_SKIP_WAIVER_TICKET,
+            "verdict_tier": "ENV_UNAVAILABLE",
+            "review_required": True,
+            "evidence": ["reports/phase2/fpga/quartus_map_audit.json"],
+            "_env_unavailable": True,
+            "_fpga_skip": True,
+        }
 
 
 def _synthesise_pdk_substitution_waivers(
@@ -3763,12 +3779,33 @@ def _attribute_cascade_verdicts(
         results: List["StepResult"],
         steps: List[Dict[str, Any]],
         waivers: Dict[Any, Dict[str, Any]],
+        skip_analog: bool = False,
 ) -> Dict[str, Any]:
     """v0.3.5 — ORGANIC #502 + #503: deterministic cascade attribution
     so the summary separates ROOT CAUSES from their inevitable
     downstream consequences. Chip-AGNOSTIC: pure graph/order walk over
     the flow definition's declared `blocks_on` edges and step order —
     no step-id or chip-class literal participates in the logic.
+
+    ORGANIC #667 — when ``skip_analog=True``, a mixed-signal (M-track)
+    sign-off step whose ``blocks_on`` ancestry transitively reaches an
+    analog (A-track) step that was downgraded to SKIPPED-CONDITION (via
+    ``--skip-analog`` in ``check_step``) is the inevitable downstream
+    consequence of that same skip: the M-step's required mixed-signal
+    artefacts can only exist once the analog track has been run, and the
+    analog track was deliberately skipped. Such a MISSING M-step is
+    downgraded to SKIPPED-CONDITION (skip inherited from the skipped
+    analog ancestry) rather than left as a hard MISSING that drives
+    Overall: FAIL. This mirrors how A-steps and the #632 P0 analog
+    sub-gates are already suppressed under --skip-analog. The #502 cascade
+    (next) only converts a MISSING descendant when the ancestor is WAIVED,
+    never SKIPPED-CONDITION, so without this pass a legitimate
+    --skip-analog digital-scope run on ANY mixed-signal-class IC could
+    never reach Overall: PASS. Chip-AGNOSTIC: gated purely on the
+    structural ``_track_of`` classification (M-track step, A-track skipped
+    ancestor) reached over declared ``blocks_on`` edges — no step-id or
+    chip literal. A GENUINE M-step FAIL (real counter-evidence) is NOT
+    touched, and the skip only fires when --skip-analog is DISCLOSED.
 
     #502 (waiver chain must propagate): a MISSING step whose
     `blocks_on` ancestry (transitive) reaches a WAIVED-DEFERRED step is
@@ -3802,6 +3839,48 @@ def _attribute_cascade_verdicts(
 
     info: Dict[str, Any] = {"deferred_by_upstream": [],
                             "blocked_by_upstream": {}}
+
+    # ── #667: --skip-analog → propagate SKIPPED-CONDITION analog ──────
+    # ancestry to its mixed-signal descendants. Runs BEFORE the #502 /
+    # #503 passes so a now-SKIPPED M-step is no longer a MISSING that
+    # those passes would re-attribute. A MISSING M-track step whose
+    # blocks_on ancestry transitively reaches an analog step that is
+    # SKIPPED-CONDITION inherits the skip. Gated purely on the structural
+    # _track_of classification + declared blocks_on edges — chip-AGNOSTIC.
+    if skip_analog:
+        skipped_analog_ids = {
+            r.id for r in results
+            if r.status == "SKIPPED-CONDITION" and _track_of(r.id) == "analog"
+        }
+        if skipped_analog_ids:
+            for r in results:
+                if r.status != "MISSING" or _track_of(r.id) != "mixed":
+                    continue
+                # BFS over blocks_on ancestry → reaches a skipped analog step?
+                queue = list(parents_of.get(r.id, []))
+                seen: set = set()
+                hit = None
+                while queue:
+                    pid = queue.pop(0)
+                    if pid in seen:
+                        continue
+                    seen.add(pid)
+                    if pid in skipped_analog_ids:
+                        hit = pid
+                        break
+                    queue.extend(parents_of.get(pid, []))
+                if hit is None:
+                    continue
+                r.status = "SKIPPED-CONDITION"
+                r.cascade_note = f"skipped-by-upstream-analog({hit})"
+                r.reasons.insert(0, (
+                    f"mixed-signal track skipped via --skip-analog: this "
+                    f"step's blocks_on ancestry reaches the SKIPPED-CONDITION "
+                    f"analog step {hit}; its mixed-signal sign-off artefacts "
+                    f"only exist once the deliberately-skipped analog track "
+                    f"has run — skip inherited (review_required at "
+                    f"analog/foundry sign-off), not an independent gap"
+                ))
 
     # ── #502: waiver-chain propagation over blocks_on ancestry ──────
     deferred_ids = {r.id for r in results if r.status == "WAIVED"}
@@ -4223,7 +4302,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # verdicts are final (waiver conversions included): waiver chains
     # propagate over blocks_on edges; post-FAIL MISSING runs are
     # attributed to their first-FAIL root cause.
-    cascade_info = _attribute_cascade_verdicts(results, steps, waivers)
+    cascade_info = _attribute_cascade_verdicts(
+        results, steps, waivers, skip_analog=skip_analog)
 
     # v0.100 H2: advisory — warn if post-route STA passed single-corner only
     advisories: List[str] = []

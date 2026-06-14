@@ -918,13 +918,24 @@ def _evaluate_match_rule(pattern: str, facts: Dict[str, Any]) -> Tuple[bool, flo
             return (True, 1.0)
         return (False, 0.0)
 
-    # "X mentions 'Y'" — alias for free-text search
-    m = re.match(r"^(L\d+R?(?:\.[a-zA-Z0-9_\[\]]+)?)\s+mentions\s+['\"]([^'\"]+)['\"]\s*$", p)
+    # "X mentions 'Y'" or "X mentions 'Y' or 'Z' or ..." — alias for
+    # free-text search. The multi-alternative form ("'X' or 'Y' or 'Z'",
+    # alternatives joined by lowercase `or` inside one clause) is a
+    # DISJUNCTION: a record mentioning ANY alternative is a hit. This
+    # mirrors the sibling "contains 'X' or 'Y'" handler (which re.findall's
+    # all quoted values and ORs them) — without this, the multi-alternative
+    # 'mentions' form fell through to the AND-all free-text fallback below
+    # and silently dropped legitimately-matching records (ORGANIC #666,
+    # field-agent round-4 v1.0.42). Single quoted value + EOL kept its
+    # original semantics as the 1-alternative special case.
+    m = re.match(r"^(L\d+R?(?:\.[a-zA-Z0-9_\[\]]+)?)\s+mentions\s+(.+)$", p)
     if m:
-        value = m.group(2)
-        if value.lower() in full_text.lower():
-            return (True, 0.7)
-        return (False, 0.0)
+        values = re.findall(r"['\"]([^'\"]+)['\"]", m.group(2))
+        if values:
+            ft = full_text.lower()
+            if any(value.lower() in ft for value in values):
+                return (True, 0.7)
+            return (False, 0.0)
 
     # Free-text fallback: check if ALL quoted phrases appear in full_text
     quoted = re.findall(r"['\"]([^'\"]+)['\"]", p)

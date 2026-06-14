@@ -196,17 +196,25 @@ def test_guard_multiclock_empty_canonical_no_evidence_fails(tmp_path):
     assert result.summary["has_crossing"] is False
 
 
-def test_guard_multiclock_skipped_condition_not_pass(tmp_path):
-    """The runner emits SKIPPED-CONDITION (not PASS) for a multi-clock
-    design — it must not be accepted as a CDC report at all."""
+def test_guard_multiclock_skipped_condition_deferred(tmp_path):
+    """SUPERSEDED by ORGANIC #673 (P0). The runner emits SKIPPED-CONDITION
+    (not PASS) for a multi-clock design — a DISCLOSED capability gap (a real
+    CDC tool is required, #436). The pre-#673 behavior treated it as a hard
+    FAIL (`files_found == 0`, "No CDC report found"), which cascade-blocked
+    ALL of Phase 3 for any design with >=2 clock domains. Per #673 it is now
+    a WAIVED-DEFERRED cap-gap (`cap:cdc`) that PASSES the gate so Phase 3 is
+    not blocked. The #458 anti-recycling intent is preserved elsewhere: a
+    genuine verdict=FAIL still hard-FAILs, a corrupt JSON is not a disclosed
+    skip, and a multi-clock PASS lacking analysis still fails."""
     _write_canonical(tmp_path, {
         "verdict": "SKIPPED-CONDITION",
         "reason": "multi-clock design requires a real CDC tool run",
         "clocks_found": ["clk_a", "clk_b"],
     })
     result = ccc.audit_cdc(tmp_path)
-    assert result.passed is False
-    assert result.summary["files_found"] == 0
+    assert result.passed is True
+    assert result.summary["deferred"] is True
+    assert result.summary["cap_flag"] == "cap:cdc"
 
 
 def test_guard_clockref_only_rpt_still_fails(tmp_path):

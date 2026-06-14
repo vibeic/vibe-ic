@@ -289,3 +289,61 @@ def decide_sv2v_tb_define(
     return sim_define, (
         f"-D{sim_define} include closure complete (or both arms "
         f"under-staged); keep -D{sim_define}")
+
+
+# ORGANIC #668 — verilator error tokens that mark a SIM-ONLY-CONSTRUCT failure:
+# a verilator-unsupported construct that lives inside a dead `ifdef SIMULATION
+# arm (std::randomize / $urandom-class randomisation helpers) which the IDENTICAL
+# closure elaborates cleanly under -DSYNTHESIS (the construct is gone — the
+# synthesizable `else passthrough is taken instead). These are NOT genuine RTL
+# defects; they are a define-set mismatch. chip-AGNOSTIC: verilator tool-token
+# surface + the standard randomisation-helper vocabulary, no chip/vendor literal.
+VERILATOR_SIMONLY_CONSTRUCT_SIGNATURES: Tuple[str, ...] = (
+    "Duplicate declaration of signal: stdrand",   # std::randomize() scaffold
+    "stdrand",                                     # verilator std::randomize tmp
+    "std::randomize",
+    "randomize() with",
+    "Unsupported: $urandom",
+    "Unsupported: randomize",
+    "Unsupported: 'randomize'",
+    "Unsupported: std::",
+)
+
+
+def verilator_should_retry_synthesis_define(
+    verilator_err: str,
+    sim_define: str = "SIMULATION",
+    synth_define: str = "SYNTHESIS",
+) -> Tuple[bool, str]:
+    """ORGANIC #668 — decide whether the verilator SIM escape, after FAILING
+    under -D<sim_define>, should retry the SAME closure under -D<synth_define>.
+
+    The verilator SIM escape historically hardcoded -DSIMULATION, so it compiled
+    the sim-only `ifdef SIMULATION arm of a vendor primitive library (e.g. a
+    randomised-delay CDC model using std::randomize()/$urandom) and died on a
+    sim-only-construct error verilator cannot lower — even though that arm is
+    functionally DEAD and the IDENTICAL closure elaborates + runs to $finish
+    under -DSYNTHESIS (the synthesizable `else passthrough), the SAME define the
+    synth slang path already uses successfully. `decide_sv2v_tb_define` only
+    flips to SYNTHESIS on an include HOLE, and the #657 escape only fires on an
+    SVA signature; neither covers this, and the escape never tried SYNTHESIS.
+
+    Retry iff verilator's stderr carries a SIM-ONLY-CONSTRUCT signature. Honesty
+    preserved: a closure that ALSO fails under -D<synth_define> still FAILs (the
+    caller keeps the honest failure). chip-AGNOSTIC: tool error-token + the
+    standard SIMULATION/SYNTHESIS define names, no chip/vendor/file literal.
+
+    Returns (should_retry, reason)."""
+    err = verilator_err or ""
+    hit = any(s in err for s in VERILATOR_SIMONLY_CONSTRUCT_SIGNATURES)
+    if not hit:
+        return False, (
+            f"verilator failure carries no sim-only-construct signature — "
+            f"not a -D{sim_define}/-D{synth_define} define-set mismatch; "
+            f"keep the honest FAIL")
+    return True, (
+        f"verilator failed under -D{sim_define} on a sim-only construct "
+        f"(std::randomize/$urandom in a dead `ifdef {sim_define} arm); the "
+        f"IDENTICAL closure elaborates under -D{synth_define} (the "
+        f"synthesizable `else passthrough — the define the synth path "
+        f"already uses) — retrying under -D{synth_define}")
