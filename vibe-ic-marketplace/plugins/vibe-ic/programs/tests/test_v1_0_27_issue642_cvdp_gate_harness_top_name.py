@@ -73,34 +73,36 @@ def test_id_derived_mismatch_is_advisory_not_blocked(tmp_path):
                            "output b);\n  assign b = a;\nendmodule\n```\n"}])
     assert recs[0]["verdict"] == "PASS"
     assert "cvdp_copilot_16qam_mapper_0001" in passed
-    assert any("filename-module-mismatch" in n
+    assert any("module-name-conformance" in n
                for n in recs[0].get("notes", []))
     assert "filename_conformance" not in recs[0]
 
 
 # ── (2) NEGATIVE no-leak: prompt-derived names still hard-block ───────────────
 
-def test_prompt_module_name_mismatch_blocked_NOLEAK(tmp_path):
-    """A `Module Name:` declaration is authoritative — a completion that
-    declares a different top hard-BLOCKs (it ELAB_ERRORs at scoring)."""
+def test_prompt_module_name_mismatch_is_advisory_NOLEAK(tmp_path):
+    """ORGANIC #642 round-2 — a `Module Name:` hint is NOT guaranteed to equal
+    the hidden harness TOPLEVEL, so a mismatch is ADVISORY (WARN + emit), never
+    a hard-BLOCK. The completion is emitted and the scorer arbitrates; the
+    potential mismatch is surfaced (not silent)."""
     recs, passed = _run(tmp_path, [{
         "id": "cvdp_copilot_foo_0001",
         "completion": _V + "module totally_wrong(input a, output b);\n"
                            "  assign b = a;\nendmodule\n```\n"}],
         extra=_prompts(tmp_path, {
             "cvdp_copilot_foo_0001": "### Module Name:\n`expected_top`\n"}))
-    assert recs[0]["verdict"] == "BLOCKED"
-    assert "cvdp_copilot_foo_0001" not in passed
-    assert "expected_top" in recs[0].get("filename_conformance", "")
+    assert recs[0]["verdict"] == "PASS"
+    assert "cvdp_copilot_foo_0001" in passed
+    assert recs[0].get("filename_conformance") is None
+    assert any("module-name-conformance" in n
+               for n in recs[0].get("notes", []))
 
 
-def test_genuine_cvdp_copilot_top_blocked_when_prompt_pins_filename_NOLEAK(
-        tmp_path):
-    """The genuine 9/302 case: the prompt pins
-    `rtl/cvdp_copilot_bus_arbiter.sv` so the harness TOPLEVEL really is
-    `cvdp_copilot_bus_arbiter`. An author who used the short `bus_arbiter`
-    name must still be BLOCKed — the stem is now PROMPT-derived (from the
-    filename), so it hard-blocks (not via the advisory id fallback)."""
+def test_filename_pinned_top_is_advisory_NOLEAK(tmp_path):
+    """ORGANIC #642 round-2 — a SAVE-FILENAME hint (`rtl/<X>.sv`) is NOT the
+    harness TOPLEVEL (cocotb sets it from the module DECLARATION name). Field
+    round-2 proved the filename-pinned hard-block false-blocked correct
+    answers, so it is now ADVISORY: the completion is emitted with a WARN."""
     recs, passed = _run(tmp_path, [{
         "id": "cvdp_copilot_bus_arbiter_0001",
         "completion": _V + "module bus_arbiter(input a, output b);\n"
@@ -108,9 +110,11 @@ def test_genuine_cvdp_copilot_top_blocked_when_prompt_pins_filename_NOLEAK(
         extra=_prompts(tmp_path, {
             "cvdp_copilot_bus_arbiter_0001":
             "Save your top to rtl/cvdp_copilot_bus_arbiter.sv"}))
-    assert recs[0]["verdict"] == "BLOCKED"
-    assert "cvdp_copilot_bus_arbiter" in recs[0].get(
-        "filename_conformance", "")
+    assert recs[0]["verdict"] == "PASS"
+    assert "cvdp_copilot_bus_arbiter_0001" in passed
+    assert recs[0].get("filename_conformance") is None
+    assert any("module-name-conformance" in n
+               for n in recs[0].get("notes", []))
 
 
 def test_prompt_module_name_match_passes_NOLEAK(tmp_path):

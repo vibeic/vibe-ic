@@ -123,7 +123,7 @@ def test_id_derived_mismatch_passes_with_warn_no_prompts(tmp_path):
                            "output b);\n  assign b = a;\nendmodule\n```\n"}])
     assert recs[0]["verdict"] == "PASS"
     assert "cvdp_copilot_16qam_mapper_0001" in passed
-    assert any("filename-module-mismatch" in n
+    assert any("module-name-conformance" in n
                for n in recs[0].get("notes", []))
     # advisory → no hard-block field recorded
     assert "filename_conformance" not in recs[0]
@@ -137,26 +137,31 @@ def test_id_derived_advisory_note_is_clearly_advisory(tmp_path):
         "completion": _V + "module bus_arbiter(input a, output b);\n"
                            "  assign b = a;\nendmodule\n```\n"}])
     note = " ".join(recs[0].get("notes", []))
-    assert "advisory only" in note
+    assert "advisory" in note
 
 
 # ── (C) STRENGTHEN + NO-LEAK: prompt-derived names still hard-block ───────────
 
-def test_module_name_mismatch_caught_at_gate_via_new_extractor(tmp_path):
-    """STRENGTHEN: with the new `Module Name:` extractor the gate now CATCHES
-    a wrong-named completion at gate time for the 293/302 `Module Name:`
-    problems — where v1.0.27 (filename-only) would have let it ELAB at
-    scoring. Prompt pins `expected_top`; completion declares `wrong_top` →
-    BLOCKED, not emitted."""
+def test_module_name_mismatch_is_advisory_not_block(tmp_path):
+    """ORGANIC #642 round-2 — a name hint mismatch is ADVISORY (WARN + emit),
+    NOT a hard-BLOCK. Even a `Module Name:` hint is not guaranteed to equal the
+    hidden harness TOPLEVEL (field round-2: 7/302 correct answers were
+    false-blocked this way), so the gate must emit and let the scorer arbitrate.
+    Prompt hints `expected_top`; completion declares `wrong_top` → PASS + WARN,
+    emitted (the scorer ELAB_ERRORs it if it's a real mismatch — same outcome
+    as blocking, but a PASSING answer is never discarded)."""
     recs, passed = _run(tmp_path, [{
         "id": "cvdp_copilot_foo_0007",
         "completion": _V + "module wrong_top(input a, output b);\n"
                            "  assign b = a;\nendmodule\n```\n"}],
         extra=_prompts(tmp_path, {
             "cvdp_copilot_foo_0007": "### Module Name:\n`expected_top`\n"}))
-    assert recs[0]["verdict"] == "BLOCKED"
-    assert "cvdp_copilot_foo_0007" not in passed
-    assert "expected_top" in recs[0].get("filename_conformance", "")
+    assert recs[0]["verdict"] == "PASS"
+    assert "cvdp_copilot_foo_0007" in passed
+    # the potential mismatch is surfaced advisory (NOT silent), never blocked
+    assert recs[0].get("filename_conformance") is None
+    assert any("module-name-conformance" in n and "expected_top" in n
+               for n in recs[0].get("notes", []))
 
 
 def test_module_name_match_passes(tmp_path):
@@ -172,12 +177,13 @@ def test_module_name_match_passes(tmp_path):
     assert "cvdp_copilot_foo_0007" in passed
 
 
-def test_genuine_9of302_filename_pinned_top_still_blocks(tmp_path):
-    """NO-LEAK for the original #642 catch: the genuine 9/302 problems whose
-    prompt pins `rtl/cvdp_copilot_<id>.sv` make the harness TOPLEVEL really be
-    `cvdp_copilot_<id>`. An author using the short functional name must still
-    be BLOCKED — the stem is PROMPT-derived (from the filename line), so it
-    hard-blocks, NOT via the advisory id fallback."""
+def test_filename_pinned_top_is_advisory_not_block(tmp_path):
+    """ORGANIC #642 round-2 — a SAVE-FILENAME hint (`rtl/<X>.sv`) is NOT the
+    harness TOPLEVEL (the cocotb harness sets TOPLEVEL from the module
+    DECLARATION name, often != the filename stem). Field round-2 proved the
+    filename-pinned hard-block false-blocked correct answers, so it is now
+    ADVISORY too: the completion is emitted with a WARN, and the scorer
+    arbitrates. A genuine mismatch is still surfaced (advisory, not silent)."""
     recs, passed = _run(tmp_path, [{
         "id": "cvdp_copilot_bus_arbiter_0001",
         "completion": _V + "module bus_arbiter(input a, output b);\n"
@@ -185,15 +191,19 @@ def test_genuine_9of302_filename_pinned_top_still_blocks(tmp_path):
         extra=_prompts(tmp_path, {
             "cvdp_copilot_bus_arbiter_0001":
             "Implement and save to rtl/cvdp_copilot_bus_arbiter.sv"}))
-    assert recs[0]["verdict"] == "BLOCKED"
-    assert "cvdp_copilot_bus_arbiter_0001" not in passed
-    assert "cvdp_copilot_bus_arbiter" in recs[0].get(
-        "filename_conformance", "")
+    assert recs[0]["verdict"] == "PASS"
+    assert "cvdp_copilot_bus_arbiter_0001" in passed
+    assert recs[0].get("filename_conformance") is None
+    # the potential mismatch is surfaced advisory (NOT silent)
+    assert any("module-name-conformance" in n
+               and "cvdp_copilot_bus_arbiter" in n
+               for n in recs[0].get("notes", []))
 
 
-def test_prompts_advisory_downgrades_prompt_derived_block(tmp_path):
-    """NO-LEAK: --prompts-advisory still downgrades even a prompt-derived
-    mismatch to a WARN (the explicit advisory escape hatch is preserved)."""
+def test_prompts_advisory_flag_still_passes(tmp_path):
+    """ORGANIC #642 round-2 — `--prompts-advisory` is retained for compat and
+    still yields PASS + WARN (conformance is now always advisory regardless of
+    the flag)."""
     recs, passed = _run(tmp_path, [{
         "id": "cvdp_copilot_foo_0008",
         "completion": _V + "module wrong_top(input a, output b);\n"
@@ -203,7 +213,7 @@ def test_prompts_advisory_downgrades_prompt_derived_block(tmp_path):
         + ["--prompts-advisory"])
     assert recs[0]["verdict"] == "PASS"
     assert "cvdp_copilot_foo_0008" in passed
-    assert any("filename-module-mismatch" in n
+    assert any("module-name-conformance" in n
                for n in recs[0].get("notes", []))
 
 
@@ -217,7 +227,7 @@ def test_non_cvdp_id_no_requirement(tmp_path):
     assert recs[0]["verdict"] == "PASS"
     assert "my_design_42" in passed
     assert recs[0].get("notes", []) == [] or not any(
-        "filename-module-mismatch" in n for n in recs[0].get("notes", []))
+        "module-name-conformance" in n for n in recs[0].get("notes", []))
 
 
 def test_doc_only_unaffected(tmp_path):
