@@ -871,19 +871,58 @@ def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
 
     Returns the inserted block when `pdk.tapcell_master` is set, or a
     SKIPPED line otherwise (latch-up risk noted out-of-band).
+
+    #684 — sparse-die guard: `tapcell -distance` tiles well-tie cells
+    across EVERY row of the die, so a large FIXED wrapper holding a tiny
+    design gets ~134K tap cells over empty silicon (latch-up ties are only
+    physically required where active wells/devices exist). The guard runs
+    at floorplan time (insts already exist in odb after link_design, even
+    before placement) and SKIPs the full-die tapcell tiling when CORE
+    utilization is below the sparse threshold; a dense / normal-util design
+    (§4.05 negative) inserts taps exactly as before. chip-AGNOSTIC.
     """
-    if pdk.tapcell_master:
-        return (
-            f"if {{[catch {{tapcell -distance {pdk.tapcell_distance_um} "
-            f"-tapcell_master {pdk.tapcell_master}}} _tap_err]}} {{\n"
-            f"  puts \"TAPCELL_NONFATAL: $_tap_err\"\n"
-            f"}} else {{\n"
-            f"  puts \"TAPCELL_INSERTED: master={pdk.tapcell_master} "
-            f"distance={pdk.tapcell_distance_um}um\"\n"
-            f"}}\n")
-    return ("puts \"TAPCELL_SKIPPED: no tapcell_master configured "
-            "for this PDK; latch-up risk if not handled "
-            "out-of-band\"\n")
+    if not pdk.tapcell_master:
+        return ("puts \"TAPCELL_SKIPPED: no tapcell_master configured "
+                "for this PDK; latch-up risk if not handled "
+                "out-of-band\"\n")
+    thr = _sparse_die_fill_threshold_pct()
+    _tap_run = (
+        f"if {{[catch {{tapcell -distance {pdk.tapcell_distance_um} "
+        f"-tapcell_master {pdk.tapcell_master}}} _tap_err]}} {{\n"
+        f"  puts \"TAPCELL_NONFATAL: $_tap_err\"\n"
+        f"}} else {{\n"
+        f"  puts \"TAPCELL_INSERTED: master={pdk.tapcell_master} "
+        f"distance={pdk.tapcell_distance_um}um\"\n"
+        f"}}\n")
+    return (
+        "# === #684 sparse-die guard for tapcell (see helper rationale) ===\n"
+        "set _tap_util NA\n"
+        "if {[catch {\n"
+        "  set _tblk [ord::get_db_block]\n"
+        "  set _tcb [$_tblk getCoreArea]\n"
+        "  if {[catch {set _tcw [$_tcb dx]}]} { set _tcw [$_tcb getDX] }\n"
+        "  if {[catch {set _tch [$_tcb dy]}]} { set _tch [$_tcb getDY] }\n"
+        "  set _tcoreA [expr {double($_tcw) * double($_tch)}]\n"
+        "  set _tocc 0.0\n"
+        "  foreach _ti [$_tblk getInsts] {\n"
+        "    set _tm [$_ti getMaster]\n"
+        "    if {[string match \"CORE*\" [$_tm getType]]} {\n"
+        "      set _tocc [expr {$_tocc + double([$_tm getWidth]) * "
+        "double([$_tm getHeight])}]\n"
+        "    }\n"
+        "  }\n"
+        "  if {$_tcoreA > 0} { set _tap_util [expr {100.0 * $_tocc / "
+        "$_tcoreA}] }\n"
+        "} _tap_m_err]} {\n"
+        "  puts \"TAPCELL_MEASURE_NONFATAL: $_tap_m_err\"\n"
+        "}\n"
+        f"if {{$_tap_util ne \"NA\" && $_tap_util < {thr}}} {{\n"
+        "  puts \"SPARSE_DIE_TAPCELL_SKIPPED: core_util=$_tap_util% < "
+        f"{thr}% — full-die tapcell tiling bounded on an empty fixed "
+        "wrapper (latch-up ties only required where active wells exist).\"\n"
+        "} else {\n"
+        f"{_tap_run}"
+        "}\n")
 
 
 def _build_pdn_tcl(pdk: "PdkConfig") -> str:
@@ -947,6 +986,107 @@ def _filler_masters_for_pdk(pdk: "PdkConfig") -> List[str]:
     if pdk.tapcell_master and "sky130_fd_sc_hd" in pdk.tapcell_master:
         return list(_SKY130_FILLER_MASTERS)
     return []
+
+
+# ── #684 — sparse-die fill guard ──────────────────────────────────────
+# OpenROAD's `filler_placement` (and `tapcell`) tile EVERY empty site in
+# EVERY placement row, regardless of how little real logic occupies the
+# die. For a small/sparse design hardened into a large FIXED-area wrapper
+# (caravel user_project_wrapper, any pad-frame / SoC harness with a
+# mandated die much larger than the logic) this floods the empty die:
+# e.g. a 189-cell design in a 2920×3520 µm fixed die became 940,262 filler
+# cells (99.93%) / a 2.0 GB GDS (known-good dense build = 2.8 MB, ~740×).
+# Decoupling/density fill over empty silicon that carries NO signals adds
+# zero design value while exploding GDS / extraction / LVS runtime+memory.
+#
+# OpenROAD 26Q1 `filler_placement` has NO -area / region / density-cap
+# argument (signature: `[-prefix prefix] [-verbose] filler_masters`), so
+# the only chip-AGNOSTIC, version-portable bound is a RUNTIME sparse-die
+# guard: measure post-place CORE utilization (occupied CORE-master area /
+# core area) from odb and SKIP the full-die decap/fill tiling when it is
+# below a threshold. A dense / normally-utilized design (§4.05 negative —
+# e.g. the spm pilot at normal utilization) is UNAFFECTED: util ≥ threshold
+# → the full `filler_placement` runs exactly as before, so density-fill
+# rule compliance is preserved. Only the sparse-die explosion is bounded.
+#
+# Default 5.0% — a fixed-wrapper design genuinely using ≥5% of its die is
+# not in the explosion regime; anything below it would tile mostly-empty
+# silicon. Overridable via VIBEIC_SPARSE_DIE_FILL_PCT for tuning, but the
+# detection itself is pure odb geometry (no chip names, no SKU literals).
+_SPARSE_DIE_FILL_UTIL_PCT_DEFAULT = 5.0
+
+
+def _sparse_die_fill_threshold_pct() -> float:
+    raw = os.environ.get("VIBEIC_SPARSE_DIE_FILL_PCT")
+    if raw:
+        try:
+            v = float(raw)
+            if 0.0 < v <= 100.0:
+                return v
+        except Exception:
+            pass
+    return _SPARSE_DIE_FILL_UTIL_PCT_DEFAULT
+
+
+def _build_sparse_die_aware_filler_tcl(filler_masters: List[str]) -> str:
+    """Return a Tcl block that runs `filler_placement {<masters>}` ONLY
+    when post-place CORE utilization ≥ the sparse-die threshold; otherwise
+    SKIP the full-die decap/fill tiling (emitting a SPARSE_DIE_FILL_SKIPPED
+    note with the measured utilization). Pure, chip-AGNOSTIC — the masters
+    are the only chip-specific input and they come from the PDK config.
+
+    Utilization is measured from odb (sum of CORE-class instance master
+    areas / die-block core area) so it does not depend on parsing
+    report_design_area text and works on every OpenROAD generation.
+    Falls back to running the fill when the measurement is unavailable
+    (fail-safe toward density-rule compliance, never toward the explosion).
+    """
+    if not filler_masters:
+        return ("puts \"FILLER_SKIPPED: no decap/fill masters known for "
+                "this PDK; dynamic-IR margin + density-fill rules must be "
+                "handled out-of-band\"\n")
+    masters_tcl = " ".join(filler_masters)
+    thr = _sparse_die_fill_threshold_pct()
+    # NOTE: doubled braces because this string is interpolated by the
+    # f-string template in _build_pnr_tcl_text (and emitted verbatim by the
+    # metal-fill helper, which also uses an f-string).
+    return (
+        "# === #684 sparse-die fill guard — bound full-die fill on a "
+        "sparse fixed wrapper ===\n"
+        "set _sd_fill_util NA\n"
+        "if {[catch {\n"
+        "  set _blk [ord::get_db_block]\n"
+        "  set _cb [$_blk getCoreArea]\n"
+        "  if {[catch {set _cw [$_cb dx]}]} { set _cw [$_cb getDX] }\n"
+        "  if {[catch {set _ch [$_cb dy]}]} { set _ch [$_cb getDY] }\n"
+        "  set _coreA [expr {double($_cw) * double($_ch)}]\n"
+        "  set _occ 0.0\n"
+        "  foreach _i [$_blk getInsts] {\n"
+        "    set _m [$_i getMaster]\n"
+        "    if {[string match \"CORE*\" [$_m getType]]} {\n"
+        "      set _occ [expr {$_occ + double([$_m getWidth]) * "
+        "double([$_m getHeight])}]\n"
+        "    }\n"
+        "  }\n"
+        "  if {$_coreA > 0} { set _sd_fill_util [expr {100.0 * $_occ / "
+        "$_coreA}] }\n"
+        "} _sd_err]} {\n"
+        "  puts \"SPARSE_DIE_FILL_MEASURE_NONFATAL: $_sd_err\"\n"
+        "}\n"
+        f"if {{$_sd_fill_util ne \"NA\" && $_sd_fill_util < {thr}}} {{\n"
+        "  puts \"SPARSE_DIE_FILL_SKIPPED: core_util=$_sd_fill_util% < "
+        f"{thr}% — full-die decap/fill tiling bounded to avoid filling an "
+        "empty fixed wrapper (would explode GDS/extraction). Density-fill "
+        "for the occupied region is covered by the downstream metal-fill "
+        "gate; empty silicon carries no signals needing decoupling.\"\n"
+        "} else {\n"
+        f"  if {{[catch {{filler_placement {{{masters_tcl}}}}} _fp_err]}} {{\n"
+        "    puts \"FILLER_NONFATAL: $_fp_err\"\n"
+        "  } else {\n"
+        f"    puts \"FILLER_INSERTED: {len(filler_masters)} masters "
+        "(core_util=$_sd_fill_util%)\"\n"
+        "  }\n"
+        "}\n")
 
 
 @dataclass
@@ -4011,7 +4151,18 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     routing_audit_note = ""
     try:
         from _pdk_via_analyzer import routing_layer_upper_bound as _rub
-        tlef_text = Path(pdk.tech_lef).read_text(errors="ignore")
+        # #687 — pdk.tech_lef is a CONTAINER-side path (PDKS_IN_CONTAINER=
+        # /foss/pdks); the iic-osic-tools PDK lives ONLY inside docker, so a
+        # host-side Path(...).read_text() throws FileNotFoundError, the
+        # analyzer is silently skipped (swallowed below), and the single-cut-
+        # via routing restriction is dropped on the exact PDK class it was
+        # written for. Resolve host-vs-container the same way every other
+        # techlef/liberty consumer does — try host, fall back to container
+        # cat. `container` is in step_pnr scope. chip-AGNOSTIC.
+        tlef_text = _v1_6_604_read_text_or_container_cat(
+            str(pdk.tech_lef), container)
+        if tlef_text is None:
+            raise FileNotFoundError(pdk.tech_lef)
         routing_upper = _rub(tlef_text)
         if routing_upper is not None:
             # Count total routing layer indices declared in LEF (heuristic).
@@ -4096,20 +4247,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     tapcell_block = _build_tapcell_tcl(pdk)
     pdn_block = _build_pdn_tcl(pdk)
     _filler_masters = _filler_masters_for_pdk(pdk)
-    if _filler_masters:
-        _filler_masters_tcl = " ".join(_filler_masters)
-        filler_block = (
-            "if {[catch {filler_placement {"
-            f"{_filler_masters_tcl}"
-            "}} _fp_err]} {\n"
-            "  puts \"FILLER_NONFATAL: $_fp_err\"\n"
-            "} else {\n"
-            f"  puts \"FILLER_INSERTED: {len(_filler_masters)} masters\"\n"
-            "}\n")
-    else:
-        filler_block = ("puts \"FILLER_SKIPPED: no decap/fill masters known "
-                        "for this PDK; dynamic-IR margin + density-fill rules "
-                        "must be handled out-of-band\"\n")
+    # #684 — sparse-die-aware fill: the full-die `filler_placement` is now
+    # gated on post-place CORE utilization so a small design in a large
+    # FIXED wrapper is NOT flooded with 940K decap/fill cells / a 2 GB GDS.
+    # A dense / normal-util design (§4.05 negative) still gets the full
+    # fill (util ≥ threshold). chip-AGNOSTIC.
+    filler_block = _build_sparse_die_aware_filler_tcl(_filler_masters)
 
     # v0.2.14 — antenna repair + the DRT-0305 PG-net cleanup that must precede
     # routing. Both built by pure helpers so the silicon-critical Tcl is pinned by
@@ -6077,19 +6220,71 @@ def _v0_3_14_detect_spare_only_classes(netlist_text: str) -> List[str]:
                   if insts and all(spare_re.search(i) for i in insts))
 
 
-def _v0_3_14_detect_top_port_aliases(def_text: str) -> List[Tuple[str, str]]:
-    """v0.3.14 — ORGANIC #509 round-3. Return (alias_pin, canonical_net)
-    pairs where TWO top pins share ONE physical net — the buffer-less
-    `assign o_a = o_b` design-intent node-merge. In the DEF PINS section a
-    pin reads `- <pin> + NET <net>`; when <net> is ITSELF another top-pin
-    name, the two ports are physically one net. ext2spice (default `short
-    none`) keeps only the net-named port and DROPS the alias, leaving the
-    extracted `.subckt` short of ports → netgen 'failed pin matching'. The
-    fix (see _v0_3_14_apply_top_port_aliases) re-adds each dropped alias +
-    a 0-ohm resistor join (netgen auto-removes the zero device, 0 added).
-    Only pairs whose net is ALSO a declared top pin are returned — a pin
-    aliased to an INTERNAL net (e.g. a hierarchical buffer output) is its
-    own port and needs no patch. chip-AGNOSTIC: pure DEF structure."""
+def _v0_3_14_extracted_top_port_set(sp_text: str, top: str = "") -> set:
+    """#685 — parse the port set of the TOP `.subckt` header from an
+    ext2spice-extracted netlist (the ports ext2spice KEPT). Handles SPICE
+    '+' line-continuation. Returns {} if no top header is found. Used to
+    pick the canonical/kept port when ≥2 top pins collapse onto one net.
+    Pure, chip-AGNOSTIC."""
+    lines = (sp_text or "").splitlines()
+    hdr_start = None
+    if top:
+        pat = re.compile(rf'^\s*\.subckt\s+{re.escape(top)}\b', re.IGNORECASE)
+        for i, ln in enumerate(lines):
+            if pat.match(ln):
+                hdr_start = i
+                break
+    if hdr_start is None:
+        for i, ln in enumerate(lines):
+            if re.match(r'^\s*\.subckt\s+\S+', ln, re.IGNORECASE):
+                hdr_start = i
+                break
+    if hdr_start is None:
+        return set()
+    hdr_end = hdr_start
+    while (hdr_end + 1 < len(lines)
+           and lines[hdr_end + 1].lstrip().startswith("+")):
+        hdr_end += 1
+    blob = " ".join(lines[i].strip().lstrip("+").strip()
+                    for i in range(hdr_start, hdr_end + 1))
+    toks = blob.split()
+    return set(toks[2:])  # toks[0]=.subckt toks[1]=name
+
+
+def _v0_3_14_detect_top_port_aliases(
+        def_text: str,
+        extracted_port_set: Optional[set] = None) -> List[Tuple[str, str]]:
+    """v0.3.14 — ORGANIC #509 round-3 + #685 round-6. Return (dropped_pin,
+    kept_pin) pairs where ≥2 top pins share ONE physical net and ext2spice
+    kept only one — re-add the dropped one(s) joined by a 0-ohm resistor.
+
+    In the DEF PINS section a pin reads `- <pin> + NET <net>`. ext2spice
+    (default `short none`) keeps only ONE port name per physical net and
+    DROPS the rest, leaving the extracted `.subckt` short of ports → netgen
+    'failed pin matching' even when the device graph matches uniquely.
+
+    Two design-intent patterns produce this, both handled here by GROUPING
+    DEF PINS BY NET (the #685 generalisation):
+      * pin-to-pin (the original #509 case): the shared net IS itself a
+        top-pin name — the buffer-less `assign o_a = o_b` node-merge.
+      * fan-out-to-internal-net (the #685 case): two top OUTPUT ports fan
+        out from one shared INTERNAL net (e.g. `assign io_out=...count...`
+        AND `assign la_data_out=count`) so both DEF pins carry the SAME
+        internal NET that is NOT a top-pin name. The old `n in pins` filter
+        silently skipped this, dropping the 2nd port from extraction.
+
+    For each net carrying ≥2 top pins, the KEPT (canonical) port is:
+      1. the one ext2spice retained — i.e. present in `extracted_port_set`
+         (the .subckt header) when that set is supplied; else
+      2. if the net name is itself one of the sharing pins (pin-to-pin),
+         that net-named pin; else
+      3. deterministically the first pin (sorted) on the net.
+    Every OTHER pin on the net is returned as a (dropped, kept) alias.
+
+    §4.05 no-leak: a net carrying exactly ONE top pin is NOT touched (no
+    fabricated alias for a port that legitimately stands alone). chip-
+    AGNOSTIC: pure DEF-net grouping + the extracted port set, NO port-name
+    allowlist (never hardcodes io_out / la_data_out / any literal)."""
     pins: set = set()
     rows: List[Tuple[str, str]] = []
     in_pins = False
@@ -6104,7 +6299,34 @@ def _v0_3_14_detect_top_port_aliases(def_text: str) -> List[Tuple[str, str]]:
             if m:
                 pins.add(m.group(1))
                 rows.append((m.group(1), m.group(2)))
-    return [(p, n) for p, n in rows if p != n and n in pins]
+
+    # Group top pins by their physical net.
+    by_net: Dict[str, List[str]] = {}
+    for pin, net in rows:
+        by_net.setdefault(net, []).append(pin)
+
+    out: List[Tuple[str, str]] = []
+    for net, members in by_net.items():
+        # de-dup + stable order so the kept-pin choice is deterministic.
+        uniq = sorted(dict.fromkeys(members))
+        if len(uniq) < 2:
+            continue  # §4.05 no-leak: one port on the net → leave it alone.
+        # Pick the KEPT port.
+        kept: Optional[str] = None
+        if extracted_port_set:
+            for p in uniq:
+                if p in extracted_port_set:
+                    kept = p
+                    break
+        if kept is None and net in pins and net in uniq:
+            # pin-to-pin: the net IS a top-pin name → it is the canonical.
+            kept = net
+        if kept is None:
+            kept = uniq[0]
+        for p in uniq:
+            if p != kept:
+                out.append((p, kept))
+    return out
 
 
 def _v0_3_14_apply_top_port_aliases(sp_text: str,
@@ -6295,17 +6517,24 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
             extras={"finding": "LVS_EXTRACTION_NO_NETLIST",
                     "lvs_verdict": verdict,
                     "transcript_tail": (out + err)[-600:]})
-    # v0.3.14 — ORGANIC #509 round-3: re-add buffer-merged same-net top
+    # v0.3.14 — ORGANIC #509 round-3 + #685 round-6: re-add same-net top
     # ports that ext2spice dropped, joined by 0-ohm resistors (netgen
-    # auto-removes them → 0 added devices). Faithfully mirrors the
-    # schematic's buffer-less `assign o_a = o_b` node-merge so all top
-    # ports pair (else netgen 'failed pin matching'). Derived from the DEF.
+    # auto-removes them → 0 added devices). Handles BOTH the buffer-less
+    # `assign o_a = o_b` pin-to-pin node-merge (#509) AND two top OUTPUT
+    # ports fanned out from one shared INTERNAL net (#685) — the detector
+    # now groups DEF pins by net (≥2 top pins on a net → re-add the dropped
+    # ones), and the extracted .subckt header tells us which port ext2spice
+    # KEPT so the others alias to it. Else netgen 'failed pin matching' even
+    # when the device graph matches uniquely. Derived from the DEF.
     try:
+        _sp_text = spice_out.read_text(errors="replace")
+        _kept_ports = _v0_3_14_extracted_top_port_set(_sp_text, top=top)
         _aliases = _v0_3_14_detect_top_port_aliases(
-            def_file.read_text(errors="replace"))
+            def_file.read_text(errors="replace"),
+            extracted_port_set=_kept_ports)
         if _aliases:
             _patched = _v0_3_14_apply_top_port_aliases(
-                spice_out.read_text(errors="replace"), _aliases, top=top)
+                _sp_text, _aliases, top=top)
             spice_out.write_text(_patched)
     except OSError:
         pass
@@ -9060,6 +9289,13 @@ def _emit_metal_fill(project: Path, top: str, pdk: PdkConfig,
     out_dir = filled_def.parent
     out_dir_c = _to_container_path(str(out_dir), container)
     fill_list = " ".join(fillers)
+    # #684 — sparse-die-aware fill guard (same policy as the PnR-embedded
+    # filler): a small design in a large FIXED wrapper must NOT be flooded
+    # with full-die decap/fill (940K cells / 2 GB GDS). The guard runs the
+    # full `filler_placement` for dense/normal designs (§4.05 negative) and
+    # SKIPs the full-die tiling when post-place CORE utilization is below
+    # the sparse threshold. chip-AGNOSTIC.
+    sparse_fill_block = _build_sparse_die_aware_filler_tcl(fillers)
     tcl_path = out_dir / f"metal_fill_{top}.tcl"
     tcl_path.write_text(f"""
 read_lef {tech_lef_c}
@@ -9072,10 +9308,8 @@ report_design_area
 # ECO-aware fill: filler_placement only ADDS filler instances into row
 # gaps; it never removes or overlaps existing (dont_touch) instances, so
 # the Step 18 spares are preserved by construction.
-if {{[catch {{filler_placement {{{fill_list}}}}} _fp_err]}} {{
-  puts "FILLER_PLACEMENT_NONFATAL: $_fp_err"
-}}
-puts "=== DESIGN AREA (post-fill) ==="
+# #684 sparse-die guard wraps the filler_placement (see helper).
+{sparse_fill_block}puts "=== DESIGN AREA (post-fill) ==="
 report_design_area
 # v0.3.9 — ORGANIC #510: TRUE row-area utilization (occupied CORE-class
 # master area / placement-row area), measured from odb. report_design_area
