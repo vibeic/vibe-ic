@@ -255,6 +255,32 @@ def _count_within(query_pts: List[Tuple[float, float]],
 # --------------------------------------------------------------------------- #
 # 1) latch-up tap-SPACING screen — CONCLUSIVE-FAIL-ONLY                        #
 # --------------------------------------------------------------------------- #
+def _sparse_die_tap_skip_attested(def_file: Path) -> bool:
+    """#684 round-8 — True iff the runner attested a DELIBERATE sparse-die
+    tapcell skip for the project owning this DEF. Derives the project dir from
+    the canonical DEF path (phase3/stage3/pnr/<def> → 3 levels up) and reads
+    reports/phase3/sparse_die_skip.json. Read-only, fail-safe. chip-AGNOSTIC."""
+    try:
+        # routed.def lives at <project>/phase3/stage3/pnr/<file>. Use the
+        # path AS GIVEN (parents[3]) — NOT .resolve() — so the project dir is
+        # the one the gate was invoked against (a symlinked DEF must still
+        # find the project's own attestation, not the symlink target's).
+        cand = []
+        if len(def_file.parents) > 3:
+            cand.append(def_file.parents[3])
+        cand.append(def_file.absolute().parents[3]
+                    if len(def_file.absolute().parents) > 3 else None)
+        for project in cand:
+            if project is None:
+                continue
+            att = _p._load_sparse_die_skip(project)
+            if att and att.get("tapcell_skipped"):
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def _latchup_tap_spacing_check(def_file: Path,
                                screen_um: float = _DEFAULT_SCREEN_UM) -> Dict[str, Any]:
     """Screen well/substrate-tap SPATIAL coverage of the std-cell field from the
@@ -303,6 +329,22 @@ def _latchup_tap_spacing_check(def_file: Path,
     if len(std) >= 1 and not taps:
         extra = (f" ({len(unknown_taps)} 'tap'-token master(s) seen but none rated: "
                  + ", ".join(unknown_taps[:4]) + ")") if unknown_taps else ""
+        # #684 round-8 — §4.05 NO-LEAK: a genuine 0-tap break STILL FAILs.
+        # Only when the runner ATTESTED a deliberate sparse-die tapcell skip
+        # (sparse_die_skip.json) is this downgraded to a documented REVIEW
+        # item (non-GAP status) — tap insertion over the occupied region is
+        # deferred to the real foundry max-tap-distance rule, not a silent
+        # break. A non-sparse design with 0 taps has no attestation → GAP.
+        if _sparse_die_tap_skip_attested(def_file):
+            return {**base, "status": "WELLTAP_SPARSE_DIE_DEFERRED",
+                    "reason": "ZERO_TAPS_SPARSE_DIE_ATTESTED",
+                    "note": (f"{len(std)} placed std cell(s) and 0 rated taps, but the "
+                             f"runner ATTESTED a deliberate sparse-die tapcell skip "
+                             f"(#684){extra} — full-die tapcell tiling was bounded on a "
+                             "sub-threshold fixed wrapper. Tap insertion over the "
+                             "occupied region is a REVIEW open item against the real "
+                             "foundry tap-distance rule, NOT a conclusive structural "
+                             "GAP. (A non-sparse 0-tap design still FAILs ZERO_TAPS.)")}
         return {**base, "status": "WELLTAP_SPACING_GAP", "reason": "ZERO_TAPS",
                 "note": (f"{len(std)} placed std cell(s) but 0 rated well/substrate-tap "
                          f"cell(s){extra} — every logic transistor is infinitely far "

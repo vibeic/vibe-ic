@@ -126,6 +126,15 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
     no_baseline = stats["filled_larger"] is None  # routed.def absent
     stats["filler_instances"] = filler_n
     stats["rows_already_full"] = rows_already_full
+    # #684 round-8 — a 0-filler result is LEGITIMATE (not FILL_NO_SUBSTANCE)
+    # when the runner DELIBERATELY skipped the full-die decap/fill tiling on a
+    # sub-threshold sparse fixed wrapper (attested in sparse_die_skip.json).
+    # Density-fill over empty silicon that carries no signals achieves
+    # nothing; the skip is the attested engineering decision. §4.05 NO-LEAK: a
+    # NON-sparse design with 0 fillers and no growth has NO attestation → it
+    # still FAILs FILL_NO_SUBSTANCE.
+    sparse_fill_attested = _sparse_die_fill_skip_attested(project_dir)
+    stats["sparse_die_fill_skip_attested"] = sparse_fill_attested
     if placed_fillers and stats["filled_larger"] is False:
         # contradiction: claims fillers but the DEF didn't grow
         findings.append(Finding(
@@ -133,7 +142,7 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
             f"density.json claims {filler_n} fillers placed but "
             f"filled.def is not larger than routed.def (#445)"))
     else:
-        substance = (per_layer_ok or rows_already_full
+        substance = (per_layer_ok or rows_already_full or sparse_fill_attested
                      or (not counted_zero
                          and (grew or (no_baseline and placed_fillers))))
         if not substance:
@@ -146,6 +155,24 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
                 "metal_fill.done alone is not fill (#445)"))
 
     return findings, stats
+
+
+def _sparse_die_fill_skip_attested(project_dir: Path) -> bool:
+    """True iff the runner wrote reports/phase3/sparse_die_skip.json attesting
+    a DELIBERATE sparse-die fill skip (#684). Read-only, fail-safe (any error
+    → False, so a missing/garbage attestation never relaxes the gate).
+    chip-AGNOSTIC."""
+    try:
+        p = _pl.reports_phase3_dir(project_dir) / "sparse_die_skip.json"
+    except Exception:
+        p = project_dir / "reports" / "phase3" / "sparse_die_skip.json"
+    try:
+        if p.is_file():
+            data = json.loads(p.read_text(errors="replace"))
+            return bool(isinstance(data, dict) and data.get("fill_skipped"))
+    except Exception:
+        pass
+    return False
 
 
 def build_report(findings: List[Finding], stats: dict,
