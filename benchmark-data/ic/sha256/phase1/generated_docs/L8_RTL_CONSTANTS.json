@@ -75,10 +75,19 @@
   "no_clock_domains_in_input": false,
   "synthesis_targets": [],
   "no_synthesis_targets_in_input": true,
-  "parameters": [],
+  "parameters": [
+    {
+      "name": "SYNTH_MAX_FANOUT",
+      "default": "**8**",
+      "type": "reference data/sky130.tcl",
+      "description": "",
+      "source": "L9_constraints_floorplan.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    }
+  ],
   "peripheral_only_emit_skipped_v1_6_376": 0,
   "extraction_strategy": {
-    "l8_evidence_population_v1_6_395": 3
+    "l8_evidence_population_v1_6_395": 4
   },
   "extraction_evidence": {
     "input/docs/L1_product_metadata.md": [
@@ -103,9 +112,14 @@
     "input/docs/L6_calibration.md": [],
     "input/docs/L7_verification_plan.md": [],
     "input/docs/L8_submodule_integration.md": [],
-    "input/docs/L9_constraints_floorplan.md": []
+    "input/docs/L9_constraints_floorplan.md": [],
+    "L9_constraints_floorplan.md": [
+      {
+        "literal": "SYNTH_MAX_FANOUT = **8**",
+        "label": "rst_param_grid_table_anchorless_v1_6_400"
+      }
+    ]
   },
-  "class_path": "digital_arithmetic_primitive",
   "auto_discovered_literals": [
     {
       "literal": "25.9ns",

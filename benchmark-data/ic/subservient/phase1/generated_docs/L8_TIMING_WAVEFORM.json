@@ -44,5 +44,13 @@
       "source_pin": "clk"
     }
   ],
+  "clocks": [
+    {
+      "name": "i_clk",
+      "type": "input",
+      "freq_mhz": null,
+      "extraction_strategy": "seeded_from_l1_clock_port_v1_6_571"
+    }
+  ],
   "clock_mhz": 100.0
 }

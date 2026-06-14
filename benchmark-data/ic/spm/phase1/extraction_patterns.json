@@ -282,6 +282,10 @@
       "label": "auto-discovered (numeric_unit)"
     },
     {
+      "literal": "2 ns",
+      "label": "auto-discovered (numeric_unit)"
+    },
+    {
       "literal": "PDK",
       "label": "auto-discovered (upper_ident)"
     },

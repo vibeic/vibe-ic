@@ -31,6 +31,30 @@
       "description": "同步 reset,**active-LOW**;assert(0)時內部歸 idle"
     },
     {
+      "name": "cs",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Chip select;`cs=1` 啟用 register file 存取"
+    },
+    {
+      "name": "we",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Write enable;`we=1` 寫入 / `we=0` 讀取"
+    },
+    {
       "name": "address",
       "mode": "input",
       "direction": "input",
@@ -105,6 +129,30 @@
       "description": "同步 reset,**active-LOW**;assert(0)時內部歸 idle"
     },
     {
+      "name": "cs",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Chip select;`cs=1` 啟用 register file 存取"
+    },
+    {
+      "name": "we",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Write enable;`we=1` 寫入 / `we=0` 讀取"
+    },
+    {
       "name": "address",
       "mode": "input",
       "direction": "input",
@@ -177,6 +225,30 @@
       "msb": 0,
       "lsb": 0,
       "description": "同步 reset,**active-LOW**;assert(0)時內部歸 idle"
+    },
+    {
+      "name": "cs",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Chip select;`cs=1` 啟用 register file 存取"
+    },
+    {
+      "name": "we",
+      "mode": "input",
+      "direction": "input",
+      "io": null,
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "rst_grid_interface_table+desc_cascade_v1_6_463",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Write enable;`we=1` 寫入 / `we=0` 讀取"
     },
     {
       "name": "address",
@@ -389,17 +461,31 @@
       "extraction_strategy": "l9_top_port_reset_derive"
     }
   ],
+  "parameters": [
+    {
+      "name": "SYNTH_MAX_FANOUT",
+      "default": "**8**",
+      "type": "reference data/sky130.tcl",
+      "description": "",
+      "source": "L9_constraints_floorplan.md",
+      "extraction_strategy": "rst_param_grid_table_anchorless_v1_6_400"
+    }
+  ],
   "clocks": [
     {
       "name": "clk",
       "edge": "posedge",
-      "extraction_strategy": "l9_top_port_clock_derive"
+      "extraction_strategy": "l9_top_port_clock_derive",
+      "freq_hz": 38600000,
+      "freq_mhz": 38.6,
+      "period_ns": 25.906736,
+      "role": "primary",
+      "domain_kind": "primary"
     }
   ],
   "interface_type": null,
   "no_interface_type_in_input": true,
   "interface_types": [],
   "no_interface_types_in_input": true,
-  "chip_top_interfaces": [],
-  "class_path": "digital_arithmetic_primitive"
+  "chip_top_interfaces": []
 }

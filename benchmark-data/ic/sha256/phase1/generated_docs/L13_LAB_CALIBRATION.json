@@ -115,5 +115,6 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive"
+  "lab_calibration_present": false,
+  "notes": "Pure digital protocol block; no analog reference / trim / calibration loop. Baud-rate is purely from a digital divider chain of the BusClock."
 }

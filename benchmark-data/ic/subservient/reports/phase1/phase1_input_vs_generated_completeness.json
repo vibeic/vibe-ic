@@ -14,12 +14,12 @@
   "per_layer": [
     {
       "layer": "L10_TEST_CASES",
-      "caught_cells": 0,
+      "caught_cells": 10,
       "ai_patched_cells": 0
     },
     {
       "layer": "L11_OTP_CONTENT",
-      "caught_cells": 0,
+      "caught_cells": 1,
       "ai_patched_cells": 0
     },
     {
@@ -33,8 +33,58 @@
       "ai_patched_cells": 0
     },
     {
+      "layer": "L14_PROTOCOL_VERSIONING",
+      "caught_cells": 0,
+      "ai_patched_cells": 0
+    },
+    {
+      "layer": "L15_ENCODING_TABLES",
+      "caught_cells": 0,
+      "ai_patched_cells": 0
+    },
+    {
+      "layer": "L16_COMPLIANCE_PROPERTIES",
+      "caught_cells": 0,
+      "ai_patched_cells": 0
+    },
+    {
+      "layer": "L17_CHANNEL_SIGNAL_CATALOG",
+      "caught_cells": 0,
+      "ai_patched_cells": 0
+    },
+    {
+      "layer": "L18_INTERCONNECT_TOPOLOGY",
+      "caught_cells": 0,
+      "ai_patched_cells": 0
+    },
+    {
+      "layer": "L19_CONSTRAINTS_PDK",
+      "caught_cells": 1,
+      "ai_patched_cells": 0
+    },
+    {
       "layer": "L1_DATASHEET",
       "caught_cells": 63,
+      "ai_patched_cells": 0
+    },
+    {
+      "layer": "L20_DFT_SCAN_TOPOLOGY",
+      "caught_cells": 0,
+      "ai_patched_cells": 0
+    },
+    {
+      "layer": "L21_POWER_INTENT",
+      "caught_cells": 0,
+      "ai_patched_cells": 0
+    },
+    {
+      "layer": "L22_VERIFICATION_PLAN",
+      "caught_cells": 0,
+      "ai_patched_cells": 0
+    },
+    {
+      "layer": "L23_SECURITY_REQUIREMENTS",
+      "caught_cells": 0,
       "ai_patched_cells": 0
     },
     {
@@ -54,7 +104,7 @@
     },
     {
       "layer": "L5_ADI_SPEC",
-      "caught_cells": 10,
+      "caught_cells": 0,
       "ai_patched_cells": 0
     },
     {
@@ -64,7 +114,7 @@
     },
     {
       "layer": "L7_TEST_DEBUG",
-      "caught_cells": 2,
+      "caught_cells": 12,
       "ai_patched_cells": 0
     },
     {
@@ -79,7 +129,7 @@
     },
     {
       "layer": "L9_INTEGRATION_SPEC",
-      "caught_cells": 17,
+      "caught_cells": 18,
       "ai_patched_cells": 0
     },
     {

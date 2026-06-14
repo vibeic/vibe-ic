@@ -4,5 +4,13 @@
   "ic_name": "spm",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "extraction_evidence": {}
+  "no_calibration": true,
+  "extraction_evidence": {
+    "input/docs/L6_calibration.md": [
+      {
+        "literal": "no-calibration assertion",
+        "label": "input explicitly states no calibration/trimming"
+      }
+    ]
+  }
 }

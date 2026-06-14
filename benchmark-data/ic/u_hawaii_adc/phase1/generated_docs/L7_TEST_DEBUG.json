@@ -1,7 +1,8 @@
 {
   "schema_version": 2,
   "doc_class": "test_debug",
-  "ic_name": "u_hawaii_ADC",
+  "ic_name": "u_hawaii_adc",
+  "test_scenarios": [],
   "test_modes": [],
   "no_test_modes_in_input": true,
   "debug_observability": [],

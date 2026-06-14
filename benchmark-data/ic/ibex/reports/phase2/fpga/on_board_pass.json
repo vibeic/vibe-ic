@@ -1,0 +1,9 @@
+{
+  "verdict": "SKIP",
+  "evidence": "usb_hid_tester_verify not run",
+  "design_identity": {
+    "design": "ibex",
+    "ic_name": "ibex",
+    "top": "ibex_top"
+  }
+}

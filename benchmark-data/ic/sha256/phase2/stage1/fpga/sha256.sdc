@@ -10,18 +10,22 @@ derive_pll_clocks
 derive_clock_uncertainty
 
 # Synchronous data inputs (moderate setup/hold)
+set_input_delay  -clock clk_main -max 4.0 [get_ports {cs}]
+set_input_delay  -clock clk_main -min 0.0 [get_ports {cs}]
+set_input_delay  -clock clk_main -max 4.0 [get_ports {we}]
+set_input_delay  -clock clk_main -min 0.0 [get_ports {we}]
 set_input_delay  -clock clk_main -max 4.0 [get_ports {address}]
 set_input_delay  -clock clk_main -min 0.0 [get_ports {address}]
+set_input_delay  -clock clk_main -max 4.0 [get_ports {write_data}]
+set_input_delay  -clock clk_main -min 0.0 [get_ports {write_data}]
 
 # Outputs
+set_output_delay -clock clk_main -max 4.0 [get_ports {read_data}]
+set_output_delay -clock clk_main -min 0.0 [get_ports {read_data}]
 set_output_delay -clock clk_main -max 4.0 [get_ports {error}]
 set_output_delay -clock clk_main -min 0.0 [get_ports {error}]
 
 # Async inputs / open-drain shared bus → false_path
 set_false_path -from [get_ports {reset_n}] -to [all_clocks]
 set_false_path -from [all_clocks] -to [get_ports {reset_n}]
-set_false_path -from [get_ports {write_data}] -to [all_clocks]
-set_false_path -from [all_clocks] -to [get_ports {write_data}]
-set_false_path -from [get_ports {read_data}] -to [all_clocks]
-set_false_path -from [all_clocks] -to [get_ports {read_data}]
 

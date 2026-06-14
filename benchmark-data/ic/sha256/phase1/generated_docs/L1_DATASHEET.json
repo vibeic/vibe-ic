@@ -39,6 +39,38 @@
       "description": "同步 reset,**active-LOW**;assert(0)時內部歸 idle"
     },
     {
+      "name": "cs",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "cs",
+      "board_name": "cs",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Chip select;`cs=1` 啟用 register file 存取",
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "rst_grid_interface_table",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Chip select;`cs=1` 啟用 register file 存取"
+    },
+    {
+      "name": "we",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "we",
+      "board_name": "we",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "Write enable;`we=1` 寫入 / `we=0` 讀取",
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "rst_grid_interface_table",
+      "width": 1,
+      "msb": 0,
+      "lsb": 0,
+      "description": "Write enable;`we=1` 寫入 / `we=0` 讀取"
+    },
+    {
       "name": "address",
       "mode": "input",
       "aliases": [],
@@ -101,6 +133,30 @@
       "msb": 0,
       "lsb": 0,
       "description": "錯誤旗標(read undefined address 等);0 = no error"
+    },
+    {
+      "name": "set_input_delay",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "set_input_delay",
+      "board_name": "set_input_delay",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "see datasheet",
+      "description": "- `set_input_delay` / `set_output_delay` 使用 clock period 的 20%(預設 ~5.2 ns)",
+      "_extraction": "backticked_interface_v455"
+    },
+    {
+      "name": "set_output_delay",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "set_output_delay",
+      "board_name": "set_output_delay",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "see datasheet",
+      "description": "- `set_input_delay` / `set_output_delay` 使用 clock period 的 20%(預設 ~5.2 ns)",
+      "_extraction": "backticked_interface_v455"
     }
   ],
   "no_pin_table_in_input": false,
@@ -161,6 +217,38 @@
       {
         "literal": "| `error` | 1 | output | 錯誤旗標(read undefined address 等);0 = no error |",
         "label": "pin (RST grid Interface table)"
+      },
+      {
+        "literal": "`clk` | 1 | input | 系統時脈;所有資料於上升沿同步取樣",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "`reset_n` | 1 | input | 同步 reset,**active-LOW**;assert(0)時內部歸 idle",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "`cs` | 1 | input | Chip select;`cs=1` 啟用 register file 存取",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "`we` | 1 | input | Write enable;`we=1` 寫入 / `we=0` 讀取",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "`address` | 8 | input | Register file address(範圍 `0x00 - 0x27`,完整 map 見 L5)",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "`write_data` | 32 | input | 寫入資料",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "`read_data` | 32 | output | 讀出資料(只在 `cs=1` 且 `we=0` 時 valid)",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "`error` | 1 | output | 錯誤旗標(read undefined address 等);0 = no error",
+        "label": "pin (GFM multi-table header-role)"
       }
     ],
     "input/docs/L4_command_protocol.md": [],
@@ -180,8 +268,8 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
-  "no_class_path_in_input": false,
+  "class_path": null,
+  "no_class_path_in_input": true,
   "comparison_tables": [
     {
       "headers": [

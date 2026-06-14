@@ -1,6 +1,6 @@
 {
-  "inserted": 7,
-  "survived": 7,
+  "inserted": 5,
+  "survived": 5,
   "removed": [],
   "untagged": [],
   "all_keep_attr_intact": true,
@@ -12,22 +12,22 @@
     "netlist"
   ],
   "program": "spare_cell_preservation_check",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "project_dir": ".",
   "artefact_paths": {
-    "netlist": "phase3/stage3/pnr/spm_pnr.v",
-    "def": "phase3/stage3/pnr/spm.def",
-    "gds": "phase3/stage4/gds/spm.gds"
+    "netlist": "phase3/stage3/pnr/chip_top_pnr.v",
+    "def": "phase3/stage3/pnr/filled.def",
+    "gds": "phase3/stage4/gds/chip_top.gds"
   },
   "output_files": [
     {
-      "path": "phase3/stage3/pnr/spm_pnr.v"
+      "path": "phase3/stage3/pnr/chip_top_pnr.v"
     },
     {
-      "path": "phase3/stage3/pnr/spm.def"
+      "path": "phase3/stage3/pnr/filled.def"
     },
     {
-      "path": "phase3/stage4/gds/spm.gds"
+      "path": "phase3/stage4/gds/chip_top.gds"
     }
   ]
 }

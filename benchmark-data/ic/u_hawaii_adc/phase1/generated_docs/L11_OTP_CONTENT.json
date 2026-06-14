@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "otp_content",
-  "ic_name": "u_hawaii_ADC",
+  "ic_name": "u_hawaii_adc",
   "depth": null,
   "width_bits": null,
   "content_hex": null,
@@ -15,5 +15,7 @@
   "no_operating_modes_in_input": true,
   "fsm_state_catalogue": [],
   "extraction_evidence": {},
-  "no_otp_fsm_in_input": true
+  "no_otp_fsm_in_input": true,
+  "otp_present": false,
+  "notes": "No OTP / fuse / configuration-ROM content in the serial-peripheral protocol block guide. All configuration is via the run-time register file."
 }

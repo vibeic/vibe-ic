@@ -87,6 +87,56 @@
       "name": "L8_TIMING_WAVEFORM",
       "evidence_count": 0,
       "todo_count": 0
+    },
+    {
+      "name": "L14_PROTOCOL_VERSIONING",
+      "evidence_count": 0,
+      "todo_count": 0
+    },
+    {
+      "name": "L15_ENCODING_TABLES",
+      "evidence_count": 0,
+      "todo_count": 0
+    },
+    {
+      "name": "L16_COMPLIANCE_PROPERTIES",
+      "evidence_count": 0,
+      "todo_count": 0
+    },
+    {
+      "name": "L17_CHANNEL_SIGNAL_CATALOG",
+      "evidence_count": 0,
+      "todo_count": 0
+    },
+    {
+      "name": "L18_INTERCONNECT_TOPOLOGY",
+      "evidence_count": 0,
+      "todo_count": 0
+    },
+    {
+      "name": "L19_CONSTRAINTS_PDK",
+      "evidence_count": 1,
+      "todo_count": 0
+    },
+    {
+      "name": "L20_DFT_SCAN_TOPOLOGY",
+      "evidence_count": 0,
+      "todo_count": 0
+    },
+    {
+      "name": "L21_POWER_INTENT",
+      "evidence_count": 0,
+      "todo_count": 0
+    },
+    {
+      "name": "L22_VERIFICATION_PLAN",
+      "evidence_count": 0,
+      "todo_count": 0
+    },
+    {
+      "name": "L23_SECURITY_REQUIREMENTS",
+      "evidence_count": 0,
+      "todo_count": 0
     }
   ],
   "universe_sample": [],

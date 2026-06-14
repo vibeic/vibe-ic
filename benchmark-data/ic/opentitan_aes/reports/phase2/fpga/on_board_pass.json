@@ -1,0 +1,9 @@
+{
+  "verdict": "SKIP",
+  "evidence": "usb_hid_tester_verify not run",
+  "design_identity": {
+    "design": "opentitan_aes",
+    "ic_name": "opentitan_aes",
+    "top": "chip_top"
+  }
+}

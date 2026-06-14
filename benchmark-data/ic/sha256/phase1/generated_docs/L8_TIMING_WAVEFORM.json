@@ -30,10 +30,13 @@
     {
       "name": "clk",
       "type": "input",
-      "freq_mhz": null,
-      "extraction_strategy": "seeded_from_l1_clock_port_v1_6_571"
+      "freq_mhz": 38.6,
+      "extraction_strategy": "seeded_from_l1_clock_port_v1_6_571",
+      "freq_hz": 38600000,
+      "period_ns": 25.906736,
+      "role": "primary",
+      "domain_kind": "primary"
     }
   ],
-  "class_path": "digital_arithmetic_primitive",
   "clock_mhz": 38.6
 }
