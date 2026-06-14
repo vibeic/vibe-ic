@@ -39,6 +39,14 @@ SAFETY (corpus-sweep — must NOT false-fire)
   * a real -er agent-noun / word collision (`resister`,
     `diviner`, `deceiver`) or any distance-2 collision
     (`recorder`→`decoder`)                                     → no alias.
+  * a real silent-`e` VERB BASE whose `+r` agent noun is canonical
+    (`decode`→`decoder`, `divide`→`divider`) — verb↔agent-noun
+    INFLECTION, not a truncation typo (#702: real OpenTitan
+    `prim_diff_decode`)                                        → no alias.
+    NB (#702 round-2): a last-char-deletion truncation typo
+    (`counte`→counter, `registe`→register) is NOT a silent-`e`
+    verb and IS still aliased — the exemption is an enumerated
+    real-verb allow-list, not a `t+"r"==canonical` grammar.
 
 Residual-harm mitigation: name-only typo detection cannot be perfect, so the CLI
 `main` additionally REFUSES to emit when the design already defines a module
@@ -104,6 +112,55 @@ _ENGLISH_WORD_DENYLIST = frozenset({
     "deceiver",   # → receiver (d1) — one who deceives
 })
 
+# ORGANIC #702 round-2 (§4.05 NO-LEAK fix): the verb BASES whose agent-noun
+# canonical term is formed by appending ONLY a trailing `r` to a silent-`e`
+# verb (decode→decoder, divide→divider). A 1-char append is the ONLY agentive
+# derivation that lands at edit-distance 1 from its canonical term, so these
+# silent-`e` roots are the ONLY ones a real verb-name module can be FALSELY
+# flagged as a truncation typo of — hence the only ones needing an exemption.
+# The `-er`/`-or` bases (count→counter, subtract→subtractor) sit at
+# edit-distance ≥2 from their canonical term (a 2-char append) and are never
+# typo-flagged, so they need no entry here.
+#
+# This MUST be an ENUMERATED real-verb allow-list, NOT a `t+"r"==canonical`
+# suffix grammar: a LAST-CHAR-DELETION truncation typo (`counte`→counter,
+# `registe`→register, `arbite`→arbiter, `shifte`→shifter) ALSO satisfies
+# `t+"r"==canonical` and is structurally indistinguishable from a silent-`e`
+# verb — only the lexical fact that `decode` is a real verb and `counte` is not
+# separates them. The original #702 bare-`r` suffix grammar leaked every such
+# truncation back into the "not a typo" bucket (adversarial review, v1.0.63).
+_SILENT_E_VERB_BASES = frozenset({
+    "decode", "encode", "divide", "receive", "schedule",
+    "sequence", "serialize", "deserialize", "normalize",
+})
+
+
+def _is_verb_base_of_canonical(t: str) -> bool:
+    """ORGANIC #702: True when `t` is a real silent-`e` verb BASE whose `+r`
+    agent noun is a canonical term (`decode`→`decoder`, `divide`→`divider`).
+
+    This is INFLECTION (verb↔agent-noun morphology), not a typo: the bare verb
+    root is a perfectly valid module name (e.g. OpenTitan's real
+    `prim_diff_decode`), so it must NOT be aliased to its agent noun.
+
+    §4.05 NO-LEAK (load-bearing — this RELAXES the typo detector): keyed on an
+    ENUMERATED real-verb allow-list, NOT the bare-`r` suffix grammar. The
+    grammar `t+"r"==canonical` ALSO matches a last-char-deletion truncation typo
+    (`counte`→counter, `registe`→register) — a genuine misspelling that MUST
+    stay flagged — so only the allow-list correctly separates the real verb
+    `decode` from the truncation `counte`. A mid-word typo (`decodr`/`decoer`)
+    was never a bare-root append and is likewise unaffected. The `-er`/`-or`
+    consonant roots (`subtract`/`count`) need no entry: they sit at
+    edit-distance ≥2 and `_closest_canonical` never flags them in the first
+    place."""
+    if len(t) < _MIN_TOKEN_LEN:
+        return False
+    if t not in _SILENT_E_VERB_BASES:
+        return False
+    # Invariant: an allow-listed base must actually append `r` to a canonical
+    # term — defends against a future canonical-set edit orphaning a base.
+    return (t + "r") in _CANONICAL_HW_TERMS
+
 
 def _is_british_spelling_of_canonical(t: str) -> bool:
     """British -ise/-iser spelling vs American -ize/-izer: a token whose s→z swap
@@ -157,6 +214,9 @@ def _closest_canonical(token: str) -> Optional[str]:
         return None  # plural / verb-inflected form = real word, not a typo
     if _is_british_spelling_of_canonical(t):
         return None  # British -iser spelling variant = intentional, not a typo
+    if _is_verb_base_of_canonical(t):
+        return None  # bare verb base of an -er/-or agent noun = inflection,
+        # not a truncation typo (#702: decode↔decoder, encode↔encoder)
     best: Optional[str] = None
     best_d = 99
     tie = False

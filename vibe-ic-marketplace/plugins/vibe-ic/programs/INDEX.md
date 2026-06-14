@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 680
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 680)
+- **Total programs (excluding helpers / shims):** 681
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 681)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 671 |
+| `any` | 672 |
 
 ## Alphabetical listing
 
@@ -194,6 +194,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `device_response_no_br_check` | any | — | deterministic compliance check derived from |
 | `dfm_screen_check` | any | — | Step 35 DFM screen (v2.3). |
 | `dft_atpg_coverage_check` | any | — | REAL stuck-at coverage gate (Step 11 DFT/ATPG). |
+| `diff_verify_harness` | any | — | independent DIFFERENTIAL self-verification |
 | `dispatch_fetch_loop_population_check` | any | — | Stub multi-frame fetch loop detector. |
 | `dispatch_handler_completeness` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 58 | Wave 58 / BACKLOG-v12 P0.2 plugin gate. |
 | `dispatch_register_default_reset_check` | any | — | Response register reset at frame boundaries. |
@@ -752,7 +753,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (671 programs)
+### `any` (672 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -919,6 +920,7 @@ _(no programs in this group)_
 - `device_response_no_br_check` — deterministic compliance check derived from
 - `dfm_screen_check` — Step 35 DFM screen (v2.3).
 - `dft_atpg_coverage_check` — REAL stuck-at coverage gate (Step 11 DFT/ATPG).
+- `diff_verify_harness` — independent DIFFERENTIAL self-verification
 - `dispatch_fetch_loop_population_check` — Stub multi-frame fetch loop detector.
 - `dispatch_register_default_reset_check` — Response register reset at frame boundaries.
 - `dispatcher_awake_gate_check` — v0.114 (BACKLOG-v7 P2.2).  _[v0.114]_

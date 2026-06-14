@@ -2102,6 +2102,84 @@ def _v661_resolve_dut_module(project: Path,
     return None
 
 
+def _v701_tiny_root_warn(project: Path, chosen_dut: Optional[str]) -> str:
+    """ORGANIC #701 defense-in-depth — return a non-empty WARN string when the
+    DUT the resolver bound (`chosen_dut`) is a tiny/leaf module while LARGER
+    un-instantiated modules exist on disk that the module enumerator dropped.
+
+    The #701 root cause was a header-import-blind `_MODULE_HEADER_RE`: it
+    silently dropped every `module X import pkg::*;` top/leaf, so the resolver's
+    graph-root fallback could bind+synth+TB-verify a trivial visible leaf and
+    SILENTLY false-PASS on the wrong tiny module. Even with the regex now fixed,
+    this WARN is a backstop: it scans rtl/ with a SUPERSET module-decl regex
+    (matches ANY `module <name>` header form, import or not) and the size (body
+    line count) of each, then WARNs if the bound DUT is among the SMALLEST
+    modules while a substantially larger module is NOT instantiated by anyone
+    (i.e. is itself a plausible top the enumerator should have offered). A
+    future enumerator gap can then surface as a loud WARN, never a silent PASS.
+
+    Returns "" when nothing suspicious (the common, healthy case). chip-AGNOSTIC
+    — pure structural size/instantiation comparison, no chip/SKU/vendor literal.
+    """
+    if not chosen_dut:
+        return ""
+    rtl_dir = _pl.rtl_dir(project)
+    if not rtl_dir.is_dir():
+        return ""
+    # SUPERSET enumerator: matches every module declaration header form (with or
+    # without import/param/port) so a regex blind-spot in the NARROW enumerator
+    # cannot also hide modules from this backstop.
+    superset_re = re.compile(r'\bmodule\s+([A-Za-z_]\w*)\b(.*?)\bendmodule\b',
+                             re.S)
+    sizes: Dict[str, int] = {}
+    bodies: Dict[str, str] = {}
+    for ext in (".v", ".sv"):
+        for f in sorted(rtl_dir.rglob(f"*{ext}")):
+            try:
+                body = _strip_v_comments(f.read_text(errors="replace"))
+            except OSError:
+                continue
+            for m in superset_re.finditer(body):
+                nm = m.group(1)
+                if nm in sizes:
+                    continue
+                sizes[nm] = m.group(2).count("\n")
+                bodies[nm] = m.group(2)
+    if chosen_dut not in sizes or len(sizes) < 2:
+        return ""
+
+    def _instantiated_super(child: str) -> bool:
+        pat = re.compile(
+            rf"\b{re.escape(child)}\s+(?:#\s*\([^;]*?\)\s*)?"
+            rf"[A-Za-z_]\w*\s*\(")
+        return any(pat.search(b) for mod, b in bodies.items() if mod != child)
+
+    chosen_size = sizes[chosen_dut]
+    # A "tiny" chosen DUT: at-or-below the median module size.
+    ordered = sorted(sizes.values())
+    median = ordered[len(ordered) // 2]
+    if chosen_size > median:
+        return ""  # the bound DUT is already among the larger modules — fine.
+    # Larger modules that NOBODY instantiates (so each is itself a plausible
+    # top the enumerator should have surfaced) and are >=4x the chosen DUT.
+    suspicious = sorted(
+        (nm for nm, sz in sizes.items()
+         if nm != chosen_dut and sz >= max(4 * max(chosen_size, 1), median)
+         and not _instantiated_super(nm)),
+        key=lambda n: -sizes[n])
+    if not suspicious:
+        return ""
+    biggest = suspicious[0]
+    return (
+        f"WARN #701: bound DUT {chosen_dut!r} ({chosen_size} body lines) is a "
+        f"small/leaf module, yet larger un-instantiated module(s) exist on "
+        f"disk that the narrow enumerator did not offer "
+        f"(e.g. {biggest!r}={sizes[biggest]} lines; "
+        f"{len(suspicious)} total). Possible module-enumerator gap — verify "
+        f"the synth/TB top is the real design core, NOT a trivial visible leaf "
+        f"(silent false-PASS guard).")
+
+
 def step_full_stack_tb_gen(project: Path,
                            top_name: str = "chip_top") -> StepResult:
     """v1.6.88 (#20 Bug 3 P0 BLOCKER) — synthesise a chip-AGNOSTIC
@@ -2148,6 +2226,12 @@ def step_full_stack_tb_gen(project: Path,
         # Unresolvable rtl/ (e.g. no rtl dir, or genuinely ambiguous root) — keep
         # the legacy fallback so already-correct / non-rtl designs do not regress.
         top_module = _l9_top_module or top_name
+    # ORGANIC #701 defense-in-depth — surface a loud WARN (never a silent PASS)
+    # if the bound DUT is a tiny/leaf module while LARGER un-instantiated modules
+    # exist on disk that the narrow enumerator did not offer (a possible
+    # enumerator gap). Carried in the StepResult detail + extras so a future
+    # regression cannot recur silently.
+    _v701_warn = _v701_tiny_root_warn(project, top_module)
     top_ports = l9.get("top_ports") or l9.get("ports") or []
     if not isinstance(top_ports, list) or not top_ports:
         return StepResult("full_stack_tb_gen", "SKIP",
@@ -2512,9 +2596,15 @@ def step_full_stack_tb_gen(project: Path,
                 "functional PASS is claimed. Functional gate falls to "
                 "the bit-level oracle (with goldens) or gate-level "
                 "synth + Phase 3.")
+    _extras: Dict[str, Any] = {}
+    _warn_suffix = ""
+    if _v701_warn:
+        _extras["v701_tiny_root_warn"] = _v701_warn
+        _warn_suffix = " | " + _v701_warn
     return StepResult("full_stack_tb_gen", verdict_word,
-                      time.time() - t0, note + _reconcile_note,
-                      [str(tb_path), str(sim_dir / "results.json")])
+                      time.time() - t0, note + _reconcile_note + _warn_suffix,
+                      [str(tb_path), str(sim_dir / "results.json")],
+                      _extras)
 
 
 # -------------------------------------------------------------------------
@@ -2818,6 +2908,42 @@ def _iverilog_compile_with_sv_fallback(
     # sv2v-converted compile still failed → a genuine defect; return the
     # converted-attempt diagnostics so the caller's FAIL is informative.
     return rc2, out2, err2, "iverilog_g2012"
+
+
+def _sim_run_or_reuse(tb_frontend: str, vvp_path: "Path",
+                      compile_rc: int, compile_out: str, compile_err: str,
+                      run_dir: "Path", timeout: int = 300,
+                      ) -> Tuple[int, str, str]:
+    """ORGANIC #703 — shared sim-run gate for the three reference-TB sites.
+
+    The iverilog / sv2v path produces a `.vvp` and is RUN with `vvp <name>.vvp`.
+    The #657 verilator SV-escape (with the #668 -DSYNTHESIS retry) does NOT
+    produce a `.vvp` — it builds a NATIVE BINARY and ALREADY RAN it inside the
+    escape, returning rc=0 and the completion transcript in `compile_out`
+    (tb_frontend == 'verilator_sva'). The historical caller then UNCONDITIONALLY
+    ran `vvp <name>.vvp` on a file the verilator frontend never wrote → 'Unable
+    to open input file' rc=255 → the successful sim stdout was DISCARDED and the
+    step mislabelled a runtime FAIL.
+
+    This helper centralises the guard so all three sites stay in lock-step:
+
+      * tb_frontend == 'verilator_sva'  → the run ALREADY happened during the
+        escape. Reuse its (rc, out, err) verbatim; do NOT run vvp. The caller
+        still checks the completion MARKER in this stdout, so a verilator escape
+        that genuinely did NOT reach the marker still FAILs honestly (no fake
+        PASS).
+      * any other frontend (iverilog_g2012 / iverilog_sv2v) → a real `.vvp`
+        exists; run `vvp <name>.vvp` exactly as before. A real vvp runtime
+        failure on this path still FAILs honestly.
+
+    chip-AGNOSTIC: keyed only on the frontend tag + the standard vvp invocation;
+    no chip/vendor literal.
+    """
+    if tb_frontend == "verilator_sva":
+        # The verilator native binary already ran during the escape — reuse the
+        # captured result; the completion-marker check happens in the caller.
+        return compile_rc, compile_out, compile_err
+    return _run(["vvp", str(vvp_path)], cwd=run_dir, timeout=timeout)
 
 
 # -------------------------------------------------------------------------
@@ -3434,7 +3560,11 @@ def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
     # firmware/ROM actually loads (cwd=run_dir at sim time, hex may sit next
     # to the TB in sim_full_stack/).
     _staged_mem = _stage_readmem_files(tb_path, run_dir)
-    rc, out, err = _run(["vvp", str(vvp)], cwd=run_dir, timeout=300)
+    # ORGANIC #703 — the #657 verilator SV-escape ALREADY ran the native binary
+    # (no oracle.vvp on disk); reuse its captured stdout instead of running vvp
+    # on a file it never produced. The iverilog/sv2v path still runs vvp.
+    rc, out, err = _sim_run_or_reuse(tb_frontend, vvp, rc, out, err,
+                                     run_dir, timeout=300)
     transcript = run_dir / "oracle.log"
     _mem_note = (("// #476 staged $readmem data into oracle_run: "
                   + ", ".join(_staged_mem) + "\n") if _staged_mem else "")
@@ -3591,7 +3721,12 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                 extras={"verification_track": "generic_full_stack",
                         "aid_tb_skipped_reason": track_reason,
                         "tb_frontend": tb_frontend})
-        rc, out, err = _run(["vvp", str(vvp)], cwd=run_dir, timeout=120)
+        # ORGANIC #703 — the #657 verilator SV-escape ALREADY ran the native
+        # binary (no full_stack.vvp on disk); reuse its captured stdout instead
+        # of running vvp on a file it never produced. The iverilog/sv2v path
+        # still runs vvp, so a real vvp runtime failure there still FAILs.
+        rc, out, err = _sim_run_or_reuse(tb_frontend, vvp, rc, out, err,
+                                         run_dir, timeout=120)
         transcript = run_dir / "full_stack.log"
         transcript.write_text(out + "\n" + err)
         if rc == 0 and "FULL_STACK_TB_DONE" in out:
@@ -4163,8 +4298,18 @@ def _v662_resolve_dependency_files(project: Path,
 
 # Instance port connections inside the TB's DUT instantiation: `.X(...)`.
 _TB_INST_PORT_RE = re.compile(r'\.([A-Za-z_]\w*)\s*\(')
-# Module header: `module <name> ( ... );`
+# Module header: `module <name> ( ... );`.
+# ORGANIC #701 — SV-2012 allows a header-package-import clause between the
+# module name and the optional `#(...)` param block / `(...)` port list, and a
+# real design CHAINS several:  `module aes_core import aes_pkg::*; import
+# prim_pkg::*; #(...) (...);`. The clause is matched as REPEATED-optional
+# (`*`, NOT a single `?`) — a single optional clause would drop every module
+# past the first import on a multi-import header and silently shrink the
+# enumerated module set (the #701 silent false-PASS root cause). `[^;]+;`
+# stops the clause at its own statement terminator so it cannot swallow a
+# following module declaration (no over-match — see §4.05 fixture).
 _MODULE_HEADER_RE = re.compile(r'\bmodule\s+([A-Za-z_]\w*)\s*'
+                               r'(?:import\s+[^;]+;\s*)*'
                                r'(?:#\s*\(.*?\))?\s*\((.*?)\)\s*;', re.S)
 # A bare port identifier in a header port list (ANSI or non-ANSI). We strip
 # direction/type keywords and packed dims, then take the trailing identifier.
@@ -4417,7 +4562,13 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
                           time.time() - t0,
                           f"iverilog rc={rc} stderr={(err or out)[-1500:]}",
                           extras={"tb_frontend": tb_frontend})
-    rc, out, err = _run(["vvp", str(vvp)], cwd=sim_dir, timeout=120)
+    # ORGANIC #703 — the #657 verilator SV-escape ALREADY ran the native binary
+    # (no .vvp on disk); reuse its captured stdout instead of running vvp on a
+    # file it never produced. The completion-marker check below still gates the
+    # PASS, so a verilator escape that did NOT reach PROTOCOL_REFERENCE_TB_PASS
+    # still FAILs. The iverilog/sv2v path still runs vvp.
+    rc, out, err = _sim_run_or_reuse(tb_frontend, vvp, rc, out, err,
+                                     sim_dir, timeout=120)
     transcript = (sim_dir / "ref_tb.log")
     transcript.write_text(out + "\n" + err)
     if "PROTOCOL_REFERENCE_TB_PASS" in out:

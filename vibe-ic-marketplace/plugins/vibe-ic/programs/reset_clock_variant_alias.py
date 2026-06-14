@@ -484,12 +484,26 @@ def _module_header(text: str, module: str,
     # emitter can re-emit them; package-scoped port-width params only resolve
     # if the import is back in scope on the outer wrapper.
     import_clauses: List[str] = []
-    while True:
-        im = re.match(r"import\s+[\w:\*\s,]+;", text[i:])
-        if not im:
-            break
-        import_clauses.append(im.group(0).strip())
-        i = _skip_ws(i + im.end())
+
+    def _consume_imports(k: int) -> int:
+        # Consume any number of `import pkg::*;` clauses starting at k,
+        # appending each (verbatim) to import_clauses; return the advanced
+        # whitespace-skipped offset. #704 — factored out so it can run BOTH
+        # before AND after the optional `#(...)` param block: the SV LRM
+        # ordering is `module X import...; #(p) (ports);`, but some tops use
+        # the reversed `module X #(p) import...; (ports);`. Tolerating both
+        # keeps the header scan order-independent across
+        # module / imports* / #(...) / imports* / (ports).
+        nonlocal_k = k
+        while True:
+            im2 = re.match(r"import\s+[\w:\*\s,]+;", text[nonlocal_k:])
+            if not im2:
+                break
+            import_clauses.append(im2.group(0).strip())
+            nonlocal_k = _skip_ws(nonlocal_k + im2.end())
+        return nonlocal_k
+
+    i = _consume_imports(i)
     param_block: Optional[str] = None
     if i < n and text[i] == "#":
         i = _skip_ws(i + 1)
@@ -499,6 +513,9 @@ def _module_header(text: str, module: str,
                 return None
             param_block = text[i + 1:j - 1].strip()
             i = _skip_ws(j)
+    # #704 — a second import-consumption pass for the reversed
+    # `#(params) import pkg::*; (ports)` ordering.
+    i = _consume_imports(i)
     if i < n and text[i] == "(":
         j = _skip_balanced(i)
         if j is None:
@@ -537,22 +554,101 @@ def parse_module_imports(rtl_text: str, module: str) -> List[str]:
     return list(hdr[2])
 
 
+# ORGANIC #704 round-2 — split a port-list block on TOP-LEVEL commas only.
+# A comma inside `[..]` (packed/unpacked width), `(..)` (function-call default
+# like `$clog2(W)`) or `{..}` (concat) does NOT separate two ports.
+def _split_top_level_commas(block: str) -> List[str]:
+    parts: List[str] = []
+    depth = 0
+    buf: List[str] = []
+    for ch in block:
+        if ch in "([{":
+            depth += 1
+            buf.append(ch)
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+            buf.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    parts.append("".join(buf))
+    return parts
+
+
+# A DIRECTIONLESS continuation port inside a comma-bundled group
+# (`input clk, rst_n` → the `rst_n` segment carries no direction keyword):
+# optional net-type, optional packed width, then the port name.
+_CONT_PORT_RE = re.compile(
+    r"^(?:(?:wire|reg|logic|signed|unsigned)\b\s*)*"
+    r"(\[[^\]]+\])?\s*(\w+)")
+
+
 def parse_module_ports(rtl_text: str, module: str,
                        defines: "Optional[set]" = None
                        ) -> List[Tuple[str, str, str]]:
-    """Parse `module <module>`'s ANSI port list as [(dir, name, width), ...].
+    """Parse `module <module>`'s ANSI port list as [(dir, width, name), ...].
 
     ORGANIC #671 — `defines` is the compile-time -D set the in-runner sv2v /
     iverilog DUT conversion uses (e.g. {"SIMULATION"} or {"SYNTHESIS"}). When
     supplied, a port inside an `ifdef <MACRO> arm whose MACRO is NOT in that set
     is NOT returned (it is not a real DUT port under that conversion). When
     `defines=None` (the legacy default) every arm is parsed exactly as before —
-    no regression on callers that don't pass a define-set."""
+    no regression on callers that don't pass a define-set.
+
+    ORGANIC #704 round-2 — COMMA-BUNDLED DIRECTIONLESS ports are no longer
+    dropped. The prior `_PORT_DECL_RE.finditer(block)` only yielded ports that
+    LED with a direction keyword, so a Verilog/SV port group that shares one
+    direction across a comma list — `input clk, rst_n` / `input [7:0] a, b, c`
+    (an extremely common top-level shape) — silently lost every member after the
+    first. That made the l9 RTL-top pin checker report the dropped ports as
+    "declared in L9 but missing from the RTL top" → a FALSE pin-mismatch FAIL on
+    a perfectly valid design. The parser now walks the block by top-level comma
+    segments, CARRYING the most-recent direction (and that group's width) onto
+    each directionless continuation port — the same carry-forward Verilog ANSI
+    semantics the historical l9-local parser implemented before it migrated here.
+
+    Equivalence: for a port list with no comma-bundling (every port leads with
+    its own direction) the result is byte-identical to the old finditer output;
+    bundling only ADDS the previously-dropped continuation ports. A leading
+    directionless token before ANY direction keyword is still skipped (non-ANSI
+    header / stray), matching the old behaviour."""
     block = _module_portlist_block(rtl_text, module, defines)
     if block is None:
         return []
-    return [(pm.group(1), (pm.group(2) or "").strip(), pm.group(3))
-            for pm in _PORT_DECL_RE.finditer(block)]
+    # Strip any preprocessor DIRECTIVE marker lines (``ifdef``/`endif`/`else`/
+    # `elsif`/`ifndef`/`define`) that survive inside the block. With `defines`
+    # the not-taken ARM bodies are already blanked, but the `ifdef/`endif marker
+    # lines themselves remain as inline text — and a comma segment that begins
+    # with such a marker would hide the `output`/`input` keyword that follows it
+    # (dropping a real direction-led port). The historical finditer scan ignored
+    # them implicitly; the segment walk must remove them first. (Removing a
+    # marker line never deletes a port — `_PP_DIRECTIVE_RE` only matches a line
+    # that LEADS with a backtick directive keyword, never a port declaration.)
+    block = _PP_DIRECTIVE_RE.sub("", block)
+    out: List[Tuple[str, str, str]] = []
+    cur_dir: Optional[str] = None
+    cur_width = ""
+    for seg in _split_top_level_commas(block):
+        s = seg.strip()
+        if not s:
+            continue
+        dm = _PORT_DECL_RE.match(s)
+        if dm is not None:
+            # Direction-led declaration — opens/re-opens a comma group and sets
+            # the carried direction + width for any continuation ports after it.
+            cur_dir = dm.group(1)
+            cur_width = (dm.group(2) or "").strip()
+            out.append((cur_dir, cur_width, dm.group(3)))
+            continue
+        if cur_dir is None:
+            continue  # directionless token before any direction → not an ANSI port
+        cm = _CONT_PORT_RE.match(s)
+        if cm is not None:
+            w = (cm.group(1) or "").strip() or cur_width
+            out.append((cur_dir, w, cm.group(2)))
+    return out
 
 
 def emit_variant_alias_wrapper(core_module: str,
