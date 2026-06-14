@@ -129,6 +129,8 @@
       "fallback_skill": "spec-to-rtl",
       "verification_track": "generic_full_stack",
       "command_protocol_applicable": false,
+      "sparse_control_timing": true,
+      "sparse_analog_block_set": true,
       "analog_applicable": true,
       "half_duplex_bus": false,
       "owner_plugin": "vibe-ic",
