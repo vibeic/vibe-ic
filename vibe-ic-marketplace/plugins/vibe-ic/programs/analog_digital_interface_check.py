@@ -120,6 +120,27 @@ def run_audit(project: Path) -> AuditResult:
         result.summary = {"skipped": True, "reason": "no_analog_blocks"}
         return result
 
+    # ORGANIC #676 — class-N/A skip (defence-in-depth; see
+    # analog_flow_compliance_check). A pure-digital SoC whose only "blocks" are
+    # low_confidence phantom keyword hits skips the analog-digital interface
+    # check instead of hard-FAILing. §4.05 no-leak: real analog IC / confident
+    # block still gated.
+    try:
+        import _analog_a_check_common as _aac
+        if _aac.analog_class_is_na(project):
+            result.findings.append(Finding(
+                rule="SKIP_DIGITAL_CLASS_NA",
+                severity="INFO",
+                message=("IC classified non-analog and all declared blocks are "
+                         "low_confidence phantom keyword hits — analog-digital "
+                         "interface N/A (ORGANIC #676)"),
+            ))
+            result.summary = {"skipped": True,
+                              "reason": "digital_class_na_low_confidence"}
+            return result
+    except Exception:
+        pass
+
     complete = 0
     errors = 0
     level_shifter_warnings = 0

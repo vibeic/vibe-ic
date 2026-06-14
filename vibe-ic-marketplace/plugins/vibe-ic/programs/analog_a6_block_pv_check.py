@@ -399,6 +399,37 @@ def main(argv=None) -> int:
         print(f"  verdict: SKIP (no analog blocks)")
         return 2
 
+    # ORGANIC #676 — class-N/A skip (defence-in-depth). When the IC is
+    # positively classified non-analog and every declared block is a
+    # low_confidence phantom keyword hit (e.g. a "POR" digital-reset token
+    # scraped into a phantom analog block on a pure-digital SoC), SKIP (rc=2)
+    # instead of FAILing per-block PV. §4.05 no-leak: a real analog IC or a
+    # confident (spec-backed) block never reaches this skip and is still gated.
+    if not args.block:
+        try:
+            import _analog_a_check_common as _aac
+            if _aac.analog_class_is_na(project):
+                report = {
+                    "gate": _GATE_NAME,
+                    "verdict": "SKIP",
+                    "step_label": args.step_label,
+                    "reason": ("IC classified non-analog "
+                               "(analog_applicable=false / generic_full_stack) "
+                               "and all declared blocks are low_confidence "
+                               "phantom keyword hits — per-block PV N/A "
+                               "(ORGANIC #676)"),
+                    "blocks_checked": 0,
+                    "blocks_pass": 0,
+                    "blocks_fail": 0,
+                    "findings": [],
+                }
+                _write(args.json, report)
+                print(f"=== {_GATE_NAME} ({project.name}) ===")
+                print(f"  verdict: SKIP (digital class N/A, #676)")
+                return 2
+        except Exception:
+            pass
+
     blocks = [args.block] if args.block else blocks_all
 
     # Step-level waiver (evidence + ticket) short-circuits to WAIVED.

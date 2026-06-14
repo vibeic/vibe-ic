@@ -147,6 +147,30 @@ def run_audit(project: Path) -> AuditResult:
         result.summary = {"skipped": True, "reason": "no_analog_blocks"}
         return result
 
+    # ORGANIC #676 — class-N/A skip. When the IC is positively classified
+    # NON-analog (has_analog:false / analog_applicable:false +
+    # verification_track=generic_full_stack) AND every declared block is a
+    # low_confidence phantom keyword hit, SKIP (N/A) instead of hard-FAILing a
+    # pure-digital SoC — matching the sibling analog gates' class awareness.
+    # §4.05 no-leak: a real analog IC, or a high-confidence (spec-backed)
+    # block, never reaches this skip and is still gated A1-A9.
+    try:
+        import _analog_a_check_common as _aac
+        if _aac.analog_class_is_na(project):
+            result.findings.append(Finding(
+                rule="SKIP_DIGITAL_CLASS_NA",
+                severity="INFO",
+                message=("IC classified non-analog (analog_applicable=false / "
+                         "generic_full_stack) and all declared blocks are "
+                         "low_confidence phantom keyword hits — analog A1-A9 "
+                         "N/A (ORGANIC #676)"),
+            ))
+            result.summary = {"skipped": True,
+                              "reason": "digital_class_na_low_confidence"}
+            return result
+    except Exception:
+        pass
+
     waivers = _load_waivers(project)
 
     matrix: Dict[str, Dict[str, str]] = {}

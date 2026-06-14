@@ -1355,6 +1355,78 @@ def _check_files_exist(project: Path, patterns: List[str], any_of: bool) -> tupl
     return passed, found, missing
 
 
+def _sibling_self_skip_for_missing(project: Path,
+                                   missing_patterns: List[str]) -> Optional[str]:
+    """ORGANIC #675 — for a `files_exist` gate that FAILed because a canonical
+    output is absent, look for a co-located sibling self-skip artifact in the
+    SAME directory that HONESTLY self-reports it was skipped
+    (verdict ∈ SKIP/SKIPPED/SKIPPED-CONDITION). Return a human-readable hint
+    string (the sibling rel path + verdict + reason) when one is found, else
+    None.
+
+    This mirrors `_check_json_field_true`'s ABSENT-field skip promotion (#608),
+    extending the same honest-deferral acceptance to the only gate form that
+    lacked it (`_check_files_exist`). The canonical case is the formal step
+    (#440): the runner emits `formal/formal_not_run.json`
+    (verdict=SKIPPED-CONDITION) but NEVER `formal/results.json`, so the
+    `files_exist:['formal/results.json']` sub-gate hard-FAILed even though the
+    sibling honestly disclosed the skip. The same shape covers any future
+    runner that drops a `*_not_run.json` / `*_skipped.json` self-report beside
+    an absent canonical output.
+
+    chip-AGNOSTIC: keyed purely on (a) the missing pattern's parent directory
+    and (b) a sibling JSON whose `verdict` is a self-skip verdict — no chip,
+    vendor, SKU or class literal. CRITICAL §4.05 no-leak: this fires ONLY when
+    the canonical output is ABSENT *and* a sibling honestly self-reports a skip;
+    a REAL authored artifact (results.json present) never reaches this path
+    (the gate already passed), and a sibling that does NOT self-report a skip
+    (e.g. a real FAIL verdict, or no sibling at all) returns None → the gate
+    stays FAILed. A real formal FAIL still FAILs.
+    """
+    seen_dirs: set = set()
+    for pat in missing_patterns:
+        # The directory the absent canonical output lives in (e.g.
+        # "phase2/stage1/formal" for "phase2/stage1/formal/results.json").
+        parent_rel = str(Path(pat).parent)
+        if parent_rel in seen_dirs:
+            continue
+        seen_dirs.add(parent_rel)
+        # Resolve the directory through the same glob-fallback as the gate so
+        # canonical-analog-dir / reports-subdir remaps are honored.
+        dir_candidates: List[Path] = []
+        direct = project / parent_rel
+        if direct.is_dir():
+            dir_candidates.append(direct)
+        # Probe via _glob_first on the dir pattern so reports/ and analog/
+        # remaps resolve the same way the missing pattern would have.
+        for hit in _glob_first(project, parent_rel):
+            hp = project / hit
+            if hp.is_dir():
+                dir_candidates.append(hp)
+        for d in dir_candidates:
+            try:
+                json_siblings = sorted(d.glob("*.json"))
+            except OSError:
+                continue
+            for sib in json_siblings:
+                try:
+                    data = json.loads(sib.read_text())
+                except Exception:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                vd = str(data.get("verdict", "")).upper().replace("_", "-")
+                if vd in _SELF_SKIP_VERDICTS:
+                    try:
+                        sib_rel = str(sib.relative_to(project))
+                    except ValueError:
+                        sib_rel = sib.name
+                    reason = str(data.get("reason", ""))[:160]
+                    return (f"{sib_rel}: sibling self-reports verdict={vd}"
+                            + (f" ({reason})" if reason else ""))
+    return None
+
+
 def _expand_globs(args: List[str], cwd: Path) -> List[str]:
     """Expand shell-style globs in program arguments (bash nullglob semantics).
     If a glob pattern has NO match, drop it — this mirrors what a shell with
@@ -2612,6 +2684,22 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
             project, gate["files_exist"], any_of=any_of
         )
         if not passed:
+            # ORGANIC #675 — before declaring a hard FAIL, honor an honest
+            # sibling self-skip artifact co-located with the absent canonical
+            # output (verdict ∈ SKIP/SKIPPED/SKIPPED-CONDITION), the way
+            # `_check_json_field_true` already promotes an ABSENT-field skip to
+            # SKIPPED-CONDITION (#608). The canonical case is the formal step:
+            # the runner emits `formal/formal_not_run.json` but never
+            # `formal/results.json`, so this `files_exist` sub-gate hard-FAILed
+            # despite the honest disclosure → cascade-blocked all of Phase 3.
+            # §4.05 no-leak: only fires on a genuine ABSENT-output + honest
+            # sibling-skip pair; a real authored output (results.json present)
+            # passes above and never reaches here, and a real FAIL verdict in
+            # the sibling is NOT a self-skip verdict → stays FAILed.
+            skip_hint = _sibling_self_skip_for_missing(project, missing)
+            if skip_hint is not None:
+                reasons.append(f"{_SKIP_HINT_PREFIX}{skip_hint}")
+                return True, reasons
             reasons.append(f"missing files (any_of={any_of}): {missing}")
         return passed, reasons
 
@@ -2723,6 +2811,14 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
                 elif hint.startswith(_WAIVER_HINT_PREFIX):
                     # #651 — a PASS_WITH_WAIVERS sub-gate makes the whole
                     # all_of step WAIVED-DEFERRED (carried via the hint).
+                    reasons.append(hint)
+                elif hint.startswith(_SKIP_HINT_PREFIX):
+                    # ORGANIC #675 — an honest sibling-self-skip sub-gate makes
+                    # the whole all_of step SKIPPED-CONDITION (carried via the
+                    # hint), the same way a vacuous/waiver sub-gate promotes
+                    # the step. A skip is more specific than a vacuous-pass, so
+                    # the step-level handler resolves SKIPPED-CONDITION ahead of
+                    # VACUOUS_PASS when both hints are present.
                     reasons.append(hint)
         return True, reasons
 
@@ -3708,13 +3804,23 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                     f"(#651 — a slot credited via a waiver, NOT a bare PASS; "
                     f"production tapeout review must close it): "
                     f"{h[len(_WAIVER_HINT_PREFIX):]}")
-        elif passed and skip_hints and not non_hint_reasons and not vacuous_hints:
+        elif passed and skip_hints and not non_hint_reasons:
+            # ORGANIC #675 — a skip is MORE specific than a vacuous-pass: when
+            # an all_of step carries BOTH an honest sibling-self-skip hint and a
+            # vacuous-pass hint (e.g. the formal step where the absent
+            # results.json is disclosed by formal_not_run.json AND the
+            # bit-level full-stack TB is vacuous for a non-protocol IC),
+            # resolve to SKIPPED-CONDITION rather than VACUOUS_PASS so the
+            # disclosed deferral (review_required, NOT executed-PASS) is what
+            # surfaces. (#608 originally required `not vacuous_hints`; that left
+            # the formal step FALLING THROUGH to VACUOUS_PASS, masking the
+            # disclosed skip — relaxed here.)
             result.status = "SKIPPED-CONDITION"
             for h in skip_hints:
                 result.reasons.append(
                     f"SKIPPED-CONDITION: gate evidence self-reports a skip "
-                    f"(#608): {h[len(_SKIP_HINT_PREFIX):]}")
-        elif passed and vacuous_hints and not non_hint_reasons:
+                    f"(#608/#675): {h[len(_SKIP_HINT_PREFIX):]}")
+        elif passed and vacuous_hints and not non_hint_reasons and not skip_hints:
             result.status = "VACUOUS_PASS"
             for h in vacuous_hints:
                 # Strip the internal prefix; surface a human-friendly
