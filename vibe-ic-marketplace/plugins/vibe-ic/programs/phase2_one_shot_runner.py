@@ -1901,6 +1901,89 @@ def _v643_width_decl(p: dict) -> str:
     return ""
 
 
+def _v661_rtl_module_names(project: Path) -> List[str]:
+    """ORGANIC #661 — every module name DEFINED in the synthesizable rtl/ dir,
+    in glob order. chip-AGNOSTIC structural parse (reuses _MODULE_HEADER_RE, the
+    SAME header regex the chip_top / reference-TB resolvers already trust)."""
+    rtl_dir = _pl.rtl_dir(project)
+    if not rtl_dir.is_dir():
+        return []
+    names: List[str] = []
+    seen: set = set()
+    for ext in (".v", ".sv"):
+        for f in sorted(rtl_dir.rglob(f"*{ext}")):
+            try:
+                body = _strip_v_comments(f.read_text(errors="replace"))
+            except OSError:
+                continue
+            for m in _MODULE_HEADER_RE.finditer(body):
+                nm = m.group(1)
+                if nm and nm not in seen:
+                    seen.add(nm)
+                    names.append(nm)
+    return names
+
+
+def _v661_resolve_dut_module(project: Path,
+                             top_name: str,
+                             l9_top_module: Optional[str]) -> Optional[str]:
+    """ORGANIC #661 — resolve the DUT module to instantiate in the full-stack TB
+    STRUCTURALLY against rtl/, never instantiating a name with no definition.
+
+    `L9.top_module` is frequently the `l1_ic_name_fallback` (the product / SKU
+    name, e.g. a SoC project name) — NOT a real RTL module. Binding the TB to it
+    emits `<phantom> u_dut (...)` → iverilog "Unknown module type: <phantom>" →
+    the full-stack/reference TB FAILs and blocks the whole Phase-2 chain, even
+    though the RTL is correct. The #629 reconcile only fixes the top PORTS, not
+    the top MODULE name, so it never caught this.
+
+    Resolution priority (mirrors the established _clock-input / reference-TB top
+    resolvers — structural, chip-AGNOSTIC):
+      (a) --top-name when it names a real module DEFINED in rtl/;
+      (b) L9.top_module ONLY when it names a real module DEFINED in rtl/;
+      (c) the single instantiation-graph root among rtl/ modules (the actual
+          synthesizable top — the module nobody else instantiates);
+      (d) None when unresolvable (caller keeps the legacy fallback, no regression
+          on already-correct designs / non-rtl SKIPs).
+    NEVER returns a name absent from rtl/. No chip / SKU / vendor literal."""
+    defined = _v661_rtl_module_names(project)
+    if not defined:
+        return None  # no parseable rtl/ — caller keeps legacy behaviour
+    defined_set = set(defined)
+    # (a) honour the orchestrator's --top-name when it is a real module.
+    if top_name and top_name in defined_set:
+        return top_name
+    # (b) L9.top_module only when it is a real module (NOT the ic_name fallback).
+    if l9_top_module and l9_top_module in defined_set:
+        return l9_top_module
+    # (c) instantiation-graph root: the module no other module instantiates.
+    bodies: Dict[str, str] = {}
+    rtl_dir = _pl.rtl_dir(project)
+    for ext in (".v", ".sv"):
+        for f in sorted(rtl_dir.rglob(f"*{ext}")):
+            try:
+                body = _strip_v_comments(f.read_text(errors="replace"))
+            except OSError:
+                continue
+            for m in re.finditer(
+                    r'\bmodule\s+([A-Za-z_]\w*)\b(.*?)\bendmodule\b', body,
+                    re.S):
+                bodies.setdefault(m.group(1), m.group(2))
+
+    def _instantiated(child: str) -> bool:
+        pat = re.compile(
+            rf"\b{re.escape(child)}\s+(?:#\s*\([^;]*?\)\s*)?"
+            rf"[A-Za-z_]\w*\s*\(")
+        return any(pat.search(b) for mod, b in bodies.items() if mod != child)
+
+    roots = [m for m in defined
+             if not m.endswith("__rcvar_inner") and not _instantiated(m)]
+    if len(roots) == 1:
+        return roots[0]
+    # (d) unresolvable (0 or >1 roots) — caller keeps legacy fallback.
+    return None
+
+
 def step_full_stack_tb_gen(project: Path,
                            top_name: str = "chip_top") -> StepResult:
     """v1.6.88 (#20 Bug 3 P0 BLOCKER) — synthesise a chip-AGNOSTIC
@@ -1932,7 +2015,21 @@ def step_full_stack_tb_gen(project: Path,
         return StepResult("full_stack_tb_gen", "FAIL",
                           time.time() - t0,
                           f"L9 parse error: {e}")
-    top_module = l9.get("top_module") or top_name
+    # ORGANIC #661 — resolve the DUT module STRUCTURALLY against rtl/. L9.top_module
+    # is frequently the l1_ic_name_fallback (a product / SKU name, not a real RTL
+    # module); binding the TB to it emits a phantom `<ic_name> u_dut (...)` →
+    # iverilog "Unknown module type" → the full-stack TB FAILs and blocks the whole
+    # Phase-2 chain even though the RTL is correct. Prefer --top-name / L9.top_module
+    # ONLY when each names a real module in rtl/; else the instantiation-graph root.
+    # NEVER instantiate a name with no definition in rtl/. chip-AGNOSTIC.
+    _l9_top_module = l9.get("top_module")
+    _resolved_dut = _v661_resolve_dut_module(project, top_name, _l9_top_module)
+    if _resolved_dut:
+        top_module = _resolved_dut
+    else:
+        # Unresolvable rtl/ (e.g. no rtl dir, or genuinely ambiguous root) — keep
+        # the legacy fallback so already-correct / non-rtl designs do not regress.
+        top_module = _l9_top_module or top_name
     top_ports = l9.get("top_ports") or l9.get("ports") or []
     if not isinstance(top_ports, list) or not top_ports:
         return StepResult("full_stack_tb_gen", "SKIP",
@@ -3528,6 +3625,179 @@ def _select_asic_rtl_sources(rtl_dir: Path):
 
 
 # ---------------------------------------------------------------------------
+# ORGANIC #662 — undefined-macro / unresolved-`include dependency pre-check.
+# When staged RTL references a `` `MACRO `` or `` `include "f" `` whose
+# definition is NOT in the staged source set, the open-source frontends
+# (iverilog, yosys/slang) fail with a BARE "undefined macro" / "cannot open
+# include" error and NO remediation hint. The defining file frequently exists
+# under `input/design_src/**/rtl/` but was not pulled into the compile set.
+# This pre-check locates that file structurally and either AUTO-STAGES it into
+# rtl/ or returns a remediation hint naming it. chip-AGNOSTIC: pure
+# `` `define `` / `` `include `` grammar; no chip / vendor / SKU literal.
+# ---------------------------------------------------------------------------
+
+# A `` `define NAME `` (definition) and a `` `NAME `` (usage). The Verilog
+# compiler directives are NOT user macros — exclude them from "undefined".
+_V662_DEFINE_RE = re.compile(r'(?<![\w$])`define\s+([A-Za-z_]\w*)')
+_V662_MACRO_USE_RE = re.compile(r'(?<![\w$])`([A-Za-z_]\w*)')
+_V662_INCLUDE_RE = re.compile(r'(?<![\w$])`include\s+"([^"]+)"')
+_V662_COMPILER_DIRECTIVES = frozenset({
+    "define", "undef", "ifdef", "ifndef", "elsif", "else", "endif",
+    "include", "timescale", "default_nettype", "resetall", "celldefine",
+    "endcelldefine", "line", "begin_keywords", "end_keywords",
+    "unconnected_drive", "nounconnected_drive", "pragma", "__FILE__",
+    "__LINE__",
+})
+
+
+def _v662_design_src_rtl_files(project: Path) -> List[Path]:
+    """Every `.v`/`.sv` under `input/design_src/**/rtl/` — the un-staged
+    dependency pool the benchmark / user input ships. chip-AGNOSTIC."""
+    base = project / "input" / "design_src"
+    if not base.is_dir():
+        return []
+    out: List[Path] = []
+    for ext in (".v", ".sv", ".vh", ".svh"):
+        # only files that live UNDER an `rtl/` directory (the issue's scope)
+        for f in base.rglob(f"*{ext}"):
+            if "rtl" in {p.name for p in f.parents}:
+                out.append(f)
+    return sorted(set(out))
+
+
+def _v662_collect_defines(files) -> set:
+    """The set of macro names DEFINED across `files` (a `` `define NAME ``)."""
+    defined: set = set()
+    for f in files:
+        try:
+            txt = _strip_v_comments(Path(f).read_text(errors="replace"))
+        except OSError:
+            continue
+        for m in _V662_DEFINE_RE.finditer(txt):
+            defined.add(m.group(1))
+    return defined
+
+
+def _v662_undefined_macros(staged_files) -> set:
+    """Macro names USED but not DEFINED across the staged source set
+    (excludes Verilog compiler directives, which are not user macros)."""
+    defined = _v662_collect_defines(staged_files)
+    used: set = set()
+    for f in staged_files:
+        try:
+            txt = _strip_v_comments(Path(f).read_text(errors="replace"))
+        except OSError:
+            continue
+        for m in _V662_MACRO_USE_RE.finditer(txt):
+            nm = m.group(1)
+            if nm not in _V662_COMPILER_DIRECTIVES:
+                used.add(nm)
+    return used - defined
+
+
+def _v662_unresolved_includes(staged_files, staged_dir: Path) -> set:
+    """`` `include "f" `` basenames not present alongside the staged files."""
+    present = {p.name for p in staged_dir.glob("*")} if staged_dir.is_dir() \
+        else set()
+    unresolved: set = set()
+    for f in staged_files:
+        try:
+            txt = Path(f).read_text(errors="replace")
+        except OSError:
+            continue
+        for m in _V662_INCLUDE_RE.finditer(txt):
+            base = os.path.basename(m.group(1))
+            if base not in present:
+                unresolved.add(base)
+    return unresolved
+
+
+def _v662_resolve_dependency_files(project: Path,
+                                   auto_stage: bool = True) -> dict:
+    """ORGANIC #662 — structural undefined-macro / unresolved-`include
+    dependency pre-check.
+
+    Scans the staged rtl/ for macros USED-but-not-DEFINED and `` `include ``s
+    that are not present, then searches `input/design_src/**/rtl/` for the file
+    that DEFINES each missing macro (or matches the missing include basename).
+    When `auto_stage` is True, copies the defining file into rtl/ so the
+    compile resolves. Always returns an actionable remediation summary.
+
+    Returns a dict:
+      {"undefined_macros": [...], "unresolved_includes": [...],
+       "staged": [<rtl-relative names copied>],
+       "hints": ["`MACRO` is defined in input/design_src/.../defines.v — "
+                 "stage it into rtl/", ...]}
+    chip-AGNOSTIC: pure `` `define `` / `` `include `` grammar; no chip literal.
+    """
+    rtl_dir = _pl.rtl_dir(project)
+    staged = _select_asic_rtl_sources(rtl_dir) if rtl_dir.is_dir() else []
+    result = {"undefined_macros": [], "unresolved_includes": [],
+              "staged": [], "hints": []}
+    if not staged:
+        return result
+    undef = _v662_undefined_macros(staged)
+    unres = _v662_unresolved_includes(staged, rtl_dir)
+    if not undef and not unres:
+        return result
+    result["undefined_macros"] = sorted(undef)
+    result["unresolved_includes"] = sorted(unres)
+    pool = _v662_design_src_rtl_files(project)
+    # macro_name -> defining file (first deterministic match in the pool)
+    macro_def_file: Dict[str, Path] = {}
+    for f in pool:
+        try:
+            txt = _strip_v_comments(f.read_text(errors="replace"))
+        except OSError:
+            continue
+        for m in _V662_DEFINE_RE.finditer(txt):
+            macro_def_file.setdefault(m.group(1), f)
+    pool_by_base = {f.name: f for f in pool}
+    to_stage: Dict[str, Path] = {}  # rtl-relative name -> source path
+    for mac in sorted(undef):
+        src = macro_def_file.get(mac)
+        if src is not None:
+            to_stage.setdefault(src.name, src)
+            result["hints"].append(
+                f"`{mac}` is defined in "
+                f"{src.relative_to(project)} — staging it into rtl/"
+                if auto_stage else
+                f"`{mac}` is defined in {src.relative_to(project)} — "
+                f"stage it into rtl/ before compiling")
+        else:
+            result["hints"].append(
+                f"`{mac}` is undefined and no defining file was found under "
+                f"input/design_src/**/rtl/ — provide the file that "
+                f"`` `define `s it")
+    for inc in sorted(unres):
+        src = pool_by_base.get(inc)
+        if src is not None:
+            to_stage.setdefault(src.name, src)
+            result["hints"].append(
+                f'`include "{inc}" resolves to {src.relative_to(project)} '
+                f'— staging it into rtl/' if auto_stage else
+                f'`include "{inc}" resolves to {src.relative_to(project)} '
+                f'— stage it into rtl/ before compiling')
+        else:
+            result["hints"].append(
+                f'`include "{inc}" could not be resolved under '
+                f'input/design_src/**/rtl/ — provide the included file')
+    if auto_stage and to_stage:
+        import shutil
+        rtl_dir.mkdir(parents=True, exist_ok=True)
+        for name, src in sorted(to_stage.items()):
+            dst = rtl_dir / name
+            if dst.exists():
+                continue
+            try:
+                shutil.copy2(src, dst)
+                result["staged"].append(name)
+            except OSError:
+                pass
+    return result
+
+
+# ---------------------------------------------------------------------------
 # ORGANIC-20260531-reference-tb-binds-asic-pad-top-not-behavioral-top
 # Chip-AGNOSTIC behavioral-top resolver: bind the functional reference-TB to
 # the candidate top whose declared ports are a SUPERSET of the ports the TB
@@ -4456,6 +4726,19 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
     # derivation below (asic_top_name) is intentionally left untouched —
     # synth/PnR legitimately use the pad-split top.
     rtl_files = _select_asic_rtl_sources(rtl_dir)
+    # ORGANIC #662 — undefined-macro / unresolved-`include dependency pre-check.
+    # When the staged RTL references a `` `MACRO `` / `` `include "f" `` whose
+    # definition is unstaged, yosys/slang fails with a BARE undefined-macro
+    # error and no remediation hint. Auto-stage the defining file from
+    # input/design_src/**/rtl/ when found; record an actionable hint either way.
+    # Fail-open robustness aid — never blocks. chip-AGNOSTIC.
+    _v662_dep = {}
+    try:
+        _v662_dep = _v662_resolve_dependency_files(project, auto_stage=True)
+        if _v662_dep.get("staged"):
+            rtl_files = _select_asic_rtl_sources(rtl_dir)  # re-glob staged deps
+    except Exception:  # pragma: no cover — robustness aid must never crash synth
+        _v662_dep = {}
     # v1.6.191 (#78 P0) — prefer ASIC-core top when both an FPGA
     # wrapper (`chip_top`) and an ASIC core (`chip_top_asic`) are
     # present in rtl/. The FPGA wrapper has tristate I/O whose
@@ -5037,12 +5320,29 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                     f"stage the missing module(s).")
         except Exception:  # nosec — preflight enrichment is best-effort
             closure_note = ""
+    # ORGANIC #662 — when the abort is an undefined-macro / unresolved-`include
+    # error, append the structural remediation hint (which file under
+    # input/design_src/**/rtl/ defines the missing macro, or that it could not
+    # be found). Advisory — never changes the FAIL verdict.
+    macro_note = ""
+    if _v662_dep.get("hints"):
+        _abort_txt2 = (out + err).lower()
+        if ("macro" in _abort_txt2 or "undefined" in _abort_txt2
+                or "cannot open include" in _abort_txt2
+                or "include file" in _abort_txt2):
+            macro_note = (" | MACRO_DEPS (#662): "
+                          + "; ".join(_v662_dep["hints"][:6]))
+            if _v662_dep.get("staged"):
+                macro_note += (f" (auto-staged: "
+                               f"{', '.join(_v662_dep['staged'])})")
     return StepResult("yosys_synth", "FAIL",
                       time.time() - t0,
-                      f"rc={rc} log_tail={(out + err)[-1500:]}{closure_note}",
+                      f"rc={rc} log_tail={(out + err)[-1500:]}"
+                      f"{closure_note}{macro_note}",
                       [str(log)],
                       extras={"synth_frontend": synth_frontend,
-                              "synth_frontend_reason": fe_reason})
+                              "synth_frontend_reason": fe_reason,
+                              "macro_deps": _v662_dep or None})
 
 
 # -------------------------------------------------------------------------

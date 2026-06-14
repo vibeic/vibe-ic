@@ -3041,22 +3041,31 @@ def _l9_bullet_submodule_extract(text: str) -> List[str]:
                 break
         body = "\n".join(bullet_lines)
         for ml in body.splitlines():
+            # v1.0.38 — for #648. When the bullet body is an
+            # "X instantiates `Y`" sentence, the CHILD is harvested by the
+            # dedicated `_v1_0_38_prose_instantiates_children` parser; skip the
+            # whole bullet here so broadening the heading vocab to include
+            # `Integration` / `Hierarchy` does not leak the parent/prose words.
+            if _V1_0_38_PROSE_INSTANTIATES_RE.search(ml):
+                continue
+            # ORGANIC #648 round-2 — a submodule name must carry trustworthy
+            # provenance (§4.05 no-leak): it appears INSIDE a backtick
+            # code-span (accepted via the relaxed legal-id gate, so short
+            # children like `counter` survive), OR — for a BARE leading bullet
+            # word — it passes the STRICT `_is_real_submodule_name` RTL-shape
+            # gate. A bare prose word under a broadened heading (`Clock` /
+            # `Single` / `The`) is neither code-spanned nor RTL-shaped, so it
+            # is excluded.
+            cs = [c for c in _v648r2_codespan_idents(ml)
+                  if _is_codespan_submodule_name(c)]
+            if cs:
+                out.extend(cs)
+                continue
             m = _RE_L1_BULLET_ITEM.match(ml)
             if not m:
                 continue
-            # v1.0.38 — for #648. When the bullet body is an
-            # "X instantiates Y" sentence, the leading token captured
-            # by `_RE_L1_BULLET_ITEM` is the PARENT (subject), not a
-            # submodule of itself — the CHILD on the right is the real
-            # submodule and is harvested by the dedicated
-            # `_v1_0_38_prose_instantiates_children` parser. Skip the
-            # subject token here so broadening the heading vocab to
-            # include `Integration` / `Hierarchy` does not leak the
-            # parent into L9.submodules. chip-AGNOSTIC.
-            if _V1_0_38_PROSE_INSTANTIATES_RE.search(ml):
-                continue
             name = m.group("name")
-            if len(name) < 3:
+            if len(name) < 3 or not _is_real_submodule_name(name):
                 continue
             out.append(name)
     return out
@@ -3083,16 +3092,60 @@ def _l9_bullet_submodule_extract(text: str) -> List[str]:
 # chip-AGNOSTIC: the `X instantiates [N] Y` relation is a universal
 # hierarchical-SoC documentation convention — no chip-class string
 # literal participates.
+# ORGANIC #648 round-2 — backtick-code-span provenance helpers. A submodule
+# name harvested from prose/bullets MUST appear inside a backtick code-span
+# (the author's explicit "this is an identifier" marker) — a BARE prose word
+# (`Clock` / `Single` / `The` / `everything`) is NEVER code-spanned and must
+# not leak into L9.submodules (§4.05 no-leak). A code-spanned LEGAL identifier
+# is accepted even when the strict RTL-shape gate would reject it (the backtick
+# is the evidence), so short / vowel-sparse real children like `counter` are
+# kept. chip-AGNOSTIC: pure backtick grammar + identifier legality.
+_V648R2_LEGAL_ID_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+_RE_V648R2_CODESPAN = re.compile(r"`\s*([A-Za-z_][A-Za-z0-9_$]*)\b[^`]*`")
+
+
+def _v648r2_codespan_idents(text_fragment: str) -> List[str]:
+    """ORGANIC #648 round-2 — ordered, de-duplicated leading identifiers of the
+    backtick code-spans in ``text_fragment`` (a trailing `#(.PARAM(...))`
+    override inside the span is ignored). chip-AGNOSTIC."""
+    if not isinstance(text_fragment, str):
+        return []
+    out: List[str] = []
+    for m in _RE_V648R2_CODESPAN.finditer(text_fragment):
+        tok = m.group(1)
+        if tok not in out:
+            out.append(tok)
+    return out
+
+
+def _is_codespan_submodule_name(name: str) -> bool:
+    """ORGANIC #648 round-2 — relaxed acceptance for a name carrying backtick
+    code-span provenance: any legal Verilog identifier (len>=2) that is not a
+    doc-table header or a common English verb. The strict RTL-shape gate is NOT
+    applied (the backtick is the evidence), so short / vowel-sparse real
+    modules (`counter`, `alu`) are admitted; bare prose words are already
+    excluded at the extraction site by the backtick requirement. chip-AGNOSTIC."""
+    if not isinstance(name, str):
+        return False
+    nm = name.strip()
+    if len(nm) < 2 or not _V648R2_LEGAL_ID_RE.match(nm):
+        return False
+    low = nm.lower()
+    return (low not in _DOC_TABLE_HEADER_TOKENS
+            and low not in _COMMON_ENGLISH_VERB_TOKENS)
+
+
 _V1_0_38_PROSE_INSTANTIATES_RE = re.compile(
     r"instantiat(?:es?|ed|ing)\b"
     # optional count qualifier: exactly / one / two / a / an / digits
     r"(?:\s+(?:exactly|at\s+least|up\s+to|a|an|one|two|three|four|"
     r"five|six|seven|eight|nine|ten|\d+))*"
     r"\s+"
-    # the child identifier — backtick-fenced OR bare token, with an
-    # optional `#(...)` parameter-override block stripped off.
-    r"`?\s*(?P<child>[A-Za-z_]\w*)"
-    r"(?:\s*#\s*\([^()]*(?:\([^()]*\)[^()]*)*\))?\s*`?",
+    # ORGANIC #648 round-2 — the child identifier MUST be backtick-fenced (a
+    # bare object like "instantiates everything" is prose, not a submodule),
+    # with an optional `#(...)` parameter-override block inside the span.
+    r"`\s*(?P<child>[A-Za-z_]\w*)"
+    r"(?:\s*#\s*\([^()]*(?:\([^()]*\)[^()]*)*\))?\s*`",
     re.IGNORECASE,
 )
 
@@ -8907,6 +8960,29 @@ def _ic_name_from_docs_impl(extracted: Dict[str, str],
         if km and len(km.group(1)) >= 3:
             return km.group(1)
 
+    # ------ Tier -0.5 (ORGANIC #646 round-2): explicit **Project name:** /
+    # **Top deliverable:** bold declaration. A doc that literally writes
+    # `**Project name:** caravel_user_project` has DECLARED the chip identity —
+    # the MOST authoritative signal short of YAML frontmatter. Field round-2
+    # reopened because the tier sat BELOW the folder-name corroboration, so the
+    # folder leaf (`caravel`) out-voted the declared project name and the
+    # explicit declaration was never used. Promoted ABOVE the folder tier so
+    # the declared name wins. chip-AGNOSTIC: a generic vendor-doc bold-label
+    # grammar (no chip/SKU literal); the declared value is still screened
+    # against the HDL/PDK macro stoplist so a macro can never be selected.
+    _decl_re = re.compile(
+        r"\*\*\s*(?:Project\s+name|Top\s+deliverable|Chip\s+name|"
+        r"Design\s+name)\s*[:：]?\s*\*\*\s*[:：]?\s*`?"
+        r"([A-Za-z_][A-Za-z0-9_.\-]+)`?",
+        re.IGNORECASE)
+    for text in (extracted or {}).values():
+        if not text:
+            continue
+        dm = _decl_re.search(text)
+        if (dm and len(dm.group(1)) >= 3
+                and not _is_hdl_pdk_macro_token(dm.group(1))):
+            return dm.group(1)
+
     # ------ Tier 0 (v1.6.244, for #105): folder-name + in-doc
     # corroboration. v1.6.233's "Tier 4.5" demotion made Tier-0
     # only fire when every other tier was silent — but real RV
@@ -8950,29 +9026,6 @@ def _ic_name_from_docs_impl(extracted: Dict[str, str],
         # underscore-split tokens.
         if _v1_6_319_tier0_5_spaced_form_match(folder_for_tier0, extracted):
             return folder_for_tier0
-
-    # ------ Tier 0.7 (ORGANIC #646): explicit **Project name:** /
-    # **Top deliverable:** bold declaration. A doc that literally writes
-    # `**Project name:** caravel_user_project` has DECLARED the chip identity;
-    # it must beat the token heuristics below (which would otherwise latch an
-    # all-caps HDL macro like USE_POWER_PINS that happens to be in RTL scope).
-    # Placed AFTER the folder-name corroboration (Tier 0/0.5) so a folder name
-    # that the docs corroborate still wins — no regression on existing picks —
-    # and BEFORE the token heuristics, as the issue requires. chip-AGNOSTIC: a
-    # generic vendor-doc bold-label grammar, no chip/SKU literal; the declared
-    # value is still screened against the HDL/PDK macro stoplist.
-    _decl_re = re.compile(
-        r"\*\*\s*(?:Project\s+name|Top\s+deliverable|Chip\s+name|"
-        r"Design\s+name)\s*[:：]?\s*\*\*\s*[:：]?\s*`?"
-        r"([A-Za-z_][A-Za-z0-9_.\-]+)`?",
-        re.IGNORECASE)
-    for text in (extracted or {}).values():
-        if not text:
-            continue
-        dm = _decl_re.search(text)
-        if (dm and len(dm.group(1)) >= 3
-                and not _is_hdl_pdk_macro_token(dm.group(1))):
-            return dm.group(1)
 
     # ------ Tier 1: "implementation of <X>" — strongest signal.
     # v1.6.59: dropped re.IGNORECASE on the captured group. The captured
@@ -41078,7 +41131,11 @@ def gen_l9_integration_spec(project: Path,
             for nm in _v1_0_38_prose_instantiates_children(text):
                 if nm in seen_submods:
                     continue
-                if not _is_real_submodule_name(nm):
+                # ORGANIC #648 round-2 — the child is backtick-fenced (the
+                # prose regex requires it), so accept any legal identifier via
+                # the relaxed code-span gate; the strict RTL-shape gate wrongly
+                # dropped short real children like `counter`.
+                if not _is_codespan_submodule_name(nm):
                     continue
                 seen_submods.add(nm)
                 submodules.append({
