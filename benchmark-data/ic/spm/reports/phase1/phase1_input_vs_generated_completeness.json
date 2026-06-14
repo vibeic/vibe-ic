@@ -14,12 +14,12 @@
   "per_layer": [
     {
       "layer": "L10_TEST_CASES",
-      "caught_cells": 0,
+      "caught_cells": 2,
       "ai_patched_cells": 0
     },
     {
       "layer": "L11_OTP_CONTENT",
-      "caught_cells": 0,
+      "caught_cells": 1,
       "ai_patched_cells": 0
     },
     {
@@ -59,12 +59,12 @@
     },
     {
       "layer": "L19_CONSTRAINTS_PDK",
-      "caught_cells": 1,
+      "caught_cells": 3,
       "ai_patched_cells": 0
     },
     {
       "layer": "L1_DATASHEET",
-      "caught_cells": 48,
+      "caught_cells": 49,
       "ai_patched_cells": 0
     },
     {
@@ -114,7 +114,7 @@
     },
     {
       "layer": "L7_TEST_DEBUG",
-      "caught_cells": 2,
+      "caught_cells": 4,
       "ai_patched_cells": 0
     },
     {
@@ -129,7 +129,7 @@
     },
     {
       "layer": "L9_INTEGRATION_SPEC",
-      "caught_cells": 1,
+      "caught_cells": 2,
       "ai_patched_cells": 0
     },
     {

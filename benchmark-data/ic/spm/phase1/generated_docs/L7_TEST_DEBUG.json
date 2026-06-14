@@ -2,6 +2,43 @@
   "schema_version": 2,
   "doc_class": "test_debug",
   "ic_name": "spm",
+  "test_scenarios": [
+    {
+      "name": "random_multiplication_functional_equivalence",
+      "kind": "functional_vector",
+      "stimulus": "**100% PASS (binary)**",
+      "expected": "隨機 ≥ 10000 組 (x, y),全部對 golden model 一致",
+      "evidence": "input/docs/L7_verification_plan.md (verification-plan table)"
+    },
+    {
+      "name": "corner_operand",
+      "kind": "functional_vector",
+      "stimulus": "100% PASS",
+      "expected": "x = 0、y_stream = 0、x = MAX_POS、x = MIN_NEG、y = MAX_POS、y = MIN_NEG、x = -1、y = -1",
+      "evidence": "input/docs/L7_verification_plan.md (verification-plan table)"
+    },
+    {
+      "name": "case_3",
+      "kind": "functional_vector",
+      "stimulus": "100% PASS",
+      "expected": "連續多筆乘法計算之間,內部狀態應正確 reset 或銜接",
+      "evidence": "input/docs/L7_verification_plan.md (verification-plan table)"
+    },
+    {
+      "name": "reset",
+      "kind": "functional_vector",
+      "stimulus": "100% PASS",
+      "expected": "reset 期間 / reset 解除瞬間 / reset 在計算進行中 assert 三種情況",
+      "evidence": "input/docs/L7_verification_plan.md (verification-plan table)"
+    },
+    {
+      "name": "toggle_branch_coverage",
+      "kind": "functional_vector",
+      "stimulus": "≥ 95%",
+      "expected": "同 random run;非 sign-off gate",
+      "evidence": "input/docs/L7_verification_plan.md (verification-plan table)"
+    }
+  ],
   "test_modes": [],
   "no_test_modes_in_input": true,
   "debug_observability": [],

@@ -1,7 +1,8 @@
-# Auto-extracted CTS report (OpenROAD-derived) — v1.6.36
+# CTS sign-off report (OpenROAD TritonCTS-derived) — #519
+# Emitted AT CTS COMPLETION (post_cts.def present), independent of
+# the downstream routing outcome.
 # Source: phase3/stage3/pnr/openroad.log
 
-[WARNING CTS-0104] Clock wire resistance/capacitance values are zero.
 [INFO CTS-0050] Root buffer is sky130_fd_sc_hd__clkbuf_16.
 [INFO CTS-0051] Sink buffer is sky130_fd_sc_hd__clkbuf_4.
 [INFO CTS-0052] The following clock buffers will be used for CTS:

@@ -7,7 +7,9 @@
     "scan_chains": [],
     "test_compression": null,
     "bist_mbist": [],
-    "jtag_tap": null
+    "jtag_tap": null,
+    "dft_present": false,
+    "notes": "Block guide does not specify DFT/scan topology; this is deferred to SoC integration. The peripheral register file is amenable to standard scan insertion at the SoC level."
   },
   "extraction_hints": [
     "Look for scan / DFT / BIST / JTAG sections.",

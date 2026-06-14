@@ -7,19 +7,14 @@
       "severity": "INFO",
       "message": "Found 3 CDC report file(s)",
       "file": "reports/phase2/cdc/crossing.json"
-    },
-    {
-      "rule": "CDC_CLOCK_REFERENCES",
-      "severity": "ERROR",
-      "message": "No clock domain references (clk/clock/domain) found in CDC report",
-      "file": "reports/phase2/cdc/crossing.json"
     }
   ],
   "summary": {
     "files_found": 3,
     "has_clock_ref": false,
-    "has_crossing": true,
+    "has_crossing": false,
     "canonical_json_pass": 3,
-    "canonical_substance_pass": true
+    "canonical_substance_pass": false,
+    "single_clock_pass": true
   }
 }

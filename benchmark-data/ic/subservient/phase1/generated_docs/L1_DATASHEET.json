@@ -7,26 +7,182 @@
   "no_package_in_input": true,
   "pin_table": [
     {
-      "name": "UART",
-      "mode": "output",
-      "aliases": [],
-      "rtl_name": "uart",
-      "board_name": "UART",
-      "io_standard": null,
-      "no_io_standard_in_input": true,
-      "function": "output",
-      "evidence": "input/docs/L2_architecture.md"
-    },
-    {
-      "name": "SERV",
+      "name": "i_clk",
       "mode": "input",
       "aliases": [],
-      "rtl_name": "serv",
-      "board_name": "SERV",
+      "rtl_name": "i_clk",
+      "board_name": "i_clk",
       "io_standard": null,
       "no_io_standard_in_input": true,
-      "function": "input",
-      "evidence": "input/docs/L3_external_interface.md"
+      "function": "系統時脈;所有資料於上升沿同步",
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2",
+      "description": "系統時脈;所有資料於上升沿同步"
+    },
+    {
+      "name": "i_rst",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_rst",
+      "board_name": "i_rst",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "同步 reset,**active-high**;assert 後一個 cycle SERV 內部歸零",
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2",
+      "description": "同步 reset,**active-high**;assert 後一個 cycle SERV 內部歸零"
+    },
+    {
+      "name": "o_gpio",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_gpio",
+      "board_name": "o_gpio",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "GPIO 輸出;預設 1 pin,可作為 simple debug bit 或 UART tx",
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2",
+      "description": "GPIO 輸出;預設 1 pin,可作為 simple debug bit 或 UART tx"
+    },
+    {
+      "name": "i_gpio",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_gpio",
+      "board_name": "i_gpio",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "GPIO 輸入(若 Plugin 採雙向 GPIO)",
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2",
+      "description": "GPIO 輸入(若 Plugin 採雙向 GPIO)",
+      "optional": true
+    },
+    {
+      "name": "o_sram_addr",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_sram_addr",
+      "board_name": "o_sram_addr",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "位址",
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2",
+      "description": "位址"
+    },
+    {
+      "name": "o_sram_data",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_sram_data",
+      "board_name": "o_sram_data",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "寫入資料(typical)",
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2",
+      "description": "寫入資料(typical)"
+    },
+    {
+      "name": "i_sram_data",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_sram_data",
+      "board_name": "i_sram_data",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "讀取資料(typical)",
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2",
+      "description": "讀取資料(typical)"
+    },
+    {
+      "name": "o_sram_we",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_sram_we",
+      "board_name": "o_sram_we",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "寫入啟用",
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2",
+      "description": "寫入啟用"
+    },
+    {
+      "name": "o_sram_cyc",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_sram_cyc",
+      "board_name": "o_sram_cyc",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "匯流排 cycle 有效",
+      "evidence": "input/docs/L3_external_interface.md",
+      "extraction_strategy": "gfm_multitable_header_role_v0_3_2",
+      "description": "匯流排 cycle 有效"
+    },
+    {
+      "name": "o_sram_wdata",
+      "mode": "output",
+      "aliases": [],
+      "rtl_name": "o_sram_wdata",
+      "board_name": "o_sram_wdata",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "see datasheet",
+      "description": "| `o_sram_data` (or `o_sram_wdata`) | 8-bit | output | 寫入資料(typical) |",
+      "_extraction": "backticked_interface_v455"
+    },
+    {
+      "name": "i_sram_rdata",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "i_sram_rdata",
+      "board_name": "i_sram_rdata",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "see datasheet",
+      "description": "| `i_sram_data` (or `i_sram_rdata`) | 8-bit | input | 讀取資料(typical) |",
+      "_extraction": "backticked_interface_v455"
+    },
+    {
+      "name": "set_input_delay",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "set_input_delay",
+      "board_name": "set_input_delay",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "see datasheet",
+      "description": "- `set_input_delay` / `set_output_delay`:使用 **clock period 的 20%** 作為預設(例:`sky130_fd_sc_hd` 10 ns → 2 ns I/O delay)",
+      "_extraction": "backticked_interface_v455"
+    },
+    {
+      "name": "set_output_delay",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "set_output_delay",
+      "board_name": "set_output_delay",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "see datasheet",
+      "description": "- `set_input_delay` / `set_output_delay`:使用 **clock period 的 20%** 作為預設(例:`sky130_fd_sc_hd` 10 ns → 2 ns I/O delay)",
+      "_extraction": "backticked_interface_v455"
+    },
+    {
+      "name": "sky130_fd_sc_hd",
+      "mode": "input",
+      "aliases": [],
+      "rtl_name": "sky130_fd_sc_hd",
+      "board_name": "sky130_fd_sc_hd",
+      "io_standard": null,
+      "no_io_standard_in_input": true,
+      "function": "see datasheet",
+      "description": "- `set_input_delay` / `set_output_delay`:使用 **clock period 的 20%** 作為預設(例:`sky130_fd_sc_hd` 10 ns → 2 ns I/O delay)",
+      "_extraction": "backticked_interface_v455"
     }
   ],
   "no_pin_table_in_input": false,
@@ -83,6 +239,42 @@
       }
     ],
     "input/docs/L3_external_interface.md": [
+      {
+        "literal": "`i_clk` | 1-bit | input | 系統時脈;所有資料於上升沿同步",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "`i_rst` | 1-bit | input | 同步 reset,**active-high**;assert 後一個 cycle SERV 內部歸零",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "`o_gpio` | ≥ 1-bit | output | GPIO 輸出;預設 1 pin,可作為 simple debug bit 或 UART tx",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "(optional) `i_gpio` | optional | input | GPIO 輸入(若 Plugin 採雙向 GPIO)",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "`o_sram_addr` | ~10-bit(對應 `memsize = 1024 bytes`,8-bit 每位元組 → 10-bit address) | output | 位址",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "`o_sram_data` (or `o_sram_wdata`) | 8-bit | output | 寫入資料(typical)",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "`i_sram_data` (or `i_sram_rdata`) | 8-bit | input | 讀取資料(typical)",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "`o_sram_we` | 1-bit | output | 寫入啟用",
+        "label": "pin (GFM multi-table header-role)"
+      },
+      {
+        "literal": "`o_sram_cyc` | 1-bit | output | 匯流排 cycle 有效",
+        "label": "pin (GFM multi-table header-role)"
+      },
       {
         "literal": "SERV",
         "label": "pin name (input)"

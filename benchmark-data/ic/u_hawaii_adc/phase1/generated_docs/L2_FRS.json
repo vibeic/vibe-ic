@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "doc_class": "frs",
-  "ic_name": "u_hawaii_ADC",
+  "ic_name": "u_hawaii_adc",
   "frs_sections": [
     {
       "section": "h2",

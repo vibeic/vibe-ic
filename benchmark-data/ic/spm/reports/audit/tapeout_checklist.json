@@ -5,8 +5,8 @@
     {
       "rule": "TAPEOUT_GDS_EXISTS",
       "severity": "INFO",
-      "message": "GDS file found: spm.gds",
-      "file": "phase3/stage4/gds/spm.gds"
+      "message": "GDS file found: chip_top.gds",
+      "file": "phase3/stage3/pnr/chip_top.gds"
     },
     {
       "rule": "TAPEOUT_NETLIST_EXISTS",
@@ -17,14 +17,14 @@
     {
       "rule": "TAPEOUT_TIMING_EXISTS",
       "severity": "INFO",
-      "message": "Timing report found: spm_fpga_bist.sta.rpt",
-      "file": "phase2/stage1/fpga/output_files/spm_fpga_bist.sta.rpt"
+      "message": "Timing report found: si_crosstalk_timing_aware.rpt",
+      "file": "reports/phase3/si_crosstalk_timing_aware.rpt"
     },
     {
-      "rule": "TAPEOUT_DRC_EXISTS",
+      "rule": "TAPEOUT_DRC_CLEAN",
       "severity": "INFO",
-      "message": "DRC report found: drc.rpt",
-      "file": "phase3/reports/drc.rpt"
+      "message": "signoff DRC report 'drc_signoff.rpt': 0 violations (count parsed, not just existence)",
+      "file": "reports/phase3/drc_signoff.rpt"
     }
   ],
   "summary": {
@@ -37,6 +37,7 @@
     "evidence_count": 4,
     "threshold": 4,
     "env_unavailable_steps": [],
+    "drc_library_internal_waived": false,
     "verdict_tier": "PASS"
   }
 }

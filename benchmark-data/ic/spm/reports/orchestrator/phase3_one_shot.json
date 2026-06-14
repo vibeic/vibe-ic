@@ -1,49 +1,141 @@
 {
-  "project": "/home/reyerchu/vibe-ic/benchmark_clean/spm",
+  "project": "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm",
   "pdk": "sky130A",
   "top": "chip_top",
   "steps": [
     {
       "name": "synth",
-      "status": "FAIL",
-      "duration_s": 0.38257861137390137,
-      "detail": "rc=1 log_tail=[INFO] Final PATH variable: /foss/tools/bin:/foss/tools/sak:/usr/local/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/foss/tools/kactus2:/foss/tools/klayout:/foss/tools/osic-multitool\n[INFO] Final PYTHONPATH variable: /usr/lib/python312.zip:/usr/lib/python3.12:/usr/lib/python3.12/lib-dynload:/usr/local/lib/python3.12/dist-packages:/usr/lib/python3/dist-packages:/foss/tools/ngspyce/local/lib/python3.12/dist-packages:/foss/tools/openems/local/lib/python3.12/dist-packages:/foss/tools/pyopus/local/lib/python3.12/dist-packages:/foss/tools/yosys/share/yosys/python3:/foss/tools/klayout/pymod\nbash: line 1: cd: /home/reyerchu/vibe-ic/benchmark_clean/spm/phase2/stage2/synth: No such file or directory\n",
+      "status": "PASS",
+      "duration_s": 0.7582945823669434,
+      "detail": "netlist=chip_top_synth.v cells=? frontend=read_verilog_v2005",
       "output_files": [
-        "/home/reyerchu/vibe-ic/benchmark_clean/spm/phase2/stage2/synth/synth.log"
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase2/stage2/synth/chip_top_synth.v",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase2/stage2/synth/synth.log"
       ],
       "extras": {
-        "synth_frontend": "none",
-        "synth_frontend_reason": "default frontend failed but no SV signature / .sv input — fallback would not help"
+        "synth_frontend": "read_verilog_v2005"
+      }
+    },
+    {
+      "name": "pnr",
+      "status": "PASS",
+      "duration_s": 32.00399565696716,
+      "detail": "def=chip_top.def sta=sta.rpt | spares=5 (target_d=0.02 actual_d=0.021186 dist_ok=True) | via_audit: via-analyzer skipped: [Errno 2] No such file or directory: '/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef'",
+      "output_files": [
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/pnr/chip_top.def",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/pnr/sta.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/pnr/spare_cells.json"
+      ],
+      "extras": {
+        "spare_density_target": 0.02,
+        "spare_count": 5,
+        "spare_types": {
+          "inverter": 1,
+          "nand2": 1,
+          "nor2": 1,
+          "mux2": 1,
+          "aoi": 1
+        }
+      }
+    },
+    {
+      "name": "gds",
+      "status": "PASS",
+      "duration_s": 39.51682686805725,
+      "detail": "gds=chip_top.gds size=444814682 (streamout=klayout; GDS snapped to 0.005µm grid (#600); klayout-native per-layer merge applied (#601))",
+      "output_files": [
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/pnr/chip_top.gds"
+      ],
+      "extras": {
+        "streamout_engine": "klayout",
+        "grid_snap": true,
+        "grid_snap_note": "GDS snapped to 0.005µm grid (#600)",
+        "layer_merge": true,
+        "layer_merge_note": "klayout-native per-layer merge applied (#601)"
       }
     },
     {
       "name": "drc",
-      "status": "SKIP",
-      "duration_s": 3.528594970703125e-05,
-      "detail": "GDS missing: /home/reyerchu/vibe-ic/benchmark_clean/spm/phase3/stage3/pnr/chip_top.gds",
-      "output_files": [],
-      "extras": {}
+      "status": "PASS",
+      "duration_s": 321.22056245803833,
+      "detail": "violations=0 report=drc.rpt",
+      "output_files": [
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/reports/drc.rpt"
+      ],
+      "extras": {
+        "klayout_deck_violations": 0,
+        "streamout_engine": "klayout",
+        "openroad_drt_violations": null,
+        "drc_engine_discrepancy": "OpenROAD detailed-route DRC count: unavailable; KLayout-deck count: 0",
+        "spacing_width_fraction": 0.0
+      }
     },
     {
       "name": "lvs",
-      "status": "WAIVED",
-      "duration_s": 0.06979823112487793,
-      "detail": "LVS requires SPICE-extracted netlist + reference; deferred to dedicated extraction flow (netgen IS available — re-run after extraction step lands)",
+      "status": "PASS",
+      "duration_s": 35.901252031326294,
+      "detail": "netgen LVS: circuits match uniquely (layout chip_top extracted via Magic ext2spice vs gate netlist chip_top_pnr.v); report at reports/phase3/lvs.rpt",
       "output_files": [],
-      "extras": {}
+      "extras": {
+        "lvs_report": "reports/phase3/lvs.rpt",
+        "lvs_verdict": "reports/phase3/lvs_verdict.json",
+        "ext2spice_warning": null,
+        "extracted_netlist": "phase3/stage3/extracted/chip_top_extracted.sp"
+      }
     },
     {
       "name": "canonicalize_artefacts",
       "status": "PASS",
-      "duration_s": 0.004299163818359375,
-      "detail": "emitted 3 canonical artefacts; notes: per-stage DEFs missing: ['floorplan.def', 'placed.def', 'post_cts.def', 'post_hold.def', 'routed.def']. Re-run phase3_one_shot_runner from scratch (delete phase3/stage3/pnr/) so v1.6.36's per-stage write_def fires.; schema-aligned on_board_pass.json fields",
+      "duration_s": 16.136983394622803,
+      "detail": "emitted 41 canonical artefacts; notes: STA basis discrepancy: estimate 11.64 vs SPEF 10.27 (delta 1.37 ns) — canonical = SPEF (#527); antenna: in-session post-repair check 0 net violations, 0 pin violations; SI timing-aware (ADVISORY): 264 pairs decoupled by window, 911 HIGH / 153 LOW advisory watch — violations_count unchanged (build not blocked).; SI: REAL SPEF coupling-cap screen — 446 nets, max ratio 0.9936, mean 0.6321, 63 coupling-dominated (advisory; screen PASS); metal fill: 0 fillers placed → filled.def (29195263 B); emitted eco_timing_repair.tcl (#561); schema-aligned on_board_pass.json fields",
       "output_files": [
-        "/home/reyerchu/vibe-ic/benchmark_clean/spm/phase2/stage2/constraints/pvt_matrix.json",
-        "/home/reyerchu/vibe-ic/benchmark_clean/spm/phase3/stage4/foundry_handoff/spm.gds",
-        "/home/reyerchu/vibe-ic/benchmark_clean/spm/reports/phase2/fpga/on_board_pass.json"
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase2/stage2/constraints/chip_top.sdc",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase2/stage2/constraints/pvt_matrix.json",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase2/sdc_check.json",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage4/foundry_handoff/chip_top.gds",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/sta/pre_pnr_timing.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/sta/pre_pnr_power_preview.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/extracted/chip_top.spef",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/sta/sta_spef_based.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/sta_spef_based.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/sta/post_route_timing.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/sta/spef_vs_estimate_discrepancy.json",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/ir_drop.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/ir_drop.json",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/em.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/em.json",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/antenna.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/antenna.json",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/si_crosstalk.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/si_crosstalk.json",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/pnr/filled.def",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/pnr/metal_fill.done",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/erc.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/erc.json",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/dfm_screen.json",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/perc_equivalent.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/perc_equivalent.json",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/PERC_SIGNOFF_MEMO.md",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/pnr/pdn.done",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/provenance.jsonl",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/cts/clock_plan.json",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/sim_postlayout/chip_top.sdf",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/sim_postlayout/sdf_sim_skipped.json",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/eco/no_eco_needed.flag",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/eco/eco_timing_repair.tcl",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/power.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/power.json",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage3/pnr/routed.drc.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/drc_router.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase3/drc_signoff.rpt",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/phase3/stage4/gds/chip_top.gds",
+        "/home/reyerchu/AI_IC_design/_bench6_v100_r1/spm/reports/phase2/fpga/on_board_pass.json"
       ],
       "extras": {}
     }
   ],
-  "verdict": "FAIL"
+  "steps_verdict": "PASS",
+  "completion_audit_verdict": "FAIL",
+  "verdict": "FAIL",
+  "verdict_note": "headline downgraded from own-steps 'PASS': the full-flow completion audit says 'FAIL' and the orchestrator must derive from, not contradict, it (#437f)"
 }

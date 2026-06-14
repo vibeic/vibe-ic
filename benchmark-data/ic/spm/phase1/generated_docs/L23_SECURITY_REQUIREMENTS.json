@@ -7,7 +7,9 @@
     "key_handling": {},
     "attack_surface": [],
     "side_channel_mitigation": [],
-    "secure_boot": false
+    "secure_boot": false,
+    "security_requirements_present": false,
+    "notes": "Block guide does not specify confidentiality / integrity / authentication requirements for the serial peripheral. Any access-control (e.g. privileged-mode register access) is deferred to SoC integration."
   },
   "extraction_hints": [
     "Look for key-management, side-channel, secure-boot sections.",

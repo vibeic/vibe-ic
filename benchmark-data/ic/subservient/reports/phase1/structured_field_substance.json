@@ -1,7 +1,7 @@
 {
   "gate": "phase1_structured_field_substance_check",
   "verdict": "PASS",
-  "project": "/home/reyerchu/AI_IC_design/subservient_vibe",
+  "project": "/home/reyerchu/AI_IC_design/_bench6_v100_r1/subservient",
   "audit_table": {
     "L1_DATASHEET": [
       {
