@@ -2014,9 +2014,12 @@ def _v661_resolve_dut_module(project: Path,
     The #629 reconcile only fixes the top PORTS, not the top MODULE name, so it
     never caught this.
 
-    Resolution priority (mirrors the established _clock-input / reference-TB top
-    resolvers AND step_yosys_synth's synth-top precedence — structural,
-    chip-AGNOSTIC):
+    Resolution priority (structural, chip-AGNOSTIC). ORGANIC #683 — this clause
+    set is now SHARED with step_yosys_synth: clauses (a0)/(a)/(b) match its
+    waivers.phase2_synth_top → L9.synth_top → top_name precedence, and clause
+    (c) (the unique instantiation-graph root) is the SAME fallback step_yosys_synth
+    adopts when its precedence falls through to the runner auto-wrapper name with
+    no real chip_top module staged — so the TB and synth steps never diverge:
       (a0) ORGANIC #672 — the explicit synth-top override
            (waivers.json:phase2_synth_top → L9.synth_top) when it names a real
            module DEFINED in rtl/ — the SAME source of truth step_yosys_synth
@@ -2531,6 +2534,18 @@ def _verilator_sim_escape(
     if rc_m != 0:
         return 1, "", "could not create verilator staging dir", \
             "iverilog_g2012"
+    # ORGANIC #682 — verilator `--binary` is SINGLE-PASS: a package importing a
+    # later-staged package, parsed first, errors "before declaration". Reorder
+    # `rtl_files` so the `*_pkg.sv` set is emitted in TOPOLOGICAL (dependency)
+    # order AHEAD of the non-package RTL, regardless of the order the caller
+    # passed (defensive — `_select_asic_rtl_sources` already topo-sorts, but a
+    # different caller / closure-pruned subset must stay correct too). Pure
+    # import grammar; chip-AGNOSTIC. Non-package order is preserved.
+    def _is_pkg_sv(p: Path) -> bool:
+        return p.suffix == ".sv" and "pkg" in p.name
+    _pkgs = [p for p in rtl_files if _is_pkg_sv(p)]
+    _non_pkgs = [p for p in rtl_files if not _is_pkg_sv(p)]
+    rtl_files = _v682_topological_package_order(_pkgs) + _non_pkgs
     # Stage the TB + every RTL source (+ the .svh/.vh/.h + *_pkg closure that
     # lives next to the sources) so `include and package imports resolve.
     staged: List[str] = []
@@ -3742,13 +3757,184 @@ def _is_fpga_board_wrapper(p: Path, sibling_basenames: Optional[set] = None) -> 
     return False
 
 
+# ---------------------------------------------------------------------------
+# ORGANIC #682 — TOPOLOGICAL package ordering for the single-pass verilator
+# --binary SIM escape.
+#
+# `_select_asic_rtl_sources` historically emitted packages ALPHABETICALLY
+# (pkg-first). iverilog / sv2v / yosys-slang are multi-pass + order-tolerant,
+# so an alphabetical pkg list never broke them. But the LAST tier of the SIM
+# ladder — the verilator `--binary` escape (#657) — does SINGLE-PASS
+# elaboration: a package that `import`s a later-sorted package, parsed first,
+# errors "Package/class for '::' reference not found" / "Reference to <type>
+# before declaration (IEEE 1800-2023 6.18)". The fix is to emit the `*_pkg.sv`
+# files in DEPENDENCY order (a package's imports BEFORE the package) ahead of
+# the non-package RTL. Pure `import <name>_pkg::` grammar + a topological sort
+# over the staged package set; chip-AGNOSTIC (no chip / vendor / SKU literal).
+# Cycles (an SCC) fall back to a stable (alphabetical) order for the members of
+# that cycle so the routine never crashes and never reorders unrelated packages.
+# ---------------------------------------------------------------------------
+
+# A SystemVerilog package import — `import some_pkg::*;` / `import some_pkg::T;`.
+# We only care about the imported PACKAGE name (group 1); the symbol after `::`
+# is irrelevant to the dependency edge.
+_V682_PKG_IMPORT_RE = re.compile(r'(?<![\w$])import\s+([A-Za-z_]\w*)\s*::')
+
+# A double-quoted SV string literal (with `\"` escapes). Blanked before import
+# scanning so a string such as `localparam string S="import low_pkg::z"` cannot
+# masquerade as a real `import` dependency edge.
+_V682_STRING_LITERAL_RE = re.compile(r'"(?:\\.|[^"\\])*"')
+
+# Conditional-compilation directives that OPEN / CONTINUE / CLOSE a guarded
+# region. An `import` inside ANY `` `ifdef`` / `` `ifndef`` / `` `elsif``-guarded
+# arm is NOT a mandatory dependency — the compiler may never see it — so it must
+# not create an ordering edge. We conservatively treat every directive-bounded
+# region as conditionally compiled (the unconditional `` `else`` arm is rare and
+# treating it as conditional only costs a phantom edge we already want gone).
+_V682_IFDEF_OPEN_RE = re.compile(r'(?<![\w$])`(?:ifdef|ifndef)\b')
+_V682_IFDEF_MID_RE = re.compile(r'(?<![\w$])`(?:elsif|else)\b')
+_V682_IFDEF_CLOSE_RE = re.compile(r'(?<![\w$])`endif\b')
+
+
+def _v682_blank_strings(body: str) -> str:
+    """Replace every double-quoted string literal with spaces of equal length
+    (offsets preserved). chip-AGNOSTIC; cheap; no false negatives (a real
+    `import` is never inside a string literal)."""
+    return _V682_STRING_LITERAL_RE.sub(
+        lambda m: " " * (m.end() - m.start()), body)
+
+
+def _v682_active_import_body(body: str) -> str:
+    """Return a view of an already-comment-stripped package body suitable for
+    `_V682_PKG_IMPORT_RE` edge detection: string literals blanked AND every
+    conditionally-compiled (`` `ifdef`` / `` `ifndef`` / `` `elsif`` / `` `else``
+    guarded) region removed. An `import` the compiler may never see (an inactive
+    `` `ifdef`` arm) or one that is mere data (a string literal) therefore never
+    becomes a PHANTOM ordering edge. ORGANIC #682 round-2. chip-AGNOSTIC: pure
+    preprocessor + string grammar, no chip / vendor / SKU literal."""
+    body = _v682_blank_strings(body)
+    out: List[str] = []
+    depth = 0  # nesting depth of open `ifdef/`ifndef regions
+    for line in body.splitlines(keepends=True):
+        opens = len(_V682_IFDEF_OPEN_RE.findall(line))
+        closes = len(_V682_IFDEF_CLOSE_RE.findall(line))
+        has_mid = bool(_V682_IFDEF_MID_RE.search(line))
+        # A line is "active" only when it sits entirely OUTSIDE any guard. A line
+        # carrying an open/mid/close directive is itself a boundary line and is
+        # dropped (its `import`, if any, lives in a guarded arm).
+        active = (depth == 0 and opens == 0 and closes == 0 and not has_mid)
+        if active:
+            out.append(line)
+        depth += opens - closes
+        if depth < 0:
+            depth = 0  # malformed nesting — never go negative
+    return "".join(out)
+
+
+def _v682_package_stem(p: Path) -> str:
+    """The package NAME a `*_pkg.sv` file is expected to declare. Used as the
+    DAG node id. We prefer the declared `package <name>;` over the file stem so
+    a file named oddly still maps to its real package symbol; fall back to the
+    stem. chip-AGNOSTIC: pure SV `package` grammar. (String literals are blanked
+    so a `package` keyword inside a string never mis-identifies the node.)"""
+    try:
+        body = _v682_blank_strings(_strip_v_comments(p.read_text(errors="replace")))
+    except OSError:
+        return p.stem
+    m = re.search(r'(?<![\w$])package\s+([A-Za-z_]\w*)\s*;', body)
+    return m.group(1) if m else p.stem
+
+
+def _v682_topological_package_order(pkg_files: List[Path]) -> List[Path]:
+    """ORGANIC #682 — return `pkg_files` reordered so that every package whose
+    declared symbol is `import`ed by another staged package is emitted BEFORE
+    its importer (dependencies first). Only edges WITHIN the staged package set
+    count (an import of a non-staged package is irrelevant to ordering). The
+    result is a topological order; any strongly-connected component (a package
+    import cycle) keeps a stable alphabetical order among its members so the
+    routine is total and never crashes. Stable across runs: ties broken by the
+    original (alphabetical) input order. chip-AGNOSTIC: pure import grammar."""
+    if len(pkg_files) < 2:
+        return list(pkg_files)
+
+    # Map declared-package-symbol -> file (first declarer wins, deterministic).
+    by_name: Dict[str, Path] = {}
+    name_of: Dict[Path, str] = {}
+    for p in pkg_files:
+        nm = _v682_package_stem(p)
+        name_of[p] = nm
+        by_name.setdefault(nm, p)
+
+    # Build dependency edges: file -> set(files it imports, restricted to the
+    # staged package set). A package importing one not in the set adds no edge.
+    # ORGANIC #682 round-2 — scan an ACTIVE-import view: string literals blanked
+    # AND `ifdef/`ifndef/`elsif-guarded regions removed, so a conditionally-
+    # compiled or in-a-string `import` never becomes a PHANTOM edge (which would
+    # reorder independent packages OR forge a false cycle whose back-edge-skip
+    # fallback re-emits a real dependency AFTER its dependent — the exact
+    # single-pass verilator failure this fix exists to prevent).
+    deps: Dict[Path, set] = {p: set() for p in pkg_files}
+    for p in pkg_files:
+        try:
+            body = _v682_active_import_body(
+                _strip_v_comments(p.read_text(errors="replace")))
+        except OSError:
+            continue
+        for m in _V682_PKG_IMPORT_RE.finditer(body):
+            dep_name = m.group(1)
+            dep_file = by_name.get(dep_name)
+            if dep_file is not None and dep_file is not p:
+                deps[p].add(dep_file)
+
+    # Deterministic DFS-based topological sort (deps emitted before dependents).
+    # `temp` marks the current DFS stack; revisiting a temp node is a CYCLE — we
+    # break it by simply not recursing further (the offending member keeps its
+    # stable position), so an SCC degrades to stable order rather than crashing.
+    order: List[Path] = []
+    state: Dict[Path, int] = {}  # 0/absent = white, 1 = on-stack, 2 = done
+    # iterate in the input (alphabetical) order so ties are stable
+    for root in pkg_files:
+        if state.get(root, 0) == 2:
+            continue
+        stack = [(root, iter(sorted(deps[root], key=lambda q: name_of[q])))]
+        state[root] = 1
+        while stack:
+            node, it = stack[-1]
+            advanced = False
+            for child in it:
+                st = state.get(child, 0)
+                if st == 2:
+                    continue
+                if st == 1:
+                    # back-edge → cycle; skip (stable-order fallback for SCC)
+                    continue
+                state[child] = 1
+                stack.append(
+                    (child,
+                     iter(sorted(deps[child], key=lambda q: name_of[q]))))
+                advanced = True
+                break
+            if not advanced:
+                state[node] = 2
+                order.append(node)
+                stack.pop()
+    return order
+
+
 def _select_asic_rtl_sources(rtl_dir: Path):
     """Chip-AGNOSTIC unified source selector for the ASIC sim / synth glob.
 
     Applies the shared `_is_tb` + pkg-ordering + `_is_fpga_board_wrapper`
     filtering at one place so all three call sites stay in sync. Returns
     pkg_files + other_sv + other_v with TBs / packages-as-body / FPGA board
-    wrappers removed.  Packages still come first so `import pkg::*` resolves.
+    wrappers removed.
+
+    ORGANIC #682 — packages are emitted in TOPOLOGICAL (dependency) order, not
+    alphabetical: a `*_pkg.sv` that `import`s another staged package is emitted
+    AFTER the imported one. The order-tolerant frontends (iverilog/sv2v/slang)
+    don't care, but the single-pass verilator `--binary` SIM escape (#657) does
+    — an importer parsed before its dependency errors "before declaration".
+    Non-package RTL still comes after every package so `import pkg::*` resolves.
     """
     def _is_tb(p):
         n = p.name
@@ -3762,6 +3948,7 @@ def _select_asic_rtl_sources(rtl_dir: Path):
                 and not _is_fpga_board_wrapper(p, sibling_basenames))
 
     pkg_files = sorted(p for p in rtl_dir.glob("*pkg*.sv") if _keep(p))
+    pkg_files = _v682_topological_package_order(pkg_files)
     other_sv = sorted(p for p in rtl_dir.glob("*.sv")
                       if "pkg" not in p.name and _keep(p))
     other_v = sorted(p for p in rtl_dir.glob("*.v") if _keep(p))
@@ -4928,6 +5115,57 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         if asic_candidate.is_file():
             asic_top_name = f"{top_name}_asic"
     synth_top = asic_top_name or top_name
+
+    # ORGANIC #683 — instantiation-graph-root synth-top fallback.
+    #
+    # The precedence above (waivers.phase2_synth_top → L9.synth_top →
+    # <top>_asic.sv → caller top_name) has NO graph-root clause. The SAME-runner
+    # TB resolver `_v661_resolve_dut_module` DOES (clause (c): the unique module
+    # nobody else instantiates) — so for a reused-IP / catalog-glue design whose
+    # Phase-1 doc-extraction lifted a doc-prose integration top into
+    # L9.top_module that is NOT a real staged module (a PHANTOM top) AND
+    # L9.synth_top is null, the TB bound the REAL top while synth fell through to
+    # `synth_top='chip_top'` (the caller default). No chip_top module exists, and
+    # `_autoemit_chip_top_if_needed` BAILS 'genuinely ambiguous' on a multi-module
+    # design → yosys `synth -top chip_top` → "chip_top is not a valid top-level
+    # module" → Phase-2 FAIL. On disk this recurs as a hand-authored
+    # waivers.json:phase2_synth_top override.
+    #
+    # Fix: ONLY when the precedence fell through to the runner's auto-wrapper
+    # name AND no such module is actually defined in staged rtl/, consult the
+    # SAME structural resolver the TB path trusts. If it returns a REAL
+    # instantiation-graph root, adopt it; otherwise keep `synth_top` unchanged so
+    # the existing auto-emit / honest-FAIL path is preserved. This NEVER overrides
+    # an explicit waiver / L9.synth_top / <top>_asic.sv (those set asic_top_name
+    # so synth_top != top_name) and NEVER fires when a real chip_top module is
+    # staged. Pure instantiation-graph structural detection; chip-AGNOSTIC.
+    if synth_top == top_name == "chip_top":
+        _staged_mods = set(_v661_rtl_module_names(project))
+        if "chip_top" not in _staged_mods:
+            _l9_top_module = None
+            try:
+                _l9p683 = (project / "phase1" / "generated_docs"
+                           / "L9_INTEGRATION_SPEC.json")
+                if _l9p683.is_file():
+                    _l9_683 = json.loads(_l9p683.read_text(errors="replace"))
+                    if isinstance(_l9_683, dict):
+                        _v = _l9_683.get("top_module")
+                        if isinstance(_v, str) and _v.strip():
+                            _l9_top_module = _v.strip()
+            except Exception:
+                _l9_top_module = None
+            try:
+                _graph_root = _v661_resolve_dut_module(
+                    project, top_name, _l9_top_module)
+            except Exception:  # pragma: no cover — structural aid never crashes
+                _graph_root = None
+            # Adopt ONLY a real, distinct graph-root module. `_v661_resolve_dut_module`
+            # already returns None on a genuinely ambiguous (0 or >1 root) design,
+            # so this honestly DEFERS those to the auto-emit / waiver path instead
+            # of silently picking a wrong root.
+            if (_graph_root and _graph_root != top_name
+                    and _graph_root in _staged_mods):
+                synth_top = _graph_root
 
     # v0.1.32 fix — chip_top auto-emit when L9.top_module ('chip_top') ≠ the
     # actual authored top in rtl/. Previously the runner hard-coded

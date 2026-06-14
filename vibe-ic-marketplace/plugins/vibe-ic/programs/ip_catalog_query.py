@@ -450,6 +450,206 @@ _INTEGER_ONLY_MARKERS = (
 )
 
 
+# ---------------------------------------------------------------------------
+# v1.0.51 — for #681. GENERIC optional/negation phrase-grammar (chip-AGNOSTIC).
+# A free-text 'mentions' hit on a term that sits inside an OPTIONAL or an
+# EXPLICIT-NEGATION / NOT-constrained window is NOT evidence the design
+# actually uses that thing — it is a "you may add it but it is not required"
+# or "we do NOT use it" mention. This mirrors (and generalises) the
+# asymmetric suppression `_extension_optional_only` / `_extension_excluded`
+# already apply to the cpu_extensions/cpu_isa `contains` branch, but here
+# the vocabulary is term-agnostic so it is reusable by the 'mentions' rules.
+# Bilingual (EN + zh-Hant) because real spec docs mix both. NO chip literal.
+# Qualifiers that PRECEDE the term ("may add foo", "without foo",
+# "must not use foo", "可自行加 foo"). Checked in a tight BACKWARD window.
+_PRECEDING_QUALIFIER_MARKERS = (
+    # optional (precede)
+    "optional", "optionally", "may add", "may include", "may also add",
+    "can add", "could add", "可自行加", "可自行", "選用", "可選",
+    # negation (precede)
+    "must not use", "must not", "does not use", "do not use", "don't use",
+    "without", "excludes", "excluding", "no use of", "not in scope",
+    "out of scope", "不使用", "未使用", "排除", "不採用", "不納入", "❌",
+)
+# Qualifiers that TRAIL the term as a TERMINAL existence assertion about
+# the term itself ("foo (optional)", "foo is optional", "foo，但不強制").
+# Matched in a tight FORWARD window within the term's own clause. NOTE: a
+# bare adjacent "optionally" is NOT here — "foo optionally supports X" says
+# foo does X optionally, NOT that foo itself is optional (that genuine case
+# must still fire); only copula-bound trailing patterns suppress, see
+# _TRAILING_GOVERNOR_RE below.
+_TRAILING_QUALIFIER_MARKERS = (
+    "(opt)", "(optional)",
+)
+# Reference / comparison markers that PRECEDE the term: a comparative or
+# referential mention ("regarding X", "such as X", "compared to X", "對 X
+# 級 protocol" — "regarding the X-level protocol") is NOT an assertion that
+# the design USES X; it is a reference. Checked in a tight backward window.
+_REFERENCE_QUALIFIER_MARKERS = (
+    "regarding", "such as", "compared to", "compared with", "relative to",
+    "as opposed to", "instead of", "rather than", "similar to", "like the",
+    "對", "類似", "相較", "相對", "而非", "而不是",
+)
+# Tight bounded windows (chars) — small enough that a qualifier attached to
+# a DIFFERENT occurrence cannot bleed onto a genuine one (further bounded by
+# the term's clause).
+_PRECEDE_WINDOW = 24
+_TRAIL_WINDOW = 24
+# Clause separators (hard punctuation) — used to bound a clause around the
+# term so a qualifier/marker in a DIFFERENT clause cannot bleed onto a
+# genuine one.
+_CLAUSE_SEPARATORS = ".。!！?？;；,，、\n"
+# Coordinating conjunctions are SOFT clause boundaries: "X is mandatory but
+# an optional Y can be added" — the 'but'/'and'/'while'/... separates the X
+# assertion from the Y qualifier even with no comma. They must NOT be used
+# as a hard split (they can appear inside a single term clause), but they DO
+# bound the term-anchored governor search so a qualifier on the far side of
+# a conjunction never governs the term. v1.0.51-r2 — for #681 review leak.
+_SOFT_BOUNDARY_RE = re.compile(
+    r"\b(?:and|but|while|with|although|though|whereas|plus|yet|however|"
+    r"as\s+well\s+as)\b")
+
+
+def _term_anchored_governor(term_l: str, segment: str) -> bool:
+    """v1.0.51-r2 — for #681 review. TERM-ANCHORED optional/negation
+    governor. Return True ONLY when an optional/negation qualifier is
+    grammatically bound to THE TERM (not merely co-present in the clause):
+
+      preceding:  optional/optionally <term> ; an optional <term>
+      trailing :  <term> is/are optional ; <term> is/are not
+                  required|mandatory|used|supported|present ;
+                  <term> may/might/can be added|omitted|included ;
+                  <term> (optional)
+
+    A naive ±N proximity window is INSUFFICIENT — it wrongly suppresses
+    "the <term> optionally supports burst transfers" (verified by the
+    reviewer). Hence the trailing form requires a COPULA ("is/are") or a
+    modal-existence phrase between the term and the qualifier.
+
+    chip-AGNOSTIC: pure grammar; no chip/IP literal.
+    """
+    t = re.escape(term_l)
+    pats = (
+        # preceding qualifier directly modifying the term
+        rf"\boptional(?:ly)?\s+{t}\b",
+        rf"\ban?\s+optional\s+{t}\b",
+        # trailing copula-bound existence assertion about the term
+        rf"\b{t}\b[^.;:,!?]{{0,30}}?\b(?:is|are|remains?|stays?)\s+optional\b",
+        rf"\b{t}\b[^.;:,!?]{{0,30}}?\b(?:is|are)\s+not\s+"
+        rf"(?:required|mandatory|used|supported|present|needed)\b",
+        # modal existence ("<term> may be added/omitted")
+        rf"\b{t}\b[^.;:,!?]{{0,20}}?\b(?:may|might|can|could)\s+be\s+"
+        rf"(?:added|omitted|included|present|left\s+out|removed)\b",
+        # parenthetical
+        rf"\b{t}\b\s*\((?:opt|optional)\)",
+    )
+    return any(re.search(p, segment) for p in pats)
+
+
+def _term_optional_or_negated(term: str, text: str) -> bool:
+    """v1.0.51 — GENERIC suppression test for a free-text term.
+
+    Return True when EVERY occurrence of `term` in `text` sits inside an
+    OPTIONAL ('optional'/'可自行加'/'不強制'/'may add'/'(opt)'…) or an
+    EXPLICIT-NEGATION / NOT-constrained ('must not use'/'without'/'不在…
+    約束的事'/'❌'…) window — i.e. there is no genuine, unqualified mention
+    of the term anywhere. A single unqualified occurrence anywhere defeats
+    the suppression (mandatory/plain mention wins), so a real constrained
+    spec section still fires.
+
+    Direction-aware AND TERM-ANCHORED: a preceding qualifier ("may add foo",
+    "without foo", "optional foo") is checked in a tight BACKWARD window; a
+    trailing qualifier is COPULA-bound to the term ("foo is optional", "foo
+    is not required") via _term_anchored_governor — never a bare clause-wide
+    keyword. Both are bounded by hard clause separators AND coordinating
+    conjunctions (soft boundaries), so a qualifier modifying a DIFFERENT
+    noun ("foo is mandatory but an optional bar...") cannot leak onto the
+    term. v1.0.51-r2 removed the unsound whole-clause governor branch that
+    dropped genuine mandatory-term mentions (#681 review leak).
+
+    chip-AGNOSTIC: pure bilingual phrase grammar; no chip/IP literal.
+    """
+    term_l = term.strip().lower()
+    if not term_l or not text:
+        return False
+    blob = text.lower()
+    found_any = False
+    start = 0
+    while True:
+        idx = blob.find(term_l, start)
+        if idx < 0:
+            break
+        found_any = True
+        end = idx + len(term_l)
+
+        # CLAUSE-bound the term on hard punctuation: a qualifier in a
+        # DIFFERENT clause must not leak (e.g. "interconnect is optional; a
+        # real crossbar fabric" — 'is optional' governs the interconnect
+        # clause only).
+        c_lo = idx
+        while c_lo > 0 and blob[c_lo - 1] not in _CLAUSE_SEPARATORS:
+            c_lo -= 1
+        c_hi = end
+        while c_hi < len(blob) and blob[c_hi] not in _CLAUSE_SEPARATORS:
+            c_hi += 1
+
+        # Further bound the term-anchored governor search by coordinating
+        # conjunctions (soft boundaries) so "X is mandatory but an optional
+        # Y" cannot let the Y-qualifier govern the X-term. The governor
+        # segment is the largest conjunction-free span around the term.
+        seg_lo = c_lo
+        for mm in _SOFT_BOUNDARY_RE.finditer(blob, c_lo, idx):
+            seg_lo = mm.end()  # last conjunction before the term
+        seg_hi = c_hi
+        mm = _SOFT_BOUNDARY_RE.search(blob, end, c_hi)
+        if mm:
+            seg_hi = mm.start()  # first conjunction after the term
+        segment = blob[seg_lo:seg_hi]
+
+        # Backward sub-window inside the segment (adjacent preceding marker).
+        back = blob[max(seg_lo, idx - _PRECEDE_WINDOW):idx]
+        # Forward sub-window inside the segment (adjacent trailing marker).
+        fwd = blob[end:min(seg_hi, end + _TRAIL_WINDOW)]
+
+        suppressed = (
+            any(mk in back for mk in _PRECEDING_QUALIFIER_MARKERS)
+            or any(mk in back for mk in _REFERENCE_QUALIFIER_MARKERS)
+            or any(mk in fwd for mk in _TRAILING_QUALIFIER_MARKERS)
+            # TERM-ANCHORED governor (copula-bound), conjunction-scoped.
+            or _term_anchored_governor(term_l, segment)
+            # bare 'no <term>' immediately preceding the occurrence
+            or re.search(rf"\bno\s+{re.escape(term_l)}\b",
+                         blob[max(0, idx - 6):end]) is not None
+        )
+        if not suppressed:
+            # A genuine unqualified occurrence — the term IS real evidence.
+            return False
+        start = end
+    # Only reach here when the term occurred at least once and EVERY
+    # occurrence was inside an optional/negation window.
+    return found_any
+
+
+# Match a JSON-serialised metadata key whose value is EMPTY: "key": [],
+# "key": {}, "key": "", "key": null. A bare key name with an empty value is
+# NOT evidence the design mentions that thing (the field exists but carries
+# nothing). chip-AGNOSTIC structural match on the serialised L*.json blob.
+_RE_EMPTY_JSON_VALUE = re.compile(
+    r'"([^"]+)"\s*:\s*(?:\[\s*\]|\{\s*\}|""|null)', re.IGNORECASE)
+
+
+def _strip_empty_metadata_keys(text: str) -> str:
+    """Return `text` with every JSON "<key>": <empty> pair removed, so a
+    'mentions' substring search cannot be satisfied by a key NAME whose
+    value is empty (e.g. `"interconnect_rules": []`). Non-JSON text and
+    keys with non-empty values are left untouched.
+
+    chip-AGNOSTIC: pure structural JSON-shape strip; no chip/IP literal."""
+    if not text or '"' not in text:
+        return text
+    return _RE_EMPTY_JSON_VALUE.sub(" ", text)
+
+
 def _extension_excluded(ext: str, field_str: str, scoped_text: str,
                         full_text: str) -> bool:
     """v-orch 4c — extension-negation guard. Return True when the spec
@@ -928,12 +1128,43 @@ def _evaluate_match_rule(pattern: str, facts: Dict[str, Any]) -> Tuple[bool, flo
     # and silently dropped legitimately-matching records (ORGANIC #666,
     # field-agent round-4 v1.0.42). Single quoted value + EOL kept its
     # original semantics as the 1-alternative special case.
+    #
+    # v1.0.51 — for #681. Three asymmetric guards (chip-AGNOSTIC) the raw
+    # whole-doc substring search above lacked:
+    #   (1) SCOPE the search to the LAYER named in the rule ("L8 mentions
+    #       'interconnect'" must look in the L8 section, not L18 metadata)
+    #       — use _scoped_section_text; fall back to whole-doc only when no
+    #       per-layer text is captured (e.g. unit-test fixtures with only
+    #       `_full_text`), so existing behaviour is preserved.
+    #   (2) EMPTY-metadata-key non-evidence: a key NAME whose value is empty
+    #       (`"interconnect_rules": []`) must not satisfy a mention.
+    #   (3) OPTIONAL / EXPLICIT-NEGATION suppression: a term that occurs only
+    #       inside an optional ('可自行加…但不強制', 'may add', '(opt)') or a
+    #       NOT-constrained / negated ('must NOT use', '不在…約束的事', '❌')
+    #       window is not real evidence of use — same asymmetry the ext_field
+    #       'contains' branch already applies via _extension_optional_only /
+    #       _extension_excluded.
     m = re.match(r"^(L\d+R?(?:\.[a-zA-Z0-9_\[\]]+)?)\s+mentions\s+(.+)$", p)
     if m:
+        field_ref = m.group(1)
         values = re.findall(r"['\"]([^'\"]+)['\"]", m.group(2))
         if values:
-            ft = full_text.lower()
-            if any(value.lower() in ft for value in values):
+            # (1) Scope to the declared layer; fall back to whole-doc only
+            # when no per-layer text map exists for this layer.
+            scoped = _scoped_section_text(facts, field_ref)
+            search_src = scoped if scoped else full_text
+            # (2) Drop empty-value metadata key NAMES so they are not
+            # mistaken for evidence.
+            search_src = _strip_empty_metadata_keys(search_src)
+            ft = search_src.lower()
+            for value in values:
+                v_l = value.lower()
+                if v_l not in ft:
+                    continue
+                # (3) Suppress when this term occurs ONLY inside an
+                # optional / explicit-negation window (no genuine mention).
+                if _term_optional_or_negated(value, search_src):
+                    continue
                 return (True, 0.7)
             return (False, 0.0)
 
