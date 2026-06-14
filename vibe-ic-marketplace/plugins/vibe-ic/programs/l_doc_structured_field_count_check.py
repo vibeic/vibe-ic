@@ -280,6 +280,67 @@ def _has_honest_no_fsm(data: dict) -> bool:
     return False
 
 
+def _has_honest_no_test_debug(data: dict) -> bool:
+    """L7 (#677): doc explicitly declares the input carries NO test/verification
+    /debug surface for the IC. Accept any of the honest-absence signals the
+    runner already emits for L7 — `no_test_scenarios_in_input`,
+    `no_verification_strategy_in_input`, `no_test_modes_in_input`,
+    `no_test_debug_in_input` — but ONLY when explicitly True. A bare
+    missing/empty/false flag can NEVER masquerade (HONESTY GUARD (a)/(b)).
+
+    This mirrors the L3 no-CRC / L6 no-FSM / L11 no-OTP / L13 no-lab escapes and
+    completes the set begun by L5.no_analog / L12.no_calibration. A minimal
+    register-mapped peripheral (bus_peripheral) genuinely has no chip-level test
+    scenarios in its input spec (its verification lives in the integrator's DV
+    env, not the IP datasheet); phase1 cannot synthesise scenarios the spec does
+    not contain.  The L7 floor stays in force for any class/doc WITHOUT an
+    explicit honest flag (corpus-sweep guard)."""
+    for key in ("no_test_scenarios_in_input",
+                "no_verification_strategy_in_input",
+                "no_test_modes_in_input",
+                "no_test_debug_in_input"):
+        if _explicit_true(data.get(key)):
+            return True
+    return False
+
+
+def _has_honest_no_test_cases(data: dict) -> bool:
+    """L10 (#677): doc explicitly declares the input carries NO chip-level test
+    cases AND no bring-up sequence to harvest. Accept the runner's honest-absence
+    signals — `no_test_cases_in_input` (and, when present, an explicit
+    `no_bring_up_sequence_in_input`) — but ONLY when explicitly True (HONESTY
+    GUARD (a)/(b)).
+
+    This is the ORTHOGONAL minimal-honest-absence case to the #641 harvest path:
+    #641 fires only when there IS a bring_up_sequence to count; a genuinely
+    minimal peripheral has nothing to harvest yet still honestly declares
+    `no_test_cases_in_input: true`. Without this escape that honest minimal doc
+    FAILs the floor. The floor stays in force for any class/doc WITHOUT an
+    explicit honest flag (corpus-sweep guard)."""
+    return _explicit_true(data.get("no_test_cases_in_input"))
+
+
+def _has_honest_no_regmap(data: dict) -> bool:
+    """L4 (#677): doc explicitly declares the input carries NO SW-visible
+    register map. Accept the existing `register_map_present == False` /
+    `no_register_map == True` escapes PLUS the runner's `no_*_in_input`
+    honest-absence mirror (`no_register_map_in_input` /
+    `no_regmap_in_input`), but ONLY when explicitly True/False (HONESTY GUARD
+    (a)/(b)). A bare missing/empty/true register_map_present keeps the floor."""
+    if _explicit_false(data.get("register_map_present")):
+        return True
+    if _explicit_true(data.get("no_register_map")):
+        return True
+    for k, v in data.items():
+        if not isinstance(k, str):
+            continue
+        kl = k.lower()
+        if (kl.startswith("no_register_map")
+                or kl.startswith("no_regmap")) and _explicit_true(v):
+            return True
+    return False
+
+
 def _detect_l_layer(name: str) -> int | None:
     """Return the L layer integer (1..13) inferred from filename, or
     None if the file does not name an L doc."""
@@ -431,6 +492,43 @@ def _class_sparse_analog_blocks(ic_class: str) -> bool:
     return False
 
 
+def _class_minimal_honest_absence(ic_class: str) -> bool:
+    """ORGANIC #677 — True iff the registry marks this class as a genuinely
+    MINIMAL register-mapped peripheral whose input spec legitimately carries
+    FEW typed L4/L7/L10 entries and HONESTLY declares the absence via a
+    `no_*_in_input: true` flag (no regmap / no test scenarios / no test cases).
+    Such a class gets the L4/L7/L10 honest-absence N/A escapes.
+
+    This is DELIBERATELY NARROWER than `_class_no_cmd_protocol`: a reused-IP
+    processor_cpu / crypto_accelerator is ALSO command_protocol_applicable==
+    False + rtl_gen==null, but ORGANIC #641 holds those classes to a POPULATED
+    bring_up_sequence (an empty bring-up with no_test_cases_in_input==true must
+    still FAIL — they carry harvestable verification intent). A minimal
+    bus_peripheral / interconnect / serial peripheral spec genuinely has nothing
+    to harvest, so it gets the pure honest-absence escape. The registry's
+    `command_protocol_applicable` flag cannot drive this (it matches BOTH
+    families); a dedicated semantic registry flag (`minimal_honest_absence_ok`)
+    does.
+
+    bare_fpga / unknown_protocol_class stay fail-closed. Chip-AGNOSTIC: a
+    registry semantic flag, no chip-name literal. When the registry is
+    unreadable this returns False (fail-closed — the strict floor is the safe
+    default)."""
+    if ic_class in _NO_PROTOCOL_FAIL_CLOSED:
+        return False
+    try:
+        reg = json.loads(
+            (Path(__file__).resolve().parent / "ic_class_registry.json")
+            .read_text())
+        for e in reg.get("classes", []):
+            if (e.get("name") == ic_class
+                    or ic_class in (e.get("synonyms") or [])):
+                return e.get("minimal_honest_absence_ok") is True
+    except (OSError, ValueError):
+        pass
+    return False
+
+
 def _check_l_doc(layer: int, data: dict,
                  escapes: dict[str, bool] | None = None,
                  ic_class: str = "unknown") -> tuple[bool, str]:
@@ -570,6 +668,20 @@ def _check_l_doc(layer: int, data: dict,
         # an explicit input N/A assertion), the ≥5-entry floor does not apply.
         if data.get("register_map_present") is False \
                 or data.get("no_register_map") is True:
+            return True, ""
+        # #677 — honest-absence `no_*_in_input` MIRROR for the L4 regmap floor,
+        # DOUBLE-KEYED per the #428/#419 doctrine (class flag AND the doc's OWN
+        # honest declaration, fail-closed). A minimal register-mapped peripheral
+        # whose input genuinely carries NO SW-visible register map honestly
+        # emits `no_register_map_in_input: true`; combined with a registry-
+        # flagged minimal-honest-absence class (bus_peripheral / interconnect /
+        # serial peripheral — NARROWER than _class_no_cmd_protocol so a reused-IP
+        # processor_cpu still obeys its #641 doctrine) the ≥5-entry floor does
+        # not apply. A command/protocol/unknown class, or a doc with no explicit
+        # flag, keeps the floor — an empty L4 can never ride this into a pass.
+        # (The unconditional register_map_present:false / no_register_map:true
+        # escapes above remain the doc's-own-typed-N/A path, like L5.no_analog.)
+        if _class_minimal_honest_absence(ic_class) and _has_honest_no_regmap(data):
             return True, ""
         # Wave 32 — L4 owns registers + control_bits + otp_layout.
         # Either ≥5 typed register entries OR ≥5 populated otp_layout
@@ -729,6 +841,34 @@ def _check_l_doc(layer: int, data: dict,
                     extra += sum(1 for x in seq if x)
             if extra >= 3:
                 n_scen = extra
+        # #677 — honest-absence N/A escape for L7 (completing the set begun by
+        # L5.no_analog / L12.no_calibration; same shape as the L3 no-CRC / L6
+        # no-FSM / L11 no-OTP / L13 no-lab escapes). A minimal register-mapped
+        # peripheral (bus_peripheral) genuinely carries NO chip-level test /
+        # verification / debug scenarios in its input spec — its verification is
+        # the integrator's DV job, not the IP datasheet. DOUBLE-KEYED per the
+        # #428/#419 doctrine (class flag AND the doc's OWN honest declaration,
+        # fail-closed): the N/A fires ONLY when (1) the IC class is a registry-
+        # flagged minimal-honest-absence class (NARROWER than
+        # _class_no_cmd_protocol so a reused-IP processor_cpu / crypto class is
+        # NOT silenced here; bare_fpga / unknown stay fail-closed via
+        # _NO_PROTOCOL_FAIL_CLOSED) AND (2) the doc carries zero typed scenarios
+        # AND (3) the doc carries an explicit honest no-test-debug flag
+        # (no_test_scenarios_in_input / no_verification_strategy_in_input /
+        # no_test_modes_in_input / no_test_debug_in_input == true). A doc with
+        # ANY harvested content (n_scen ≥ 1), or no explicit flag, or in a
+        # command/protocol/unknown class, keeps the floor — the #670/#641
+        # harvesters still rescue docs that DO carry content, and a rich class
+        # that SHOULD have scenarios but emits an empty list without an honest
+        # flag still FAILs (field agent corpus-sweep guard).
+        if (n_scen == 0
+                and _class_minimal_honest_absence(ic_class)
+                and _has_honest_no_test_debug(data)):
+            return True, ("SKIP — L7 test/debug floor N/A: ic_class="
+                          f"{ic_class} (no-command-protocol peripheral) AND the "
+                          "doc honestly declares no test/verification scenarios "
+                          "in the input with zero typed scenarios (verification "
+                          "is the integrator's DV job; no source to synthesise).")
         if n_scen < 3:
             return False, (
                 f"L7 test_debug must carry ≥3 typed test scenarios "
@@ -887,6 +1027,29 @@ def _check_l_doc(layer: int, data: dict,
             bus = (data.get("bring_up_sequence")
                    or data.get("bringup_sequence"))
             n_cases += _list_len_of_dicts(bus)
+        # #677 — ORTHOGONAL minimal-honest-absence N/A escape for L10. The #641
+        # path above HARVESTS a populated bring_up_sequence; a genuinely minimal
+        # register-mapped peripheral (bus_peripheral) has NOTHING to harvest yet
+        # honestly declares `no_test_cases_in_input: true` — that honest minimal
+        # doc would still FAIL the floor. DOUBLE-KEYED per the #428/#419 doctrine
+        # (class flag AND the doc's OWN honest declaration, fail-closed): fires
+        # ONLY when (1) the IC class is a registry-flagged minimal-honest-absence
+        # class — DELIBERATELY NARROWER than _class_no_cmd_protocol so a reused-IP
+        # processor_cpu still obeys its #641 doctrine (empty bring-up + the flag
+        # must still FAIL); bare_fpga / unknown stay fail-closed — AND (2) AFTER
+        # the #641 harvest there are still zero typed cases AND (3) the doc
+        # carries an explicit honest `no_test_cases_in_input: true`. A doc with
+        # ANY harvested/typed case, or no explicit flag, or in a command/
+        # protocol/unknown class, keeps the floor — an empty L10 in a rich class
+        # without an honest flag still FAILs (field agent corpus-sweep guard).
+        if (n_cases == 0
+                and _class_minimal_honest_absence(ic_class)
+                and _has_honest_no_test_cases(data)):
+            return True, ("SKIP — L10 test-case floor N/A: ic_class="
+                          f"{ic_class} (no-command-protocol peripheral) AND the "
+                          "doc honestly declares no_test_cases_in_input with "
+                          "zero typed cases and nothing to harvest (no chip-"
+                          "level test vectors in the input spec).")
         # #428 — class-appropriate floor: a no-protocol datapath primitive
         # has no command sequences to enumerate, so its structured test-case
         # floor falls back to ≥2 (a real floor, not a skip).
