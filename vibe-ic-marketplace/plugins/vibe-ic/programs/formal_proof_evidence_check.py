@@ -20,7 +20,19 @@ Verdicts / exit codes (chip-AGNOSTIC — structural artifacts only):
   1 = all_proved claimed without the chain, or chain broken, or no
       proof claim at all (FAIL — a bare field is not a proof)
   2 = results.json honestly self-reports SKIPPED-CONDITION (no proof
-      ran; the #440 manifest shape) — vacuous for THIS gate
+      ran; the #440 manifest shape) — vacuous for THIS gate, OR
+      (ORGANIC #675) results.json is ABSENT but a co-located sibling
+      self-skip artifact (e.g. `formal/formal_not_run.json`,
+      verdict=SKIPPED-CONDITION) honestly discloses that no proof ran.
+      The phase2 runner (#440) emits ONLY `formal_not_run.json`, never
+      `results.json`, so the absent-results.json path used to hard-FAIL
+      (rc=1) despite the honest disclosure → cascade-blocked Phase 3.
+
+§4.05 no-leak: rc=2 fires ONLY when results.json is absent AND a sibling
+self-reports a self-skip verdict. A REAL authored proof
+(results.json + .sby + sby PASS log) gates normally (rc=0/1); a real
+formal FAIL (results.json present with all_proved:false, or a broken
+chain) still FAILs (rc=1) — no skip leak.
 """
 from __future__ import annotations
 
@@ -112,6 +124,36 @@ def _resolve(formal_dir: Path, project: Path, token: str):
     return None
 
 
+_SELF_SKIP_VERDICTS = frozenset({"SKIP", "SKIPPED", "SKIPPED-CONDITION"})
+
+
+def _sibling_self_skip(formal_dir: Path):
+    """ORGANIC #675 — when formal/results.json is absent, return the basename
+    of a co-located sibling *.json that HONESTLY self-reports a self-skip
+    verdict (verdict ∈ SKIP/SKIPPED/SKIPPED-CONDITION), else None. The phase2
+    runner emits `formal_not_run.json` (verdict=SKIPPED-CONDITION) when no
+    proof tool ran. chip-AGNOSTIC: scans only the verdict field of JSON files
+    in formal/, no chip/vendor/class literal. A sibling whose verdict is NOT a
+    self-skip verdict (a real FAIL) returns None → the caller hard-FAILs."""
+    try:
+        siblings = sorted(formal_dir.glob("*.json"))
+    except OSError:
+        return None
+    for sib in siblings:
+        if sib.name == "results.json":
+            continue
+        try:
+            data = json.loads(sib.read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        vd = str(data.get("verdict", "")).upper().replace("_", "-")
+        if vd in _SELF_SKIP_VERDICTS:
+            return sib.name
+    return None
+
+
 def audit(project: Path) -> dict:
     formal_dir = _pl.formal_dir(project)
     results_path = formal_dir / "results.json"
@@ -119,6 +161,27 @@ def audit(project: Path) -> dict:
            "findings": []}
 
     if not results_path.is_file():
+        # ORGANIC #675 — results.json is the canonical proof artifact, but
+        # the phase2 runner (#440) emits ONLY a sibling self-skip manifest
+        # (`formal/formal_not_run.json`, verdict=SKIPPED-CONDITION) when no
+        # SymbiYosys proof ran, and NEVER results.json. Before declaring a
+        # hard FAIL, honor that honest disclosure: if ANY *.json in formal/
+        # self-reports a self-skip verdict, this gate is vacuous (rc=2), the
+        # same way an in-results.json SKIPPED-CONDITION already is. This is
+        # the program-first root-cause fix for the formal-step cascade block.
+        # §4.05 no-leak: only the absent-results.json + honest-sibling-skip
+        # pair defers; a real proof has results.json present (this branch is
+        # not taken), and a sibling with a non-skip verdict (a real FAIL) is
+        # NOT matched → falls through to the hard FAIL below.
+        skip_sib = _sibling_self_skip(formal_dir)
+        if skip_sib is not None:
+            rep.update(verdict="SKIPPED-CONDITION", rc=2)
+            rep["findings"].append(
+                f"SELF_REPORTED_SKIP (#675): results.json absent but the "
+                f"co-located sibling '{skip_sib}' honestly self-reports no "
+                f"proof ran (verdict=SKIPPED-CONDITION, #440 manifest "
+                f"shape) — vacuous for this gate, NOT a fabricated PASS")
+            return rep
         rep.update(verdict="FAIL", rc=1)
         rep["findings"].append(
             "NO_RESULTS: formal/results.json absent — nothing claims a "

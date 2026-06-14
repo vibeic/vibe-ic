@@ -29598,6 +29598,63 @@ _RE_ANALOG_REJECT_CONTEXT = re.compile(
 )
 
 
+# ORGANIC #676 — the `por` (power-on-reset / brownout) keyword class is the
+# one analog vocabulary that COLLIDES with an extremely common DIGITAL concept:
+# "POR" is also the power-on-RESET DEFAULT VALUE of a register / GPIO / pin
+# (e.g. "GPIO POR config", "POR default = 0", "reset configuration"). The
+# generic ±200-char `_RE_ANALOG_CONTEXT` guard is too weak here: a digital port
+# table that lists a "1.8 V supply" power-pin row a few lines above a "GPIO POR
+# config" phrase trips the `\d+ ?V` analog cue and fabricates a phantom analog
+# `por` block on a pure-digital SoC (caravel round-5). The reset family needs a
+# STRONGER, RESET-SPECIFIC analog cue than a bare nearby voltage:
+#   * a POR/brownout TRIP/THRESHOLD VOLTAGE  (the real analog-POR signature), OR
+#   * an explicit analog-POR/brownout-detector vocabulary token.
+# When the only nearby cue is a digital-reset/GPIO-default phrase, DENY it.
+# chip-AGNOSTIC: structural reset-vocabulary patterns, no chip/vendor literal.
+_RE_POR_DIGITAL_RESET_CONTEXT = re.compile(
+    r"(?i)("
+    r"\bGPIO\b|"
+    r"\b(?:POR|power[\s\-]?on[\s\-]?reset|reset)\s+"
+    r"(?:config|configuration|value|default|state|vector|register|mode|"
+    r"strap|setting)\b|"
+    r"\bdefault\s+(?:GPIO|pin|register|value|state)\b|"
+    r"\breset\s+default\b|"
+    r"\b(?:tied|strap(?:ped)?)\b"
+    r")"
+)
+_RE_POR_ANALOG_STRONG_CUE = re.compile(
+    # A real analog POR/brownout block discloses a TRIP / THRESHOLD voltage,
+    # detector vocabulary, or hysteresis — not just an incidental supply rail.
+    r"(?i)("
+    r"\b(?:POR|brown[\s\-]?out|BOD|reset)\s+"
+    r"(?:trip|threshold|trigger|detect\w*|level)\b|"
+    r"\b(?:trip|threshold|detect)\s+(?:voltage|level)\b|"
+    r"\bbrown[\s\-]?out\s+detector?\b|"
+    r"\bV(?:POR|BOR|RST|TRIP|TH)\b|"
+    r"\bhysteresis\b|"
+    r"\b\d+(?:\.\d+)?\s*(?:mV|V)\s*(?:trip|threshold|POR|brown)"
+    r")"
+)
+
+
+def _v676_por_is_digital_reset(ctx_window: str) -> bool:
+    """ORGANIC #676 — True iff the `por` keyword's context window looks like a
+    DIGITAL reset / GPIO-default phrase (a register/pin power-on-reset VALUE),
+    NOT a real analog POR/brownout block. Returns True (→ DENY the block) when
+    a digital-reset phrase is present AND no STRONG analog-POR cue (trip /
+    threshold voltage / brownout detector / hysteresis) is present.
+
+    §4.05 no-leak: a REAL analog POR block — disclosing e.g. "POR trip voltage
+    1.62 V" / "brown-out detector" / "VPOR" — carries a strong cue, so this
+    returns False and the block is still emitted and gated. Only the
+    digital-default phrasing with no analog-POR signature is denied.
+    chip-AGNOSTIC: reset-vocabulary structure only.
+    """
+    if _RE_POR_ANALOG_STRONG_CUE.search(ctx_window):
+        return False
+    return bool(_RE_POR_DIGITAL_RESET_CONTEXT.search(ctx_window))
+
+
 # v1.6.563 — for #382 P3 ORGANIC. Parenthetical sub-qualifier
 # parser for L5 analog-block multiplicity. When a sentence shape is
 # "<head-count> copies of A (one of them is powered by B)" — the
@@ -29984,6 +30041,19 @@ def gen_l5_adi_spec(project: Path,
             if _RE_ANALOG_REJECT_CONTEXT.search(ctx_window):
                 continue
             if not _RE_ANALOG_CONTEXT.search(ctx_window):
+                continue
+            # ORGANIC #676 — the `por` (power-on-reset / brownout) class is the
+            # one analog keyword that collides with a DIGITAL concept: "POR" is
+            # the power-on-reset DEFAULT VALUE of a register / GPIO / pin. The
+            # generic ±200-char analog cue is too weak — a "1.8 V supply"
+            # power-pin row a few lines above a "GPIO POR config" phrase trips
+            # the `\d+ ?V` cue and fabricates a phantom analog `por` block on a
+            # pure-digital SoC. Require a RESET-SPECIFIC analog cue (trip /
+            # threshold voltage / brown-out detector / hysteresis) before
+            # emitting a `por` block; deny the bare digital-reset/GPIO-default
+            # phrasing. §4.05 no-leak: a real analog POR (with a trip-threshold
+            # voltage) still passes. chip-AGNOSTIC reset-vocabulary structure.
+            if cls == "por" and _v676_por_is_digital_reset(ctx_window):
                 continue
             # v0.1.62 — reject keywords inside a NEGATED clause (e.g.
             # "不需 … analog trim DAC", "無 ESD", "pure digital, no analog").
