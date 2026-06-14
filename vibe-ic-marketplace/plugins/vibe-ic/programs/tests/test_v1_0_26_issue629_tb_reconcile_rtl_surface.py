@@ -176,7 +176,10 @@ def test_l9_matches_rtl_no_reconcile_diagnostic_NOLEAK(tmp_path):
 def test_rtl_top_ports_helper_excludes_parameter(tmp_path):
     proj = _seed(tmp_path, _L9_CORRUPT, _RTL_DATAPATH)
     ports = P2._v629_rtl_top_ports(proj, "mul_top")
-    names = [n for _d, n in ports]
+    # ORGANIC #643 — the helper now returns (direction, name, width) triples
+    # (the width is needed so the TB declares a multi-bit bus at its real
+    # width); the name is the 2nd element.
+    names = [t[1] for t in ports]
     assert names == ["clk", "rst", "x", "y", "p"]
     assert "size" not in names
 
