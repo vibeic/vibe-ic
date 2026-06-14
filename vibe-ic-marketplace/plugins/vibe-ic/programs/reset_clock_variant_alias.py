@@ -34,6 +34,7 @@ chip-AGNOSTIC: only the generic reset/clock spelling sets are baked in.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -105,7 +106,8 @@ def _same_class(a: str, b: str) -> bool:
     return is_clock(a) and is_clock(b)
 
 
-def plan_aliases(port_names: List[str]) -> Dict[str, str]:
+def plan_aliases(port_names: List[str],
+                 contract_ports: "Optional[set]" = None) -> Dict[str, str]:
     """Deterministic rename policy: map each recognised reset/clock port whose
     spelling is NOT already canonical to its canonical-per-polarity spelling.
 
@@ -114,13 +116,39 @@ def plan_aliases(port_names: List[str]) -> Dict[str, str]:
     so a design declaring two same-polarity variants (e.g. `reset_n` AND `rstn`,
     both → `rst_n`) never produces a duplicate wrapper port (ORGANIC #518
     adversarial review). Only the first such variant is canonicalised; the rest
-    keep their original spelling. POLARITY-SAFE by construction."""
+    keep their original spelling. POLARITY-SAFE by construction.
+
+    ORGANIC #689 — CONTRACT-AWARE suppression (additive, never lossy/over-firing):
+    `contract_ports` is the (lowercased) set of reset/clock port spellings the
+    design's OWN contract (its staged prompt/description/external-interface doc)
+    declares — see :func:`design_contract_ports`. A spelling pinned there IS the
+    TB-facing contract: a hidden testbench instantiates the DUT by THAT name, so
+    canonicalising it away (e.g. `reset` -> `rst`) makes the wrapper expose a
+    different port than the TB binds -> a hard `port 'reset' is not a port`
+    elaboration FAIL. When a port's spelling appears in `contract_ports`, its
+    rename is DROPPED from the plan (the original spelling is preserved verbatim
+    on the TB-facing surface). This is the SAME first-class suppression rank as
+    the #618 staged-SDC pin and the #518 L9 native-port pin.
+
+    NO-LEAK (§4.05): when `contract_ports` is None/empty (the design ships no
+    staged contract — exactly like the #518/#618 benchmark designs ship no SDC),
+    NOTHING is suppressed and the field-verified #518 doctrine applies unchanged:
+    the legitimate hidden-TB alias still fires (a design declaring a non-canonical
+    spelling its hidden TB needs as the canonical name STILL gets the alias).
+    chip-AGNOSTIC: set-membership on the design's own declared port spellings; no
+    chip/vendor/SKU literal."""
     existing = {p.lower() for p in port_names}
+    contract = {c.lower() for c in (contract_ports or set())}
     assigned_targets: set = set()
     plan: Dict[str, str] = {}
     for p in port_names:
         canon = canonical_variant(p)
         if canon is None or canon == p.lower():
+            continue
+        if p.lower() in contract:
+            # The design's OWN contract declares this spelling — it IS the
+            # TB-facing name. Renaming it would break the hidden TB's binding
+            # (#689). Preserve the original spelling; do not alias.
             continue
         if canon in existing:
             continue  # would collide with a real port — skip
@@ -132,6 +160,129 @@ def plan_aliases(port_names: List[str]) -> Dict[str, str]:
         plan[p] = canon
         assigned_targets.add(canon)
     return plan
+
+
+# ORGANIC #689 — design-contract reader. The design's OWN contract (the staged
+# prompt / external-interface doc) is the FIRST-CLASS source of the TB-facing
+# reset/clock port spelling, on par with the #618 staged-SDC pin and the #518
+# L9 native-port pin. When the contract already declares a STANDARD reset/clock
+# spelling, that spelling IS what the hidden TB binds, so the canonicaliser must
+# NOT rename it (doing so makes the wrapper expose a different port → a hard
+# `port <X> is not a port` elaboration FAIL).
+
+# Files (in any project layout) that carry the design's own port contract:
+# the verbatim external-interface / prompt / description text + the parsed L3.
+_CONTRACT_GLOBS = (
+    "phase1/generated_docs/L3*.json",   # parsed structured port list (best)
+    "phase1/input_doc/L3*",             # verbatim external-interface doc (Path A)
+    "phase1/input_doc/*",               # other staged vendor-doc extracts
+    "input/docs/L3*",                   # legacy external-interface doc
+    "input/docs/design_description*",   # auto-bridged prompt → description
+    "input/docs/*",
+    "input/phase1_prompt.md",           # Path B free-text prompt
+    "phase1/input_prompt/*",            # Path B dialogue / fact-graph workspace
+)
+# A reset/clock spelling counts as CONTRACT-DECLARED only when it appears in a
+# PORT-DECLARATION context — never from loose prose ("assert the reset"). The
+# three port-naming contexts a design contract uses:
+#   (1) a Verilog ANSI port decl  : `input clk,` / `input wire rst_n`
+#   (2) a markdown / backtick name : `` `reset` `` or a `| reset |` table cell
+#   (3) an explicit "port" phrasing: `port reset` / `signal clk` / `clk port`
+# Each is anchored so a spelling buried in prose does not over-suppress.
+_CONTRACT_NAME_TOKENS = "|".join(
+    re.escape(n) for n in sorted(
+        set(_RESET_ACTIVE_LOW) | set(_RESET_ACTIVE_HIGH) | set(_CLOCK_NAMES),
+        key=len, reverse=True))
+_CONTRACT_BACKTICK_RE = re.compile(rf"`\s*({_CONTRACT_NAME_TOKENS})\s*`",
+                                   re.IGNORECASE)
+_CONTRACT_TABLECELL_RE = re.compile(
+    rf"\|\s*`?\s*({_CONTRACT_NAME_TOKENS})\s*`?\s*\|", re.IGNORECASE)
+_CONTRACT_VERILOG_RE = re.compile(
+    rf"\b(?:input|output|inout)\b[\w\s\[\]:.-]*?\b({_CONTRACT_NAME_TOKENS})\b",
+    re.IGNORECASE)
+_CONTRACT_PHRASE_RE = re.compile(
+    rf"\b(?:port|signal|pin)\s+`?({_CONTRACT_NAME_TOKENS})`?\b"
+    rf"|\b`?({_CONTRACT_NAME_TOKENS})`?\s+(?:port|signal|pin)\b",
+    re.IGNORECASE)
+
+
+def _contract_ports_from_text(text: str) -> set:
+    """The reset/clock spellings declared as PORTS in one contract-doc `text`.
+    Only port-declaration contexts count (backtick name / markdown table cell /
+    Verilog port decl / explicit `port <name>` phrasing) — loose prose mentions
+    of "reset"/"clock" do NOT register, so the suppression never over-fires."""
+    found: set = set()
+    for re_ in (_CONTRACT_BACKTICK_RE, _CONTRACT_TABLECELL_RE,
+                _CONTRACT_VERILOG_RE):
+        for m in re_.finditer(text):
+            found.add(m.group(1).lower())
+    for m in _CONTRACT_PHRASE_RE.finditer(text):
+        tok = m.group(1) or m.group(2)
+        if tok:
+            found.add(tok.lower())
+    return found
+
+
+def _contract_ports_from_l3_json(data) -> set:
+    """Reset/clock spellings from a parsed L3 external-interface JSON's port
+    list (whatever key carries it — `top_ports` / `ports` / `port_list` /
+    `external_interface`). Each entry may be a bare name or a `{name: …}` dict.
+    Only recognised standard reset/clock spellings are returned."""
+    found: set = set()
+
+    def _walk(obj):
+        if isinstance(obj, dict):
+            nm = obj.get("name") or obj.get("port") or obj.get("signal")
+            if isinstance(nm, str) and (classify_reset(nm) or is_clock(nm)):
+                found.add(nm.lower())
+            for v in obj.values():
+                _walk(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                if isinstance(v, str) and (classify_reset(v) or is_clock(v)):
+                    found.add(v.lower())
+                else:
+                    _walk(v)
+    _walk(data)
+    return found
+
+
+def design_contract_ports(project: Path) -> set:
+    """ORGANIC #689 — return the (lowercased) set of STANDARD reset/clock port
+    spellings the design's OWN contract declares: the staged prompt /
+    external-interface doc / parsed L3 port list.
+
+    This is the design's TB-facing contract — the SAME ground-truth ranking as
+    the #618 staged-SDC pin (:func:`sdc_constraints.staged_constrained_ports`)
+    and the #518 L9 native-port pin. `plan_aliases(..., contract_ports=<this>)`
+    drops the rename of any port whose spelling is pinned here, so the hidden TB
+    binding the design's own spelling still elaborates.
+
+    Returns an EMPTY set when no contract doc is staged (the #518/#618 benchmark
+    designs ship none — exactly like they ship no SDC), so callers fall through
+    to the field-verified canonical-convergence doctrine unchanged (no-leak).
+    chip-AGNOSTIC: port-declaration grammar + the closed standard reset/clock
+    spelling set; no chip/vendor/SKU literal."""
+    pinned: set = set()
+    seen: set = set()
+    for pat in _CONTRACT_GLOBS:
+        for f in sorted(project.glob(pat)):
+            rp = f.resolve()
+            if rp in seen or not f.is_file():
+                continue
+            seen.add(rp)
+            try:
+                raw = f.read_text(errors="replace")
+            except OSError:
+                continue
+            if f.suffix == ".json":
+                try:
+                    pinned |= _contract_ports_from_l3_json(json.loads(raw))
+                    continue
+                except (ValueError, TypeError):
+                    pass  # fall through to text scan on malformed JSON
+            pinned |= _contract_ports_from_text(raw)
+    return pinned
 
 
 # Word-boundary anchored: matches both spaced and COMPACT Verilog (#517 r3).
