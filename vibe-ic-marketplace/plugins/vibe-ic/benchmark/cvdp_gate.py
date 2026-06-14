@@ -136,6 +136,80 @@ def json_code_files(completion: str) -> Optional[Dict[str, str]]:
     return files or None
 
 
+# ORGANIC #680 — the official harness `model_helpers.determine_schema` decides,
+# per problem, whether the model response is parsed under the MULTI-FILE JSON
+# schema (`no_schema=False` → the `{"code":[{path:content},…]}` dict is decoded
+# file-by-file) or under NO schema (`no_schema=True` → `parse_model_response`
+# calls only `extract_code_blocks`, which on a completion carrying NO ```fence
+# FALLS BACK to `res.strip()` and writes the ENTIRE completion verbatim as the
+# single RTL file). Field-measured 297/302 nonagentic copilot problems are
+# single-file (`no_schema=True`). So a JSON code-dict emitted verbatim for a
+# single-file problem is written LITERALLY (`{"code": […`) as the .sv → line-1
+# `iverilog` syntax error → scorer ELAB_ERROR, even though the gate extracted
+# clean RTL and PASSed it. The gate must therefore NORMALIZE its emit to the
+# format the harness decodes for THIS problem's schema, never echo the author's
+# format. We mirror determine_schema's single-vs-multi signal structurally (no
+# vendored harness source in-repo): a problem is MULTI-FILE when the prompt
+# carries an explicit JSON `{"code":…}` response-schema directive, or when the
+# completion's JSON dict legitimately spans MORE THAN ONE RTL file (a true
+# multi-file deliverable). Pure prompt-prose / file-count structure —
+# chip-AGNOSTIC, no chip/vendor/SKU literal.
+#
+# The directive signal is the LITERAL `{"code": [` response-envelope the
+# schema'd prompt demonstrates — NOT fuzzy prose like "json schema". Fuzzy
+# prose false-fires on a NEGATED or incidental mention ("single-file, NO json
+# schema" wrongly read as needing a schema), so it is deliberately excluded;
+# only the actual envelope (or an explicit positive "respond with a JSON
+# object of the form …code…" directive that shows the envelope key) counts.
+_JSON_SCHEMA_DIRECTIVE_RE = re.compile(
+    r"[{\[]\s*[\"']code[\"']\s*:\s*\[",          # the literal {"code":[ envelope
+    re.IGNORECASE)
+# An explicit positive instruction to RESPOND with a JSON object/dict (a
+# response-FORMAT directive, not an incidental noun) — the harness gives a
+# schema only when it tells the author to emit JSON. Negations ("no json",
+# "without json", "not in json") must NOT satisfy it.
+_RESPOND_JSON_RE = re.compile(
+    r"\b(?:respond|reply|answer|return|provide|output|format|give)\b"
+    r"[^.\n]{0,40}?\b(?:in|with|as|using)\b\s+(?:a\s+|an\s+|the\s+)?"
+    r"json\b[^.\n]{0,30}?\b(?:object|dict|schema|format|response|code)\b",
+    re.IGNORECASE)
+_JSON_NEGATION_RE = re.compile(
+    r"\b(?:no|not|without|don'?t|do\s+not|avoid|never|single[- ]?file)\b"
+    r"[^.\n]{0,20}?\bjson\b",
+    re.IGNORECASE)
+
+
+def prompt_requires_json_schema(prompt_text: Optional[str]) -> bool:
+    """ORGANIC #680 — True when the prompt explicitly asks for a multi-file
+    JSON `{"code":[{path:content},…]}` response (the harness then parses it
+    under the schema, so the JSON dict is the format to keep). Two positive
+    signals — the literal `{"code":[` envelope, or an explicit positive
+    "respond with a JSON object/code …" directive — and an OVERRIDING negation
+    guard so "single-file, NO json schema" is correctly read as no-schema.
+    Structural, chip-AGNOSTIC."""
+    t = prompt_text or ""
+    if _JSON_SCHEMA_DIRECTIVE_RE.search(t):
+        return True            # the literal envelope is unambiguous
+    if _JSON_NEGATION_RE.search(t):
+        return False           # an explicit negation overrides fuzzy prose
+    return bool(_RESPOND_JSON_RE.search(t))
+
+
+def json_dict_is_multifile(files: Dict[str, str],
+                           prompt_text: Optional[str] = None) -> bool:
+    """ORGANIC #680 — single-vs-multi decision mirroring determine_schema's
+    signal: a JSON code-dict completion is MULTI-FILE (keep the JSON, the
+    harness decodes it under the schema) when the prompt carries an explicit
+    JSON-schema directive, OR the dict legitimately spans MORE THAN ONE RTL
+    file. Otherwise it is the dominant SINGLE-FILE shape (`no_schema=True`,
+    297/302) and the emit must be NORMALIZED to a fenced/bare RTL block the
+    harness's `extract_code_blocks` decodes — never the raw JSON verbatim."""
+    if prompt_requires_json_schema(prompt_text):
+        return True
+    rtl = [k for k in files if k.lower().endswith(_RTL_SUFFIXES)]
+    return len(rtl) > 1
+
+
 def extract_code(completion: str) -> Tuple[Optional[str], str]:
     """Return (code, kind). kind ∈ {'json_dict','fenced','bare','doc_only'}.
 
@@ -506,7 +580,8 @@ def yosys_smoke(code: str, workdir: Path,
     return True, "yosys-smoke ok (" + "; ".join(details) + ")"
 
 
-def gate_record(rec: Dict, workdir: Path) -> Tuple[bool, Dict, Dict]:
+def gate_record(rec: Dict, workdir: Path,
+                prompt_text: Optional[str] = None) -> Tuple[bool, Dict, Dict]:
     """Gate one {id, completion} record → (ok, out_record, report_entry).
 
     Hygiene runs PER CODE FENCE (each fence body is fixed separately — a
@@ -517,7 +592,17 @@ def gate_record(rec: Dict, workdir: Path) -> Tuple[bool, Dict, Dict]:
     EXACT bytes the gate compiled — never the original text with the fence
     markers retained (ORGANIC #626: a retained ```verilog marker is a line-1
     backtick macro directive that ELAB_ERRORs the verbatim-written .sv at
-    official scoring)."""
+    official scoring).
+
+    ORGANIC #680: a JSON code-dict completion is likewise NORMALIZED to the
+    format the harness decodes for THIS problem's schema. For the dominant
+    SINGLE-FILE shape (`no_schema=True`, 297/302) the harness writes the
+    completion verbatim, so the JSON dict must be re-serialized as a FENCED
+    RTL block (the EXACT bytes the gate compiled); only a genuinely MULTI-FILE
+    problem (prompt JSON-schema directive, or >1 RTL file) keeps the JSON dict.
+    `prompt_text` (this id's prompt) supplies determine_schema's signal; when
+    absent only the file-count signal applies (a >1-RTL-file dict stays JSON,
+    a single-RTL-file dict normalizes — the safe 297/302 default)."""
     rid = rec.get("id", "")
     completion = rec.get("completion", "") or ""
     # ORGANIC #535 round-2 — an EMPTY / whitespace-only / trivially-short
@@ -567,24 +652,45 @@ def gate_record(rec: Dict, workdir: Path) -> Tuple[bool, Dict, Dict]:
             return False, rec, entry
         entry["verdict"] = "PASS"
         out_rec = dict(rec)
-        if any(fixed_map[k] != files[k] for k in rtl_keys):
-            i = completion.find("{")
-            j = completion.rfind("}")
-            obj = json.loads(completion[i:j + 1])
-            code_field = obj.get("code")
-            if isinstance(code_field, list):
-                for d in code_field:
-                    if isinstance(d, dict):
-                        for k in list(d):
-                            if k in fixed_map:
-                                d[k] = fixed_map[k]
-            elif isinstance(code_field, dict):
-                for k in list(code_field):
-                    if k in fixed_map:
-                        code_field[k] = fixed_map[k]
-            out_rec["completion"] = (completion[:i]
-                                     + json.dumps(obj, ensure_ascii=False)
-                                     + completion[j + 1:])
+        if json_dict_is_multifile(files, prompt_text):
+            # MULTI-FILE: the harness decodes the JSON under its schema — keep
+            # the JSON dict (re-serialize ONLY when hygiene changed a body so
+            # the harness re-parses identically; prefix/suffix prose kept).
+            entry["emit_format"] = "json_dict (multi-file schema)"
+            if any(fixed_map[k] != files[k] for k in rtl_keys):
+                i = completion.find("{")
+                j = completion.rfind("}")
+                obj = json.loads(completion[i:j + 1])
+                code_field = obj.get("code")
+                if isinstance(code_field, list):
+                    for d in code_field:
+                        if isinstance(d, dict):
+                            for k in list(d):
+                                if k in fixed_map:
+                                    d[k] = fixed_map[k]
+                elif isinstance(code_field, dict):
+                    for k in list(code_field):
+                        if k in fixed_map:
+                            code_field[k] = fixed_map[k]
+                out_rec["completion"] = (completion[:i]
+                                         + json.dumps(obj, ensure_ascii=False)
+                                         + completion[j + 1:])
+        else:
+            # ORGANIC #680 SINGLE-FILE (`no_schema=True`, 297/302): the harness
+            # `parse_model_response` runs `extract_code_blocks`, which on a
+            # completion with NO ```fence FALLS BACK to `res.strip()` and writes
+            # the WHOLE completion verbatim as the single .sv. A JSON dict would
+            # then land as `{"code": […` on line 1 → scorer ELAB_ERROR. Emit the
+            # EXACT RTL bytes the gate just compiled (`combined`) as BARE,
+            # DE-FENCED RTL — the same robust shape #626 settled on for the
+            # fenced kind: `extract_code_blocks` finds no fence and `res.strip()`
+            # writes clean `module…endmodule` that compiles, AND were the harness
+            # to look for a fence there is none to become a line-1 backtick macro
+            # directive (the #626 ELAB_ERROR shape). Invariant: the bytes the
+            # gate COMPILED == the bytes the scorer compiles from the emit.
+            entry["emit_format"] = ("bare RTL (single-file no_schema "
+                                    "normalize, #680)")
+            out_rec["completion"] = combined
         return True, out_rec, entry
     if kind == "bare":
         fixed, notes = hygiene_fix(code, workdir)
@@ -882,7 +988,11 @@ def main(argv=None) -> int:
     with tempfile.TemporaryDirectory(prefix="cvdp_gate_") as td:
         wd = Path(td)
         for rec in records:
-            ok, out_rec, entry = gate_record(rec, wd)
+            # ORGANIC #680 — pass this id's prompt so gate_record can mirror
+            # determine_schema's single-vs-multi signal when normalizing a
+            # JSON code-dict emit (single-file → bare RTL, multi-file → JSON).
+            ok, out_rec, entry = gate_record(
+                rec, wd, prompt_text=prompts.get(str(rec.get("id"))))
             # ORGANIC #559 — filename/module-name conformance (only when a
             # prompt for this id states a required rtl/<name>.sv). The
             # harness builds TOPLEVEL from the file layout, so a completion

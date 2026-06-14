@@ -185,17 +185,44 @@ def test_bare_completion_unchanged_NOLEAK(tmp_path):
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
-def test_json_dict_shape_preserved_NOLEAK(tmp_path):
-    """no-leak (a): a JSON code-dict completion still emits in the official
-    json_code_files shape (a parseable JSON object), NOT a de-fenced blob."""
+def test_json_dict_single_file_normalized_to_bare_rtl_NOLEAK(tmp_path):
+    """no-leak (a), SUPERSEDED BY #680: a SINGLE-RTL-FILE JSON code-dict
+    completion is the dominant `no_schema=True` shape (297/302). The harness
+    writes it VERBATIM, so a raw JSON dict ELAB_ERRORs on line 1. The gate now
+    NORMALIZES it to BARE de-fenced RTL (the exact bytes it compiled), like the
+    fenced kind. (The old assertion that a single-file JSON dict is emitted
+    verbatim WAS the #680 defect; a multi-file dict still stays JSON — see
+    test_json_dict_multifile_stays_json_NOLEAK.)"""
     ok, out_rec, entry = G.gate_record(
         {"id": "p_json", "completion": JSON_DICT}, _wd(tmp_path))
     assert ok and entry["verdict"] == "PASS"
     emitted = out_rec["completion"]
-    # still the official JSON shape: json_code_files can re-parse it
+    # single-file → normalized to bare RTL, NOT raw JSON
+    assert not emitted.lstrip().startswith("{"), (
+        f"single-file JSON dict emitted verbatim (the #680 defect): "
+        f"{emitted[:40]!r}")
+    assert "module qux" in emitted
+    assert _verbatim_compiles(emitted, tmp_path)
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog not on this host")
+def test_json_dict_multifile_stays_json_NOLEAK(tmp_path):
+    """no-leak (a'), #680: a genuinely MULTI-FILE JSON code-dict (>1 RTL file)
+    is decoded by the harness under its schema, so it MUST stay the JSON
+    shape (json_code_files can re-parse it). Only the single-file shape
+    normalizes to bare RTL."""
+    multi = json.dumps({"code": [
+        {"rtl/qux.sv": "module qux(input g, output h); assign h = g; "
+                       "endmodule\n"},
+        {"rtl/quux.sv": "module quux(input i, output j); assign j = ~i; "
+                        "endmodule\n"}]})
+    ok, out_rec, entry = G.gate_record(
+        {"id": "p_json_multi", "completion": multi}, _wd(tmp_path))
+    assert ok and entry["verdict"] == "PASS"
+    emitted = out_rec["completion"]
     files = G.json_code_files(emitted)
-    assert files is not None and any(
-        k.endswith(".sv") or "module" in v for k, v in files.items())
+    assert files is not None and len(
+        [k for k in files if k.endswith(".sv")]) == 2
 
 
 def test_doc_only_stays_doc_only_NOLEAK(tmp_path):
