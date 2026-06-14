@@ -4253,6 +4253,49 @@ def _v0_3_4_sanitize_pin_name_cell(raw: str):
     return clean, optional, aliases
 
 
+_V644_LEGAL_ID_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+
+
+def _v644_split_pair_names(name: str) -> List[str]:
+    """ORGANIC #644 — split a power/supply NAME cell that PAIRS two rails in a
+    single cell (`vccd1 / vssd1`, `VDD/VSS`, `AVDD / AGND`) into the list of
+    individual LEGAL Verilog identifiers it carries.
+
+    A power/supply table routinely groups a rail pair in one cell; the GFM
+    walker otherwise emits a single port whose name contains a literal `/` — an
+    ILLEGAL Verilog identifier that corrupts L9 (the integration contract) and
+    every downstream consumer (TB gen #643, chip_top wrapper, LEF pin list). A
+    later legality guard then DROPS it (losing the power ports entirely). Split
+    on `/` so each rail becomes its OWN legal port instead.
+
+    Returns: [name] for a single already-legal name; the split legal tokens for
+    an `A / B` pair; [] when nothing legal remains (never emit an illegal id).
+
+    NEGATIVE no-leak: the SPLIT branch applies a >=2-char floor per part (the
+    same 1-char floor `_is_real_port_token` enforces) so a junk grouping cell
+    like `N/A` / `TBD/—` does NOT manufacture phantom 1-char ports (`N`, `A`);
+    real supply-rail pairs (`vccd1`, `VSS`, `AVDD` — all >=3 chars) are
+    unaffected. The single-name passthrough is NOT floored, so a legitimate
+    1-char datapath port (`x` / `p`, no `/`) still survives.
+
+    chip-AGNOSTIC: pure `/`-split + identifier-legality + length floor, no
+    chip/vendor/SKU literal."""
+    name = (name or "").strip()
+    if not name:
+        return []
+    if "/" not in name:
+        return [name] if _V644_LEGAL_ID_RE.match(name) else []
+    out: List[str] = []
+    seen: set = set()
+    for part in name.split("/"):
+        p = part.strip().strip("`* ").strip()
+        if (p and len(p) >= 2 and _V644_LEGAL_ID_RE.match(p)
+                and p not in seen):
+            seen.add(p)
+            out.append(p)
+    return out
+
+
 def _v0_3_2_emit_pins_from_gfm_tables(text: str):
     """v0.3.2 — for #491 R2. Resolve `_v0_3_2_iter_gfm_pin_tables` blocks
     into canonical port records `{name, direction, width, description,
@@ -4312,16 +4355,22 @@ def _v0_3_2_emit_pins_from_gfm_tables(text: str):
             desc_arg = None
             if desc_i is not None and desc_i < len(cells):
                 desc_arg = (cells[desc_i] or "").strip() or None
-            rec = {
-                "name": name,
-                "direction": dir_full,
-                "width": width_arg,
-                "description": desc_arg,
-                "source_row": " | ".join(cells)[:120],
-            }
-            if row_optional:
-                rec["optional"] = True
-            yield rec
+            # ORGANIC #644 — a power/supply NAME cell that PAIRS two rails
+            # (`vccd1 / vssd1`) must SPLIT into two separate legal-identifier
+            # ports, never collapse into one illegal name carrying a '/'. The
+            # row's direction / width / description apply to each split rail.
+            # A single legal name yields one rec unchanged.
+            for _split_nm in _v644_split_pair_names(name):
+                rec = {
+                    "name": _split_nm,
+                    "direction": dir_full,
+                    "width": width_arg,
+                    "description": desc_arg,
+                    "source_row": " | ".join(cells)[:120],
+                }
+                if row_optional:
+                    rec["optional"] = True
+                yield rec
 
 
 # ===========================================================================
@@ -7995,6 +8044,34 @@ def _trim_h1_to_ip_phrase(t: str) -> str:
     return " ".join(out).strip()
 
 
+# ORGANIC #646 — HDL / PDK conditional-compile macros are a language / PDK
+# convention present in EVERY sky130 / OpenLane / Caravel SoC (gating power
+# pins, sim modes, gate-level builds), never a chip name. The all-caps
+# single-token validator below otherwise accepts any `tok.isupper() and
+# len>=2`, so a macro in RTL/SIMULATION scope (USE_POWER_PINS, SYNTHESIS, GL)
+# could hijack `ic_name` and corrupt L9.top_module. chip-AGNOSTIC: a fixed
+# macro deny-set + the unambiguous `USE_*` (ifdef-guard) / `MPRJ_*` (Caravel
+# IO) macro prefixes; real all-caps chip acronyms (AES / JTAG / SHA / MD5) are
+# neither in the set nor USE_/MPRJ_-prefixed.
+_HDL_PDK_MACRO_STOPLIST = frozenset({
+    "USE_POWER_PINS", "SYNTHESIS", "FORMAL", "GL", "SIM", "SIMULATION",
+    "FUNCTIONAL", "ANALOG", "COCOTB", "VERILATOR", "YOSYS", "ICARUS",
+    "NETLIST", "GATE_LEVEL", "BEHAVIORAL", "TIMING", "SDF_ANNOTATE",
+    "UNIT_DELAY", "NO_TIMING", "ASSERT_ON", "MPRJ_IO_PADS", "USE_PG_PINS",
+})
+_RE_HDL_GUARD_MACRO = re.compile(r"^(?:USE|MPRJ)_[A-Z0-9_]+$")
+
+
+def _is_hdl_pdk_macro_token(tok: str) -> bool:
+    """ORGANIC #646 — True iff `tok` is an HDL / PDK conditional-compile macro
+    (USE_POWER_PINS / SYNTHESIS / GL / MPRJ_IO_PADS / …) and therefore never a
+    chip name. chip-AGNOSTIC (deny-set + `USE_*` / `MPRJ_*` macro prefixes)."""
+    up = (tok or "").upper()
+    if up in _HDL_PDK_MACRO_STOPLIST:
+        return True
+    return bool(_RE_HDL_GUARD_MACRO.match(up))
+
+
 def _is_strict_single_token_ic_name(tok: str) -> bool:
     """v1.6.60 — strict validator for a SINGLE-token candidate. The
     issue-#5 v1.6.59 follow-up flagged that "Analyzer" was still
@@ -8021,6 +8098,11 @@ def _is_strict_single_token_ic_name(tok: str) -> bool:
     rule.
     """
     if not tok:
+        return False
+    # ORGANIC #646 — reject HDL/PDK conditional-compile macros BEFORE the
+    # all-caps acceptance (else USE_POWER_PINS / SYNTHESIS / GL pass
+    # `isupper() and len>=2` and hijack ic_name).
+    if _is_hdl_pdk_macro_token(tok):
         return False
     if tok.isupper() and len(tok) >= 2:
         return True
@@ -8730,6 +8812,29 @@ def _ic_name_from_docs_impl(extracted: Dict[str, str],
         # underscore-split tokens.
         if _v1_6_319_tier0_5_spaced_form_match(folder_for_tier0, extracted):
             return folder_for_tier0
+
+    # ------ Tier 0.7 (ORGANIC #646): explicit **Project name:** /
+    # **Top deliverable:** bold declaration. A doc that literally writes
+    # `**Project name:** caravel_user_project` has DECLARED the chip identity;
+    # it must beat the token heuristics below (which would otherwise latch an
+    # all-caps HDL macro like USE_POWER_PINS that happens to be in RTL scope).
+    # Placed AFTER the folder-name corroboration (Tier 0/0.5) so a folder name
+    # that the docs corroborate still wins — no regression on existing picks —
+    # and BEFORE the token heuristics, as the issue requires. chip-AGNOSTIC: a
+    # generic vendor-doc bold-label grammar, no chip/SKU literal; the declared
+    # value is still screened against the HDL/PDK macro stoplist.
+    _decl_re = re.compile(
+        r"\*\*\s*(?:Project\s+name|Top\s+deliverable|Chip\s+name|"
+        r"Design\s+name)\s*[:：]?\s*\*\*\s*[:：]?\s*`?"
+        r"([A-Za-z_][A-Za-z0-9_.\-]+)`?",
+        re.IGNORECASE)
+    for text in (extracted or {}).values():
+        if not text:
+            continue
+        dm = _decl_re.search(text)
+        if (dm and len(dm.group(1)) >= 3
+                and not _is_hdl_pdk_macro_token(dm.group(1))):
+            return dm.group(1)
 
     # ------ Tier 1: "implementation of <X>" — strongest signal.
     # v1.6.59: dropped re.IGNORECASE on the captured group. The captured
@@ -40470,6 +40575,58 @@ def _v1_6_581_route_l1_fallback_top_module(
     return True
 
 
+_RE_V647_BIT_SCALAR = re.compile(r"^(?P<base>.+?)(?P<idx>\d+)$")
+
+
+def _v647_drop_redundant_bit_scalars(pins):
+    """ORGANIC #647 — drop fabricated per-bit scalar ports (`io_in0`..`io_in37`)
+    when the packed bus they were blasted from (`io_in`, width>1) is ALSO
+    present. A single L3 row `io_in | 38` must yield exactly ONE `io_in` port,
+    never the bus PLUS 38 phantom scalars (width=None, no evidence) that inflate
+    L9.top_ports 21→48 and make the generated TB wire non-existent ports
+    (iverilog rc=29). Defense-in-depth backstop to the #627 extraction-row
+    guard: covers the non-pipe-table (bullet-list) interface shape where the
+    description-column bit-range can still expand.
+
+    Drops `<base><digits>` iff (a) a sibling named exactly `<base>` exists with
+    width>1 (a packed bus), AND (b) the scalar is itself a bit (width None or 1)
+    — a genuine independent port carrying its own multi-bit width is KEPT.
+    chip-AGNOSTIC: pure `<base><digits>` name shape + packed-parent width check,
+    no chip/SKU literal."""
+    if not isinstance(pins, list):
+        return pins
+
+    def _is_packed(p):
+        w = p.get("width")
+        if isinstance(w, int) and w > 1:
+            return True
+        msb, lsb = p.get("msb"), p.get("lsb")
+        return isinstance(msb, int) and isinstance(lsb, int) and msb != lsb
+
+    def _is_bit_scalar(p):
+        w = p.get("width")
+        return w is None or w == 1
+
+    packed_bases = {
+        str(p.get("name", "")).lower()
+        for p in pins
+        if isinstance(p, dict) and p.get("name") and _is_packed(p)
+    }
+    if not packed_bases:
+        return pins
+    out = []
+    dropped = 0
+    for p in pins:
+        if isinstance(p, dict) and p.get("name"):
+            m = _RE_V647_BIT_SCALAR.match(str(p["name"]))
+            if (m and m.group("base").lower() in packed_bases
+                    and _is_bit_scalar(p)):
+                dropped += 1
+                continue   # phantom per-bit scalar of an existing packed bus
+        out.append(p)
+    return out if dropped else pins
+
+
 def gen_l9_integration_spec(project: Path,
                             extracted: Dict[str, str],
                             l3: dict) -> LDocResult:
@@ -40526,6 +40683,10 @@ def gen_l9_integration_spec(project: Path,
     l1_doc = _try_load_l_doc(project, "L1_DATASHEET")
     l1_pins = ((l1_doc or {}).get("pin_table")
                if isinstance(l1_doc, dict) else None) or []
+    # ORGANIC #647 — strip fabricated per-bit scalars of an already-present
+    # packed bus before promotion (a single `io_in|38` row must not also yield
+    # phantom io_in<N> ports that inflate L9.top_ports and break the TB).
+    l1_pins = _v647_drop_redundant_bit_scalars(l1_pins)
     promoted_from_l1 = bool(l1_pins)
     if promoted_from_l1:
         # v1.6.86 (#18 Bug 1) — canonicalise port names on the L9 side

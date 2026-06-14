@@ -2031,6 +2031,13 @@ def step_full_stack_tb_gen(project: Path,
     inst_args: List[str] = []
     inout_names: List[str] = []
     _v643_skipped_illegal: List[str] = []
+    # ORGANIC #645 — power/ground DUT connections are collected SEPARATELY and
+    # emitted inside an `ifdef USE_POWER_PINS` block (see the instance emit
+    # below). The DUT RTL declares its supply pins only inside the same
+    # `ifdef`; the reference_tb / oracle compile omits -DUSE_POWER_PINS, so an
+    # UNCONDITIONAL `.vccd1(vccd1)` would bind to a non-existent DUT port →
+    # iverilog rc=2 → reference_tb FAIL → downstream blocked.
+    _v645_power_pin_names: List[str] = []
     for p in top_ports:
         if not isinstance(p, dict):
             continue
@@ -2058,7 +2065,10 @@ def step_full_stack_tb_gen(project: Path,
             decl_lines.append(
                 f"  wire{w} {nm};  // power/ground pin — tied, not driven "
                 f"(#643, USE_POWER_PINS)")
-            inst_args.append(f"    .{nm}({nm})")
+            # ORGANIC #645 — DEFER this connection to the `ifdef USE_POWER_PINS`
+            # block (do NOT add to the unconditional inst_args) so TB↔DUT↔compile
+            # stay self-consistent whether or not the macro is defined.
+            _v645_power_pin_names.append(nm)
             continue
         if direction == "input":
             decl_lines.append(f"  reg{w} {nm} = 0;")
@@ -2092,6 +2102,17 @@ def step_full_stack_tb_gen(project: Path,
     lines.append(f"  {top_module} u_dut (")
     if inst_args:
         lines.append(",\n".join(inst_args))
+    # ORGANIC #645 — emit power/ground connections ONLY under USE_POWER_PINS,
+    # mirroring the DUT RTL's own `ifdef`. Leading-comma style composes whether
+    # or not regular args precede (first connection gets a comma iff something
+    # was emitted before it). Self-consistent in BOTH compile modes: undefined
+    # → neither side has the pins; defined → both do.
+    if _v645_power_pin_names:
+        lines.append("`ifdef USE_POWER_PINS")
+        for i, nm in enumerate(_v645_power_pin_names):
+            sep = "," if (inst_args or i > 0) else " "
+            lines.append(f"    {sep} .{nm}({nm})")
+        lines.append("`endif")
     lines.append("  );")
     lines.append("")
     # Bit-time delay constant — bit_level_full_stack_tb_check expects
