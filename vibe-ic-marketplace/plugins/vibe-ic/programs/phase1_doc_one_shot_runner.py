@@ -32199,6 +32199,190 @@ def _v1_6_485_extract_formal_interfaces(
     return out
 
 
+# ORGANIC #634 (generation-side facets a + d) — shared converter-class
+# harvesters. A data-converter / mixed-signal IC documents its primary
+# timing surface in a markdown SPEC TABLE whose parameter NAME, numeric
+# VALUE and UNIT live in SEPARATE cells (`| fclk | 1.0 | 0.1-10 | MHz |`)
+# plus unitless converter scalars (`OSR = 256` / `Order = 2`), and its
+# verification plan as a literal `## Verification intent` bullet section.
+# Neither shape is reachable by the existing clock-prose / numbered-phase /
+# verification-plan-TABLE harvesters (the clock regex needs the literal
+# word `clock` before the number; the value/unit split across cells breaks
+# the inline `name value unit` adjacency form; bullets are not a table).
+# These two helpers harvest those shapes into typed timing_constants (L8)
+# and typed verification entries (L7 / L10). Both are chip-AGNOSTIC: a
+# generic spec-table SHAPE + a generic data-converter parameter vocabulary
+# (OSR / order / decimation / sample-rate family — open technical terms,
+# never a chip / vendor / SKU literal) and a generic section-heading +
+# bullet SHAPE. Both are no-fabrication: an empty doc, a doc with no spec
+# table, or a doc with no Verification-intent section yields [].
+_V634_UNIT_CELL_RE = re.compile(
+    r"^(?:MHz|kHz|GHz|Hz|ns|us|µs|μs|ms|s|ksps|Msps|sps|"
+    r"bit|bits|dB)$",
+    re.IGNORECASE)
+_V634_NAME_CELL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,30}$")
+_V634_NUM_CELL_RE = re.compile(r"^[-+]?\d+(?:\.\d+)?$")
+# Generic data-converter scalar-parameter vocabulary (often unitless: an
+# oversampling RATIO / loop ORDER / decimation FACTOR / sample-rate). These
+# are open technical terms (no chip/vendor/SKU literal).
+_V634_CONVERTER_PARAM_RE = re.compile(
+    r"(?i)\b("
+    r"OSR|oversampling[\s_-]?ratio|"
+    r"order|modulator[\s_-]?order|loop[\s_-]?order|"
+    r"decimation(?:[\s_-]?(?:ratio|factor|rate))?|dec[\s_-]?rate|"
+    r"fclk|fmod|fsample|fsamp|fs|f_s|f_clk|f_mod|"
+    r"sample[\s_-]?rate|clock[\s_-]?divider|clk[\s_-]?div|"
+    r"interp(?:olation)?[\s_-]?(?:ratio|factor)?|enob"
+    r")\b")
+_V634_RATIO_UNIT_RE = re.compile(
+    r"(?i)osr|ratio|order|decimation|dec_rate|enob|interp")
+_V634_CONVERTER_SCALAR_LINE_RE = re.compile(
+    r"(?im)^\s*([A-Za-z_][A-Za-z0-9_ /-]{0,30}?)\s*[:=]\s*"
+    r"([-+]?\d+(?:\.\d+)?)\s*$")
+
+
+def _v634_split_pipe_cells(line: str) -> List[str]:
+    """Split a markdown pipe row into trimmed cells, dropping the
+    leading/trailing empty cells produced by bordered `| a | b |`."""
+    parts = [c.strip() for c in line.split("|")]
+    if parts and parts[0] == "":
+        parts = parts[1:]
+    if parts and parts and parts[-1] == "":
+        parts = parts[:-1]
+    return parts
+
+
+def _v634_is_pipe_sep_row(line: str) -> bool:
+    cells = _v634_split_pipe_cells(line)
+    return bool(cells) and all(c and set(c) <= set("-: ") for c in cells)
+
+
+def _v634_harvest_converter_timing(
+        extracted: Dict[str, str]) -> List[Dict[str, Any]]:
+    """ORGANIC #634 facet (a). Harvest typed converter timing constants
+    from (1) markdown spec-table rows whose NAME / numeric VALUE / UNIT
+    live in SEPARATE cells (`| fclk | 1.0 | 0.1-10 | MHz |`) and (2)
+    unitless converter-scalar assignments (`OSR = 256` / `Order = 2`).
+
+    Returns a list of typed `{name,value,unit,source,extraction_strategy}`
+    dicts (deduped by name). Empty when the input carries no spec-table
+    row with a real name+value+unit triple and no converter-scalar line —
+    NEVER fabricates a constant. chip-AGNOSTIC: spec-table SHAPE + open
+    data-converter vocabulary; no chip/vendor/SKU literal."""
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for fname, text in (extracted or {}).items():
+        if not isinstance(text, str) or not text:
+            continue
+        # (1) markdown spec-table rows — name / value / unit in
+        # SEPARATE cells. A header row carries no numeric cell, so it
+        # is skipped naturally; the separator row is skipped explicitly.
+        if "|" in text:
+            for line in text.splitlines():
+                if "|" not in line or _v634_is_pipe_sep_row(line):
+                    continue
+                cells = _v634_split_pipe_cells(line)
+                if len(cells) < 3:
+                    continue
+                name = re.sub(r"[`*]", "", cells[0]).strip()
+                if not _V634_NAME_CELL_RE.match(name):
+                    continue
+                num_val: Optional[str] = None
+                unit: Optional[str] = None
+                for c in cells[1:]:
+                    cc = re.sub(r"[`*]", "", c).strip()
+                    if num_val is None and _V634_NUM_CELL_RE.match(cc):
+                        num_val = cc
+                    if unit is None and _V634_UNIT_CELL_RE.match(cc):
+                        unit = cc
+                if num_val is None or unit is None:
+                    continue
+                key = name.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({
+                    "name": name,
+                    "value": (float(num_val) if "." in num_val
+                              else int(num_val)),
+                    "unit": unit,
+                    "source": f"input/docs/{fname}",
+                    "extraction_strategy":
+                        "spec_table_name_value_unit_v634",
+                })
+        # (2) inline converter-scalar params (`OSR = 256` / `Order: 2`).
+        # Only converter-vocabulary names qualify so a generic
+        # `bits = 8` digital prose line never produces a timing
+        # constant. chip-AGNOSTIC: open converter terms only.
+        for m in _V634_CONVERTER_SCALAR_LINE_RE.finditer(text):
+            nm = m.group(1).strip()
+            if not _V634_CONVERTER_PARAM_RE.search(nm):
+                continue
+            key = re.sub(r"[\s/-]+", "_", nm.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            num = m.group(2)
+            out.append({
+                "name": nm,
+                "value": float(num) if "." in num else int(num),
+                "unit": ("ratio" if _V634_RATIO_UNIT_RE.search(nm)
+                         else "count"),
+                "source": f"input/docs/{fname}",
+                "extraction_strategy": "converter_scalar_param_v634",
+            })
+    return out
+
+
+_V634_VERIF_HEADING_RE = re.compile(
+    r"(?im)^\s{0,3}#{1,6}\s*verification\s+intent\b[^\n]*$")
+_V634_VERIF_BULLET_RE = re.compile(r"(?m)^\s{0,6}(?:[-*+]|\d+[.)])\s+(.+?)\s*$")
+_V634_NEXT_HEADING_RE = re.compile(r"(?m)^\s{0,3}#{1,6}\s+\S")
+
+
+def _v634_harvest_verification_intent(
+        extracted: Dict[str, str]) -> List[Dict[str, Any]]:
+    """ORGANIC #634 facet (d). Mine the literal `## Verification intent`
+    section's bullets (DC op-point / line-load regulation / SNDR-ENOB /
+    multi-corner) into typed verification entries. Each bullet → one
+    `{name,description,evidence,extraction_strategy}` dict. The harvest is
+    bounded to the section body (stops at the next heading) so unrelated
+    bullets never leak in. Empty when no `Verification intent` section
+    exists — NEVER fabricates. chip-AGNOSTIC: a generic section-heading +
+    bullet SHAPE; no chip/vendor/SKU literal."""
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for fname, text in (extracted or {}).items():
+        if not isinstance(text, str) or not text:
+            continue
+        m = _V634_VERIF_HEADING_RE.search(text)
+        if not m:
+            continue
+        body_start = m.end()
+        nxt = _V634_NEXT_HEADING_RE.search(text, body_start)
+        body = text[body_start: nxt.start() if nxt else len(text)]
+        for bm in _V634_VERIF_BULLET_RE.finditer(body):
+            desc = re.sub(r"[`*]", "", bm.group(1)).strip()
+            if len(desc) < 6:
+                continue
+            slug = re.sub(r"[^a-z0-9]+", "_", desc.lower()).strip("_")[:48]
+            if not slug:
+                slug = f"verif_intent_{len(out) + 1}"
+            if slug in seen:
+                continue
+            seen.add(slug)
+            out.append({
+                "name": slug,
+                "description": desc,
+                "evidence": (f"input/docs/{fname} "
+                             "(Verification intent section)"),
+                "extraction_strategy": "verification_intent_bullet_v634",
+            })
+        if out:
+            break
+    return out
+
+
 def gen_l7_test_debug(project: Path,
                       extracted: Dict[str, str]) -> LDocResult:
     """L7: test mode + engineer mode opcodes."""
@@ -32776,6 +32960,32 @@ def gen_l7_test_debug(project: Path,
                     break
             if len(verification_strategy) >= 32:
                 break
+        if len(verification_strategy) >= 32:
+            break
+
+    # ORGANIC #634 facet (d) — mine the literal `## Verification intent`
+    # section bullets (a data-converter / mixed-signal spec carries its
+    # verification plan as a prose bullet list under this heading, not as
+    # a numbered `phase N:` template nor a verification-plan TABLE, so the
+    # passes above miss it). Each bullet becomes one typed
+    # verification_strategy entry. No-fabrication: empty when no
+    # Verification-intent section exists. chip-AGNOSTIC.
+    _seen_vstrat_slugs = {
+        re.sub(r"[^a-z0-9]+", "_", str(v.get("method", "")).lower()).strip("_")
+        for v in verification_strategy}
+    for _vi in _v634_harvest_verification_intent(extracted):
+        if _vi["name"] in _seen_vstrat_slugs:
+            continue
+        _seen_vstrat_slugs.add(_vi["name"])
+        verification_strategy.append({
+            "phase": _vi["name"],
+            "method": _vi["description"],
+            "evidence": _vi["evidence"],
+            "extraction_strategy": _vi["extraction_strategy"],
+        })
+        evidence.setdefault(_vi["evidence"].split(" ")[0], []).append({
+            "literal": _vi["description"][:120],
+            "label": "verification intent bullet (#634 facet d)"})
         if len(verification_strategy) >= 32:
             break
 
@@ -35698,6 +35908,32 @@ def gen_l8_timing_waveform(project: Path,
                     })
             break  # first file with SATA timing wins
 
+    # ORGANIC #634 facet (a) — converter spec-table timing harvest. A
+    # data-converter / mixed-signal IC documents its timing surface in a
+    # markdown spec table whose NAME / VALUE / UNIT live in separate cells
+    # (`| fclk | 1.0 | 0.1-10 | MHz |`) plus unitless converter scalars
+    # (`OSR = 256` / `Order = 2`). The clock regex above requires the
+    # literal word `clock` before the number and the inline/SATA pickers
+    # need value+unit adjacency, so none of them reach a spec-table fclk
+    # row. Harvest those as typed timing_constants here, deduped by name.
+    # No-fabrication: empty when the input carries no such row/scalar.
+    for _ct in _v634_harvest_converter_timing(extracted):
+        if _ct["name"] in seen_tc_names:
+            continue
+        seen_tc_names.add(_ct["name"])
+        timing_constants.append({
+            "name": _ct["name"],
+            "value": _ct["value"],
+            "unit": _ct["unit"],
+            "source": _ct["source"],
+            "extraction_strategy": _ct["extraction_strategy"],
+        })
+        _src_key = _ct["source"]
+        evidence.setdefault(_src_key, []).append({
+            "literal": f"{_ct['name']} = {_ct['value']} {_ct['unit']}",
+            "label": "converter spec-table timing constant (#634 facet a)",
+        })
+
     # v1.6.78 — closes #11 FLAG-EVIDENCE CONSISTENCY for L8.timing_constants.
     # v1.6.79 — closes #12 L8 flag-evidence consistency. The local
     # `evidence` dict only carries sources matched by the loop above
@@ -36719,6 +36955,32 @@ def gen_l8_timing_waveform_doc(project: Path,
             if len(ev_list) < 64:
                 ev_list.append({"literal": f"{val_s}{unit}",
                                 "label": "timing bare value"})
+
+    # ORGANIC #634 facet (a) — converter spec-table timing harvest into
+    # the L8_TIMING_WAVEFORM sidecar (the doc that carried only 2 typed
+    # constants and FAILed the relaxed ≥3 sparse-control-timing floor for
+    # the data-converter class). Same chip-AGNOSTIC harvester as the
+    # L8_RTL_CONSTANTS path: a spec-table name/value/unit triple
+    # (`| fclk | 1.0 | 0.1-10 | MHz |`) plus unitless converter scalars
+    # (`OSR = 256` / `Order = 2`). Deduped by name against the
+    # bare-value / cycle harvests above. No-fabrication: empty when the
+    # input has no such row/scalar.
+    _seen_tc_names_sidecar = {tc.get("name") for tc in timing_constants}
+    for _ct in _v634_harvest_converter_timing(extracted):
+        if _ct["name"] in _seen_tc_names_sidecar:
+            continue
+        _seen_tc_names_sidecar.add(_ct["name"])
+        timing_constants.append({
+            "name": _ct["name"],
+            "value": _ct["value"],
+            "unit": _ct["unit"],
+            "source": _ct["source"],
+            "extraction_strategy": _ct["extraction_strategy"],
+        })
+        evidence.setdefault(_ct["source"], []).append({
+            "literal": f"{_ct['name']} = {_ct['value']} {_ct['unit']}",
+            "label": "converter spec-table timing constant (#634 facet a)",
+        })
 
     # v1.6.38 — chip-AGNOSTIC half-duplex split.
     # When the project's L2 declares half_duplex=true, partition timing
@@ -42037,6 +42299,30 @@ def gen_l10_test_cases(project: Path,
                 "label": "verification-plan table row → functional test case",
             })
 
+    # ORGANIC #634 facet (d) — also mine the literal `## Verification
+    # intent` section bullets into typed L10 test cases (the same
+    # source the L7 verification_strategy harvest reads). A
+    # data-converter / mixed-signal spec documents its verification plan
+    # as a prose bullet list, not a verification-plan TABLE, so the
+    # table harvester above never reaches it. No-fabrication: empty when
+    # no Verification-intent section exists. chip-AGNOSTIC.
+    for _vi in _v634_harvest_verification_intent(extracted):
+        if _vi["name"] in _existing_names:
+            continue
+        _existing_names.add(_vi["name"])
+        cases.append({
+            "name": _vi["name"],
+            "kind": "verification_intent",
+            "stimulus": _vi["description"],
+            "expected": ("verification intent satisfied "
+                         "(analog/mixed-signal acceptance check)"),
+            "evidence": _vi["evidence"],
+        })
+        evidence.setdefault("derived_from_verification_intent", []).append({
+            "literal": _vi["description"][:120],
+            "label": "verification intent bullet → functional test case",
+        })
+
     # v1.6.67 — closes issue #8 Bug B (L10 half). Mirror the
     # `no_<X>_in_input` emission convention used by L1/L3/L5/L6/L7/
     # L8/L9/L11/L13 so downstream consumers can distinguish
@@ -42485,6 +42771,26 @@ _RE_L12_NO_CALIBRATION = re.compile(
     r'\bno\s+(?:calibration|trimming|trim)\b|'
     r'\bnot\s+calibrat|\bno\s+otp[\s-]*based\s+calibration\b')
 
+# ORGANIC #634 facet (e) — POSITIVE calibration-source vocabulary. A
+# calibration / trim / OTP-cal SOURCE in the input means the part DOES
+# carry calibration content (so `no_calibration` must stay False). When
+# NONE of these tokens appears AND no behavioral sequences were harvested,
+# gen_l12 auto-sets `no_calibration: true` — the honest absence-based N/A
+# that mirrors L5.no_analog (blocks == [] → no_analog = True). The negated
+# forms (`no calibration` / `無 trim`) are first stripped to a marker so a
+# sentence that DENIES calibration is not miscounted as a source. The trim
+# token requires an adjacent calibration-context word so a `bit-trimming`
+# datapath idiom never falsely registers a cal source. chip-AGNOSTIC: open
+# calibration vocabulary; no chip/vendor/SKU literal.
+_RE_L12_CALIBRATION_SOURCE = re.compile(
+    r'(?i)\bcalibrat(?:ion|e|ed)\b|'
+    r'\b(?:trim|trimming)\s+(?:code|register|dac|bit|value|step|'
+    r'procedure|routine|table)\b|'
+    r'(?:code|register|dac|bit|value|step|procedure|routine|table)\s+'
+    r'(?:trim|trimming)\b|'
+    r'\botp[\s-]*(?:based\s+)?(?:cal|trim)\w*\b|'
+    r'校[準准]|微調')
+
 
 def gen_l12_behavioral(project: Path,
                        extracted: Dict[str, str],
@@ -42585,6 +42891,33 @@ def gen_l12_behavioral(project: Path,
                     "label": "input explicitly states no calibration/trimming",
                 })
                 break
+        # ORGANIC #634 facet (e) — absence-based auto-set, mirroring the
+        # L5.no_analog auto-detection (blocks == [] → no_analog = True).
+        # When the explicit no-cal assertion above did NOT fire, scan the
+        # input for a calibration / trim / OTP-cal SOURCE. If there is no
+        # such source anywhere AND no behavioral sequences were harvested,
+        # the part genuinely has no calibration content — set the honest
+        # `no_calibration: true`. NO-FABRICATION & NO-LEAK: the presence of
+        # ANY calibration source keeps no_calibration False (so a part that
+        # DOES document trim/cal never gets the honest-N/A free pass); the
+        # explicit-negation marker is stripped first so a "no calibration"
+        # sentence is not itself counted as a source.
+        if not no_calibration:
+            _has_cal_source = False
+            for _f, _t in (extracted or {}).items():
+                if not isinstance(_t, str) or not _t:
+                    continue
+                _t_pos = _RE_L12_NO_CALIBRATION.sub(" __NO_CAL__ ", _t)
+                if _RE_L12_CALIBRATION_SOURCE.search(_t_pos):
+                    _has_cal_source = True
+                    break
+            if not _has_cal_source:
+                no_calibration = True
+                evidence.setdefault("derived_no_calibration_source", []).append({
+                    "literal": "no calibration / trim / OTP-cal source in input",
+                    "label": ("L12 no_calibration auto-set (#634 facet e) — "
+                              "absence-based, mirrors L5.no_analog"),
+                })
     content = {
         "schema_version": 2,
         "doc_class": "behavioral_sequences",
