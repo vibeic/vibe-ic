@@ -673,6 +673,34 @@ def completion_module_names(completion):
     return set(_MODULE_NAMES_RE.findall(_detection_text(code)))
 
 
+# ORGANIC #642 — a CVDP draft id follows the harness's universal naming
+# scheme `cvdp_copilot_<problem>` plus an optional trailing `_NNNN` variant
+# suffix. The official cocotb harness elaborates each completion with
+# `iverilog -s cvdp_copilot_<problem> ... rtl/cvdp_copilot_<problem>.sv`, i.e.
+# it FORCES the top module to be named `cvdp_copilot_<problem>`. A completion
+# whose top is named differently (the short/functional prose name) compiles
+# clean at this gate but ELAB_ERRORs at scoring ("cannot find top") — the same
+# gate-compile != scorer-compile class as the fence-emit gap #626. Deriving the
+# required top from the id lets the gate enforce the #559 module-name
+# conformance BY DEFAULT (without --prompts), so a name-mismatch is BLOCKED here
+# rather than shipped to ELAB. chip-AGNOSTIC: pure id-string structure (the
+# harness's own naming convention, applied uniformly to EVERY CVDP problem) —
+# no chip / vendor / SKU literal.
+_V642_VARIANT_SUFFIX_RE = re.compile(r"^(cvdp_copilot_.+?)_\d{3,}$")
+
+
+def required_top_from_id(rid):
+    """ORGANIC #642 — the harness-required top module name `cvdp_copilot_<stem>`
+    for a CVDP draft id (the id minus a trailing `_NNNN` variant suffix), or
+    None when the id does not follow the `cvdp_copilot_` convention (then no
+    id-derived requirement is imposed and the gate behaves as before)."""
+    rid = (rid or "").strip()
+    if not rid.startswith("cvdp_copilot_"):
+        return None
+    m = _V642_VARIANT_SUFFIX_RE.match(rid)
+    return m.group(1) if m else rid
+
+
 def _load_prompts(path):
     """Return {id: prompt_text} from a prompts JSONL ({id, prompt|input|...})."""
     out = {}
@@ -823,16 +851,32 @@ def main(argv=None) -> int:
             # harness builds TOPLEVEL from the file layout, so a completion
             # that declares no module matching the requested filename
             # ELAB_ERRORs. Advisory mode WARNs instead of blocking.
-            if ok and prompts:
-                req = required_module_names_from_prompt(
-                    prompts.get(str(rec.get("id")), ""))
+            if ok:
+                # #559 — prompt-stated required filename (when --prompts given).
+                req = (required_module_names_from_prompt(
+                    prompts.get(str(rec.get("id")), "")) if prompts else set())
+                # ORGANIC #642 — when the prompt did not state a required
+                # filename (or --prompts was not passed — the documented
+                # --batch-dir flow), DERIVE the harness-required top name
+                # `cvdp_copilot_<stem>` from the draft id, so the module-name
+                # conformance is enforced BY DEFAULT and a name-mismatch is
+                # BLOCKED here instead of ELAB_ERRORing at scoring.
+                _id_derived = not req
+                if not req:
+                    _derived_top = required_top_from_id(str(rec.get("id")))
+                    if _derived_top:
+                        req = {_derived_top}
                 if req:
                     mods = completion_module_names(out_rec.get("completion"))
                     if mods and not (req & mods):
-                        msg = (f"prompt requires a module named {sorted(req)} "
-                               f"(per the requested rtl/<name>.sv); completion "
-                               f"declares {sorted(mods)} — the harness derives "
-                               f"TOPLEVEL from the filename so this ELAB_ERRORs")
+                        _src = ("the draft id implies the harness top "
+                                "`-s {0}` (rtl/{0}.sv)".format(sorted(req)[0])
+                                if _id_derived else
+                                "the requested rtl/<name>.sv")
+                        msg = (f"harness requires a module named {sorted(req)} "
+                               f"({_src}); completion declares {sorted(mods)} — "
+                               f"the harness forces TOPLEVEL to that name so "
+                               f"this ELAB_ERRORs at scoring (#642)")
                         if args.prompts_advisory:
                             entry.setdefault("notes", []).append(
                                 "WARN filename-module-mismatch: " + msg)
