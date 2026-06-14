@@ -155,7 +155,14 @@ def find_local_mirror(ip_name: str,
                     return cand
     for root in LOCAL_MIRROR_ROOTS:
         for name in candidate_names:
-            p = root / name
+            # ORGANIC #665 round-2 — LOCAL_MIRROR_ROOTS carry a literal `~`
+            # (`Path("~/ic_documents/...")`); without expanduser() a `~`-rooted
+            # candidate NEVER resolves (`Path('~/ic_documents/open_ic/serv')`
+            # .is_dir() is always False), so the populated home-dir fallback the
+            # #665 round-1 content-gate was meant to fall THROUGH to stayed
+            # unreachable and the catalog-glue RTL pull still FAILed. Expand the
+            # user home so the real mirror is found. chip-AGNOSTIC.
+            p = (root / name).expanduser()
             if _dir_has_rtl(p, rtl_files):
                 return p
     return None
