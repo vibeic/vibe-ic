@@ -120,6 +120,63 @@ STAGE_SHORT = {
     "stage5_manufacturing": "Stage 5 (Mfg)",
 }
 
+# #652 — only the manufacturing stage is "awaiting silicon". A
+# SKIPPED-CONDITION verdict on any EARLIER step (FPGA board absent,
+# capability gap, cascade-blocked, …) is a MID-FLOW skip and must NOT
+# be rolled up under the "manufacturing-skipped" label. We classify a
+# step structurally — chip-AGNOSTIC, never by chip-specific step names:
+#   (1) preferred: the step's own `stage` field equals the manufacturing
+#       stage id (`stage5_manufacturing`); else
+#   (2) fallback (for snapshots lacking a stage field): the documented
+#       manufacturing step-number range 40-44 inclusive.
+MANUFACTURING_STAGE_ID = "stage5_manufacturing"
+# Documented manufacturing step-number range (inclusive), used only when
+# a step record carries no usable `stage` field.
+MANUFACTURING_STEP_ID_MIN = 40
+MANUFACTURING_STEP_ID_MAX = 44
+
+
+def _is_manufacturing_step(step: Dict[str, Any]) -> bool:
+    """True iff `step` belongs to the silicon-dependent manufacturing
+    stage. Structural + chip-AGNOSTIC: prefers the explicit `stage`
+    field, falls back to the documented numeric step-id range when the
+    step carries no stage. Never keys off chip-specific step names."""
+    stage = step.get("stage")
+    if stage is not None:
+        return stage == MANUFACTURING_STAGE_ID
+    sid = step.get("id")
+    try:
+        n = int(sid)
+    except (TypeError, ValueError):
+        return False
+    return MANUFACTURING_STEP_ID_MIN <= n <= MANUFACTURING_STEP_ID_MAX
+
+
+def _split_skipped_by_stage(
+    flow: Dict[str, Any], verdicts: Dict[str, str]
+) -> Tuple[int, int]:
+    """#652 — split the SKIPPED-CONDITION rollup BY STAGE.
+
+    Returns ``(manufacturing_skipped, midflow_skipped)``. A step counts
+    as manufacturing-skipped only when its verdict is SKIPPED-CONDITION
+    AND it is a manufacturing-stage step (`_is_manufacturing_step`);
+    every other SKIPPED-CONDITION step is a mid-flow skip. The two
+    buckets are mutually exclusive and sum to the total SKIPPED-CONDITION
+    rollup, so the report stays honest (mid-flow + manufacturing ==
+    total skipped). chip-AGNOSTIC: structural stage classification only.
+    """
+    mfg = 0
+    midflow = 0
+    for s in flow.get("steps", []):
+        sid = str(s.get("id"))
+        if verdicts.get(sid, "MISSING") != "SKIPPED-CONDITION":
+            continue
+        if _is_manufacturing_step(s):
+            mfg += 1
+        else:
+            midflow += 1
+    return mfg, midflow
+
 
 # ─── helpers ─────────────────────────────────────────────────────────────
 
@@ -589,7 +646,12 @@ def _verdict_rollup(flow: Dict[str, Any], verdicts: Dict[str, str]) -> Tuple[Dic
     return dict(counts), total
 
 
-def _counts_snapshot(rollup: Dict[str, int], total_steps: int) -> Dict[str, int]:
+def _counts_snapshot(
+    rollup: Dict[str, int],
+    total_steps: int,
+    flow: Optional[Dict[str, Any]] = None,
+    verdicts: Optional[Dict[str, str]] = None,
+) -> Dict[str, int]:
     """#461 symptom (2): derive ALL displayed counts from ONE rollup.
 
     `executed_pass` / `executed_total` match the audit summary line's
@@ -598,7 +660,16 @@ def _counts_snapshot(rollup: Dict[str, int], total_steps: int) -> Dict[str, int]
     the headline audit block, the prose bullets, and the resource log
     never disagree. `pass_only` is the strict PASS bucket retained for
     the per-verdict roll-up table. chip-AGNOSTIC: pure arithmetic on
-    verdict buckets."""
+    verdict buckets.
+
+    #652 — the SKIPPED-CONDITION total (`skipped`) is ALSO split BY
+    STAGE into `skipped_manufacturing` (silicon-dependent steps 40-44 /
+    `stage5_manufacturing`) and `skipped_midflow` (every earlier
+    SKIPPED-CONDITION step: FPGA board absent, capability gap,
+    cascade-blocked, …). The split needs the per-step `flow` + verdicts;
+    when they are not supplied the whole total is conservatively booked
+    as mid-flow (no step is silently mislabelled as a silicon skip).
+    `skipped_manufacturing + skipped_midflow == skipped` always holds."""
     pass_only = rollup.get("PASS", 0)
     vacuous = rollup.get("VACUOUS-PASS", 0)
     waived = rollup.get("WAIVED-DEFERRED", 0)
@@ -607,11 +678,19 @@ def _counts_snapshot(rollup: Dict[str, int], total_steps: int) -> Dict[str, int]
     missing = rollup.get("MISSING", 0)
     executed_pass = pass_only + vacuous
     executed_total = total_steps - waived - skipped
+    if flow is not None and verdicts is not None:
+        skipped_manufacturing, skipped_midflow = _split_skipped_by_stage(flow, verdicts)
+    else:
+        # No per-step context: book the whole bucket as mid-flow rather
+        # than risk labelling a non-silicon skip as a manufacturing one.
+        skipped_manufacturing, skipped_midflow = 0, skipped
     return {
         "pass_only": pass_only,
         "vacuous": vacuous,
         "waived": waived,
         "skipped": skipped,
+        "skipped_manufacturing": skipped_manufacturing,
+        "skipped_midflow": skipped_midflow,
         "fail": fail,
         "missing": missing,
         "executed_pass": executed_pass,
@@ -1028,7 +1107,7 @@ def _render(project: Path, run_audit: bool = True,
     # the prose, and the resource log all agree. A snapshot marker is
     # stamped so a reader knows a fresh `--strict` re-run can move the
     # numbers (e.g. once late artefacts land).
-    snap = _counts_snapshot(rollup, total_steps)
+    snap = _counts_snapshot(rollup, total_steps, flow=flow, verdicts=verdicts)
     snapshot_marker = _snapshot_marker(audit_text, overall)
 
     now = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1094,8 +1173,16 @@ def _render(project: Path, run_audit: bool = True,
         md.append(f"- WAIVED-DEFERRED={waived_n} — deferred via documented waiver "
                   "(human review required before tapeout).")
     if skipped_n:
-        md.append(f"- SKIPPED-CONDITION={skipped_n} — gate predicate not yet met "
-                  "(e.g., manufacturing steps awaiting silicon).")
+        # #652 — split the SKIPPED-CONDITION total by stage so mid-flow
+        # skips (FPGA board absent / capability gap / cascade-blocked)
+        # are not mislabelled as silicon-stage skips. Only the
+        # manufacturing-stage steps are genuinely "awaiting silicon".
+        skipped_mfg_n = snap["skipped_manufacturing"]
+        skipped_mid_n = snap["skipped_midflow"]
+        md.append(f"- SKIPPED-CONDITION={skipped_n} — gate predicate not yet met. "
+                  f"manufacturing-stage (awaiting silicon)={skipped_mfg_n}; "
+                  f"mid-flow (board absent / capability gap / "
+                  f"cascade-blocked)={skipped_mid_n}.")
     if vacuous_n:
         md.append(f"- VACUOUS-PASS={vacuous_n} — gate accepts the present project "
                   "shape; check whether it should be a real PASS for your flow.")
@@ -1398,7 +1485,8 @@ def _render(project: Path, run_audit: bool = True,
               f"(strict PASS: {snap['pass_only']}, "
               f"deferred via waiver: {snap['waived']}, "
               f"vacuous-pass: {snap['vacuous']}, "
-              f"manufacturing-skipped: {snap['skipped']})")
+              f"manufacturing-skipped: {snap['skipped_manufacturing']}, "
+              f"mid-flow-skipped: {snap['skipped_midflow']})")
     md.append("")
 
     # SHA-256 Attestation table — v1.6.34 closes doctrine rule #5

@@ -83,14 +83,21 @@ def test_library_internal_only_credits_drc_slot_4of4(tmp_path):
     assert "TAPEOUT_DRC_VIOLATIONS" not in rules
 
 
-def test_acceptance_main_exit_zero_no_cascaded_waiver(tmp_path):
-    # the issue's ## 驗收 end-state: rc == 0 (PASS_WITH_WAIVERS) with NO
-    # hand-written cascaded tapeout waiver file anywhere in the project.
+def test_acceptance_main_exit_no_cascaded_waiver(tmp_path):
+    # the issue's ## 驗收 end-state: PASS_WITH_WAIVERS with NO hand-written
+    # cascaded tapeout waiver file anywhere in the project.
+    # #651 UPDATE: PASS_WITH_WAIVERS now returns the DISTINCT waiver rc
+    # (audit.WAIVER_EXIT_CODE == 3), not rc 0 — a bare PASS (rc 0) must
+    # NEVER be conflated with PASS_WITH_WAIVERS at the rc-only flow gate
+    # (CLAUDE.md rule 11). The #515 substance (no HAND-WRITTEN cascaded
+    # waiver needed) still holds; an auto-emitted waivers.json Step-36
+    # entry is the intended waiver-accounting artifact, not a cascade file.
     xml = _report_db({"li.3": 115114})
     p = _proj(tmp_path, xml)
     rc = audit.main([str(p), "--mode", "tapeout"])
-    assert rc == 0
-    # no cascaded waiver artifact was needed/created.
+    assert rc == audit.WAIVER_EXIT_CODE   # distinct PASS_WITH_WAIVERS rc, not 0
+    assert rc != 0
+    # no HAND-WRITTEN cascaded waiver artifact was needed/created.
     assert not list(p.rglob("*cascad*"))
     assert not list(p.rglob("*step36*waiver*"))
 

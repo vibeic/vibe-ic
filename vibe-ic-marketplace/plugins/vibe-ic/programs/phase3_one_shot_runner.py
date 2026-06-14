@@ -2371,6 +2371,201 @@ def _v1_6_599_check_wrapper_pin_order_cfg(
 
 
 # ---------------------------------------------------------------------------
+# ORGANIC #650 — pin_order.cfg INGESTION (not a dead-end presence check).
+# ---------------------------------------------------------------------------
+# Before #650, phase3 always ran the bare auto-assign
+#   place_pins -hor_layers M3 -ver_layers M2
+# and a wrapper-class pre-flight (_v1_6_599) only checked that a
+# `pin_order.cfg` EXISTED — it never fed the file to OpenROAD, so a
+# fixed-die wrapper / hardmacro / shuttle target's pin-order contract was
+# detected but never honored. #650 makes the discovered cfg an INPUT to
+# pin placement: the edge sections are parsed and translated into
+# `set_io_pin_constraint` directives so each pin lands on its required die
+# edge, and `place_pins` then routes only the still-unconstrained pins.
+#
+# The common `pin_order.cfg` (OpenLane / classic OpenROAD io-placer) is a
+# plain-text file of edge sections — a header line `#N` / `#S` / `#E` /
+# `#W` (North / South / East / West) followed by one pin-name token (or a
+# pin-name regex) per line, e.g.:
+#
+#     #N
+#     clk
+#     resetn
+#     #E
+#     gpio\[.*\]
+#     #S
+#     ...
+#
+# Chip-AGNOSTIC: the parser keys on the open-standard edge-letter grammar
+# (N/S/E/W) and treats every non-header token as an opaque pin pattern.
+# No chip / vendor / SKU literal anywhere — any fixed-die wrapper,
+# hardmacro, or shuttle target that ships this format is honored.
+
+# Canonical edge letters → OpenROAD `set_io_pin_constraint -region <edge>:*`
+# side keyword. Open-standard compass convention used by the OpenLane /
+# OpenROAD io-placer pin_order.cfg format.
+_V1_0_38_EDGE_LETTER_TO_REGION = {
+    "N": "top",
+    "S": "bottom",
+    "E": "right",
+    "W": "left",
+}
+
+
+def _v1_0_38_parse_pin_order_cfg(text: str) -> List[Tuple[str, List[str]]]:
+    """ORGANIC #650 — parse a `pin_order.cfg` into ordered
+    [(edge_letter, [pin_pattern, ...]), ...] sections. Generic across the
+    common io-placer format: a header line whose first non-`#` token is a
+    compass letter (N/S/E/W) opens a section; every subsequent
+    non-comment, non-blank line is one pin-name token or pin-name regex
+    that belongs to that section. Lines before the first edge header, and
+    sections whose header letter is not a recognised edge, are ignored.
+
+    Returns an empty list when no edge section is found (caller then keeps
+    the bare auto-assign). Chip-AGNOSTIC: keys only on the N/S/E/W edge
+    grammar; pin tokens are opaque.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return []
+    sections: List[Tuple[str, List[str]]] = []
+    cur_edge: Optional[str] = None
+    cur_pins: List[str] = []
+    # A header is a line that is just `#<edge>` (optionally spaced), e.g.
+    # `#N`, `# N`, `#NORTH`. We take the first alpha char after `#` as the
+    # edge letter so both `#N` and `#NORTH` resolve to N.
+    header_re = re.compile(r"^\s*#\s*([A-Za-z])")
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            continue
+        hm = header_re.match(line)
+        if hm is not None:
+            letter = hm.group(1).upper()
+            if letter in _V1_0_38_EDGE_LETTER_TO_REGION:
+                # Flush the previous section, open a new one.
+                if cur_edge is not None:
+                    sections.append((cur_edge, cur_pins))
+                cur_edge = letter
+                cur_pins = []
+            # `#` lines that are not an edge header are comments → skip.
+            continue
+        # Any other `#`-leading line inside the file is a comment.
+        if stripped.startswith("#"):
+            continue
+        if cur_edge is None:
+            # Pin tokens before the first edge header have no edge — skip.
+            continue
+        # First whitespace-delimited token is the pin name / regex.
+        token = stripped.split()[0]
+        if token:
+            cur_pins.append(token)
+    if cur_edge is not None:
+        sections.append((cur_edge, cur_pins))
+    return sections
+
+
+def _v1_0_38_build_pin_placement_tcl(
+        sections: List[Tuple[str, List[str]]],
+        bare_place_pins: str) -> str:
+    """ORGANIC #650 — translate parsed pin_order.cfg edge sections into an
+    OpenROAD pin-placement TCL block, then run `place_pins` so the
+    remaining (unconstrained) pins are still auto-assigned. Each pin
+    pattern becomes a `set_io_pin_constraint -pin_names {<pat>} -region
+    <edge>:*` directive (NONFATAL-guarded so an OpenROAD build that lacks
+    the command falls through to the bare auto-assign without aborting).
+
+    When `sections` is empty (no cfg, or a cfg with no usable edge), the
+    caller passes nothing here and keeps `bare_place_pins` verbatim — this
+    function is only invoked when there is at least one constraint to emit.
+    The trailing `place_pins` (the same hor/ver-layer auto-assign string)
+    is appended so any pin NOT named in the cfg is still placed.
+
+    Chip-AGNOSTIC: edge regions come from the open-standard N/S/E/W map;
+    pin patterns are passed through opaquely.
+    """
+    lines: List[str] = [
+        "# === ORGANIC #650 — pin_order.cfg ingestion: honor the "
+        "fixed-die / wrapper / hardmacro pin-order contract ===",
+        "# Each cfg pin is pinned to its required die edge via "
+        "set_io_pin_constraint;",
+        "# NONFATAL-guarded so PDKs / OpenROAD builds without the "
+        "command fall back to",
+        "# the bare auto-assign below. Pins NOT named in the cfg are "
+        "placed by place_pins.",
+    ]
+    for edge, pins in sections:
+        region = _V1_0_38_EDGE_LETTER_TO_REGION.get(edge)
+        if region is None:
+            continue
+        for pat in pins:
+            if not pat:
+                continue
+            # Brace-quote the pin pattern so regex metacharacters survive
+            # TCL word-splitting. set_io_pin_constraint -region <edge>:*
+            # constrains the named pin(s) to the whole named edge.
+            lines.append(
+                "if {[catch {set_io_pin_constraint "
+                f"-pin_names {{{pat}}} -region {region}:*}} "
+                "_poc_err]} {\n"
+                f"  puts \"PIN_ORDER_CONSTRAINT_NONFATAL: {pat} "
+                f"-> {region}: $_poc_err\"\n"
+                "}")
+    # Auto-assign whatever the cfg did not pin.
+    lines.append(bare_place_pins)
+    return "\n".join(lines) + "\n"
+
+
+def _v1_0_38_find_pin_order_cfg(project: Path) -> Optional[Path]:
+    """ORGANIC #650 — locate a `pin_order.cfg` anywhere a project might
+    ship one (openlane/ / pnr/ / constraints/, plus the project root as a
+    last resort). Returns the first hit (deterministic sorted order) or
+    None. Chip-AGNOSTIC: filename-only discovery, no chip literal.
+    """
+    if not project or not project.is_dir():
+        return None
+    hits: List[Path] = []
+    for sub in ("openlane", "pnr", "constraints"):
+        d = project / sub
+        if d.is_dir():
+            hits.extend(h for h in d.rglob("pin_order.cfg") if h.is_file())
+    root_hit = project / "pin_order.cfg"
+    if root_hit.is_file():
+        hits.append(root_hit)
+    if not hits:
+        return None
+    return sorted(hits, key=lambda p: str(p))[0]
+
+
+def _v1_0_38_pin_placement_block(project: Path,
+                                 bare_place_pins: str) -> Tuple[str, str]:
+    """ORGANIC #650 — the ENTRY POINT to pin_order.cfg ingestion used by
+    step_pnr. Locate a `pin_order.cfg`; if found, parse it and emit the
+    cfg-derived `set_io_pin_constraint` block (followed by the bare
+    auto-assign for unconstrained pins). If none is found (or it has no
+    usable edge section), return the bare auto-assign UNCHANGED.
+
+    Returns (place_pins_tcl, note). `note` is "" when no cfg was used.
+    Chip-AGNOSTIC.
+    """
+    cfg = _v1_0_38_find_pin_order_cfg(project)
+    if cfg is None:
+        return bare_place_pins, ""
+    try:
+        sections = _v1_0_38_parse_pin_order_cfg(
+            cfg.read_text(encoding="utf-8", errors="replace"))
+    except Exception as _e:  # nosec — cfg ingestion is best-effort
+        return bare_place_pins, f"pin_order.cfg unreadable ({_e}); auto-assign"
+    n_pins = sum(len(p) for _, p in sections)
+    if not sections or n_pins == 0:
+        return bare_place_pins, f"pin_order.cfg ({cfg.name}) had no edge pins"
+    tcl = _v1_0_38_build_pin_placement_tcl(sections, bare_place_pins)
+    note = (f"pin_order.cfg ingested ({cfg.name}): {n_pins} pin(s) across "
+            f"{len(sections)} edge section(s)")
+    return tcl, note
+
+
+# ---------------------------------------------------------------------------
 # Design-for-ECO — PROACTIVE spare-cell-array insertion + PROTECTION.
 # ---------------------------------------------------------------------------
 # This is the canonical flow Step 18 ("Spare-cell + ECO-prep
@@ -3490,7 +3685,8 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         clk_buf_root: str, routing_constraint_tcl: str,
                         pg_cleanup_block: str, spef_repair_block: str,
                         antenna_repair_block: str,
-                        filler_block: str) -> str:
+                        filler_block: str,
+                        place_pins_block: Optional[str] = None) -> str:
     """ORGANIC #581 — the COMPLETE pnr.tcl template as a PURE builder
     (v0.1.49 doctrine: extract Tcl-block builders into pure helpers so
     regression tests pin them). The #557 SPEF-repair block shipped with
@@ -3498,7 +3694,20 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     converged; content-only assertions missed it, so the full template
     is now validated by an actual tclsh parse/eval test
     (test_v0_3_39_issue581_pnr_tcl_syntax.py).
+
+    ORGANIC #650 — `place_pins_block` parametrizes the I/O-pin placement.
+    When None (default), the bare auto-assign
+    `place_pins -hor_layers M3 -ver_layers M2` is emitted (legacy
+    behavior, NO-LEAK for projects without a pin_order.cfg). When a
+    project ships a `pin_order.cfg`, step_pnr passes the ingested
+    cfg-derived `set_io_pin_constraint` block here so the fixed-die /
+    wrapper / hardmacro pin-order contract is honored.
     Chip-AGNOSTIC: every placeholder is a parameter."""
+    _bare_place_pins = (
+        f"place_pins -hor_layers {metal_prefix}3 "
+        f"-ver_layers {metal_prefix}2")
+    if place_pins_block is None:
+        place_pins_block = _bare_place_pins
     return f"""
 read_lef {tech_lef_c}
 read_lef {cell_lef_c}
@@ -3532,7 +3741,7 @@ initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\
                       -core_area "{core_pad} {core_pad} {core_w} {core_h}" \\
                       -site {site}
 make_tracks
-place_pins -hor_layers {metal_prefix}3 -ver_layers {metal_prefix}2
+{place_pins_block}
 write_def {out_dir_c}/floorplan.def
 # === v0.1.46 — tapcell insertion for latch-up well-tie density ===
 # v0.1.44 spm pilot Tier 5 finding: prior runs (v0.1.25 and v0.1.45 alike)
@@ -3912,6 +4121,18 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # can be unit-tested and the emitter/checker drift gate applies).
     spef_repair_block = _post_route_spef_repair_tcl(out_dir_c, tech_lef_c)
 
+    # ORGANIC #650 — INGEST a `pin_order.cfg` when the project ships one.
+    # _v1_6_599 above is the wrapper-class pre-flight (FAILs only when a
+    # wrapper-class top has NO cfg); here is its companion ENTRY to
+    # ingestion: if a cfg exists, parse its N/S/E/W edge sections into
+    # `set_io_pin_constraint` directives so each pin lands on its required
+    # die edge, then auto-assign only the unconstrained pins. With no cfg,
+    # the bare `place_pins -hor_layers M3 -ver_layers M2` is kept verbatim.
+    _bare_place_pins = (
+        f"place_pins -hor_layers {pdk.metal_prefix}3 "
+        f"-ver_layers {pdk.metal_prefix}2")
+    place_pins_block, pin_order_note = _v1_0_38_pin_placement_block(
+        project, _bare_place_pins)
     # v1.6.36 — emit per-stage DEF snapshots so def_stage_progression_check
     # sees byte-distinct, instance-count-growing, monotone-size files. Each
     # OpenROAD command modifies the in-memory database; write_def after
@@ -3933,7 +4154,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         pg_cleanup_block=pg_cleanup_block,
         spef_repair_block=spef_repair_block,
         antenna_repair_block=antenna_repair_block,
-        filler_block=filler_block))
+        filler_block=filler_block,
+        place_pins_block=place_pins_block))
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
            f"openroad -no_init -exit {pnr_tcl_c} 2>&1 | "
@@ -4117,6 +4339,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     detail = f"def={def_file.name} sta={sta_file.name}" + spare_note
     if routing_audit_note:
         detail += f" | via_audit: {routing_audit_note}"
+    if pin_order_note:
+        detail += f" | pin_order: {pin_order_note}"  # ORGANIC #650
     if resize_history:
         detail += (f" | die_auto_resized: {len(resize_history)}× "
                    f"final {die_w}x{die_h}µm")
