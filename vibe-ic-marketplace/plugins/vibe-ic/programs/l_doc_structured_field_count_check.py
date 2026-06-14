@@ -109,6 +109,127 @@ _BOOKKEEPING_FIELDS = frozenset({
 })
 
 
+# ── ORGANIC #706 — ai_deep_review_patches sidecar merge (fail-closed) ─────────
+# Sibling gate `phase1_doc_input_completeness_check` already merges the durable
+# `phase1/ai_deep_review_patches.json` sidecar (the home of MANDATORY AI
+# deep-review recoveries — generated_docs/L*.json is rewritten from scratch every
+# Phase-1 run, so a recovered field can ONLY survive in the sidecar). This
+# typed-field-COUNT gate read ONLY generated_docs/L*.json, so an AI-recovered,
+# doc-traceable typed field credited by the completeness gate could not satisfy a
+# count floor without hand-editing the regen-overwritten L*.json (which the
+# phase-1 skill forbids) — a latent asymmetry. We mirror the sibling's sidecar
+# channel here so EVERY count floor honours the same AI-recovery source.
+#
+# FAIL-CLOSED (§4.05 NO-LEAK): a sidecar entry is merged into a layer's primary
+# typed list ONLY when it carries the typed SHAPE the floor requires — a name-like
+# identifier AND ≥1 substantive shape key (fsm_states: transitions/actions; ports:
+# dir/width; opcodes: encoding/bits; registers: offset/bits). A bare token can
+# therefore never inflate a count floor, and a genuinely thin doc with no
+# qualifying sidecar entry still FAILs/waives exactly as before. chip-AGNOSTIC.
+_AI_PATCH_MARKER = "ai_deep_review_patch"
+
+# layer → (primary-list aliases in `data`, name-like keys, substantive shape keys)
+_SIDECAR_FLOOR_LAYERS = {
+    3: (("opcodes", "commands"),
+        ("name", "mnemonic", "opcode", "cmd"),
+        ("code", "opcode", "encoding", "bits", "value", "fields")),
+    4: (("registers", "regmap", "register_table", "register_map"),
+        ("name", "register", "reg", "field"),
+        ("offset", "address", "addr", "bits", "width", "fields", "reset")),
+    6: (("fsm_states", "states", "state_table"),
+        ("name", "state"),
+        ("transitions", "actions", "next", "on", "outputs")),
+    9: (("ports", "port_list", "top_ports"),
+        ("name", "port", "signal"),
+        ("dir", "direction", "width", "bits", "msb")),
+}
+
+
+def _is_ai_patch_entry(entry) -> bool:
+    """A sidecar entry is an AI deep-review patch iff it is a dict carrying the
+    `extraction_strategy/label/strategy == ai_deep_review_patch` marker — the
+    same marker the sibling completeness gate keys on (so the two gates honour
+    the SAME channel, never a looser one)."""
+    if not isinstance(entry, dict):
+        return False
+    return any(entry.get(k) == _AI_PATCH_MARKER
+               for k in ("extraction_strategy", "label", "strategy"))
+
+
+def _typed_patch_ok(entry: dict, name_keys, shape_keys) -> bool:
+    """FAIL-CLOSED typed-shape gate: the entry must carry a non-empty name-like
+    identifier AND at least one non-empty substantive shape key, so a bare
+    `{"name": "x"}` token (or a marker-only stub) can never satisfy a count
+    floor."""
+    has_name = any(isinstance(entry.get(k), str) and entry.get(k).strip()
+                   for k in name_keys)
+    has_shape = any(entry.get(k) not in (None, "", [], {})
+                    for k in shape_keys)
+    return has_name and has_shape
+
+
+def _load_field_count_sidecar(project: "Path") -> dict:
+    """Return {layer_number: [typed_patch_dict, ...]} from
+    `phase1/ai_deep_review_patches.json` — mirrors
+    phase1_doc_input_completeness_check._load_ai_patches_sidecar (same resolver,
+    same `patches` schema). Only AI-patch-marked entries are returned; the
+    per-layer typed-shape filter is applied at merge time. Any read/parse error
+    → {} (the sidecar is purely additive; its absence never changes a verdict)."""
+    try:
+        side = _pl.phase1_ai_deep_review_patches_file(project)
+    except Exception:
+        return {}
+    if not side.is_file():
+        return {}
+    try:
+        data = json.loads(side.read_text(errors="replace"))
+    except Exception:
+        return {}
+    patches = data.get("patches") if isinstance(data, dict) else None
+    if not isinstance(patches, dict):
+        return {}
+    out: dict = {}
+    for layer_key, lst in patches.items():
+        if not isinstance(lst, list):
+            continue
+        layer_no = _detect_l_layer(str(layer_key))
+        if layer_no is None:
+            continue
+        entries = [e for e in lst if _is_ai_patch_entry(e)]
+        if entries:
+            out.setdefault(layer_no, []).extend(entries)
+    return out
+
+
+def _merge_sidecar_for_layer(layer: int, data: dict,
+                             sidecar: dict) -> None:
+    """Append the layer's typed-shape-valid sidecar patches into the SAME
+    primary-list alias `_check_l_doc` reads (the first NON-EMPTY alias, matching
+    its `data.get(a) or data.get(b)` short-circuit; canonical alias when none is
+    populated). Mutates `data` in place. No-op for layers without a count floor,
+    or when no qualifying sidecar entry exists (preserving the verdict)."""
+    spec = _SIDECAR_FLOOR_LAYERS.get(layer)
+    if spec is None or not isinstance(data, dict):
+        return
+    aliases, name_keys, shape_keys = spec
+    entries = sidecar.get(layer) or []
+    valid = [e for e in entries if _typed_patch_ok(e, name_keys, shape_keys)]
+    if not valid:
+        return
+    # Match _check_l_doc's `or`-chain: it reads the first NON-EMPTY alias list.
+    target = None
+    for a in aliases:
+        v = data.get(a)
+        if isinstance(v, list) and v:
+            target = a
+            break
+    if target is None:
+        target = aliases[0]
+        data[target] = []
+    if isinstance(data.get(target), list):
+        data[target].extend(valid)
+
+
 def _is_blob_field(name: str) -> bool:
     if not isinstance(name, str):
         return False
@@ -1258,6 +1379,10 @@ def main(argv=None) -> int:
     user_escapes = _facts_yaml_escape_flags(project)
     escapes = {**auto_escapes, **{k: v for k, v in user_escapes.items() if v}}
 
+    # ORGANIC #706 — load the AI deep-review patches sidecar ONCE (mirrors the
+    # sibling completeness gate). Merged per-layer (fail-closed) before counting.
+    sidecar = _load_field_count_sidecar(project)
+
     fails: list[str] = []
     passed: list[str] = []
     for lp in l_files:
@@ -1269,6 +1394,9 @@ def main(argv=None) -> int:
         except Exception as e:
             fails.append(f"{lp.name}: parse error: {e}")
             continue
+        # ORGANIC #706 — credit AI-deep-review-recovered, doc-traceable typed
+        # fields (sidecar) toward this layer's count floor, fail-closed.
+        _merge_sidecar_for_layer(layer, data, sidecar)
         ok, reason = _check_l_doc(layer, data,
                                   escapes=escapes, ic_class=ic_class)
         if ok:
