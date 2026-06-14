@@ -398,6 +398,39 @@ def _class_sparse_control_timing(ic_class: str) -> bool:
     return ic_class in _DATAPATH_COMPUTE_CLASSES
 
 
+def _class_sparse_analog_blocks(ic_class: str) -> bool:
+    """ORGANIC #634 — True iff the registry marks this class as having a
+    SPARSE analog-block set: a data-converter / mixed-signal class whose
+    legitimate analog content is a small, fixed set of blocks (e.g. a
+    delta-sigma ADC = modulator + on-chip regulator/reference), fewer than the
+    ≥3-block default the L5 floor was tuned for (a multi-rail PMIC / analog
+    front-end with several distinct blocks). These get the relaxed L5 (≥2
+    typed analog blocks) floor instead of the strict ≥3 — a REAL floor, not a
+    skip: an empty / 0-block / 1-block analog doc still FAILs, so an empty or
+    under-populated doc can never pass.
+
+    Registry-driven (a dedicated `sparse_analog_block_set` SEMANTIC flag),
+    NOT keyed on `_class_no_cmd_protocol` or on `analog_applicable` — a
+    multi-block analog system (PMIC / SerDes AFE) is also analog_applicable
+    yet must KEEP the strict ≥3 floor, so neither of those flags can drive
+    this relaxation. bare_fpga / unknown_protocol_class stay fail-closed.
+    Chip-AGNOSTIC: a registry semantic flag + numeric floor, no chip-name
+    literal."""
+    if ic_class in _NO_PROTOCOL_FAIL_CLOSED:
+        return False
+    try:
+        reg = json.loads(
+            (Path(__file__).resolve().parent / "ic_class_registry.json")
+            .read_text())
+        for e in reg.get("classes", []):
+            if (e.get("name") == ic_class
+                    or ic_class in (e.get("synonyms") or [])):
+                return e.get("sparse_analog_block_set") is True
+    except (OSError, ValueError):
+        pass
+    return False
+
+
 def _check_l_doc(layer: int, data: dict,
                  escapes: dict[str, bool] | None = None,
                  ic_class: str = "unknown") -> tuple[bool, str]:
@@ -595,9 +628,21 @@ def _check_l_doc(layer: int, data: dict,
         blocks = (data.get("analog_blocks") or data.get("blocks")
                   or data.get("adi_blocks"))
         n_blocks = _list_len_of_dicts(blocks)
-        if n_blocks < 3:
+        # ORGANIC #634 — IC-class-aware analog-block floor. The ≥3 default is
+        # tuned for a multi-block analog SYSTEM (multi-rail PMIC / analog front-
+        # end). A data-converter / mixed-signal class (delta-sigma / SAR /
+        # pipeline ADC, DAC) legitimately carries a SMALL fixed block set — a
+        # modulator + on-chip regulator/reference = 2 typed blocks — and would
+        # otherwise FAIL with `no_analog` (which is FALSE — it IS analog) as the
+        # only escape. Relax to ≥2 for classes the registry flags
+        # `sparse_analog_block_set`. NOT a skip: a REAL floor — an empty /
+        # 0-block / 1-block doc still FAILs, so an under-populated doc can never
+        # ride this into a pass. Registry-driven semantic flag (chip-AGNOSTIC);
+        # a multi-block analog system is NOT flagged and keeps the strict ≥3.
+        l5_min = 2 if _class_sparse_analog_blocks(ic_class) else 3
+        if n_blocks < l5_min:
             return False, (
-                f"L5 adi_spec must carry ≥3 typed analog blocks (or "
+                f"L5 adi_spec must carry ≥{l5_min} typed analog blocks (or "
                 f"set `no_analog: true`); have {n_blocks}.")
     elif layer == 6:
         # v0.1.83 — IC-class-aware FSM floor. The ≥5 default is tuned for
