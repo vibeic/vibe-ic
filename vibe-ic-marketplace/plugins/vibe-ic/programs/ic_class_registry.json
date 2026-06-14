@@ -159,6 +159,7 @@
     },
     {
       "name": "bus_interconnect_protocol",
+      "minimal_honest_absence_ok": true,
       "description": "v0.1.62 — for AMBA AXI/AHB/APB/ACE, Wishbone, TileLink, CHI, OCP, AvalonMM, STBus, and any other multi-channel master/slave bus-interconnect protocol SPEC document. Distinguished by valid/ready (or req/ack) handshake on per-direction channels with burst transfers and explicit master/slave (or manager/subordinate) roles. NO SW-visible opcode/command protocol — payload is data, not instructions; protocol behaviour is in channel-handshake rules. L4 (regmap), L5 (analog), L6 (FSM), L10 (test cases), L11 (OTP), L12 (calibration), L13 (lab) legitimately N/A — the spec defines wire-level protocol, not an end IC. L14-L18 (versioning, encoding tables, compliance rules, channel catalog, interconnect rules) are the SUBSTANTIVE content. Phase 2 runner dispatches via fallback_skill=spec-to-rtl when ingesting a spec for a protocol IP (e.g. an AXI master adapter); for the spec document itself, Phase 2 is N/A.",
       "synonyms": [
         "bus_protocol",
@@ -248,7 +249,8 @@
     },
     {
       "name": "bus_peripheral",
-      "description": "ORGANIC #542 — Register-mapped peripheral IP: SW-visible register map (hjson/regmap or equivalent) exposed via a bus subordinate interface (TL-UL, APB, AXI-Lite, Wishbone, AHB). No ISA / instruction-fetch semantics. L4 register map is the primary specification layer. Distinguished from bus_interconnect_protocol (wire-level protocol spec) and processor_cpu (instruction-executing). crypto_accelerator takes priority when crypto algorithm features are present.",
+      "minimal_honest_absence_ok": true,
+      "description": "ORGANIC #542 — Register-mapped peripheral IP: SW-visible register map (hjson/regmap or equivalent) exposed via a bus subordinate interface (TL-UL, APB, AXI-Lite, Wishbone, AHB). No ISA / instruction-fetch semantics. L4 register map is the primary specification layer. Distinguished from bus_interconnect_protocol (wire-level protocol spec) and processor_cpu (instruction-executing). crypto_accelerator takes priority when crypto algorithm features are present. ORGANIC #677 — a MINIMAL instance (e.g. a Wishbone-mapped counter with no regmap / no test scenarios / no test cases) may honestly declare the absence via no_register_map_in_input / no_test_scenarios_in_input / no_test_cases_in_input == true; minimal_honest_absence_ok lets l_doc_structured_field_count_check waive the L4/L7/L10 typed-field floors for that honest minimal doc (NARROWER than command_protocol_applicable so a reused-IP processor_cpu still obeys its #641 populated-bring-up doctrine).",
       "synonyms": [
         "register_peripheral",
         "mmio_peripheral",
