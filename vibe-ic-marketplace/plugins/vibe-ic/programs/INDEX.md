@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 674
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 674)
+- **Total programs (excluding helpers / shims):** 675
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 675)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 665 |
+| `any` | 666 |
 
 ## Alphabetical listing
 
@@ -127,6 +127,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `canopen_protocol_synth` | any | — | CANopen (CiA 301) protocol synth helper (protocol #70). |
 | `caravel_integration_runner` | any | v0.1.51 | Caravel chipignite integration runner (B2 from spm pilot). |
 | `caravel_wrapper_emit` | any | v0.1.51 | Caravel user_project_wrapper emitter (B3 from spm pilot). |
+| `catalog_glue_closure_resolver` | any | — | REUSED-IP / catalog-glue staging |
 | `cdc_async_input_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
 | `cdc_crossing_check` | any | — | cdc_crossing_check.py -- Deterministic CDC report checker. |
 | `changelog_command_reproducibility_check` | any | — | anti-fabrication gate |
@@ -746,7 +747,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (665 programs)
+### `any` (666 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -848,6 +849,7 @@ _(no programs in this group)_
 - `canopen_protocol_synth` — CANopen (CiA 301) protocol synth helper (protocol #70).
 - `caravel_integration_runner` — Caravel chipignite integration runner (B2 from spm pilot).  _[v0.1.51]_
 - `caravel_wrapper_emit` — Caravel user_project_wrapper emitter (B3 from spm pilot).  _[v0.1.51]_
+- `catalog_glue_closure_resolver` — REUSED-IP / catalog-glue staging
 - `cdc_async_input_check` — deterministic compliance check derived from <chip-class> v040 debug.
 - `cdc_crossing_check` — cdc_crossing_check.py -- Deterministic CDC report checker.
 - `changelog_command_reproducibility_check` — anti-fabrication gate

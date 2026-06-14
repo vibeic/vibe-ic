@@ -305,6 +305,33 @@ def extract_l9_ports(l9: dict) -> list[dict]:
 
 
 # ─── RTL top extraction ────────────────────────────────────────────
+def l9_top_module_name(l9: dict) -> Optional[str]:
+    """ORGANIC-20260614 — return the L9-declared top-module NAME (not the
+    file). This is the same name `find_rtl_top` greps with when it does
+    its content-scan fallback; threading it into the port parser lets the
+    parser anchor on the correct module header even when the resolved top
+    is NOT the first `module` declared in a multi-module bundle file.
+
+    Mirrors `find_rtl_top`'s precedence for the name-bearing fields
+    (schema-v2 canonical first, then legacy dtop_* keys). Returns None
+    when L9 carries no explicit top-module name — in that case the parser
+    falls back to the historical first-module behaviour, which is correct
+    for the single-module-per-file / name-guess cases. Chip-AGNOSTIC:
+    pure schema-key read, no chip/vendor literal."""
+    top_v2 = l9.get("top_module") or l9.get("top") or l9.get("dtop")
+    if isinstance(top_v2, str) and top_v2.strip():
+        return top_v2.strip()
+    dtop = l9.get("dtop_top_level", {})
+    if isinstance(dtop, dict):
+        m = dtop.get("module_name")
+        if isinstance(m, str) and m.strip():
+            return m.strip()
+    m = l9.get("dtop_module_name")
+    if isinstance(m, str) and m.strip():
+        return m.strip()
+    return None
+
+
 def find_rtl_top(project: Path, l9: dict) -> Optional[Path]:
     rtl = _pl.rtl_dir(project)
     if not rtl.is_dir():
@@ -424,11 +451,23 @@ def _strip_param_block(src: str) -> str:
     return "".join(out)
 
 
-def parse_rtl_top_ports(rtl_path: Path) -> list[dict]:
+def parse_rtl_top_ports(rtl_path: Path,
+                        top_name: Optional[str] = None) -> list[dict]:
     """Parse `module <name>(...);` and emit [{name, direction}].
 
     Supports the SystemVerilog `module foo import pkg::*;
     (input wire clk, output id_tx_en, inout id_bus, ...)` shape.
+
+    ORGANIC-20260614 — when `top_name` is supplied (the L9-declared top
+    that `find_rtl_top` already resolved the FILE by), the port-list regex
+    is ANCHORED to that specific module header
+    (`module <re.escape(top_name)>\\b ... ( ... );`) so a multi-module
+    bundle file whose top is NOT declared first is parsed at the CORRECT
+    module — not the first `module` in the file. When `top_name` is None,
+    or the named module is absent from the file, the parser falls back to
+    the historical first-module match (preserving behaviour for
+    single-module files and name-mismatch edge cases). Chip-AGNOSTIC: the
+    anchor is the resolved-top string itself, never a chip/vendor literal.
     """
     text = _strip_comments(rtl_path.read_text(errors="ignore"))
     # Strip the optional `#( ... )` parameter block with a balanced-paren
@@ -436,13 +475,30 @@ def parse_rtl_top_ports(rtl_path: Path) -> list[dict]:
     # like `$clog2(memsize)` (and nested calls) can't truncate the match
     # at an inner `)` and yield zero ports (#474).
     text = _strip_param_block(text)
-    m = re.search(
-        r"module\s+\w+\s*"
-        r"(?:import\s+[\w:\*\s,]+;\s*)*"  # SV imports
-        r"\(([^;]+?)\)\s*;",
-        text,
-        flags=re.DOTALL,
-    )
+    m = None
+    if isinstance(top_name, str) and top_name.strip():
+        # Anchor on the resolved top module header. `\b` after the escaped
+        # name prevents `mytop` from matching `mytop_wrapper`. The optional
+        # SV import clause(s) between the header and the port-list paren are
+        # tolerated exactly as in the generic pattern below.
+        m = re.search(
+            r"module\s+" + re.escape(top_name.strip()) + r"\b\s*"
+            r"(?:import\s+[\w:\*\s,]+;\s*)*"  # SV imports
+            r"\(([^;]+?)\)\s*;",
+            text,
+            flags=re.DOTALL,
+        )
+    if m is None:
+        # Fallback: first `module <name>(...)` in the file (historical
+        # behaviour, correct for single-module files and when the named
+        # top is absent / mis-spelled).
+        m = re.search(
+            r"module\s+\w+\s*"
+            r"(?:import\s+[\w:\*\s,]+;\s*)*"  # SV imports
+            r"\(([^;]+?)\)\s*;",
+            text,
+            flags=re.DOTALL,
+        )
     if not m:
         return []
     body = m.group(1)
@@ -522,7 +578,17 @@ def main(argv: list[str]) -> int:
         )
         return 0
 
-    rtl_ports = parse_rtl_top_ports(rtl_top)
+    # ORGANIC-20260614 — thread the L9-declared top-module name into the
+    # parser so the port-list regex anchors on the CORRECT module header
+    # even when the resolved top is not the first `module` in a multi-
+    # module bundle file. Precedence: the explicit L9 name field; else the
+    # resolved file's stem (the candidate-filename / chip_top / <ic_name>
+    # resolution paths name the file after the module, so the stem is the
+    # module name there). The parser falls back to the first module if the
+    # named module turns out to be absent. Chip-AGNOSTIC: the anchor is the
+    # resolved-top string, never a chip/vendor literal.
+    top_name = l9_top_module_name(l9) or rtl_top.stem
+    rtl_ports = parse_rtl_top_ports(rtl_top, top_name)
     if not rtl_ports:
         print(
             f"FAIL — RTL top {rtl_top.name} parsed zero ports — "
