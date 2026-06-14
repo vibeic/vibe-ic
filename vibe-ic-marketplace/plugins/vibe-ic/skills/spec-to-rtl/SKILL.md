@@ -115,6 +115,35 @@ When `phase2_one_shot_runner.step_rtl_gen` WAIVES with the message:
    any finding exit 1 once you've confirmed the named signals really are ports.
    FIX every confirmed finding before emit — these are deterministic
    elaboration/bind failures the scorer would hit, not authoring judgment.
+6c. **Spec-first coverage attribution pre-emit gate (ORGANIC #697)**. The
+   hidden scorer is built from the SAME spec you read — where "spec" is the
+   WHOLE input chain (prompt → fact graph → the L1-L23 the runner just emitted).
+   So your self-TB must cover every spec-derived requirement, or the hidden TB
+   will catch a bug yours never exercised. Run the deterministic gate — it reads
+   ONLY the chain + your RTL + your TB (BLIND; never the oracle):
+
+   ```bash
+   python3 plugins/vibe-ic/programs/spec_coverage_check.py \
+       --prompt <prompt.txt> --ldocs <project>/generated_docs/ \
+       [--fact-graph <fact_graph.json>] \
+       --rtl <project>/phase2/stage1/rtl/<module_name>.v \
+       --tb  <your_functional_tb.sv> --strict
+   ```
+
+   It extracts a DETERMINISTIC checklist (ports/widths/directions, reset
+   value+polarity+sync/async, stated latency, every table row, every worked
+   example, **every ENUMERATED SET + its outside-the-set/default boundary** —
+   the most-missed #697 pattern — signed-ness, byte order, overflow, handshake)
+   from EVERY chain station and reports any item your TB leaves UNCOVERED
+   (`--strict` BLOCKs on a coverage gap). FIX the gap by adding the missing
+   directed stimulus/assertion (especially an OUTSIDE-the-set value for any
+   enumerated set). On a downstream FAIL, re-run with `--failure "<behavior>"`:
+   a `coverage-gap` ⇒ enhance your TB; an `extraction-gap` ⇒ the program names
+   the `route_to:` station (pm-agent / ic-expert-agent / spec-to-rtl) that
+   dropped the requirement (community-backlog it); only a cited `spec-absent` is
+   a genuine floor. The structural extraction + routing is deterministic;
+   deciding whether a prose sentence is a distinct *testable* requirement (so
+   you can author its stimulus) is your LLM judgment.
 7. **Tell the orchestrator you're done**. The caller will re-invoke
    `vibe_ic_one_shot_runner.py` so the runner detects the RTL at the
    expected path, skips `step_rtl_gen`, and continues with: chip_top
