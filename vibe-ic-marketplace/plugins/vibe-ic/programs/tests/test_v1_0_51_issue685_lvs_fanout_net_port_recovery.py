@@ -139,8 +139,11 @@ _REPRO = Path("/home/reyerchu/AI_IC_design/_bench7_caravel_v1034_cleanroom"
               "/caravel_r6")
 
 
-@pytest.mark.skipif(not (_REPRO / "phase3/stage3/pnr/filled.def").is_file(),
-                    reason="caravel_r6 repro artifacts not present")
+@pytest.mark.skipif(
+    not ((_REPRO / "phase3/stage3/pnr/filled.def").is_file()
+         and (_REPRO / "phase3/stage3/extracted/"
+              "user_project_wrapper_extracted.sp").is_file()),
+    reason="caravel_r6 repro artifacts not present")
 def test_caravel_repro_recovers_16_la_data_out():
     def_text = (_REPRO / "phase3/stage3/pnr/filled.def").read_text(
         errors="replace")
