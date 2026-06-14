@@ -188,6 +188,17 @@ def _module_header(text: str, module: str
         return None
 
     i = _skip_ws(i)
+    # ORGANIC #637 — consume any `import pkg::*;` clauses between
+    # `module <name>` and the `#(...)`/`(...)` regions (the standard SV
+    # ordering `module X import a_pkg::*; #(params) (ports);`). Without this
+    # the `#`/`(` test below finds `import` and returns None, so the port
+    # parser / clock-reset alias emitter see zero ports on any package-
+    # importing top (REUSED-IP / IP-integration-wrapper class). Repeatable.
+    while True:
+        im = re.match(r"import\s+[\w:\*\s,]+;", text[i:])
+        if not im:
+            break
+        i = _skip_ws(i + im.end())
     param_block: Optional[str] = None
     if i < n and text[i] == "#":
         i = _skip_ws(i + 1)
