@@ -263,6 +263,98 @@ _L4_GLOBS = (
     "**/L4_REGMAP.json",
 )
 
+_L1_GLOBS = (
+    "phase1/generated_docs/L1_DATASHEET.json",
+    "phase1/generated_docs/L1*.json",
+    "**/L1_DATASHEET.json",
+)
+
+_L9_GLOBS = (
+    "phase1/generated_docs/L9_INTEGRATION_SPEC.json",
+    "phase1/generated_docs/L9*.json",
+    "**/L9_INTEGRATION_SPEC.json",
+)
+
+# ───────────────────────────────────────────────────────────────────────────
+# ORGANIC #633 — external-reference-pin discriminator for the bandgap class.
+#
+# The bandgap keyword class matches `VREF`/`VBG`/`voltage reference`. For a
+# data-converter / mixed-signal IC whose reference is supplied EXTERNALLY (the
+# modulator reference comes in off-chip on VREF/VHI/VLO pins) there is NO
+# on-chip bandgap/reference BLOCK to spec, so demanding an L5.analog_blocks[]
+# entry false-FAILs the entire class of externally-referenced analog ICs. The
+# extractor already discriminates block-vs-prose (ORGANIC #466 R3
+# spurious_analog_blocks); this gate must likewise honor reference-PIN-vs-
+# bandgap-BLOCK. chip-AGNOSTIC: pure pin-declaration + on-chip-descriptor
+# structure, no chip/vendor/SKU literal.
+#
+# An ON-CHIP bandgap signal (explicit `bandgap` / `BG_ref` / `on-chip
+# reference` / `voltage reference circuit|block|generator`) STILL requires an
+# L5 entry — the suppression fires ONLY when every bandgap-class hit is a bare
+# external-reference-pin mention.
+_ONCHIP_BANDGAP_RE = re.compile(
+    r"bandgap|band[\s.\-]?gap|\bBG[\s_]?ref\b|on[\s\-]?chip\s+(?:voltage\s+)?"
+    r"reference|(?:voltage\s+)?reference\s+(?:generator|circuit|block|core|"
+    r"cell)|reference\s+generator",
+    re.IGNORECASE)
+# Short reference-PIN tokens (an externally-supplied reference rail).
+_REF_PIN_TOKEN_RE = re.compile(
+    r"\bV(?:REF|BG|HI|LO|RH|RL|REFP|REFN|REFH|REFL|CM)\b", re.IGNORECASE)
+# Explicit external-reference-pin context on the hit line itself.
+_EXTERNAL_REF_CONTEXT_RE = re.compile(
+    r"reference\s+pins?|external(?:ly)?[\s-]*(?:supplied|provided|driven)?"
+    r"[\s\w]*reference|reference\s*\([^)]*[-−][^)]*\)|off[\s-]?chip\s+reference"
+    r"|supplied\s+off[\s-]?chip",
+    re.IGNORECASE)
+
+
+def _external_ref_pin_names(project: Path) -> set:
+    """Uppercase names declared as TOP/EXTERNAL pins in L1.pin_table and
+    L9.top_ports/ports — the design's own statement that a token is an
+    externally-supplied pin, not an internal block."""
+    names: set = set()
+    p1 = _find_first(project, _L1_GLOBS)
+    if p1 is not None:
+        try:
+            d = json.loads(p1.read_text())
+            for row in (d.get("pin_table") or d.get("pins") or []):
+                nm = row.get("name") if isinstance(row, dict) else row
+                if isinstance(nm, str):
+                    names.add(nm.strip().upper())
+        except Exception:
+            pass
+    p9 = _find_first(project, _L9_GLOBS)
+    if p9 is not None:
+        try:
+            d = json.loads(p9.read_text())
+            for row in (d.get("top_ports") or d.get("ports") or []):
+                nm = row.get("name") if isinstance(row, dict) else row
+                if isinstance(nm, str):
+                    names.add(nm.strip().upper())
+        except Exception:
+            pass
+    return names
+
+
+def _bandgap_external_only(project: Path, hit_lines: List[str]) -> bool:
+    """ORGANIC #633 — True iff EVERY bandgap-class hit is a bare external-
+    reference-pin mention (no on-chip bandgap descriptor), AND the reference is
+    positively externally supplied (a reference token declared as an external
+    pin in L1/L9, OR an explicit external-reference-pin context on a hit line).
+    Fail-closed: a bare ambiguous `VREF` with NO external evidence keeps the
+    requirement (returns False)."""
+    # Any on-chip bandgap descriptor → NOT external-only (keep the L5 demand).
+    if any(_ONCHIP_BANDGAP_RE.search(ln) for ln in hit_lines):
+        return False
+    ext_pins = _external_ref_pin_names(project)
+    for ln in hit_lines:
+        if _EXTERNAL_REF_CONTEXT_RE.search(ln):
+            return True
+        for tm in _REF_PIN_TOKEN_RE.finditer(ln):
+            if tm.group(0).strip().upper() in ext_pins:
+                return True
+    return False
+
 
 def _waiver_count(project: Path) -> int:
     """Count valid waiver entries (>=40 chars).
@@ -432,8 +524,22 @@ def main() -> int:
         # Generic: at least one L5 entry must match the class pattern.
         if any(_block_matches(b, pat) for b in l5_blocks):
             matched.append((cid, n_hits, _KEYWORD_CLASSES[cid][1]))
-        else:
-            missing.append((cid, n_hits, _KEYWORD_CLASSES[cid][1]))
+            continue
+        # ORGANIC #633 — bandgap/reference class: an EXTERNAL reference
+        # (VREF/VHI/VLO supplied off-chip) is not an on-chip bandgap BLOCK and
+        # needs no L5 entry. Suppress the requirement ONLY when every bandgap-
+        # class hit is a bare external-reference-pin mention (no on-chip
+        # descriptor) AND the reference is positively externally supplied. A
+        # genuine on-chip bandgap keyword still demands an L5 entry (no-leak).
+        if cid == "bandgap" and _bandgap_external_only(
+                project, [t for (_f, _ln, t) in hits[cid]]):
+            matched.append((
+                cid, n_hits,
+                _KEYWORD_CLASSES[cid][1] +
+                " [external reference pins only — no on-chip bandgap block "
+                "required (#633)]"))
+            continue
+        missing.append((cid, n_hits, _KEYWORD_CLASSES[cid][1]))
 
     waiver_n = _waiver_count(project)
     detected_flag = _l5_blocks_detected_flag(project)
