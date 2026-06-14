@@ -147,7 +147,125 @@ def _strip_comments(text: str) -> str:
     return text
 
 
-def _module_header(text: str, module: str
+# ORGANIC #671 — preprocessor-directive tokens for the port-surface parser.
+_PP_DIRECTIVE_RE = re.compile(
+    r"^[ \t]*`(ifdef|ifndef|elsif|else|endif|define)\b[ \t]*(\w+)?",
+    re.MULTILINE)
+
+
+def _collect_inline_defines(text: str, base: "Optional[set]" = None) -> set:
+    """ORGANIC #671 — the set of macros UNCONDITIONALLY `define-d in `text`
+    (those sitting at preprocessor depth 0 — not nested inside an un-taken
+    `ifdef arm). Mirrors the way an in-file `` `define X `` that itself sits
+    under a gate only becomes visible when that gate is taken. Seeded by the
+    compile-time `base` define-set (the -D flags the sv2v / compile uses)."""
+    active: set = set(base or set())
+    # Walk the directive stream tracking a take/skip stack so a `define inside
+    # an un-taken arm does not leak into the active set.
+    take_stack: List[bool] = []  # one bool per open `ifdef/`ifndef/`else region
+
+    def _all_taken() -> bool:
+        return all(take_stack)
+
+    for m in _PP_DIRECTIVE_RE.finditer(text):
+        kind, name = m.group(1), m.group(2)
+        if kind == "define":
+            if name and _all_taken():
+                active.add(name)
+        elif kind == "ifdef":
+            take_stack.append(_all_taken() and (name in active))
+        elif kind == "ifndef":
+            take_stack.append(_all_taken() and (name not in active))
+        elif kind == "elsif":
+            if take_stack:
+                # flip: this arm is taken iff no earlier arm in the chain was,
+                # the enclosing context is taken, and the macro is defined.
+                outer = all(take_stack[:-1]) if len(take_stack) > 1 else True
+                take_stack[-1] = outer and (not take_stack[-1]) \
+                    and (name in active)
+        elif kind == "else":
+            if take_stack:
+                outer = all(take_stack[:-1]) if len(take_stack) > 1 else True
+                take_stack[-1] = outer and (not take_stack[-1])
+        elif kind == "endif":
+            if take_stack:
+                take_stack.pop()
+    return active
+
+
+def _resolve_preprocessor_arms(text: str,
+                               defines: "Optional[set]" = None) -> str:
+    """ORGANIC #671 — blank out the bodies of NOT-TAKEN `ifdef/`ifndef/`elsif/
+    `else arms under the compile-time define-set `defines`, so a downstream
+    port-list scan never binds a conditionally-compiled port (e.g. a formal /
+    debug interface gated by a define the sv2v/compile set does NOT pass).
+
+    The historical caller passed no define-set, taking EVERY arm — which over-
+    counts ports inside never-compiled `ifdef arms and makes the generated TB
+    bind pins the DUT does not expose. With `defines` = the SAME define-set the
+    in-runner sv2v DUT conversion uses (e.g. {SIMULATION} or {SYNTHESIS}), an
+    arm whose gating macro is absent is removed before the port regex runs, so
+    the TB↔DUT port surfaces match. Newlines are preserved (bodies blanked, not
+    deleted) so byte offsets and line structure are stable.
+
+    chip-AGNOSTIC: pure `ifdef/`define grammar + the abstract compile define-set
+    — no chip / vendor / macro-name literal."""
+    if "`if" not in text:
+        return text  # no conditional compilation — nothing to resolve
+    active = _collect_inline_defines(text, defines)
+    out: List[str] = []
+    # take_stack[i] = is region i currently taken (under the enclosing context)
+    take_stack: List[bool] = []
+    seen_taken: List[bool] = []  # has ANY arm of this if-chain been taken yet
+
+    def _ctx_taken() -> bool:
+        return all(take_stack) if take_stack else True
+
+    for line in text.splitlines(keepends=True):
+        m = _PP_DIRECTIVE_RE.match(line)
+        kind = m.group(1) if m else None
+        name = m.group(2) if m else None
+        if kind in ("ifdef", "ifndef"):
+            outer = _ctx_taken()
+            taken = outer and (
+                (name in active) if kind == "ifdef" else (name not in active))
+            take_stack.append(taken)
+            seen_taken.append(taken)
+            out.append(line)  # keep the directive line itself
+            continue
+        if kind == "elsif":
+            if take_stack:
+                outer = all(take_stack[:-1]) if len(take_stack) > 1 else True
+                taken = outer and (not seen_taken[-1]) and (name in active)
+                take_stack[-1] = taken
+                seen_taken[-1] = seen_taken[-1] or taken
+            out.append(line)
+            continue
+        if kind == "else":
+            if take_stack:
+                outer = all(take_stack[:-1]) if len(take_stack) > 1 else True
+                taken = outer and (not seen_taken[-1])
+                take_stack[-1] = taken
+                seen_taken[-1] = seen_taken[-1] or taken
+            out.append(line)
+            continue
+        if kind == "endif":
+            if take_stack:
+                take_stack.pop()
+                seen_taken.pop()
+            out.append(line)
+            continue
+        # ordinary body line: keep only when the enclosing context is taken;
+        # else blank it (preserve the trailing newline so line structure holds).
+        if _ctx_taken():
+            out.append(line)
+        else:
+            out.append("\n" if line.endswith("\n") else "")
+    return "".join(out)
+
+
+def _module_header(text: str, module: str,
+                   defines: "Optional[set]" = None
                    ) -> Optional[Tuple[Optional[str], str, List[str]]]:
     """Return (param_block, port_block, import_clauses) for
     `module <module> [import pkg::*;]* [#(...)] (...)`, SKIPPING/capturing an
@@ -161,8 +279,17 @@ def _module_header(text: str, module: str
     `import pkg::*;` text the regex loop consumes, so the wrapper emitter can
     RE-EMIT them in the wrapper header — without it the wrapper references
     package-scoped port-width params (e.g. a bus-pkg width localparam) with no
-    import in scope → a deterministic SV `use of undeclared identifier` error."""
+    import in scope → a deterministic SV `use of undeclared identifier` error.
+
+    ORGANIC #671 — when `defines` (the compile-time -D set the sv2v/iverilog
+    DUT conversion uses) is supplied, NOT-TAKEN `ifdef/`ifndef/`elsif/`else
+    arms are blanked BEFORE the port list is extracted, so a conditionally-
+    compiled port (e.g. a formal/debug interface gated by a macro absent from
+    the compile set) is never returned as a DUT port. `defines=None` preserves
+    the historical take-every-arm behaviour exactly (no regression)."""
     text = _strip_comments(text)
+    if defines is not None:
+        text = _resolve_preprocessor_arms(text, defines)
     m = re.search(rf"\bmodule\s+{re.escape(module)}\b", text)
     if not m:
         return None
@@ -229,8 +356,9 @@ def _module_header(text: str, module: str
     return None
 
 
-def _module_portlist_block(text: str, module: str) -> Optional[str]:
-    hdr = _module_header(text, module)
+def _module_portlist_block(text: str, module: str,
+                           defines: "Optional[set]" = None) -> Optional[str]:
+    hdr = _module_header(text, module, defines)
     return None if hdr is None else hdr[1]
 
 
@@ -258,9 +386,18 @@ def parse_module_imports(rtl_text: str, module: str) -> List[str]:
     return list(hdr[2])
 
 
-def parse_module_ports(rtl_text: str, module: str
+def parse_module_ports(rtl_text: str, module: str,
+                       defines: "Optional[set]" = None
                        ) -> List[Tuple[str, str, str]]:
-    block = _module_portlist_block(rtl_text, module)
+    """Parse `module <module>`'s ANSI port list as [(dir, name, width), ...].
+
+    ORGANIC #671 — `defines` is the compile-time -D set the in-runner sv2v /
+    iverilog DUT conversion uses (e.g. {"SIMULATION"} or {"SYNTHESIS"}). When
+    supplied, a port inside an `ifdef <MACRO> arm whose MACRO is NOT in that set
+    is NOT returned (it is not a real DUT port under that conversion). When
+    `defines=None` (the legacy default) every arm is parsed exactly as before —
+    no regression on callers that don't pass a define-set."""
+    block = _module_portlist_block(rtl_text, module, defines)
     if block is None:
         return []
     return [(pm.group(1), (pm.group(2) or "").strip(), pm.group(3))

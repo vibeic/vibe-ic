@@ -1793,8 +1793,38 @@ def _finalize_full_stack_results(per_vector: List[Dict[str, Any]],
     return results
 
 
+def _v671_tb_compile_defines(project: Path) -> set:
+    """ORGANIC #671 — the macro define-set the in-runner full-stack-TB / DUT
+    conversion compiles under, so the RTL-top port parser EXCLUDES ports gated
+    by a macro this set does not pass.
+
+    Mirrors `decide_sv2v_tb_define` exactly (the same SIMULATION/SYNTHESIS pick
+    the sv2v pre-pass uses): the base is SIMULATION, flipped to SYNTHESIS ONLY
+    when the simulation arm leaves an include-closure hole the synthesis arm
+    resolves. A formal/debug/coverage define (e.g. RISCV_FORMAL) is in NEITHER
+    set, so a port inside such an `ifdef is excluded under whichever arm wins —
+    matching what the DUT actually exposes. chip-AGNOSTIC: pure SIMULATION/
+    SYNTHESIS grammar; no chip/vendor/macro literal."""
+    rtl_dir = _pl.rtl_dir(project)
+    if not rtl_dir.is_dir():
+        return {"SIMULATION"}
+    files_text: Dict[str, str] = {}
+    for ext in (".v", ".sv", ".svh", ".vh"):
+        for f in sorted(rtl_dir.rglob(f"*{ext}")):
+            try:
+                files_text[str(f)] = f.read_text(errors="replace")
+            except OSError:
+                continue
+    try:
+        define, _reason = _sf.decide_sv2v_tb_define(files_text)
+    except Exception:  # pragma: no cover — defensive
+        define = "SIMULATION"
+    return {define}
+
+
 def _v629_rtl_top_ports(project: Path,
-                        top_module: str) -> List[Tuple[str, str]]:
+                        top_module: str,
+                        defines: Optional[set] = None) -> List[Tuple[str, str]]:
     """ORGANIC #629 — the authoritative DUT port surface, parsed from the
     synthesizable RTL top, as [(direction, name), ...].
 
@@ -1805,7 +1835,16 @@ def _v629_rtl_top_ports(project: Path,
     returned as a port. Returns [] when the top is not found or is non-ANSI
     (bare-name port list, no in-header directions) — the caller then falls back
     to L9.top_ports verbatim (no regression). chip-AGNOSTIC: pure RTL parse, no
-    IC-class / token literals."""
+    IC-class / token literals.
+
+    ORGANIC #671 — `defines` is the compile-time -D macro set the runner's
+    sv2v/iverilog DUT conversion uses (default {"SIMULATION"} resolved by
+    `_v671_tb_compile_defines`). Ports inside an `ifdef <MACRO> arm whose MACRO
+    is absent from this set (e.g. a formal/debug interface gated by RISCV_FORMAL,
+    which the SIMULATION/SYNTHESIS conversion never defines) are EXCLUDED — the
+    DUT does not expose them, so binding them in the TB makes the reference_tb
+    uncompilable ('port `x` is not a port of u_dut'). `defines=None` keeps the
+    legacy take-every-arm parse (no regression)."""
     if not top_module:
         return []
     rtl_dir = _pl.rtl_dir(project)
@@ -1824,7 +1863,7 @@ def _v629_rtl_top_ports(project: Path,
                 txt = f.read_text(errors="replace")
             except OSError:
                 continue
-            ports = _rcv.parse_module_ports(txt, top_module)
+            ports = _rcv.parse_module_ports(txt, top_module, defines)
             if ports:
                 # parse_module_ports only yields ANSI ports carrying a
                 # direction keyword; a parameter (in the `#()` block) is never
@@ -1924,21 +1963,64 @@ def _v661_rtl_module_names(project: Path) -> List[str]:
     return names
 
 
+def _v672_synth_top_override(project: Path) -> Optional[str]:
+    """ORGANIC #672 — the explicit synth-top OVERRIDE, read with the SAME
+    precedence `step_yosys_synth` uses: `waivers.json:phase2_synth_top` then
+    `L9.synth_top`. Returns the first non-empty string, else None.
+
+    `step_full_stack_tb_gen` historically derived the DUT from
+    `l9.get("top_module") or top_name` ONLY and never consulted this chain — so
+    when L9.top_module is a phantom doc-prose integration top (e.g. a name the
+    Phase-1 doc-extraction truthfully lifted from prose but the staged vendor
+    rtl/ never ships), the TB bound `<phantom> u_dut` while the synth step
+    recovered via phase2_synth_top — a same-runner asymmetry. Surfacing the
+    same override here lets the TB bind the module the design actually synths.
+    chip-AGNOSTIC: structural key lookup, no chip/vendor/SKU literal."""
+    try:
+        waiver_path = project / "waivers.json"
+        if waiver_path.is_file():
+            w = json.loads(waiver_path.read_text(errors="replace"))
+            if isinstance(w, dict):
+                v = w.get("phase2_synth_top")
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+    except Exception:
+        pass
+    try:
+        l9_path = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
+        if l9_path.is_file():
+            l9 = json.loads(l9_path.read_text(errors="replace"))
+            if isinstance(l9, dict):
+                v = l9.get("synth_top")
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+    except Exception:
+        pass
+    return None
+
+
 def _v661_resolve_dut_module(project: Path,
                              top_name: str,
                              l9_top_module: Optional[str]) -> Optional[str]:
-    """ORGANIC #661 — resolve the DUT module to instantiate in the full-stack TB
-    STRUCTURALLY against rtl/, never instantiating a name with no definition.
+    """ORGANIC #661 / #672 — resolve the DUT module to instantiate in the
+    full-stack TB STRUCTURALLY against rtl/, never instantiating a name with no
+    definition.
 
     `L9.top_module` is frequently the `l1_ic_name_fallback` (the product / SKU
-    name, e.g. a SoC project name) — NOT a real RTL module. Binding the TB to it
-    emits `<phantom> u_dut (...)` → iverilog "Unknown module type: <phantom>" →
-    the full-stack/reference TB FAILs and blocks the whole Phase-2 chain, even
-    though the RTL is correct. The #629 reconcile only fixes the top PORTS, not
-    the top MODULE name, so it never caught this.
+    name, e.g. a SoC project name) OR a phantom doc-prose integration top — NOT
+    a real RTL module. Binding the TB to it emits `<phantom> u_dut (...)` →
+    iverilog "Unknown module type: <phantom>" → the full-stack/reference TB
+    FAILs and blocks the whole Phase-2 chain, even though the RTL is correct.
+    The #629 reconcile only fixes the top PORTS, not the top MODULE name, so it
+    never caught this.
 
     Resolution priority (mirrors the established _clock-input / reference-TB top
-    resolvers — structural, chip-AGNOSTIC):
+    resolvers AND step_yosys_synth's synth-top precedence — structural,
+    chip-AGNOSTIC):
+      (a0) ORGANIC #672 — the explicit synth-top override
+           (waivers.json:phase2_synth_top → L9.synth_top) when it names a real
+           module DEFINED in rtl/ — the SAME source of truth step_yosys_synth
+           binds, so the TB and the synth step never diverge;
       (a) --top-name when it names a real module DEFINED in rtl/;
       (b) L9.top_module ONLY when it names a real module DEFINED in rtl/;
       (c) the single instantiation-graph root among rtl/ modules (the actual
@@ -1950,6 +2032,13 @@ def _v661_resolve_dut_module(project: Path,
     if not defined:
         return None  # no parseable rtl/ — caller keeps legacy behaviour
     defined_set = set(defined)
+    # (a0) ORGANIC #672 — explicit synth-top override (same precedence as
+    # step_yosys_synth) wins, but ONLY when it names a real module in rtl/ so we
+    # never re-introduce a phantom. A phantom L9.top_module no longer wins over
+    # a real phase2_synth_top/synth_top the synth step already honours.
+    synth_override = _v672_synth_top_override(project)
+    if synth_override and synth_override in defined_set:
+        return synth_override
     # (a) honour the orchestrator's --top-name when it is a real module.
     if top_name and top_name in defined_set:
         return top_name
@@ -2047,7 +2136,13 @@ def step_full_stack_tb_gen(project: Path,
     # gen already parses the RTL surface (ports vs parameters); do the same here.
     # Prefer the RTL surface; fall back to L9 only when the RTL top is absent /
     # non-ANSI (no regression). chip-AGNOSTIC: structural RTL parse.
-    _rtl_ports = _v629_rtl_top_ports(project, top_module)
+    # ORGANIC #671 — parse the RTL port surface under the SAME compile define-set
+    # the in-runner sv2v DUT conversion uses (SIMULATION/SYNTHESIS); a port gated
+    # by a formal/debug-only macro absent from that set (e.g. an RVFI interface
+    # under `ifdef RISCV_FORMAL) is NOT bound, so the TB↔DUT surfaces match and
+    # the reference_tb does not FAIL with "port `x` is not a port of u_dut".
+    _tb_defines = _v671_tb_compile_defines(project)
+    _rtl_ports = _v629_rtl_top_ports(project, top_module, _tb_defines)
     _reconcile_note = ""
     if _rtl_ports:
         _l9_names = {(_p.get("name") or "").strip()
@@ -2341,8 +2436,28 @@ def step_full_stack_tb_gen(project: Path,
         results_path.write_text(json.dumps(results, indent=2) + "\n")
     else:
         # File already richer; just ensure opcodes_tested is populated.
+        _changed = False
         if not existing_results.get("opcodes_tested"):
             existing_results["opcodes_tested"] = opcodes_hex[:5]
+            _changed = True
+        # ORGANIC #674 — the "don't overwrite richer results.json" guard
+        # preserves per_vector / input_doc_evidence richness, but it must NOT
+        # preserve a STALE DUT/TB IDENTITY when this pass changed it. After the
+        # #661/#672 DUT resolution picks the real top, the TB filename + DUT
+        # module differ from the prior phantom identity; leaving the old `tb`/
+        # `dut` strings advertises a TB/DUT no longer the one verified to every
+        # downstream consumer. Refresh the identity fields (and ts_unix) ONLY
+        # when they actually changed — a same-identity re-run keeps the richer
+        # prior values byte-for-byte (no spurious churn). chip-AGNOSTIC: pure
+        # string-identity compare, no chip/vendor literal.
+        _cur_tb, _cur_dut = tb_path.name, top_module
+        if existing_results.get("tb") != _cur_tb \
+                or existing_results.get("dut") != _cur_dut:
+            existing_results["tb"] = _cur_tb
+            existing_results["dut"] = _cur_dut
+            existing_results["ts_unix"] = time.time()
+            _changed = True
+        if _changed:
             results_path.write_text(json.dumps(existing_results, indent=2) + "\n")
         results = existing_results
 
@@ -2444,22 +2559,51 @@ def _verilator_sim_escape(
                     _run(["docker", "cp", str(hp),
                           f"{container}:{stage}/{hp.name}"], timeout=60)
     obj = f"{stage}/obj_dir"
+
     # verilator --binary builds a standalone simulation executable from the
     # TB (which contains the $finish-terminated initial block). -Wno-* keeps
     # lint pedantry from failing an otherwise-elaboratable closure; the goal
     # here is functional reachability, not a clean-lint gate.
-    vl_cmd = (
-        f"cd {stage} && export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
-        f"verilator --binary --timing -Wno-fatal -Wno-lint "
-        f"-DSIMULATION -DDUT_TOP_NAME={top_name} "
-        f"--top-module {tb_path.stem} -Mdir {obj} "
-        f"{tb_path.name} {' '.join(staged)} 2>&1 && "
-        f"{obj}/V{tb_path.stem}")
-    vrc, vout, verr = _docker_exec(container, vl_cmd, timeout=600)
-    _docker_exec(container, f"rm -rf {stage}", timeout=30)
+    def _vl_build_run(define: str) -> Tuple[int, str, str]:
+        # NOTE: obj_dir is re-created per attempt; a prior failed build must not
+        # leave stale artifacts that mask the retry.
+        cmd = (
+            f"cd {stage} && export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
+            f"rm -rf {obj} && "
+            f"verilator --binary --timing -Wno-fatal -Wno-lint "
+            f"-D{define} -DDUT_TOP_NAME={top_name} "
+            f"--top-module {tb_path.stem} -Mdir {obj} "
+            f"{tb_path.name} {' '.join(staged)} 2>&1 && "
+            f"{obj}/V{tb_path.stem}")
+        return _docker_exec(container, cmd, timeout=600)
+
+    vrc, vout, verr = _vl_build_run("SIMULATION")
     if vrc == 0:
+        _docker_exec(container, f"rm -rf {stage}", timeout=30)
         return vrc, (vout + f"\n[verilator SVA escape: {reason}]"), \
             verr, "verilator_sva"
+    # ORGANIC #668 — the -DSIMULATION build may have died compiling a sim-only
+    # `ifdef SIMULATION arm (std::randomize/$urandom in a vendor primitive lib)
+    # that verilator cannot lower, even though that arm is functionally DEAD and
+    # the IDENTICAL closure elaborates + runs under -DSYNTHESIS (the
+    # synthesizable `else passthrough — the SAME define the synth slang path
+    # uses successfully). Retry under -DSYNTHESIS iff the failure carries a
+    # sim-only-construct signature. Honesty preserved: a closure that ALSO fails
+    # under -DSYNTHESIS keeps the honest FAIL below. chip-AGNOSTIC: tool
+    # error-token + the standard SIMULATION/SYNTHESIS define names.
+    _retry, _retry_reason = _sf.verilator_should_retry_synthesis_define(
+        (vout or "") + "\n" + (verr or ""))
+    if _retry:
+        srrc, srout, srerr = _vl_build_run("SYNTHESIS")
+        if srrc == 0:
+            _docker_exec(container, f"rm -rf {stage}", timeout=30)
+            return srrc, (srout + f"\n[verilator SVA escape: {reason}]"
+                          f"\n[verilator define retry: {_retry_reason}]"), \
+                srerr, "verilator_sva"
+        # Synthesis arm ALSO failed — surface the SYNTHESIS-attempt diagnostics
+        # so the honest FAIL is informative, then fall through.
+        vrc, vout, verr = srrc, srout, srerr
+    _docker_exec(container, f"rm -rf {stage}", timeout=30)
     # verilator also rejected the closure → genuine defect; keep honest FAIL.
     return vrc, vout, verr, "iverilog_g2012"
 
