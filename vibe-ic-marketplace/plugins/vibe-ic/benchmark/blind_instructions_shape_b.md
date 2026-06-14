@@ -84,10 +84,32 @@ at the score front door.
    chip_top wrapper, power-up `--fix`, lint, synth) → emits RTL at
    `<project>/phase2/stage1/rtl/`.
 
-4. **Copy the runner's RTL to the scoreable location**:
-   The runner emits its top module under whatever name was authored. Find the
-   module that matches the description's stated name and copy it to
-   `<RUNDIR>/samples/<leaf>.v`.
+4. **Export the runner's RTL to the scoreable location — DETERMINISTIC, the
+   SOLE EMIT PATH** (ORGANIC #678; analogous to `gates_atomic.py` for Shape C):
+   ```
+   python3 ${CLAUDE_PLUGIN_ROOT}/programs/shape_b_sample_export.py \
+       --project <project> --leaf <leaf> --samples <RUNDIR>/samples \
+       [--module <spec 'Module name:' value>]
+   ```
+   DO NOT hand-copy a single module. The program copies the runner's **COMPLETE
+   TB-facing-top RTL FILE verbatim**, preserving every variant-alias / synonym
+   wrapper bundled with its inner children in one file, then runs a post-export
+   guard (standalone `iverilog -g2012` compile + variant-alias completeness).
+
+   **WHY (the gate↔scorer discrepancy this closes).** The runner may fire
+   `reset_clock_variant_alias` (#518): it renames the TB-facing top to
+   `<top>__rcvar_inner` in place and appends a wrapper `<top>` exposing the
+   canonical reset/clock spelling, wired 1:1 — BOTH modules in ONE file, and only
+   that complete file PASSES the hidden TB (which binds the canonical port). The
+   same class applies to leaf-typo synonym wrappers (#517). A hand-extracted
+   single module ships only the un-wrapped inner core (prompt-spelling ports),
+   DROPPING the wrapper: standalone compile (no TB) passes the inner → gate
+   green, but the host scorer binds the hidden TB against the canonical port →
+   COMPILE-ERROR, and the runner's deterministic fix never reaches the scorer.
+   The export program is the sole emit path so that can never happen; its guard
+   REJECTS any export missing a wrapper (or a wrapper's inner). Exit 0 = sample
+   exported + guard passed; a non-zero exit means re-run the runner, never
+   hand-edit the sample.
 
 5. **Handling phase2 outcomes** — there are TWO classes to distinguish carefully:
 

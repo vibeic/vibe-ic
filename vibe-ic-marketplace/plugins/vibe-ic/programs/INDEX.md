@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 676
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 676)
+- **Total programs (excluding helpers / shims):** 677
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 677)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 667 |
+| `any` | 668 |
 
 ## Alphabetical listing
 
@@ -590,6 +590,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `send_test_active_drive_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `sent_protocol_synth` | any | — | Single Edge Nibble Transmission (SENT) protocol synth helper. |
 | `sgmii_protocol_synth` | any | — | Serial-GMII (SGMII) protocol synth helper. |
+| `shape_b_sample_export` | any | — | deterministic Shape-B sample-export (ORGANIC #678). |
 | `si_crosstalk_check` | any | — | Verify signal integrity / crosstalk analysis was performed. |
 | `si_signoff_timing_aware` | any | — | OPEN-SOURCE timing-window-aware SI ADVISORY screen. |
 | `signaltap_recompile_sequence_check` | any | — | Validate that the Quartus |
@@ -748,7 +749,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (667 programs)
+### `any` (668 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1307,6 +1308,7 @@ _(no programs in this group)_
 - `send_test_active_drive_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `sent_protocol_synth` — Single Edge Nibble Transmission (SENT) protocol synth helper.
 - `sgmii_protocol_synth` — Serial-GMII (SGMII) protocol synth helper.
+- `shape_b_sample_export` — deterministic Shape-B sample-export (ORGANIC #678).
 - `si_crosstalk_check` — Verify signal integrity / crosstalk analysis was performed.
 - `si_signoff_timing_aware` — OPEN-SOURCE timing-window-aware SI ADVISORY screen.
 - `signaltap_recompile_sequence_check` — Validate that the Quartus

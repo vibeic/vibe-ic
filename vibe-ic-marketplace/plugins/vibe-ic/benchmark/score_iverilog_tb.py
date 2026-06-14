@@ -300,7 +300,98 @@ def _verilator_compile_run(design: str, sample_c: str, tb: Path, design_dir: Pat
                 pass
 
 
+def _golden_ref_fails_own_tb_runtime(design: str, dataset: Path,
+                                     layout: dict, args: dict):
+    """Shape-B RUNTIME golden-fails-own-TB audit (#679). Mirror of the Shape-C
+    `golden_ref_fails_own_tb` dataset-defect flag, but at the FUNCTIONAL level:
+    the Shape-C audit is COMPILE-only (does ref+TB elaborate?), whereas a
+    standalone Shape-B benchmark can have a golden that compiles cleanly yet
+    FAILs its own official TB at RUNTIME — a desc<->TB contradiction or a
+    handshake race (e.g. a TB holding res_ready tied high for the whole run, or
+    a clock-generator whose golden never prints the pass marker). Such a design
+    is unsatisfiable by ANY spec-compliant submission, so a model FAIL on it must
+    be DISCLOSED as a dataset defect, not charged to the model.
+
+    Resolves the golden via `layout.ref_glob` (e.g. `verified_*.v`) in the design
+    dir, iverilog -g2012 compiles it with `layout.tb_filename`, runs vvp with
+    cwd=design_dir (the same cwd_design_dir rule the main scorer obeys — see
+    benchmark_score_cwd_guard.py), and checks the golden's own stdout against
+    `pass_regex`/`fail_regex`.
+
+    Returns:
+      True  — golden COMPILES but FAILs its own TB at runtime (no pass marker, or
+              a fail_regex match) → irreducible dataset defect.
+      False — golden PASSes its own TB at runtime → the design IS satisfiable;
+              a candidate FAIL stays a real model FAIL (no flag).
+      None  — no determination (no ref_glob, no glob match, no TB, golden fails to
+              COMPILE — which is the existing compile-audit's job, not double-
+              counted here, or a timeout / tool error). No flag.
+
+    Deterministic + chip-AGNOSTIC: driven entirely by registry
+    layout.ref_glob/tb_filename + scorer_args regex; NO design/vendor literal.
+    Honesty: touches the hidden golden/TB at SCORING time only (same as the main
+    scorer), never during blind authoring.
+    """
+    ref_glob = layout.get("ref_glob")
+    tb_name = layout.get("tb_filename")
+    if not ref_glob or not tb_name:
+        return None
+    design_dir = dataset / design
+    tb = design_dir / tb_name
+    if not tb.is_file():
+        return None
+    refs = sorted(design_dir.glob(ref_glob))
+    if not refs:
+        return None
+    pass_re = re.compile(args["pass_regex"])
+    fail_re = re.compile(args["fail_regex"]) if args.get("fail_regex") else None
+    use_cwd = args.get("cwd_design_dir", True)
+    with tempfile.TemporaryDirectory() as td:
+        binp = os.path.join(td, "golden_bin")
+        srcs = [str(p) for p in refs] + [str(tb)]
+        try:
+            c = subprocess.run(["iverilog", "-g2012", "-o", binp] + srcs,
+                               capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            return None
+        if c.returncode != 0 or not os.path.exists(binp):
+            # Golden fails to COMPILE — that is the existing compile-audit's
+            # domain (a candidate compile_error is already its own FAIL reason),
+            # not a runtime defect. Don't double-count; leave it to the main path.
+            return None
+        try:
+            r = subprocess.run(["vvp", binp], capture_output=True, text=True,
+                               timeout=120,
+                               cwd=str(design_dir) if use_cwd else None)
+        except subprocess.TimeoutExpired:
+            # Golden's own TB hangs — treat as no determination (could be a TB
+            # that waits forever); don't flip a model FAIL into a defect on a
+            # timeout we can't attribute.
+            return None
+        out = r.stdout + r.stderr
+        golden_passes = bool(pass_re.search(out)) and not (
+            fail_re and fail_re.search(out))
+        return (not golden_passes)
+
+
 def _score_shape_b(design: str, samples: Path, dataset: Path,
+                   layout: dict, args: dict) -> dict:
+    """Shape-B scorer wrapper (#679): run the core scorer, then on a FAIL whose
+    cause is NOT a compile error (compile errors are handled upstream / not a
+    runtime golden defect), RUNTIME-audit the golden reference against its own
+    official TB. If even the golden FAILs its own TB at runtime, the design is an
+    irreducible dataset defect — flag it (dual report in main(); verdict NOT
+    changed, never inflate the pass rate), mirroring the Shape-C path."""
+    res = _score_shape_b_impl(design, samples, dataset, layout, args)
+    if res.get("verdict") == "FAIL" and res.get("reason") != "compile_error":
+        gref = _golden_ref_fails_own_tb_runtime(design, dataset, layout, args)
+        if gref is True:
+            res["dataset_defect"] = True
+            res["dataset_defect_reason"] = "golden_ref_fails_own_tb_runtime"
+    return res
+
+
+def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
                    layout: dict, args: dict) -> dict:
     sample = _resolve_sample_b(design, samples, dataset, layout)
     tb = dataset / design / layout["tb_filename"]
@@ -623,10 +714,13 @@ def main():
     npass_disc = npass - nd_pass
     n_eff_disc = n_eff - nd_pass
     # Irreducible benchmark defects: problems where even the golden reference
-    # cannot compile against its own hidden TB (golden_ref_fails_own_tb) —
-    # unsatisfiable by ANY submission. Flag + DUAL-report (raw pass@1 unchanged
-    # for leaderboard parity, plus a rate that excludes them); never silently
-    # inflate. Mirrors the non-discriminating-TB dual report above.
+    # fails its own hidden TB — Shape C: it cannot COMPILE against its own TB
+    # (golden_ref_fails_own_tb); Shape B (#679): it compiles but FAILs at RUNTIME
+    # (golden_ref_fails_own_tb_runtime). Both are unsatisfiable by ANY submission.
+    # Flag + DUAL-report (raw pass@1 unchanged for leaderboard parity, plus a rate
+    # that excludes them); never silently inflate. Shape-agnostic: keys on the
+    # per-result `dataset_defect` flag set by either shape's wrapper. Mirrors the
+    # non-discriminating-TB dual report above.
     ddef = [r for r in results if r.get("dataset_defect")]
     n_ddef = len(ddef)
     n_eff_satisfiable = n_eff - n_ddef

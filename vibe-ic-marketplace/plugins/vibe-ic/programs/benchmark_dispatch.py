@@ -161,6 +161,10 @@ def cmd_show(bench: str):
         print(f"     python3 {Path(__file__).name} {bench} --setup --dataset <DATASET> --run <RUNDIR>")
         print(f"  3. Drive batches per blind instructions: {bi}")
         print(f"     For each design: vibe_ic_one_shot_runner.py <project> --skip-phase3 --skip-analog --skip-hardware")
+        exp = Path(__file__).resolve().parent / "shape_b_sample_export.py"
+        print(f"  3b. Export each sample (DETERMINISTIC sole emit path, #678 — "
+              f"never hand-copy a single module):")
+        print(f"      python3 {exp} --project <project> --leaf <leaf> --samples <RUNDIR>/samples [--module <name>]")
         print(f"  4. Score: python3 {scorer} --bench {bench} --dataset <DATASET> --run <RUNDIR>")
     elif shape == "C":
         bi = HARNESS / "blind_instructions_shape_c.md"
