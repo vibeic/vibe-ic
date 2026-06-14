@@ -243,9 +243,52 @@ def evaluate_preservation(plan: dict,
     }
 
 
+# ── #686 robustness: never slurp a multi-GB binary artefact as text ──
+# The survival scan only needs to find instance-NAME tokens, which only
+# exist in the text artefacts (netlist / DEF). A streamed binary GDS
+# never name-matches (it carries layout records, not ASCII identifiers),
+# so loading it as text is pure dead work whose cost is O(GDS-bytes) in
+# BOTH time and memory — a 2 GB streamout becomes a ~10 GB Python str +
+# a 100M-element splitlines() that hangs flow_compliance_check for an
+# hour. We therefore (1) binary-sniff the head and SKIP any artefact that
+# is binary, and (2) hard-cap the bytes read for any (text) artefact so a
+# pathologically large text file can never blow the time/RAM budget. The
+# DEF + netlist already establish survival, so a skipped/capped GDS does
+# not weaken a real violation verdict (a spare REMOVED from the netlist
+# is still caught; the negative case stays detected). chip-AGNOSTIC.
+_BINARY_SNIFF_BYTES = 8192
+# Generous enough that any normal text netlist/DEF is read in full
+# (the largest known-good flat DEFs are tens of MB); only a pathological
+# multi-hundred-MB text artefact is head-capped. The binary GDS is
+# skipped before this cap ever applies.
+MAX_SCAN_BYTES = 256 * 1024 * 1024  # 256 MiB
+
+
+def _looks_binary(head: bytes) -> bool:
+    """A NUL byte in the head is the canonical binary marker (GDSII, OASIS,
+    any packed-record format). ASCII netlists / DEF / TCL never contain
+    NUL. Pure, chip-AGNOSTIC."""
+    return b"\x00" in head
+
+
 def _read_text(path: Path) -> str:
+    """Bounded, binary-safe text read for the name-survival scan.
+    Returns '' for a binary artefact (e.g. a streamed binary GDS) and a
+    head-capped string for any text artefact larger than MAX_SCAN_BYTES.
+    Never materializes a multi-GB file into a Python str. chip-AGNOSTIC."""
     try:
-        return path.read_text(encoding="utf-8", errors="ignore")
+        with open(path, "rb") as fh:
+            head = fh.read(_BINARY_SNIFF_BYTES)
+            if _looks_binary(head):
+                return ""  # binary artefact — names never appear; skip.
+            rest = b""
+            if len(head) == _BINARY_SNIFF_BYTES:
+                rest = fh.read(MAX_SCAN_BYTES - _BINARY_SNIFF_BYTES)
+        raw = head + rest
+    except Exception:
+        return ""
+    try:
+        return raw.decode("utf-8", errors="ignore")
     except Exception:
         return ""
 
