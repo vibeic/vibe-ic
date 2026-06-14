@@ -2877,7 +2877,14 @@ _RE_L9_BULLET_SUBMOD_HEADING = re.compile(
 # Markdown / RST section vocabulary, not chip-class.
 _RE_L9_BULLET_SUBMOD_HEADING_v1_6_313 = re.compile(
     r"^#{1,3}\s+(?:Submodules?|Modules?|Components?|Cores?|"
-    r"Plugins?|Subsystems?|Units?|Stages?|Pipelines?)\b",
+    r"Plugins?|Subsystems?|Units?|Stages?|Pipelines?|"
+    # v1.0.38 — for #648. Hierarchy / instantiation-tree /
+    # integration / port-mapping headings are equally-conventional
+    # SoC-documentation anchors for a submodule inventory and were
+    # missing from the vocab, so bullet/tree blocks under them were
+    # dropped. chip-AGNOSTIC documentation vocabulary.
+    r"Hierarchy|Instantiation(?:\s+(?:Tree|Hierarchy))?|"
+    r"(?:Submodule\s+)?Integration|Port[\s\-]?mapping)\b",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -3033,11 +3040,142 @@ def _l9_bullet_submodule_extract(text: str) -> List[str]:
             if in_bullets:
                 break
         body = "\n".join(bullet_lines)
-        for m in _RE_L1_BULLET_ITEM.finditer(body):
+        for ml in body.splitlines():
+            m = _RE_L1_BULLET_ITEM.match(ml)
+            if not m:
+                continue
+            # v1.0.38 — for #648. When the bullet body is an
+            # "X instantiates Y" sentence, the leading token captured
+            # by `_RE_L1_BULLET_ITEM` is the PARENT (subject), not a
+            # submodule of itself — the CHILD on the right is the real
+            # submodule and is harvested by the dedicated
+            # `_v1_0_38_prose_instantiates_children` parser. Skip the
+            # subject token here so broadening the heading vocab to
+            # include `Integration` / `Hierarchy` does not leak the
+            # parent into L9.submodules. chip-AGNOSTIC.
+            if _V1_0_38_PROSE_INSTANTIATES_RE.search(ml):
+                continue
             name = m.group("name")
             if len(name) < 3:
                 continue
             out.append(name)
+    return out
+
+
+# v1.0.38 — for #648. Prose "instantiation" sentence parser. Plain
+# integration / hierarchy docs routinely declare the parent→child
+# instantiation relation in a single prose sentence rather than a
+# bullet list or an ASCII tree, e.g.
+#
+#     - `top_wrapper` (top) instantiates exactly one `child_a`
+#     - `child_a #(.BITS(32))` instantiates one `child_b #(.BITS(32))`
+#
+# Neither the bullet-heading walker nor the ASCII-tree walker
+# detects this shape, so the declared CHILDREN were dropped and L9
+# emitted `submodules: []` → stub-module risk. The parser captures
+# the right-hand `instantiates [exactly] one|<N>|a|an <child>`
+# child identifier (the parent on the left is the module being
+# described, not a submodule of itself, so only the child is
+# emitted). A trailing `#(...)` parameter-override block is
+# tolerated and stripped. Each captured child still passes the
+# shared `_is_real_submodule_name` gate at the call-site.
+#
+# chip-AGNOSTIC: the `X instantiates [N] Y` relation is a universal
+# hierarchical-SoC documentation convention — no chip-class string
+# literal participates.
+_V1_0_38_PROSE_INSTANTIATES_RE = re.compile(
+    r"instantiat(?:es?|ed|ing)\b"
+    # optional count qualifier: exactly / one / two / a / an / digits
+    r"(?:\s+(?:exactly|at\s+least|up\s+to|a|an|one|two|three|four|"
+    r"five|six|seven|eight|nine|ten|\d+))*"
+    r"\s+"
+    # the child identifier — backtick-fenced OR bare token, with an
+    # optional `#(...)` parameter-override block stripped off.
+    r"`?\s*(?P<child>[A-Za-z_]\w*)"
+    r"(?:\s*#\s*\([^()]*(?:\([^()]*\)[^()]*)*\))?\s*`?",
+    re.IGNORECASE,
+)
+
+
+def _v1_0_38_prose_instantiates_children(text: str) -> List[str]:
+    """v1.0.38 — for #648. Return the ordered, de-duplicated list of
+    child module identifiers declared by prose `X instantiates
+    [exactly] one|N `Y`` sentences in ``text``. Only the right-hand
+    child is emitted; the left-hand parent is the subject of the
+    sentence (not a submodule of itself). Empty list when no such
+    sentence is present. chip-AGNOSTIC."""
+    out: List[str] = []
+    if not isinstance(text, str) or not text:
+        return out
+    seen: Set[str] = set()
+    for m in _V1_0_38_PROSE_INSTANTIATES_RE.finditer(text):
+        child = (m.group("child") or "").strip()
+        if not child or child in seen:
+            continue
+        seen.add(child)
+        out.append(child)
+    return out
+
+
+# v1.0.38 — for #648. Wrapper→child markdown port-map table router.
+# An integration doc commonly pins a parent→child connectivity table
+# whose header row names the child module, e.g.
+#
+#     | top_wrapper port | child_a port | width |
+#     | ---------------- | ------------ | ----- |
+#     | clk              | clk          | 1     |
+#
+# The child-module name living in a header cell of a wrapper→child
+# port-map table is itself evidence of an instantiated submodule.
+# This router parses such a table and returns the child name + the
+# (parent_port -> child_port) pairs so the L9 builder can attach a
+# `port_map` to the corresponding submodule. chip-AGNOSTIC: GitHub-
+# flavoured-Markdown grid-table grammar — no chip-class literal.
+_V1_0_38_PORTMAP_HEADER_RE = re.compile(
+    r"^\s*\|\s*(?P<parent>[A-Za-z_]\w*)\s+port\s*\|\s*"
+    r"(?P<child>[A-Za-z_]\w*)\s+port\s*\|",
+    re.IGNORECASE,
+)
+
+
+def _v1_0_38_wrapper_child_port_maps(text: str) -> List[Dict[str, Any]]:
+    """v1.0.38 — for #648. Parse every wrapper→child markdown
+    port-map table in ``text``. Returns a list of
+        {child: <name>, port_map: [{parent_port, child_port}, ...]}
+    one per table. The child name is taken from the second
+    `<name> port` header cell; the parent name from the first.
+    Empty list when no such table is present. chip-AGNOSTIC."""
+    out: List[Dict[str, Any]] = []
+    if not isinstance(text, str) or not text:
+        return out
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        hm = _V1_0_38_PORTMAP_HEADER_RE.match(lines[i])
+        if hm is None:
+            i += 1
+            continue
+        child = hm.group("child")
+        pairs: List[Dict[str, str]] = []
+        j = i + 1
+        # Skip the GFM separator row (`| --- | --- |`) if present.
+        if (j < len(lines)
+                and re.match(r"^\s*\|[\s:\-|]+\|\s*$", lines[j])):
+            j += 1
+        # Collect body rows until a non-table line.
+        while j < len(lines):
+            row = lines[j]
+            cells = [c.strip() for c in row.strip().strip("|").split("|")]
+            if not row.strip().startswith("|") or len(cells) < 2:
+                break
+            p_port, c_port = cells[0], cells[1]
+            if re.fullmatch(r"[A-Za-z_]\w*", p_port) and \
+                    re.fullmatch(r"[A-Za-z_]\w*", c_port):
+                pairs.append({"parent_port": p_port,
+                              "child_port": c_port})
+            j += 1
+        out.append({"child": child, "port_map": pairs})
+        i = j
     return out
 
 
@@ -40921,6 +41059,76 @@ def gen_l9_integration_spec(project: Path,
                     break
             if len(submodules) >= 32:
                 break
+    # v1.0.38 — for #648. Strategy A0c — prose `X instantiates
+    # [exactly] one|N `Y`` sentences + wrapper→child markdown
+    # port-map tables. Integration / hierarchy docs declare the
+    # parent→child relation in prose ("`top_wrapper` (top)
+    # instantiates exactly one `child_a`") or pin it as a
+    # wrapper→child port-map table, neither of which the bullet /
+    # RST-h3 / ASCII-tree walkers detect. Each captured child must
+    # pass `_is_real_submodule_name` AND carry input-doc evidence so
+    # a non-module token cannot be fabricated. Port-map tables, when
+    # present, attach a `port_map` to the matching submodule (or
+    # introduce the child if prose did not already). chip-AGNOSTIC.
+    if len(submodules) < 32:
+        for fname, text in extracted.items():
+            if not text or _is_vendor_tool_doc(fname):
+                continue
+            # (b) prose instantiation sentences.
+            for nm in _v1_0_38_prose_instantiates_children(text):
+                if nm in seen_submods:
+                    continue
+                if not _is_real_submodule_name(nm):
+                    continue
+                seen_submods.add(nm)
+                submodules.append({
+                    "name": nm,
+                    "instances": 1,
+                    "type": "prose instantiation sentence",
+                    "extraction_strategy":
+                        "prose_instantiates_v1_0_38",
+                    "evidence": f"input/docs/{fname}",
+                    "role": "documented submodule",
+                })
+                if len(submodules) >= 32:
+                    break
+            if len(submodules) >= 32:
+                break
+            # (d) wrapper→child markdown port-map tables.
+            for pm in _v1_0_38_wrapper_child_port_maps(text):
+                nm = pm.get("child")
+                if not isinstance(nm, str) or not nm:
+                    continue
+                if not _is_real_submodule_name(nm):
+                    continue
+                existing = next(
+                    (s for s in submodules
+                     if isinstance(s, dict) and s.get("name") == nm),
+                    None)
+                if existing is not None:
+                    if pm.get("port_map") and not existing.get("port_map"):
+                        existing["port_map"] = pm["port_map"]
+                        existing.setdefault(
+                            "port_map_evidence",
+                            f"input/docs/{fname}")
+                    continue
+                if nm in seen_submods:
+                    continue
+                seen_submods.add(nm)
+                submodules.append({
+                    "name": nm,
+                    "instances": 1,
+                    "type": "wrapper-child port-map table",
+                    "extraction_strategy":
+                        "wrapper_child_port_map_v1_0_38",
+                    "evidence": f"input/docs/{fname}",
+                    "role": "documented submodule",
+                    "port_map": pm.get("port_map") or [],
+                })
+                if len(submodules) >= 32:
+                    break
+            if len(submodules) >= 32:
+                break
     # Strategy A — DISABLED at v1.6.330 (closes #228 P1).
     #
     # _v1_6_330_disabled_rtl_strategy_a — the original Strategy A globbed
@@ -48204,6 +48412,19 @@ _V1_6_526_NODE_DENY = frozenset({
 # literal participates.
 _V1_6_532_CONNECTOR_ONLY_RE = re.compile(r"^[\s|`+\-\\]+$")
 
+# v1.0.38 — for #648. Box-drawing-aware connector-only spacer.
+# Modern hierarchy trees (the de-facto `tree(1)` / Markdown / SoC
+# documentation convention) draw the connectors with Unicode
+# box-drawing glyphs (└ ─ ├ │ ┌ ┐ ┘ ┴ ┬ ┤) rather than ASCII
+# `|`/`-`/`` ` ``. A bare box-vertical spacer line (`│`) between
+# siblings must be tolerated exactly like the ASCII `|` spacer so
+# the walker does not truncate the tree at the first box-glyph
+# breathing-room line. chip-AGNOSTIC — pure typographical glyph
+# class; no chip-class string literal participates.
+_V1_0_38_BOX_GLYPHS = "└─├│┌┐┘┴┬┤"
+_V1_0_38_CONNECTOR_ONLY_RE = re.compile(
+    r"^[\s|`+\-\\" + _V1_0_38_BOX_GLYPHS + r"]+$")
+
 
 # v1.6.534 — for #362 R4. Real ASCII trees commonly have trailing
 # parenthetical annotation after a node identifier:
@@ -48270,6 +48491,63 @@ _V1_6_534_ASCII_TREE_NODE_RE = re.compile(
     # No leading connector → 2-way trailer (regression-safe;
     # prevents plain prose from being mistaken for tree nodes):
     r"(?:\s*[|`\-]+\s*$|\s*$)"
+    r")",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+# v1.0.38 — for #648. Box-drawing + parenthetical-root ASCII tree
+# node regex. The v1.6.534 NODE_RE's leading-connector class is
+# `[|`+\-]` which EXCLUDES the Unicode box-drawing glyphs
+# (└ ─ ├ │ ┌ ┐ ┘ ┴ ┬ ┤) that modern hierarchy trees (`tree(1)`,
+# GitHub-rendered Markdown, SoC integration docs) use to draw the
+# connectors — so a canonical
+#     top_wrapper
+#     └── child_a
+#         └── child_b
+# tree had every connector-drawn child line rejected. Two widenings:
+#   (1) the leading-connector char class now ALSO accepts the box
+#       glyphs, so `└── child_a` / `    └── child_b` match and yield
+#       `child_a` / `child_b`;
+#   (2) the NO-leading-connector branch (a tree ROOT printed without
+#       a connector, e.g. `top_wrapper (top)`) now ALSO accepts a
+#       trailing `(...)` parenthetical annotation — a near-universal
+#       convention for tagging the root (`(top)`, `(top-level)`).
+#       Without (2) the connector-less annotated root broke the
+#       block at its very first line.
+# The v1.6.534 constant is left byte-for-byte untouched so tests
+# that import it directly still pass; only the walker call-site is
+# rewired to this widened regex.
+#
+# Group layout is identical to v1.6.534 (group(1) = leading
+# connector capture used by the `(?(1)yes|no)` conditional;
+# `node` = the identifier).
+#
+# chip-AGNOSTIC — pure typographical grammar; box-drawing trees are
+# a universal hierarchical-documentation convention. No chip-class
+# string literal participates.
+_V1_0_38_ASCII_TREE_NODE_RE = re.compile(
+    r"^[ \t]*(?:([|`+\-" + _V1_0_38_BOX_GLYPHS +
+    r"][| `+\-" + _V1_0_38_BOX_GLYPHS + r"]*)\s*)?"
+    r"(?P<node>[a-z_][a-z0-9_]+)"
+    r"(?(1)"
+    # Leading connector present → 4-way trailer (regression-parity
+    # with v1.6.534):
+    r"(?:"
+    r"\s*[|`\-]+\s*$"          # (a) connector-glyph trailer
+    r"|"
+    r"\s*$"                     # (b) EOL trailer
+    r"|"
+    r"\s+\([^)]*\)\s*$"        # (c) parenthetical annotation
+    r"|"
+    r"\s+[^|`\-\s][^|]*$"      # (d) non-connector prose (`|` excluded)
+    r")"
+    r"|"
+    # No leading connector → root line. v1.0.38 widens the
+    # regression 2-way trailer to ALSO accept a trailing
+    # parenthetical (`top_wrapper (top)`), `|`-excluded prose still
+    # rejected so plain sentences are not mistaken for tree nodes.
+    r"(?:\s*[|`\-]+\s*$|\s*$|\s+\([^)]*\)\s*$)"
     r")",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -48655,14 +48933,14 @@ def _v1_6_526_walk_ascii_art_hierarchy(
                     break
                 continue
             consec_blank = 0
-            # v1.6.534 — for #362 R4. Use the widened NODE_RE which
-            # additionally accepts trailing parenthetical annotation
-            # (`(2x instruction)`, `(optional)`, `(1x per cluster)`)
-            # and trailing non-connector prose. v1.6.526 NODE_RE
-            # rejected such lines and the walker broke at the first
-            # annotated sibling (→ 4 of 10 nodes harvested on ic-B
-            # real benchmark).
-            m = _V1_6_534_ASCII_TREE_NODE_RE.match(ln)
+            # v1.0.38 — for #648. Use the box-drawing-aware NODE_RE
+            # which, on top of the v1.6.534 trailing-parenthetical /
+            # prose trailer, ALSO accepts Unicode box-drawing
+            # connector glyphs (└ ─ ├ │ …) and a connector-less root
+            # carrying a `(...)` annotation. The v1.6.534 regex
+            # rejected every box-glyph-drawn child line, so a modern
+            # `tree(1)`-style hierarchy yielded 0 nodes.
+            m = _V1_0_38_ASCII_TREE_NODE_RE.match(ln)
             if m is None:
                 # v1.6.532 — for #362 R3. Connector-only spacer
                 # tolerance. Real ASCII trees use bare `|` lines
@@ -48671,7 +48949,9 @@ def _v1_6_526_walk_ascii_art_hierarchy(
                 # token follows. Treat them as in-block lines so
                 # the surrounding nodes still aggregate, instead
                 # of truncating the block at the first spacer.
-                if started and _V1_6_532_CONNECTOR_ONLY_RE.match(
+                # v1.0.38 — for #648. Box-glyph spacers (`│`) are
+                # tolerated identically to the ASCII `|` spacer.
+                if started and _V1_0_38_CONNECTOR_ONLY_RE.match(
                         ln.rstrip("\n")):
                     tree_lines.append(ln)
                     if len(tree_lines) >= 256:
@@ -48699,19 +48979,27 @@ def _v1_6_526_walk_ascii_art_hierarchy(
             # noise).
             continue
         # Extract node identifiers from tree_lines.
-        # v1.6.534 — for #362 R4. Same widened NODE_RE so annotated
-        # nodes (`|- foo (annotation)`) yield their identifier here
-        # too; otherwise tree_lines would carry the line but the
-        # second pass would drop it.
+        # v1.0.38 — for #648. Same box-drawing-aware NODE_RE so
+        # box-glyph-drawn nodes (`└── foo`) and annotated nodes
+        # (`|- foo (annotation)`) yield their identifier here too;
+        # otherwise tree_lines would carry the line but the second
+        # pass would drop it.
         block_nodes: List[str] = []
         for tl in tree_lines:
-            m = _V1_6_534_ASCII_TREE_NODE_RE.match(tl)
+            m = _V1_0_38_ASCII_TREE_NODE_RE.match(tl)
             if m is None:
                 continue
             node = (m.group("node") or "").lower().strip()
             if not node or len(node) < 3:
                 continue
             if node in _V1_6_526_NODE_DENY:
+                continue
+            # v1.0.38 — for #648. Each emitted node must pass the
+            # shared `_is_real_submodule_name` RTL-shape gate so a
+            # box-drawing tree cannot fabricate a non-module token
+            # (table glyph / all-caps abbreviation / English word)
+            # as a submodule. chip-AGNOSTIC structural filter.
+            if not _is_real_submodule_name(node):
                 continue
             if node in seen:
                 continue
