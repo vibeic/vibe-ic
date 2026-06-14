@@ -301,10 +301,48 @@ def _check_erc(project_dir: Path, findings: List[Finding], stats: dict) -> None:
         return
 
     if (floating is not None and floating > 0) or clean_no:
+        # ORGANIC #696 — a raw floating-net COUNT > 0 is NOT automatically a
+        # functional ERC defect. The OpenROAD ERC screen reports
+        # structurally-benign floats too: design-for-ECO spare-cell I/O
+        # (intentionally tied-off, pre-placed for a metal ECO), power/ground
+        # rails (VPWR/VGND/vdd/vss SPECIALNETS), and the yosys hilomap
+        # constant-tie net (zero_/one_). Classify the floats BY OWNER and
+        # FAIL only on a positive FUNCTIONAL count. §4.05 no-leak: a genuine
+        # floating SIGNAL net (not spare-owned, not a power/ground rail, not
+        # a tie net) is still functional → ERC_DIRTY FAIL; an unparseable
+        # report with no verbose float list also still FAILs (we cannot
+        # prove the floats are benign, so we do not waive on faith).
+        functional = floating if floating is not None else None
+        classified = None
+        try:
+            import erc_float_owner_classify as _efc  # noqa: PLC0415
+            names = _efc.parse_floats(text)
+            if names:
+                classified = _efc.classify(names)
+                functional = classified["functional_count"]
+        except Exception:
+            classified = None  # fall through to raw-count FAIL
+        if classified is not None and functional == 0:
+            # All floats are structurally benign (spare I/O / power-ground /
+            # tie nets). This is the open-source ERC screen's known benign
+            # set — record as REVIEW/INFO, not a hard ERC_DIRTY failure.
+            stats["erc_clean"] = True
+            stats["erc_floating_benign"] = classified["benign_count"]
+            stats["erc_floating_functional"] = 0
+            findings.append(Finding(
+                "INFO", "ERC_BENIGN_FLOATS",
+                f"ERC floating nets={floating} are 100% structurally benign "
+                f"(spare-cell I/O / power-ground rails / hilomap tie net; "
+                f"by_owner={classified['by_owner']}) — 0 functional floats, "
+                "not an electrical-rule failure (#696)"))
+            return
+        # Genuine functional float(s) — or an unclassifiable report — FAIL.
+        _fn = (f"{functional} functional of {floating}"
+               if (classified is not None and floating is not None)
+               else (str(floating) if floating is not None else "?"))
         findings.append(Finding(
             "ERROR", "ERC_DIRTY",
-            f"ERC not clean: floating nets="
-            f"{floating if floating is not None else '?'}, "
+            f"ERC not clean: floating nets={_fn}, "
             f"clean={'NO' if clean_no else ('YES' if clean_yes else '?')} "
             "— floating signal nets are a real electrical-rule failure"))
         return
