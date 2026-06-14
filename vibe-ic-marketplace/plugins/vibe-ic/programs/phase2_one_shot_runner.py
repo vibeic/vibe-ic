@@ -1283,11 +1283,37 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0,
                           f"top {tgt!r} has no parseable ANSI ports")
-    plan = _rcv.plan_aliases([p[2] for p in ports])
+    # ORGANIC #689 — CONTRACT-AWARE suppression (FIRST-CLASS, applies
+    # UNCONDITIONALLY before the #618 SDC + #518 L9 guards). The alias
+    # canonicaliser used to UNCONDITIONALLY rename any recognised non-canonical
+    # STANDARD reset/clock spelling (`reset`->`rst`, `clock`->`clk`, …) and take
+    # over the top name. But when the design's OWN contract (its staged prompt /
+    # external-interface doc / parsed L3 port list) ALREADY declares that
+    # standard spelling, THAT spelling IS the TB-facing contract — a hidden
+    # benchmark TB instantiates the DUT by exactly that name (e.g. RTLLM's
+    # multi_booth_8bit declares `reset` and its TB binds `.reset(...)`). Renaming
+    # it (lossy in-place: `reset`->`rst`, the wrapper then exposing ONLY `rst`)
+    # makes the wrapper port differ from the TB binding → a hard iverilog
+    # `port 'reset' is not a port of dut` elaboration FAIL on a TB-passing
+    # design. The #618 SDC guard misses this (RTLLM ships no SDC → empty pinned
+    # set) and the #518 L9 guard misses it (L9 top_ports==[] + top_module case
+    # differs), so the design's OWN contract must be consulted directly. Drive
+    # the plan with the contract spellings so any contract-declared port is
+    # preserved verbatim (additive, never lossy). chip-AGNOSTIC: port-decl
+    # grammar + the closed standard reset/clock spelling set; no chip literal.
+    try:
+        _contract_ports = _rcv.design_contract_ports(project)
+    except Exception:  # pragma: no cover — defensive
+        _contract_ports = set()
+    plan = _rcv.plan_aliases([p[2] for p in ports],
+                             contract_ports=_contract_ports)
     if not plan:
+        _why = ("the design's own contract already declares the standard "
+                "spelling(s) — refusing to rename the TB-facing contract (#689)"
+                if _contract_ports and _rcv.plan_aliases([p[2] for p in ports])
+                else "top reset/clock ports already canonical")
         return StepResult("reset_clock_variant_aliases", "SKIP",
-                          time.time() - t0,
-                          "top reset/clock ports already canonical")
+                          time.time() - t0, _why)
     # ORGANIC #618 — spec-aware suppression (applies UNCONDITIONALLY, before
     # the resolved_via_chip_top-gated L9 guard below). The alias emitter
     # renames a recognised non-canonical clock/reset spelling to a hardcoded

@@ -374,16 +374,181 @@ def _golden_ref_fails_own_tb_runtime(design: str, dataset: Path,
         return (not golden_passes)
 
 
+def _canonical_dut_name_shape_b(design: str, dataset: Path, layout: dict):
+    """Resolve the canonical DUT module name a Shape-B candidate is authored under
+    (the same name the TB instantiates). For the RTLLM convention this is the spec's
+    `Module name:` line; fall back to the design dir leaf. Returns a name or None.
+    Chip-AGNOSTIC: registry-driven prompt_filename + the spec's own Module-name line."""
+    spec = dataset / design / layout.get("prompt_filename", "design_description.txt")
+    if spec.is_file():
+        m = re.search(r"Module\s*name:\s*\n?\s*([A-Za-z_]\w*)",
+                      spec.read_text(errors="ignore"))
+        if m:
+            return m.group(1)
+    leaf = design.split("/")[-1]
+    return leaf or None
+
+
+def _spec_declares_port(design: str, dataset: Path, layout: dict, port: str) -> bool:
+    """True iff the prose design description names `port` as a whole word ANYWHERE.
+    This is the §4.05 no-leak guard for the unsatisfiable-TB audit: a port the spec
+    mentions at all is NOT spec-absent (a candidate that omits it is the candidate's
+    own bug → stays a model FAIL). Whole-word match avoids overfitting to a specific
+    'Input ports:' prose layout and never flags a port the spec genuinely declares.
+    Chip-AGNOSTIC: pure text search on the registry's prompt_filename."""
+    spec = dataset / design / layout.get("prompt_filename", "design_description.txt")
+    if not spec.is_file():
+        # No spec to consult ⇒ cannot prove the port is spec-absent ⇒ treat as
+        # DECLARED (fail-safe: never flag a defect we cannot substantiate).
+        return True
+    txt = spec.read_text(errors="ignore")
+    return bool(re.search(r"\b" + re.escape(port) + r"\b", txt))
+
+
+def _module_declared_ports(verilog_text: str) -> set:
+    """Best-effort set of port identifiers declared in the FIRST module header of
+    `verilog_text` (ANSI-style `input/output/inout [wire|reg|logic] [width] name`).
+    Used to confirm a TB-demanded missing port is one the GOLDEN declares."""
+    m = re.search(r"\bmodule\s+\w+\s*\((.*?)\)\s*;", verilog_text, re.S)
+    if not m:
+        return set()
+    hdr = m.group(1)
+    return set(re.findall(
+        r"\b(?:input|output|inout)\b(?:\s+(?:wire|reg|logic))?"
+        r"(?:\s+signed)?(?:\s*\[[^\]]*\])?\s+([A-Za-z_]\w*)", hdr))
+
+
+def _golden_ref_compiles_with_tb_shape_b(design: str, dataset: Path, layout: dict):
+    """Compile the Shape-B golden reference + the hidden TB ALONE (no candidate),
+    aliasing the golden's module to the canonical DUT name so the TB's
+    `<canonical> uut(...)` instantiation binds to it. COMPILE-level mirror of
+    `_golden_ref_fails_own_tb_runtime` (which is RUNTIME-level).
+
+    Returns (compiles: bool|None, golden_ports: set).
+      compiles True  — golden(aliased)+TB elaborates: the TB IS satisfiable by some
+                       design (the golden). A candidate compile_error here is the
+                       candidate's own problem UNLESS it is a spec-absent golden port
+                       (case (b), checked by the caller).
+      compiles False — golden(aliased)+TB ALSO fails to elaborate: the TB is
+                       unsatisfiable by ANY submission (case (a)).
+      compiles None  — no determination (no ref_glob/glob-match/TB, no canonical
+                       name, or a tool error) ⇒ no flag.
+    `golden_ports` is the golden header's declared port set (empty when undetermined).
+
+    Deterministic + chip-AGNOSTIC: registry layout.ref_glob/tb_filename + the spec's
+    own Module-name line; NO design/vendor literal. Honesty: touches the hidden
+    golden/TB at SCORING time only, never during blind authoring."""
+    ref_glob = layout.get("ref_glob")
+    tb_name = layout.get("tb_filename")
+    if not ref_glob or not tb_name:
+        return (None, set())
+    design_dir = dataset / design
+    tb = design_dir / tb_name
+    if not tb.is_file():
+        return (None, set())
+    refs = sorted(design_dir.glob(ref_glob))
+    if not refs:
+        return (None, set())
+    dut_name = _canonical_dut_name_shape_b(design, dataset, layout)
+    if not dut_name:
+        return (None, set())
+    # Alias the golden's module name → canonical DUT name so the TB binds to it.
+    golden_text = refs[0].read_text(errors="ignore")
+    mm = re.search(r"\bmodule\s+(\w+)", golden_text)
+    if not mm:
+        return (None, set())
+    golden_mod = mm.group(1)
+    golden_ports = _module_declared_ports(golden_text)
+    aliased = (golden_text if golden_mod == dut_name
+               else re.sub(rf"\b{re.escape(golden_mod)}\b", dut_name, golden_text))
+    with tempfile.TemporaryDirectory() as td:
+        binp = os.path.join(td, "golden_alias_bin")
+        alias_f = os.path.join(td, "golden_alias.v")
+        # Include any OTHER refs verbatim (multi-file goldens) so helper modules
+        # the aliased top instantiates are present; only the FIRST is aliased.
+        extra = [str(p) for p in refs[1:]]
+        with open(alias_f, "w") as fh:
+            fh.write(aliased)
+        srcs = [alias_f] + extra + [str(tb)]
+        try:
+            c = subprocess.run(["iverilog", "-g2012", "-o", binp] + srcs,
+                               capture_output=True, text=True, timeout=120)
+        except (subprocess.TimeoutExpired, OSError):
+            return (None, golden_ports)
+        return (c.returncode == 0 and os.path.exists(binp), golden_ports)
+
+
+def _unsatisfiable_tb_compile_audit_shape_b(design: str, dataset: Path,
+                                            layout: dict, candidate_log: str):
+    """Shape-B COMPILE-level unsatisfiable-TB audit (#690). Runs PRECISELY on the
+    `reason=='compile_error'` path the RUNTIME audit (#679) excludes. Tells an
+    irreducible dataset defect (a TB no spec-faithful submission can satisfy) from a
+    genuine model compile error.
+
+    Returns (defect: bool, reason: str|None):
+      (a) golden(aliased)+TB ALSO fails to elaborate  → (True,
+          'golden_ref_fails_own_tb_compile') — TB unsatisfiable by ANY design.
+      (b) golden+TB compiles AND the candidate's compile error is
+          `port 'P' is not a port of uut` where P is a port the GOLDEN declares yet
+          the prose spec NEVER names → (True, 'tb_requires_spec_absent_port') — the
+          TB demands a handshake/port no spec-faithful design could provide.
+      otherwise → (False, None): the candidate's own compile bug (a syntax error, or
+          a missing port the SPEC declares) stays a model FAIL — §4.05 no-leak.
+
+    Deterministic + chip-AGNOSTIC: registry layout + iverilog exit code + the
+    candidate's own elaboration error text; NO design-id branching."""
+    compiles, golden_ports = _golden_ref_compiles_with_tb_shape_b(
+        design, dataset, layout)
+    if compiles is None:
+        return (False, None)
+    if compiles is False:
+        # (a) Even the golden cannot elaborate against its own TB.
+        return (True, "golden_ref_fails_own_tb_compile")
+    # (b) golden+TB compiles — only a SPEC-ABSENT, GOLDEN-DECLARED missing port is a
+    # defect. Extract the offending port from the candidate's own elaboration error.
+    m = re.search(r"port\s+[`'\"]*([A-Za-z_]\w*)[`'\"]*\s+is not a port of",
+                  candidate_log or "", re.I)
+    if not m:
+        return (False, None)            # not a missing-port error ⇒ candidate's bug
+    port = m.group(1)
+    # Must be a port the GOLDEN declares (the TB binds it onto a golden-satisfiable
+    # instance) AND one the spec NEVER names (no spec-faithful design could add it).
+    if port not in golden_ports:
+        return (False, None)
+    if _spec_declares_port(design, dataset, layout, port):
+        return (False, None)            # spec DOES name it ⇒ candidate's omission
+    return (True, "tb_requires_spec_absent_port")
+
+
 def _score_shape_b(design: str, samples: Path, dataset: Path,
                    layout: dict, args: dict) -> dict:
-    """Shape-B scorer wrapper (#679): run the core scorer, then on a FAIL whose
-    cause is NOT a compile error (compile errors are handled upstream / not a
-    runtime golden defect), RUNTIME-audit the golden reference against its own
-    official TB. If even the golden FAILs its own TB at runtime, the design is an
-    irreducible dataset defect — flag it (dual report in main(); verdict NOT
-    changed, never inflate the pass rate), mirroring the Shape-C path."""
+    """Shape-B scorer wrapper (#679 + #690): run the core scorer, then audit the
+    golden reference against its own official TB to tell an irreducible dataset
+    defect from a real model FAIL. Two complementary audits:
+
+      * RUNTIME (#679): on a FAIL whose cause is NOT a compile error, the golden
+        compiles but FAILs its own TB at runtime → golden_ref_fails_own_tb_runtime.
+      * COMPILE (#690): on a `reason=='compile_error'` FAIL, the golden(aliased)+TB
+        ALSO fails to elaborate (TB unsatisfiable by anyone), OR the candidate's
+        elaboration error is a TB-bound port the GOLDEN declares but the prose spec
+        NEVER names (tb_requires_spec_absent_port) → dataset_defect. §4.05: a genuine
+        candidate compile bug (syntax / a spec-declared port it omitted) stays a
+        model FAIL.
+
+    In every case the verdict is NOT changed (dual report in main(); never inflate
+    the pass rate) — only the dataset_defect annotation is added."""
     res = _score_shape_b_impl(design, samples, dataset, layout, args)
-    if res.get("verdict") == "FAIL" and res.get("reason") != "compile_error":
+    if res.get("verdict") != "FAIL":
+        return res
+    if res.get("reason") == "compile_error":
+        defect, reason = _unsatisfiable_tb_compile_audit_shape_b(
+            design, dataset, layout, res.get("log", ""))
+        if defect:
+            res["dataset_defect"] = True
+            res["dataset_defect_reason"] = reason
+            if reason == "tb_requires_spec_absent_port":
+                res["reason"] = "tb_requires_spec_absent_port"
+    else:
         gref = _golden_ref_fails_own_tb_runtime(design, dataset, layout, args)
         if gref is True:
             res["dataset_defect"] = True
@@ -464,10 +629,23 @@ def _golden_ref_self_compiles(prob: str, dataset: Path, layout: dict):
     the golden ref to the candidate's module name: a well-formed problem then
     compiles (golden-vs-golden); only a problem whose TB wires ports neither
     module declares (e.g. TB instantiates .Y2()/.Y4() on a Y1/Y3 module) fails —
-    which is the irreducible defect we want to flag. Scoped to the
-    always_TopModule strategy (VerilogEval-class), where this defect class lives;
-    returns None otherwise (no determination, no flag).
+    which is the irreducible defect we want to flag.
+
+    TWO layouts (#690 generalization — no longer always_TopModule-only):
+      * VerilogEval-class: ref_suffix + tb_suffix + module_name_strategy
+        ==always_TopModule (flat <Prob>_ref.sv / <Prob>_test.sv). DUT name is the
+        fixed 'TopModule'.
+      * Shape-B / RTLLM-class: ref_glob + tb_filename + a per-design subdir, where
+        `prob` is the design subdir. DUT name comes from the spec's `Module name:`
+        line. Delegates to _golden_ref_compiles_with_tb_shape_b so the compile-level
+        unsatisfiable-TB detector also covers Shape-B benchmarks. The golden module
+        is aliased to the canonical DUT name the TB instantiates (`uut`).
+    Returns None for any layout providing neither shape's keys (no determination).
     """
+    # Shape-B / RTLLM-class layout (ref_glob + tb_filename + per-design subdir).
+    if layout.get("ref_glob") and layout.get("tb_filename"):
+        compiles, _ports = _golden_ref_compiles_with_tb_shape_b(prob, dataset, layout)
+        return compiles
     if not layout.get("ref_suffix") or not layout.get("tb_suffix"):
         return None
     if layout.get("module_name_strategy") != "always_TopModule":
