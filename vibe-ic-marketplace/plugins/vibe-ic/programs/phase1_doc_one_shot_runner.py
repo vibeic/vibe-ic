@@ -8137,17 +8137,50 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
                     alias_idents.add(alias_id)
                     if prev:
                         alias_for.setdefault(prev, []).append(alias_id)
+                # ORGANIC #627 — pipe-table port-row awareness. In a Markdown
+                # port-table row (`| `x` | N-bit(`[size-1:0]`,parameter `size`)
+                # | input |`) the PORT is the LEADING name-cell token; the
+                # later cells carry width / parameter / description tokens that
+                # must NOT be promoted as ports (else a width-cell `size`
+                # parameter is mis-emitted AND the real short port `x` is
+                # dropped by the blanket short-name guard). For such a row:
+                # (1) the leading name-cell token is a real port even if 1-2
+                # chars (single-letter datapath ports x/y/p/a/b/q), and
+                # (2) only leading-cell tokens are promoted. Outside a pipe
+                # table (the bullet-list interface shape this walker also
+                # serves) the original all-tokens + short-name-drop behaviour
+                # is unchanged. chip-AGNOSTIC: pure table-row structure, no
+                # IC-class / token literals. Mirrors #611's provenance pattern.
+                _is_port_table_row = (
+                    _is_pipe_table_row(line)
+                    and direction in ("input", "output", "inout"))
+                _leading_cell_toks: set = set()
+                if _is_port_table_row:
+                    for _cell in line.split("|"):
+                        if _cell.strip():
+                            _leading_cell_toks = set(
+                                _RE_BACKTICK_TOKEN.findall(_cell))
+                            break
                 for tok in _RE_BACKTICK_TOKEN.findall(line):
+                    # #627 — in a port-table row, ONLY the leading name-cell
+                    # token is a port (a later-cell width/parameter token is
+                    # not promoted).
+                    if _is_port_table_row and tok not in _leading_cell_toks:
+                        continue
                     expanded = _v455_expand_pin_token(tok)
                     # aliases attach only to a single (non-banked) canonical tok
                     tok_aliases = (alias_for.get(tok, [])
                                    if expanded == [tok] else [])
                     for name in expanded:
+                        # #627 — the short-name prose-drop does NOT apply to a
+                        # leading name-cell token of a port-table row.
+                        _short_drop = (name.islower() and len(name) <= 2
+                                       and not _is_port_table_row)
                         if (not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name)
                                 or len(name) > 24 or name in seen
                                 or name in alias_idents  # #610: alt-spelling
                                 or name.upper() in _PIN_PROSE_DENY
-                                or name.islower() and len(name) <= 2):
+                                or _short_drop):
                             continue
                         seen.add(name)
                         out.append({
