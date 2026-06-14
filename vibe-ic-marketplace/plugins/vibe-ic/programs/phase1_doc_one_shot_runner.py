@@ -1403,15 +1403,24 @@ _SECTION_HEADER_RE = re.compile(
 # Restrict the depth to 2-4 so isolated `# Title` (typically the
 # document title) and `##### / ######` (deep sub-sub-headings) do
 # not blow up the section count.
+# ORGANIC #630 — the title's FIRST char admits ASCII-uppercase OR any
+# non-ASCII letter (CJK / accented Latin / Greek / Cyrillic …). The old
+# `[A-Z]` anchor dropped EVERY CJK-titled heading (`## 功能定義`), so a
+# content-rich CJK L2 spec mined ZERO sections and under-filled the L2 ≥15
+# typed-field floor. `[^\x00-\x7F\W\d_]` = a non-ASCII word char that is not a
+# digit/underscore (a non-ASCII LETTER); the ASCII path stays byte-identical
+# (lowercase-led prose still rejected) so the downstream noise guards
+# (install-verb / FPGA-token / short-caps) are unaffected. chip-AGNOSTIC.
+_V1_6_630_TITLE_FIRST = r"(?:[A-Z]|[^\x00-\x7F\W\d_])"
 _V1_6_334_RE_SECTION_HEADER_MD_ATX = re.compile(
-    r"^\s*(#{2,4})\s+([A-Z][\w\s\-,/()&]+?)\s*#*\s*$",
+    r"^\s*(#{2,4})\s+(" + _V1_6_630_TITLE_FIRST + r"[\w\s\-,/()&]+?)\s*#*\s*$",
     re.MULTILINE,
 )
 
 # AsciiDoc heading: `== Title`, `=== Title`. Same depth range
 # (level-1 `= Title` is the doctitle).
 _V1_6_334_RE_SECTION_HEADER_ADOC = re.compile(
-    r"^\s*(={2,4})\s+([A-Z][\w\s\-,/()&]+?)\s*$",
+    r"^\s*(={2,4})\s+(" + _V1_6_630_TITLE_FIRST + r"[\w\s\-,/()&]+?)\s*$",
     re.MULTILINE,
 )
 
@@ -1426,7 +1435,8 @@ _V1_6_334_RE_SECTION_HEADER_ADOC = re.compile(
 # check, otherwise a narrow `~~~` underline 4 paragraphs below
 # could be paired with an arbitrary earlier title.
 _V1_6_334_RE_SECTION_HEADER_RST_UNDERLINE = re.compile(
-    r"^([A-Z][\w \t\-,/()&]{1,79})\n([=\-~^\"*+#]{3,})\s*$",
+    r"^(" + _V1_6_630_TITLE_FIRST + r"[\w \t\-,/()&]{1,79})\n"
+    r"([=\-~^\"*+#]{3,})\s*$",
     re.MULTILINE,
 )
 
