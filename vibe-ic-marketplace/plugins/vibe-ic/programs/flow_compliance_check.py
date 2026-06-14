@@ -3157,6 +3157,41 @@ _STUB_TAG_RE = re.compile(
     r'deterministic_stub|"low_confidence"\s*:\s*true|low_confidence=true',
     re.IGNORECASE)
 
+# ORGANIC #636 — a verdict-JSON `evidence` field is dereferenced as a file
+# pointer ONLY when it is structurally path-SHAPED, not merely because it
+# contains a '/'. Prose evidence notes legitimately carry slashes INSIDE words
+# ("derived/gated clock tokens", "input/output delay", "REQ/ACK", "and/or",
+# "RTL file(s)"); the old `"/" in ev_ptr` heuristic resolved the WHOLE sentence
+# as `project / <sentence>`, found no file, and false-FAILed EVIDENCE_MISSING —
+# the dominant trigger for single-clock-domain designs whose CDC/RDC checker
+# emits the standard "derived/gated clock tokens attributed to root" prose, and
+# it cascaded to ~25 downstream steps. A real path pointer has NO embedded
+# whitespace AND (a known artifact extension OR a known project-output dir
+# prefix). This restores the line-3151 prose-exemption intent while still
+# catching the genuine broken-pointer case (#433b: the empty
+# sim/reference_tb/ref_tb.log chain — `sim/` prefix + `.log` ext → still
+# dereferenced). chip-AGNOSTIC: pure path-shape structure, no IC-class/token
+# literals.
+_EVIDENCE_PATH_EXT_RE = re.compile(
+    r"\.(?:json|log|xml|rpt|txt|def|gds|gds2|spef|sdc|sdf|saif|vcd|csv|"
+    r"ya?ml|lef|lib|v|sv|drc|lvs|out)$",
+    re.IGNORECASE)
+_EVIDENCE_PATH_PREFIX_RE = re.compile(
+    r"^(?:\./)?(?:reports|phase1|phase2|phase3|sim|synth|pnr|sta|drc|lvs|"
+    r"layout|gds|fpga|analog|input|rtl|work|build|out|results)/")
+
+
+def _looks_like_evidence_path(s: str) -> bool:
+    """ORGANIC #636 — True iff `s` is structurally a dereferenceable artifact
+    path, NOT a prose note that merely contains a '/'. A real pointer has no
+    embedded whitespace AND (a known artifact extension OR a known project-
+    output dir prefix). chip-AGNOSTIC: path-shape only."""
+    s = s.strip()
+    if not s or any(ch.isspace() for ch in s):
+        return False
+    return bool(_EVIDENCE_PATH_EXT_RE.search(s)
+                or _EVIDENCE_PATH_PREFIX_RE.match(s))
+
 
 def _evidence_integrity_scan(project: Path,
                              result: "StepResult") -> "StepResult":
@@ -3195,7 +3230,9 @@ def _evidence_integrity_scan(project: Path,
                         f"{rel}: {str(d.get('reason', ''))[:160]}")
                     continue
                 ev_ptr = d.get("evidence")
-                if isinstance(ev_ptr, str) and "/" in ev_ptr:
+                # ORGANIC #636 — dereference ONLY a path-SHAPED pointer, never
+                # a prose note that merely contains a '/' (e.g. "derived/gated").
+                if isinstance(ev_ptr, str) and _looks_like_evidence_path(ev_ptr):
                     tgt = project / ev_ptr
                     if not tgt.is_file() or tgt.stat().st_size == 0:
                         broken.append(
