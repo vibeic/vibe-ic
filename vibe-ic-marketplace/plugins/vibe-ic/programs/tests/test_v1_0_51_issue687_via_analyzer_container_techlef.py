@@ -148,11 +148,9 @@ def test_step_pnr_via_analyzer_uses_container_reader():
 # ── §4.05 NEGATIVE — benign single-cut PDK emits NO restriction ────────
 def test_negative_single_cut_pdk_emits_no_restriction():
     """A normal all-single-cut techlef must NOT trigger a routing
-    restriction (no false alert). VIA1..VIA4 are all single-cut, so the
-    upper bound walks past every cut layer and reaches M5 — there is no
-    multi-cut-only upper via, so no set_routing_layers is warranted."""
+    restriction (no false alert). Every metal transition is single-cut-
+    covered, so the bound is None — the consumer emits set_routing_layers
+    only when the bound is not None, so a benign PDK keeps full routing."""
     upper = via.routing_layer_upper_bound(_SINGLE_CUT_TLEF)
-    # No gap below M5 → upper == 5; the inline restriction only fires when
-    # `routing_upper < mtotal` (an uncovered upper layer exists), which is
-    # NOT the case here. So a benign single-cut PDK keeps full routing.
-    assert upper == 5
+    # GAP#1 corrected semantics: fully-covered → None (no restriction).
+    assert upper is None

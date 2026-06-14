@@ -82,15 +82,79 @@ _RECT_RE = re.compile(r"^\s*RECT\b", re.MULTILINE)
 
 
 def _classify_layer_kind(name: str) -> str:
-    """Return 'cut' if name looks like VIAn (cut layer), 'routing' if METn /
-    METALn / Mn, else 'unknown'."""
+    """Return 'cut' if name looks like a via cut layer, 'routing' if METn /
+    METALn / Mn, else 'unknown'.
+
+    GAP#1 (round-7) — a via cut layer is NOT always ``VIAn``. SKY130 names
+    its cut layers ``mcon`` (li1↔met1), ``via`` (met1↔met2, UNNUMBERED),
+    ``via2``/``via3``/``via4`` — so the old `startswith("VIA") and has-digit`
+    test classified the bare ``via`` and ``mcon`` as 'unknown', dropping the
+    M1↔M2 transition from coverage and collapsing signal routing to met1.
+    Recognise the bare/unnumbered cut names too. chip-AGNOSTIC: matches the
+    generic via/cut/mcon vocabulary, not any chip literal."""
     n = name.upper()
-    if n.startswith("VIA") and any(c.isdigit() for c in n):
-        return "cut"
+    # routing layers FIRST (so a metal like METAL1 isn't mistaken for a cut).
     if (n.startswith("MET") or n.startswith("METAL") or
             (n.startswith("M") and len(n) >= 2 and n[1].isdigit())):
         return "routing"
+    # cut layers: VIAn, the bare/unnumbered VIA, and the sub-metal contact
+    # cuts (MCON / LICON / CONT / CO). The structural `routing-pair`
+    # derivation below assigns the transition index, so the cut NAME need
+    # only be recognised AS a cut — its digits are not relied upon.
+    if n.startswith("VIA") or n in ("MCON", "LICON", "LICON1",
+                                    "CONT", "CO", "CONTACT"):
+        return "cut"
     return "unknown"
+
+
+def _routing_index(name: str) -> int | None:
+    """Map a routing-layer NAME to its metal index (met1→1, metal3→3, M5→5,
+    li1→0 = the local-interconnect sub-metal). Returns None if not a routing
+    layer. Pure, chip-AGNOSTIC."""
+    n = name.upper()
+    if n in ("LI", "LI1"):
+        return 0  # local interconnect sits below met1.
+    m = re.match(r"^(?:METAL|MET|M)(\d+)$", n)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def via_transition_coverage(text: str) -> Dict[int, bool]:
+    """Structural single-cut coverage keyed by the LOWER metal index of each
+    routing-layer transition a via spans. For a via connecting met(k)↔met(k+1)
+    the transition index is k; the value is True iff at least one single-cut
+    via covers it.
+
+    This is naming-AGNOSTIC: it does NOT parse digits out of the cut-layer
+    name (which fails on SKY130's unnumbered ``via`` = M1↔M2). It derives the
+    transition from the two ROUTING layers the via block actually connects,
+    so ``mcon`` (li1↔met1 → index 0), ``via`` (met1↔met2 → index 1),
+    ``via2`` (met2↔met3 → index 2) all map correctly. Pure, chip-AGNOSTIC."""
+    cover: Dict[int, bool] = {}
+    for vm in _VIA_BLOCK_RE.finditer(text):
+        body = vm.group(2)
+        routing_idx: List[int] = []
+        cut_rect_count = 0
+        for lm in _LAYER_BLOCK_RE.finditer(body):
+            lname = lm.group(1)
+            lbody = lm.group(2)
+            kind = _classify_layer_kind(lname)
+            if kind == "routing":
+                ri = _routing_index(lname)
+                if ri is not None:
+                    routing_idx.append(ri)
+            elif kind == "cut":
+                cut_rect_count = max(cut_rect_count,
+                                     len(_RECT_RE.findall(lbody)))
+        if len(routing_idx) < 2:
+            continue
+        lo = min(routing_idx)
+        is_single = (cut_rect_count <= 1)
+        # transition index = lower metal index; True wins (any single-cut
+        # via on the transition makes it covered).
+        cover[lo] = cover.get(lo, False) or is_single
+    return cover
 
 
 def analyze_lef(text: str) -> Dict[str, Dict[str, Any]]:
@@ -158,43 +222,50 @@ def cut_layers_with_single_cut(text: str) -> Set[str]:
 
 
 def routing_layer_upper_bound(text: str) -> int | None:
-    """Given the cut-layer single-cut coverage, return the highest metal
-    layer index N such that all cut layers VIA1..VIA(N-1) have at least
-    one single-cut via. Returns None if no single-cut vias exist at all
-    or the LEF has no VIA blocks.
+    """Return the highest metal layer index N up to which signal routing is
+    safe — i.e. every met1↔met2 … met(N-1)↔metN transition has at least one
+    SINGLE-CUT via. Returns None when no restriction is warranted (every
+    present transition from met1 up is single-cut-covered, the common case
+    incl. SKY130) OR when the LEF has no analysable via blocks.
 
-    Example: PDK has single-cut VIA1..VIA4 but only multi-cut VIA5 →
-    returns 5 (route Metal1..Metal5; transitions M1↔M5 only need
-    VIA1..VIA4).
+    GAP#1 fix: the transition coverage is now derived STRUCTURALLY from the
+    routing-layer pair each via spans (see via_transition_coverage), NOT from
+    digits in the cut-layer name. SKY130's unnumbered ``via`` (met1↔met2) and
+    ``mcon`` (li1↔met1) are therefore counted, so the analyzer no longer
+    falsely reports the M1↔M2 transition as missing and collapses signal
+    routing to met1-met1 (which caused GRT-0229). A restriction is returned
+    ONLY when a real gap exists (a transition above met1 has multi-cut-only
+    vias), and it is floored at met2 — never met1 — so signal routing always
+    has at least two layers (a single-metal signal route cannot complete).
     """
-    covered = cut_layers_with_single_cut(text)
-    if not covered:
+    cover = via_transition_coverage(text)
+    # keep only the metal-to-metal transitions (index >= 1); index 0 is the
+    # li1↔met1 sub-metal contact, not a signal-routing metal transition.
+    metal_tx = {k: ok for k, ok in cover.items() if k >= 1}
+    if not metal_tx:
+        return None  # no analysable metal vias → no restriction (route all).
+    # Walk met1 upward: the last fully single-cut-covered transition k means
+    # routing up to met(k+1) is safe. Stop at the first uncovered transition.
+    k = 1
+    while metal_tx.get(k) is True:
+        k += 1
+    # k is the first UNCOVERED metal transition. If k never advanced past 1
+    # AND transition 1 itself isn't present, there is nothing to restrict.
+    if k == 1 and 1 not in metal_tx:
         return None
-    # Extract numeric suffix from VIA names (VIA1 → 1, VIA12 → 12 means
-    # M1↔M2; VIA56 → 56 means M5↔M6 — handle both single-digit "VIA1"
-    # and concatenated "VIA12" forms).
-    indices: Set[int] = set()
-    for v in covered:
-        m = re.match(r"^VIA(\d+)$", v)
-        if not m:
-            continue
-        s = m.group(1)
-        if len(s) == 1:
-            indices.add(int(s))                # VIA3 = M3↔M4 transition
-        elif len(s) == 2 and s[0] == s[1]:     # never used in practice
-            indices.add(int(s[0]))
-        else:
-            # VIA12 means M1↔M2 — first digit is the lower metal.
-            indices.add(int(s[0]))
-    if not indices:
+    # highest safe routing metal = the upper metal of the last covered
+    # transition = k (transition k-1 covers met(k-1)↔met(k)).
+    bound = k
+    # Determine the highest metal transition actually present so we can tell
+    # "fully covered" (no restriction) from "gap in the middle" (restrict).
+    max_tx = max(metal_tx)
+    if bound > max_tx:
+        # every present transition is covered → no restriction needed.
         return None
-    # Walk upward from 1 until we hit a gap.
-    n = 1
-    while n in indices:
-        n += 1
-    # n is the first cut layer NOT covered, so M1..Mn (one above the
-    # last covered cut) is the safe routing range.
-    return n
+    # A genuine gap exists at transition `bound`; restrict routing to
+    # met1..met{bound}. Floor at met2 so a single-cut-missing met1↔met2
+    # never collapses signal routing to one layer.
+    return max(bound, 2)
 
 
 def main() -> int:
