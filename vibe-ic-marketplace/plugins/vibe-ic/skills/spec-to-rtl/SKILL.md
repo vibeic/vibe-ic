@@ -59,11 +59,37 @@ When `phase2_one_shot_runner.step_rtl_gen` WAIVES with the message:
      `rtl_hygiene_lint --fix` doesn't have to repair PROCASSINIT.
    - `case`: include `default`; rewrite overlapping `casez` priority encoders
      as `if/else-if`.
-6. **Self-check with MCP** (encouraged, not strictly required — the runner
-   will re-run these):
-   - `eda_lint`: 0 errors.
-   - `eda_synth` (gf180): clean, no inferred latches except intended
-     `always_latch` transparent latches.
+6. **Self-verify with the HARNESS-EXACT toolchain BEFORE emit (MANDATORY —
+   ORGANIC #688)**. A host-only / RTL+TB-together self-check passes code the
+   scorer rejects, because the scorer (a) pins a specific tool version, (b)
+   compiles the RTL **alone** under the harness top flag `-s <module>` (full
+   codegen, not a `-t null` elaborate), and (c) runs a lint gate. Run the
+   deterministic gate program — it is the gate, not a suggestion:
+
+   ```bash
+   python3 plugins/vibe-ic/programs/harness_exact_selfverify.py \
+       --rtl <project>/phase2/stage1/rtl/<module_name>.v \
+       --top <module_name> \
+       --tb  <your_functional_tb.sv>   \  # optional gate C (see below)
+       --report harness_exact_selfverify.json
+   ```
+
+   The program runs THREE gates and exits 0 only when every enforced gate
+   passes:
+   - **Gate A (deterministic)** — `iverilog -g2012 -o sim.vvp -s <top> rtl`
+     standalone full codegen (catches ELAB-only + standalone-top fail
+     classes). This is the harness-exact flag, NOT a `-t null` elaborate.
+   - **Gate B (deterministic)** — `verilator --lint-only -Wall` clean.
+   - **Gate C (you author, the program RUNS)** — a functional TB whose golden
+     vectors are the **prompt's OWN worked examples / tables** (+ random +
+     boundary). Extracting those examples is YOUR judgment; pass the TB via
+     `--tb` and the program compiles+runs it and parses the verdict. No `--tb`
+     → gate C is reported `skipped`, never silently passed.
+
+   The program DISCLOSES any host/scorer tool-version skew and does NOT claim
+   to catch spec-INTERPRETATION mismatches (it cannot — that residual stays an
+   authoring judgment). When a tool is absent it discloses and skips (or, under
+   `--require-tools`, hard-refuses) — it never fakes a pass.
 7. **Tell the orchestrator you're done**. The caller will re-invoke
    `vibe_ic_one_shot_runner.py` so the runner detects the RTL at the
    expected path, skips `step_rtl_gen`, and continues with: chip_top
@@ -88,8 +114,10 @@ When `phase2_one_shot_runner.step_rtl_gen` WAIVES with the message:
 ## Quality bar
 
 A "good" spec-to-rtl emission means:
-- The RTL `iverilog -g2012`-compiles standalone (no missing dependencies).
-- `eda_lint` returns 0 errors.
+- `harness_exact_selfverify.py` exits 0 (gate A standalone `-s <top>` codegen
+  + gate B verilator lint both pass — see step 6; this subsumes "compiles
+  standalone" and "lint clean" with the SCORER's exact flags, so the host-only
+  accept-set cannot diverge).
 - `eda_synth` gf180 emits ≥1 cell (not pure-passthrough; not optimised to nothing).
 - The module name + port list match the description verbatim.
 - No latches inferred (or, if a latch IS intended per the description,

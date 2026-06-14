@@ -206,6 +206,38 @@ def main():
     steps["iverilog_compile"] = {"verdict": "PASS" if rc == 0 else "FAIL",
                                  "rc": rc, "log": out[-400:]}
 
+    # 3b. HARNESS-EXACT self-verify (ORGANIC #688): the scorer compiles the RTL
+    # ALONE under `-s <top>` (full codegen) and runs a verilator lint gate —
+    # NOT the RTL+TB-together / host-only shape the agent self-checks with.
+    # Three fail classes slip through host-only self-check (ELAB-only, standalone
+    # -s <top> top-name/TB-signal dependence, lint). harness_exact_selfverify.py
+    # runs the deterministic gate-A (standalone `-s <top>` -o codegen) + gate-B
+    # (verilator --lint-only -Wall) so the Shape-C accept-set MATCHES the
+    # scorer. The functional gate-C is AI-authored (prompt examples) and is run
+    # by the cvdp/full_stack path, not here. Emit-BLOCKING on a BLOCK verdict.
+    hxsv_json = wd / "harness_exact_selfverify.json"
+    rc, out = run([sys.executable, str(PROGRAMS / "harness_exact_selfverify.py"),
+                   "--rtl", str(sample), "--top", top_module,
+                   "--report", str(hxsv_json)], env=cli_env)
+    hxsv_verd = "PASS" if rc == 0 else ("FAIL" if rc == 1 else "SKIP")
+    steps["harness_exact_selfverify"] = {"verdict": hxsv_verd, "rc": rc,
+                                         "log": out[-500:]}
+    # rc==1 means a deterministic gate (A standalone codegen / B lint) BLOCKED —
+    # the scorer would reject the same RTL, so block emit. rc==2 (a tool was
+    # absent) is DISCLOSED, not a block (the existing iverilog_compile hard gate
+    # still applies); the program never silently passes an unenforced gate.
+    hxsv_blocking = []
+    if rc == 1 and hxsv_json.is_file():
+        try:
+            hx = json.loads(hxsv_json.read_text())
+            for g in hx.get("gates", []):
+                if g.get("verdict") in ("BLOCK", "ERROR"):
+                    hxsv_blocking.append({"program": "harness_exact_selfverify",
+                                          "rule": g.get("gate"),
+                                          "message": (g.get("reason") or "")[:400]})
+        except Exception:
+            pass
+
     # 4. spec_conformance_check vs prompt-derived contract
     sem_manifest = wd / "semantic_manifest.json"
     conf_json = wd / "conformance_findings.json"
@@ -261,6 +293,10 @@ def main():
                                    "msbfirst-direction-mismatch",
                                    "moore-output-reset-gated"}
     blocking: list = []
+    # ORGANIC #688 — harness-exact self-verify BLOCKs (standalone `-s <top>`
+    # codegen / verilator lint) are emit-blocking: the scorer rejects the same
+    # RTL the host-only / RTL+TB-together self-check passed.
+    blocking.extend(hxsv_blocking)
     if conf_json.is_file():
         try:
             for fd in json.loads(conf_json.read_text()):
